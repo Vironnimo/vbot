@@ -1,43 +1,50 @@
-"""Tests for Agent-facing control of background bash processes."""
+"""The Agent-facing process Tool: status, wait, and kill for background shell commands."""
 
 from __future__ import annotations
 
 import asyncio
-import sys
-from collections.abc import AsyncIterator, Callable
+import re
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
-import pytest_asyncio
 
 import core.tools.process as process_module
+import core.tools.process_manager as manager_module
+from core.storage import TemporaryFileManager
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process import (
     PROCESS_ACTIONS,
     PROCESS_TOOL_DESCRIPTION,
     PROCESS_TOOL_NAME,
     PROCESS_TOOL_PARAMETERS,
-    make_process_handler,
+    normalize_process_arguments,
     register_process_tool,
 )
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from tests.core.tools.process_manager_test_support import (
+    AGENT_A,
+    AGENT_B,
+    SCOPE_A,
+    SLEEP,
+    spawn,
+)
+from tests.core.tools.process_manager_test_support import (
+    manager as manager,
+)
 
-AGENT_A = "agent-a"
-AGENT_B = "agent-b"
-RUN_A = "run-a"
-
-
-@pytest_asyncio.fixture
-async def manager() -> AsyncIterator[ProcessManager]:
-    manager = ProcessManager(sweep_interval_seconds=3600)
-    try:
-        yield manager
-    finally:
-        await manager.aclose()
+# Prints a start line, a ready line, then keeps running like a server.
+SERVER = (
+    "import time\n"
+    "print('booting', flush=True)\n"
+    "time.sleep(0.3)\n"
+    "print('Server READY on port 3000', flush=True)\n"
+    "time.sleep(30)"
+)
 
 
 @pytest.fixture
@@ -45,67 +52,42 @@ def context(tmp_path: Path) -> ToolContext:
     return make_context(tmp_path)
 
 
-def make_context(
-    tmp_path: Path,
-    *,
-    agent_id: str = AGENT_A,
-    result_persisted_hook: Callable[[Callable[[], None]], None] | None = None,
-) -> ToolContext:
+def make_context(tmp_path: Path, *, agent_id: str = AGENT_A, **fields: Any) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
         session_id="chat-session-a",
-        run_id=RUN_A,
+        run_id=SCOPE_A,
         tool_call_id="tool-call-a",
         tool_name=PROCESS_TOOL_NAME,
         tool_call_index=0,
         workspace=tmp_path,
         vbot_root=tmp_path,
         data_root=tmp_path,
-        result_persisted_hook=result_persisted_hook,
+        **fields,
     )
 
 
-async def call_process(
-    manager: ProcessManager,
-    context: ToolContext,
-    arguments: JsonObject,
-) -> JsonObject:
-    return cast(JsonObject, await make_process_handler(manager)(context, arguments))
-
-
-async def dispatch_process(
-    manager: ProcessManager,
-    context: ToolContext,
-    arguments: JsonObject,
-) -> JsonObject:
+def make_registry(manager: ProcessManager) -> ToolRegistry:
     registry = ToolRegistry()
     register_process_tool(registry, manager)
+    return registry
+
+
+async def dispatch(
+    manager: ProcessManager, context: ToolContext, arguments: JsonObject
+) -> dict[str, Any]:
+    """Call the Tool as the executor does, reporting argument errors as the Model sees them."""
     try:
-        return await registry.dispatch(context, arguments, [PROCESS_TOOL_NAME])
+        return await make_registry(manager).dispatch(context, arguments, [PROCESS_TOOL_NAME])
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error), retryable=False)
 
 
-async def spawn_python(manager: ProcessManager, script: str, *, agent_id: str = AGENT_A) -> str:
-    return await manager.spawn(
-        RUN_A,
-        agent_id,
-        [sys.executable, "-c", script],
-        env=None,
-        cwd=None,
-    )
-
-
-async def wait_for_terminal(manager: ProcessManager, process_id: str) -> None:
-    for _ in range(20):
-        result = await manager.poll(process_id, AGENT_A, timeout_ms=500)
-        if result["status"] != "running":
-            return
-    raise AssertionError("process did not finish")
+# --- contract ----------------------------------------------------------------
 
 
 def test_schema_exposes_small_flat_action_contract() -> None:
-    assert PROCESS_TOOL_DESCRIPTION
+    assert f"`{SHELL_MODEL_NAME}` command" in PROCESS_TOOL_DESCRIPTION
     assert PROCESS_TOOL_PARAMETERS["type"] == "object"
     assert "oneOf" not in PROCESS_TOOL_PARAMETERS
     properties = cast(dict[str, Any], PROCESS_TOOL_PARAMETERS["properties"])
@@ -128,24 +110,149 @@ def test_schema_exposes_small_flat_action_contract() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_status_without_process_id_lists_owned_processes_only(
-    manager: ProcessManager,
-    context: ToolContext,
-) -> None:
-    owned_process_id = await spawn_python(manager, "import time; time.sleep(30)")
-    hidden_process_id = await spawn_python(manager, "import time; time.sleep(30)", agent_id=AGENT_B)
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        # Hermes and Codex name the id session_id; OpenClaw writes sessionId.
+        ({"action": "poll", "session_id": "proc_a"}, {"action": "status", "process_id": "proc_a"}),
+        (
+            {"action": "poll", "sessionId": "proc_a", "timeout": 30000},
+            {"action": "wait", "process_id": "proc_a", "timeout": 30000},
+        ),
+        (
+            {"action": "wait", "session_id": "proc_a", "timeout": 30},
+            {"action": "wait", "process_id": "proc_a", "timeout": 30},
+        ),
+        (
+            {"action": "log", "process_id": "proc_a", "offset": 0, "limit": 50},
+            {"action": "status", "process_id": "proc_a"},
+        ),
+        ({"action": "list"}, {"action": "status"}),
+        ({"action": "stop", "bash_id": "proc_a"}, {"action": "kill", "process_id": "proc_a"}),
+        ({"action": "Terminate", "task_id": "proc_a"}, {"action": "kill", "process_id": "proc_a"}),
+        (
+            {"request": {"operation": "poll", "id": "proc_a"}},
+            {"action": "status", "process_id": "proc_a"},
+        ),
+        # Placeholder values request nothing.
+        (
+            {"action": "status", "process_id": "proc_a", "filter": "", "limit": 0, "before": " "},
+            {"action": "status", "process_id": "proc_a"},
+        ),
+        ({"action": "status", "process_id": "", "filter": "", "limit": 0}, {"action": "status"}),
+        # Fields another action owns are dropped.
+        (
+            {"action": "kill", "process_id": "proc_a", "filter": "all", "timeout": 10},
+            {"action": "kill", "process_id": "proc_a"},
+        ),
+        (
+            {"action": "wait", "process_id": "proc_a", "filter": "running", "limit": 5},
+            {"action": "wait", "process_id": "proc_a"},
+        ),
+        ({"action": "status", "timeout": 5}, {"action": "status"}),
+        # A snapshot with a pattern or a timeout is a wait.
+        (
+            {"action": "status", "process_id": "proc_a", "until": "ready"},
+            {"action": "wait", "process_id": "proc_a", "pattern": "ready"},
+        ),
+        (
+            {"action": "status", "process_id": "proc_a", "timeout_ms": 5000},
+            {"action": "wait", "process_id": "proc_a", "timeout_ms": 5000},
+        ),
+    ],
+)
+def test_other_harness_process_calls_map_onto_the_actions(arguments, expected) -> None:
+    assert normalize_process_arguments(arguments) == expected
 
-    result = await call_process(manager, context, {"action": "status"})
-    await manager.kill(owned_process_id, AGENT_A)
-    await manager.kill(hidden_process_id, AGENT_B)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"poll": {"process_id": "process-a"}}, '"poll" is not a parameter'),
+        ({"action": "clear", "process_id": "process-a"}, '"action" must be one of'),
+        ({"action": "status", "text": "value"}, '"text" is not a parameter'),
+        ({"action": "status", "filter": "failed"}, '"filter" must be one of'),
+        ({"action": "status", "limit": 101}, '"limit" must be at most 100'),
+        ({"action": "status", "limit": True}, '"limit" must be an integer'),
+        (
+            {"action": "wait", "process_id": "proc_a", "timeout": 5, "timeout_ms": 9000},
+            "process was not run: timeout (5 s) and timeout_ms (9000 ms) disagree",
+        ),
+    ],
+    ids=[
+        "nested-call",
+        "unknown-action",
+        "input-field",
+        "unknown-filter",
+        "limit-above-100",
+        "limit-not-integer",
+        "disagreeing-timeouts",
+    ],
+)
+async def test_invalid_calls_are_rejected(manager, context, arguments, message) -> None:
+    result = await dispatch(manager, context, arguments)
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert message in result["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_input_actions_fail_with_the_alternative_and_leave_the_command_alone(
+    manager, context
+) -> None:
+    process_id = await spawn(manager)
+
+    for action in ("write", "submit", "send_keys", "input"):
+        result = await dispatch(
+            manager,
+            context,
+            {"action": action, "session_id": process_id, "text": "y\n", "eof": True},
+        )
+        assert result["error"] == {
+            "code": "invalid_arguments",
+            "message": (
+                "process was not run: background commands take no input; their input is closed "
+                "when they start. Run interactive programs with the terminal Tool if you have "
+                "it, or give the command its input through a file or a pipeline."
+            ),
+            "retryable": False,
+        }
+
+    tracked = manager.get_process(process_id, AGENT_A)
+    assert tracked.status == "running"
+    assert tracked.proc.stdin is None
+
+
+def test_activity_row_shows_the_normalized_action_and_process_id() -> None:
+    registry = make_registry(ProcessManager(sweep_interval_seconds=3600))
+
+    display = registry.display_for_call(
+        PROCESS_TOOL_NAME, {"action": "wait", "session_id": "proc_a", "until": "ready"}
+    )
+
+    assert [(part["kind"], part["value"]) for part in display["primary"]] == [
+        ("text", "wait"),
+        ("identifier", "proc_a"),
+    ]
+
+
+# --- status ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_without_process_id_lists_owned_processes_only(manager, context) -> None:
+    owned_process_id = await spawn(manager, command="npm run  dev\n")
+    await spawn(manager, agent_id=AGENT_B)
+
+    result = await dispatch(manager, context, {"action": "list"})
 
     assert result["ok"] is True
-    tracked_processes = cast(dict[str, Any], result["data"])["processes"]
-    assert tracked_processes == [
+    assert result["data"]["processes"] == [
         {
             "process_id": owned_process_id,
-            "command": None,
+            "command": "npm run dev",
             "status": "running",
             "exit_code": None,
             "started_at": manager.get_process(owned_process_id, AGENT_A).started_at.isoformat(),
@@ -153,50 +260,18 @@ async def test_status_without_process_id_lists_owned_processes_only(
             "log_file": None,
         }
     ]
-    registry = ToolRegistry()
-    register_process_tool(registry, manager)
-    display = registry.display_for_call(PROCESS_TOOL_NAME, {"action": "status"}, result=result)
+    display = make_registry(manager).display_for_call(
+        PROCESS_TOOL_NAME, {"action": "status"}, result=result
+    )
     assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": False}]
-
-
-@pytest.mark.asyncio
-async def test_status_with_process_id_returns_non_consuming_snapshot(
-    manager: ProcessManager,
-    context: ToolContext,
-) -> None:
-    process_id = await spawn_python(manager, "print('snapshot-output')")
-    await wait_for_terminal(manager, process_id)
-
-    first = await call_process(
-        manager,
-        context,
-        {"action": "status", "process_id": process_id},
-    )
-    second = await call_process(
-        manager,
-        context,
-        {"action": "status", "process_id": process_id},
-    )
-
-    first_data = cast(dict[str, Any], first["data"])
-    second_data = cast(dict[str, Any], second["data"])
-    assert first_data == second_data
-    assert first_data["process_id"] == process_id
-    assert first_data["status"] == "completed"
-    assert first_data["exit_code"] == 0
-    assert first_data["output"].strip() == "snapshot-output"
-    assert "truncated" not in first_data
-    assert "stdin_open" not in first_data
-    assert "waiting_for_input" not in first_data
-    assert first_data["log_file"] is None
 
 
 @pytest.mark.asyncio
 async def test_default_hides_130_finished_commands_but_history_remains_retrievable(
     manager, context
 ):
-    process_id = await spawn_python(manager, "print('retained output')")
-    await wait_for_terminal(manager, process_id)
+    process_id = await spawn(manager, "print('retained output')")
+    await manager.wait(process_id, AGENT_A, timeout_seconds=10)
     template = manager.get_process(process_id, AGENT_A)
     manager._processes.clear()
     for index in range(130):
@@ -207,18 +282,18 @@ async def test_default_hides_130_finished_commands_but_history_remains_retrievab
             started_at=template.started_at + timedelta(seconds=index),
         )
         manager._processes[tracked.process_id] = tracked
-    active_id = await spawn_python(manager, "import time; time.sleep(30)")
-    callbacks = []
+    active_id = await spawn(manager)
+    callbacks: list[Callable[[], None]] = []
     context = replace(context, result_persisted_hook=callbacks.append)
 
-    default = (await dispatch_process(manager, context, {"action": "status"}))["data"]
+    default = (await dispatch(manager, context, {"action": "status"}))["data"]
     assert [row["process_id"] for row in default["processes"]] == [active_id]
     assert default["counts"] == {"running": 1, "finished": 130}
     assert default["next_call"] is None
     arguments = default["history_call"]
     seen = []
     while arguments:
-        result = await dispatch_process(manager, context, arguments)
+        result = await dispatch(manager, context, arguments)
         assert result["ok"] is True
         page = result["data"]
         assert 1 <= len(page["processes"]) <= 20
@@ -226,15 +301,15 @@ async def test_default_hides_130_finished_commands_but_history_remains_retrievab
         arguments = page["next_call"]
     assert seen == [f"proc-{index:03d}" for index in reversed(range(130))]
     assert callbacks == []  # Browsing history must not acknowledge completion.
-    detail = await dispatch_process(manager, context, {"action": "status", "process_id": seen[-1]})
+    detail = await dispatch(manager, context, {"action": "status", "process_id": seen[-1]})
     assert detail["data"]["output"].strip() == "retained output"
     assert len(callbacks) == 1
 
 
 @pytest.mark.asyncio
 async def test_pages_use_stable_boundaries_and_scope_counts(manager, context):
-    process_id = await spawn_python(manager, "print('done')")
-    await wait_for_terminal(manager, process_id)
+    process_id = await spawn(manager, "print('done')")
+    await manager.wait(process_id, AGENT_A, timeout_seconds=10)
     template = manager.get_process(process_id, AGENT_A)
     manager._processes.clear()
     for key in ("a", "b", "c"):
@@ -245,28 +320,28 @@ async def test_pages_use_stable_boundaries_and_scope_counts(manager, context):
     manager._processes["foreign-project"] = replace(
         template, process_id="foreign-project", project_id="other"
     )
-    first = (
-        await dispatch_process(manager, context, {"action": "status", "filter": "all", "limit": 1})
-    )["data"]
+    first = (await dispatch(manager, context, {"action": "status", "filter": "all", "limit": 1}))[
+        "data"
+    ]
     assert first["counts"] == {"running": 0, "finished": 3}
     assert [row["process_id"] for row in first["processes"]] == ["c"]
     manager._processes["new"] = replace(
         template, process_id="new", started_at=template.started_at + timedelta(seconds=1)
     )
-    second = (await dispatch_process(manager, context, first["next_call"]))["data"]
+    second = (await dispatch(manager, context, first["next_call"]))["data"]
     assert [row["process_id"] for row in second["processes"]] == ["b"]
     del manager._processes["b"]
-    expired = await dispatch_process(manager, context, second["next_call"])
+    expired = await dispatch(manager, context, second["next_call"])
     assert expired["error"]["code"] == "process_not_found"
     for boundary in ("foreign-agent", "foreign-project", "missing"):
-        result = await dispatch_process(manager, context, {"action": "status", "before": boundary})
+        result = await dispatch(manager, context, {"action": "status", "before": boundary})
         assert result["error"]["code"] == "process_not_found"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("selection", ["running", "finished", "all"])
 async def test_empty_lists_and_explicit_filters(manager, context, selection):
-    result = await dispatch_process(
+    result = await dispatch(
         manager, context, {"action": "status", "filter": selection, "limit": 100}
     )
     assert result["data"] == {
@@ -278,43 +353,50 @@ async def test_empty_lists_and_explicit_filters(manager, context, selection):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"action": "status", "filter": "failed"},
-        *({"action": "status", "limit": value} for value in (0, 101, True, 1.5, None, "20")),
-        {"action": "status", "before": 1},
-    ],
-)
-async def test_list_arguments_are_validated_before_process_access(manager, context, arguments):
-    result = await call_process(manager, context, arguments)
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-
-
-@pytest.mark.asyncio
-async def test_status_caps_output_tail(
-    manager: ProcessManager,
-    context: ToolContext,
+@pytest.mark.parametrize("with_log", [False, True], ids=["complete", "truncated-with-log"])
+async def test_status_with_process_id_returns_a_bounded_non_consuming_snapshot(
+    tmp_path: Path, with_log: bool
 ) -> None:
-    process_id = await spawn_python(manager, "print('x' * 9000 + 'END-MARKER')")
-    await wait_for_terminal(manager, process_id)
-
-    result = await call_process(
-        manager,
-        context,
-        {"action": "status", "process_id": process_id},
+    manager = ProcessManager(
+        sweep_interval_seconds=3600,
+        temporary_files=TemporaryFileManager(tmp_path) if with_log else None,
     )
+    line_count = 200 if with_log else 1
+    try:
+        process_id = await spawn(
+            manager, f"print('\\n'.join(f'line-{{i}}' for i in range({line_count})))"
+        )
+        await manager.wait(process_id, AGENT_A, timeout_seconds=10)
+        arguments: JsonObject = {"action": "status", "process_id": process_id}
 
-    data = cast(dict[str, Any], result["data"])
-    assert len(data["output"]) <= 8000
-    assert data["output"].rstrip().endswith("END-MARKER")
+        first = await dispatch(manager, make_context(tmp_path), arguments)
+        second = await dispatch(manager, make_context(tmp_path), arguments)
+    finally:
+        await manager.aclose()
+
+    assert first == second
+    data = first["data"]
+    assert (data["process_id"], data["status"], data["exit_code"]) == (process_id, "completed", 0)
+    assert "stdin_open" not in data
+    assert "waiting_for_input" not in data
+    if not with_log:
+        assert data["output"].strip() == "line-0"
+        assert "truncated" not in data
+        assert data["log_file"] is None
+        return
     assert data["truncated"] is True
+    marker, *tail = data["output"].splitlines()
+    assert tail == [f"line-{i}" for i in range(100, 200)]
+    assert data["log_file"] in marker
+    assert Path(data["log_file"]).read_text(encoding="utf-8").splitlines() == [
+        f"line-{i}" for i in range(200)
+    ]
 
 
-@pytest.mark.parametrize("newline", ["\n", "\r\n"])
-@pytest.mark.parametrize("line_count", [0, 1, 100, 101, 200])
-@pytest.mark.parametrize("has_log", [False, True])
+@pytest.mark.parametrize(
+    ("newline", "line_count", "has_log"),
+    [("\n", 0, False), ("\n", 100, True), ("\r\n", 101, True), ("\n", 200, False)],
+)
 def test_output_line_budget_preserves_text_and_log_reference(newline, line_count, has_log):
     lines = [f"line-{index}\n" for index in range(line_count)]
     output = "".join(line.replace("\n", newline) for line in lines)
@@ -330,6 +412,7 @@ def test_output_line_budget_preserves_text_and_log_reference(newline, line_count
             assert log_file in marker
     else:
         assert fields["output"] == "".join(lines)
+        assert "log_file" not in fields
 
 
 @pytest.mark.parametrize(
@@ -349,8 +432,10 @@ def test_output_shows_carriage_returns_as_a_terminal_leaves_them(output, shown):
     assert process_module.shape_process_output(output)["output"] == shown
 
 
-@pytest.mark.parametrize("size", [0, 7999, 8000, 8001, 20000])
-@pytest.mark.parametrize("already_truncated", [False, True])
+@pytest.mark.parametrize(
+    ("size", "already_truncated"),
+    [(0, False), (8000, False), (8001, False), (7999, True), (20000, True)],
+)
 def test_output_character_budget_includes_marker(size, already_truncated):
     output = "x" * size
     fields = process_module.shape_process_output(output, truncated=already_truncated)
@@ -362,45 +447,28 @@ def test_output_character_budget_includes_marker(size, already_truncated):
         assert fields["output"] == output
 
 
-@pytest.mark.asyncio
-async def test_status_line_limit_preserves_complete_log_and_is_non_consuming(tmp_path):
-    from core.storage import TemporaryFileManager
-
-    manager = ProcessManager(temporary_files=TemporaryFileManager(tmp_path))
-    try:
-        process_id = await spawn_python(
-            manager, "print('\\n'.join(f'line-{i}' for i in range(200)))"
-        )
-        await wait_for_terminal(manager, process_id)
-        context = make_context(tmp_path)
-        arguments = {"action": "status", "process_id": process_id}
-        first = await call_process(manager, context, arguments)
-        second = await call_process(manager, context, arguments)
-        assert first == second
-        data = first["data"]
-        assert data["exit_code"] == 0
-        assert data["truncated"] is True
-        assert data["output"].splitlines()[1:] == [f"line-{i}" for i in range(100, 200)]
-        log_file = Path(data["log_file"])
-        assert log_file.read_text(encoding="utf-8").splitlines() == [
-            f"line-{i}" for i in range(200)
-        ]
-    finally:
-        await manager.aclose()
+# --- kill and completion acknowledgement -------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_kill_stops_a_process(
-    manager: ProcessManager,
-    context: ToolContext,
-) -> None:
-    process_id = await spawn_python(manager, "import time; time.sleep(30)")
+async def test_kill_stops_the_command_and_a_failed_tree_kill_can_be_retried(
+    manager, context, monkeypatch
+):
+    process_id = await spawn(manager)
 
-    result = await call_process(
-        manager,
-        context,
-        {"action": "kill", "process_id": process_id},
-    )
+    async def denied(proc, **kwargs):
+        raise PermissionError("test-owned denied tree")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(manager_module, "kill_process_tree_async", denied)
+        result = await dispatch(manager, context, {"action": "kill", "process_id": process_id})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "process_kill_failed"
+        assert result["error"]["retryable"] is True
+        assert process_id in result["error"]["message"]
+        assert manager.get_process(process_id, AGENT_A).status == "running"
+
+    result = await dispatch(manager, context, {"action": "kill", "process_id": process_id})
 
     assert result == tool_success({"process_id": process_id, "status": "killed"})
 
@@ -413,14 +481,10 @@ async def test_terminal_manual_result_cancels_pending_completion_after_persisten
     action: str,
 ) -> None:
     callbacks: list[Callable[[], None]] = []
-    context = make_context(
-        tmp_path,
-        result_persisted_hook=lambda callback: callbacks.append(callback),
-    )
-    script = "print('done')" if action == "status" else "import time; time.sleep(30)"
-    process_id = await spawn_python(manager, script)
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    process_id = await spawn(manager, "print('done')" if action == "status" else SLEEP)
     if action == "status":
-        await wait_for_terminal(manager, process_id)
+        await manager.wait(process_id, AGENT_A, timeout_seconds=10)
 
     notification_release = asyncio.Event()
 
@@ -430,11 +494,7 @@ async def test_terminal_manual_result_cancels_pending_completion_after_persisten
     notification_task = asyncio.create_task(pending_notification())
     manager.register_completion_notification(process_id, AGENT_A, notification_task)
 
-    result = await call_process(
-        manager,
-        context,
-        {"action": action, "process_id": process_id},
-    )
+    result = await dispatch(manager, context, {"action": action, "process_id": process_id})
 
     assert result["ok"] is True
     assert len(callbacks) == 1
@@ -447,59 +507,187 @@ async def test_terminal_manual_result_cancels_pending_completion_after_persisten
     assert manager.get_process(process_id, AGENT_A).completion_acknowledged is True
 
 
-@pytest.mark.parametrize(
-    "arguments",
-    (
-        {"poll": {"process_id": "process-a"}},
-        {"action": "clear", "process_id": "process-a"},
-        {"action": "status", "text": "value"},
-    ),
-)
-@pytest.mark.asyncio
-async def test_unknown_process_calls_are_rejected(
-    manager: ProcessManager,
-    context: ToolContext,
-    arguments: JsonObject,
-) -> None:
-    result = await dispatch_process(manager, context, arguments)
-
-    assert result["ok"] is False
-    assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"
+# --- wait --------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("dispatch", [False, True])
-async def test_removed_input_action_cannot_affect_a_running_process(manager, context, dispatch):
-    process_id = await spawn_python(manager, "import time; time.sleep(30)")
-    invoke = dispatch_process if dispatch else call_process
-    result = await invoke(
+async def test_wait_returns_the_final_result_when_the_command_exits(manager, tmp_path):
+    persisted: list[Callable[[], None]] = []
+    context = make_context(tmp_path, result_persisted_hook=persisted.append)
+    process_id = await spawn(manager, "import time; time.sleep(0.3); print('work done')")
+
+    result = await dispatch(manager, context, {"action": "wait", "process_id": process_id})
+
+    data = result["data"]
+    assert (data["status"], data["exit_code"]) == ("completed", 0)
+    assert data["output"].strip() == "work done"
+    assert "note" not in data
+    # Like a terminal status, the result replaces the automatic completion notice.
+    assert len(persisted) == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_when_a_line_matches_and_the_command_keeps_running(manager, context):
+    process_id = await spawn(manager, SERVER)
+
+    result = await asyncio.wait_for(
+        dispatch(
+            manager,
+            context,
+            {"action": "wait", "process_id": process_id, "pattern": "ready on port \\d+"},
+        ),
+        10,
+    )
+
+    data = result["data"]
+    assert data["status"] == "running"
+    assert data["matched"] == "Server READY on port 3000"
+    assert data["output"].splitlines() == ["booting", "Server READY on port 3000"]
+    assert data["note"] == "The command is still running; vBot delivers its result when it exits."
+    assert manager.get_process(process_id, AGENT_A).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_output_printed_before_the_wait_still_matches(manager, context):
+    process_id = await spawn(manager, "print('ready', flush=True); import time; time.sleep(30)")
+    await manager.wait(process_id, AGENT_A, timeout_seconds=10, pattern=re.compile("ready"))
+
+    # A zero timeout returns at once, so only already printed output can match.
+    result = await dispatch(
         manager,
         context,
-        {"action": "input", "process_id": process_id, "text": "value", "eof": True},
+        {"action": "wait", "process_id": process_id, "pattern": "ready", "timeout": 0},
     )
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-    assert manager.get_process(process_id, AGENT_A).status == "running"
-    assert manager.get_process(process_id, AGENT_A).proc.stdin is None
-    await manager.kill(process_id, AGENT_A)
+
+    assert result["data"]["matched"] == "ready"
 
 
-@pytest.mark.parametrize("action", PROCESS_ACTIONS)
 @pytest.mark.asyncio
-async def test_cross_agent_process_access_returns_not_found(
-    manager: ProcessManager,
-    tmp_path: Path,
-    action: str,
-) -> None:
-    process_id = await spawn_python(manager, "import time; time.sleep(30)")
-    arguments: JsonObject = {"action": action, "process_id": process_id}
+async def test_a_wait_that_runs_out_of_time_says_what_to_do(manager, context, monkeypatch):
+    monkeypatch.setattr(process_module, "PROCESS_WAIT_MAX_SECONDS", 0)
+    process_id = await spawn(manager)
 
-    result = await call_process(
-        manager,
-        make_context(tmp_path, agent_id=AGENT_B),
-        arguments,
+    for arguments, note, ends_turn in [
+        ({"timeout": 0}, "Still running after 0 s.", True),
+        ({"timeout": 900}, "wait waits at most 0 s per call. Still running after 0 s.", True),
+        ({"timeout": 0, "pattern": "ready"}, "No output line matched pattern within 0 s", False),
+    ]:
+        result = await dispatch(
+            manager, context, {"action": "wait", "process_id": process_id, **arguments}
+        )
+
+        data = result["data"]
+        assert data["status"] == "running"
+        assert "matched" not in data
+        assert data["note"].startswith(note)
+        # Without a pattern the result arrives on its own, so another wait only spends a
+        # round trip; a server's result never arrives while it serves.
+        assert ("end your turn" in data["note"]) is ends_turn
+        assert "wait again" not in data["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "note"),
+    [
+        (
+            {"timeout": 30000},
+            "timeout 30000 was read as milliseconds (30 s); timeout takes seconds.",
+        ),
+        ({"timeout": 5, "timeout_ms": 5000}, None),
+        (
+            {"pattern": "done (exit"},
+            "pattern is not a valid regular expression, so it was matched as plain text.",
+        ),
+    ],
+)
+async def test_wait_reads_other_units_and_plain_text_patterns(manager, context, arguments, note):
+    process_id = await spawn(manager, "print('done (exit 0)')")
+
+    result = await dispatch(
+        manager, context, {"action": "wait", "process_id": process_id, **arguments}
     )
-    await manager.kill(process_id, AGENT_A)
+
+    data = result["data"]
+    assert data["output"].strip() == "done (exit 0)"
+    expected_note = note
+    if "pattern" in arguments:
+        # Matching stdout may win the race with process-exit finalization.
+        assert data["matched"] == "done (exit 0)"
+        assert data["status"] in {"running", "completed"}
+        if data["status"] == "running":
+            expected_note = (
+                f"{note} The command is still running; vBot delivers its result when it exits."
+            )
+    else:
+        assert data["status"] == "completed"
+    assert data.get("note") == expected_note
+
+
+@pytest.mark.asyncio
+async def test_user_can_end_a_wait_and_keep_the_command(manager, tmp_path):
+    controls: list[Callable[[], bool]] = []
+    context = make_context(tmp_path, background_registration_hook=controls.append)
+    process_id = await spawn(manager)
+
+    waiting = asyncio.create_task(
+        dispatch(manager, context, {"action": "wait", "process_id": process_id, "timeout": 30})
+    )
+    while not controls:
+        await asyncio.sleep(0.01)
+    assert controls[0]() is True
+    result = await asyncio.wait_for(waiting, 5)
+
+    assert result["data"]["status"] == "running"
+    assert result["data"]["note"] == (
+        "The user ended this wait. The command is still running, and vBot delivers its "
+        "result when it exits."
+    )
+    assert manager.get_process(process_id, AGENT_A).status == "running"
+
+
+@pytest.mark.asyncio
+async def test_user_cancelled_wait_leaves_the_command_running(manager, tmp_path):
+    cancelled = False
+    waiting_started = asyncio.Event()
+    context = make_context(
+        tmp_path,
+        cancel_check_hook=lambda: cancelled,
+        background_registration_hook=lambda _control: waiting_started.set(),
+    )
+    process_id = await spawn(manager)
+
+    waiting = asyncio.create_task(
+        dispatch(manager, context, {"action": "wait", "process_id": process_id, "timeout": 30})
+    )
+    await asyncio.wait_for(waiting_started.wait(), 5)
+    cancelled = True
+    result = await asyncio.wait_for(waiting, 5)
+
+    assert result["error"] == {
+        "code": "cancelled_by_user",
+        "message": "The user cancelled this wait. The command is still running.",
+        "retryable": False,
+    }
+    assert manager.get_process(process_id, AGENT_A).status == "running"
+
+
+# --- finding the right process -----------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_id", "project_id", "action"),
+    [(AGENT_B, "project-a", "kill"), (AGENT_A, "project-b", "wait"), (AGENT_A, None, "status")],
+    ids=["other-agent", "other-project", "no-project"],
+)
+async def test_another_agent_address_cannot_see_the_process(
+    manager, tmp_path, agent_id, project_id, action
+):
+    process_id = await spawn(manager, project_id="project-a")
+    context = make_context(tmp_path, agent_id=agent_id, project_id=project_id)
+
+    result = await dispatch(manager, context, {"action": action, "process_id": process_id})
 
     assert result == tool_failure(
         "process_not_found",
@@ -507,48 +695,45 @@ async def test_cross_agent_process_access_returns_not_found(
         f"`{SHELL_MODEL_NAME}` command that runs in the background returns its process_id.",
         retryable=False,
     )
+    assert manager.get_process(process_id, AGENT_A, project_id="project-a").status == "running"
 
 
 @pytest.mark.asyncio
-async def test_same_agent_process_access_returns_not_found_across_project_scopes(
-    manager: ProcessManager, tmp_path: Path
-) -> None:
-    process_id = await manager.spawn(
-        RUN_A,
-        AGENT_A,
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        project_id="project-a",
-        env=None,
-        cwd=None,
-    )
-    context = replace(make_context(tmp_path, agent_id=AGENT_A), project_id="project-b")
+async def test_wait_without_an_id_lists_the_commands_to_choose_from(manager, context):
+    process_id = await spawn(manager, command="npm run dev")
 
-    result = await call_process(manager, context, {"action": "status", "process_id": process_id})
-    await manager.kill(process_id, AGENT_A, project_id="project-a")
+    result = await dispatch(manager, context, {"action": "wait", "pattern": "ready"})
 
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": "wait needs the process_id of the command to wait for. "
+        f"Your commands: {process_id} (running: npm run dev).",
+        "retryable": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_unknown_id_names_the_agents_commands(manager, context):
+    long_command = "python -m http.server 8000 " + "--flag " * 20
+    running = await spawn(manager, command=long_command)
+    finished = await spawn(manager, "print(1)", command="git status")
+    await manager.wait(finished, AGENT_A, timeout_seconds=10)
+
+    result = await dispatch(manager, context, {"action": "status", "process_id": "proc_missing"})
+
+    label = " ".join(long_command.split())[:57] + "..."
     assert result["error"]["code"] == "process_not_found"
-    assert result["error"]["message"].startswith(f"No background command has the id {process_id}.")
+    assert result["error"]["message"] == (
+        f"No background command has the id proc_missing. Your commands: {running} "
+        f"(running: {label}); {finished} (completed: git status)."
+    )
 
 
 @pytest.mark.asyncio
-async def test_failed_kill_returns_retryable_error_and_allows_retry(manager, context, monkeypatch):
-    import core.tools.process_manager as manager_module
+async def test_terminal_id_points_to_the_terminal_tool(manager, context):
+    result = await dispatch(manager, context, {"action": "kill", "process_id": "term_abc123"})
 
-    process_id = await manager.spawn(
-        RUN_A, AGENT_A, [sys.executable, "-c", "import time; time.sleep(30)"], env=None, cwd=None
+    assert result["error"]["message"] == (
+        "term_abc123 is a terminal, not a background command. Use the terminal Tool with "
+        "this terminal_id."
     )
-
-    async def denied(proc, **kwargs):
-        raise PermissionError("test-owned denied tree")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(manager_module, "kill_process_tree_async", denied)
-        result = await call_process(manager, context, {"action": "kill", "process_id": process_id})
-        assert result["ok"] is False
-        assert result["error"]["code"] == "process_kill_failed"
-        assert result["error"]["retryable"] is True
-        assert process_id in result["error"]["message"]
-        assert manager.get_process(process_id, AGENT_A).status == "running"
-    result = await call_process(manager, context, {"action": "kill", "process_id": process_id})
-    assert result["ok"] is True
-    assert result["data"]["status"] == "killed"

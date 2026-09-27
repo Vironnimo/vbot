@@ -1,4 +1,4 @@
-"""Process manager: lifecycle behavior."""
+"""ProcessManager lifecycle: admission, scopes, shutdown, termination, and retention."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 import re
 import sys
 from contextlib import suppress
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import psutil  # type: ignore[import-untyped]
 import pytest
@@ -15,32 +15,46 @@ from core.runs import RunExecutionOwner
 from core.tools import process_manager as process_manager_module
 from core.tools.process_manager import (
     ProcessManager,
+    ProcessManagerError,
     ProcessNotFoundError,
+    ProcessTerminationError,
 )
-from tests.core.tools.process_manager_helpers import (
-    AGENT_A,
-    SCOPE_A,
-    as_text,
-    poll_until_terminal,
-)
-from tests.core.tools.process_manager_helpers import (
+from tests.core.tools.process_manager_test_support import AGENT_A, SCOPE_A, finish, spawn
+from tests.core.tools.process_manager_test_support import (
     manager as manager,
 )
+
+
+def delay_os_launch(monkeypatch: pytest.MonkeyPatch) -> tuple[asyncio.Event, asyncio.Event]:
+    """Hold every later OS process creation until the returned release event is set."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original = asyncio.create_subprocess_exec
+
+    async def delayed_spawn(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
+    return started, release
+
+
+def sweeper_running() -> bool:
+    return any(
+        task.get_name() == "process-manager-sweep" and not task.done()
+        for task in asyncio.all_tasks()
+    )
+
+
+# --- admission, scopes, and shutdown -----------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_execution_group_stop_keeps_unrelated_process_in_same_scope(manager):
     owner = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
-    argv = [sys.executable, "-c", "import time; time.sleep(30)"]
-    owned = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        argv,
-        env=None,
-        cwd=None,
-        execution_owner=owner,
-    )
-    unrelated = await manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None)
+    owned = await spawn(manager, execution_owner=owner)
+    unrelated = await spawn(manager)
     assert manager.has_execution_work(owner)
     await manager.close_execution_group("fixture", "group", "epoch")
     assert not manager.has_execution_work(owner)
@@ -53,42 +67,17 @@ async def test_execution_group_stop_keeps_unrelated_process_in_same_scope(manage
 
 @pytest.mark.asyncio
 async def test_execution_group_stop_waits_for_pending_process_creation(manager, monkeypatch):
-    started = asyncio.Event()
-    release = asyncio.Event()
-    original = asyncio.create_subprocess_exec
-
-    async def blocked_spawn(*args, **kwargs):
-        started.set()
-        await release.wait()
-        return await original(*args, **kwargs)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", blocked_spawn)
+    started, release = delay_os_launch(monkeypatch)
     owner = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
-    launch = asyncio.create_task(
-        manager.spawn(
-            SCOPE_A,
-            AGENT_A,
-            [sys.executable, "-c", "import time; time.sleep(30)"],
-            env=None,
-            cwd=None,
-            execution_owner=owner,
-        )
-    )
+    launch = asyncio.create_task(spawn(manager, execution_owner=owner))
     await started.wait()
     close = asyncio.create_task(manager.close_execution_group("fixture", "group", "epoch"))
     await asyncio.sleep(0)
     assert not close.done()
     assert manager.has_execution_work(owner)
     # A launch racing the drain is rejected while the group closes.
-    with pytest.raises(process_manager_module.ProcessManagerError):
-        await manager.spawn(
-            SCOPE_A,
-            AGENT_A,
-            [sys.executable, "-c", "import time; time.sleep(30)"],
-            env=None,
-            cwd=None,
-            execution_owner=owner,
-        )
+    with pytest.raises(ProcessManagerError):
+        await spawn(manager, execution_owner=owner)
     release.set()
     process_id = await launch
     await close
@@ -98,41 +87,30 @@ async def test_execution_group_stop_waits_for_pending_process_creation(manager, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("owned", [False, True])
-@pytest.mark.parametrize("scope_only", [False, True])
-async def test_shutdown_waits_for_pending_launch_and_closes_admission(
-    manager, monkeypatch, owned, scope_only
+@pytest.mark.parametrize("closing", ["run-scope", "shutdown"])
+async def test_closing_kills_running_and_pending_launches_and_closes_admission(
+    manager, monkeypatch, closing
 ):
-    started = asyncio.Event()
-    release = asyncio.Event()
-    original = asyncio.create_subprocess_exec
-
-    async def delayed_spawn(*args, **kwargs):
-        started.set()
-        await release.wait()
-        return await original(*args, **kwargs)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
-    owner = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch") if owned else None
-    argv = [sys.executable, "-c", "import time; time.sleep(30)"]
-    launch = asyncio.create_task(
-        manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None, execution_owner=owner)
-    )
+    running_id = await spawn(manager)
+    started, release = delay_os_launch(monkeypatch)
+    launch = asyncio.create_task(spawn(manager))
     await started.wait()
     close = asyncio.create_task(
-        manager.cancel_scope_async(SCOPE_A) if scope_only else manager.aclose()
+        manager.cancel_scope_async(SCOPE_A) if closing == "run-scope" else manager.aclose()
     )
     try:
         await asyncio.sleep(0)
         assert not close.done()
         release.set()
-        process_id = await launch
+        launched_id = await launch
         await close
-        tracked = manager.get_process(process_id, AGENT_A)
-        assert tracked.proc.returncode is not None
-        assert tracked.status == "killed"
-        with pytest.raises(process_manager_module.ProcessManagerError):
-            await manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None)
+        for process_id in (running_id, launched_id):
+            tracked = manager.get_process(process_id, AGENT_A)
+            assert tracked.status == "killed"
+            assert tracked.proc.returncode is not None
+            assert tracked.wait_task is not None and tracked.wait_task.done()
+        with pytest.raises(ProcessManagerError):
+            await spawn(manager)
     finally:
         release.set()
         await asyncio.gather(launch, close, return_exceptions=True)
@@ -140,16 +118,17 @@ async def test_shutdown_waits_for_pending_launch_and_closes_admission(
 
 
 @pytest.mark.asyncio
-async def test_settled_run_scope_releases_its_closed_marker(manager):
-    argv = [sys.executable, "-c", "import time; time.sleep(30)"]
-    process_id = await manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None)
+async def test_run_scope_cancellation_is_limited_to_its_scope_until_the_run_settles(manager):
+    process_id = await spawn(manager)
+    other_scope_id = await spawn(manager, scope_key="run-b")
 
     await manager.cancel_scope_async(SCOPE_A)
 
     assert manager.get_process(process_id, AGENT_A).status == "killed"
+    assert manager.get_process(other_scope_id, AGENT_A).status == "running"
     # Until the Run settles, a launch racing its cancellation stays rejected.
-    with pytest.raises(process_manager_module.ProcessManagerError):
-        await manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None)
+    with pytest.raises(ProcessManagerError):
+        await spawn(manager)
 
     manager.release_scope(SCOPE_A)
 
@@ -161,29 +140,26 @@ async def test_settled_run_scope_releases_its_closed_marker(manager):
 
 
 @pytest.mark.asyncio
-async def test_synchronous_stop_retires_a_late_launch(manager, monkeypatch):
-    started = asyncio.Event()
-    release = asyncio.Event()
-    original = asyncio.create_subprocess_exec
-
-    async def delayed_spawn(*args, **kwargs):
-        started.set()
-        await release.wait()
-        return await original(*args, **kwargs)
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
-    argv = [sys.executable, "-c", "import time; time.sleep(30)"]
-    launch = asyncio.create_task(manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None))
+async def test_synchronous_stop_kills_running_processes_and_retires_a_late_launch(
+    manager, monkeypatch
+):
+    running_id = await spawn(manager)
+    started, release = delay_os_launch(monkeypatch)
+    launch = asyncio.create_task(spawn(manager))
     await started.wait()
     try:
         manager.stop()
         release.set()
-        process_id = await launch
-        tracked = manager.get_process(process_id, AGENT_A)
-        assert tracked.status == "killed"
-        assert tracked.proc.returncode is not None
-        with pytest.raises(process_manager_module.ProcessManagerError):
-            await manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None)
+        launched_id = await launch
+        running = manager.get_process(running_id, AGENT_A)
+        assert running.wait_task is not None
+        await asyncio.wait_for(running.wait_task, timeout=5)
+        for process_id in (running_id, launched_id):
+            tracked = manager.get_process(process_id, AGENT_A)
+            assert tracked.status == "killed"
+            assert tracked.proc.returncode is not None
+        with pytest.raises(ProcessManagerError):
+            await spawn(manager)
     finally:
         release.set()
         await asyncio.gather(launch, return_exceptions=True)
@@ -191,8 +167,7 @@ async def test_synchronous_stop_retires_a_late_launch(manager, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("owned", [False, True])
-async def test_cancel_during_os_launch_waits_and_kills_created_process(manager, monkeypatch, owned):
+async def test_cancel_during_os_launch_waits_and_kills_created_process(manager, monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
     original = asyncio.create_subprocess_exec
@@ -206,17 +181,7 @@ async def test_cancel_during_os_launch_waits_and_kills_created_process(manager, 
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_return)
-    owner = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch") if owned else None
-    launch = asyncio.create_task(
-        manager.spawn(
-            SCOPE_A,
-            AGENT_A,
-            [sys.executable, "-c", "import time; time.sleep(30)"],
-            env=None,
-            cwd=None,
-            execution_owner=owner,
-        )
-    )
+    launch = asyncio.create_task(spawn(manager))
     await started.wait()
     try:
         launch.cancel()
@@ -238,170 +203,55 @@ async def test_cancel_during_os_launch_waits_and_kills_created_process(manager, 
 
 
 @pytest.mark.asyncio
-async def test_spawn_captures_stdout_and_stderr(manager: ProcessManager) -> None:
-    process_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [
-            sys.executable,
-            "-c",
-            "import sys; print('hello'); print('problem', file=sys.stderr)",
-        ],
-        env=None,
-        cwd=None,
-    )
+async def test_parallel_process_ids_skip_collisions(manager, monkeypatch):
+    from core.utils import ids
 
-    result = await poll_until_terminal(manager, process_id)
-
-    assert result["status"] == "completed"
-    assert result["exit_code"] == 0
-    assert "hello" in as_text(result["stdout"])
-    assert "problem" in as_text(result["stderr"])
-    assert result["output"]
+    values = iter((1, 1, 2))
+    monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    first, second = await asyncio.gather(*(spawn(manager, "pass") for _ in range(2)))
+    assert {first, second} == {"proc_000000000001", "proc_000000000002"}
+    assert manager.get_process(first, AGENT_A).process_id == first
+    assert manager.get_process(second, AGENT_A).process_id == second
 
 
 @pytest.mark.asyncio
-async def test_process_access_requires_matching_project_scope(manager: ProcessManager) -> None:
-    process_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        project_id="project-a",
-        env=None,
-        cwd=None,
-    )
-
-    with pytest.raises(ProcessNotFoundError):
-        manager.get_process(process_id, AGENT_A)
-    with pytest.raises(ProcessNotFoundError):
-        manager.get_process(process_id, AGENT_A, project_id="project-b")
-
-    assert manager.get_process(process_id, AGENT_A, project_id="project-a").process_id == process_id
-    await manager.kill(process_id, AGENT_A, project_id="project-a")
-
-
-@pytest.mark.asyncio
-async def test_output_is_stripped_of_ansi_escape_sequences(manager: ProcessManager) -> None:
-    # A model must never see raw escape codes — it copies them into file writes.
-    # The colored/title markers are removed while the visible text survives, in
-    # both the streamed poll output and the full log buffer.
-    script = (
-        "import sys; esc = chr(27); bel = chr(7); "
-        "sys.stdout.write(f'{esc}[31mred{esc}[0m and {esc}]0;title{bel}done\\n')"
-    )
-    process_id = await manager.spawn(
-        SCOPE_A, AGENT_A, [sys.executable, "-c", script], env=None, cwd=None
-    )
-
-    result = await poll_until_terminal(manager, process_id)
-    log_result = await manager.log(process_id, AGENT_A)
-
-    streamed = as_text(result["output"])
-    logged = as_text(log_result["output"])
-    assert "red and done" in streamed
-    assert "red and done" in logged
-    for surfaced in (streamed, logged):
-        assert "\x1b" not in surfaced
-        assert "[31m" not in surfaced
-        assert "title" not in surfaced  # the OSC title payload is stripped too
-
-
-@pytest.mark.asyncio
-async def test_buffer_cap_drops_oldest_bytes_and_marks_truncated(tmp_path) -> None:
-    manager = ProcessManager(buffer_cap_bytes=32, sweep_interval_seconds=3600)
+async def test_sweeper_removes_expired_processes_and_stops_with_the_manager() -> None:
+    manager = ProcessManager(sweep_interval_seconds=3600, finished_process_ttl=timedelta(0))
+    manager.start()
     try:
-        script = "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"
-        process_id = await manager.spawn(
-            SCOPE_A,
-            AGENT_A,
-            [sys.executable, "-c", script],
-            env=None,
-            cwd=tmp_path,
-        )
+        finished_id = await spawn(manager, "print('done')")
+        await finish(manager, finished_id)
+        running_id = await spawn(manager)
 
-        result = await poll_until_terminal(manager, process_id)
-        log_result = await manager.log(process_id, AGENT_A)
+        await manager.sweep_finished()
 
-        assert result["status"] == "completed"
-        assert log_result["truncated"] is True
-        assert log_result["output"] == "a" * 32
+        with pytest.raises(ProcessNotFoundError):
+            manager.get_process(finished_id, AGENT_A)
+        assert manager.get_process(running_id, AGENT_A).status == "running"
     finally:
         await manager.aclose()
+    # Closing awaits the cancelled periodic sweeper as well.
+    assert not sweeper_running()
+
+
+# --- termination -------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sweep_finished_removes_expired_processes(manager: ProcessManager) -> None:
-    process_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", "print('done')"],
-        env=None,
-        cwd=None,
-    )
-    await poll_until_terminal(manager, process_id)
+@pytest.mark.parametrize("by_user", [False, True], ids=["kill", "cancel-for-user"])
+async def test_kill_stops_the_process_and_records_whether_the_user_asked(manager, by_user):
+    process_id = await spawn(manager)
+
+    if by_user:
+        await manager.cancel_for_user(process_id, AGENT_A)
+    else:
+        await manager.kill(process_id, AGENT_A)
+
     tracked = manager.get_process(process_id, AGENT_A)
-    tracked.finished_at = datetime.now(UTC) - timedelta(minutes=31)
-
-    await manager.sweep_finished()
-
-    with pytest.raises(ProcessNotFoundError):
-        manager.get_process(process_id, AGENT_A)
-
-
-@pytest.mark.asyncio
-async def test_cancel_scope_kills_active_processes(manager: ProcessManager) -> None:
-    process_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        env=None,
-        cwd=None,
-    )
-
-    await manager.cancel_scope_async(SCOPE_A)
-    result = await manager.poll(process_id, AGENT_A, timeout_ms=5000)
-
-    assert result["status"] == "killed"
-
-
-@pytest.mark.asyncio
-async def test_stop_kills_active_processes(manager: ProcessManager) -> None:
-    process_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        env=None,
-        cwd=None,
-    )
-    tracked = manager.get_process(process_id, AGENT_A)
-
-    manager.stop()
-    assert tracked.wait_task is not None
-    await asyncio.wait_for(tracked.wait_task, timeout=5)
-    result = await manager.poll(process_id, AGENT_A, timeout_ms=5000)
-
-    assert result["status"] == "killed"
-    assert tracked.proc.returncode is not None
-
-
-@pytest.mark.asyncio
-async def test_aclose_awaits_process_cleanup(manager: ProcessManager) -> None:
-    manager.start()
-    process_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        env=None,
-        cwd=None,
-    )
-    tracked = manager.get_process(process_id, AGENT_A)
-
-    await manager.aclose()
-
-    assert manager._sweeper_task is None
     assert tracked.status == "killed"
     assert tracked.proc.returncode is not None
-    assert tracked.wait_task is not None and tracked.wait_task.done()
+    assert tracked.finished_at is not None
+    assert tracked.cancelled_by_user is by_user
 
 
 @pytest.mark.asyncio
@@ -458,3 +308,89 @@ async def test_kill_terminates_child_process_tree(
     finally:
         with suppress(psutil.NoSuchProcess):
             child.kill()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shutdown", [False, True])
+async def test_kill_failure_keeps_process_retryable(manager, monkeypatch, shutdown):
+    process_id = await spawn(manager)
+    tracked = manager.get_process(process_id, AGENT_A)
+
+    async def fail_async(proc, **kwargs):
+        raise PermissionError("test-owned kill failure")
+
+    def fail_sync(proc, **kwargs):
+        raise PermissionError("test-owned kill failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(process_manager_module, "kill_process_tree_async", fail_async)
+        patch.setattr(manager, "_kill_process_tree", fail_sync)
+        with pytest.raises(ProcessTerminationError):
+            if shutdown:
+                # Synchronous shutdown kill; aclose retries it after pending launches.
+                manager.stop()
+            else:
+                await manager.cancel_scope_async(SCOPE_A)
+        assert tracked.status == "running"
+        assert tracked.proc.returncode is None
+        assert tracked.finished_at is None
+    if shutdown:
+        await manager.aclose()
+    else:
+        await manager.cancel_scope_async(SCOPE_A)
+    assert tracked.status == "killed"
+    assert tracked.proc.returncode is not None
+
+
+@pytest.mark.asyncio
+async def test_failed_scope_kill_still_stops_other_processes(manager, monkeypatch):
+    ids = [await spawn(manager) for _ in range(2)]
+    first = manager.get_process(ids[0], AGENT_A)
+    original = process_manager_module.kill_process_tree_async
+
+    async def deny_first(proc, **kwargs):
+        if proc is first.proc:
+            raise PermissionError("test-owned failure")
+        await original(proc, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(process_manager_module, "kill_process_tree_async", deny_first)
+        with pytest.raises(ProcessTerminationError):
+            await manager.cancel_scope_async(SCOPE_A)
+    assert first.status == "running"
+    assert manager.get_process(ids[1], AGENT_A).status == "killed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("shutdown", "code"), [(False, 7), (True, 0)])
+async def test_kill_during_reader_drain_preserves_real_exit(manager, monkeypatch, shutdown, code):
+    draining = asyncio.Event()
+    release = asyncio.Event()
+    original = manager._await_reader_tasks
+
+    async def delayed_readers(tracked):
+        draining.set()
+        await release.wait()
+        await original(tracked)
+
+    monkeypatch.setattr(manager, "_await_reader_tasks", delayed_readers)
+    process_id = await spawn(manager, f"raise SystemExit({code})")
+    tracked = manager.get_process(process_id, AGENT_A)
+    await asyncio.wait_for(draining.wait(), 5)
+    assert tracked.proc.returncode == code
+    assert tracked.status == "running"
+    kill = None
+    try:
+        if shutdown:
+            manager.stop()
+        else:
+            kill = asyncio.create_task(manager.kill(process_id, AGENT_A))
+            await asyncio.sleep(0)
+        assert tracked.status == "running"
+    finally:
+        release.set()
+        if kill is not None:
+            await asyncio.wait_for(kill, 5)
+        await asyncio.wait_for(tracked.wait_task, 5)
+    assert tracked.status == ("completed" if code == 0 else "failed")
+    assert tracked.exit_code == code
