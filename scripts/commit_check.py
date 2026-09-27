@@ -30,6 +30,7 @@ sources plus the guard tests, and the WebUI build runs.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -61,6 +62,9 @@ PYTEST_SUMMARY_PATTERN = re.compile(r"^(?:FAILED|ERROR) (?P<test>.+?)(?: - .*)?$
 # Changes that can affect any test: pytest and plugin configuration.
 FULL_SUITE_TRIGGERS = frozenset({"pyproject.toml"})
 TESTS_LOCK_NAME = "vbot-commit-tests.lock"
+# Recorded test seconds per xdist worker; starting a worker costs about a second.
+SECONDS_PER_WORKER = 4.0
+TEST_MODULE_PATTERN = re.compile(r"^tests/(?:.+/)?(?:test_[^/]*|[^/]*_test)\.py$")
 
 
 class StepResult(NamedTuple):
@@ -423,6 +427,47 @@ def _adopt_primary_data(root: Path) -> None:
         print("Commit check: copied the test-impact data of the primary checkout.", flush=True)
 
 
+def _workers(seconds: float) -> list[str]:
+    """Size xdist to the recorded test duration; short runs are fastest in one process."""
+    workers = math.ceil(seconds / SECONDS_PER_WORKER)
+    if workers <= 1:
+        return ["-n", "0"]
+    return ["-n", str(min(workers, os.cpu_count() or 1))]
+
+
+def _test_runs(
+    root: Path, changed: list[str], python_changed: bool, complete: bool, readers: set[str]
+) -> list[tuple[str, list[str]]]:
+    pytest = [sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header"]
+    if complete:
+        return [("complete suite", [*pytest, "-n", "auto", "--testmon-noselect"])]
+    runs: list[tuple[str, list[str]]] = []
+    if python_changed:
+        selection = file_dependencies.select(root)
+        if selection.complete:
+            print(
+                "Commit check: no usable test-impact data in this checkout; this commit runs "
+                "the complete suite once to record it (about 10 minutes).",
+                flush=True,
+            )
+            return [("complete suite", [*pytest, "-n", "auto", "--testmon"])]
+        # Staged test modules may hold tests testmon has not recorded yet. Other
+        # sessions' new test modules are left to their own commits.
+        staged_tests = [path for path in changed if TEST_MODULE_PATTERN.match(path)]
+        modules = sorted({*selection.modules, *staged_tests})
+        modules = [module for module in modules if (root / module).is_file()]
+        if modules:
+            workers = _workers(selection.seconds)
+            runs.append(("affected by code", [*pytest, *workers, "--testmon", *modules]))
+    # testmon selects by Python code only; run the modules of data-file readers
+    # without its selection. Deleted tests leave stale records behind.
+    modules = sorted({test.partition("::")[0] for test in readers})
+    modules = [module for module in modules if (root / module).is_file()]
+    if modules:
+        runs.append(("reading staged data files", [*pytest, "--testmon-noselect", *modules]))
+    return runs
+
+
 def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepResult]:
     """Run the pytest tests affected by *changed*, the staged and deleted paths."""
     _adopt_primary_data(root)
@@ -434,30 +479,13 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
     if not (python_changed or complete or readers):
         return []
 
-    pytest = [sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header"]
-    runs: list[tuple[str, list[str]]] = []
-    if complete:
-        runs.append(("complete suite", [*pytest, "--testmon-noselect"]))
-    else:
-        if python_changed:
-            runs.append(("affected by code", [*pytest, "--testmon"]))
-        # testmon selects by Python code only; run the modules of data-file readers
-        # without its selection. Deleted tests leave stale records behind.
-        modules = sorted({test.partition("::")[0] for test in readers})
-        modules = [module for module in modules if (root / module).is_file()]
-        if modules:
-            runs.append(("reading staged data files", [*pytest, "--testmon-noselect", *modules]))
-    if not (root / file_dependencies.TESTMON_DATA).is_file():
-        print(
-            "Commit check: no test-impact data in this checkout yet; this commit runs the "
-            "complete suite once to record it (about 10 minutes).",
-            flush=True,
-        )
-
     lock_path = Path(_git(root, "rev-parse", "--absolute-git-dir").strip()) / TESTS_LOCK_NAME
     env = _test_environment(root)
     outputs: list[str] = []
     with _exclusive(lock_path):
+        runs = _test_runs(root, changed, python_changed, complete, readers)
+        if not runs:
+            return [StepResult("pytest", "PASS (no test affected)", False)]
         for label, command in runs:
             result = _run(command, root, env)
             if result.returncode not in (0, 1, 5):  # 5: no test selected

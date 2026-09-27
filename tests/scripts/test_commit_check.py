@@ -269,8 +269,22 @@ def test_first_commit_in_a_worktree_adopts_the_primary_checkout_data(
     assert "test_calc.py::test_double" in results["FAIL: tests affected by this commit"][1]
 
 
-def test_unaffected_change_runs_no_tests(impact_project: Path) -> None:
-    _write(impact_project, "notes.txt", "unread")
-    _git(impact_project, "add", "notes.txt")
+@pytest.mark.parametrize(
+    ("path", "content", "expected"),
+    [
+        ("notes.txt", "unread", {}),
+        (
+            "calc.py",
+            "# Arithmetic helpers.\n" + IMPACT_PROJECT["calc.py"],
+            {"PASS (no test affected)": (False, "")},
+        ),
+    ],
+    ids=["unread data file", "code change no test executes"],
+)
+def test_unaffected_change_starts_no_test_run(
+    impact_project: Path, path: str, content: str, expected: dict[str, tuple[bool, str]]
+) -> None:
+    _write(impact_project, path, content)
+    _git(impact_project, "add", path)
 
-    assert _check_tests(impact_project) == {}
+    assert _check_tests(impact_project) == expected

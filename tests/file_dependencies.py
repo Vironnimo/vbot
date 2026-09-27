@@ -21,6 +21,7 @@ import json
 import os
 import sqlite3
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -229,6 +230,43 @@ def dependencies(root: Path, tests: set[str]) -> dict[str, set[str]]:
             if test in result:
                 result[test].add(path.replace("\\", "/"))
     return result
+
+
+@dataclass(frozen=True)
+class Selection:
+    """The tests pytest-testmon would run for the current working tree."""
+
+    modules: list[str]
+    """Test modules holding a test whose recorded code changed or that failed last."""
+    seconds: float
+    """Recorded duration of those tests."""
+    complete: bool
+    """No usable record exists (none yet, or installed packages changed)."""
+
+
+def select(root: Path) -> Selection:
+    """Compute pytest-testmon's selection without starting pytest.
+
+    Starting pytest costs seconds even when testmon then deselects every test, so
+    callers use this to skip the run or to size it.
+    """
+    if not (root / TESTMON_DATA).is_file():
+        return Selection([], 0.0, complete=True)
+    from testmon.testmon_core import TestmonData  # type: ignore[import-untyped]
+
+    data = TestmonData.for_local_run(rootdir=str(root))
+    try:
+        recorded = data.all_tests
+        # testmon drops the records of an environment whose packages changed.
+        if data.system_packages_change or not recorded:
+            return Selection([], 0.0, complete=True)
+        data.determine_stable()
+        tests = set(data.unstable_test_names) | set(data.failing_tests)
+        modules = sorted({test.partition("::")[0] for test in tests})
+        seconds = sum((recorded.get(test) or {}).get("duration") or 0.0 for test in tests)
+        return Selection(modules, seconds, complete=False)
+    finally:
+        data.db.con.close()
 
 
 def copy_data(source_root: Path, target_root: Path) -> bool:
