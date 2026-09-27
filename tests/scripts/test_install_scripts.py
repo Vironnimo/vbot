@@ -437,6 +437,39 @@ def test_existing_settings_port_update_is_locked_and_atomic(script_name: str) ->
     assert "lock_path.unlink(missing_ok=True)" in script
 
 
+@pytest.mark.parametrize(
+    ("script_name", "start", "end"),
+    [
+        ("setup.sh", 'sync_settings_port() {\n    "$PYTHON" - "$1" "$2" <<\'PYEOF\'\n', "\nPYEOF"),
+        ("setup.ps1", "$SyncSettingsPortScript = @'\n", "\n'@"),
+    ],
+)
+def test_existing_settings_port_update_program_runs(
+    tmp_path: Path, script_name: str, start: str, end: str
+) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+    program_start = script.index(start) + len(start)
+    program = script[program_start : script.index(end, program_start)]
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"port": 8420, "name": "kept"}), encoding="utf-8")
+
+    def sync(port: int) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-c", program, str(settings_path), str(port)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    updated = sync(9134)
+    unchanged = sync(9134)
+
+    assert (updated.returncode, updated.stdout.strip()) == (0, "port"), updated.stderr
+    assert (unchanged.returncode, unchanged.stdout.strip()) == (0, ""), unchanged.stderr
+    assert json.loads(settings_path.read_text(encoding="utf-8")) == {"port": 9134, "name": "kept"}
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["settings.json"]
+
+
 @pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
 def test_server_install_manifest_records_lifecycle_target(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")

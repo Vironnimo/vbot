@@ -204,8 +204,11 @@ PYEOF
 sync_settings_port() {
     "$PYTHON" - "$1" "$2" <<'PYEOF'
 import json
+import os
 import sys
+import time
 from pathlib import Path
+from uuid import uuid4
 
 path = Path(sys.argv[1])
 port = int(sys.argv[2])
