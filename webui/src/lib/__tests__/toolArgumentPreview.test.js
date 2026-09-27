@@ -6,13 +6,42 @@ import {
 } from '../toolArgumentPreview.js';
 
 describe('createToolArgumentPreviewScanner', () => {
-  it('extracts a completed field from a single complete fragment', () => {
+  it.each([
+    [
+      'a completed field',
+      '{"path": "notes/todo.md"}',
+      { path: 'notes/todo.md' },
+    ],
+    [
+      'decoded escape sequences',
+      '{"path": "C:\\\\dev\\\\a \\"b\\".txt", "x": "\\u00e4"}',
+      { path: 'C:\\dev\\a "b".txt', x: 'ä' },
+    ],
+    [
+      'only top-level keys, not nested ones',
+      '{"meta": {"path": "inner"}, "list": ["path", {"path": "deep"}], "path": "outer.txt"}',
+      { path: 'outer.txt' },
+    ],
+    [
+      'no key-shaped text from inside a string value',
+      '{"content": "{\\"path\\": \\"fake.txt\\"}", "path": "real.txt"}',
+      { content: '{"path": "fake.txt"}', path: 'real.txt' },
+    ],
+    [
+      'only string values',
+      '{"count": 3, "force": true, "opts": null, "path": "a.txt"}',
+      { path: 'a.txt' },
+    ],
+    [
+      'nothing after the top-level object closes',
+      '{"path": "a.txt"} {"path": "b.txt"}',
+      { path: 'a.txt' },
+    ],
+  ])('captures %s from one fragment', (_label, fragment, fields) => {
     const scanner = createToolArgumentPreviewScanner();
 
-    const changed = scanner.push('{"path": "notes/todo.md"}');
-
-    expect(changed).toBe(true);
-    expect(scanner.fields()).toEqual({ path: 'notes/todo.md' });
+    expect(scanner.push(fragment)).toBe(true);
+    expect(scanner.fields()).toEqual(fields);
   });
 
   it('extracts the first field while a later value is still streaming', () => {
@@ -37,62 +66,12 @@ describe('createToolArgumentPreviewScanner', () => {
     expect(scanner.fields()).toEqual({ pattern: 'TODO', path: 'core/' });
   });
 
-  it('decodes escape sequences in captured values', () => {
-    const scanner = createToolArgumentPreviewScanner();
-
-    scanner.push('{"path": "C:\\\\dev\\\\a \\"b\\".txt", "x": "\\u00e4"}');
-
-    expect(scanner.fields()).toEqual({
-      path: 'C:\\dev\\a "b".txt',
-      x: 'ä',
-    });
-  });
-
-  it('ignores keys inside nested objects and arrays', () => {
-    const scanner = createToolArgumentPreviewScanner();
-
-    scanner.push(
-      '{"meta": {"path": "inner"}, "list": ["path", {"path": "deep"}], "path": "outer.txt"}',
-    );
-
-    expect(scanner.fields()).toEqual({ path: 'outer.txt' });
-  });
-
-  it('does not treat key-shaped text inside a string value as a key', () => {
-    const scanner = createToolArgumentPreviewScanner();
-
-    scanner.push(
-      '{"content": "{\\"path\\": \\"fake.txt\\"}", "path": "real.txt"}',
-    );
-
-    expect(scanner.fields()).toEqual({
-      content: '{"path": "fake.txt"}',
-      path: 'real.txt',
-    });
-  });
-
-  it('skips non-string top-level values', () => {
-    const scanner = createToolArgumentPreviewScanner();
-
-    scanner.push('{"count": 3, "force": true, "opts": null, "path": "a.txt"}');
-
-    expect(scanner.fields()).toEqual({ path: 'a.txt' });
-  });
-
   it('returns no fields for a fragment that is not an object', () => {
     const scanner = createToolArgumentPreviewScanner();
 
     expect(scanner.push('"just a string"')).toBe(false);
     expect(scanner.push('{"path": "late.txt"}')).toBe(false);
     expect(scanner.fields()).toBeNull();
-  });
-
-  it('ignores input after the top-level object closes', () => {
-    const scanner = createToolArgumentPreviewScanner();
-
-    scanner.push('{"path": "a.txt"} {"path": "b.txt"}');
-
-    expect(scanner.fields()).toEqual({ path: 'a.txt' });
   });
 
   it('truncates an overlong value and marks it with an ellipsis', () => {

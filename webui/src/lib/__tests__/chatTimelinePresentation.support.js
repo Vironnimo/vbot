@@ -1,7 +1,3 @@
-import { beforeEach } from 'vitest';
-
-import { init } from '../i18n.js';
-
 function runningSubAgentTool(overrides = {}) {
   return {
     name: 'subagent',
@@ -89,15 +85,4 @@ function backgroundBashTool(overrides = {}) {
   };
 }
 
-function setupChatTimelinePresentationSuite() {
-  beforeEach(() => {
-    init('en');
-  });
-}
-
-export {
-  runningSubAgentTool,
-  queuedSubAgentTool,
-  backgroundBashTool,
-  setupChatTimelinePresentationSuite,
-};
+export { runningSubAgentTool, queuedSubAgentTool, backgroundBashTool };

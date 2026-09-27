@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { init } from '../i18n.js';
+import { t } from '../i18n.js';
 import {
   automaticCompactionRatio,
   contextLimitWarning,
@@ -9,10 +9,6 @@ import {
 } from '../tokenUsageTooltip.js';
 
 describe('formatTokenUsageTooltip', () => {
-  beforeEach(() => {
-    init('en');
-  });
-
   it('returns undefined without any usage data', () => {
     expect(formatTokenUsageTooltip(null, null, null)).toBeUndefined();
     expect(
@@ -237,9 +233,7 @@ describe('formatTokenUsageTooltip', () => {
 });
 
 describe('contextUsageCardModel', () => {
-  beforeEach(() => {
-    init('en');
-  });
+  const label = (key, params) => t(`chat.contextCard.${key}`, '', params);
 
   it('returns the headline and labelled rows with shares as sub-rows', () => {
     const contextUsage = {
@@ -284,29 +278,32 @@ describe('contextUsageCardModel', () => {
         id: 'context',
         title: '',
         meta: '',
-        rows: ['Provider input: 154,731', 'Provider output: 243'],
+        rows: [
+          `${label('providerInput')}: 154,731`,
+          `${label('providerOutput')}: 243`,
+        ],
       },
       {
         id: 'last-turn',
-        title: 'Last turn',
+        title: t('chat.tokenTooltipLastTurn'),
         meta: '',
         rows: [
-          'Input: 1,000',
-          '· Read from cache: 800 (80%)',
-          '· Uncached: 200',
-          'Output: 50',
-          '· Reasoning: 20',
+          `${label('input')}: 1,000`,
+          `· ${label('cacheRead')}: 800 (80%)`,
+          `· ${label('uncached')}: 200`,
+          `${label('output')}: 50`,
+          `· ${label('reasoning')}: 20`,
         ],
       },
       {
         id: 'session',
-        title: 'Session',
-        meta: '3 measured turns',
+        title: label('session'),
+        meta: label('measuredTurns', { turns: '3' }),
         rows: [
-          'Input: 3,000',
-          '· Read from cache: 2,400 (80%)',
-          'Output: 150',
-          'Avg cache read per turn: 800',
+          `${label('input')}: 3,000`,
+          `· ${label('cacheRead')}: 2,400 (80%)`,
+          `${label('output')}: 150`,
+          `${label('avgCacheRead')}: 800`,
         ],
       },
     ]);
@@ -331,9 +328,7 @@ describe('contextUsageCardModel', () => {
       '~10',
       '~2',
     ]);
-    expect(card.sections[0].notes).toEqual([
-      'Estimated (provider sent no usage data)',
-    ]);
+    expect(card.sections[0].notes).toEqual([t('chat.tokenTooltipEstimated')]);
   });
 
   it('has no headline or sections without any measurement', () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { t } from '../i18n.js';
 import {
   applySessionList,
   createSessionListFilters,
@@ -67,16 +68,6 @@ describe('Session filter storage', () => {
 });
 
 describe('sessionListView helpers', () => {
-  it('creates the default state shape', () => {
-    expect(createSessionListState()).toEqual({
-      sessions: [],
-      loading: false,
-      error: null,
-      selectedSessionId: null,
-      selectedAgentAddress: null,
-    });
-  });
-
   it('normalizes session lists, sorts by last activity, and preserves selected session', () => {
     const state = {
       ...createSessionListState(),
@@ -112,7 +103,7 @@ describe('sessionListView helpers', () => {
       'channel-session',
     ]);
     expect(next.sessions[0]).toMatchObject({
-      display_name: 'New Session',
+      display_name: t('sessions.newSession'),
       is_channel_session: false,
       latest_completion_run_id: 'run-one',
       has_unread_completion: true,
@@ -184,8 +175,9 @@ describe('sessionListView helpers', () => {
     ).toMatchObject({ has_active_run: true });
   });
 
-  it('normalizes sub-agent session metadata', () => {
-    const next = applySessionList(createSessionListState(), [
+  it.each([
+    [
+      'sub-agent metadata',
       {
         id: 'child-session',
         is_subagent_session: true,
@@ -197,110 +189,127 @@ describe('sessionListView helpers', () => {
           tool_call_index: 2,
         },
       },
-    ]);
-
-    expect(next.sessions[0]).toMatchObject({
-      id: 'child-session',
-      is_subagent_session: true,
-      subagent_parent: {
-        agent_id: 'orchestrator',
-        session_id: 'parent-session',
-        run_id: 'parent-run',
-        tool_call_id: 'tool-call-one',
-        tool_call_index: 2,
+      {
+        is_subagent_session: true,
+        subagent_parent: {
+          agent_id: 'orchestrator',
+          session_id: 'parent-session',
+          run_id: 'parent-run',
+          tool_call_id: 'tool-call-one',
+          tool_call_index: 2,
+        },
       },
-    });
+    ],
+    [
+      'a fork_source object as a fork',
+      {
+        id: 'fork-session',
+        fork_source: {
+          agent_id: 'coder',
+          session_id: 'source-session',
+          project_id: null,
+          forked_at: '2026-07-04T00:00:00+00:00',
+        },
+      },
+      {
+        is_fork: true,
+        fork_source: {
+          agent_id: 'coder',
+          session_id: 'source-session',
+          project_id: null,
+          forked_at: '2026-07-04T00:00:00+00:00',
+        },
+      },
+    ],
+    [
+      'an absent fork_source as no fork',
+      { id: 'plain-session' },
+      { is_fork: false, fork_source: null },
+    ],
+    [
+      'a non-object fork_source as no fork',
+      { id: 'bad-session', fork_source: 'nope' },
+      { is_fork: false, fork_source: null },
+    ],
+    [
+      'an incomplete fork_source as no fork',
+      { id: 'bad-fork', fork_source: { agent_id: 'coder' } },
+      { is_fork: false, fork_source: null },
+    ],
+    [
+      'the title into the display name',
+      {
+        id: 'session-1',
+        title: 'Release planning',
+        platform: 'telegram',
+        platform_conv_id: '999',
+      },
+      { title: 'Release planning', display_name: 'Release planning' },
+    ],
+    [
+      'the owning Agent for merged lists',
+      { id: 'session-1', agent_address: 'nabu', agent_name: 'Nabu' },
+      { agent_address: 'nabu', agent_name: 'Nabu' },
+    ],
+    [
+      'a missing owning Agent as null',
+      { id: 'session-2', title: 'Untouched' },
+      { agent_address: null, agent_name: null },
+    ],
+  ])('normalizes %s', (_label, raw, expected) => {
+    const next = applySessionList(createSessionListState(), [raw]);
+
+    expect(next.sessions[0]).toMatchObject({ id: raw.id, ...expected });
   });
 
-  it('maps a fork_source object to is_fork and preserves it', () => {
-    const forkSource = {
-      agent_id: 'coder',
-      session_id: 'source-session',
-      project_id: null,
-      forked_at: '2026-07-04T00:00:00+00:00',
-    };
-    const next = applySessionList(createSessionListState(), [
-      { id: 'fork-session', fork_source: forkSource },
-    ]);
-
-    expect(next.sessions[0]).toMatchObject({
-      id: 'fork-session',
-      is_fork: true,
-      fork_source: forkSource,
-    });
-  });
-
-  it('resolves immediate parents for Subagent, Fork, and Reflection Sessions', () => {
-    expect(
-      sessionParentReference({
+  it.each([
+    [
+      'a Subagent Session',
+      {
         subagent_parent: {
           agent_id: 'orchestrator',
           session_id: 'parent-session',
           project_id: 'vbot',
         },
-      }),
-    ).toEqual({
-      kind: 'subagent',
-      agent_id: 'orchestrator',
-      session_id: 'parent-session',
-      project_id: 'vbot',
-    });
-
-    for (const runKinds of [[], ['reflection']]) {
-      expect(
-        sessionParentReference({
-          run_kinds: runKinds,
-          fork_source: {
-            agent_id: 'coder',
-            session_id: 'source-session',
-            project_id: null,
-          },
-        }),
-      ).toEqual({
+      },
+      {
+        kind: 'subagent',
+        agent_id: 'orchestrator',
+        session_id: 'parent-session',
+        project_id: 'vbot',
+      },
+    ],
+    ...[[], ['reflection']].map((runKinds) => [
+      `a Fork with run kinds [${runKinds}]`,
+      {
+        run_kinds: runKinds,
+        fork_source: {
+          agent_id: 'coder',
+          session_id: 'source-session',
+          project_id: null,
+        },
+      },
+      {
         kind: 'fork',
         agent_id: 'coder',
         session_id: 'source-session',
         project_id: null,
-      });
-    }
+      },
+    ]),
+    ['an empty subagent_parent', { subagent_parent: {} }, null],
+    ['an incomplete fork_source', { fork_source: { agent_id: 'coder' } }, null],
+  ])('resolves the immediate parent of %s', (_label, session, parent) => {
+    expect(sessionParentReference(session)).toEqual(parent);
   });
 
-  it('treats absent or non-object fork_source as not a fork', () => {
-    const next = applySessionList(createSessionListState(), [
-      { id: 'plain-session' },
-      { id: 'bad-session', fork_source: 'nope' },
-    ]);
-
-    for (const session of next.sessions) {
-      expect(session.is_fork).toBe(false);
-      expect(session.fork_source).toBeNull();
-    }
-  });
-
-  it('rejects incomplete parent provenance', () => {
-    expect(sessionParentReference({ subagent_parent: {} })).toBeNull();
-    expect(
-      sessionParentReference({ fork_source: { agent_id: 'coder' } }),
-    ).toBeNull();
-
-    const next = applySessionList(createSessionListState(), [
-      { id: 'bad-fork', fork_source: { agent_id: 'coder' } },
-    ]);
-    expect(next.sessions[0]).toMatchObject({
-      is_fork: false,
-      fork_source: null,
-    });
-  });
-
-  it('clears selected session when the session list no longer contains it', () => {
-    const state = {
-      ...createSessionListState(),
-      selectedSessionId: 'missing-session',
-    };
-
-    const next = applySessionList(state, [{ id: 'known-session' }]);
+  it('clears the selected Session when the list no longer contains it', () => {
+    const next = applySessionList(
+      { ...createSessionListState(), selectedSessionId: 'missing-session' },
+      [{ id: 'known-session' }],
+    );
 
     expect(next.selectedSessionId).toBeNull();
+    expect(next.selectedAgentAddress).toBeNull();
   });
 
   it('selects only existing sessions and clears unknown selections', () => {
@@ -326,68 +335,49 @@ describe('sessionListView helpers', () => {
     expect(selected.selectedAgentAddress).toBe('beta');
   });
 
-  it('derives stable display names for channel and generic sessions', () => {
-    expect(
-      sessionDisplayName({
-        platform: 'telegram',
-        platform_conv_id: '-100123',
-      }),
-    ).toBe('telegram/-100123');
-    // A Session without title, automatic title, or channel identity has no
-    // content yet — it shows the neutral label, never its raw id.
-    expect(sessionDisplayName({ id: 'session-001' })).toBe('New Session');
-    expect(sessionDisplayName({})).toBe('New Session');
-  });
+  const newSession = () => t('sessions.newSession');
 
-  it('prefers a user title over channel and id labels', () => {
-    expect(
-      sessionDisplayName({
+  it.each([
+    [
+      'a channel Session',
+      { platform: 'telegram', platform_conv_id: '-100123' },
+      () => 'telegram/-100123',
+    ],
+    // A Session without title, automatic title, or channel identity has no
+    // content yet: it shows the neutral label, never its raw id.
+    ['a Session with only an id', { id: 'session-001' }, newSession],
+    ['an empty Session', {}, newSession],
+    [
+      'a user title over channel and id',
+      {
         title: 'Release planning',
         platform: 'telegram',
         platform_conv_id: '-100123',
         id: 'session-001',
-      }),
-    ).toBe('Release planning');
-    // A blank title falls back to the channel-derived label.
-    expect(
-      sessionDisplayName({
-        title: '   ',
-        platform: 'telegram',
-        platform_conv_id: '-100123',
-      }),
-    ).toBe('telegram/-100123');
-  });
-
-  it('uses the automatic title beneath the manual override', () => {
-    expect(
-      sessionDisplayName({
-        auto_title: 'Generated title',
-        id: 'session-001',
-      }),
-    ).toBe('Generated title');
-    expect(
-      sessionDisplayName({
+      },
+      () => 'Release planning',
+    ],
+    [
+      'a blank title',
+      { title: '   ', platform: 'telegram', platform_conv_id: '-100123' },
+      () => 'telegram/-100123',
+    ],
+    [
+      'an automatic title',
+      { auto_title: 'Generated title', id: 'session-001' },
+      () => 'Generated title',
+    ],
+    [
+      'a manual title over the automatic title',
+      {
         title: 'Manual title',
         auto_title: 'Generated title',
         id: 'session-001',
-      }),
-    ).toBe('Manual title');
-  });
-
-  it('carries the title through normalization and into the display name', () => {
-    const next = applySessionList(createSessionListState(), [
-      {
-        id: 'session-1',
-        title: 'Release planning',
-        platform: 'telegram',
-        platform_conv_id: '999',
       },
-    ]);
-
-    expect(next.sessions[0]).toMatchObject({
-      title: 'Release planning',
-      display_name: 'Release planning',
-    });
+      () => 'Manual title',
+    ],
+  ])('names %s', (_label, session, name) => {
+    expect(sessionDisplayName(session)).toBe(name());
   });
 
   it('hides background-only and sub-agent sessions until their filter is enabled', () => {
@@ -527,50 +517,22 @@ describe('sessionListView helpers', () => {
     ).toHaveLength(1);
   });
 
-  it('carries the owning agent through normalization for merged lists', () => {
-    const next = applySessionList(createSessionListState(), [
-      {
-        id: 'session-1',
-        title: 'Release planning',
-        agent_address: 'nabu',
-        agent_name: 'Nabu',
-      },
-      { id: 'session-2', title: 'Untouched' },
-    ]);
+  it.each([
+    ['background', { id: 'cron-session', run_kinds: ['cron'] }],
+    ['sub-agent', { id: 'subagent-session', is_subagent_session: true }],
+  ])(
+    'keeps the selected %s Session visible in the important view',
+    (_label, hidden) => {
+      const next = applySessionList(createSessionListState(), [
+        { id: 'user-session', run_kinds: ['user'] },
+        hidden,
+      ]);
 
-    expect(next.sessions[0]).toMatchObject({
-      agent_address: 'nabu',
-      agent_name: 'Nabu',
-    });
-    expect(next.sessions[1]).toMatchObject({
-      agent_address: null,
-      agent_name: null,
-    });
-  });
-
-  it('keeps the selected background session visible in the important view', () => {
-    const next = applySessionList(createSessionListState(), [
-      { id: 'user-session', run_kinds: ['user'] },
-      { id: 'cron-session', run_kinds: ['cron'] },
-    ]);
-
-    expect(
-      visibleSessionsForSelection(next.sessions, {
-        selectedSessionId: 'cron-session',
-      }).map((session) => session.id),
-    ).toEqual(['cron-session', 'user-session']);
-  });
-
-  it('keeps the selected sub-agent session visible in the important view', () => {
-    const next = applySessionList(createSessionListState(), [
-      { id: 'user-session', run_kinds: ['user'] },
-      { id: 'subagent-session', is_subagent_session: true },
-    ]);
-
-    expect(
-      visibleSessionsForSelection(next.sessions, {
-        selectedSessionId: 'subagent-session',
-      }).map((session) => session.id),
-    ).toEqual(['subagent-session', 'user-session']);
-  });
+      expect(
+        visibleSessionsForSelection(next.sessions, {
+          selectedSessionId: hidden.id,
+        }).map((session) => session.id),
+      ).toEqual([hidden.id, 'user-session']);
+    },
+  );
 });

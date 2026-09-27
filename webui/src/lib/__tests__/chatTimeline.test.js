@@ -5,531 +5,268 @@ import {
   ensureSessionState,
   loadHistory,
   startRun,
-  visibleTimelineItemsForRender,
 } from '../chatState.js';
-import { pruneRunEventsPersistedInHistory } from '../chatTimeline.js';
 import {
-  CHAT_STATUS_RUNNING,
-  CHAT_STATUS_COMPLETED,
-  finishedRunEvents,
-} from './chatTimeline.support.js';
+  pruneRunEventsPersistedInHistory,
+  visibleTimelineItemsForRender,
+} from '../chatTimeline.js';
 
-describe('pruneRunEventsPersistedInHistory (handoff3 B10)', () => {
-  it('drops every event of a non-active Run with a canonical terminal summary', () => {
-    const runEvents = [
-      ...finishedRunEvents('run-finished', 'assistant-finished'),
-      {
-        type: 'run_started',
-        run_id: 'run-active',
-        sequence: 1,
-        payload: { status: CHAT_STATUS_RUNNING },
-      },
-    ];
-    const runs = { 'run-finished': { complete: true, status: 'completed' } };
+// The Session state is built through the Chat state owner, the only producer
+// of the History and Run event shapes the timeline projects.
+function session(sessionId = 'session') {
+  return ensureSessionState(createChatState(), 'alpha', sessionId);
+}
 
-    const prunedEvents = pruneRunEventsPersistedInHistory(
-      runEvents,
-      runs,
-      'run-active',
-    );
+function runEvent(runId, sequence, type, payload = {}, extra = {}) {
+  return { type, run_id: runId, sequence, payload, ...extra };
+}
 
-    expect(prunedEvents.map((event) => event.run_id)).toEqual(['run-active']);
+function append(state, ...args) {
+  appendRunEvent(state, runEvent(...args));
+}
+
+function start(state, runId) {
+  startRun(state, {
+    run_id: runId,
+    sse_url: `/api/runs/${runId}/events`,
+    status: 'running',
   });
+}
 
-  it('keeps a non-active run whose output is not fully persisted in the page', () => {
-    const runEvents = finishedRunEvents('run-finished', 'assistant-finished');
+const render = visibleTimelineItemsForRender;
 
-    const prunedEvents = pruneRunEventsPersistedInHistory(
-      runEvents,
-      { 'run-finished': { complete: false } },
-      'run-active',
-    );
+function assistantRun(state, runId) {
+  return render(state).find(
+    (item) =>
+      item.type === 'assistant_run' &&
+      (runId === undefined || item.runId === runId),
+  );
+}
 
-    expect(prunedEvents).toBe(runEvents);
-  });
+function separators(items) {
+  return items.filter((item) => item.type === 'compaction_separator');
+}
 
-  it('keeps runs that produced no persisted output messages at all', () => {
-    const runEvents = [
-      {
-        type: 'run_started',
-        run_id: 'run-empty',
-        sequence: 1,
-        payload: { status: CHAT_STATUS_RUNNING },
-      },
-      {
-        type: 'run_completed',
-        run_id: 'run-empty',
-        sequence: 2,
-        payload: { status: CHAT_STATUS_COMPLETED },
-      },
-    ];
+function finishedRunEvents(runId, messageId) {
+  return [
+    runEvent(runId, 1, 'user_message_persisted', {
+      message: { id: `user-${runId}`, role: 'user', content: 'Hi' },
+    }),
+    runEvent(runId, 2, 'run_started', { status: 'running' }),
+    runEvent(runId, 3, 'assistant_output', {
+      message: { id: messageId, role: 'assistant', content: 'Done.' },
+    }),
+    runEvent(runId, 4, 'run_completed', { status: 'completed' }),
+  ];
+}
 
-    const prunedEvents = pruneRunEventsPersistedInHistory(
-      runEvents,
-      {},
-      'run-active',
-    );
-
-    expect(prunedEvents).toBe(runEvents);
-  });
-
-  it('never prunes the active run, even when its output is already persisted', () => {
-    const runEvents = finishedRunEvents('run-active', 'assistant-active');
-    const runs = { 'run-active': { complete: true } };
-
-    const prunedEvents = pruneRunEventsPersistedInHistory(
-      runEvents,
-      runs,
-      'run-active',
-    );
-
-    expect(prunedEvents).toBe(runEvents);
-  });
-});
-
-describe('terminal-run projection memoization (handoff3 B10)', () => {
-  function seedSession() {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-memo',
-    );
-    appendRunEvent(sessionState, {
-      type: 'run_started',
-      run_id: 'run-finished',
-      sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output',
-      run_id: 'run-finished',
-      sequence: 2,
-      payload: {
-        message: {
-          id: 'assistant-finished',
-          role: 'assistant',
-          content: 'First answer.',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'run_completed',
-      run_id: 'run-finished',
-      sequence: 3,
-      payload: { status: CHAT_STATUS_COMPLETED },
-    });
-    startRun(sessionState, {
-      run_id: 'run-active',
-      sse_url: '/api/runs/run-active/events',
-      status: CHAT_STATUS_RUNNING,
-    });
-    appendRunEvent(sessionState, {
-      type: 'run_started',
-      run_id: 'run-active',
-      sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-active',
-      sequence: 2,
-      payload: { content_delta: 'Streaming…' },
-    });
-    return sessionState;
-  }
-
-  function assistantRunById(timelineItems, runId) {
-    return timelineItems.find(
-      (item) => item.type === 'assistant_run' && item.runId === runId,
-    );
-  }
-
-  it('reuses the finished run projection across flushes while rebuilding the active run', () => {
-    const sessionState = seedSession();
-
-    const firstRender = visibleTimelineItemsForRender(sessionState);
-    const secondRender = visibleTimelineItemsForRender(sessionState);
-
-    const firstFinishedRun = assistantRunById(firstRender, 'run-finished');
-    const secondFinishedRun = assistantRunById(secondRender, 'run-finished');
-    expect(secondFinishedRun.items).toBe(firstFinishedRun.items);
-    expect(secondFinishedRun.events).toBe(firstFinishedRun.events);
-
-    const firstActiveRun = assistantRunById(firstRender, 'run-active');
-    const secondActiveRun = assistantRunById(secondRender, 'run-active');
-    expect(secondActiveRun.items).not.toBe(firstActiveRun.items);
-  });
-
-  it('rebuilds a memoized run when a late event for it arrives', () => {
-    const sessionState = seedSession();
-    const initialRender = visibleTimelineItemsForRender(sessionState);
-    const initialFinishedRun = assistantRunById(initialRender, 'run-finished');
-
-    appendRunEvent(sessionState, {
-      type: 'tool_call_result',
-      run_id: 'run-finished',
-      sequence: 4,
-      payload: {
-        tool_call: { id: 'call-late', index: 0, name: 'read' },
-        result: { ok: true },
-      },
-    });
-    const nextRender = visibleTimelineItemsForRender(sessionState);
-    const nextFinishedRun = assistantRunById(nextRender, 'run-finished');
-
-    expect(nextFinishedRun.items).not.toBe(initialFinishedRun.items);
-    expect(nextFinishedRun.tools.map((tool) => tool.toolCallId)).toEqual([
-      'call-late',
-    ]);
-  });
-});
-
-describe('Provider heartbeat projection', () => {
-  it('keeps the latest transport liveness measurement on the active run', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-heartbeat',
-    );
-    appendRunEvent(sessionState, {
-      type: 'run_started',
-      run_id: 'run-heartbeat',
-      sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
-    });
-    appendRunEvent(sessionState, {
-      type: 'provider_heartbeat',
-      run_id: 'run-heartbeat',
-      sequence: 2,
-      timestamp: '2026-07-27T10:00:15Z',
-      payload: {
-        idle_seconds: 75.4,
-        state: 'waiting_for_model_delta',
-      },
-    });
-
-    const assistantRun = visibleTimelineItemsForRender(sessionState).find(
-      (item) => item.type === 'assistant_run' && item.runId === 'run-heartbeat',
-    );
-
-    expect(assistantRun.providerHeartbeat).toEqual({
-      idleSeconds: 75.4,
-      timestamp: '2026-07-27T10:00:15Z',
-    });
-    expect(assistantRun.items).toEqual([]);
-
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-heartbeat',
-      sequence: 3,
-      payload: { content_delta: 'The buffered call is ready.' },
-    });
-    const progressedRun = visibleTimelineItemsForRender(sessionState).find(
-      (item) => item.type === 'assistant_run' && item.runId === 'run-heartbeat',
-    );
-
-    expect(progressedRun.providerHeartbeat).toBeNull();
-  });
-});
-
-describe('live compaction timeline projection', () => {
-  it('keeps each checkpoint between the Tool steps surrounding its Run event', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-live-compaction',
-    );
-    loadHistory(sessionState, [
-      { id: 'old-user', role: 'user', content: 'Earlier turn' },
-      { id: 'old-assistant', role: 'assistant', content: 'Earlier answer' },
-    ]);
-    startRun(sessionState, {
-      run_id: 'run-compaction',
-      sse_url: '/api/runs/run-compaction/events',
-      status: CHAT_STATUS_RUNNING,
-    });
-    appendRunEvent(sessionState, {
-      type: 'user_message_persisted',
-      run_id: 'run-compaction',
-      sequence: 1,
-      payload: {
-        message: {
-          id: 'current-user',
-          role: 'user',
-          content: 'Keep working',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_started',
-      run_id: 'run-compaction',
-      sequence: 2,
-      payload: {
-        tool_call: { id: 'call-read', index: 0, name: 'read', arguments: {} },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_result',
-      run_id: 'run-compaction',
-      sequence: 3,
-      payload: {
-        tool_call: { id: 'call-read', index: 0, name: 'read' },
-        result: { ok: true },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'compaction_started',
-      run_id: 'run-compaction',
-      sequence: 4,
-      timestamp: '2026-07-29T17:55:20Z',
-      payload: {
-        context_tokens_before: 250_000,
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'compaction_completed',
-      run_id: 'run-compaction',
-      sequence: 5,
-      timestamp: '2026-07-29T17:55:25Z',
-      payload: {
-        context_tokens_before: 250_000,
-        context_tokens_after: 30_000,
-        message: {
-          id: 'checkpoint-1',
-          role: 'compaction_checkpoint',
-          timestamp: '2026-07-29T17:55:25Z',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_started',
-      run_id: 'run-compaction',
-      sequence: 6,
-      payload: {
-        tool_call: { id: 'call-edit', index: 0, name: 'edit', arguments: {} },
-      },
-    });
-
-    const items = visibleTimelineItemsForRender(sessionState);
-    const liveRun = items.find(
-      (item) =>
-        item.type === 'assistant_run' && item.runId === 'run-compaction',
-    );
-
-    expect(liveRun.items.map((child) => child.type)).toEqual([
-      'tool_call',
-      'compaction_separator',
-      'tool_call',
-    ]);
-    expect(liveRun.items[1].message.id).toBe('checkpoint-1');
-    expect(liveRun.items[1].status).toBe(CHAT_STATUS_COMPLETED);
-    expect(liveRun.items[1].contextTokensBefore).toBe(250_000);
-    expect(liveRun.items[1].contextTokensAfter).toBe(30_000);
-    expect(liveRun.items[1].events.map((event) => event.type)).toEqual([
-      'compaction_started',
+function compactionRunEvents(runId, { checkpointId, durationMs } = {}) {
+  return [
+    runEvent(runId, 1, 'run_started', { status: 'running' }),
+    runEvent(runId, 2, 'compaction_started', {
+      context_tokens_before: 120_000,
+    }),
+    runEvent(
+      runId,
+      3,
       'compaction_completed',
-    ]);
-    expect(
-      sessionState.messages.some(
-        (message) => message.role === 'compaction_checkpoint',
-      ),
-    ).toBe(false);
-  });
+      {
+        context_tokens_before: 120_000,
+        context_tokens_after: 30_000,
+        ...(durationMs === undefined ? {} : { duration_ms: durationMs }),
+        message: {
+          id: checkpointId,
+          history_sequence: 3,
+          role: 'compaction_checkpoint',
+          timestamp: '2026-08-27T14:00:55Z',
+        },
+      },
+      { timestamp: '2026-08-27T14:00:55Z' },
+    ),
+    runEvent(runId, 4, 'run_completed', {
+      status: 'completed',
+      history_persisted: true,
+    }),
+  ];
+}
 
-  it.each(['failed', 'stale_context', 'insufficient_reclaim'])(
-    'settles a Compaction attempt with reason %s',
-    (reason) => {
-      const sessionState = ensureSessionState(
-        createChatState(),
-        'alpha',
-        'session-compaction-progress',
-      );
-      appendRunEvent(sessionState, {
-        type: 'compaction_started',
-        run_id: 'run-progress',
-        sequence: 1,
-        payload: { context_tokens_before: 250_000 },
+describe('History and live Run projection', () => {
+  it.each(['live', 'mixed', 'history'])(
+    'keeps steered User corrections between responses in %s mode',
+    (mode) => {
+      const message = (id, role, content) => ({
+        id,
+        role,
+        content,
+        history_run_id: 'r',
       });
-
-      // A run whose only child is the compaction divider renders the divider
-      // bare instead of wrapped in a run block.
-      const running = visibleTimelineItemsForRender(sessionState).find(
-        (item) => item.type === 'compaction_separator',
+      const user = message('u1', 'user', 'Original');
+      const before = message('a1', 'assistant', 'Before');
+      const steer = message('u2', 'user', 'Correction');
+      const after = message('a2', 'assistant', 'After');
+      const events = [
+        ['run_started', { status: 'running' }],
+        ['user_message_persisted', { message: user }],
+        ['assistant_output', { message: before }],
+        ['user_message_persisted', { message: steer, queue_item_id: 'q' }],
+        ['assistant_output', { message: after }],
+      ].map(([type, payload], index) =>
+        runEvent('r', index + 1, type, payload),
       );
-      expect(running).toMatchObject({
-        type: 'compaction_separator',
-        status: CHAT_STATUS_RUNNING,
-        contextTokensBefore: 250_000,
-      });
+      const state = {
+        messages: mode === 'live' ? [] : [user, before, steer, after],
+        runEvents: mode === 'history' ? [] : events,
+        streamingRunEvents: [],
+        currentRun:
+          mode === 'history' ? null : { runId: 'r', status: 'running' },
+        historyRuns: {},
+      };
 
-      appendRunEvent(sessionState, {
-        type: 'compaction_aborted',
-        run_id: 'run-progress',
-        sequence: 2,
-        payload: { reason },
-      });
-
-      const items = visibleTimelineItemsForRender(sessionState);
-      const separators = items.filter(
-        (item) => item.type === 'compaction_separator',
+      const all = render(state).flatMap((item) =>
+        item.type === 'assistant_run' ? item.items : [item],
       );
-      if (reason === 'failed') {
-        expect(separators).toHaveLength(1);
-        expect(separators[0].status).toBe('failed');
-      } else {
-        expect(separators).toEqual([]);
-      }
-      const aborted = items.find((item) => item.type === 'assistant_run');
-      expect(aborted?.items ?? []).toEqual([]);
+
+      expect(
+        all.map(
+          (item) =>
+            item.message?.content ??
+            item.event?.payload?.message?.content ??
+            item.content,
+        ),
+      ).toEqual(['Original', 'Before', 'Correction', 'After']);
+      expect(all.filter((item) => item.type === 'user_message')).toHaveLength(
+        1,
+      );
     },
   );
-});
 
-describe('interrupted assistant turn projection', () => {
-  function assistantOutputChild(sessionState, runId) {
-    const run = visibleTimelineItemsForRender(sessionState).find(
-      (item) => item.type === 'assistant_run' && item.runId === runId,
-    );
-    return run?.items.find((child) => child.type === 'assistant_output');
-  }
-
-  it('flags a live interrupted assistant_output event', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-live-interrupted',
-    );
-    appendRunEvent(sessionState, {
-      type: 'run_started',
-      run_id: 'run-int',
-      sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
+  describe('Run failure fallback', () => {
+    const runId = 'test-failed-run';
+    const error = 'test-terminal-failure';
+    const failure = runEvent(runId, 2, 'run_failed', {
+      status: 'failed',
+      error,
     });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output',
-      run_id: 'run-int',
-      sequence: 2,
-      payload: {
+    const message = { id: 'test-error', role: 'error', content: error };
+    const errors = (state) =>
+      render(state).filter((item) => item.message?.role === 'error');
+
+    it('replaces the fallback when the canonical error event arrives', () => {
+      const state = { messages: [], runEvents: [failure] };
+      expect(errors(state).map((item) => item.message.content)).toEqual([
+        error,
+      ]);
+
+      state.runEvents.push(
+        runEvent(runId, 1, 'error_message_persisted', { message }),
+      );
+      expect(errors(state).map((item) => item.message)).toEqual([message]);
+    });
+
+    it.each([false, true])(
+      'uses loaded canonical History once (User anchor: %s)',
+      (withUser) => {
+        const user = { id: 'test-user', role: 'user', content: 'test-request' };
+        const summary = {
+          id: 'test-summary',
+          role: 'run_summary',
+          run_id: runId,
+          status: 'failed',
+        };
+        const state = {
+          status: 'failed',
+          currentRun: { runId, status: 'failed' },
+          messages: withUser ? [user, summary, message] : [summary, message],
+          runEvents: [
+            failure,
+            ...(withUser
+              ? [
+                  runEvent(runId, 0, 'user_message_persisted', {
+                    message: user,
+                  }),
+                ]
+              : []),
+          ],
+        };
+        expect(errors(state).map((item) => item.message)).toEqual([message]);
+      },
+    );
+
+    it('keeps an earlier identical error from hiding a new failure', () => {
+      const state = { messages: [message], runEvents: [failure] };
+      expect(errors(state).map((item) => item.message.content)).toEqual([
+        error,
+        error,
+      ]);
+    });
+  });
+
+  it.each([
+    ['a live interrupted output', true, 'live'],
+    ['a normal live output', false, 'live'],
+    ['an interrupted output loaded from History', true, 'history'],
+  ])('flags %s as interrupted: %s', (_label, interrupted, source) => {
+    const state = session();
+    if (source === 'history') {
+      loadHistory(state, [
+        { id: 'u1', role: 'user', content: 'Long question' },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: 'Half',
+          interrupted: true,
+          run_id: 'run-int',
+        },
+      ]);
+    } else {
+      append(state, 'run-int', 1, 'run_started', { status: 'running' });
+      append(state, 'run-int', 2, 'assistant_output', {
         message: {
           id: 'a-int',
           role: 'assistant',
           content: 'Half',
-          interrupted: true,
+          ...(interrupted ? { interrupted: true } : {}),
         },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'run_interrupted',
-      run_id: 'run-int',
-      sequence: 3,
-      payload: { status: 'interrupted', cause: 'network' },
-    });
+      });
+      if (interrupted) {
+        append(state, 'run-int', 3, 'run_interrupted', {
+          status: 'interrupted',
+          cause: 'network',
+        });
+      }
+    }
 
-    const output = assistantOutputChild(sessionState, 'run-int');
+    const output = assistantRun(state).items.find(
+      (child) => child.type === 'assistant_output',
+    );
     expect(output.content).toBe('Half');
-    expect(output.interrupted).toBe(true);
+    expect(output.interrupted).toBe(interrupted);
   });
 
   it('drops an unfinished Tool preview when the Run is interrupted', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-interrupted-tool-preview',
-    );
-    startRun(sessionState, {
-      run_id: 'run-tool-preview',
-      sse_url: '/api/runs/run-tool-preview/events',
-      status: CHAT_STATUS_RUNNING,
+    const state = session();
+    start(state, 'run-tool-preview');
+    append(state, 'run-tool-preview', 1, 'run_started', { status: 'running' });
+    append(state, 'run-tool-preview', 2, 'tool_call_delta', {
+      tool_call_id: 'call-partial',
+      name_delta: 'subagent',
+      arguments_delta: '{"action":"run","agent_id":"work',
     });
-    appendRunEvent(sessionState, {
-      type: 'run_started',
-      run_id: 'run-tool-preview',
-      sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_delta',
-      run_id: 'run-tool-preview',
-      sequence: 2,
-      payload: {
-        tool_call_id: 'call-partial',
-        name_delta: 'subagent',
-        arguments_delta: '{"action":"run","agent_id":"work',
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'run_interrupted',
-      run_id: 'run-tool-preview',
-      sequence: 3,
-      payload: { status: 'interrupted', cause: 'network' },
+    append(state, 'run-tool-preview', 3, 'run_interrupted', {
+      status: 'interrupted',
+      cause: 'network',
     });
 
-    const run = visibleTimelineItemsForRender(sessionState).find(
-      (item) => item.type === 'assistant_run',
-    );
+    const run = assistantRun(state);
     expect(run.status).toBe('interrupted');
     expect(run.tools).toEqual([]);
   });
 
-  it('does not flag a normal assistant_output event', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-live-normal',
-    );
-    appendRunEvent(sessionState, {
-      type: 'assistant_output',
-      run_id: 'run-normal',
-      sequence: 1,
-      payload: {
-        message: { id: 'a-normal', role: 'assistant', content: 'All done' },
-      },
-    });
-
-    const output = assistantOutputChild(sessionState, 'run-normal');
-    expect(output.interrupted).toBe(false);
-  });
-
-  it('flags an interrupted assistant message loaded from history', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-history-interrupted',
-    );
-    loadHistory(sessionState, [
-      { id: 'u1', role: 'user', content: 'Long question' },
-      {
-        id: 'a1',
-        role: 'assistant',
-        content: 'The first half',
-        interrupted: true,
-        run_id: 'run-hist',
-      },
-    ]);
-
-    const run = visibleTimelineItemsForRender(sessionState).find(
-      (item) => item.type === 'assistant_run',
-    );
-    const output = run.items.find((child) => child.type === 'assistant_output');
-    expect(output.interrupted).toBe(true);
-  });
-});
-
-describe('agent_takeover timeline projection', () => {
-  it('projects a persisted agent_takeover message as a takeover_separator item', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-takeover',
-    );
-    loadHistory(sessionState, [
+  it('projects an Agent takeover as a divider that closes the previous Run', () => {
+    const state = session();
+    loadHistory(state, [
       { id: 'u1', role: 'user', content: 'Do the thing' },
-      {
-        id: 'a1',
-        role: 'assistant',
-        content: 'On it',
-        run_id: 'run-1',
-      },
+      { id: 'a1', role: 'assistant', content: 'before', run_id: 'run-1' },
       {
         id: 'takeover-1',
         role: 'agent_takeover',
@@ -537,183 +274,773 @@ describe('agent_takeover timeline projection', () => {
         timestamp: '2026-06-22T10:00:00+00:00',
       },
       { id: 'u2', role: 'user', content: 'Continue' },
-    ]);
-
-    const items = visibleTimelineItemsForRender(sessionState);
-    const separator = items.find((item) => item.type === 'takeover_separator');
-    expect(separator).toBeTruthy();
-    expect(separator.id).toBe('takeover-takeover-1');
-    expect(separator.timestamp).toBe('2026-06-22T10:00:00+00:00');
-    // The original message rides on the item so the presentation layer can
-    // parse from/to from its content.
-    expect(separator.message.content).toContain('builder@vbot');
-
-    // It is a real divider between turns, not folded into an assistant run.
-    const separatorIndex = items.indexOf(separator);
-    expect(items[separatorIndex - 1].type).toBe('assistant_run');
-    expect(items[separatorIndex + 1].type).toBe('message');
-    expect(items[separatorIndex + 1].message.role).toBe('user');
-  });
-
-  it('breaks an assistant run at the takeover so it is not swallowed', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-takeover-break',
-    );
-    loadHistory(sessionState, [
-      { id: 'u1', role: 'user', content: 'before turn' },
-      { id: 'a1', role: 'assistant', content: 'before', run_id: 'run-1' },
-      {
-        id: 't1',
-        role: 'agent_takeover',
-        content: JSON.stringify({ from: 'a', to: 'b' }),
-        timestamp: '2026-06-22T10:05:00+00:00',
-      },
-      { id: 'u2', role: 'user', content: 'after turn' },
       { id: 'a2', role: 'assistant', content: 'after', run_id: 'run-2' },
     ]);
 
-    const items = visibleTimelineItemsForRender(sessionState);
-    const separatorIndex = items.findIndex(
-      (item) => item.type === 'takeover_separator',
-    );
-    expect(separatorIndex).toBeGreaterThan(0);
-    // The assistant turn before the takeover is closed off at the divider, and
-    // the turn after starts fresh — the takeover is never folded into a run.
-    const beforeRun = items[separatorIndex - 1];
-    expect(beforeRun.type).toBe('assistant_run');
-    expect((beforeRun.outputs ?? []).map((output) => output.content)).toEqual([
+    const items = render(state);
+    const index = items.findIndex((item) => item.type === 'takeover_separator');
+    const separator = items[index];
+    expect(separator).toMatchObject({
+      id: 'takeover-takeover-1',
+      timestamp: '2026-06-22T10:00:00+00:00',
+    });
+    // The presentation layer parses from/to from the message it carries.
+    expect(separator.message.content).toContain('builder@vbot');
+    // The takeover is never folded into a Run: the turn before ends at it and
+    // the next User turn starts after it.
+    expect(items[index - 1].type).toBe('assistant_run');
+    expect(items[index - 1].outputs.map((output) => output.content)).toEqual([
       'before',
     ]);
-    const afterUser = items[separatorIndex + 1];
-    expect(afterUser.type).toBe('message');
-    expect(afterUser.message.role).toBe('user');
+    expect(items[index + 1].type).toBe('message');
+    expect(items[index + 1].message.role).toBe('user');
   });
-});
 
-it('keeps repeated Provider Tool ids separate by their persisted Assistant identity', () => {
-  const state = ensureSessionState(createChatState(), 'agent', 'session');
-  const messages = ['first', 'second'].flatMap((id, index) => [
-    {
-      id,
-      role: 'assistant',
-      history_run_id: 'run',
-      history_sequence: index * 2,
-      tool_calls: [{ id: 'reused', name: 'read', arguments: { path: id } }],
-    },
-    {
-      id: `${id}-result`,
-      role: 'tool',
-      history_run_id: 'run',
-      history_sequence: index * 2 + 1,
-      tool_call_id: 'reused',
-      name: 'read',
-      content: id,
-    },
-  ]);
-  loadHistory(state, messages);
-  startRun(state, { run_id: 'run' });
-  appendRunEvent(state, {
-    run_id: 'run',
-    sequence: 1,
-    type: 'tool_call_started',
-    payload: {
+  it('keeps repeated Provider Tool ids separate by their persisted Assistant identity', () => {
+    const state = session();
+    loadHistory(
+      state,
+      ['first', 'second'].flatMap((id, index) => [
+        {
+          id,
+          role: 'assistant',
+          history_run_id: 'run',
+          history_sequence: index * 2,
+          tool_calls: [{ id: 'reused', name: 'read', arguments: { path: id } }],
+        },
+        {
+          id: `${id}-result`,
+          role: 'tool',
+          history_run_id: 'run',
+          history_sequence: index * 2 + 1,
+          tool_call_id: 'reused',
+          name: 'read',
+          content: id,
+        },
+      ]),
+    );
+    startRun(state, { run_id: 'run' });
+    append(state, 'run', 1, 'tool_call_started', {
       assistant_message_id: 'second',
       tool_call: { id: 'reused', name: 'read', arguments: { path: 'second' } },
-    },
-  });
-  appendRunEvent(state, {
-    run_id: 'run',
-    sequence: 2,
-    type: 'tool_call_result',
-    payload: {
+    });
+    append(state, 'run', 2, 'tool_call_result', {
       assistant_message_id: 'second',
       tool_call: { id: 'reused', name: 'read' },
       result: 'second',
-    },
+    });
+
+    const tools = render(state).flatMap((item) => item.tools ?? []);
+    expect(tools.map((tool) => tool.result)).toEqual(['first', 'second']);
+    expect(new Set(tools.map((tool) => tool.id)).size).toBe(2);
   });
-  const tools = visibleTimelineItemsForRender(state).flatMap(
-    (item) => item.tools ?? [],
-  );
-  expect(tools.map((tool) => tool.result)).toEqual(['first', 'second']);
-  expect(new Set(tools.map((tool) => tool.id)).size).toBe(2);
+
+  it('keeps a Tool row id from its first live event through History rebuild', () => {
+    const state = session();
+    const result = {
+      ok: true,
+      data: { artifact: { kind: 'speech', url: '/a' } },
+    };
+    const toolCall = { id: 'call', name: 'text_to_speech', arguments: {} };
+    const toolIds = () => assistantRun(state).tools.map((tool) => tool.id);
+    startRun(state, { run_id: 'run', status: 'running' });
+    append(state, 'run', 1, 'user_message_persisted', {
+      message: { id: 'user', role: 'user', content: 'Speak' },
+    });
+    // The streamed Tool preview creates the row before the stable events.
+    append(state, 'run', 2, 'tool_call_delta', {
+      tool_call_id: 'call',
+      name_delta: 'text_to_speech',
+    });
+    append(state, 'run', 3, 'assistant_output', {
+      message: { id: 'call-step', role: 'assistant', tool_calls: [toolCall] },
+    });
+    append(state, 'run', 4, 'tool_call_started', {
+      assistant_message_id: 'call-step',
+      tool_call: toolCall,
+    });
+    append(state, 'run', 5, 'tool_call_result', {
+      assistant_message_id: 'call-step',
+      tool_call: toolCall,
+      result,
+    });
+    const liveRun = assistantRun(state);
+    const liveToolIds = toolIds();
+
+    append(state, 'run', 6, 'assistant_output', {
+      message: { id: 'answer', role: 'assistant', content: 'Spoken.' },
+    });
+    append(state, 'run', 7, 'run_completed', { status: 'completed' });
+    expect(state.streamingRunEvents).toEqual([]);
+    expect(toolIds()).toEqual(liveToolIds);
+    const completedRun = assistantRun(state);
+
+    loadHistory(
+      state,
+      [
+        { id: 'user', role: 'user', content: 'Speak' },
+        { id: 'call-step', role: 'assistant', tool_calls: [toolCall] },
+        {
+          id: 'tool',
+          role: 'tool',
+          tool_call_id: 'call',
+          name: 'text_to_speech',
+          content: JSON.stringify(result),
+        },
+        { id: 'answer', role: 'assistant', content: 'Spoken.' },
+      ].map((message, index) => ({
+        ...message,
+        history_run_id: 'run',
+        history_sequence: index + 1,
+      })),
+      { runs: [{ run_id: 'run', complete: true }] },
+    );
+    const historyRun = assistantRun(state);
+
+    expect(state.runEvents).toEqual([]);
+    expect(historyRun.source).toBe('history');
+    expect(historyRun.tools[0].result).toBe(JSON.stringify(result));
+    expect(historyRun.id).toBe(liveRun.id);
+    expect(toolIds()).toEqual(liveToolIds);
+    expect(historyRun.items.map((child) => child.id)).toEqual(
+      completedRun.items.map((child) => child.id),
+    );
+  });
+
+  it('keeps the latest Provider heartbeat on the active Run until output arrives', () => {
+    const state = session();
+    append(state, 'run-heartbeat', 1, 'run_started', { status: 'running' });
+    append(
+      state,
+      'run-heartbeat',
+      2,
+      'provider_heartbeat',
+      { idle_seconds: 75.4, state: 'waiting_for_model_delta' },
+      { timestamp: '2026-07-27T10:00:15Z' },
+    );
+
+    const waiting = assistantRun(state, 'run-heartbeat');
+    expect(waiting.providerHeartbeat).toEqual({
+      idleSeconds: 75.4,
+      timestamp: '2026-07-27T10:00:15Z',
+    });
+    expect(waiting.items).toEqual([]);
+
+    append(state, 'run-heartbeat', 3, 'assistant_output_delta', {
+      content_delta: 'The buffered call is ready.',
+    });
+    expect(assistantRun(state, 'run-heartbeat').providerHeartbeat).toBeNull();
+  });
+
+  it('reuses a finished Run projection across renders and rebuilds it on a late event', () => {
+    const state = session();
+    for (const event of finishedRunEvents(
+      'run-finished',
+      'assistant-finished',
+    )) {
+      appendRunEvent(state, event);
+    }
+    start(state, 'run-active');
+    append(state, 'run-active', 1, 'run_started', { status: 'running' });
+    append(state, 'run-active', 2, 'assistant_output_delta', {
+      content_delta: 'Streaming…',
+    });
+
+    const first = assistantRun(state, 'run-finished');
+    const second = assistantRun(state, 'run-finished');
+    expect(second.items).toBe(first.items);
+    expect(second.events).toBe(first.events);
+    expect(assistantRun(state, 'run-active').items).not.toBe(
+      assistantRun(state, 'run-active').items,
+    );
+
+    append(state, 'run-finished', 5, 'tool_call_result', {
+      tool_call: { id: 'call-late', index: 0, name: 'read' },
+      result: { ok: true },
+    });
+    const rebuilt = assistantRun(state, 'run-finished');
+    expect(rebuilt.items).not.toBe(first.items);
+    expect(rebuilt.tools.map((tool) => tool.toolCallId)).toEqual(['call-late']);
+  });
+
+  it('inserts a retained live Run into History by its timestamp', () => {
+    const state = session();
+    loadHistory(state, [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'First',
+        timestamp: '2026-08-27T10:00:00Z',
+      },
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: 'First answer',
+        timestamp: '2026-08-27T10:00:05Z',
+      },
+      {
+        id: 'user-3',
+        role: 'user',
+        content: 'Later',
+        timestamp: '2026-08-27T10:10:00Z',
+      },
+    ]);
+    start(state, 'run-live');
+    append(
+      state,
+      'run-live',
+      1,
+      'user_message_persisted',
+      { message: { id: 'user-2', role: 'user', content: 'Middle' } },
+      { timestamp: '2026-08-27T10:05:00Z' },
+    );
+    append(state, 'run-live', 2, 'assistant_output', {
+      message: { id: 'assistant-2', role: 'assistant', content: 'Working.' },
+    });
+
+    // The live User message stays directly before its Assistant output.
+    expect(
+      render(state).map((item) =>
+        item.type === 'assistant_run'
+          ? `run:${item.runId ?? 'history'}`
+          : (item.message ?? item.event.payload.message).id,
+      ),
+    ).toEqual(['user-1', 'run:history', 'user-2', 'run:run-live', 'user-3']);
+  });
 });
 
-it('keeps a Tool row id from its first live event through History rebuild', () => {
-  const state = ensureSessionState(createChatState(), 'agent', 'session');
-  const result = {
-    ok: true,
-    data: { artifact: { kind: 'speech', url: '/a' } },
-  };
-  const toolCall = { id: 'call', name: 'text_to_speech', arguments: {} };
-  const append = (sequence, type, payload) =>
-    appendRunEvent(state, { type, run_id: 'run', sequence, payload });
-  const assistantRun = () =>
-    visibleTimelineItemsForRender(state).find(
-      (item) => item.type === 'assistant_run',
-    );
-  const toolIds = () => assistantRun().tools.map((tool) => tool.id);
-  startRun(state, { run_id: 'run', status: 'running' });
-  append(1, 'user_message_persisted', {
-    message: { id: 'user', role: 'user', content: 'Speak' },
-  });
-  // The streamed Tool preview creates the row before the stable events.
-  append(2, 'tool_call_delta', {
-    tool_call_id: 'call',
-    name_delta: 'text_to_speech',
-  });
-  append(3, 'assistant_output', {
-    message: { id: 'call-step', role: 'assistant', tool_calls: [toolCall] },
-  });
-  append(4, 'tool_call_started', {
-    assistant_message_id: 'call-step',
-    tool_call: toolCall,
-  });
-  append(5, 'tool_call_result', {
-    assistant_message_id: 'call-step',
-    tool_call: toolCall,
-    result,
-  });
-  const liveRun = assistantRun();
-  const liveToolIds = toolIds();
+describe('Run status projection', () => {
+  it.each(['cancelled', 'interrupted'])(
+    'renders a bare %s Run row from an anchorless Run Summary',
+    (status) => {
+      const state = session();
+      loadHistory(state, [
+        { id: 'u1', role: 'user', content: 'tell me a story' },
+        {
+          id: 's1',
+          role: 'run_summary',
+          run_id: 'run-ended',
+          status,
+          timing: { duration_ms: 12000 },
+        },
+      ]);
 
-  append(6, 'assistant_output', {
-    message: { id: 'answer', role: 'assistant', content: 'Spoken.' },
-  });
-  append(7, 'run_completed', { status: 'completed' });
-  expect(state.streamingRunEvents).toEqual([]);
-  expect(toolIds()).toEqual(liveToolIds);
-  const completedRun = assistantRun();
+      // The ended turn is not a hole: its row renders after the User message
+      // although no Assistant or Tool message anchors it.
+      const items = render(state);
+      expect(items.map((item) => item.type)).toEqual([
+        'message',
+        'assistant_run',
+      ]);
+      expect(items[1]).toMatchObject({
+        status,
+        runId: 'run-ended',
+        durationMs: 12000,
+        items: [],
+      });
+    },
+  );
 
-  loadHistory(
-    state,
-    [
-      { id: 'user', role: 'user', content: 'Speak' },
-      { id: 'call-step', role: 'assistant', tool_calls: [toolCall] },
+  it('does not render bare rows for anchorless completed summaries of a page slice', () => {
+    const state = session();
+    loadHistory(state, [
       {
-        id: 'tool',
-        role: 'tool',
-        tool_call_id: 'call',
-        name: 'text_to_speech',
-        content: JSON.stringify(result),
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-old',
+        status: 'completed',
+        timing: { duration_ms: 5 },
       },
-      { id: 'answer', role: 'assistant', content: 'Spoken.' },
-    ].map((message, index) => ({
-      ...message,
-      history_run_id: 'run',
-      history_sequence: index + 1,
-    })),
-    { runs: [{ run_id: 'run', complete: true }] },
-  );
-  const historyRun = assistantRun();
+      { id: 'u1', role: 'user', content: 'next turn' },
+    ]);
 
-  expect(state.runEvents).toEqual([]);
-  expect(historyRun.source).toBe('history');
-  expect(historyRun.tools[0].result).toBe(JSON.stringify(result));
-  expect(historyRun.id).toBe(liveRun.id);
-  expect(toolIds()).toEqual(liveToolIds);
-  expect(historyRun.items.map((child) => child.id)).toEqual(
-    completedRun.items.map((child) => child.id),
+    expect(render(state).map((item) => item.type)).toEqual(['message']);
+  });
+
+  it('marks the Run cancelled when a preserved interrupted partial precedes a cancelled summary', () => {
+    const state = session();
+    loadHistory(state, [
+      { id: 'u1', role: 'user', content: 'tell me a story' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Once upon a',
+        interrupted: true,
+      },
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-cancelled',
+        status: 'cancelled',
+        timing: { duration_ms: 3000 },
+      },
+    ]);
+
+    const run = assistantRun(state);
+    expect(run.status).toBe('cancelled');
+    expect(run.durationMs).toBe(3000);
+    // The partial stays visible and flagged; the component shows the
+    // Cancelled header instead of the interruption notice.
+    expect(run.outputs.map((output) => output.content)).toEqual([
+      'Once upon a',
+    ]);
+    expect(run.outputs[0].interrupted).toBe(true);
+  });
+
+  it('restores the canonical Iteration count from a persisted Run Summary', () => {
+    const state = session();
+    loadHistory(state, [
+      { id: 'u1', role: 'user', content: 'Use five tools' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        tool_calls: Array.from({ length: 5 }, (_, index) => ({
+          id: `c${index}`,
+          name: 'read',
+          arguments: {},
+        })),
+      },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `t${index}`,
+        role: 'tool',
+        tool_call_id: `c${index}`,
+        name: 'read',
+        content: '{}',
+      })),
+      { id: 'a2', role: 'assistant', content: 'Done' },
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-two-iterations',
+        status: 'completed',
+        iteration_count: 2,
+      },
+    ]);
+
+    const run = assistantRun(state);
+    expect(run.iterationCount).toBe(2);
+    expect(run.tools).toHaveLength(5);
+  });
+
+  it('does not invent an Iteration count for a summary without the field', () => {
+    const state = session();
+    loadHistory(state, [
+      { id: 'u1', role: 'user', content: 'Old run' },
+      { id: 'a1', role: 'assistant', content: 'Done' },
+      {
+        id: 's1',
+        role: 'run_summary',
+        run_id: 'run-unknown',
+        status: 'completed',
+      },
+    ]);
+
+    expect(assistantRun(state).iterationCount).toBeNull();
+  });
+
+  it('tracks the Iteration count and change stats through live Run events', () => {
+    const state = session();
+    startRun(state, {
+      run_id: 'run-live',
+      sse_url: '/runs/run-live',
+      iteration_count: 0,
+    });
+    append(state, 'run-live', 1, 'run_started', { status: 'running' });
+    append(state, 'run-live', 2, 'model_step_usage', { iteration_count: 1 });
+    const changeStats = { files: 1, added: 2, removed: 1, paths: ['a.txt'] };
+    append(state, 'run-live', 3, 'run_change_stats', {
+      change_stats: changeStats,
+    });
+
+    let run = assistantRun(state);
+    expect(run.status).toBe('running');
+    expect(run.iterationCount).toBe(1);
+    expect(run.changeStats).toEqual(changeStats);
+
+    // An all-zero update (edits reverted to their baseline) retires the
+    // earlier total instead of leaving it stale.
+    const reverted = { files: 0, added: 0, removed: 0, paths: [] };
+    append(state, 'run-live', 4, 'run_change_stats', {
+      change_stats: reverted,
+    });
+    append(state, 'run-live', 5, 'model_step_usage', { iteration_count: 2 });
+    append(state, 'run-live', 6, 'run_completed', {
+      status: 'completed',
+      iteration_count: 2,
+    });
+    run = assistantRun(state);
+    expect(run.changeStats).toEqual(reverted);
+    expect(run.iterationCount).toBe(2);
+  });
+
+  it.each([
+    [
+      'cancelled',
+      { ok: false, error: { code: 'cancelled_by_user', message: 'aborted' } },
+    ],
+    [
+      'failed',
+      { ok: false, error: { code: 'process_timeout', message: 'timed out' } },
+    ],
+    [
+      'partial',
+      {
+        ok: true,
+        error: null,
+        data: { status: 'partial', total: 3, succeeded: 2, failed: 1 },
+      },
+    ],
+  ])(
+    'settles a live Tool row as %s from its result envelope',
+    (status, result) => {
+      const state = session();
+      start(state, 'run-1');
+      const toolCall = { id: 'call-bash', index: 0, name: 'bash' };
+      append(state, 'run-1', 1, 'tool_call_started', {
+        tool_call: { ...toolCall, arguments: { command: 'sleep 600' } },
+      });
+      append(state, 'run-1', 2, 'tool_call_result', {
+        tool_call: toolCall,
+        result: { data: null, artifacts: [], ...result },
+      });
+
+      const run = assistantRun(state);
+      expect(run.tools).toHaveLength(1);
+      expect(run.tools[0].status).toBe(status);
+    },
   );
+
+  it('keeps a reloaded user-cancelled Tool result cancelled without failing the Run', () => {
+    const state = session();
+    loadHistory(state, [
+      { id: 'user-1', role: 'user', content: 'Run it' },
+      {
+        id: 'assistant-tool',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-bash',
+            name: 'bash',
+            arguments: { command: 'sleep 600' },
+          },
+        ],
+      },
+      {
+        id: 'tool-bash',
+        role: 'tool',
+        tool_call_id: 'call-bash',
+        name: 'bash',
+        content: JSON.stringify({
+          ok: false,
+          error: { code: 'cancelled_by_user', message: 'aborted' },
+          data: null,
+          artifacts: [],
+        }),
+        timing: { duration_ms: 1200 },
+      },
+    ]);
+
+    const run = assistantRun(state);
+    expect(run.tools.map((tool) => tool.status)).toEqual(['cancelled']);
+    expect(run.status).not.toBe('failed');
+  });
+
+  it('settles only pending Tool rows when a cancelled Run reloads from History', () => {
+    const state = session();
+    loadHistory(state, [
+      { id: 'user-1', role: 'user', content: 'Run both' },
+      {
+        id: 'assistant-tools',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'call-read', name: 'read', arguments: { path: 'README.md' } },
+          {
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: {
+              agent_id: 'researcher',
+              background: false,
+              content: 'Research the API',
+            },
+          },
+        ],
+      },
+      {
+        id: 'tool-read',
+        role: 'tool',
+        tool_call_id: 'call-read',
+        name: 'read',
+        content: JSON.stringify({
+          ok: true,
+          error: null,
+          data: { content: 'done' },
+          artifacts: [],
+        }),
+      },
+      {
+        id: 'summary-1',
+        role: 'run_summary',
+        run_id: 'run-1',
+        status: 'cancelled',
+        timestamp: '2026-07-27T09:14:23Z',
+      },
+    ]);
+
+    const run = assistantRun(state);
+    const statuses = Object.fromEntries(
+      run.tools.map((tool) => [tool.name, tool.status]),
+    );
+    expect(run.status).toBe('cancelled');
+    expect(statuses).toEqual({ read: 'success', subagent: 'cancelled' });
+  });
+});
+
+describe('Compaction projection', () => {
+  it('keeps an in-Run checkpoint between the Tool steps around its events', () => {
+    const state = session();
+    loadHistory(state, [
+      { id: 'old-user', role: 'user', content: 'Earlier turn' },
+      { id: 'old-assistant', role: 'assistant', content: 'Earlier answer' },
+    ]);
+    start(state, 'run-compaction');
+    append(state, 'run-compaction', 1, 'user_message_persisted', {
+      message: { id: 'current-user', role: 'user', content: 'Keep working' },
+    });
+    append(state, 'run-compaction', 2, 'tool_call_started', {
+      tool_call: { id: 'call-read', index: 0, name: 'read', arguments: {} },
+    });
+    append(state, 'run-compaction', 3, 'tool_call_result', {
+      tool_call: { id: 'call-read', index: 0, name: 'read' },
+      result: { ok: true },
+    });
+    append(state, 'run-compaction', 4, 'compaction_started', {
+      context_tokens_before: 250_000,
+    });
+    append(state, 'run-compaction', 5, 'compaction_completed', {
+      context_tokens_before: 250_000,
+      context_tokens_after: 30_000,
+      message: {
+        id: 'checkpoint-1',
+        role: 'compaction_checkpoint',
+        timestamp: '2026-07-29T17:55:25Z',
+      },
+    });
+    append(state, 'run-compaction', 6, 'tool_call_started', {
+      tool_call: { id: 'call-edit', index: 0, name: 'edit', arguments: {} },
+    });
+
+    const items = render(state);
+    const run = assistantRun(state, 'run-compaction');
+    expect(run.items.map((child) => child.type)).toEqual([
+      'tool_call',
+      'compaction_separator',
+      'tool_call',
+    ]);
+    expect(run.items[1]).toMatchObject({
+      message: { id: 'checkpoint-1' },
+      status: 'completed',
+      contextTokensBefore: 250_000,
+      contextTokensAfter: 30_000,
+    });
+    expect(run.items[1].events.map((event) => event.type)).toEqual([
+      'compaction_started',
+      'compaction_completed',
+    ]);
+    // The separator stays inside its Run block, never beside it.
+    expect(separators(items)).toEqual([]);
+    expect(
+      state.messages.some(
+        (message) => message.role === 'compaction_checkpoint',
+      ),
+    ).toBe(false);
+  });
+
+  it.each(['failed', 'stale_context', 'insufficient_reclaim'])(
+    'settles a Compaction attempt aborted with reason %s',
+    (reason) => {
+      const state = session();
+      append(state, 'run-progress', 1, 'compaction_started', {
+        context_tokens_before: 250_000,
+      });
+
+      // A Run whose only child is the divider renders it bare.
+      expect(separators(render(state))).toEqual([
+        expect.objectContaining({
+          status: 'running',
+          contextTokensBefore: 250_000,
+        }),
+      ]);
+
+      append(state, 'run-progress', 2, 'compaction_aborted', { reason });
+
+      const items = render(state);
+      expect(separators(items).map((item) => item.status)).toEqual(
+        reason === 'failed' ? ['failed'] : [],
+      );
+      expect(
+        items.find((item) => item.type === 'assistant_run')?.items ?? [],
+      ).toEqual([]);
+    },
+  );
+
+  it('renders a finished standalone Compaction Run as a bare separator', () => {
+    const state = session();
+    loadHistory(state, [
+      { id: 'user-1', role: 'user', content: 'Earlier turn' },
+    ]);
+    for (const event of compactionRunEvents('run-compaction', {
+      checkpointId: 'checkpoint-live',
+      durationMs: 54_000,
+    })) {
+      appendRunEvent(state, event);
+    }
+
+    expect(assistantRun(state, 'run-compaction')).toBeUndefined();
+    expect(separators(render(state))).toEqual([
+      expect.objectContaining({
+        status: 'completed',
+        message: expect.objectContaining({ id: 'checkpoint-live' }),
+        durationMs: 54_000,
+      }),
+    ]);
+  });
+
+  it('keeps the failed Run block when a standalone Compaction aborts', () => {
+    const state = session();
+    loadHistory(state, [
+      { id: 'user-1', role: 'user', content: 'Earlier turn' },
+    ]);
+    append(state, 'run-failed', 1, 'run_started', { status: 'running' });
+    append(state, 'run-failed', 2, 'compaction_started', {
+      context_tokens_before: 120_000,
+    });
+    append(state, 'run-failed', 3, 'compaction_aborted', { reason: 'failed' });
+    append(state, 'run-failed', 4, 'run_failed', {
+      status: 'failed',
+      error: 'Provider request failed',
+    });
+
+    expect(separators(render(state))).toEqual([]);
+    expect(assistantRun(state, 'run-failed').status).toBe('failed');
+  });
+
+  it('reads a reloaded checkpoint duration from its usage', () => {
+    const state = session();
+    loadHistory(state, [
+      { id: 'user-1', role: 'user', content: 'Earlier turn' },
+      {
+        id: 'checkpoint-1',
+        history_sequence: 3,
+        role: 'compaction_checkpoint',
+        timestamp: '2026-08-27T14:00:55Z',
+        usage: {
+          context_tokens_before: 120_000,
+          context_tokens_after: 30_000,
+          compaction_duration_ms: 54_000,
+        },
+      },
+    ]);
+
+    expect(separators(render(state)).map((item) => item.durationMs)).toEqual([
+      54_000,
+    ]);
+  });
+
+  it('renders a persisted checkpoint once while a newer Run streams', () => {
+    const state = session();
+    loadHistory(
+      state,
+      [
+        { id: 'user-1', role: 'user', content: 'Earlier turn' },
+        { id: 'assistant-1', role: 'assistant', content: 'Earlier answer' },
+        {
+          id: 'summary-prev',
+          role: 'run_summary',
+          run_id: 'run-prev',
+          status: 'completed',
+          timing: { duration_ms: 87_000 },
+          iteration_count: 1,
+        },
+        {
+          id: 'checkpoint-1',
+          history_sequence: 3,
+          role: 'compaction_checkpoint',
+          timestamp: '2026-08-27T14:00:55Z',
+        },
+        { id: 'user-2', role: 'user', content: 'Go ahead.' },
+      ],
+      {
+        runs: [
+          { run_id: 'run-compaction', status: 'completed', complete: true },
+        ],
+      },
+    );
+    for (const event of compactionRunEvents('run-compaction', {
+      checkpointId: 'checkpoint-1',
+    })) {
+      appendRunEvent(state, event);
+    }
+    start(state, 'run-next');
+    append(state, 'run-next', 1, 'user_message_persisted', {
+      message: { id: 'user-2', role: 'user', content: 'Go ahead.' },
+    });
+    append(state, 'run-next', 2, 'assistant_output', {
+      message: { id: 'assistant-2', role: 'assistant', content: 'Working.' },
+    });
+
+    expect(assistantRun(state, 'run-compaction')).toBeUndefined();
+    expect(separators(render(state))).toHaveLength(1);
+  });
+});
+
+describe('pruneRunEventsPersistedInHistory', () => {
+  const activeStart = runEvent('run-active', 1, 'run_started', {
+    status: 'running',
+  });
+  const emptyRun = [
+    runEvent('run-empty', 1, 'run_started', { status: 'running' }),
+    runEvent('run-empty', 2, 'run_completed', { status: 'completed' }),
+  ];
+
+  it.each([
+    [
+      'drops a finished Run with a complete persisted page',
+      [...finishedRunEvents('run-finished', 'a'), activeStart],
+      { 'run-finished': { complete: true, status: 'completed' } },
+      ['run-active'],
+    ],
+    [
+      'drops a finished Compaction Run once its checkpoint is persisted',
+      compactionRunEvents('run-compaction', { checkpointId: 'checkpoint-1' }),
+      { 'run-compaction': { complete: true, status: 'completed' } },
+      [],
+    ],
+  ])('%s', (_label, events, runs, remainingRunIds) => {
+    const pruned = pruneRunEventsPersistedInHistory(events, runs, 'run-active');
+    expect(pruned.map((event) => event.run_id)).toEqual(
+      events
+        .map((event) => event.run_id)
+        .filter((runId) => remainingRunIds.includes(runId)),
+    );
+  });
+
+  it.each([
+    [
+      'a Run whose output the page does not fully hold',
+      finishedRunEvents('run-finished', 'a'),
+      { 'run-finished': { complete: false } },
+    ],
+    ['a Run without persisted output', emptyRun, {}],
+    [
+      'the active Run even when its output is persisted',
+      finishedRunEvents('run-active', 'a'),
+      { 'run-active': { complete: true } },
+    ],
+  ])('keeps %s', (_label, events, runs) => {
+    expect(pruneRunEventsPersistedInHistory(events, runs, 'run-active')).toBe(
+      events,
+    );
+  });
 });

@@ -14,17 +14,17 @@ import {
   setDraft,
 } from '../composerMemory.js';
 
+beforeEach(() => {
+  localStorage.clear();
+  resetComposerMemory();
+});
+
+afterEach(() => {
+  resetComposerMemory();
+  localStorage.clear();
+});
+
 describe('composerMemory drafts', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    resetComposerMemory();
-  });
-
-  afterEach(() => {
-    resetComposerMemory();
-    localStorage.clear();
-  });
-
   it('returns an empty draft for an unknown or blank key', () => {
     expect(getDraft('agent::session')).toBe('');
     expect(getDraft('')).toBe('');
@@ -38,16 +38,12 @@ describe('composerMemory drafts', () => {
     expect(getDraft('agent::two')).toBe('a different thought');
   });
 
-  it('clears a draft when set to empty text', () => {
+  it.each([
+    ['set to empty text', () => setDraft('agent::one', '')],
+    ['cleared explicitly', () => clearDraft('agent::one')],
+  ])('clears a draft %s', (_label, clear) => {
     setDraft('agent::one', 'something');
-    setDraft('agent::one', '');
-
-    expect(getDraft('agent::one')).toBe('');
-  });
-
-  it('clears a draft explicitly', () => {
-    setDraft('agent::one', 'something');
-    clearDraft('agent::one');
+    clear();
 
     expect(getDraft('agent::one')).toBe('');
   });
@@ -74,48 +70,30 @@ describe('composerMemory drafts', () => {
 });
 
 describe('composerMemory history', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    resetComposerMemory();
-  });
-
-  afterEach(() => {
-    resetComposerMemory();
-    localStorage.clear();
-  });
-
   it('returns an empty history for an unknown or blank key', () => {
     expect(getHistory('agent')).toEqual([]);
     expect(getHistory('')).toEqual([]);
   });
 
-  it('records sent messages newest-first', () => {
-    pushHistory('agent', 'first');
-    pushHistory('agent', 'second');
+  it.each([
+    [
+      'records sent messages newest-first',
+      ['first', 'second'],
+      ['second', 'first'],
+    ],
+    ['ignores a consecutive duplicate send', ['same', 'same'], ['same']],
+    [
+      'floats a reused message back to the top without duplicating it',
+      ['a', 'b', 'a'],
+      ['a', 'b'],
+    ],
+    ['trims entries and skips blank sends', ['  spaced  ', '   '], ['spaced']],
+  ])('%s', (_label, sends, history) => {
+    for (const text of sends) {
+      pushHistory('agent', text);
+    }
 
-    expect(getHistory('agent')).toEqual(['second', 'first']);
-  });
-
-  it('ignores a consecutive duplicate send', () => {
-    pushHistory('agent', 'same');
-    pushHistory('agent', 'same');
-
-    expect(getHistory('agent')).toEqual(['same']);
-  });
-
-  it('floats a reused message back to the top without duplicating it', () => {
-    pushHistory('agent', 'a');
-    pushHistory('agent', 'b');
-    pushHistory('agent', 'a');
-
-    expect(getHistory('agent')).toEqual(['a', 'b']);
-  });
-
-  it('trims entries and skips blank sends', () => {
-    pushHistory('agent', '  spaced  ');
-    pushHistory('agent', '   ');
-
-    expect(getHistory('agent')).toEqual(['spaced']);
+    expect(getHistory('agent')).toEqual(history);
   });
 
   it('keeps history scoped per agent', () => {
@@ -139,16 +117,6 @@ describe('composerMemory history', () => {
 });
 
 describe('composerMemory attachments', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    resetComposerMemory();
-  });
-
-  afterEach(() => {
-    resetComposerMemory();
-    localStorage.clear();
-  });
-
   it('keeps uploaded attachments isolated to their session', () => {
     setPendingAttachments('agent-one::session-one', [
       {
@@ -222,14 +190,6 @@ describe('composerMemory across browser tabs', () => {
       }),
     );
   }
-
-  beforeEach(() => {
-    localStorage.clear();
-  });
-
-  afterEach(() => {
-    localStorage.clear();
-  });
 
   it("keeps the other tab's drafts and history when persisting", async () => {
     const tabA = await openTab();
