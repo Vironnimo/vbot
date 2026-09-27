@@ -25,23 +25,27 @@ from core.runs import (
     RUN_FAILED_EVENT,
     RUN_INTERRUPTED_EVENT,
     RUN_STARTED_EVENT,
+    STREAM_ATTEMPT_RESTARTED_EVENT,
     TOOL_CALL_STDERR_EVENT,
     TOOL_CALL_STDOUT_EVENT,
     Run,
     RunEvent,
     RunKind,
 )
+from core.subagents import SUBAGENT_SESSION_STARTED_EVENT, SUBAGENT_STATUS_CHANGED_EVENT
 from server.events import ALLOWED_SERVER_EVENT_TYPES, ServerEventBus
 from server.file_delivery import FileDelivery
 from server.rpc import event_bridge
 from server.rpc.event_bridge import (
     RUN_DELTA_EVENT_TYPES,
+    RUN_OUTPUT_EVENT_TYPES,
     RUN_SOURCE_SESSION_FIELD,
     SERVER_EVENT_TYPES,
     QueuedRunItem,
     _bridge_queued_item_to_event_bus,
     _publish_run_events,
     _server_event_from_run_event,
+    publish_bash_process_status_changed,
     publish_resource_changed,
 )
 
@@ -324,9 +328,12 @@ def test_publish_resource_changed_signals_the_kind_and_its_scope(
     ]
 
 
-def test_publish_resource_changed_is_noop_without_event_bus() -> None:
-    # A CLI-only runtime stub has no bus: the helper must no-op, not crash.
-    publish_resource_changed(SimpleNamespace(event_bus=None), "models")
+def test_publishers_are_noops_without_event_bus() -> None:
+    # A CLI-only runtime stub has no bus: the helpers must no-op, not crash.
+    state = SimpleNamespace(event_bus=None)
+
+    publish_resource_changed(state, "models")
+    publish_bash_process_status_changed(state, {"process_id": "process-one"})
 
 
 def test_publish_resource_changed_rejects_unknown_kind() -> None:
@@ -394,13 +401,18 @@ async def test_run_timeline_bridges_lifecycle_events_and_invalidates_its_exact_s
     ]
 
 
-def test_process_output_deltas_are_sse_only_not_websocket_events() -> None:
-    """Process stdout/stderr deltas stream over SSE and do not bridge to WebSocket."""
-    process_delta_events = {TOOL_CALL_STDOUT_EVENT, TOOL_CALL_STDERR_EVENT}
-
-    assert process_delta_events <= RUN_DELTA_EVENT_TYPES
-    assert process_delta_events.isdisjoint(SERVER_EVENT_TYPES)
-    assert process_delta_events.isdisjoint(ALLOWED_SERVER_EVENT_TYPES)
+def test_streaming_deltas_are_sse_only_and_subagent_lifecycle_reaches_websocket() -> None:
+    """Deltas, including process output and stream restarts, stream over SSE only;
+    subagent lifecycle events bridge to WebSocket as run output."""
+    assert {
+        TOOL_CALL_STDOUT_EVENT,
+        TOOL_CALL_STDERR_EVENT,
+        STREAM_ATTEMPT_RESTARTED_EVENT,
+    } <= RUN_DELTA_EVENT_TYPES
+    assert RUN_DELTA_EVENT_TYPES.isdisjoint(RUN_OUTPUT_EVENT_TYPES)
+    assert RUN_DELTA_EVENT_TYPES.isdisjoint(SERVER_EVENT_TYPES)
+    assert RUN_DELTA_EVENT_TYPES.isdisjoint(ALLOWED_SERVER_EVENT_TYPES)
+    assert {SUBAGENT_SESSION_STARTED_EVENT, SUBAGENT_STATUS_CHANGED_EVENT} <= RUN_OUTPUT_EVENT_TYPES
 
 
 @pytest.mark.asyncio

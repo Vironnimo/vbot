@@ -31,84 +31,28 @@ _EDGE_WINDOWS = (
 )
 
 
-def test_register_adds_entry_to_list() -> None:
-    registry = ClientRegistry()
-
-    entry = registry.register(connection_id="tab-a", accessor="browser", user_agent=_CHROME_WINDOWS)
-
-    roster = registry.list()
-    assert len(roster) == 1
-    assert roster[0] is entry
-    assert entry.connection_id == "tab-a"
-    assert entry.accessor == ACCESSOR_BROWSER
-    assert entry.browser == "Chrome"
-    assert entry.os == "Windows"
-
-
-def test_register_mints_unique_registration_id_per_call() -> None:
-    registry = ClientRegistry()
-
-    first = registry.register(connection_id="tab-a", accessor="browser", user_agent="")
-    second = registry.register(connection_id="tab-a", accessor="browser", user_agent="")
-
-    # Two connections from the same client id (e.g. a reconnect overlap) are two
-    # distinct registry entries keyed by the server-minted id.
-    assert first.id != second.id
-    assert len(registry.list()) == 2
-
-
-def test_register_and_unregister_log_client_details_and_duration(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    connected_at = datetime(2026, 7, 24, 10, 0, tzinfo=UTC)
-    clock = iter((connected_at, connected_at + timedelta(minutes=18, seconds=4)))
+def test_register_lists_each_connection_with_the_row_contract_oldest_first() -> None:
+    at = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    clock = iter((at + timedelta(hours=1), at, at + timedelta(minutes=30)))
     registry = ClientRegistry(now_provider=lambda: next(clock))
 
-    with caplog.at_level(logging.INFO, logger="vbot.server.clients"):
-        entry = registry.register(
-            connection_id="12345678-abcd",
-            accessor="browser",
-            user_agent=_CHROME_WINDOWS,
-        )
-        registry.unregister(entry.id)
+    desktop = registry.register(connection_id="tab-b", accessor="desktop", user_agent=_SAFARI_MAC)
+    unknown = registry.register(connection_id="tab-a", accessor="cli", user_agent="")
+    # A reconnect overlap from the same client id is a second, distinct entry.
+    overlap = registry.register(connection_id="tab-a", accessor="browser", user_agent="")
 
-    messages = [record.getMessage() for record in caplog.records]
-    assert len(messages) == 2
-    assert all("client_id=12345678" in message for message in messages)
-    assert "connected_for=18m 4s" in messages[1]
-
-
-def test_overlapping_reconnect_logs_one_logical_presence_cycle(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    connected_at = datetime(2026, 7, 24, 10, 0, tzinfo=UTC)
-    clock = iter(
-        (
-            connected_at,
-            connected_at + timedelta(seconds=5),
-            connected_at + timedelta(minutes=2),
-        )
-    )
-    registry = ClientRegistry(now_provider=lambda: next(clock))
-
-    with caplog.at_level(logging.INFO, logger="vbot.server.clients"):
-        original = registry.register(
-            connection_id="same-tab-id",
-            accessor="desktop",
-            user_agent=_EDGE_WINDOWS,
-        )
-        replacement = registry.register(
-            connection_id="same-tab-id",
-            accessor="desktop",
-            user_agent=_EDGE_WINDOWS,
-        )
-        registry.unregister(original.id)
-        registry.unregister(replacement.id)
-
-    messages = [record.getMessage() for record in caplog.records]
-    assert len(messages) == 2
-    assert all("client_id=same-tab" in message for message in messages)
-    assert "connected_for=2m" in messages[1]
+    assert registry.list() == [unknown, overlap, desktop]
+    assert unknown.id != overlap.id
+    assert (unknown.accessor, overlap.accessor) == (ACCESSOR_UNKNOWN, ACCESSOR_BROWSER)
+    assert desktop.to_dict() == {
+        "id": desktop.id,
+        "connection_id": "tab-b",
+        "accessor": ACCESSOR_DESKTOP,
+        "browser": "Safari",
+        "os": "macOS",
+        "connected_at": "2026-06-20T11:00:00+00:00",
+        "status": CLIENT_STATUS_CONNECTED,
+    }
 
 
 def test_unregister_removes_only_the_named_entry() -> None:
@@ -116,57 +60,49 @@ def test_unregister_removes_only_the_named_entry() -> None:
     first = registry.register(connection_id="tab-a", accessor="browser", user_agent="")
     second = registry.register(connection_id="tab-b", accessor="desktop", user_agent="")
 
-    registry.unregister(first.id)
-
-    roster = registry.list()
-    assert [entry.id for entry in roster] == [second.id]
-
-
-def test_unregister_unknown_id_is_a_noop() -> None:
-    registry = ClientRegistry()
-    registry.register(connection_id="tab-a", accessor="browser", user_agent="")
-
     registry.unregister("does-not-exist")
+    assert len(registry.list()) == 2
 
-    assert len(registry.list()) == 1
-
-
-def test_list_orders_by_connection_time() -> None:
-    registry = ClientRegistry()
-    older = registry.register(connection_id="tab-a", accessor="browser", user_agent="")
-    # Force a later, deterministic timestamp on the second entry.
-    newer = registry.register(connection_id="tab-b", accessor="browser", user_agent="")
-    object.__setattr__(older, "connected_at", "2026-06-20T10:00:00+00:00")
-    object.__setattr__(newer, "connected_at", "2026-06-20T11:00:00+00:00")
-
-    roster = registry.list()
-
-    assert [entry.connection_id for entry in roster] == ["tab-a", "tab-b"]
+    registry.unregister(first.id)
+    assert registry.list() == [second]
 
 
-def test_to_dict_exposes_the_row_contract() -> None:
-    registry = ClientRegistry()
-    entry = registry.register(connection_id="tab-a", accessor="desktop", user_agent=_SAFARI_MAC)
+def test_presence_logs_one_connect_and_disconnect_per_logical_window(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    at = datetime(2026, 7, 24, 10, 0, tzinfo=UTC)
+    clock = iter(
+        (
+            at,
+            at + timedelta(minutes=18, seconds=4),
+            at,
+            at + timedelta(seconds=5),
+            at + timedelta(minutes=2),
+        )
+    )
+    registry = ClientRegistry(now_provider=lambda: next(clock))
 
-    payload = entry.to_dict()
+    with caplog.at_level(logging.INFO, logger="vbot.server.clients"):
+        window = registry.register(
+            connection_id="12345678-abcd", accessor="browser", user_agent=_CHROME_WINDOWS
+        )
+        registry.unregister(window.id)
+        # Overlapping reconnect sockets of one window form one presence cycle.
+        original = registry.register(
+            connection_id="same-tab-id", accessor="desktop", user_agent=_EDGE_WINDOWS
+        )
+        replacement = registry.register(
+            connection_id="same-tab-id", accessor="desktop", user_agent=_EDGE_WINDOWS
+        )
+        registry.unregister(original.id)
+        registry.unregister(replacement.id)
 
-    assert payload == {
-        "id": entry.id,
-        "connection_id": "tab-a",
-        "accessor": ACCESSOR_DESKTOP,
-        "browser": "Safari",
-        "os": "macOS",
-        "connected_at": entry.connected_at,
-        "status": CLIENT_STATUS_CONNECTED,
-    }
-
-
-def test_unknown_accessor_normalizes_to_unknown() -> None:
-    registry = ClientRegistry()
-
-    entry = registry.register(connection_id="tab-a", accessor="cli", user_agent="")
-
-    assert entry.accessor == ACCESSOR_UNKNOWN
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 4
+    assert all("client_id=12345678" in message for message in messages[:2])
+    assert "connected_for=18m 4s" in messages[1]
+    assert all("client_id=same-tab" in message for message in messages[2:])
+    assert "connected_for=2m)" in messages[3]
 
 
 @pytest.mark.parametrize(
