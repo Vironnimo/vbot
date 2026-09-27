@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from resources.extensions.swarm._store_values import wiki_ref
+
 _TOLERANCE = [
     ("formatting", "Before\r\n“Ready” — wait…\r\nAfter", '"Ready" -- wait...', "Done", True),
     (
@@ -57,7 +59,8 @@ async def wiki_cases(store: Any, sid: str, pid: str) -> list[tuple[str, dict[str
     await create("Long", "x" * 12500)
     long = (await store.wiki(sid, pid, {"action": "list", "query": "Long"}))["entries"][0]
     listing = await store.wiki(sid, pid, {"action": "list", "limit": 1})
-    target = page["page_id"]
+    # Prescribed calls name pages by number, as Tool results show them.
+    target = wiki_ref(page["number"])
     read = {"action": "read", "page_id": target}
     update = {"action": "update", "page_id": target, "expected_revision": 1, "title": "Renamed"}
     create_args = {"action": "create", "title": "New", "content": ""}
@@ -80,7 +83,7 @@ async def wiki_cases(store: Any, sid: str, pid: str) -> list[tuple[str, dict[str
                 "tolerance_" + name,
                 {
                     "action": "update",
-                    "page_id": fixture["page_id"],
+                    "page_id": wiki_ref(fixture["number"]),
                     "expected_revision": 1,
                     "old_text": old,
                     "new_text": new,
@@ -98,7 +101,8 @@ async def wiki_cases(store: Any, sid: str, pid: str) -> list[tuple[str, dict[str
         ("read_default", read, True),
         ("read_revision", {**read, "revision": 1}, True),
         ("read_offset", {**read, "offset": 6, "limit": 4}, True),
-        ("read_large", {"action": "read", "page_id": long["page_id"]}, True),
+        ("read_large", {"action": "read", "page_id": wiki_ref(long["number"])}, True),
+        ("read_stored_id", {"action": "read", "page_id": page["page_id"]}, True),
         ("read_max", {**read, "limit": 20000}, True),
         ("read_unknown", {**read, "page_id": "foreign"}, False),
         ("recovered_page_title", {"action": "read", "page_id": "Fixture"}, True),

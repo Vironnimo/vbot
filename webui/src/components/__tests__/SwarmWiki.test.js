@@ -15,13 +15,14 @@ function wikiBridge() {
   vi.spyOn(fixture.bridge, 'openLink');
   let page = {
     page_id: 'wpg-one',
+    number: 1,
     title: 'Shared research',
     content: 'Original evidence',
     revision: 1,
     current_revision: 1,
     deleted: false,
     author: { name: 'Alpha', kind: 'participant' },
-    link: '[Shared research](#wiki/wpg-one)',
+    link: '[Shared research](#wiki/w1)',
   };
   const versions = [structuredClone(page)];
   fixture.operation.mockImplementation(async (name, args) => {
@@ -33,7 +34,7 @@ function wikiBridge() {
           {
             id: 'pst-link',
             author: { name: 'Alpha' },
-            text: '[Research](#wiki/wpg-one)',
+            text: '[Research](#wiki/w1)',
           },
         ],
         has_more: false,
@@ -64,6 +65,7 @@ function wikiBridge() {
         title: args.title,
         content: args.content,
         page_id: 'wpg-new',
+        number: 2,
         revision: 1,
         current_revision: 1,
       };
@@ -139,18 +141,29 @@ describe('Swarm Wiki', () => {
     await render(fixture.bridge);
     button('Investigate').click();
     await vi.waitFor(() =>
-      expect(document.querySelector('a[href="#wiki/wpg-one"]')).not.toBeNull(),
+      expect(document.querySelector('a[href="#wiki/w1"]')).not.toBeNull(),
     );
     expect(document.querySelector('.swarm-goal-post').textContent).toContain(
       swarm.prompt,
     );
-    document.querySelector('a[href="#wiki/wpg-one"]').click();
+    document.querySelector('a[href="#wiki/w1"]').click();
     await vi.waitFor(() =>
       expect(document.querySelector('.wiki-content').textContent).toContain(
         'Original evidence',
       ),
     );
     expect(fixture.bridge.openLink).not.toHaveBeenCalled();
+    // A page link names the page by the number participants use for it.
+    expect(fixture.operation).toHaveBeenCalledWith(
+      'wiki',
+      expect.objectContaining({ action: 'read', page_id: 'w1' }),
+    );
+    expect(
+      document.querySelector('.wiki-content h3 .wiki-number').textContent,
+    ).toBe('w1');
+    expect(
+      document.querySelector('.wiki-page-link .wiki-number').textContent,
+    ).toBe('w1');
     button('Delete page').click();
     await vi.waitFor(() =>
       expect(button('Restore this version')).toBeDefined(),

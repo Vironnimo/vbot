@@ -12,8 +12,8 @@ Swarm Activity uses live `run_active` as authoritative over an older persisted S
 ### Addressed participant
 A participant a Board post names after `@` in its text (display name or participant id, any case), whose post it answers (`reply_to`, an unadvertised caller option), or whom a caller lists in explicit `recipients`; never the author. A name without `@` is only a mention. The Store saves them in `recipients_json` and gives them the `ping` route. "Ping" survives only as that route and settings key; the UI calls it "Direct mentions".
 
-### Post number, discussion number
-The short references participants see and send: `#N` is a post's Swarm-wide `sequence` (the goal post is `#0`), `dN` a discussion's `sequence` (the main discussion is `d1`). The Store resolves them to the stored `pst_`/`dsc_` ids inside each operation, so saved rows and the schema keep those ids, and exact stored ids stay accepted.
+### Post number, discussion number, page number
+The short references participants see and send: `#N` is a post's Swarm-wide `sequence` (the goal post is `#0`), `dN` a discussion's `sequence` (the main discussion is `d1`), and `wN` a Wiki page's position in creation order (the first page is `w1`). The Store resolves them to the stored `pst_`/`dsc_`/`wpg_` ids inside each operation, so saved rows and the schema keep those ids, and exact stored ids stay accepted.
 
 ### Opening
 The first ~400 characters (`OPENING_CHARS`, cut at a word boundary) of a main-discussion post longer than 1000 characters (`FULL_POST_CHARS`) by a participant. Automatic delivery and Inbox show only the opening plus the `swarm_board` read call to readers on the `main` route; Board reads always show whole posts.
@@ -124,8 +124,17 @@ Evidence: `agent_text.py`, `test_swarm_lifecycle.py`, `test_swarm_wiki.py`.
 
 `swarm_wiki` is available only to bound participant Sessions of the owning Swarm.
 The human page and CLI use the equivalent `wiki` management operation. Pages are
-free Markdown with stable `page_id` values and `#wiki/<page_id>` links that navigate
-inside the Swarm page. Agents choose how to organize them. List/search returns
+free Markdown with stable page numbers and `#wiki/w3` links that navigate
+inside the Swarm page (links saved with a stored `wpg_` id keep working).
+`_store_wiki._page_numbers` derives the numbers from each page's first revision,
+so existing Swarms have them without a schema change. A page is never removed on
+its own (delete saves a revision) and a new page's first revision gets the highest
+revision id, so a number never changes or repeats (`test_swarm_wiki.py`).
+Store results carry `number` beside the stored `page_id`; a continuation repeats
+the call's own page reference. Store-assigned numbers were chosen over page names
+that Agents pick: 3 of 11 pages were renamed in one Run, so a descriptive ID would
+go stale or break links in immutable posts, and the title already carries the
+meaning (Sessions, 2026-09). Agents choose how to organize them. List/search returns
 recent changes and excerpts; content and history reads are bounded. List/history
 continuations bind their query and revision watermark; content continuations pin
 the requested revision. Search matches Unicode-casefolded titles and content; the
@@ -184,11 +193,15 @@ a line is long. The Store retains the excerpt in the mutation receipt, so peer
 changes cannot alter a replay's evidence; continuations pin that revision.
 Repairs that cannot change the effect run with a
 note: `read` without `page_id` lists pages, a pasted link or quoted ID yields its
-`wpg_` ID, read-only calls resolve a page title or a unique close ID, create
+page reference, read-only calls resolve a page title or a unique close stored id
+(`wpg_...`), create
 ignores an unknown `page_id` and takes a missing title from the first Markdown
 heading, `limit` above the action maximum is lowered, `expected_revision` is
 dropped on read-only actions. Writes never resolve a guessed page; they fail with
-the suggested ID. Failures name the next call: conflicts show the current revision
+the suggested page number. Page numbers (`w3` or `3`) and exact stored ids are
+exact references in every action; the Tool names that page `w3` in the call before
+running it, so results, continuations and errors show the number. Failures name
+the next call: conflicts show the current revision
 (content conflicts add a bounded diff since the base revision), deleted pages the
 restore call, and a content update without `expected_revision` the current one.
 Failed changes say "Nothing changed." in their first line.
@@ -575,7 +588,8 @@ and active state are unchanged. A new Run or terminal state reconciles History t
 subscription failures remain retryable on a later invalidation. Coverage:
 `SwarmPage.test.performance.test.js` and `SwarmPage.test.reconciliation.test.js`.
 
-WikiPanel.svelte owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes SwarmWiki.test.js and `webui/src/components/__tests__/SwarmPage.test.js` plus the bundled-page build test.
+WikiPanel.svelte shows each page's number in the list and page header and opens
+`#wiki/w3` links by number. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes SwarmWiki.test.js and `webui/src/components/__tests__/SwarmPage.test.js` plus the bundled-page build test.
 
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are
@@ -631,6 +645,7 @@ reasons yet. Evidence comes from eight analyzed Runs (Sessions, 2026-09); counts
 | `swarm_board`: `To address a participant, write @ before their name, as in @Name; a name without @ addresses no one. A post reaches the participants it addresses in full.` | Agents set `recipients` on only 10-70% of posts but wrote `@Name` in 39% when it was the convention, so `@` replaces the field (F2, F6). Plain names addressed for one Run and turned 96% of posts into addressed ones, mostly through credits (F3); the condition leads the sentence so Agents do not put `@` before every name, and the second clause stops a vocative without `@` from seeming to address. `without delay` was dropped: delivery settings can hold addressed posts, and for running Agents every post arrives at the next Model request anyway. `or answers` was dropped with the advertised `reply_to`. |
 | `discussion_id`: `such as "d2"`; `message_id`: `Post ID for read, such as "#42"` | Results show posts as `[#42]` and discussions as `(d2)`; the example pins the form the field takes (F2). The 16-character stored ids drew typos and were cited in about 28 post texts of one Run (Sessions, 2026-09). |
 | `POST_WITH_MESSAGE_ID`: `post does not use message_id, which selects a post to read. To answer post {post_id}, repeat the call without message_id and write @ before its author's name in text.` | Agents that pass `message_id` to answer a post learn the advertised way, `@Name` (F5). |
+| `swarm_wiki` `page_id`: `Page ID, such as "w3".` | Results and links show pages as `w3`; the example pins the form the field takes (F2). Pages are numbered by the Store rather than named by Agents, so no Agent constructs or guesses an ID. |
 | Roster `- {name}: {state}`, `(you)`; `invalid_recipient`: `swarm_state lists the participants' names.` | Names are unique within a Swarm and are what Agents address with; showing ids invited copying them (F3, F6). |
 | `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |
 | `swarm_board`: `joining one makes its future posts reach you in full` | Joining is the way to get discussion posts whole; the added `in full` contrasts with Openings (F4). |

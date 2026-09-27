@@ -44,6 +44,8 @@
   const snapshot = () =>
     JSON.stringify({ page: selected?.page_id, title, content });
   const hasChanges = () => editing && snapshot() !== baseline;
+  // Participants refer to a page by its number, as in "w3" or a "#wiki/w3" link.
+  const pageRef = (page) => (page?.number != null ? `w${page.number}` : null);
   const call = (args) =>
     client.operation('wiki', { swarm_id: swarmId, ...args });
   const autosave = createDebouncedAutosave({
@@ -167,7 +169,10 @@
   }
   export function openPage(id) {
     return requestTransition(() => {
-      if (selected?.page_id === id && !historyOpen) {
+      if (
+        (selected?.page_id === id || pageRef(selected) === id) &&
+        !historyOpen
+      ) {
         editing = false;
         return;
       }
@@ -357,7 +362,11 @@
             class:selected={selected?.page_id === page.page_id}
             onclick={() => openPage(page.page_id)}
           >
-            <strong>{page.title}</strong>
+            <span class="wiki-page-title"
+              >{#if page.number != null}<span class="wiki-number"
+                  >{pageRef(page)}</span
+                >{/if}<strong>{page.title}</strong></span
+            >
             {#if page.deleted}<small>{t('swarm.wiki.deleted', 'Deleted')}</small
               >{/if}
             <small>{page.excerpt}</small>
@@ -411,7 +420,11 @@
             >
           </div>
         {:else if selected}
-          <h3>{selected.title}</h3>
+          <h3>
+            {#if selected.number != null}<span class="wiki-number"
+                >{pageRef(selected)}</span
+              >{/if}{selected.title}
+          </h3>
           <p class="wiki-meta">
             {t('swarm.wiki.revision', 'Revision {revision} · {author}', {
               revision: selected.revision,
@@ -522,6 +535,20 @@
     border-radius: 0.4rem;
     overflow-wrap: anywhere;
     cursor: pointer;
+  }
+  .wiki-page-title {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+  .wiki-number {
+    color: var(--text-med);
+    font: 600 var(--fs-label-sm) var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    margin-right: 0.5rem;
+  }
+  .wiki-page-title .wiki-number {
+    margin-right: 0;
   }
   .wiki-page-link.selected {
     background: var(--surface-2);

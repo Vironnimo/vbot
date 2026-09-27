@@ -18,7 +18,16 @@ from ._store_database import (
     SwarmDatabase,
 )
 from ._store_records import _assert_epoch, _assert_mutable, _participant
-from ._store_values import Json, SwarmStoreError, _dump, _hash, _load, _request_id
+from ._store_values import (
+    Json,
+    SwarmStoreError,
+    _dump,
+    _hash,
+    _load,
+    _request_id,
+    wiki_number,
+    wiki_ref,
+)
 from ._wiki_edit import EditMiss, apply_text_edit
 
 MUTATIONS = {"create", "update", "delete", "restore"}
@@ -101,6 +110,31 @@ def _validate(arguments: Json) -> str:
     return action
 
 
+def _page_numbers(connection: sqlite3.Connection, swarm_id: str) -> dict[str, int]:
+    """Number the Swarm's pages in creation order: the first page created is "w1".
+
+    A page is never removed on its own (delete saves a revision), and a new page's
+    first revision gets a higher ID than every saved revision, so a page keeps its
+    number and no number is reused.
+    """
+
+    rows = connection.execute(
+        "SELECT page_id FROM wiki_revisions WHERE swarm_id=? GROUP BY page_id ORDER BY MIN(id)",
+        (swarm_id,),
+    ).fetchall()
+    return {row["page_id"]: number for number, row in enumerate(rows, 1)}
+
+
+def _page_id(connection: sqlite3.Connection, swarm_id: str, reference: str) -> str:
+    """Return the ID of the page ``reference`` numbers ("w3"); any other value unchanged."""
+
+    number = wiki_number(reference)
+    if number is None:
+        return reference
+    numbered = {value: page_id for page_id, value in _page_numbers(connection, swarm_id).items()}
+    return numbered.get(number, reference)
+
+
 def _page(
     connection: sqlite3.Connection, swarm_id: str, page_id: str, revision: int | None = None
 ) -> sqlite3.Row:
@@ -119,26 +153,30 @@ def _page(
     return cast(sqlite3.Row, row)
 
 
-def _metadata(row: sqlite3.Row) -> Json:
+def _metadata(row: sqlite3.Row, numbers: dict[str, int]) -> Json:
     label = " ".join(row["title"].split()).replace("[", "").replace("]", "")
+    number = numbers[row["page_id"]]
     return {
         "page_id": row["page_id"],
+        "number": number,
         "title": row["title"],
         "revision": row["revision"],
         "deleted": bool(row["deleted"]),
         "updated_at": row["created_at"],
         "author": {"id": row["author_id"], "name": row["author_name"], "kind": row["author_kind"]},
-        "link": f"[{label}](#wiki/{row['page_id']})",
+        "link": f"[{label}](#wiki/{wiki_ref(number)})",
     }
 
 
-def _read(row: sqlite3.Row, arguments: Json, current_revision: int) -> Json:
+def _read(
+    row: sqlite3.Row, arguments: Json, current_revision: int, numbers: dict[str, int]
+) -> Json:
     offset, limit = arguments.get("offset", 0), arguments.get("limit", 12000)
     content = row["content"]
     if offset > len(content):
         raise SwarmStoreError("invalid_arguments", field="offset")
     result = {
-        **_metadata(row),
+        **_metadata(row, numbers),
         "current_revision": current_revision,
         "content": content[offset : offset + limit],
         "offset": offset,
@@ -153,7 +191,7 @@ def _read(row: sqlite3.Row, arguments: Json, current_revision: int) -> Json:
 
 
 def wiki_pages(db: SwarmDatabase, swarm_id: str) -> list[Json]:
-    """Return every page's ID, current title and deletion state, newest change first."""
+    """Return every page's ID, number, current title and deletion state, newest change first."""
 
     with db._read() as connection:
         rows = connection.execute(
@@ -161,8 +199,14 @@ def wiki_pages(db: SwarmDatabase, swarm_id: str) -> list[Json]:
             "ON r.page_id=p.id AND r.revision=p.revision WHERE p.swarm_id=? ORDER BY r.id DESC",
             (swarm_id,),
         ).fetchall()
+        numbers = _page_numbers(connection, swarm_id)
     return [
-        {"page_id": row["id"], "title": row["title"], "deleted": bool(row["deleted"])}
+        {
+            "page_id": row["id"],
+            "number": numbers[row["id"]],
+            "title": row["title"],
+            "deleted": bool(row["deleted"]),
+        }
         for row in rows
     ]
 
@@ -173,6 +217,7 @@ def wiki_contents(
     """Return the complete content of the named revisions that exist."""
 
     with db._read() as connection:
+        page_id = _page_id(connection, swarm_id, page_id)
         rows = connection.execute(
             "SELECT revision,content FROM wiki_revisions WHERE swarm_id=? AND page_id=? "
             f"AND revision IN ({','.join('?' * len(revisions))})",
@@ -197,36 +242,44 @@ def wiki(
         actor = _participant(connection, swarm_id, actor_id) if actor_id is not None else None
         if actor is not None and expected_epoch is not None:
             _assert_epoch(connection, swarm_id, expected_epoch)
+        # A page number names its page exactly. The operation uses the page's ID, while
+        # a continuation repeats the call as it was made.
+        call = (
+            {**arguments, "page_id": _page_id(connection, swarm_id, arguments["page_id"])}
+            if "page_id" in arguments
+            else arguments
+        )
         if action in MUTATIONS:
             if actor is not None:
                 _assert_mutable(connection, swarm_id)
             elif swarm["state"] in {"stopping", "deleting"}:
                 raise SwarmStoreError("swarm_closed")
-            return _mutate(connection, swarm_id, actor, arguments)
+            return _mutate(connection, swarm_id, actor, call)
+        numbers = _page_numbers(connection, swarm_id)
         if action == "read":
-            current = _page(connection, swarm_id, arguments["page_id"])
-            row = _page(connection, swarm_id, arguments["page_id"], arguments.get("revision"))
-            return _read(row, arguments, current["revision"])
+            current = _page(connection, swarm_id, call["page_id"])
+            row = _page(connection, swarm_id, call["page_id"], call.get("revision"))
+            return _read(row, arguments, current["revision"], numbers)
         if action == "history":
-            _page(connection, swarm_id, arguments["page_id"])
+            _page(connection, swarm_id, call["page_id"])
         high = connection.execute(
             "SELECT COALESCE(MAX(id),0) FROM wiki_revisions WHERE swarm_id=?", (swarm_id,)
         ).fetchone()[0]
         scope = _dump(
             {
                 "swarm_id": swarm_id,
-                **{key: value for key, value in arguments.items() if key != "cursor"},
+                **{key: value for key, value in call.items() if key != "cursor"},
             }
         )
         offset = 0
-        if arguments.get("cursor"):
-            offset, high = db._cursor(arguments["cursor"], "wiki", scope, high)
-        limit = arguments.get("limit", 20)
+        if call.get("cursor"):
+            offset, high = db._cursor(call["cursor"], "wiki", scope, high)
+        limit = call.get("limit", 20)
         if action == "history":
             rows = connection.execute(
                 f"SELECT {WIKI_REVISION_COLUMNS} FROM wiki_revisions "
                 "WHERE swarm_id=? AND page_id=? AND id<=? ORDER BY id DESC LIMIT ? OFFSET ?",
-                (swarm_id, arguments["page_id"], high, limit + 1, offset),
+                (swarm_id, call["page_id"], high, limit + 1, offset),
             ).fetchall()
         else:
             # Unicode case folding happens in Python: SQLite's lower() folds
@@ -247,7 +300,7 @@ def wiki(
             rows = list(islice(matches, offset, offset + limit + 1))
         entries = []
         for row in rows[:limit]:
-            value = _metadata(row)
+            value = _metadata(row, numbers)
             if action == "list":
                 query = arguments.get("query", "").casefold()
                 start = max(0, row["content"].casefold().find(query) - 80) if query else 0
@@ -284,7 +337,13 @@ def _mutate(
     if replay is not None:
         if replay["payload_hash"] != payload_hash:
             raise SwarmStoreError("request_conflict")
-        return {**_load(replay["outcome"]), "replayed": True}
+        outcome = _load(replay["outcome"])
+        # Outcomes saved before pages had numbers carry only the page ID.
+        outcome.setdefault("number", _page_numbers(connection, swarm_id)[outcome["page_id"]])
+        return {**outcome, "replayed": True}
+
+    def metadata(row: sqlite3.Row) -> Json:
+        return _metadata(row, _page_numbers(connection, swarm_id))
 
     def finish(result: Json, *, changed_offset: int | None = None) -> Json:
         if not result["deleted"] and (
@@ -315,7 +374,7 @@ def _mutate(
         if duplicate is not None:
             # A repeated create from a later Tool Call must not fork the page.
             return finish(
-                {**_metadata(_page(connection, swarm_id, duplicate["id"])), "unchanged": True}
+                {**metadata(_page(connection, swarm_id, duplicate["id"])), "unchanged": True}
             )
         while True:
             page_id = new_id("wpg")
@@ -356,7 +415,7 @@ def _mutate(
             current["content"],
             current["deleted"],
         ):
-            return finish({**_metadata(current), "unchanged": True})
+            return finish({**metadata(current), "unchanged": True})
         if expected is not None and expected != current["revision"] and not rebase:
             raise SwarmStoreError(
                 "wiki_revision_conflict", details={**state, "expected_revision": expected}
@@ -382,7 +441,7 @@ def _mutate(
                 )
             content, line, notes = edit.content, edit.line, list(edit.notes)
             if content == current["content"] and title == current["title"]:
-                return finish({**_metadata(current), "unchanged": True, "line": line})
+                return finish({**metadata(current), "unchanged": True, "line": line})
         if len(content) > 200000:
             raise SwarmStoreError("invalid_arguments", field="content")
         revision = current["revision"] + 1
@@ -404,7 +463,7 @@ def _mutate(
             now,
         ),
     )
-    result = _metadata(_page(connection, swarm_id, page_id))
+    result = metadata(_page(connection, swarm_id, page_id))
     if line is not None:
         result["line"] = line
     if notes:
