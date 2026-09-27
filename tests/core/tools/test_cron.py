@@ -16,8 +16,7 @@ from core.projects import (
     ResolutionProjectNotFoundError,
 )
 from core.tools.cron import CRON_TOOL_DESCRIPTION, CRON_TOOL_NAME, CRON_TOOL_PARAMETERS
-
-from .cron_tool_support import cron_tool
+from tests.core.tools.scheduling_tool_support import cron_tool
 
 PROMPT = "Check the nightly build and summarize failures."
 BERLIN_TIME = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+0[12]:00"
@@ -28,10 +27,7 @@ def _error(envelope: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], envelope["error"])
 
 
-def test_schema_exposes_flat_action_contract() -> None:
-    assert CRON_TOOL_PARAMETERS["type"] == "object"
-    assert "oneOf" not in CRON_TOOL_PARAMETERS
-    assert "additionalProperties" not in CRON_TOOL_PARAMETERS
+def test_schema_advertises_only_the_canonical_fields() -> None:
     properties = cast(dict[str, Any], CRON_TOOL_PARAMETERS["properties"])
     # Accepted time zone and paused-state spellings are never advertised.
     assert list(properties) == ["action", "id", "target", "name", "prompt", "schedule", "repeat"]
@@ -131,12 +127,16 @@ def test_one_time_job_shows_its_local_time_once(tmp_path: Path) -> None:
     assert "repeat" not in text
 
 
-@pytest.mark.parametrize("repeat", [2, None])
-def test_one_time_schedule_refuses_another_repeat(tmp_path: Path, repeat: int | None) -> None:
+@pytest.mark.parametrize(("action", "repeat"), [("create", 2), ("create", None), ("update", None)])
+def test_one_time_schedule_refuses_another_repeat(
+    tmp_path: Path, action: str, repeat: int | None
+) -> None:
     tool = cron_tool(tmp_path)
+    created, _ = tool.call({"action": "create", "prompt": PROMPT, "schedule": "every 1d"})
+    subject = {"prompt": PROMPT} if action == "create" else {"id": created["data"]["id"]}
 
     envelope, _text = tool.call(
-        {"action": "create", "prompt": PROMPT, "schedule": "in 30m", "repeat": repeat}
+        {"action": action, **subject, "schedule": "in 30m", "repeat": repeat}
     )
 
     error = _error(envelope)
@@ -144,7 +144,7 @@ def test_one_time_schedule_refuses_another_repeat(tmp_path: Path, repeat: int | 
     assert "fires once" in error["message"]
     assert '"repeat":1' in error["message"]
     assert "retryable" not in error
-    assert tool.jobs() == []
+    assert [(job.schedule_type, job.remaining_runs) for job in tool.jobs()] == [("interval", None)]
 
 
 def test_list_shows_every_job_as_a_readable_block(tmp_path: Path) -> None:
@@ -263,18 +263,6 @@ def test_update_to_a_one_time_schedule_fires_once(tmp_path: Path) -> None:
     job = tool.only_job()
     assert (job.schedule_type, job.remaining_runs, job.status) == ("once", 1, "active")
     assert re.search(rf"^schedule: {BERLIN_TIME}$", text, re.MULTILINE)
-
-
-def test_update_to_a_one_time_schedule_refuses_null_repeat(tmp_path: Path) -> None:
-    tool = cron_tool(tmp_path)
-    created, _ = tool.call({"action": "create", "prompt": PROMPT, "schedule": "every 1d"})
-
-    envelope, _text = tool.call(
-        {"action": "update", "id": created["data"]["id"], "schedule": "in 30m", "repeat": None}
-    )
-
-    assert '"repeat":1' in _error(envelope)["message"]
-    assert tool.only_job().schedule_type == "interval"
 
 
 def test_update_needs_a_change(tmp_path: Path) -> None:

@@ -24,6 +24,7 @@ from core.tools import (
 )
 from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
 from core.tools.bash import BASH_TOOL_PARAMETERS
+from core.tools.calendar import CALENDAR_TOOL_PARAMETERS
 from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
 from core.tools.cron import CRON_TOOL_PARAMETERS
 from core.tools.history import HISTORY_TOOL_PARAMETERS
@@ -400,6 +401,7 @@ _BUILTIN_TOOL_SCHEMAS: dict[str, JsonObject] = {
     "apply_patch": APPLY_PATCH_TOOL_PARAMETERS,
     "analyze_image": ANALYZE_IMAGE_TOOL_PARAMETERS,
     "bash": BASH_TOOL_PARAMETERS,
+    "calendar": CALENDAR_TOOL_PARAMETERS,
     "channel_send": CHANNEL_SEND_TOOL_PARAMETERS,
     "cron": CRON_TOOL_PARAMETERS,
     "history": HISTORY_TOOL_PARAMETERS,
