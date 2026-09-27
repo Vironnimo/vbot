@@ -242,21 +242,34 @@ def test_every_wire_replays_full_history_with_its_own_fidelity(
 async def test_chat_wire_replays_only_readable_reasoning_for_every_assistant() -> None:
     reasoning = "EXACT old Reasoning: äöü\nline two\n"
     history: list[dict[str, Any]] = [{"role": "user", "content": "First"}]
-    for text in (reasoning, "second reasoning", None, ""):
+    # A Tool Call without Reasoning still carries an empty reasoning_content:
+    # DeepSeek's thinking mode rejects the request otherwise (Sessions, 2026-09).
+    for text, calls in (
+        (reasoning, False),
+        ("second reasoning", False),
+        (None, False),
+        ("", False),
+        ("tool reasoning", True),
+        (None, True),
+        ("", True),
+    ):
+        call = {"id": f"call_{len(history)}", "name": "read", "arguments": {"path": "a.txt"}}
         history += [
             {
                 "role": "assistant",
-                "content": "Answer",
+                "content": None if calls else "Answer",
                 "reasoning": text,
                 "reasoning_meta": {"reasoning_details": [{"trace": "opaque"}]} if text else None,
-                "tool_calls": None,
+                "tool_calls": [call] if calls else None,
             },
-            {"role": "user", "content": "Next"},
+            {"role": "tool", "tool_call_id": call["id"], "content": "text"}
+            if calls
+            else {"role": "user", "content": "Next"},
         ]
 
     with respx.mock:
         route = respx.post(CHAT_URL).mock(return_value=success_response("chat", streaming=False))
-        await go_adapter().send(history, model_id="glm-5.3")
+        await go_adapter().send(history, model_id="deepseek-v4.1-flash")
 
     assistants = [m for m in _sent_payload(route)["messages"] if m["role"] == "assistant"]
     assert [m.get("reasoning_content") for m in assistants] == [
@@ -264,6 +277,9 @@ async def test_chat_wire_replays_only_readable_reasoning_for_every_assistant() -
         "second reasoning",
         None,
         None,
+        "tool reasoning",
+        "",
+        "",
     ]
     assert all("reasoning_details" not in m and "reasoning" not in m for m in assistants)
     assert all("<reasoning_history>" not in (m.get("content") or "") for m in assistants)

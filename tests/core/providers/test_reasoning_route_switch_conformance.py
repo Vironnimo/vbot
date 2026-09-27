@@ -543,7 +543,9 @@ async def test_bundled_models_replay_persisted_tool_history_only_on_its_original
                 assert all(item.get("type") != "reasoning" for item in payload["input"])
             continue
         prior = next(item for item in payload["messages"] if item["role"] == "assistant")
-        assert prior.get(readable_field) == (READABLE_REASONING if same_route else None)
+        # OpenCode Go keeps an empty carrier on a Tool Call whose Reasoning it drops.
+        dropped = "" if provider_id == "opencode-go" else None
+        assert prior.get(readable_field) == (READABLE_REASONING if same_route else dropped)
         other_field = "reasoning_content" if readable_field == "reasoning" else "reasoning"
         assert other_field not in prior
         assert "reasoning_details" not in prior
