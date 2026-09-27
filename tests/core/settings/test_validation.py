@@ -1,72 +1,86 @@
-"""Tests for Settings-owned data-dir validation orchestration."""
+"""Tests for raw ``settings.json`` validation and data-dir validation orchestration."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from core.config_validation import JsonDiagnostic
 from core.settings import (
     SettingsValidationError,
     load_runtime_settings_json,
     validate_data_dir_config,
     validate_settings_data,
     validate_settings_document,
+    validate_settings_file,
 )
 
 
-def test_validate_data_dir_config_delegates_project_files(tmp_path: Path) -> None:
-    project_dir = tmp_path / "projects" / "vbot"
-    project_dir.mkdir(parents=True)
-    (project_dir / "project.json").write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "project_id": "vbot",
-                "display_name": "vBot",
-                "cwd": "/srv/repos/vbot",
-                "allowed_tools": [],
-                "created_at": "2026-06-18T10:00:00Z",
-                "updated_at": "2026-06-18T10:00:00Z",
-            }
+def _diagnostics(items: Iterable[JsonDiagnostic]) -> list[tuple[str, str, str]]:
+    return [(item.severity, item.path, item.message) for item in items]
+
+
+_VALID_PROJECT = {
+    "format_version": 1,
+    "project_id": "vbot",
+    "display_name": "vBot",
+    "cwd": "/srv/repos/vbot",
+    "allowed_tools": [],
+    "created_at": "2026-06-18T10:00:00Z",
+    "updated_at": "2026-06-18T10:00:00Z",
+}
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "content", "first_diagnostic"),
+    [
+        pytest.param("projects/vbot/project.json", json.dumps(_VALID_PROJECT), None, id="project"),
+        pytest.param(
+            "agents/order.json",
+            json.dumps({"format_version": 1, "revision": 1, "agent_ids": ["main", "main"]}),
+            ("$.agent_ids[1]", ""),
+            id="agent-order",
         ),
-        encoding="utf-8",
-    )
+        pytest.param(
+            "bootstrap/jobs.json",
+            '{"format_version": 1, "jobs": [{"mode": "sometimes"}]}',
+            ("$.jobs[0].id", "is required"),
+            id="bootstrap-jobs",
+        ),
+        # Undecodable bytes are a diagnostic, never an exception.
+        pytest.param(
+            "agents/main/agent.json",
+            b'{"id":"main","name":"\xff"}',
+            ("$", "not valid UTF-8"),
+            id="non-utf8-agent",
+        ),
+    ],
+)
+def test_validate_data_dir_config_delegates_each_document_to_its_owner(
+    tmp_path: Path,
+    relative_path: str,
+    content: str | bytes,
+    first_diagnostic: tuple[str, str] | None,
+) -> None:
+    path = tmp_path / relative_path
+    path.parent.mkdir(parents=True)
+    if isinstance(content, bytes):
+        path.write_bytes(content)
+    else:
+        path.write_text(content, encoding="utf-8")
 
     reports = validate_data_dir_config(tmp_path)
 
-    project_reports = [report for report in reports if report.file_path.name == "project.json"]
-    assert len(project_reports) == 1
-    assert project_reports[0].ok
-
-
-def test_validate_data_dir_config_delegates_agent_order_file(tmp_path: Path) -> None:
-    order_path = tmp_path / "agents" / "order.json"
-    order_path.parent.mkdir(parents=True)
-    order_path.write_text(
-        json.dumps({"format_version": 1, "revision": 1, "agent_ids": ["main", "main"]}),
-        encoding="utf-8",
-    )
-
-    reports = validate_data_dir_config(tmp_path)
-
-    order_reports = [report for report in reports if report.file_path == order_path]
-    assert len(order_reports) == 1
-    assert order_reports[0].ok is False
-    assert order_reports[0].diagnostics[0].path == "$.agent_ids[1]"
-
-
-def test_validate_data_dir_config_delegates_bootstrap_jobs(tmp_path: Path) -> None:
-    jobs_path = tmp_path / "bootstrap" / "jobs.json"
-    jobs_path.parent.mkdir(parents=True)
-    jobs_path.write_text('{"format_version": 1, "jobs": [{"mode": "sometimes"}]}', encoding="utf-8")
-
-    reports = validate_data_dir_config(tmp_path)
-
-    bootstrap_reports = [report for report in reports if report.file_path == jobs_path]
-    assert len(bootstrap_reports) == 1
-    assert bootstrap_reports[0].ok is False
+    [report] = [report for report in reports if report.file_path == path]
+    assert report.ok is (first_diagnostic is None)
+    if first_diagnostic is not None:
+        diagnostic = report.diagnostics[0]
+        assert diagnostic.path == first_diagnostic[0]
+        assert first_diagnostic[1] in diagnostic.message
 
 
 _ATTACHMENT_METADATA: dict[str, object] = {
@@ -133,7 +147,8 @@ def test_validate_data_dir_config_covers_every_json_document(tmp_path: Path) -> 
     ] == []
 
 
-@pytest.mark.parametrize("media_type", [[], {}, None, 1, True])
+# ``[]`` is unhashable; ``None`` is the missing value.
+@pytest.mark.parametrize("media_type", [[], None])
 def test_validate_data_dir_config_reports_invalid_attachment_media_type(
     tmp_path: Path, media_type: object
 ) -> None:
@@ -164,107 +179,411 @@ def test_validate_data_dir_config_refuses_documents_before_generation_1(tmp_path
     assert [report.file_path for report in reports if report.ok] == []
 
 
-def test_validate_data_dir_config_reports_non_utf8_json_without_raising(tmp_path: Path) -> None:
-    agent_path = tmp_path / "agents" / "main" / "agent.json"
-    agent_path.parent.mkdir(parents=True)
-    agent_path.write_bytes(b'{"id":"main","name":"\xff"}')
+@pytest.mark.parametrize(
+    ("content", "ok", "diagnostics"),
+    [
+        pytest.param(None, True, [], id="missing-file"),
+        pytest.param(
+            "{",
+            False,
+            [
+                (
+                    "error",
+                    "$",
+                    "Invalid JSON: Expecting property name enclosed in double quotes at line 1 "
+                    "column 2",
+                )
+            ],
+            id="invalid-json",
+        ),
+        pytest.param("[]", False, [("error", "$", "Expected a JSON object, got list")], id="array"),
+        # Unknown fields warn for forward compatibility; the file stays valid.
+        pytest.param(
+            json.dumps({"format_version": 1, "debug": {"enabled": True, "extra": 1}}),
+            True,
+            [("warning", "$.debug.extra", "unknown debug field: extra")],
+            id="unknown-field-warns",
+        ),
+    ],
+)
+def test_validate_settings_file_reports_the_document(
+    tmp_path: Path, content: str | None, ok: bool, diagnostics: list[tuple[str, str, str]]
+) -> None:
+    path = tmp_path / "settings.json"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
 
-    reports = validate_data_dir_config(tmp_path)
+    report = validate_settings_file(path)
 
-    agent_report = next(report for report in reports if report.file_path == agent_path)
-    assert agent_report.ok is False
-    assert agent_report.diagnostics[0].path == "$"
-    assert "not valid UTF-8" in agent_report.diagnostics[0].message
+    assert (report.ok, report.exists) == (ok, content is not None)
+    assert _diagnostics(report.diagnostics) == diagnostics
 
 
-def test_validate_custom_provider_accepts_secret_free_model_facts() -> None:
-    diagnostics = validate_settings_data(
-        {
-            "providers": {
-                "custom": {
-                    "local-ai": {
-                        "name": "Local AI",
-                        "adapter": "openai_compatible",
-                        "base_url": "http://127.0.0.1:8080/v1",
-                        "auth": "none",
-                        "models_endpoint": "/models",
-                        "models": {
-                            "chat-model": {
-                                "capabilities": {
-                                    "tools": True,
-                                    "input_modalities": ["text"],
-                                    "output_modalities": ["text"],
+def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "server_port": 8500,
+                "keep_awake": True,
+                "timezone": "Europe/Berlin",
+                "appearance": {
+                    "language": "en",
+                    "chat_width": "wide",
+                    "chat_working_mode": "compact",
+                },
+                "skill_directories": ["~/skills"],
+                "extension_directories": ["C:/vbot/extensions"],
+                "attachment_max_size_bytes": 1024,
+                "speech_upload_max_size_bytes": 2048,
+                "speech": {
+                    "transcription_audio": {
+                        "profile": "custom",
+                        "format": "flac",
+                        "sample_rate_hz": 24_000,
+                    }
+                },
+                "max_subagent_depth": 4,
+                "max_subagents_per_turn": 8,
+                "subagent_timeout_minutes": 60,
+                "compaction": {
+                    "enabled": True,
+                    "trigger": {"type": "context_ratio", "threshold": 0.8},
+                    "strategy": {
+                        "type": "summary_tail",
+                        "tail_tokens": 15_000,
+                        "summary_model": None,
+                    },
+                },
+                "recall": {"backend": "sqlite_fts"},
+                "reflection": {
+                    "enabled": True,
+                    "memory_turn_interval": 10,
+                    "skill_model_step_interval": 25,
+                },
+                "extensions": {
+                    "disabled": ["legacy-ext"],
+                    "config": {"weather": {"api_key": "x", "units": "metric"}},
+                },
+                "web_search": {
+                    "provider": "searxng",
+                    "default_count": 12,
+                    "searxng": {"base_url": "http://localhost:8888"},
+                },
+                "defaults": {
+                    "agent": {
+                        "model": "openai/gpt-5.2",
+                        "fallback_models": [],
+                        "temperature": 0.7,
+                        "thinking_effort": "medium",
+                    }
+                },
+                "model_tasks": {
+                    "speech_to_text": {
+                        "target": "openrouter/openai/gpt-4o-transcribe::api-key",
+                        "options": {"language": "auto"},
+                    }
+                },
+                "session_titles": {"enabled": False, "model": ""},
+                "local_models": {"context_windows": {"ollama/m": 16384}},
+                "debug": {"enabled": True, "trace_limit": 500},
+                # Custom Provider records hold secret-free Model facts.
+                "providers": {
+                    "custom": {
+                        "local-ai": {
+                            "name": "Local AI",
+                            "adapter": "openai_compatible",
+                            "base_url": "http://127.0.0.1:8080/v1",
+                            "auth": "none",
+                            "models_endpoint": "/models",
+                            "models": {
+                                "chat-model": {
+                                    "capabilities": {
+                                        "tools": True,
+                                        "input_modalities": ["text"],
+                                        "output_modalities": ["text"],
+                                    }
                                 }
-                            }
-                        },
+                            },
+                        }
                     }
-                }
+                },
             }
-        }
+        ),
+        encoding="utf-8",
     )
 
-    assert [item for item in diagnostics if item.severity == "error"] == []
+    report = validate_settings_file(settings_path)
+
+    assert (report.ok, report.exists, report.diagnostics) == (True, True, ())
 
 
-def test_validate_custom_provider_rejects_secret_and_invalid_endpoint() -> None:
-    diagnostics = validate_settings_data(
-        {
-            "providers": {
-                "custom": {
-                    "local-ai": {
-                        "name": "Local AI",
-                        "adapter": "openai_compatible",
-                        "base_url": "https://user:secret@example.test/v1",
-                        "auth": "api_key",
-                        "api_key": "must-not-live-here",
+@pytest.mark.parametrize(
+    ("data", "diagnostics"),
+    [
+        pytest.param(
+            {
+                "server_port": 70000,
+                "skill_directories": ["relative/path"],
+                "attachment_max_size_bytes": 0,
+                "speech_upload_max_size_bytes": 0,
+                "compaction": {
+                    "enabled": True,
+                    "trigger": {"type": "context_ratio", "threshold": 2},
+                    "strategy": {"type": "summary_tail", "tail_tokens": False},
+                },
+                "defaults": {"agent": {"temperature": "warm", "unknown": True}},
+                "web_search": {
+                    "provider": "unknown",
+                    "default_count": 25,
+                    "searxng": {"base_url": ""},
+                },
+                "model_tasks": {"speech_to_text": {"target": "", "options": []}},
+                "typo": True,
+            },
+            [
+                ("warning", "$.typo", "unknown settings key: typo"),
+                ("error", "$.server_port", "must be between 1 and 65535"),
+                ("error", "$.skill_directories[0]", "must be an absolute or home-relative path"),
+                ("error", "$.attachment_max_size_bytes", "must be a positive integer"),
+                ("error", "$.speech_upload_max_size_bytes", "must be a positive integer"),
+                ("error", "$.compaction.trigger.threshold", "must be in (0, 1]"),
+                ("error", "$.compaction.strategy.tail_tokens", "must be a positive integer"),
+                ("warning", "$.defaults.agent.unknown", "unknown defaults.agent setting: unknown"),
+                ("error", "$.defaults.agent.temperature", "must be a number"),
+                (
+                    "error",
+                    "$.web_search.provider",
+                    "must be one of: brave, duckduckgo, exa, firecrawl, "
+                    "perplexity, searxng, serper, tavily",
+                ),
+                ("error", "$.web_search.default_count", "must be an integer between 1 and 20"),
+                ("error", "$.web_search.searxng.base_url", "must be a non-empty string"),
+                ("error", "$.model_tasks.speech_to_text.target", "must be a non-empty string"),
+                ("error", "$.model_tasks.speech_to_text.options", "must be an object"),
+            ],
+            id="every-invalid-top-level-field-in-order",
+        ),
+        pytest.param(
+            {"appearance": {"language": "en", "chat_width": "huge"}},
+            [
+                (
+                    "error",
+                    "$.appearance.chat_width",
+                    "unsupported chat width; supported: comfortable, full, wide",
+                )
+            ],
+            id="chat-width",
+        ),
+        pytest.param(
+            {"appearance": {"language": "en", "chat_working_mode": "dense"}},
+            [
+                (
+                    "error",
+                    "$.appearance.chat_working_mode",
+                    "unsupported chat working mode; supported: compact, normal",
+                )
+            ],
+            id="chat-working-mode",
+        ),
+        pytest.param(
+            {"recall": {"backend": "SQLite FTS"}},
+            [("error", "$.recall.backend", "must use lowercase snake_case")],
+            id="recall-backend",
+        ),
+        pytest.param(
+            {"extensions": []},
+            [("error", "$.extensions", "must be an object")],
+            id="extensions-not-an-object",
+        ),
+        pytest.param(
+            {
+                "extensions": {
+                    "disabled": ["ok", "", 5],
+                    "config": {"good": {}, "bad": ["x"]},
+                    "weird": True,
+                }
+            },
+            [
+                ("warning", "$.extensions.weird", "unknown extensions field: weird"),
+                ("error", "$.extensions.disabled[1]", "must be a non-empty string"),
+                ("error", "$.extensions.disabled[2]", "must be a non-empty string"),
+                ("error", "$.extensions.config.bad", "must be an object"),
+            ],
+            id="extensions-fields",
+        ),
+        pytest.param(
+            {"extensions": {"disabled": "solo"}},
+            [("error", "$.extensions.disabled", "must be a list")],
+            id="extensions-disabled-not-a-list",
+        ),
+        pytest.param(
+            {"debug": []}, [("error", "$.debug", "must be an object")], id="debug-not-an-object"
+        ),
+        pytest.param(
+            {"debug": {"enabled": "yes", "trace_limit": True}},
+            [
+                ("error", "$.debug.enabled", "must be a boolean"),
+                ("error", "$.debug.trace_limit", "must be a positive integer (1-500)"),
+            ],
+            id="debug-types",
+        ),
+        pytest.param(
+            {"debug": {"trace_limit": 0}},
+            [("error", "$.debug.trace_limit", "must be at least 1")],
+            id="trace-limit-below-range",
+        ),
+        pytest.param(
+            {"debug": {"trace_limit": 501}},
+            [("error", "$.debug.trace_limit", "must be at most 500")],
+            id="trace-limit-above-range",
+        ),
+        pytest.param(
+            {"reflection": []},
+            [("error", "$.reflection", "must be an object")],
+            id="reflection-not-an-object",
+        ),
+        # Omitted intervals keep their defaults.
+        pytest.param({"reflection": {"enabled": False}}, [], id="partial-reflection"),
+        pytest.param(
+            {
+                "reflection": {
+                    "enabled": "yes",
+                    "memory_turn_interval": "five",
+                    "skill_model_step_interval": 0,
+                    "extra": 1,
+                }
+            },
+            [
+                ("warning", "$.reflection.extra", "unknown reflection field: extra"),
+                ("error", "$.reflection.enabled", "must be a boolean"),
+                ("error", "$.reflection.memory_turn_interval", "must be a positive integer"),
+                ("error", "$.reflection.skill_model_step_interval", "must be at least 1"),
+            ],
+            id="reflection-fields",
+        ),
+        pytest.param(
+            {"local_models": []},
+            [("error", "$.local_models", "must be an object")],
+            id="local-models-not-an-object",
+        ),
+        pytest.param(
+            {"local_models": {"context_windows": 42}},
+            [("error", "$.local_models.context_windows", "must be an object")],
+            id="context-windows-not-an-object",
+        ),
+        pytest.param(
+            {
+                "local_models": {
+                    "context_windows": {"no-slash": 4096, "ollama/m": 0},
+                    "extra": 1,
+                }
+            },
+            [
+                ("warning", "$.local_models.extra", "unknown local_models field: extra"),
+                (
+                    "error",
+                    "$.local_models.context_windows['no-slash']",
+                    "key must be a '<provider>/<model_id>' string",
+                ),
+                (
+                    "error",
+                    "$.local_models.context_windows['ollama/m']",
+                    "must be a positive integer",
+                ),
+            ],
+            id="context-window-entries",
+        ),
+        pytest.param(
+            {"session_titles": {"enabled": "yes", "model": 7, "extra": True}},
+            [
+                ("warning", "$.session_titles.extra", "unknown session_titles field: extra"),
+                ("error", "$.session_titles.enabled", "must be a boolean"),
+                ("error", "$.session_titles.model", "must be a string"),
+            ],
+            id="session-titles",
+        ),
+        pytest.param(
+            {"keep_awake": "yes"}, [("error", "$.keep_awake", "must be a boolean")], id="keep-awake"
+        ),
+        pytest.param(
+            {"timezone": "Berlin"},
+            [("error", "$.timezone", "is not a known IANA timezone")],
+            id="timezone",
+        ),
+        # Live voice is a Task Model binding; its old opt-in is only an unknown key.
+        pytest.param(
+            {"live_voice": {"enabled": True}},
+            [("warning", "$.live_voice", "unknown settings key: live_voice")],
+            id="removed-live-voice",
+        ),
+        # A Custom Provider record never carries a secret, even inside its URL.
+        pytest.param(
+            {
+                "providers": {
+                    "custom": {
+                        "local-ai": {
+                            "name": "Local AI",
+                            "adapter": "openai_compatible",
+                            "base_url": "https://user:secret@example.test/v1",
+                            "auth": "api_key",
+                            "api_key": "must-not-live-here",
+                        }
                     }
                 }
-            }
-        }
-    )
-
-    errors = [item for item in diagnostics if item.severity == "error"]
-    assert len(errors) == 1
-    assert errors[0].path == "$.providers.custom['local-ai']"
-
-
-def test_validate_settings_data_accepts_boolean_keep_awake() -> None:
-    assert validate_settings_data({"keep_awake": True}) == []
-    assert validate_settings_data({"keep_awake": False}) == []
-
-
-def test_validate_settings_data_accepts_missing_keep_awake() -> None:
-    assert validate_settings_data({}) == []
-
-
-def test_validate_settings_data_rejects_non_boolean_keep_awake() -> None:
-    diagnostics = validate_settings_data({"keep_awake": "yes"})
-    errors = [diagnostic for diagnostic in diagnostics if diagnostic.severity == "error"]
-
-    assert len(errors) == 1
-    assert errors[0].path == "$.keep_awake"
-    assert errors[0].message == "must be a boolean"
-
-
-def test_validate_settings_data_accepts_iana_timezone() -> None:
-    assert validate_settings_data({"timezone": "Europe/Berlin"}) == []
-
-
-def test_validate_settings_data_rejects_unknown_timezone() -> None:
-    diagnostics = validate_settings_data({"timezone": "Berlin"})
-    errors = [diagnostic for diagnostic in diagnostics if diagnostic.severity == "error"]
-
-    assert len(errors) == 1
-    assert errors[0].path == "$.timezone"
-    assert errors[0].message == "is not a known IANA timezone"
-
-
-def test_removed_live_voice_section_is_an_unknown_key() -> None:
-    """Live voice is configured as a Task Model; its old opt-in is not a Setting."""
-
-    diagnostics = validate_settings_data({"live_voice": {"enabled": True}})
-
-    assert [(item.path, item.severity) for item in diagnostics] == [("$.live_voice", "warning")]
+            },
+            [
+                (
+                    "warning",
+                    "$.providers.custom['local-ai'].api_key",
+                    "unknown custom provider field: api_key",
+                ),
+                (
+                    "error",
+                    "$.providers.custom['local-ai']",
+                    "local-ai.base_url must be an absolute HTTP(S) URL without credentials, "
+                    "query, or fragment",
+                ),
+            ],
+            id="custom-provider-secrets",
+        ),
+        pytest.param(
+            {
+                "web_fetch": {"provider": "direct", "future_mode": "x"},
+                "model_tasks": {"future_task": {"target": "a/b::c"}},
+                "defaults": {"future_section": {}, "agent": {"future_default": 1}},
+                "providers": {
+                    "openrouter": {"routing": {"default": {"mode": "automatic", "future": 1}}}
+                },
+            },
+            [
+                (
+                    "warning",
+                    "$.defaults.future_section",
+                    "unknown defaults section: future_section",
+                ),
+                (
+                    "warning",
+                    "$.defaults.agent.future_default",
+                    "unknown defaults.agent setting: future_default",
+                ),
+                ("warning", "$.web_fetch.future_mode", "unknown web_fetch field: future_mode"),
+                ("warning", "$.model_tasks.future_task", "unknown model task type: future_task"),
+                (
+                    "warning",
+                    "$.providers.openrouter.routing.default.future",
+                    "unknown routing field: future",
+                ),
+            ],
+            id="unknown-fields-below-strict-sections-warn",
+        ),
+    ],
+)
+def test_settings_data_reports_each_invalid_field(
+    data: dict[str, Any], diagnostics: list[tuple[str, str, str]]
+) -> None:
+    assert _diagnostics(validate_settings_data(data)) == diagnostics
 
 
 @pytest.mark.parametrize(
@@ -309,24 +628,3 @@ def test_runtime_settings_leave_out_unknown_fields_and_the_version(tmp_path: Pat
 
     assert settings == {"web_fetch": {"provider": "direct"}, "model_tasks": {}}
     assert ignored == ()
-
-
-def test_unknown_fields_below_strict_sections_are_warnings() -> None:
-    diagnostics = validate_settings_data(
-        {
-            "web_fetch": {"provider": "direct", "future_mode": "x"},
-            "model_tasks": {"future_task": {"target": "a/b::c"}},
-            "defaults": {"future_section": {}, "agent": {"future_default": 1}},
-            "providers": {
-                "openrouter": {"routing": {"default": {"mode": "automatic", "future": 1}}}
-            },
-        }
-    )
-
-    assert sorted((item.severity, item.path) for item in diagnostics) == [
-        ("warning", "$.defaults.agent.future_default"),
-        ("warning", "$.defaults.future_section"),
-        ("warning", "$.model_tasks.future_task"),
-        ("warning", "$.providers.openrouter.routing.default.future"),
-        ("warning", "$.web_fetch.future_mode"),
-    ]

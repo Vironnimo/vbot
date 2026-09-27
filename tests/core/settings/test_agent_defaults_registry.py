@@ -34,22 +34,17 @@ from core.settings.settings import (
 from core.utils.errors import StorageError
 
 
-def test_registry_fields_match_canonical_set() -> None:
-    assert set(agent_default_specs()) == set(AGENT_DEFAULT_FIELDS)
-
-
-def test_catalog_fields_match_registry() -> None:
-    catalog_fields = [field for field, *_ in agent_default_catalog()]
-    assert set(catalog_fields) == set(AGENT_DEFAULT_FIELDS)
-
-
-def test_settings_catalog_carries_exactly_agent_default_paths() -> None:
-    agent_paths = {
+def test_every_derived_surface_carries_exactly_the_registry_fields() -> None:
+    fields = set(AGENT_DEFAULT_FIELDS)
+    settings_paths = {
         definition.template
         for definition in setting_definitions()
         if definition.template.startswith("defaults.agent.")
     }
-    assert agent_paths == {f"defaults.agent.{field}" for field in AGENT_DEFAULT_FIELDS}
+
+    assert set(agent_default_specs()) == fields
+    assert {field for field, *_ in agent_default_catalog()} == fields
+    assert settings_paths == {f"defaults.agent.{field}" for field in fields}
 
 
 @pytest.mark.parametrize("field", sorted(AGENT_DEFAULT_FIELDS))
@@ -120,21 +115,13 @@ def _bake_defaults(agent_defaults: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("chain", _INVALID_CHAINS)
-def test_invalid_fallback_chain_rejected_by_parse(chain: list[str]) -> None:
+def test_invalid_fallback_chain_is_rejected_by_every_surface(chain: list[str]) -> None:
     with pytest.raises(SettingsValidationError):
         parse_agent_default_value(
             "fallback_models", chain, label="params.defaults.agent.fallback_models"
         )
-
-
-@pytest.mark.parametrize("chain", _INVALID_CHAINS)
-def test_invalid_fallback_chain_rejected_by_normalize(chain: list[str]) -> None:
     with pytest.raises(StorageError):
         normalize_agent_default_value("fallback_models", chain)
-
-
-@pytest.mark.parametrize("chain", _INVALID_CHAINS)
-def test_invalid_fallback_chain_rejected_by_bake(chain: list[str]) -> None:
     with pytest.raises(StorageError):
         _bake_defaults({"fallback_models": chain})
 
@@ -146,19 +133,17 @@ def test_valid_fallback_chain_is_stripped_by_normalize_and_bake() -> None:
     }
 
 
-def test_bake_rejects_out_of_range_temperature() -> None:
+@pytest.mark.parametrize(
+    "agent_defaults",
+    [
+        pytest.param({"temperature": MAX_TEMPERATURE + 1}, id="out-of-range-temperature"),
+        pytest.param({"thinking_effort": "ultra"}, id="unknown-thinking-effort"),
+        pytest.param({"model": 42}, id="non-string-model"),
+    ],
+)
+def test_bake_rejects_unusable_defaults(agent_defaults: dict[str, Any]) -> None:
     with pytest.raises(StorageError):
-        _bake_defaults({"temperature": MAX_TEMPERATURE + 1})
-
-
-def test_bake_rejects_unknown_thinking_effort() -> None:
-    with pytest.raises(StorageError):
-        _bake_defaults({"thinking_effort": "ultra"})
-
-
-def test_bake_rejects_non_string_model() -> None:
-    with pytest.raises(StorageError):
-        _bake_defaults({"model": 42})
+        _bake_defaults(agent_defaults)
 
 
 # --- catalog bounds derive from kind ------------------------------------------
