@@ -83,7 +83,7 @@ After Chat completes canonical history shaping and dangling-cycle repair, an Ada
 as a Run, without a Model call. Extension prompt inspection uses this to keep
 native Tool definitions and System Prompt Tool-owner gates aligned. Empty
 continuation notes retain their canonical receipts but produce no request message.
-Evidence: `_request_builder.py`, `wire_shaping.py`, `test_chat_loop_tools.py`,
+Evidence: `_request_builder.py`, `wire_shaping.py`, `test_chat_loop_tool_definitions.py`,
 `tests/resources/extensions/test_swarm_lifecycle.py`.
 
 - Canonical messages: `core/chat/messages.py`; wire shaping and response ingestion: `core/chat/wire_shaping.py`; tests under `tests/core/chat/test_messages_*.py`, `test_wire_shaping_*.py`, `test_chat_loop_messages.py`, `test_chat_loop_requests.py`, `test_chat_loop_reasoning_replay.py`, `test_chat_loop_fallback.py`, and `tests/core/providers/test_reasoning_route_switch_conformance.py`.

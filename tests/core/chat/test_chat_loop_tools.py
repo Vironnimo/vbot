@@ -1,93 +1,163 @@
-"""Tests for chat loop tools."""
+"""The chat loop Tool cycle: dispatch, persistence, continuation and cancellation."""
 
 from __future__ import annotations
 
+import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from core.chat import (
-    ChatMessage,
+from core.chat import ChatMessage
+from core.runs import (
+    MODEL_STEP_USAGE_EVENT,
+    TOOL_CALL_RESULT_EVENT,
+    RunCancelledError,
+    RunStatus,
 )
-from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.sessions import ChatSession
 from core.sessions.store import SessionStore
 from core.tools import (
-    ANALYZE_IMAGE_TOOL_NAME,
-    BASH_SUBAGENT_TOOL_DESCRIPTION,
-    BASH_SUBAGENT_TOOL_PARAMETERS,
-    BASH_TOOL_DESCRIPTION,
-    BASH_TOOL_NAME,
-    BASH_TOOL_PARAMETERS,
     HISTORY_TOOL_NAME,
-    ToolAccess,
     ToolContext,
+    ToolDisplay,
     ToolRegistry,
-    model_names,
-    model_tool_name,
     register_history_tool,
+    tool_failure,
     tool_success,
 )
+from core.tools.process_manager import ProcessManager, ProcessManagerError
 from tests.core.chat.chat_loop_support import (
-    StubAdapter,
-    StubAgent,
     StubModels,
-    StubRuntime,
     StubStorage,
     build_chat_loop,
     persisted_roles,
-    session_address,
 )
 from tests.core.chat.chat_loop_tools_test_support import (
+    WAIT_SECONDS,
     JsonObject,
+    final,
+    history,
+    tool_results,
+    tool_runtime,
+    tool_turn,
 )
 
 
-def _analyze_image_registry() -> ToolRegistry:
-    registry = ToolRegistry()
-    registry.register(
-        ANALYZE_IMAGE_TOOL_NAME,
-        "Analyze images.",
+def _weather_tools(**options: Any) -> ToolRegistry:
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
         {"type": "object"},
-        lambda _context, _arguments: tool_success({"analysis": "ok"}),
+        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
+        **options,
     )
-    return registry
+    return tools
 
 
-def _request_tool_names(adapter: StubAdapter) -> set[str]:
-    tools = adapter.requests[0]["kwargs"]["tools"]
-    return {str(definition["name"]) for definition in tools}
+_WEATHER_TURN = tool_turn(
+    ("call_abc", "get_weather", {"city": "Berlin"}),
+    reasoning="Need weather.",
+    reasoning_meta={"encrypted_content": "opaque-current-turn"},
+    usage={"input_tokens": 11, "output_tokens": 7},
+)
 
 
 @pytest.mark.asyncio
-async def test_sibling_tool_results_use_one_ordered_session_batch(
+async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Path) -> None:
+    runtime = tool_runtime(
+        tmp_path,
+        _weather_tools(display=ToolDisplay(summary_fields=("city",))),
+        [_WEATHER_TURN, final("Sunny")],
+    )
+
+    assistant = await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
+
+    persisted = [message.to_dict() for message in history(runtime)]
+    adapter = runtime.adapter
+    assert assistant.content == "Sunny"
+    assert [message["role"] for message in persisted] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "run_summary",
+    ]
+    assert persisted[1]["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
+    assert persisted[2]["tool_call_id"] == "call_abc"
+    assert persisted[2]["timing"]["duration_ms"] >= 0
+    assert json.loads(persisted[2]["content"]) == tool_success({"temp": 22, "city": "Berlin"})
+    assert persisted[4]["run_id"]
+    assert persisted[4]["status"] == "completed"
+    assert persisted[4]["timing"]["duration_ms"] >= 0
+    continuation = adapter.requests[1]["messages"]
+    assert [message["role"] for message in continuation] == ["system", "user", "assistant", "tool"]
+    assert continuation[2]["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
+    assert continuation[2]["reasoning"] == "Need weather."
+    # usage is persisted on the assistant turn but never sent to the provider.
+    assert persisted[1]["usage"]["input_tokens"] == 11
+    assert persisted[1]["usage"]["output_tokens"] == 7
+    assert "usage" not in continuation[2]
+    assert "timing" not in continuation[3]
+    run = runtime.chat_runs.get(persisted[4]["run_id"])
+    [tool_result_event] = [event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT]
+    assert tool_result_event.payload["timing"]["duration_ms"] >= 0
+    usage_events = [event for event in run.events if event.type == MODEL_STEP_USAGE_EVENT]
+    assistant_turns = [message for message in persisted if message["role"] == "assistant"]
+    assert [event.payload["usage"] for event in usage_events] == [
+        message["usage"] for message in assistant_turns
+    ]
+    assert usage_events[0].payload["context_usage"] == {
+        "tokens": 45,
+        "estimated": True,
+        "estimated_delta_tokens": 34,
+        "provider_input_tokens": 11,
+        "provider_output_tokens": 7,
+    }
+    measured_session_usage = {
+        "measured_turns": 1,
+        "estimated_turns": 0,
+        "cache_turns": 0,
+        "input_tokens": 11,
+        "output_tokens": 7,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
+    assert usage_events[0].payload["session_usage"] == measured_session_usage
+    assert usage_events[1].payload["usage"]["estimated"] is True
+    assert usage_events[1].payload["context_usage"]["estimated"] is True
+    assert usage_events[1].payload["context_usage"]["tokens"] > 18
+    assert usage_events[1].payload["session_usage"] == {
+        **measured_session_usage,
+        "estimated_turns": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_sibling_calls_run_concurrently_and_persist_in_call_order_as_one_batch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    second_started = asyncio.Event()
+    first_can_finish = asyncio.Event()
+
+    async def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        if context.tool_call_id == "call_1":
+            # Completes only once its sibling of the same Tool has started.
+            await asyncio.wait_for(second_started.wait(), timeout=WAIT_SECONDS)
+            first_can_finish.set()
+        else:
+            second_started.set()
+        return tool_success({"id": context.tool_call_id})
+
     tools = ToolRegistry()
-    tools.register(
-        "probe",
-        "Return the probe id.",
-        {"type": "object"},
-        lambda context, _arguments: tool_success({"id": context.tool_call_id}),
-        parallel_safe=True,
+    tools.register("probe", "Return the probe id.", {"type": "object"}, probe)
+    runtime = tool_runtime(
+        tmp_path, tools, [tool_turn(("call_1", "probe"), ("call_2", "probe")), final("Done")]
     )
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {"id": "first", "name": "probe", "arguments": {}},
-                    {"id": "second", "name": "probe", "arguments": {}},
-                ],
-            },
-            {"content": "done", "tool_calls": None},
-        ]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
     batches: list[list[str]] = []
     original_append_many_async = ChatSession.append_many_async
 
@@ -99,142 +169,19 @@ async def test_sibling_tool_results_use_one_ordered_session_batch(
 
     monkeypatch.setattr(ChatSession, "append_many_async", recording_append_many)
 
-    await build_chat_loop(runtime).send("coder", "run both", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Run tools", session_id="session-one")
 
-    tool_batches = [batch for batch in batches if "tool" in batch]
-    assert tool_batches == [["tool", "tool"]]
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert [message.tool_call_id for message in persisted if message.role == "tool"] == [
-        "first",
-        "second",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_provider_requests_use_model_tool_names_while_the_session_keeps_registry_names(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(model_names, "_MODEL_NAMES", {"probe": "host_probe"})
-    monkeypatch.setattr(model_names, "_REGISTRY_NAMES", {"host_probe": "probe"})
-    dispatched: list[str] = []
-
-    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
-        dispatched.append(context.tool_name)
-        return tool_success({"id": context.tool_call_id})
-
-    tools = ToolRegistry()
-    tools.register("probe", "Return the probe id.", {"type": "object"}, probe)
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [{"id": "first", "name": "host_probe", "arguments": {}}],
-            },
-            {"content": "done", "tool_calls": None},
-        ]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-
-    await build_chat_loop(runtime).send("coder", "probe", session_id="session-one")
-
-    assert dispatched == ["probe"]
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert [call.name for message in persisted for call in message.tool_calls or []] == ["probe"]
-    follow_up = adapter.requests[1]
-    assert [tool["name"] for tool in follow_up["kwargs"]["tools"]] == ["host_probe"]
-    wire_calls = [
-        call["name"]
-        for message in follow_up["messages"]
-        for call in message.get("tool_calls") or []
-    ]
-    assert wire_calls == ["host_probe"]
+    messages = history(runtime)
+    run = runtime.chat_runs.get(messages[-1].run_id)
+    assert assistant.content == "Done"
+    assert first_can_finish.is_set()
+    assert [batch for batch in batches if "tool" in batch] == [["tool", "tool"]]
+    assert [result["data"]["id"] for result in tool_results(messages)] == ["call_1", "call_2"]
     assert [
-        message.get("name") for message in follow_up["messages"] if message["role"] == "tool"
-    ] == ["host_probe"]
-
-
-@pytest.mark.asyncio
-async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_name(
-    tmp_path: Path,
-) -> None:
-    dispatched: list[str] = []
-
-    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
-        dispatched.append(context.tool_name)
-        return tool_success({"id": context.tool_call_id})
-
-    tools = ToolRegistry()
-    tools.register("web_fetch", "Fetch a page.", {"type": "object"}, probe)
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["web_fetch"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {"id": "first", "name": "functions.WebFetch", "arguments": {}},
-                    {"id": "second", "name": "TodoWrite", "arguments": {}},
-                ],
-            },
-            {"content": "done", "tool_calls": None},
-        ]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-
-    await build_chat_loop(runtime).send("coder", "fetch", session_id="session-one")
-
-    assert dispatched == ["web_fetch"]
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert [call.name for message in persisted for call in message.tool_calls or []] == [
-        "web_fetch",
-        "TodoWrite",
-    ]
-    unknown = next(
-        message for message in persisted if message.role == "tool" and message.name == "TodoWrite"
-    )
-    assert "Unknown Tool: TodoWrite. Call one of the available Tools instead: web_fetch." in str(
-        unknown.content
-    )
-    follow_up = adapter.requests[1]
-    assert [
-        call["name"]
-        for message in follow_up["messages"]
-        for call in message.get("tool_calls") or []
-    ] == ["web_fetch", "TodoWrite"]
-
-
-@pytest.mark.asyncio
-async def test_ambiguous_tool_spelling_never_dispatches_a_harness_alias(tmp_path: Path) -> None:
-    dispatched: list[str] = []
-
-    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
-        dispatched.append(context.tool_name)
-        return tool_success({"id": context.tool_call_id})
-
-    tools = ToolRegistry()
-    offered = ["read", "read_file", "readfile"]
-    for name in offered:
-        tools.register(name, "Read a resource.", {"type": "object"}, probe)
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=offered)
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [{"id": "ambiguous", "name": "ReadFile", "arguments": {}}],
-            },
-            {"content": "done", "tool_calls": None},
-        ]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-
-    await build_chat_loop(runtime).send("coder", "read", session_id="session-one")
-
-    assert dispatched == []
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert [call.name for message in persisted for call in message.tool_calls or []] == ["ReadFile"]
-    result = next(message for message in persisted if message.role == "tool")
-    assert json.loads(cast(str, result.content))["error"]["code"] == "tool_not_found"
+        event.payload["tool_call"]["id"]
+        for event in run.events
+        if event.type == TOOL_CALL_RESULT_EVENT
+    ] == ["call_2", "call_1"]
 
 
 @pytest.mark.asyncio
@@ -251,23 +198,14 @@ async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
 
     tools = ToolRegistry()
     tools.register("probe", "Return the probe id.", {"type": "object"}, probe)
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
+    runtime = tool_runtime(tmp_path, tools, [tool_turn(("first", "probe")), final("done")])
+    send = runtime.adapter.send
 
-    class ObservingAdapter(StubAdapter):
-        async def send(self, messages: Any, *, model_id: str, **kwargs: Any) -> Any:
-            writes_at.setdefault("first_request", writes)
-            return await super().send(messages, model_id=model_id, **kwargs)
+    async def observing_send(messages: Any, *, model_id: str, **kwargs: Any) -> Any:
+        writes_at.setdefault("first_request", writes)
+        return await send(messages, model_id=model_id, **kwargs)
 
-    adapter = ObservingAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [{"id": "first", "name": "probe", "arguments": {}}],
-            },
-            {"content": "done", "tool_calls": None},
-        ]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    monkeypatch.setattr(runtime.adapter, "send", observing_send)
     runtime.chat_sessions.create("coder", session_id="session-one")
     journal_writes: list[list[str]] = []
     original_append_continuation = SessionStore.append_continuation
@@ -299,277 +237,24 @@ async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
     # Only the Assistant append separates the Model response from the Tool
     # handler: starting a Tool writes nothing.
     assert writes_at["handler"] == writes_at["first_request"] + 1
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert persisted_roles(persisted)[-3:] == ["assistant", "tool", "assistant"]
-
-
-@pytest.mark.asyncio
-async def test_nested_run_receives_non_handoff_bash_definition(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=[BASH_TOOL_NAME],
-    )
-    adapter = StubAdapter(
-        [
-            {"content": "top-level done", "tool_calls": None},
-            {"content": "nested done", "tool_calls": None},
-        ]
-    )
-    tools = ToolRegistry()
-    tools.register(
-        BASH_TOOL_NAME,
-        BASH_TOOL_DESCRIPTION,
-        BASH_TOOL_PARAMETERS,
-        lambda _context, _arguments: tool_success({"status": "completed"}),
-        open_input_schema=True,
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-    parent = build_chat_loop(runtime)
-
-    await parent.send("coder", "Top-level", session_id="top-level")
-    await parent.child_loop(nesting_depth=1).send("coder", "Nested", session_id="nested")
-
-    top_level_definition = adapter.requests[0]["kwargs"]["tools"][0]
-    nested_definition = adapter.requests[1]["kwargs"]["tools"][0]
-    # The Provider request carries the name the Model knows on this host, and the
-    # description names no dedicated file Tool, since this Agent is offered none.
-    usual_pointer = (
-        "For reading, searching and editing files use read, search_files and apply_patch. "
-    )
-    assert top_level_definition == {
-        "name": model_tool_name(BASH_TOOL_NAME),
-        "description": BASH_TOOL_DESCRIPTION.replace(usual_pointer, ""),
-        "parameters": BASH_TOOL_PARAMETERS,
-    }
-    assert nested_definition == {
-        "name": model_tool_name(BASH_TOOL_NAME),
-        "description": BASH_SUBAGENT_TOOL_DESCRIPTION.replace(usual_pointer, ""),
-        "parameters": BASH_SUBAGENT_TOOL_PARAMETERS,
-    }
-
-
-@pytest.mark.asyncio
-async def test_analyze_image_visible_for_nonvision_route_with_usable_binding(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/text-model",
-        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
-    )
-    adapter = StubAdapter([{"content": "done", "tool_calls": None}])
-    models = StubModels(
-        {("openai", "text-model"): 128_000},
-        input_modalities={("openai", "text-model"): ("text",)},
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=_analyze_image_registry(),
-        models=models,
-        available_task_models={TASK_IMAGE_UNDERSTANDING},
-    )
-
-    loop = build_chat_loop(runtime)
-    preview = await loop.preview_tool_definitions(agent)
-    assert ANALYZE_IMAGE_TOOL_NAME in {tool["name"] for tool in preview}
-    assert not adapter.requests
-    await loop.send("coder", "Inspect the image", session_id="s1")
-
-    assert ANALYZE_IMAGE_TOOL_NAME in _request_tool_names(adapter)
-    assert ANALYZE_IMAGE_TOOL_NAME in runtime.system_prompts.effective_tool_name_calls[-1]
-
-
-@pytest.mark.asyncio
-async def test_analyze_image_hidden_when_effective_route_can_view_images(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/vision-model",
-        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
-    )
-    adapter = StubAdapter(
-        [{"content": "done", "tool_calls": None}],
-        wire_media_types=frozenset({"image/png"}),
-    )
-    models = StubModels(
-        {("openai", "vision-model"): 128_000},
-        input_modalities={("openai", "vision-model"): ("text", "image")},
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=_analyze_image_registry(),
-        models=models,
-        available_task_models={TASK_IMAGE_UNDERSTANDING},
-    )
-
-    loop = build_chat_loop(runtime)
-    preview = await loop.preview_tool_definitions(agent)
-    assert ANALYZE_IMAGE_TOOL_NAME not in {tool["name"] for tool in preview}
-    assert not adapter.requests
-    await loop.send("coder", "Inspect the image", session_id="s1")
-
-    assert ANALYZE_IMAGE_TOOL_NAME not in _request_tool_names(adapter)
-    assert ANALYZE_IMAGE_TOOL_NAME not in runtime.system_prompts.effective_tool_name_calls[-1]
-
-
-@pytest.mark.asyncio
-async def test_analyze_image_visible_when_model_has_image_but_wire_does_not(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/vision-model",
-        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
-    )
-    adapter = StubAdapter([{"content": "done", "tool_calls": None}])
-    models = StubModels(
-        {("openai", "vision-model"): 128_000},
-        input_modalities={("openai", "vision-model"): ("text", "image")},
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=_analyze_image_registry(),
-        models=models,
-        available_task_models={TASK_IMAGE_UNDERSTANDING},
-    )
-
-    await build_chat_loop(runtime).send("coder", "Inspect the image", session_id="s1")
-
-    assert ANALYZE_IMAGE_TOOL_NAME in _request_tool_names(adapter)
-
-
-@pytest.mark.asyncio
-async def test_analyze_image_hidden_without_usable_binding(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/text-model",
-        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
-    )
-    adapter = StubAdapter([{"content": "done", "tool_calls": None}])
-    models = StubModels(
-        {("openai", "text-model"): 128_000},
-        input_modalities={("openai", "text-model"): ("text",)},
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=_analyze_image_registry(),
-        models=models,
-    )
-
-    await build_chat_loop(runtime).send("coder", "Inspect the image", session_id="s1")
-
-    assert ANALYZE_IMAGE_TOOL_NAME not in _request_tool_names(adapter)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("policy", "available", "visible"),
-    [
-        (ToolAccess(mode="all"), True, False),
-        (ToolAccess(mode="all", granted=(ANALYZE_IMAGE_TOOL_NAME,)), True, True),
-        (
-            ToolAccess(
-                mode="selected",
-                allowed=(ANALYZE_IMAGE_TOOL_NAME,),
-                granted=(ANALYZE_IMAGE_TOOL_NAME,),
-            ),
-            True,
-            True,
-        ),
-        (ToolAccess(mode="all", granted=(ANALYZE_IMAGE_TOOL_NAME,)), False, False),
-        (ToolAccess(mode="none", granted=(ANALYZE_IMAGE_TOOL_NAME,)), True, False),
-        (ToolAccess(mode="selected", granted=(ANALYZE_IMAGE_TOOL_NAME,)), True, False),
-        (
-            ToolAccess(
-                mode="selected",
-                denied=(ANALYZE_IMAGE_TOOL_NAME,),
-                granted=(ANALYZE_IMAGE_TOOL_NAME,),
-            ),
-            True,
-            False,
-        ),
-    ],
-)
-async def test_analyze_image_vision_grant_is_stable_and_respects_availability(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    policy: ToolAccess,
-    available: bool,
-    visible: bool,
-) -> None:
-    monkeypatch.setattr(StubAgent, "tool_access", property(lambda _self: policy))
-    agent = StubAgent(id="coder", model="openai/vision-model")
-    adapter = StubAdapter(
-        [{"content": "done", "tool_calls": None}] * 2,
-        wire_media_types=frozenset({"image/png"}),
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=_analyze_image_registry(),
-        models=StubModels(
-            {("openai", "vision-model"): 128_000},
-            input_modalities={("openai", "vision-model"): ("text", "image")},
-        ),
-        available_task_models={TASK_IMAGE_UNDERSTANDING} if available else set(),
-    )
-    loop = build_chat_loop(runtime)
-    preview = await loop.preview_tool_definitions(agent)
-    assert not adapter.requests
-    assert (ANALYZE_IMAGE_TOOL_NAME in {tool["name"] for tool in preview}) is visible
-
-    for message in ("Read the handwriting with analyze_image", "What is two plus two?"):
-        await loop.send("coder", message, session_id="s1")
-        assert (
-            ANALYZE_IMAGE_TOOL_NAME in runtime.system_prompts.effective_tool_name_calls[-1]
-        ) is visible
-
-    assert adapter.requests[0]["kwargs"]["tools"] == preview
-    assert adapter.requests[1]["kwargs"]["tools"] == preview
+    assert persisted_roles(history(runtime))[-3:] == ["assistant", "tool", "assistant"]
 
 
 @pytest.mark.asyncio
 async def test_tool_result_persistence_callback_observes_durable_result(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [{"id": "call_probe", "name": "probe", "arguments": {}}],
-            },
-            {"content": "done", "tool_calls": None},
-        ]
-    )
-    runtime_holder: dict[str, Any] = {}
     observed_roles: list[list[str]] = []
+    runtime_holder: list[Any] = []
 
     def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
         context.after_result_persisted(
-            lambda: observed_roles.append(
-                persisted_roles(
-                    runtime_holder["runtime"]
-                    .chat_sessions.get(session_address("coder", "session-one"))
-                    .load()
-                )
-            )
+            lambda: observed_roles.append(persisted_roles(history(runtime_holder[0])))
         )
         return tool_success({"value": "ready"})
 
     tools = ToolRegistry()
     tools.register("probe", "Probe persistence.", {"type": "object"}, probe)
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-    runtime_holder["runtime"] = runtime
+    runtime = tool_runtime(tmp_path, tools, [tool_turn(("call_probe", "probe")), final("done")])
+    runtime_holder.append(runtime)
 
     await build_chat_loop(runtime).send("coder", "Run probe", session_id="session-one")
 
@@ -577,51 +262,23 @@ async def test_tool_result_persistence_callback_observes_durable_result(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_internal_input_persistence_callback_observes_durable_note(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2")
-    adapter = StubAdapter([{"content": "handled", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+@pytest.mark.parametrize("entry", ["start_run", "queue_run"])
+async def test_internal_input_persistence_callback_observes_the_durable_note(
+    tmp_path: Path, entry: str
+) -> None:
+    runtime = tool_runtime(tmp_path, None, [final("handled")], allowed_tools=[])
     observed_roles: list[list[str]] = []
     loop = build_chat_loop(runtime)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await loop.start_run(
+    started = await getattr(loop, entry)(
         "coder",
         "background result",
         session_id="session-one",
         internal=True,
-        input_persisted_hook=lambda: observed_roles.append(
-            persisted_roles(
-                runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-            )
-        ),
+        input_persisted_hook=lambda: observed_roles.append(persisted_roles(history(runtime))),
     )
-    await run.wait()
-
-    assert observed_roles == [["note"]]
-
-
-@pytest.mark.asyncio
-async def test_queued_input_persistence_callback_waits_for_durable_note(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2")
-    adapter = StubAdapter([{"content": "handled", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    observed_roles: list[list[str]] = []
-    loop = build_chat_loop(runtime)
-    runtime.chat_sessions.create("coder", session_id="session-one")
-
-    queued = await loop.queue_run(
-        "coder",
-        "background result",
-        session_id="session-one",
-        internal=True,
-        input_persisted_hook=lambda: observed_roles.append(
-            persisted_roles(
-                runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-            )
-        ),
-    )
-    run = await queued.future
+    run = await started.future if entry == "queue_run" else started
     await run.wait()
 
     assert observed_roles == [["note"]]
@@ -641,37 +298,14 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
         def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
             return 90
 
-        def has_new_compactable_context(
-            self,
-            _messages: list[ChatMessage],
-            _settings: Any,
-            **_kwargs: Any,
-        ) -> bool:
+        def has_new_compactable_context(self, *_args: Any, **_kwargs: Any) -> bool:
             return True
 
-        def should_auto_compact(
-            self,
-            _input_tokens: int,
-            _context_window: int,
-            _threshold: float,
-            **_kwargs: Any,
-        ) -> bool:
+        def should_auto_compact(self, *_args: Any, **_kwargs: Any) -> bool:
             self.checks += 1
             return self.checks == 2 and not self.compacted
 
-        async def compact(
-            self,
-            messages: list[ChatMessage],
-            *,
-            session_address: Any,
-            summary_adapter: Any,
-            summary_model_id: str,
-            storage: Any,
-            settings: Any,
-            **kwargs: Any,
-        ) -> ChatMessage:
-            del session_address, summary_adapter, summary_model_id, storage, settings
-
+        async def compact(self, messages: list[ChatMessage], **kwargs: Any) -> ChatMessage:
             self.compacted = True
             self.compact_calls += 1
             self.request_messages = [dict(message) for message in kwargs["request_messages"]]
@@ -686,40 +320,12 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
                 compacted_token_count=42,
             )
 
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "reasoning": "Need weather.",
-                "reasoning_meta": {"encrypted_content": "opaque-current-turn"},
-                "usage": {"input_tokens": 11, "output_tokens": 7},
-                "tool_calls": [
-                    {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
-                ],
-            },
-            {"content": "Sunny", "tool_calls": None},
-        ]
-    )
-    tools = ToolRegistry()
-    tools.register(
-        "get_weather",
-        "Get weather.",
-        {"type": "object"},
-        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=tools,
+    runtime = tool_runtime(
+        tmp_path,
+        _weather_tools(),
+        [_WEATHER_TURN, final("Sunny")],
         storage=StubStorage(
-            {
-                "auto": True,
-                "threshold": 0.8,
-                "tail_tokens": 15_000,
-                "summary_model": None,
-            }
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
         ),
         models=StubModels({("openai", "gpt-5.2"): 100}),
     )
@@ -727,16 +333,14 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
     compaction_service = SingleCheckpointCompactionService()
 
     assistant = await build_chat_loop(
-        runtime,
-        compaction_service=cast(Any, compaction_service),
+        runtime, compaction_service=cast(Any, compaction_service)
     ).send("coder", "Weather?", session_id="session-one")
 
-    continued_messages = adapter.requests[1]["messages"]
-    first_tool_names = [tool["name"] for tool in adapter.requests[0]["kwargs"]["tools"]]
-    continued_tool_names = [tool["name"] for tool in adapter.requests[1]["kwargs"]["tools"]]
+    requests = runtime.adapter.requests
+    continued_messages = requests[1]["messages"]
     assert assistant.content == "Sunny"
     assert compaction_service.compact_calls == 1
-    assert compaction_service.request_messages[:2] == adapter.requests[0]["messages"]
+    assert compaction_service.request_messages[:2] == requests[0]["messages"]
     assert [message["role"] for message in compaction_service.request_messages] == [
         "system",
         "user",
@@ -745,8 +349,8 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
     ]
     assert compaction_service.request_messages[2]["reasoning"] == "Need weather."
     assert compaction_service.request_messages[3]["tool_call_id"] == "call_abc"
-    assert HISTORY_TOOL_NAME not in first_tool_names
-    assert HISTORY_TOOL_NAME in continued_tool_names
+    assert HISTORY_TOOL_NAME not in [tool["name"] for tool in requests[0]["kwargs"]["tools"]]
+    assert HISTORY_TOOL_NAME in [tool["name"] for tool in requests[1]["kwargs"]["tools"]]
     assert [message["role"] for message in continued_messages] == [
         "system",
         "user",
@@ -761,3 +365,182 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
     assert continued_messages[3]["reasoning"] == "Need weather."
     assert continued_messages[3]["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
     assert "usage" not in continued_messages[3]
+
+
+@pytest.mark.asyncio
+async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
+    tmp_path: Path,
+) -> None:
+    slow_started = asyncio.Event()
+    slow_release = asyncio.Event()
+    cancel_callbacks: list[str] = []
+
+    async def fast_probe(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        await slow_started.wait()
+        return tool_success({"probe": "fast"})
+
+    async def slow_probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        def cancel() -> None:
+            cancel_callbacks.append(context.tool_call_id)
+            slow_release.set()
+
+        context.on_cancel(cancel)
+        slow_started.set()
+        await slow_release.wait()
+        return tool_failure("cancelled_by_user", "Slow probe cancelled.")
+
+    tools = ToolRegistry()
+    tools.register("fast_probe", "Complete first.", {"type": "object"}, fast_probe)
+    tools.register("slow_probe", "Remain active until cancelled.", {"type": "object"}, slow_probe)
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [
+            tool_turn(("call_fast", "fast_probe"), ("call_slow", "slow_probe")),
+            final("Recovered on the next Run."),
+        ],
+    )
+    loop = build_chat_loop(runtime)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    cancelled_run = await loop.start_run("coder", "Run both probes.", session_id="session-one")
+
+    async def fast_result_emitted() -> None:
+        while not any(
+            event.type == TOOL_CALL_RESULT_EVENT and event.payload["tool_call"]["id"] == "call_fast"
+            for event in cancelled_run.events
+        ):
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(fast_result_emitted(), timeout=WAIT_SECONDS)
+    cancelled_run.request_cancel(reason="user")
+    with pytest.raises(RunCancelledError):
+        await cancelled_run.wait()
+
+    after_cancel = history(runtime)
+    assert cancel_callbacks == ["call_slow"]
+    assert runtime.process_manager.cancelled_scopes == [cancelled_run.id]
+    assert runtime.process_manager.released_scopes == [cancelled_run.id]
+    assert persisted_roles(after_cancel) == ["user", "assistant"]
+    assert [m.status for m in after_cancel if m.role == "run_summary"] == ["cancelled"]
+
+    recovered = await loop.send("coder", "Continue safely.", session_id="session-one")
+
+    assert recovered.content == "Recovered on the next Run."
+    repaired_results = [
+        message
+        for message in runtime.adapter.requests[1]["messages"]
+        if message.get("role") == "tool"
+    ]
+    assert [message["tool_call_id"] for message in repaired_results] == ["call_fast", "call_slow"]
+    for message in repaired_results:
+        assert json.loads(message["content"])["error"]["code"] == "result_unavailable"
+    final_history = history(runtime)
+    assert persisted_roles(final_history) == ["user", "assistant", "user", "assistant"]
+    assert [m.status for m in final_history if m.role == "run_summary"] == [
+        "cancelled",
+        "completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_cancel_rejects_a_racing_launch_and_releases_the_settled_scope(
+    tmp_path: Path,
+) -> None:
+    process_manager = ProcessManager(sweep_interval_seconds=3600)
+    tool_started = asyncio.Event()
+    launch_outcomes: list[str] = []
+
+    async def late_launch(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        tool_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # A launch arriving after the Run cancel but before the Run settles;
+            # the Process manager must refuse it, so no child process starts.
+            try:
+                await process_manager.spawn(
+                    context.run_id,
+                    context.agent_id,
+                    [sys.executable, "-c", "pass"],
+                    env=None,
+                    cwd=None,
+                )
+            except ProcessManagerError:
+                launch_outcomes.append("rejected")
+            else:
+                launch_outcomes.append("started")
+            raise
+        return tool_success({})
+
+    tools = ToolRegistry()
+    tools.register("late_launch", "Launch after cancellation.", {"type": "object"}, late_launch)
+    runtime = tool_runtime(tmp_path, tools, [tool_turn(("call_late", "late_launch"))])
+    runtime.process_manager = process_manager
+    loop = build_chat_loop(runtime)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    try:
+        run = await loop.start_run("coder", "Launch late.", session_id="session-one")
+        await asyncio.wait_for(tool_started.wait(), WAIT_SECONDS)
+
+        run.request_cancel(reason="user")
+        with pytest.raises(RunCancelledError):
+            await run.wait()
+
+        assert launch_outcomes == ["rejected"]
+        assert process_manager.list_processes("coder") == []
+        # The settled Run no longer retains its closed-scope marker.
+        assert process_manager._closed_scopes == set()
+    finally:
+        await process_manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_per_call_cancel_persists_cancelled_and_completed_siblings_in_order(
+    tmp_path: Path,
+) -> None:
+    cancellable_started = asyncio.Event()
+    cancel_fired = asyncio.Event()
+    sibling_started = asyncio.Event()
+    sibling_release = asyncio.Event()
+
+    async def cancellable(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        context.on_cancel(cancel_fired.set)
+        cancellable_started.set()
+        await cancel_fired.wait()
+        assert context.was_cancelled_by_user() is True
+        return tool_failure("cancelled_by_user", "Cancelled by the user.")
+
+    async def sibling(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        sibling_started.set()
+        await sibling_release.wait()
+        return tool_success({"sibling": "completed"})
+
+    tools = ToolRegistry()
+    tools.register("cancellable", "Wait for cancellation.", {"type": "object"}, cancellable)
+    tools.register("sibling", "Complete beside a cancelled Tool.", {"type": "object"}, sibling)
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [
+            tool_turn(("call_cancel", "cancellable"), ("call_sibling", "sibling")),
+            final("Both Results observed."),
+        ],
+    )
+    loop = build_chat_loop(runtime)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    run = await loop.start_run("coder", "Run siblings.", session_id="session-one")
+    await asyncio.wait_for(
+        asyncio.gather(cancellable_started.wait(), sibling_started.wait()), timeout=WAIT_SECONDS
+    )
+    assert run.cancel_tool_call("call_cancel") is True
+    sibling_release.set()
+    assistant = await run.wait()
+
+    assert assistant.content == "Both Results observed."
+    assert (run.status, run.cancel_requested) == (RunStatus.COMPLETED, False)
+    persisted_tools = [message for message in history(runtime) if message.role == "tool"]
+    assert [message.tool_call_id for message in persisted_tools] == ["call_cancel", "call_sibling"]
+    cancelled, completed = tool_results(persisted_tools)
+    assert cancelled["error"]["code"] == "cancelled_by_user"
+    assert completed == tool_success({"sibling": "completed"})

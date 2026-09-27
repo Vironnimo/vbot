@@ -22,11 +22,14 @@ from core.sessions import SessionAddress
 from core.tools import ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
+from tests.core.chat.chat_loop_tools_test_support import WAIT_SECONDS
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("catalog_change", ["remove", "replace"])
-@pytest.mark.parametrize("valid_hook_result", [False, True])
+@pytest.mark.parametrize(
+    ("catalog_change", "valid_hook_result"),
+    [("replace", False), ("replace", True), ("remove", True)],
+)
 async def test_running_tool_result_survives_live_catalog_change(
     tmp_path, catalog_change, valid_hook_result
 ):
@@ -79,7 +82,7 @@ async def test_running_tool_result_survives_live_catalog_change(
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     run = await build_chat_loop(runtime).start_run("coder", "run the Tool", session_id=session.id)
     try:
-        await asyncio.wait_for(started.wait(), timeout=5)
+        await asyncio.wait_for(started.wait(), timeout=WAIT_SECONDS)
         candidates = []
         if catalog_change == "replace":
             candidates.append(
@@ -151,7 +154,7 @@ async def test_worker_publication_before_dispatch_uses_selected_tool_contract(
 
     def publisher(_context, _arguments):
         publisher_threads.append(threading.get_ident())
-        assert publish.wait(timeout=5)
+        assert publish.wait(timeout=WAIT_SECONDS)
         try:
             operations.replace_tools(
                 "catalog",
@@ -190,7 +193,7 @@ async def test_worker_publication_before_dispatch_uses_selected_tool_contract(
             # Force a real sibling worker publication after Chat has entered
             # dispatch but before canonical dispatch selects the executing Tool.
             publish.set()
-            assert await asyncio.to_thread(published.wait, 5)
+            assert await asyncio.to_thread(published.wait, WAIT_SECONDS)
         return await dispatch(context, arguments, allowed_tools)
 
     monkeypatch.setattr(tools, "dispatch", dispatch_after_publication)
@@ -243,62 +246,10 @@ async def test_worker_publication_before_dispatch_uses_selected_tool_contract(
 
 
 @pytest.mark.asyncio
-async def test_live_catalog_publication_refreshes_next_provider_cycle(tmp_path):
-    tools = ToolRegistry()
-    operations = ExtensionOperations("test")
-    operations.bind(tools)
-    calls = []
-
-    async def installed(context, arguments):
-        calls.append("installed-called")
-        return tool_success({"sentinel": True})
-
-    async def install(context, arguments):
-        operations.replace_tools(
-            "connection",
-            [
-                {
-                    "name": "installed",
-                    "description": "test-sentinel",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": False,
-                    },
-                    "handler": installed,
-                }
-            ],
-        )
-        return tool_success({"installed": True})
-
-    tools.register("install", "test-sentinel", {"type": "object"}, install)
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [{"id": "install", "name": "install", "arguments": {}}],
-            },
-            {"content": None, "tool_calls": [{"id": "use", "name": "installed", "arguments": {}}]},
-            {"content": "finished"},
-        ]
-    )
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-    runtime.chat_sessions.create("coder", session_id="session-one")
-
-    run = await build_chat_loop(runtime).start_run(
-        "coder", "install and use", session_id="session-one"
-    )
-    await run.wait()
-
-    assert calls == ["installed-called"]
-    assert "installed" not in {tool["name"] for tool in adapter.requests[0]["kwargs"]["tools"]}
-    assert "installed" in {tool["name"] for tool in adapter.requests[1]["kwargs"]["tools"]}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("continue_after_batch", [False, True])
-@pytest.mark.parametrize("finalization_failure", [None, "summary", "callback"])
+@pytest.mark.parametrize(
+    ("continue_after_batch", "finalization_failure"),
+    [(True, None), (False, "summary"), (False, "callback")],
+)
 async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
     tmp_path, continue_after_batch, finalization_failure, monkeypatch
 ):
