@@ -1,122 +1,79 @@
-"""Tests for ``ExtensionRegistry.load`` discovery and fail-open loading.
+"""``ExtensionRegistry.load`` discovery, roots, records and fail-open loading.
 
-Covers the three accepted entry-point shapes (single-file module, package
-``__init__.py``, directory ``extension.py`` fallback), sorted load order across
-roots, fail-open behavior on import/``register`` failures, and async
-``register`` via the no-running-loop path. Loaded extensions write their name to
-a marker file from a ``run_start`` handler so behavior is observed through real
-dispatch rather than registry internals.
+Covers the accepted entry-point shapes, name order within a root and root order
+across roots (data dir, extra roots, bundled copies), what each record reports
+(manifest, config, disabled, overridden), and that every kind of load failure
+fails only its own Extension. Loaded Extensions report through a ``run_start``
+marker, so behavior is observed through real dispatch.
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
 import sys
-from collections.abc import Iterator
+import types
 from pathlib import Path
 
 import pytest
 
-from core.extensions import ExtensionRegistry, HookContext
+from core.extensions import API_VERSION, ExtensionRegistry, purge_extension_modules
+from tests.core.extensions.extension_test_support import (
+    fire_run_start,
+    marker_lines,
+    marker_source,
+    record,
+    write_extension,
+    write_package,
+)
+
+_RAISES_ON_IMPORT = "raise RuntimeError('must never be imported')\n"
 
 
-@pytest.fixture(autouse=True)
-def _clean_extension_modules() -> Iterator[None]:
-    """Drop the synthetic ``vbot_ext`` namespace after each test."""
-    yield
-    for module_name in list(sys.modules):
-        if module_name == "vbot_ext" or module_name.startswith("vbot_ext."):
-            del sys.modules[module_name]
-
-
-def _extension_source(name: str, marker: Path, *, is_async: bool = False) -> str:
-    register_def = "async def register(api):" if is_async else "def register(api):"
+def _import_marker_source(name: str, marker: Path) -> str:
+    """Module that records *name* at import time, before ``register`` runs."""
     return (
         "import pathlib\n"
-        f"_MARKER = pathlib.Path({str(marker)!r})\n"
-        "\n"
-        f"{register_def}\n"
-        "    def handler(ctx, **payload):\n"
-        "        with _MARKER.open('a', encoding='utf-8') as fh:\n"
-        f"            fh.write({name!r} + '\\n')\n"
-        "    api.on('run_start', handler)\n"
+        f"with pathlib.Path({str(marker)!r}).open('a', encoding='utf-8') as fh:\n"
+        f"    fh.write({name!r} + '\\n')\n"
+        "def register(api):\n"
+        "    pass\n"
     )
 
 
-def _write_single_file(root: Path, name: str, marker: Path, *, is_async: bool = False) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / f"{name}.py").write_text(
-        _extension_source(name, marker, is_async=is_async), encoding="utf-8"
-    )
-
-
-def _write_package(root: Path, name: str, marker: Path) -> None:
-    package = root / name
-    package.mkdir(parents=True, exist_ok=True)
-    (package / "__init__.py").write_text(_extension_source(name, marker), encoding="utf-8")
-
-
-def _write_directory_fallback(root: Path, name: str, marker: Path) -> None:
-    package = root / name
-    package.mkdir(parents=True, exist_ok=True)
-    (package / "extension.py").write_text(_extension_source(name, marker), encoding="utf-8")
-
-
-def _fire_run_start(registry: ExtensionRegistry) -> None:
-    ctx = HookContext(session_id="s", agent_id="a", run_id="r")
-    asyncio.run(registry.dispatch_run_start(ctx, session_id="s", agent_id="a"))
-
-
-def _marker_names(marker: Path) -> list[str]:
-    if not marker.exists():
-        return []
-    return marker.read_text(encoding="utf-8").split()
-
-
-def test_loads_single_file_extension(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
+def test_entry_point_shapes_load_in_name_order_with_extra_roots_last(tmp_path: Path) -> None:
+    root, extra = tmp_path / "extensions", tmp_path / "extra"
     marker = tmp_path / "marker.txt"
-    _write_single_file(root, "single_mod", marker)
+    # An async register() completes before apply even without a running loop.
+    write_extension(root, "zeta", marker_source(marker, "zeta", asynchronous=True))
+    # Directory entry points resolve relative imports inside their package.
+    for name, entry in (("alpha", "__init__.py"), ("mike", "extension.py")):
+        package = write_package(root, name, "from .helper import register\n", entry=entry)
+        (package / "helper.py").write_text(marker_source(marker, name), encoding="utf-8")
+    # A module without register() loads but contributes nothing.
+    write_extension(root, "no_register", "VALUE = 1\n")
+    write_extension(extra, "extra_ext", marker_source(marker, "extra_ext"))
 
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
+    registry = ExtensionRegistry.load(root, [extra], bundled_dir=tmp_path / "missing-bundled")
+    fire_run_start(registry)
 
-    assert _marker_names(marker) == ["single_mod"]
-
-
-def test_loads_package_extension(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    _write_package(root, "package_ext", marker)
-
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["package_ext"]
-
-
-def test_non_utf8_manifest_fails_only_its_extension(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    _write_package(root, "broken_manifest", marker)
-    (root / "broken_manifest" / "extension.json").write_bytes(b"\xff")
-    _write_single_file(root, "healthy", marker)
-
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["healthy"]
-    broken = _record_by_name(registry, "broken_manifest")
-    assert broken.status == "failed"
-    assert broken.error is not None
-    assert "not valid UTF-8" in broken.error
+    assert marker_lines(marker) == ["alpha", "mike", "zeta", "extra_ext"]
+    assert [(item.name, item.status) for item in registry.records()] == [
+        ("alpha", "loaded"),
+        ("mike", "loaded"),
+        ("no_register", "loaded"),
+        ("zeta", "loaded"),
+        ("extra_ext", "loaded"),
+    ]
+    assert registry.diagnostics() == []
 
 
-def test_unreadable_extension_root_is_skipped(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+def test_missing_or_unreadable_roots_yield_no_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    missing = ExtensionRegistry.load(tmp_path / "does-not-exist")
+    fire_run_start(missing)
+    assert missing.records() == []
+
     root = tmp_path / "extensions"
     root.mkdir()
     original_iterdir = Path.iterdir
@@ -128,257 +85,160 @@ def test_unreadable_extension_root_is_skipped(
 
     monkeypatch.setattr(Path, "iterdir", fail_target_iterdir)
 
-    registry = ExtensionRegistry.load(root)
-
-    assert registry.records() == []
+    assert ExtensionRegistry.load(root).records() == []
     assert str(root) in caplog.text
 
 
-def test_loads_directory_fallback_extension(tmp_path: Path) -> None:
+def test_earlier_roots_shadow_bundled_copies_even_when_disabled(tmp_path: Path) -> None:
+    data_dir, extra, bundled = tmp_path / "extensions", tmp_path / "extra", tmp_path / "bundled"
+    marker = tmp_path / "marker.txt"
+    write_extension(data_dir, "from_data", marker_source(marker, "from_data"))
+    write_extension(data_dir, "gated", marker_source(marker, "gated"))
+    write_extension(extra, "from_extra", marker_source(marker, "from_extra"))
+    write_extension(bundled, "bundled_only", marker_source(marker, "bundled_only"))
+    # Bundled copies of claimed names would raise if they were ever imported.
+    for name in ("from_data", "gated", "from_extra"):
+        write_extension(bundled, name, _RAISES_ON_IMPORT)
+
+    registry = ExtensionRegistry.load(data_dir, [extra], disabled={"gated"}, bundled_dir=bundled)
+    fire_run_start(registry)
+
+    # Exactly one copy of each name runs; disabling a name never activates another copy.
+    assert marker_lines(marker) == ["from_data", "from_extra", "bundled_only"]
+    assert record(registry, "gated").status == "disabled"
+    assert record(registry, "gated").entry_path == data_dir / "gated.py"
+    assert record(registry, "from_extra").entry_path == extra / "from_extra.py"
+    assert record(registry, "bundled_only").status == "loaded"
+    overridden = {
+        item.name: (item.entry_path, item.overridden_by)
+        for item in registry.records()
+        if item.status == "overridden"
+    }
+    assert overridden == {
+        "from_data": (bundled / "from_data.py", str(data_dir / "from_data.py")),
+        "gated": (bundled / "gated.py", str(data_dir / "gated.py")),
+        "from_extra": (bundled / "from_extra.py", str(extra / "from_extra.py")),
+    }
+
+
+def test_loaded_records_carry_manifest_config_and_disabled_state(tmp_path: Path) -> None:
     root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    _write_directory_fallback(root, "fallback_ext", marker)
-
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["fallback_ext"]
-
-
-def test_load_order_is_sorted_by_name(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    _write_single_file(root, "zeta", marker)
-    _write_single_file(root, "alpha", marker)
-    _write_single_file(root, "mike", marker)
-
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["alpha", "mike", "zeta"]
-
-
-def test_extra_dirs_loaded_after_primary(tmp_path: Path) -> None:
-    primary = tmp_path / "primary"
-    extra = tmp_path / "extra"
-    marker = tmp_path / "marker.txt"
-    _write_single_file(primary, "primary_ext", marker)
-    _write_single_file(extra, "extra_ext", marker)
-
-    registry = ExtensionRegistry.load(primary, [extra])
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["primary_ext", "extra_ext"]
-
-
-def test_broken_extension_does_not_block_others(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "broken.py").write_text("raise RuntimeError('import boom')\n", encoding="utf-8")
-    _write_single_file(root, "healthy", marker)
-
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["healthy"]
-
-
-def test_register_failure_does_not_block_others(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "bad_register.py").write_text(
-        "def register(api):\n    raise ValueError('register boom')\n", encoding="utf-8"
+    imported = tmp_path / "imported.txt"
+    config_source = (
+        "import json, pathlib\n"
+        "def register(api):\n"
+        f"    name = __name__.rsplit('.', 1)[-1]\n"
+        f"    target = pathlib.Path({str(tmp_path)!r}) / (name + '.json')\n"
+        "    target.write_text(json.dumps(api.config), encoding='utf-8')\n"
     )
-    _write_single_file(root, "healthy", marker)
-
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["healthy"]
-
-
-def test_missing_directory_yields_empty_registry(tmp_path: Path) -> None:
-    registry = ExtensionRegistry.load(tmp_path / "does-not-exist")
-    # No handlers registered; dispatch is a safe no-op.
-    _fire_run_start(registry)
-
-
-def test_module_without_register_is_skipped(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "no_register.py").write_text("VALUE = 1\n", encoding="utf-8")
-    _write_single_file(root, "healthy", marker)
-
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["healthy"]
-
-
-def test_async_register_runs_without_running_loop(tmp_path: Path) -> None:
-    root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    _write_single_file(root, "async_ext", marker, is_async=True)
-
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["async_ext"]
-
-
-def _write_raising_single_file(root: Path, name: str) -> Path:
-    """Write a single-file extension whose import raises; returns its entry path."""
-    root.mkdir(parents=True, exist_ok=True)
-    entry = root / f"{name}.py"
-    entry.write_text("raise RuntimeError('must never be imported')\n", encoding="utf-8")
-    return entry
-
-
-def _record_by_name(registry: ExtensionRegistry, name: str):
-    return next(record for record in registry.records() if record.name == name)
-
-
-def test_bundled_dir_is_scanned_and_loads(tmp_path: Path) -> None:
-    data_dir = tmp_path / "extensions"
-    bundled = tmp_path / "bundled"
-    marker = tmp_path / "marker.txt"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    _write_single_file(bundled, "bundled_ext", marker)
-
-    registry = ExtensionRegistry.load(data_dir, bundled_dir=bundled)
-    _fire_run_start(registry)
-
-    assert _marker_names(marker) == ["bundled_ext"]
-    assert _record_by_name(registry, "bundled_ext").status == "loaded"
-
-
-def test_data_dir_copy_shadows_bundled_same_name(tmp_path: Path) -> None:
-    data_dir = tmp_path / "extensions"
-    bundled = tmp_path / "bundled"
-    marker = tmp_path / "marker.txt"
-    _write_single_file(data_dir, "shared", marker)
-    _write_raising_single_file(bundled, "shared")
-
-    registry = ExtensionRegistry.load(data_dir, bundled_dir=bundled)
-    _fire_run_start(registry)
-
-    # Only the data-dir copy loaded and ran its handler; the bundled copy would
-    # have raised on import, proving it was never imported.
-    assert _marker_names(marker) == ["shared"]
-    data_record = _record_by_name(registry, "shared")
-    assert data_record.status == "loaded"
-    assert data_record.entry_path == data_dir / "shared.py"
-
-    overridden = [record for record in registry.records() if record.status == "overridden"]
-    assert len(overridden) == 1
-    assert overridden[0].name == "shared"
-    assert overridden[0].entry_path == bundled / "shared.py"
-    assert overridden[0].overridden_by == str(data_dir / "shared.py")
-
-
-def test_extra_root_copy_shadows_bundled_same_name(tmp_path: Path) -> None:
-    data_dir = tmp_path / "extensions"
-    extra = tmp_path / "extra"
-    bundled = tmp_path / "bundled"
-    marker = tmp_path / "marker.txt"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    _write_single_file(extra, "shared", marker)
-    _write_raising_single_file(bundled, "shared")
-
-    registry = ExtensionRegistry.load(data_dir, [extra], bundled_dir=bundled)
-    _fire_run_start(registry)
-
-    # Root order is data dir → extras → bundled, so the extra-root copy wins.
-    assert _marker_names(marker) == ["shared"]
-    extra_record = _record_by_name(registry, "shared")
-    assert extra_record.status == "loaded"
-    assert extra_record.entry_path == extra / "shared.py"
-
-    overridden = [record for record in registry.records() if record.status == "overridden"]
-    assert len(overridden) == 1
-    assert overridden[0].entry_path == bundled / "shared.py"
-    assert overridden[0].overridden_by == str(extra / "shared.py")
-
-
-def test_disabled_name_still_claims_identity_over_bundled_copy(tmp_path: Path) -> None:
-    data_dir = tmp_path / "extensions"
-    bundled = tmp_path / "bundled"
-    marker = tmp_path / "marker.txt"
-    _write_single_file(data_dir, "shared", marker)
-    _write_raising_single_file(bundled, "shared")
-
-    registry = ExtensionRegistry.load(data_dir, disabled={"shared"}, bundled_dir=bundled)
-    _fire_run_start(registry)
-
-    # Disabling a name must never silently activate a different copy of it: the
-    # data-dir copy is disabled (never imported) and still shadows the bundled one.
-    assert _marker_names(marker) == []
-    data_record = _record_by_name(registry, "shared")
-    assert data_record.status == "disabled"
-    assert data_record.entry_path == data_dir / "shared.py"
-
-    overridden = [record for record in registry.records() if record.status == "overridden"]
-    assert len(overridden) == 1
-    assert overridden[0].entry_path == bundled / "shared.py"
-    assert overridden[0].overridden_by == str(data_dir / "shared.py")
-
-
-def test_bundled_dir_none_and_missing_behave_like_today(tmp_path: Path) -> None:
-    data_dir = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    _write_single_file(data_dir, "only_ext", marker)
-
-    without_bundled = ExtensionRegistry.load(data_dir)
-    _fire_run_start(without_bundled)
-    assert _marker_names(marker) == ["only_ext"]
-    assert [record.name for record in without_bundled.records()] == ["only_ext"]
-
-    marker.unlink()
-    with_missing_bundled = ExtensionRegistry.load(data_dir, bundled_dir=tmp_path / "does-not-exist")
-    _fire_run_start(with_missing_bundled)
-    assert _marker_names(marker) == ["only_ext"]
-    assert [record.name for record in with_missing_bundled.records()] == ["only_ext"]
-
-
-def test_same_name_across_roots_no_longer_both_load(tmp_path: Path) -> None:
-    data_dir = tmp_path / "extensions"
-    bundled = tmp_path / "bundled"
-    marker = tmp_path / "marker.txt"
-    _write_single_file(data_dir, "shared", marker)
-    _write_single_file(bundled, "shared", marker)
-
-    registry = ExtensionRegistry.load(data_dir, bundled_dir=bundled)
-    _fire_run_start(registry)
-
-    # Exactly one copy loads and fires (no double-firing across roots); the other
-    # is an ``overridden`` record.
-    assert _marker_names(marker) == ["shared"]
-    statuses = sorted(record.status for record in registry.records())
-    assert statuses == ["loaded", "overridden"]
-
-
-@pytest.mark.parametrize("entry_name", ["__init__.py", "extension.py"])
-def test_directory_entry_points_resolve_relative_imports(tmp_path: Path, entry_name: str) -> None:
-    root = tmp_path / "extensions"
-    package = root / "directory_ext"
-    package.mkdir(parents=True)
-    marker = tmp_path / "marker.txt"
-    (package / "helper.py").write_text(
-        "from pathlib import Path\n"
-        "def handler(ctx, **payload):\n"
-        f"    Path({str(marker)!r}).write_text('directory_ext', encoding='utf-8')\n",
-        encoding="utf-8",
+    write_extension(root, "plain", "def register(api):\n    pass\n")
+    write_package(
+        root,
+        "manifested",
+        "def register(api):\n    pass\n",
+        manifest={"version": "1.2.0", "description": "demo", "name": "Display Name"},
     )
-    (package / entry_name).write_text(
-        "from .helper import handler\ndef register(api):\n    api.on('run_start', handler)\n",
-        encoding="utf-8",
+    write_extension(root, "configured", config_source)
+    write_extension(root, "configless", config_source)
+    write_extension(root, "skipme", _import_marker_source("skipme", imported))
+
+    registry = ExtensionRegistry.load(
+        root, disabled={"skipme"}, config={"configured": {"token": "abc", "level": 3}}
     )
 
-    registry = ExtensionRegistry.load(root)
-    _fire_run_start(registry)
+    plain = record(registry, "plain")
+    assert (plain.status, plain.error, plain.manifest) == ("loaded", None, None)
+    manifest = record(registry, "manifested").manifest
+    assert manifest is not None
+    assert (manifest.version, manifest.description, manifest.display_name) == (
+        "1.2.0",
+        "demo",
+        "Display Name",
+    )
+    assert json.loads((tmp_path / "configured.json").read_text(encoding="utf-8")) == {
+        "token": "abc",
+        "level": 3,
+    }
+    assert json.loads((tmp_path / "configless.json").read_text(encoding="utf-8")) == {}
+    # A disabled Extension is never imported.
+    assert record(registry, "skipme").status == "disabled"
+    assert marker_lines(imported) == []
+    assert registry.diagnostics() == []
 
-    assert _record_by_name(registry, "directory_ext").status == "loaded"
-    assert _marker_names(marker) == ["directory_ext"]
+
+def test_each_load_failure_fails_only_its_extension(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    marker, imported = tmp_path / "marker.txt", tmp_path / "imported.txt"
+    noop = "def register(api):\n    pass\n"
+    write_package(root, "bad_json", noop, manifest="{ not valid json")
+    write_package(root, "bad_utf8", noop)
+    (root / "bad_utf8" / "extension.json").write_bytes(b"\xff")
+    write_package(root, "bad_version", noop, manifest={"version": 123})
+    write_package(
+        root,
+        "future",
+        _import_marker_source("future", imported),
+        manifest={"api_version": API_VERSION + 1},
+    )
+    write_extension(root, "import_boom", "raise RuntimeError('import boom')\n")
+    write_extension(root, "register_boom", "def register(api):\n    raise ValueError('nope')\n")
+    write_extension(
+        root,
+        "register_cancelled",
+        "import asyncio\ndef register(api):\n    raise asyncio.CancelledError()\n",
+    )
+    write_extension(
+        root,
+        "bad_settings",
+        "def register(api):\n"
+        "    api.register_settings([{'key': 'Bad', 'type': 'text', 'label': 'X'}])\n",
+    )
+    write_extension(
+        root,
+        "double_settings",
+        "def register(api):\n"
+        "    api.register_settings([{'key': 'a', 'type': 'text', 'label': 'A'}])\n"
+        "    api.register_settings([{'key': 'b', 'type': 'text', 'label': 'B'}])\n",
+    )
+    write_extension(root, "healthy", marker_source(marker, "healthy"))
+
+    registry = ExtensionRegistry.load(root)
+    fire_run_start(registry)
+
+    expected = {
+        "bad_json": "invalid JSON",
+        "bad_utf8": "not valid UTF-8",
+        "bad_version": "version must be a string",
+        "future": "api_version",
+        "import_boom": "import failed: import boom",
+        "register_boom": "register() raised: nope",
+        "register_cancelled": "register() raised",
+        "bad_settings": "Bad",
+        "double_settings": "already declared",
+    }
+    errors = {item.name: item.error or "" for item in registry.diagnostics()}
+    assert errors.keys() == expected.keys()
+    assert {name: fragment in errors[name] for name, fragment in expected.items()} == dict.fromkeys(
+        expected, True
+    )
+    assert record(registry, "healthy").status == "loaded"
+    assert marker_lines(marker) == ["healthy"]
+    # A newer api_version is refused before import: the module body never ran.
+    assert marker_lines(imported) == []
+
+
+def test_purge_removes_only_the_extension_namespace() -> None:
+    for name in ("vbot_ext", "vbot_ext.pkg", "vbot_ext.pkg.sub"):
+        sys.modules[name] = types.ModuleType(name)
+    # Names that merely prefix the namespace without the dot boundary survive.
+    survivors = {name: types.ModuleType(name) for name in ("vbot_extra", "vbot_extras_helper")}
+    sys.modules.update(survivors)
+
+    try:
+        purge_extension_modules()
+
+        assert not {"vbot_ext", "vbot_ext.pkg", "vbot_ext.pkg.sub"} & set(sys.modules)
+        assert {name: sys.modules.get(name) for name in survivors} == survivors
+    finally:
+        for name in survivors:
+            sys.modules.pop(name, None)

@@ -1,26 +1,25 @@
 """Extension templates shipped with the vbot-cli Skill work after installation.
 
 These examples are documentation-grade: a third-party author copies them first,
-so they must load without diagnostics and behave as their comments claim. The
-tests double as reusable end-to-end fixtures — they exercise the full
-declare → apply path through the real filesystem loader.
+so they must load without diagnostics and behave as their comments claim. They
+are installed into a disposable Extension root and loaded through the real
+filesystem loader.
 """
 
 from __future__ import annotations
 
 import asyncio
 import shutil
-import sys
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from core.chat import CommandDispatcher, CommandExecutionContext, ReplySurface
-from core.extensions import ExtensionRegistry, HookContext
+from core.extensions import ExtensionRegistry
 from core.runs import ChatRunManager, Run
 from core.skills import SkillRegistry
-from core.tools import ToolContext, ToolContractError, ToolRegistry
+from core.tools import ToolContractError, ToolRegistry
+from tests.core.extensions.extension_test_support import hook_context, tool_context
 
 _ASSETS_DIR = Path(__file__).resolve().parents[3] / "resources/skills/vbot-cli/assets/extensions"
 
@@ -31,131 +30,70 @@ def examples_dir(tmp_path: Path) -> Path:
     return Path(shutil.copytree(_ASSETS_DIR, tmp_path / "data/extensions"))
 
 
-@pytest.fixture(autouse=True)
-def _clean_extension_modules() -> Iterator[None]:
-    """Drop the synthetic ``vbot_ext`` namespace after each test."""
-    yield
-    for module_name in list(sys.modules):
-        if module_name == "vbot_ext" or module_name.startswith("vbot_ext."):
-            del sys.modules[module_name]
-
-
 def _allow_validator(extension_name: str, candidate: dict) -> dict:
     return candidate
 
 
-def test_example_extensions_load_without_diagnostics(examples_dir: Path) -> None:
-    registry = ExtensionRegistry.load(examples_dir)
-
-    names = {record.name for record in registry.records()}
-    assert {"guard_bash", "word_count", "workflow_command"} <= names
-    assert registry.diagnostics() == []
-    for record in registry.records():
-        assert record.status == "loaded"
-        assert record.capability_errors == []
-
-
-@pytest.mark.parametrize(
-    ("arguments", "expected_count"),
-    [({"text": "one two three"}, 3), ({"text": " \t\n"}, 0)],
-)
-def test_example_word_count_tool_registers_and_runs(
-    tmp_path: Path, examples_dir: Path, arguments: dict, expected_count: int
-) -> None:
-    registry = ExtensionRegistry.load(examples_dir)
-    tool_registry = ToolRegistry()
-    registry.apply_tools(tool_registry)
-
-    context = ToolContext(
-        agent_id="a",
-        session_id="s",
-        run_id="r",
-        tool_call_id="c1",
-        tool_name="word_count",
-        tool_call_index=0,
-        workspace=tmp_path,
-        vbot_root=tmp_path,
-        data_root=tmp_path,
-    )
-    result = asyncio.run(tool_registry.dispatch(context, arguments))
-    tool = tool_registry.get("word_count")
-
-    assert result["ok"] is True
-    assert result["data"] == {"word_count": expected_count}
-    assert tool.parallel_safe is True
-    assert tool.result_schema is not None
-    assert tool.result_schema["additionalProperties"] is False
-
-
-@pytest.mark.parametrize(
-    ("arguments", "problem"),
-    [
-        ({}, '"text" is required'),
-        ({"text": None}, '"text" must be a string'),
-        ({"text": "one", "extra": True}, '"extra" is not a parameter'),
-    ],
-)
-def test_example_word_count_rejects_invalid_input(
-    examples_dir: Path, arguments: dict, problem: str
+def test_example_extensions_load_cleanly_and_word_count_honors_its_schema(
+    examples_dir: Path,
 ) -> None:
     registry = ExtensionRegistry.load(examples_dir)
     tools = ToolRegistry()
     registry.apply_tools(tools)
-    context = ToolContext(
-        agent_id="a",
-        session_id="s",
-        run_id="r",
-        tool_call_id="invalid",
-        tool_name="word_count",
-        tool_call_index=0,
-        workspace=examples_dir,
-        vbot_root=examples_dir,
-        data_root=examples_dir,
-    )
 
-    with pytest.raises(ToolContractError) as exc_info:
-        asyncio.run(tools.dispatch(context, arguments))
+    assert {"guard_bash", "word_count", "workflow_command"} <= {
+        item.name for item in registry.records()
+    }
+    assert registry.diagnostics() == []
+    assert [(item.status, item.capability_errors) for item in registry.records()] == [
+        ("loaded", [])
+    ] * len(registry.records())
 
-    assert problem in str(exc_info.value)
+    tool = tools.get("word_count")
+    assert tool.parallel_safe is True
+    assert tool.open_input_schema is True
+    assert "additionalProperties" not in tool.parameters
+    assert tool.result_schema is not None
+    assert tool.result_schema["additionalProperties"] is False
+    context = tool_context("word_count", examples_dir)
+    for text, count in (("one two three", 3), (" \t\n", 0)):
+        result = asyncio.run(tools.dispatch(context, {"text": text}))
+        assert (result["ok"], result["data"]) == (True, {"word_count": count})
+    for arguments, problem in (
+        ({}, '"text" is required'),
+        ({"text": None}, '"text" must be a string'),
+        ({"text": "one", "extra": True}, '"extra" is not a parameter'),
+    ):
+        with pytest.raises(ToolContractError) as exc_info:
+            asyncio.run(tools.dispatch(context, arguments))
+        assert problem in str(exc_info.value)
 
 
-def test_example_guard_bash_denies_dangerous_command(examples_dir: Path) -> None:
+def test_example_guard_bash_denies_only_dangerous_commands(examples_dir: Path) -> None:
     registry = ExtensionRegistry.load(examples_dir)
     notes: list[str] = []
-    ctx = HookContext(session_id="s", agent_id="a", run_id="r", add_note=notes.append)
 
-    decision = asyncio.run(
-        registry.dispatch_tool_call(
-            ctx,
-            tool_name="bash",
-            tool_call_id="c1",
-            input={"command": "rm -rf / --no-preserve-root"},
-            validator=_allow_validator,
+    def decide(command: str):
+        return asyncio.run(
+            registry.dispatch_tool_call(
+                hook_context(add_note=notes.append),
+                tool_name="bash",
+                tool_call_id="c1",
+                input={"command": command},
+                validator=_allow_validator,
+            )
         )
-    )
 
-    assert decision.deny_extension == "guard_bash"
-    assert decision.deny_reason
-    assert notes  # a system-reminder note was added for the model
+    allowed = decide("ls -la")
+    assert (allowed.deny_reason, allowed.replacement) == (None, None)
+    assert allowed.effective_input == {"command": "ls -la"}
+    assert notes == []
 
-
-def test_example_guard_bash_allows_safe_command(examples_dir: Path) -> None:
-    registry = ExtensionRegistry.load(examples_dir)
-    ctx = HookContext(session_id="s", agent_id="a", run_id="r")
-
-    decision = asyncio.run(
-        registry.dispatch_tool_call(
-            ctx,
-            tool_name="bash",
-            tool_call_id="c1",
-            input={"command": "ls -la"},
-            validator=_allow_validator,
-        )
-    )
-
-    assert decision.deny_reason is None
-    assert decision.replacement is None
-    assert decision.effective_input == {"command": "ls -la"}
+    denied = decide("rm -rf / --no-preserve-root")
+    assert denied.deny_extension == "guard_bash"
+    assert denied.deny_reason
+    # A system-reminder note tells the model why the command was refused.
+    assert notes
 
 
 @pytest.mark.asyncio

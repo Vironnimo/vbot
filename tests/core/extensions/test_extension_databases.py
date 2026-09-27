@@ -56,13 +56,15 @@ def _bodies(database) -> list[str]:
         return [row["body"] for row in connection.execute("SELECT body FROM notes ORDER BY id")]
 
 
-def test_open_creates_a_registered_canonical_extension_database(databases, data_dir) -> None:
+def test_open_creates_a_registered_canonical_database_once(databases, data_dir) -> None:
     identity = _identity()
 
     database = asyncio.run(databases.opener(identity)("notes", SCHEMA))
 
+    spec = extension_database_spec(data_dir, "notes_ext", "notes", SCHEMA)
+    assert database.name == spec.name == extension_database_name("notes_ext", "notes")
     assert database.name == "ext.notes_ext.notes"
-    assert database.path == data_dir / "extension-data" / "notes_ext" / "notes.db"
+    assert database.path == spec.path == data_dir / "extension-data" / "notes_ext" / "notes.db"
     marker = read_marker(data_dir)
     assert marker is not None
     assert marker.databases["ext.notes_ext.notes"].database_id == database.database_id
@@ -72,7 +74,11 @@ def test_open_creates_a_registered_canonical_extension_database(databases, data_
             connection.execute("PRAGMA application_id").fetchone()[0]
             == (APPLICATION_IDS["extensions"])
         )
+    with pytest.raises(ValueError, match="already open"):
+        asyncio.run(databases.open(identity, "notes", SCHEMA))
     assert databases.open_databases() == (database,)
+    with pytest.raises(ValueError, match="schema_sql"):
+        extension_database_spec(data_dir, "notes_ext", "notes", "  ")
 
 
 def test_release_closes_the_owner_handles_and_a_new_registration_reopens(
@@ -92,16 +98,6 @@ def test_release_closes_the_owner_handles_and_a_new_registration_reopens(
         asyncio.run(databases.open(first_owner, "notes", SCHEMA))
     reloaded = asyncio.run(databases.open(_identity(epoch="epoch-2"), "notes", SCHEMA))
     assert _bodies(reloaded) == ["kept"]
-
-
-def test_a_second_open_of_the_same_database_is_refused(databases) -> None:
-    identity = _identity()
-    database = asyncio.run(databases.open(identity, "notes", SCHEMA))
-
-    with pytest.raises(ValueError, match="already open"):
-        asyncio.run(databases.open(identity, "notes", SCHEMA))
-
-    assert databases.open_databases() == (database,)
 
 
 def test_close_closes_every_handle_and_refuses_later_opens(databases) -> None:
@@ -205,25 +201,11 @@ def test_migrations_and_additive_schema_changes_apply_on_reopen(databases) -> No
     assert applied == ["backfill"]
 
 
-@pytest.mark.parametrize(
-    "name", ["", "Notes", "../notes", "notes.db", "a/b", "con", "-notes", "x" * 129, 7]
-)
-def test_invalid_database_names_are_rejected(databases, data_dir, name) -> None:
-    with pytest.raises(ValueError, match="Invalid Extension database name"):
-        asyncio.run(databases.open(_identity(), name, SCHEMA))
-
-    assert not (data_dir / "extension-data").exists()
-
-
-def test_an_extension_whose_id_is_not_a_safe_id_cannot_open_databases(databases) -> None:
+def test_unsafe_database_names_and_owner_ids_are_rejected(databases, data_dir) -> None:
+    for name in ("", "Notes", "../notes", "notes.db", "a/b", "con", "-notes", "x" * 129, 7):
+        with pytest.raises(ValueError, match="Invalid Extension database name"):
+            asyncio.run(databases.open(_identity(), name, SCHEMA))
     with pytest.raises(ValueError, match="cannot open databases"):
         asyncio.run(databases.open(_identity("Notes.Ext"), "notes", SCHEMA))
 
-
-def test_spec_matches_the_host_opened_database(data_dir) -> None:
-    spec = extension_database_spec(data_dir, "swarm", "swarm", SCHEMA)
-
-    assert spec.name == extension_database_name("swarm", "swarm") == "ext.swarm.swarm"
-    assert spec.path == data_dir / "extension-data" / "swarm" / "swarm.db"
-    with pytest.raises(ValueError, match="schema_sql"):
-        extension_database_spec(data_dir, "swarm", "swarm", "  ")
+    assert not (data_dir / "extension-data").exists()

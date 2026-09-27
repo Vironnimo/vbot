@@ -1,4 +1,4 @@
-"""Live Extension ownership and management validation regressions."""
+"""Live Extension Tool catalogs and management operations."""
 
 import pytest
 
@@ -15,7 +15,7 @@ def declaration(name, handler=None):
     }
 
 
-def test_catalog_replacement_preserves_other_owners():
+def test_catalog_replacement_is_atomic_and_owned_per_catalog():
     registry = ToolRegistry()
     builtin = registry.register(**declaration("builtin"))
     operations = ExtensionOperations("example")
@@ -24,47 +24,24 @@ def test_catalog_replacement_preserves_other_owners():
 
     operations.replace_tools("server", [declaration("second")])
 
+    # Replacing one catalog leaves every other owner's Tools in place.
     assert [tool.name for tool in registry.list_tools()] == ["builtin", "second"]
     assert registry.get("builtin") is builtin
-
-
-def test_invalid_replacement_preserves_entire_previous_catalog():
-    registry = ToolRegistry()
-    operations = ExtensionOperations("example")
-    operations.bind(registry)
-    operations.replace_tools("server", [declaration("first")])
-    previous = registry.get("first")
-
+    previous = registry.get("second")
+    # An invalid replacement keeps the entire previous catalog.
     with pytest.raises(ValueError):
-        operations.replace_tools("server", [declaration("second"), declaration("bad-name")])
-
-    assert registry.list_tools() == [previous]
-
-
-def test_collision_cannot_replace_another_catalog():
-    registry = ToolRegistry()
-    operations = ExtensionOperations("example")
-    operations.bind(registry)
-    operations.replace_tools("first", [declaration("owned")])
-    previous = registry.get("owned")
-
+        operations.replace_tools("server", [declaration("third"), declaration("bad-name")])
+    # Another catalog cannot take over a name this one owns.
     with pytest.raises(ValueError):
-        operations.replace_tools("second", [declaration("owned")])
+        operations.replace_tools("other", [declaration("second")])
+    assert registry.list_tools() == [builtin, previous]
 
-    assert registry.get("owned") is previous
-
-
-def test_retired_extension_cannot_republish():
-    registry = ToolRegistry()
-    operations = ExtensionOperations("example")
-    operations.bind(registry)
-    operations.replace_tools("server", [declaration("owned")])
     operations.retire()
 
+    # A retired Extension cannot republish; its catalogs are gone.
     with pytest.raises(RuntimeError):
         operations.replace_tools("server", [declaration("late")])
-
-    assert registry.list_tools() == []
+    assert registry.list_tools() == [builtin]
 
 
 def test_dynamic_hidden_catalog_tool_stays_registered_for_dispatch_ownership():
