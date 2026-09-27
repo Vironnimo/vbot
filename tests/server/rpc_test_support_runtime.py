@@ -29,6 +29,7 @@ from core.providers.accounts import (
 )
 from core.runs import ChatRunManager
 from core.runtime.runtime import Runtime
+from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
@@ -41,11 +42,6 @@ from tests.server.rpc_test_support_common import (
     StubProjects,
     StubProviders,
 )
-from tests.server.rpc_test_support_storage import (
-    StubStorage,
-)
-
-__all__ = ["StubStorage"]
 
 JsonObject = dict[str, Any]
 
@@ -179,7 +175,8 @@ class ReloadableStubRuntimeSkills:
 
     def list_all(self) -> list[StubSkill]:
         return [
-            StubSkill(name, f"{name} skill.") for name in self._runtime.storage._skill_directories
+            StubSkill(name, f"{name} skill.")
+            for name in self._runtime.storage.load_skill_directory_settings()
         ]
 
     def warnings_for(self, _name: str) -> list[str]:
@@ -286,7 +283,7 @@ class StubTerminalManager:
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self._model_database_refresh_lock = asyncio.Lock()
-        self.storage = StubStorage(tmp_path)
+        self.storage = StorageManager(tmp_path)
         self.agents = StubAgents(
             StubAgent(id="coder", allowed_tools=["*"]),
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),

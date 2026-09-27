@@ -41,6 +41,16 @@ _REPO_RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 _CONNECTION_LOGGER = "vbot.server.rpc.connection_methods"
 
 
+def _stored_credentials(state: Any) -> dict[str, str]:
+    """Return the configured data-directory credentials, without empty placeholders.
+
+    The first credential write seeds ``<data_dir>/.env`` from the bundled template,
+    whose keys start empty.
+    """
+
+    return {key: value for key, value in state.runtime.storage.load_environment().items() if value}
+
+
 def _openrouter_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY__WORK", raising=False)
@@ -64,7 +74,7 @@ async def test_connection_list_returns_connections_with_usability_and_accounts(
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     state = _openrouter_state(tmp_path, monkeypatch)
-    state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY__WORK", "sk-or-work")
+    (tmp_path / ".env").write_text("OPENROUTER_API_KEY__WORK=sk-or-work\n", encoding="utf-8")
 
     result = await rpc_result(state, "connection.list")
 
@@ -294,7 +304,7 @@ async def test_provider_set_key_writes_the_account_credential_and_signals_provid
         "credential_key": credential_key,
         "configured": True,
     }
-    assert state.runtime.storage.load_environment() == {credential_key: "sk-or-test"}
+    assert _stored_credentials(state) == {credential_key: "sk-or-test"}
     account_suffix = f":{account}" if account else ""
     assert state.runtime.provider_credentials.has_credentials(
         "openrouter", f"openrouter:api-key{account_suffix}"
@@ -335,7 +345,7 @@ async def test_provider_unset_key_removes_only_the_account_credential(
         "removed": True,
         "configured": False,
     }
-    assert state.runtime.storage.load_environment() == remaining
+    assert _stored_credentials(state) == remaining
     assert resource_changes(state) == [{"kind": "providers"}]
 
 

@@ -521,7 +521,10 @@ async def test_settings_update_maps_storage_errors_to_domain_error_without_parti
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
-    original_settings = {"appearance": {"language": "en", "theme": "legacy"}, "server_port": 8500}
+    original_settings = {
+        "appearance": {"language": "en", "chat_width": "wide"},
+        "server_port": 8500,
+    }
     state.runtime.storage.save_settings(original_settings)
 
     def fail_settings_update(_settings_update: object) -> JsonObject:

@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 import pytest
 
@@ -70,14 +70,6 @@ def resource_changes(state: Any, kind: str | None = None) -> list[JsonObject]:
         if event["type"] == "resource_changed"
         and (kind is None or event["payload"]["kind"] == kind)
     ]
-
-
-SettingsUpdateResult = TypeVar("SettingsUpdateResult")
-STUB_SUBAGENT_SETTING_FIELDS = (
-    "max_subagent_depth",
-    "max_subagents_per_turn",
-    "subagent_timeout_minutes",
-)
 
 
 @pytest.fixture(autouse=True)
@@ -597,6 +589,7 @@ class StubModels:
         resources_dir: Path,
         *,
         runtime_models_dir: Path | None = None,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         """Mirror ``ModelRegistry.reload``: swap contents in place from disk.
 
@@ -607,7 +600,11 @@ class StubModels:
         """
 
         ModelRegistry.invalidate(resources_dir, runtime_models_dir=runtime_models_dir)
-        loaded = ModelRegistry.load(resources_dir, runtime_models_dir=runtime_models_dir)
+        loaded = ModelRegistry.load(
+            resources_dir,
+            runtime_models_dir=runtime_models_dir,
+            custom_providers=custom_providers,
+        )
         regrouped: dict[str, list[Model]] = {}
         for provider_id, model in loaded.query(ModelQuery.from_filters({})):
             regrouped.setdefault(provider_id, []).append(model)
