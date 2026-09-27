@@ -1,17 +1,15 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  createTerminalsController,
-  createTerminalsViewState,
-} from '../terminalsView.js';
-import { fakeApi, manual, terminal } from './terminalsView.support.js';
+  startTerminals,
+  readyEvent,
+  manual,
+  terminal,
+} from './terminalsView.support.js';
 
 describe('terminal speech input', () => {
   let controller;
-  afterEach(() => controller?.destroy());
 
   async function setup({ createRecorder, transcribe } = {}) {
-    const streams = [];
-    const state = createTerminalsViewState();
     const recorder = {
       start: vi.fn(),
       cancel: vi.fn(),
@@ -20,32 +18,22 @@ describe('terminal speech input', () => {
     };
     const onTranscript = vi.fn();
     const onSpeechError = vi.fn();
-    const api = fakeApi({
-      streams,
-      groups: [manual(), manual({ group_id: 'other' })],
-    });
     const record = createRecorder ?? vi.fn().mockResolvedValue(recorder);
     const recognize =
       transcribe ?? vi.fn().mockResolvedValue({ text: 'dictation sentinel' });
-    controller = createTerminalsController({
-      state,
-      api,
-      createRecorder: record,
-      transcribe: recognize,
-      onTranscript,
-      onSpeechError,
+    const harness = await startTerminals({
+      groups: [manual(), manual({ group_id: 'other' })],
+      controller: {
+        createRecorder: record,
+        transcribe: recognize,
+        onTranscript,
+        onSpeechError,
+      },
     });
-    await controller.start();
-    streams[0].emit({
-      type: 'terminal_ready',
-      sequence: 1,
-      ansi: '',
-      terminal: terminal('term-1'),
-    });
+    controller = harness.controller;
+    harness.streams[0].emit(readyEvent('term-1', 1));
     return {
-      state,
-      api,
-      streams,
+      ...harness,
       recorder,
       onTranscript,
       onSpeechError,
@@ -188,12 +176,7 @@ describe('terminal speech input', () => {
     h.streams[0].close();
     await controller.toggleSpeech('term-1');
     expect(h.record).toHaveBeenCalledOnce();
-    h.streams[0].emit({
-      type: 'terminal_ready',
-      sequence: 2,
-      ansi: '',
-      terminal: terminal('term-1', { state: 'exited' }),
-    });
+    h.streams[0].emit(readyEvent('term-1', 2, '', { state: 'exited' }));
     await controller.toggleSpeech('term-1');
     expect(h.record).toHaveBeenCalledOnce();
   });

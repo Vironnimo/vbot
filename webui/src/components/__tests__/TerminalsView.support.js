@@ -227,6 +227,16 @@ function manualGroup(overrides = {}) {
   };
 }
 
+function userGroup(groupId, name, terminalCount = 0) {
+  return manualGroup({
+    group_id: groupId,
+    name,
+    kind: 'user',
+    terminal_count: terminalCount,
+    live_count: terminalCount,
+  });
+}
+
 function terminalListResponse(terminals, groups) {
   const groupList = groups ?? [
     manualGroup({
@@ -235,6 +245,25 @@ function terminalListResponse(terminals, groups) {
     }),
   ];
   return { groups: groupList, terminals };
+}
+
+// Deliver each open stream its authoritative ready snapshot.
+function readyAll(terminals, ansi = '') {
+  streams.forEach((stream, index) =>
+    stream.handlers.onEvent({
+      type: 'terminal_ready',
+      sequence: 1,
+      ansi,
+      terminal: terminals[index],
+    }),
+  );
+  flushSync();
+}
+
+function submitStartForm() {
+  document
+    .querySelector('#terminal-start-form')
+    .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 }
 
 function flushAnimationFrames(count = 1) {
@@ -346,11 +375,31 @@ function setupTerminalsViewSuite() {
     document.body.innerHTML = '';
   });
   return {
-    get mountedComponent() {
+    // Mount the view into the document; the suite unmounts it after the test.
+    mount(props = {}) {
+      mountedComponent = mount(TerminalsView, {
+        target: document.body,
+        props,
+      });
+      flushSync();
       return mountedComponent;
     },
-    set mountedComponent(value) {
-      mountedComponent = value;
+    // Serve `terminals` (in `groups`) and wait until every tile has its xterm.
+    async mountWith(terminals, groups) {
+      listTerminalsMock.mockResolvedValue(
+        terminalListResponse(terminals, groups),
+      );
+      const view = this.mount();
+      await waitFor(
+        () =>
+          streams.length === terminals.length &&
+          terminalInstances.length === terminals.length,
+      );
+      return view;
+    },
+    async unmount() {
+      await unmount(mountedComponent);
+      mountedComponent = null;
     },
   };
 }
@@ -371,11 +420,13 @@ export {
   terminalInstances,
   fitAddons,
   resizeObservers,
-  TerminalsView,
   terminal,
   launchHistory,
   manualGroup,
+  userGroup,
   terminalListResponse,
+  readyAll,
+  submitStartForm,
   flushAnimationFrames,
   waitFor,
   findButton,
@@ -385,4 +436,4 @@ export {
   setupTerminalsViewSuite,
 };
 
-export { flushSync, mount, unmount };
+export { flushSync };

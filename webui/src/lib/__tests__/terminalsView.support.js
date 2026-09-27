@@ -1,6 +1,16 @@
 import { afterEach, vi } from 'vitest';
 
+import {
+  createTerminalsController,
+  createTerminalsViewState,
+} from '../terminalsView.js';
+
+const controllers = [];
+
 afterEach(() => {
+  for (const controller of controllers.splice(0)) {
+    controller.destroy();
+  }
   vi.useRealTimers();
 });
 
@@ -48,6 +58,40 @@ function fakeApi({
   };
 }
 
+// A controller over a fake API whose server lists `terminals` in `groups`.
+// `streams` collects one entry per opened Terminal socket. The suite destroys
+// every controller after the test.
+function createTerminals({
+  controller: controllerOptions,
+  ...apiOptions
+} = {}) {
+  const state = createTerminalsViewState();
+  const streams = [];
+  const api = fakeApi({ streams, ...apiOptions });
+  const controller = createTerminalsController({
+    state,
+    api,
+    ...controllerOptions,
+  });
+  controllers.push(controller);
+  return { state, streams, api, controller };
+}
+
+async function startTerminals(options) {
+  const harness = createTerminals(options);
+  await harness.controller.start();
+  return harness;
+}
+
+function readyEvent(terminalId, sequence, ansi = '', changes = {}) {
+  return {
+    type: 'terminal_ready',
+    sequence,
+    ansi,
+    terminal: terminal(terminalId, changes),
+  };
+}
+
 function manual(overrides = {}) {
   return {
     group_id: 'auto:manual',
@@ -58,6 +102,16 @@ function manual(overrides = {}) {
     order: [],
     ...overrides,
   };
+}
+
+function userGroup(groupId, name, terminalCount) {
+  return manual({
+    group_id: groupId,
+    name,
+    kind: 'user',
+    terminal_count: terminalCount,
+    live_count: terminalCount,
+  });
 }
 
 function terminal(terminalId, changes = {}) {
@@ -93,8 +147,23 @@ function launchHistory(id, changes = {}) {
   };
 }
 
-function span(row, column) {
-  return { row, column, rowSpan: 1, columnSpan: 1 };
+// Resolve later: returns [promise, resolve, reject].
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return [promise, resolve, reject];
 }
 
-export { fakeApi, manual, terminal, launchHistory, span };
+export {
+  startTerminals,
+  readyEvent,
+  manual,
+  userGroup,
+  terminal,
+  launchHistory,
+  deferred,
+};
