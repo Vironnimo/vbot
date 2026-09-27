@@ -738,6 +738,23 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
         'closest page is "Release plan" (w1). Repeat the call with page_id "w1" if you meant '
         "it. Nothing changed."
     )
+    # Without page_id, an update names the pages that hold its old_text, newest change first.
+    changed = {"action": "update", "page_id": "w2", "old_text": "x", "new_text": "no"}
+    assert (await invoke(board, changed))["ok"]
+    for old_text, named in (
+        ("Body", 'old_text occurs in w1 ("Release plan"); repeat the call with page_id "w1".'),
+        (
+            "o",
+            'old_text occurs in w2 ("B") and w1 ("Release plan"); repeat the call with the '
+            "page_id of the page you mean.",
+        ),
+        ("Missing", 'Find pages with {"action": "list"}.'),
+    ):
+        unnamed = await invoke(board, {"action": "update", "old_text": old_text, "new_text": "y"})
+        assert visible(unnamed) == (
+            f"Error (invalid_arguments): update needs page_id. {named} Nothing changed."
+        )
+    assert (await stored(board, "w1"))["content"] == "Body"
     for unknown in ("w9", "wpg_unrelated"):
         missing = await invoke(board, {"action": "read", "page_id": unknown})
         assert visible(missing) == (

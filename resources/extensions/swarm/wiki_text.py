@@ -153,6 +153,14 @@ WIKI_PAGE_NOT_FOUND = "No page {value} exists in your group's Wiki."
 WIKI_PAGE_SUGGESTION = 'The closest page is "{title}" ({page_id}).'
 WIKI_PAGE_RETRY = 'Repeat the call with page_id "{page_id}" if you meant it.'
 WIKI_PAGE_FIND = 'Find pages with {"action": "list"}.'
+WIKI_PAGE_HOLDS_TEXT = (
+    'update needs page_id. old_text occurs in {page}; repeat the call with page_id "{page_id}".'
+)
+WIKI_PAGES_HOLD_TEXT = (
+    "update needs page_id. old_text occurs in {pages}; repeat the call with the page_id "
+    "of the page you mean."
+)
+WIKI_MORE_PAGES = "{count} more pages"
 WIKI_CREATE_EXISTING = (
     'create makes a new page, but page_id names the existing page "{title}" ({page_id}). '
     "To change that page, use update; to add a separate page, omit page_id."

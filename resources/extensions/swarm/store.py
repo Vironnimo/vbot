@@ -627,11 +627,15 @@ class SwarmStore:
 
         return await self._run(wiki, swarm_id, actor_id, arguments, expected_epoch)
 
-    async def wiki_pages(self, swarm_id: str) -> list[Json]:
-        """Return every Wiki page's ID, current title and deletion state."""
+    async def wiki_pages(self, swarm_id: str, containing: str | None = None) -> list[Json]:
+        """Return every Wiki page's ID, current title and deletion state.
+
+        With ``containing``, return only the live pages whose current content
+        contains that exact text.
+        """
         from ._store_wiki import wiki_pages
 
-        return cast(list[Json], await self._run(wiki_pages, swarm_id))
+        return cast(list[Json], await self._run(wiki_pages, swarm_id, containing))
 
     async def wiki_contents(
         self, swarm_id: str, page_id: str, revisions: list[int]

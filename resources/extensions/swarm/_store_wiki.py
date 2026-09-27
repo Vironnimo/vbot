@@ -190,14 +190,19 @@ def _read(
     return result
 
 
-def wiki_pages(db: SwarmDatabase, swarm_id: str) -> list[Json]:
-    """Return every page's ID, number, current title and deletion state, newest change first."""
+def wiki_pages(db: SwarmDatabase, swarm_id: str, containing: str | None = None) -> list[Json]:
+    """Return every page's ID, number, current title and deletion state, newest change first.
+
+    With ``containing``, return only the live pages whose current content contains
+    that exact text.
+    """
 
     with db._read() as connection:
         rows = connection.execute(
             "SELECT p.id,r.title,r.deleted FROM wiki_pages p JOIN wiki_revisions r "
-            "ON r.page_id=p.id AND r.revision=p.revision WHERE p.swarm_id=? ORDER BY r.id DESC",
-            (swarm_id,),
+            "ON r.page_id=p.id AND r.revision=p.revision WHERE p.swarm_id=? "
+            "AND (? IS NULL OR (r.deleted=0 AND instr(r.content,?)>0)) ORDER BY r.id DESC",
+            (swarm_id, containing, containing),
         ).fetchall()
         numbers = _page_numbers(connection, swarm_id)
     return [
