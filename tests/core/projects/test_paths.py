@@ -16,34 +16,17 @@ from core.projects.paths import (
 )
 
 
-def test_normalize_cwd_returns_absolute_resolved_path(tmp_path: Path) -> None:
-    normalized = normalize_cwd(tmp_path)
-
-    assert normalized.is_absolute()
-    assert normalized == Path(os.path.realpath(tmp_path))
-
-
-def test_normalize_cwd_strips_trailing_separator(tmp_path: Path) -> None:
-    with_slash = f"{tmp_path}{os.sep}"
-
-    assert normalize_cwd(with_slash) == normalize_cwd(str(tmp_path))
-
-
-def test_normalize_cwd_collapses_dot_segments(tmp_path: Path) -> None:
+def test_normalize_cwd_resolves_an_absolute_path_without_trailing_separator(
+    tmp_path: Path,
+) -> None:
     sub = tmp_path / "sub"
     sub.mkdir()
-    noisy = sub / ".." / "sub"
 
-    assert normalize_cwd(noisy) == normalize_cwd(sub)
-
-
-def test_normalize_cwd_rejects_empty() -> None:
+    assert normalize_cwd(tmp_path) == Path(os.path.realpath(tmp_path))
+    assert normalize_cwd(f"{tmp_path}{os.sep}") == normalize_cwd(str(tmp_path))
+    assert normalize_cwd(sub / ".." / "sub") == normalize_cwd(sub)
     with pytest.raises(ValueError):
         normalize_cwd("   ")
-
-
-def test_cwd_identity_key_equal_for_trailing_slash_variants(tmp_path: Path) -> None:
-    assert cwd_identity_key(str(tmp_path)) == cwd_identity_key(f"{tmp_path}{os.sep}")
 
 
 def test_cwd_identity_key_resolves_symlink(tmp_path: Path) -> None:
@@ -58,34 +41,29 @@ def test_cwd_identity_key_resolves_symlink(tmp_path: Path) -> None:
     assert cwd_identity_key(link) == cwd_identity_key(target)
 
 
-def test_cwd_identity_key_case_folds_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Windows filesystem is case-insensitive: two casings name the same repo.
-    monkeypatch.setattr(paths_module, "_CWD_CASE_INSENSITIVE", True)
+@pytest.mark.parametrize(
+    ("case_insensitive", "first", "second", "same"),
+    [
+        # A Windows filesystem is case-insensitive: two casings name the same repo.
+        pytest.param(True, "C:/Repos/VBot", "c:/repos/vbot", True, id="windows"),
+        pytest.param(False, "/srv/A", "/srv/a", False, id="posix"),
+    ],
+)
+def test_cwd_identity_key_case_folds_only_on_windows(
+    monkeypatch: pytest.MonkeyPatch, case_insensitive: bool, first: str, second: str, same: bool
+) -> None:
+    monkeypatch.setattr(paths_module, "_CWD_CASE_INSENSITIVE", case_insensitive)
     monkeypatch.setattr(paths_module, "normalize_cwd", lambda value: Path(str(value)))
 
-    assert cwd_identity_key("C:/Repos/VBot") == cwd_identity_key("c:/repos/vbot")
+    assert (cwd_identity_key(first) == cwd_identity_key(second)) is same
 
 
-def test_cwd_identity_key_case_sensitive_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
-    # POSIX filesystem is case-sensitive: /srv/A and /srv/a are distinct repos.
-    monkeypatch.setattr(paths_module, "_CWD_CASE_INSENSITIVE", False)
-    monkeypatch.setattr(paths_module, "normalize_cwd", lambda value: Path(str(value)))
-
-    assert cwd_identity_key("/srv/A") != cwd_identity_key("/srv/a")
-
-
-def test_cwd_exists_true_for_existing_directory(tmp_path: Path) -> None:
-    assert cwd_exists(tmp_path) is True
-
-
-def test_cwd_exists_false_for_missing_directory(tmp_path: Path) -> None:
-    assert cwd_exists(tmp_path / "gone") is False
-
-
-def test_cwd_exists_false_for_file(tmp_path: Path) -> None:
+def test_cwd_exists_only_for_an_existing_directory(tmp_path: Path) -> None:
     file_path = tmp_path / "a.txt"
     file_path.write_text("x", encoding="utf-8")
 
+    assert cwd_exists(tmp_path) is True
+    assert cwd_exists(tmp_path / "gone") is False
     assert cwd_exists(file_path) is False
 
 
@@ -99,16 +77,11 @@ def test_cwd_exists_false_for_file(tmp_path: Path) -> None:
         ("under_score", "under_score"),
         ("a/b:c", "a-b-c"),
         ("0starts-with-digit", "0starts-with-digit"),
+        ("x" * 200, "x" * paths_module.MAX_PROJECT_ID_LENGTH),
     ],
 )
 def test_slugify_project_id_normalizes_names(display_name: str, expected: str) -> None:
     assert slugify_project_id(display_name) == expected
-
-
-def test_slugify_project_id_truncates_to_max_length() -> None:
-    slug = slugify_project_id("x" * 200)
-
-    assert len(slug) == paths_module.MAX_PROJECT_ID_LENGTH
 
 
 @pytest.mark.parametrize("display_name", ["", "   ", "***", "/// ---"])

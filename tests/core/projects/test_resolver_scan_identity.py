@@ -1,4 +1,4 @@
-"""Project scan and Identity-Agent resolution tests."""
+"""Project scan, Identity-Agent resolution, and working-Project scope tests."""
 
 import threading
 from typing import Any
@@ -18,8 +18,11 @@ from .resolver_test_support import (
     _openai_configured,
     _project,
     _resolver,
+    _stub_project,
     _write_agent,
     pytest,
+    resolve_prompt_project,
+    resolve_skill_scope,
 )
 from .resolver_test_support import agents as agents
 from .resolver_test_support import data_dir as data_dir
@@ -28,52 +31,41 @@ from .resolver_test_support import repo as repo
 from .resolver_test_support import template_dir as template_dir
 
 
-def test_scan_reports_unconfigured_model_as_bad_model_finding(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+@pytest.mark.parametrize(
+    ("model", "default_agent", "findings"),
+    [
+        pytest.param("openai/gpt-5.2", "", [], id="clean"),
+        pytest.param(
+            "openai/ghost-model", "", [(FindingType.BAD_MODEL, "builder", True)], id="bad-model"
+        ),
+        # No declared Model legitimately inherits a default.
+        pytest.param("", "", [], id="no-declared-model"),
+        # Pointer findings carry the pointer's id and no source file.
+        pytest.param(
+            "openai/gpt-5.2", "ghost", [(FindingType.ORPHAN, "ghost", False)], id="orphan-default"
+        ),
+        pytest.param("openai/gpt-5.2", "builder", [], id="default-on-team"),
+    ],
+)
+def test_scan_reports_model_and_default_agent_findings(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    model: str,
+    default_agent: str,
+    findings: list[tuple[FindingType, str, bool]],
 ) -> None:
-    # Arrange
-    _write_agent(repo, "builder.md", model="openai/ghost-model")
-    project = _project(projects, repo)
+    _write_agent(repo, "builder.md", model=model)
+    _project(projects, repo)
+    project = projects.update("vbot", default_agent=default_agent)
     resolver = _resolver(agents, projects, _openai_configured())
 
-    # Act
     result = resolver.scan_project_report(project)
 
-    # Assert
-    bad = result.report.findings_of(FindingType.BAD_MODEL)
-    assert len(bad) == 1
-    assert bad[0].agent_id == "builder"
-    assert bad[0].source_path is not None
-
-
-def test_scan_does_not_flag_agent_without_declared_model(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # Arrange: no declared model legitimately inherits a default — not a finding.
-    _write_agent(repo, "writer.md", model="")
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    # Act
-    result = resolver.scan_project_report(project)
-
-    # Assert
-    assert result.report.findings_of(FindingType.BAD_MODEL) == ()
-
-
-def test_scan_reports_configured_model_clean(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # Arrange
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    # Act
-    result = resolver.scan_project_report(project)
-
-    # Assert
-    assert result.report.is_clean
+    assert [
+        (finding.type, finding.agent_id, finding.source_path is not None)
+        for finding in result.report.findings
+    ] == findings
     assert [member.agent_id for member in result.team] == ["builder"]
 
 
@@ -98,41 +90,6 @@ def test_scan_honors_project_source_format(
     assert result.team[0].source_format == "claude"
 
 
-def test_scan_reports_orphan_default_agent(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # Arrange: the anchor points at a default agent the scan does not produce.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _project(projects, repo)
-    project = projects.update("vbot", default_agent="ghost")
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    # Act
-    result = resolver.scan_project_report(project)
-
-    # Assert: pointer-origin findings carry the pointer's id and no source file.
-    orphans = result.report.findings_of(FindingType.ORPHAN)
-    assert len(orphans) == 1
-    assert orphans[0].agent_id == "ghost"
-    assert orphans[0].source_path is None
-
-
-def test_scan_default_agent_on_team_is_not_orphan(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # Arrange
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _project(projects, repo)
-    project = projects.update("vbot", default_agent="builder")
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    # Act
-    result = resolver.scan_project_report(project)
-
-    # Assert
-    assert result.report.findings_of(FindingType.ORPHAN) == ()
-
-
 def test_scan_reports_orphan_session_owner(agents: AgentStore, repo: Path, data_dir: Path) -> None:
     # Arrange: sessions under the anchor for an agent the scan no longer yields
     # (renamed/deleted in the repo) — and for one still on the team (no finding).
@@ -155,29 +112,33 @@ def test_scan_reports_orphan_session_owner(agents: AgentStore, repo: Path, data_
     sessions.close()
 
 
-def test_identity_resolution_returns_store_agent_unchanged(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+@pytest.mark.parametrize(
+    "tools",
+    [
+        # No Subagent settings keep the wildcard: global and cross-Project reach.
+        pytest.param({}, id="wildcard"),
+        # Explicit targets stay verbatim, including ones that do not resolve now.
+        pytest.param(
+            {"subagent": {"allowed_agents": ["worker", "missing", "builder@vbot", "ghost@vbot"]}},
+            id="explicit-targets",
+        ),
+    ],
+)
+def test_identity_resolution_returns_the_store_agent_unchanged(
+    agents: AgentStore, projects: ProjectStore, repo: Path, tools: dict[str, Any]
 ) -> None:
-    # Arrange
-    created = agents.create("orchestrator", "Orchestrator", model="openai/gpt-5.2")
+    agents.create("worker", "Worker")
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    agents.create("orchestrator", "Orchestrator", model="openai/gpt-5.2", tools=tools)
+    created = agents.update("orchestrator", root_project_id=project.project_id)
     resolver = _resolver(agents, projects, _openai_configured())
 
-    # Act
     resolved = resolver.resolve_agent(None, "orchestrator")
 
-    # Assert: byte-for-byte the store agent (same object contract as today).
     assert resolved == created
-    assert resolved.workspace == created.workspace
-    assert resolved.model == "openai/gpt-5.2"
-
-
-def test_identity_resolution_unknown_agent_raises(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    with pytest.raises(ResolutionAgentNotFoundError):
-        resolver.resolve_agent(None, "missing-agent")
+    assert resolved.tools == tools
+    assert resolved.root_project_id == "vbot"
 
 
 @pytest.mark.asyncio
@@ -252,52 +213,6 @@ async def test_async_resolution_on_a_closed_session_database_fails_cleanly(
     assert isinstance(member, ConfigAgent)
 
 
-def test_identity_wildcard_keeps_global_and_cross_project_reach(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    agents.create("worker", "Worker")
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    project = _project(projects, repo)
-    created = agents.create("orchestrator", "Orchestrator")
-    created = agents.update("orchestrator", root_project_id=project.project_id)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    resolved = resolver.resolve_agent(None, "orchestrator")
-
-    assert resolved == created
-    assert resolved.tools == {}
-    assert resolved.root_project_id == "vbot"
-
-
-def test_identity_explicit_targets_remain_in_optional_subagent_tool_settings(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    agents.create("worker", "Worker")
-    agents.create(
-        "orchestrator",
-        "Orchestrator",
-        tools={
-            "subagent": {
-                "allowed_agents": [
-                    "worker",
-                    "missing",
-                    "builder@vbot",
-                    "ghost@vbot",
-                ]
-            }
-        },
-    )
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    resolved = resolver.resolve_agent(None, "orchestrator")
-
-    assert resolved.tools == {
-        "subagent": {"allowed_agents": ["worker", "missing", "builder@vbot", "ghost@vbot"]}
-    }
-
-
 def test_single_agent_config_is_read_fresh_per_resolve(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
@@ -355,17 +270,6 @@ def test_team_membership_uses_cache_not_live_new_file(
     assert resolved.id == "planner"
 
 
-def test_resolve_unknown_project_agent_raises(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    with pytest.raises(ResolutionAgentNotFoundError):
-        resolver.resolve_agent(project.project_id, "ghost")
-
-
 def test_case_variant_addresses_resolve_as_unknown(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
@@ -391,3 +295,38 @@ def test_case_variant_addresses_resolve_as_unknown(
     assert isinstance(project_error.value.__cause__, ProjectNotFoundError)
     assert isinstance(identity_error.value.__cause__, AgentNotFoundError)
     assert resolver.resolve_agent("vbot", "builder").id == "builder"
+
+
+def test_resolve_prompt_project_uses_only_the_explicit_project(
+    projects: ProjectStore, repo: Path
+) -> None:
+    projects.create("vbot", "vBot", repo)
+
+    resolved = resolve_prompt_project(projects, "vbot")
+
+    assert resolved is not None
+    assert resolved.project_id == "vbot"
+    # Workspace equality does not select a Project.
+    assert resolve_prompt_project(projects, None) is None
+
+
+@pytest.mark.parametrize(
+    ("project_id", "prompt_project", "agent_id", "scope"),
+    [
+        # A Project Run never carries an Identity layer: a Team slug colliding with an
+        # Identity Agent's id must not pull that Agent's private Skills in.
+        pytest.param("vbot", "vbot", "builder", ("vbot", None), id="project-run"),
+        # A rooted Identity Run sees its home Project's Skills plus its private layer.
+        pytest.param(None, "vbot", "main", ("vbot", "main"), id="rooted-identity"),
+        pytest.param(None, None, "main", (None, "main"), id="plain-identity"),
+    ],
+)
+def test_resolve_skill_scope(
+    project_id: str | None,
+    prompt_project: str | None,
+    agent_id: str,
+    scope: tuple[str | None, str | None],
+) -> None:
+    project = None if prompt_project is None else _stub_project(prompt_project)
+
+    assert resolve_skill_scope(project_id, project, agent_id) == scope
