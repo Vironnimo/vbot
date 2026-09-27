@@ -1,48 +1,29 @@
-"""Tests for websocket handshake."""
+"""Tests for the /ws connection_ready handshake: replay cursor and reconnect snapshot."""
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
-from core.runs import ChatRunManager, RunKind, RunStatus
+from core.runs import RunKind, RunStatus
 from server.app import create_app
 from server.events import APP_ERROR_EVENT, ServerEventBus
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 
-# -- Connection-ready handshake tests (Phase 1.1, Task 2) --
-def _override_bus_epoch(bus: ServerEventBus, *, epoch: str | None = None) -> str:
-    """Return the bus's epoch, optionally overriding it for the test.
-
-    The bus's ``epoch`` is a read-only property backed by ``_epoch``. Tests
-    that need a known epoch value mutate ``_epoch`` directly; tests that just
-    want to learn the bus's current epoch leave it alone and read the
-    property.
-    """
-    if epoch is not None:
-        bus._epoch = epoch  # type: ignore[attr-defined]
-    return bus.epoch
+def _set_bus_epoch(bus: ServerEventBus, epoch: str) -> None:
+    """Give the bus a known epoch; the public ``epoch`` property is read-only."""
+    bus._epoch = epoch  # type: ignore[attr-defined]
 
 
-def _attach_chat_runs_active_runs(chat_runs: ChatRunManager) -> list[Any]:
-    """Add a test-only ``active_runs()`` accessor to a ChatRunManager.
-
-    Task 3 introduces the real method; this shim mirrors the same return shape
-    so the handshake tests can run in isolation.
-    """
-    snapshot: list[Any] = []
-
-    def active_runs() -> list[Any]:
-        return list(snapshot)
-
-    chat_runs.active_runs = active_runs  # type: ignore[method-assign]
-    return snapshot
+def _stub_app(tmp_path: Path) -> Any:
+    return create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
 
 
 def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_replay(
@@ -51,41 +32,41 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
     """A fresh /ws connect receives a connection_ready hello first; pre-connect
     bus events are *not* re-delivered afterwards. Live events published after
     the connect still flow to the client."""
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    app = _stub_app(tmp_path)
 
     with TestClient(app) as client:
         bus = app.state.event_bus
-        bus_epoch = _override_bus_epoch(bus, epoch="epoch-abc")
+        _set_bus_epoch(bus, "epoch-abc")
 
         for index in range(3):
             bus.publish("run_started", {"id": f"pre-{index}"})
 
         with client.websocket_connect("/ws") as websocket:
             hello = websocket.receive_json()
-            assert hello["type"] == "connection_ready"
-            assert hello["epoch"] == bus_epoch
-            # Sequence 4 is this window's own presence connect signal, published
-            # on register before the hello read; the 3 pre-connect run events
-            # (1..3) are still not replayed below.
-            assert hello["last_sequence"] == 4
-            assert hello["replay_status"] == "fresh"
-            assert hello["active_runs"] == []
-            assert hello["queues"] == []
-            # Critical: no "sequence" field on the hello frame — it must not feed
-            # the client's lastSequence bookkeeping.
-            assert "sequence" not in hello
-
             bus.publish("run_started", {"id": "post-0"})
             bus.publish("run_output", {"id": "post-0"})
-
             first_live = websocket.receive_json()
             second_live = websocket.receive_json()
 
-    assert first_live["type"] == "run_started"
-    assert first_live["payload"] == {"id": "post-0"}
-    assert first_live["sequence"] == 5
-    assert second_live["type"] == "run_output"
-    assert second_live["sequence"] == 6
+    # Sequence 4 is this window's own presence connect signal, published on
+    # register before the hello read; the 3 pre-connect run events are not replayed.
+    assert hello == {
+        "type": "connection_ready",
+        "epoch": "epoch-abc",
+        "last_sequence": 4,
+        "replay_status": "fresh",
+        "active_runs": [],
+        "queues": [],
+    }
+    # No "sequence" field on the hello: it must not feed the client's
+    # lastSequence bookkeeping.
+    assert "sequence" not in hello
+    assert (first_live["type"], first_live["payload"], first_live["sequence"]) == (
+        "run_started",
+        {"id": "post-0"},
+        5,
+    )
+    assert (second_live["type"], second_live["sequence"]) == ("run_output", 6)
 
 
 def test_websocket_handshake_replays_when_epoch_and_after_sequence_match(
@@ -93,30 +74,28 @@ def test_websocket_handshake_replays_when_epoch_and_after_sequence_match(
 ) -> None:
     """Resume path: same-epoch + after_sequence>0 replays retained events newer
     than the client's marker, then continues with live events."""
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    app = _stub_app(tmp_path)
 
     with TestClient(app) as client:
         bus = app.state.event_bus
-        bus_epoch = _override_bus_epoch(bus, epoch="epoch-abc")
+        _set_bus_epoch(bus, "epoch-abc")
 
         for index in range(5):
             bus.publish("run_started", {"id": f"event-{index + 1}"})
 
-        with client.websocket_connect(f"/ws?after_sequence=3&epoch={bus_epoch}") as websocket:
+        # Surrounding whitespace around the query values is ignored.
+        with client.websocket_connect("/ws?after_sequence=3&epoch=%20epoch-abc%20") as websocket:
             hello = websocket.receive_json()
-            assert hello["type"] == "connection_ready"
-            assert hello["epoch"] == bus_epoch
-            # 6 = 5 retained run events + this window's own presence connect
-            # signal (published on register before the hello read).
-            assert hello["last_sequence"] == 6
-            assert hello["replay_status"] == "resumed"
-
             replayed = [websocket.receive_json() for _ in range(2)]
-            assert [event["sequence"] for event in replayed] == [4, 5]
-            assert [event["payload"]["id"] for event in replayed] == [
-                "event-4",
-                "event-5",
-            ]
+
+    assert hello["epoch"] == "epoch-abc"
+    # 6 = 5 retained run events + this window's own presence connect signal.
+    assert hello["last_sequence"] == 6
+    assert hello["replay_status"] == "resumed"
+    assert [(event["sequence"], event["payload"]["id"]) for event in replayed] == [
+        (4, "event-4"),
+        (5, "event-5"),
+    ]
 
 
 def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
@@ -125,215 +104,169 @@ def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
     """B1 regression (server half): a stale or missing epoch must not strand
     the client. The hello frame is still sent, and only events published
     *after* the connect are delivered (no historical replay)."""
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    app = _stub_app(tmp_path)
+    connections: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
 
     with TestClient(app) as client:
         bus = app.state.event_bus
-        bus_epoch = _override_bus_epoch(bus, epoch="epoch-abc")
-
+        _set_bus_epoch(bus, "epoch-abc")
         for index in range(5):
             bus.publish("run_started", {"id": f"event-{index + 1}"})
 
-        # Stale epoch path: client passes a different (older) epoch string.
-        with client.websocket_connect("/ws?after_sequence=3000&epoch=stale-epoch") as websocket:
-            hello = websocket.receive_json()
-            assert hello["type"] == "connection_ready"
-            assert hello["epoch"] == bus_epoch
-            # 6 = 5 retained run events + this window's own presence connect
-            # signal (published on register before the hello read).
-            assert hello["last_sequence"] == 6
-            assert hello["replay_status"] == "epoch_changed"
+        for name, query in (
+            ("stale", "after_sequence=3000&epoch=stale-epoch"),
+            ("missing", "after_sequence=3000"),
+        ):
+            with client.websocket_connect(f"/ws?{query}") as websocket:
+                hello = websocket.receive_json()
+                bus.publish("run_started", {"id": f"live-{name}"})
+                connections[name] = (hello, websocket.receive_json())
 
-            bus.publish("run_started", {"id": "live-1"})
-            bus.publish("run_output", {"id": "live-2"})
-
-            live_events = [websocket.receive_json() for _ in range(2)]
-            assert [event["sequence"] for event in live_events] == [7, 8]
-            assert [event["payload"]["id"] for event in live_events] == [
-                "live-1",
-                "live-2",
-            ]
-
-    # Build a fresh app so the bus is empty (no retained events to begin with).
-    app2 = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
-
-    with TestClient(app2) as client:
-        bus2 = app2.state.event_bus
-        bus2_epoch = _override_bus_epoch(bus2, epoch="epoch-abc")
-
-        # Missing epoch path: client sends only after_sequence=3000, no epoch.
-        with client.websocket_connect("/ws?after_sequence=3000") as websocket:
-            hello = websocket.receive_json()
-            assert hello["type"] == "connection_ready"
-            assert hello["epoch"] == bus2_epoch
-            # 1 = this window's own presence connect signal (the only event so
-            # far); the live-only floor sits above it so it is not replayed.
-            assert hello["last_sequence"] == 1
-            assert hello["replay_status"] == "fresh"
-
-            bus2.publish("run_started", {"id": "live-1"})
-
-            live_event = websocket.receive_json()
-            assert live_event["sequence"] == 2
-            assert live_event["payload"] == {"id": "live-1"}
+    stale_hello, stale_live = connections["stale"]
+    missing_hello, missing_live = connections["missing"]
+    assert (stale_hello["epoch"], stale_hello["replay_status"]) == ("epoch-abc", "epoch_changed")
+    assert (missing_hello["epoch"], missing_hello["replay_status"]) == ("epoch-abc", "fresh")
+    for hello, live, name in (
+        (stale_hello, stale_live, "stale"),
+        (missing_hello, missing_live, "missing"),
+    ):
+        assert live["sequence"] == hello["last_sequence"] + 1
+        assert live["payload"] == {"id": f"live-{name}"}
 
 
 def test_websocket_handshake_reports_replay_gap_without_partial_replay(tmp_path: Path) -> None:
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    """A cursor that fell out of retention, or that is ahead of the bus, is a
+    gap: no partial replay, live events only. A cursor right before the oldest
+    retained event still resumes."""
+    app = _stub_app(tmp_path)
+    connections: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
 
     with TestClient(app) as client:
         bus = ServerEventBus(event_retention_limit=2)
-        _override_bus_epoch(bus, epoch="epoch-abc")
+        _set_bus_epoch(bus, "epoch-abc")
         app.state.event_bus = bus
         for index in range(4):
             bus.publish("run_started", {"id": f"event-{index + 1}"})
 
-        with client.websocket_connect("/ws?after_sequence=1&epoch=epoch-abc") as websocket:
-            hello = websocket.receive_json()
-            assert hello["replay_status"] == "gap"
-            assert hello["last_sequence"] == 5
+        # Each connect first publishes its own presence signal, so the bus
+        # retains [last_sequence - 1, last_sequence] at the hello.
+        for cursor in (3, 2, 99):
+            with client.websocket_connect(f"/ws?after_sequence={cursor}&epoch=epoch-abc") as ws:
+                hello = ws.receive_json()
+                bus.publish("run_started", {"id": f"live-{cursor}"})
+                connections[cursor] = (hello, ws.receive_json())
+            if cursor == 3:
+                assert hello["last_sequence"] == 5
 
-            bus.publish("run_started", {"id": "live"})
-            first_event = websocket.receive_json()
+    resumed_hello, first_resumed = connections[3]
+    assert resumed_hello["replay_status"] == "resumed"
+    assert first_resumed["sequence"] == 4
+    for cursor in (2, 99):
+        hello, first_event = connections[cursor]
+        assert hello["replay_status"] == "gap"
+        assert first_event["sequence"] == hello["last_sequence"] + 1
+        assert first_event["payload"] == {"id": f"live-{cursor}"}
 
-    assert first_event["sequence"] == 6
-    assert first_event["payload"] == {"id": "live"}
+
+def _stub_run(run_id: str, **fields: Any) -> Any:
+    values: dict[str, Any] = {
+        "id": run_id,
+        "agent_id": "coder",
+        "project_id": None,
+        "session_id": f"session-{run_id}",
+        "run_kind": RunKind.USER,
+        "status": RunStatus.RUNNING,
+        "created_at": "2026-08-05T18:00:00+00:00",
+        "iteration_count": 0,
+        "events": [],
+        "controls": lambda: {"compaction": "unavailable", "background_tool_call_ids": []},
+    }
+    values.update(fields)
+    return SimpleNamespace(**values)
 
 
-def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_terminal(
-    tmp_path: Path,
+class _QueuedItem:
+    def __init__(self, item_id: str, *, internal: bool = False) -> None:
+        self.item_id = item_id
+        self.internal = internal
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.item_id, "internal": self.internal}
+
+
+def test_websocket_hello_snapshots_running_runs_and_public_queues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The connection_ready.active_runs snapshot lists only running runs and
-    exposes the SSE endpoint URL for each."""
-    runtime = StubRuntime(tmp_path, StubAdapter())
-    app = create_app(runtime=cast(Any, runtime))
-
-    running_run = cast(
-        Any,
-        type(
-            "StubRun",
-            (),
-            {
-                "id": "run-running",
-                "agent_id": "coder",
-                "project_id": None,
-                "session_id": "session-running",
-                "run_kind": RunKind.USER,
-                "status": RunStatus.RUNNING,
-                "created_at": "2026-05-03T14:30:01+00:00",
-                "iteration_count": 3,
-                "events": [],
-                "controls": lambda self: {
-                    "compaction": "unavailable",
-                    "background_tool_call_ids": [],
-                },
-            },
-        )(),
-    )
-    terminal_run = cast(
-        Any,
-        type(
-            "StubRun",
-            (),
-            {
-                "id": "run-terminal",
-                "agent_id": "coder",
-                "session_id": "session-terminal",
-                "status": RunStatus.COMPLETED,
-            },
-        )(),
-    )
+    """The hello lets a reconnecting window re-attach running Runs over SSE and
+    rebuild its Queues without extra reads."""
+    runs = [
+        _stub_run(
+            "run-running",
+            project_id="acme",
+            iteration_count=4,
+            events=[SimpleNamespace(sequence=7)],
+        ),
+        _stub_run("run-terminal", status=RunStatus.COMPLETED),
+        # A review fork carries its source Session from the Run itself, so the
+        # WebUI projects the review without a Session read.
+        _stub_run(
+            "run-refl",
+            run_kind=RunKind.MEMORY_REFLECTION,
+            source_session_id="session-source",
+        ),
+        _stub_run("run-system", run_kind=RunKind.SYSTEM, contributes_to_agent_activity=False),
+    ]
+    queued = [
+        (("project-b", "writer", "session-b"), _QueuedItem("second")),
+        ((None, "coder", "session-a"), _QueuedItem("first")),
+        ((None, "coder", "session-a"), _QueuedItem("hidden", internal=True)),
+        (("project-b", "writer", "session-b"), _QueuedItem("third")),
+    ]
+    app = _stub_app(tmp_path)
 
     with TestClient(app) as client:
-        _override_bus_epoch(app.state.event_bus, epoch="epoch-abc")
-
-        chat_runs: ChatRunManager = app.state.chat_runs
-        active_snapshot = _attach_chat_runs_active_runs(chat_runs)
-        active_snapshot.extend([running_run, terminal_run])
-
+        monkeypatch.setattr(app.state.chat_runs, "active_runs", lambda: list(runs))
+        monkeypatch.setattr(app.state.chat_runs, "all_queued", lambda: list(queued))
         with client.websocket_connect("/ws") as websocket:
             hello = websocket.receive_json()
 
-    assert hello["type"] == "connection_ready"
-    assert hello["active_runs"] == [
-        {
-            "run_id": "run-running",
+    def snapshot(run_id: str, **fields: Any) -> dict[str, Any]:
+        return {
+            "run_id": run_id,
             "agent_id": "coder",
             "project_id": None,
-            "session_id": "session-running",
+            "session_id": f"session-{run_id}",
             "run_kind": "user",
             "status": "running",
-            "started_at": "2026-05-03T14:30:01+00:00",
-            "iteration_count": 3,
-            "controls": {"compaction": "unavailable", "background_tool_call_ids": []},
-            "controls_sequence": 0,
-            "sse_url": "/api/runs/run-running/events",
-        }
-    ]
-
-
-def test_websocket_handshake_reflection_run_carries_source_session(
-    tmp_path: Path,
-) -> None:
-    """A running reflection Run's snapshot entry carries the reviewed source
-    Session from the Run itself so the WebUI can project the review onto its
-    originating Session without a Session read."""
-    runtime = StubRuntime(tmp_path, StubAdapter())
-    app = create_app(runtime=cast(Any, runtime))
-
-    sessions = runtime.chat_sessions
-    source = sessions.create("coder", session_id="session-source")
-    fork = sessions.create("coder", session_id="session-fork")
-
-    reflection_run = cast(
-        Any,
-        type(
-            "StubRun",
-            (),
-            {
-                "id": "run-refl",
-                "agent_id": "coder",
-                "project_id": None,
-                "session_id": fork.id,
-                "run_kind": RunKind.MEMORY_REFLECTION,
-                "source_session_id": source.id,
-                "status": RunStatus.RUNNING,
-                "created_at": "2026-05-03T14:30:01+00:00",
-                "iteration_count": 0,
-                "events": [],
-                "controls": lambda self: {
-                    "compaction": "unavailable",
-                    "background_tool_call_ids": [],
-                },
-            },
-        )(),
-    )
-
-    with TestClient(app) as client:
-        _override_bus_epoch(app.state.event_bus, epoch="epoch-abc")
-
-        chat_runs: ChatRunManager = app.state.chat_runs
-        active_snapshot = _attach_chat_runs_active_runs(chat_runs)
-        active_snapshot.append(reflection_run)
-
-        with client.websocket_connect("/ws") as websocket:
-            hello = websocket.receive_json()
-
-    assert hello["active_runs"] == [
-        {
-            "run_id": "run-refl",
-            "agent_id": "coder",
-            "project_id": None,
-            "session_id": fork.id,
-            "run_kind": "memory_reflection",
-            "status": "running",
-            "started_at": "2026-05-03T14:30:01+00:00",
+            "started_at": "2026-08-05T18:00:00+00:00",
             "iteration_count": 0,
             "controls": {"compaction": "unavailable", "background_tool_call_ids": []},
             "controls_sequence": 0,
-            "sse_url": "/api/runs/run-refl/events",
-            "source_session_id": source.id,
+            "sse_url": f"/api/runs/{run_id}/events",
+            **fields,
         }
+
+    assert hello["active_runs"] == [
+        snapshot("run-running", project_id="acme", iteration_count=4, controls_sequence=7),
+        snapshot("run-refl", run_kind="memory_reflection", source_session_id="session-source"),
+        snapshot("run-system", run_kind="system", contributes_to_agent_activity=False),
+    ]
+    assert hello["queues"] == [
+        {
+            "project_id": None,
+            "agent_id": "coder",
+            "session_id": "session-a",
+            "items": [{"id": "first", "internal": False}],
+        },
+        {
+            "project_id": "project-b",
+            "agent_id": "writer",
+            "session_id": "session-b",
+            "items": [
+                {"id": "second", "internal": False},
+                {"id": "third", "internal": False},
+            ],
+        },
     ]
 
 
@@ -342,12 +275,10 @@ def test_websocket_handshake_reflection_run_carries_source_session(
 async def test_shared_socket_closes_subscription_immediately(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_mode: str
 ) -> None:
-    from types import SimpleNamespace
-
     import server.app as server_app
 
     bus = ServerEventBus()
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    app = _stub_app(tmp_path)
     app.state.event_bus = bus
     monkeypatch.setattr(server_app, "_register_ws_client", lambda _socket: None)
     monkeypatch.setattr(server_app, "_active_runs_snapshot", lambda _state: [])

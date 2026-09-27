@@ -29,12 +29,19 @@ def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) 
         health_response = client.get("/health")
         missing_sse_response = client.get("/api/runs/missing/events")
         rpc_response = client.post("/api/rpc", json={"method": "unknown.method"})
+        # Unmatched server paths are never answered with the WebUI document.
+        reserved_responses = [
+            client.get(path) for path in ("/api/unknown", "/ws", "/ws/logs", "/ws/terminals/term-1")
+        ]
 
     assert health_response.status_code == 200
     assert health_response.json() == {"status": "ok"}
     assert missing_sse_response.status_code == 404
     assert rpc_response.status_code == 200
     assert rpc_response.json()["ok"] is False
+    assert [(response.status_code, response.json()) for response in reserved_responses] == [
+        (404, {"detail": "Not Found"})
+    ] * 4
 
 
 @pytest.mark.parametrize(

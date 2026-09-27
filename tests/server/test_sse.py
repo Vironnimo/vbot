@@ -43,44 +43,11 @@ EXPECTED_SSE_EVENT_NAMES = [
 
 
 def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_path: Path) -> None:
-    adapter = StubAdapter(stream_deltas=_test_stream_turns())
-    runtime = StubRuntime(tmp_path, adapter)
-    register_read_tool(
-        runtime.tools,
-        attachment_store=None,
-        speech_service=None,
-        file_state=FileReadState(),
-        speech_max_size_bytes=20_971_520,
-    )
-    runtime.agents.update(
-        "coder",
-        model="openai/gpt-5.2::api-key",
-        workspace=str(tmp_path / "workspace"),
-    )
-    workspace = Path(runtime.agents.get("coder").workspace)
-    workspace.mkdir(parents=True, exist_ok=True)
-    workspace.joinpath("note.txt").write_text("SSE visible content", encoding="utf-8")
+    runtime, workspace = _read_tool_runtime(tmp_path)
     app = create_app(runtime=cast(Any, runtime))
 
     with TestClient(app) as client:
-        create_response = client.post(
-            "/api/rpc",
-            json={
-                "method": "session.create",
-                "params": {"agent_id": "coder", "session_id": "session-one"},
-            },
-        )
-        stream_response = client.post(
-            "/api/rpc",
-            json={
-                "method": "chat.stream",
-                "params": {"agent_id": "coder", "session_id": "session-one", "content": "Hi"},
-            },
-        )
-
-        assert create_response.json()["ok"] is True
-        stream_result = stream_response.json()["result"]
-        response = client.get(stream_result["sse_url"])
+        response = client.get(_stream_chat(client)["sse_url"])
 
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse(response.text)
@@ -171,15 +138,6 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
     assert "reasoning_scope" not in response.text
 
 
-def test_sse_endpoint_returns_not_found_for_unknown_run(tmp_path: Path) -> None:
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
-
-    with TestClient(app) as client:
-        response = client.get("/api/runs/missing/events")
-
-    assert response.status_code == 404
-
-
 def test_streaming_chat_projects_completed_path_line_in_stable_event(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -200,25 +158,8 @@ def test_streaming_chat_projects_completed_path_line_in_stable_event(tmp_path: P
     app = create_app(runtime=cast(Any, runtime))
 
     with TestClient(app) as client:
-        client.post(
-            "/api/rpc",
-            json={
-                "method": "session.create",
-                "params": {"agent_id": "coder", "session_id": "session-file"},
-            },
-        )
-        stream_response = client.post(
-            "/api/rpc",
-            json={
-                "method": "chat.stream",
-                "params": {
-                    "agent_id": "coder",
-                    "session_id": "session-file",
-                    "content": "Show it",
-                },
-            },
-        )
-        response = client.get(stream_response.json()["result"]["sse_url"])
+        stream = _stream_chat(client, session_id="session-file", content="Show it")
+        response = client.get(stream["sse_url"])
 
     assistant_event = next(
         event for event in _parse_sse(response.text) if event["event"] == ASSISTANT_OUTPUT_EVENT
@@ -239,36 +180,35 @@ def test_streaming_chat_projects_completed_path_line_in_stable_event(tmp_path: P
     ]
 
 
-def test_sse_endpoint_replays_after_explicit_sequence(tmp_path: Path) -> None:
-    response = _stream_test_run(tmp_path, sse_url_suffix="?after_sequence=3")
+def test_sse_endpoint_replays_after_the_requested_sequence(tmp_path: Path) -> None:
+    runtime, _workspace = _read_tool_runtime(tmp_path)
+    app = create_app(runtime=cast(Any, runtime))
 
-    assert _event_names(response.text) == EXPECTED_SSE_EVENT_NAMES[3:]
+    with TestClient(app) as client:
+        sse_url = _stream_chat(client)["sse_url"]
+        # (query, Last-Event-ID header) -> number of skipped timeline events.
+        controls = [
+            ("?after_sequence=3", None, 3),
+            ("", "4", 4),
+            # An explicit after_sequence wins over the reconnect header.
+            ("?after_sequence=2", "5", 2),
+            # Malformed or negative cursors clamp to a full replay.
+            ("?after_sequence=bad", None, 0),
+            ("", "-8", 0),
+        ]
+        replays = [
+            _event_names(
+                client.get(
+                    f"{sse_url}{query}",
+                    headers=None if last_event_id is None else {"Last-Event-ID": last_event_id},
+                ).text
+            )
+            for query, last_event_id, _skipped in controls
+        ]
+        missing_run = client.get("/api/runs/missing/events")
 
-
-def test_sse_endpoint_replays_after_last_event_id_header(tmp_path: Path) -> None:
-    response = _stream_test_run(tmp_path, headers={"Last-Event-ID": "4"})
-
-    assert _event_names(response.text) == EXPECTED_SSE_EVENT_NAMES[4:]
-
-
-def test_sse_endpoint_prefers_explicit_after_sequence_over_last_event_id(
-    tmp_path: Path,
-) -> None:
-    response = _stream_test_run(
-        tmp_path,
-        sse_url_suffix="?after_sequence=2",
-        headers={"Last-Event-ID": "5"},
-    )
-
-    assert _event_names(response.text) == EXPECTED_SSE_EVENT_NAMES[2:]
-
-
-def test_sse_endpoint_clamps_malformed_sequence_controls(tmp_path: Path) -> None:
-    malformed_response = _stream_test_run(tmp_path, sse_url_suffix="?after_sequence=bad")
-    negative_response = _stream_test_run(tmp_path, headers={"Last-Event-ID": "-8"})
-
-    assert _event_names(malformed_response.text) == EXPECTED_SSE_EVENT_NAMES
-    assert _event_names(negative_response.text) == EXPECTED_SSE_EVENT_NAMES
+    assert replays == [EXPECTED_SSE_EVENT_NAMES[skipped:] for _query, _header, skipped in controls]
+    assert missing_run.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -353,14 +293,9 @@ async def _read_next_sse_event(stream: AsyncIterator[str]) -> str:
     return await anext(stream)
 
 
-def _stream_test_run(
-    tmp_path: Path,
-    *,
-    sse_url_suffix: str = "",
-    headers: dict[str, str] | None = None,
-) -> Any:
-    adapter = StubAdapter(stream_deltas=_test_stream_turns())
-    runtime = StubRuntime(tmp_path, adapter)
+def _read_tool_runtime(tmp_path: Path) -> tuple[StubRuntime, Path]:
+    """A runtime whose two-turn stream reads ``note.txt`` and then answers."""
+    runtime = StubRuntime(tmp_path, StubAdapter(stream_deltas=_test_stream_turns()))
     register_read_tool(
         runtime.tools,
         attachment_store=None,
@@ -368,33 +303,32 @@ def _stream_test_run(
         file_state=FileReadState(),
         speech_max_size_bytes=20_971_520,
     )
-    runtime.agents.update(
-        "coder",
-        model="openai/gpt-5.2::api-key",
-        workspace=str(tmp_path / "workspace"),
-    )
-    workspace = Path(runtime.agents.get("coder").workspace)
+    workspace = tmp_path / "workspace"
+    runtime.agents.update("coder", model="openai/gpt-5.2::api-key", workspace=str(workspace))
     workspace.mkdir(parents=True, exist_ok=True)
     workspace.joinpath("note.txt").write_text("SSE visible content", encoding="utf-8")
-    app = create_app(runtime=cast(Any, runtime))
+    return runtime, workspace
 
-    with TestClient(app) as client:
-        client.post(
-            "/api/rpc",
-            json={
-                "method": "session.create",
-                "params": {"agent_id": "coder", "session_id": "session-one"},
-            },
-        )
-        stream_response = client.post(
-            "/api/rpc",
-            json={
-                "method": "chat.stream",
-                "params": {"agent_id": "coder", "session_id": "session-one", "content": "Hi"},
-            },
-        )
-        sse_url = f"{stream_response.json()['result']['sse_url']}{sse_url_suffix}"
-        return client.get(sse_url, headers=headers)
+
+def _stream_chat(
+    client: TestClient, *, session_id: str = "session-one", content: str = "Hi"
+) -> dict[str, Any]:
+    created = client.post(
+        "/api/rpc",
+        json={
+            "method": "session.create",
+            "params": {"agent_id": "coder", "session_id": session_id},
+        },
+    )
+    assert created.json()["ok"] is True
+    response = client.post(
+        "/api/rpc",
+        json={
+            "method": "chat.stream",
+            "params": {"agent_id": "coder", "session_id": session_id, "content": content},
+        },
+    )
+    return cast(dict[str, Any], response.json()["result"])
 
 
 def _event_names(body: str) -> list[str]:
