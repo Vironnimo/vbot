@@ -18,7 +18,7 @@ import respx
 
 from core.model_tasks.decisions import DecisionService
 from core.model_tasks.embeddings import EmbeddingService
-from core.model_tasks.embeddings_providers import _parse_embedding_usage
+from core.model_tasks.embeddings_providers import EmbeddingUsage
 from core.model_tasks.image import ImageService
 from core.model_tasks.model_tasks import TaskModelService, parse_task_model_target_id
 from core.model_tasks.music import MusicService
@@ -279,22 +279,29 @@ async def test_local_cancelled_attempt_stays_unknown_and_cost_projection_keeps_s
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"),
+    ("usage", "expected"),
     [
-        (None, {}),
-        ({"prompt_tokens": 0}, {"input_tokens": 0, "output_tokens": 0}),
-        ({"input_tokens": 7}, {"input_tokens": 7, "output_tokens": 0}),
-        ({"total_tokens": 7}, {"output_tokens": 0}),
-        ({"cost": "0.25"}, {"reported_cost_usd": 0.25}),
-        ({"cost": 0}, {"reported_cost_usd": 0.0}),
-        ({"prompt_tokens": True, "cost": -1}, {}),
+        (EmbeddingUsage(requests=1), {}),
+        (
+            EmbeddingUsage(requests=1, token_reports=1, input_token_reports=1),
+            {"input_tokens": 0, "output_tokens": 0},
+        ),
+        (
+            EmbeddingUsage(
+                requests=1, token_reports=1, input_tokens=7, total_tokens=7, input_token_reports=1
+            ),
+            {"input_tokens": 7, "output_tokens": 0},
+        ),
+        (EmbeddingUsage(requests=1, token_reports=1, total_tokens=7), {"output_tokens": 0}),
+        (EmbeddingUsage(requests=1, cost_reports=1, cost=0.25), {"reported_cost_usd": 0.25}),
+        (EmbeddingUsage(requests=1, cost_reports=1), {"reported_cost_usd": 0.0}),
     ],
 )
 def test_embedding_usage_preserves_report_provenance(
-    raw: Any,
+    usage: EmbeddingUsage,
     expected: dict[str, Any],
 ) -> None:
-    assert task_usage(_parse_embedding_usage(raw)) == expected
+    assert task_usage(usage) == expected
 
 
 @pytest.mark.asyncio
@@ -307,7 +314,17 @@ async def test_embedding_result_preserves_normalized_cost_without_raw_usage(
     call_id = await observer.start()
     await observer.finish(
         call_id,
-        result=SimpleNamespace(usage=_parse_embedding_usage({"input_tokens": 9, "cost": "0.2"})),
+        result=SimpleNamespace(
+            usage=EmbeddingUsage(
+                requests=1,
+                token_reports=1,
+                cost_reports=1,
+                input_tokens=9,
+                total_tokens=9,
+                cost=0.2,
+                input_token_reports=1,
+            )
+        ),
     )
     _, records = recorder.read_since()
     assert len(records) == 1

@@ -217,6 +217,28 @@ async def test_invalid_request_options_fail_before_any_request(
             ),
             id="unrepresentable-cost-is-unreported",
         ),
+        # A reported zero is a report; malformed counters are not.
+        pytest.param(
+            {**_vectors_for(["alpha", "beta"]), "usage": {"prompt_tokens": 0, "cost": 0}},
+            ([0.1], [0.2]),
+            None,
+            EmbeddingUsage(requests=1, token_reports=1, cost_reports=1, input_token_reports=1),
+            id="zero-counters-are-reported",
+        ),
+        pytest.param(
+            {**_vectors_for(["alpha", "beta"]), "usage": {"total_tokens": 7}},
+            ([0.1], [0.2]),
+            None,
+            EmbeddingUsage(requests=1, token_reports=1, total_tokens=7),
+            id="total-tokens-only",
+        ),
+        pytest.param(
+            {**_vectors_for(["alpha", "beta"]), "usage": {"prompt_tokens": True, "cost": -1}},
+            ([0.1], [0.2]),
+            None,
+            EmbeddingUsage(requests=1),
+            id="malformed-counters-are-unreported",
+        ),
     ],
 )
 @respx.mock
