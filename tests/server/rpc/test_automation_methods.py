@@ -1,4 +1,8 @@
-"""Tests for cron (automation) RPC handlers."""
+"""Automation RPCs: cron jobs and bootstrap jobs.
+
+The RPC edge validates params, splits the ``agent@project`` address once and
+projects the service's jobs; the services own scheduling and target validation.
+"""
 
 from __future__ import annotations
 
@@ -9,43 +13,58 @@ from unittest.mock import Mock
 
 import pytest
 
-from core.automation.cron import CronServiceError
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
-from server.rpc.methods import dispatch_rpc
 from tests.core.automation.cron_test_support import make_service
+from tests.server.rpc_test_support import rpc_error, rpc_result
+
+JsonObject = dict[str, Any]
+_CRON_PARAMS: JsonObject = {
+    "agent_id": "main",
+    "name": "Status check",
+    "prompt": "Run status check",
+    "schedule_type": "cron",
+    "cron_expression": "*/5 * * * *",
+}
+_CREATE_DEFAULTS: JsonObject = {
+    "name": None,
+    "cron_expression": None,
+    "interval_seconds": None,
+    "run_at": None,
+    "remaining_runs": None,
+    "session_id": None,
+    "project_id": None,
+}
 
 
-def _state_with_cron_service(
-    cron_service: Any,
-    *,
-    resolver: object | None = None,
-) -> SimpleNamespace:
-    # The cron RPC validates the target through the agent resolver (the same seam
-    # every run path uses), so the stub state carries one. A bare resolver Mock
-    # resolves any target; tests that exercise the rejection path inject a side
-    # effect.
-    agent_resolver = resolver if resolver is not None else Mock()
-    if isinstance(agent_resolver, Mock):
-        agent_resolver.resolve_agent.return_value = SimpleNamespace(id="main")
-    if isinstance(cron_service, Mock):
-        cron_service.format_schedule.side_effect = lambda job: (
-            job.cron_expression
-            if job.schedule_type == "cron"
-            else f"every {job.interval_seconds // 3600}h"
-            if job.schedule_type == "interval"
-            else job.run_at
-        )
+def _format_schedule(job: Any) -> str:
+    if job.schedule_type == "cron":
+        return str(job.cron_expression)
+    if job.schedule_type == "interval":
+        return f"every {job.interval_seconds // 3600}h"
+    return str(job.run_at)
+
+
+def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None) -> SimpleNamespace:
+    # The cron RPC validates the target through the Agent resolver (the seam every
+    # run path uses); the default resolver accepts any target.
+    if resolver is None:
+        resolver = Mock()
+        resolver.resolve_agent.return_value = SimpleNamespace(id="main")
+    if cron_service is None:
+        cron_service = Mock()
+        cron_service.format_schedule.side_effect = _format_schedule
+        cron_service.next_fire_at.return_value = None
     return SimpleNamespace(
-        runtime=SimpleNamespace(cron_service=cron_service, agent_resolver=agent_resolver)
+        runtime=SimpleNamespace(cron_service=cron_service, agent_resolver=resolver)
     )
 
 
 def _cron_job(**changes: Any) -> SimpleNamespace:
-    fields: dict[str, Any] = {
+    fields: JsonObject = {
         "id": "job-123",
         "agent_id": "main",
         "project_id": None,
@@ -73,7 +92,7 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
 
 
 def _bootstrap_job(**changes: Any) -> SimpleNamespace:
-    fields: dict[str, Any] = {
+    fields: JsonObject = {
         "id": "bootstrap-123",
         "agent_id": "main",
         "project_id": None,
@@ -96,32 +115,31 @@ def _bootstrap_job(**changes: Any) -> SimpleNamespace:
     return SimpleNamespace(**fields)
 
 
-def _state_with_bootstrap_service(service: Any) -> SimpleNamespace:
-    return SimpleNamespace(runtime=SimpleNamespace(bootstrap_service=service))
+# ---------------------------------------------------------------------------
+# bootstrap.*
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_create_parses_project_target_and_session() -> None:
+async def test_bootstrap_create_and_update_pass_the_parsed_target_and_session() -> None:
     service = Mock()
     service.create_job.return_value = _bootstrap_job(agent_id="builder", project_id="vbot")
-    state = _state_with_bootstrap_service(service)
+    service.update_job.return_value = _bootstrap_job(session_id=None)
+    state = SimpleNamespace(runtime=SimpleNamespace(bootstrap_service=service))
 
-    response = await dispatch_rpc(
+    created = await rpc_result(
         state,
-        {
-            "method": "bootstrap.create",
-            "params": {
-                "agent_id": "builder@vbot",
-                "name": "Verify update",
-                "prompt": "Check status and logs",
-                "mode": "once",
-                "session_id": "session-one",
-            },
-        },
+        "bootstrap.create",
+        agent_id="builder@vbot",
+        name="Verify update",
+        prompt="Check status and logs",
+        mode="once",
+        session_id="session-one",
     )
+    # A null session clears the pinned Session.
+    updated = await rpc_result(state, "bootstrap.update", id="bootstrap-123", session_id=None)
 
-    assert response["ok"] is True
-    assert response["result"]["target"] == "builder@vbot"
+    assert created["target"] == "builder@vbot"
     service.create_job.assert_called_once_with(
         agent_id="builder",
         project_id="vbot",
@@ -130,472 +148,226 @@ async def test_bootstrap_create_parses_project_target_and_session() -> None:
         mode="once",
         session_id="session-one",
     )
-
-
-@pytest.mark.asyncio
-async def test_bootstrap_update_can_clear_session() -> None:
-    service = Mock()
-    service.update_job.return_value = _bootstrap_job(session_id=None)
-    state = _state_with_bootstrap_service(service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "bootstrap.update",
-            "params": {"id": "bootstrap-123", "session_id": None},
-        },
-    )
-
-    assert response["ok"] is True
+    assert updated["session_id"] is None
     service.update_job.assert_called_once_with("bootstrap-123", session_id=None)
 
 
-@pytest.mark.asyncio
-async def test_bootstrap_rejects_unknown_mode() -> None:
-    response = await dispatch_rpc(
-        _state_with_bootstrap_service(Mock()),
-        {
-            "method": "bootstrap.create",
-            "params": {"agent_id": "main", "prompt": "Check", "mode": "sometimes"},
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
+# ---------------------------------------------------------------------------
+# cron.*
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cron_create_happy_path() -> None:
-    cron_service = Mock()
-    cron_service.create_job.return_value = _cron_job()
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.create",
-            "params": {
+@pytest.mark.parametrize(
+    ("params", "job", "service_call", "result"),
+    [
+        pytest.param(
+            {**_CRON_PARAMS, "session_id": "session-1"},
+            _cron_job(),
+            {
                 "agent_id": "main",
                 "name": "Status check",
-                "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
                 "session_id": "session-1",
             },
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["id"] == "job-123"
-    assert response["result"]["name"] == "Status check"
-    assert response["result"]["target"] == "main"
-    assert response["result"]["status"] == "active"
-    cron_service.create_job.assert_called_once_with(
-        agent_id="main",
-        name="Status check",
-        prompt="Run status check",
-        schedule_type="cron",
-        cron_expression="*/5 * * * *",
-        interval_seconds=None,
-        run_at=None,
-        remaining_runs=None,
-        session_id="session-1",
-        project_id=None,
-    )
-
-
-@pytest.mark.asyncio
-async def test_cron_create_parses_project_qualified_target() -> None:
-    cron_service = Mock()
-    cron_service.create_job.return_value = _cron_job(
-        agent_id="builder", project_id="vbot", session_id=None
-    )
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.create",
-            "params": {
-                "agent_id": "builder@vbot",
+            {"id": "job-123", "name": "Status check", "target": "main", "status": "active"},
+            id="cron",
+        ),
+        # The address is split once at the edge into agent_id + project_id, never an
+        # "@" string in agent_id.
+        pytest.param(
+            {**_CRON_PARAMS, "agent_id": "builder@vbot"},
+            _cron_job(agent_id="builder", project_id="vbot", session_id=None),
+            {
+                "agent_id": "builder",
                 "name": "Status check",
-                "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
+                "project_id": "vbot",
             },
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["id"] == "job-123"
-    assert response["result"]["target"] == "builder@vbot"
-    # The address form is split once at the edge: agent_id + project_id, never an
-    # "@" string in agent_id. CronService owns target validation.
-    cron_service.create_job.assert_called_once_with(
-        agent_id="builder",
-        name="Status check",
-        prompt="Run status check",
-        schedule_type="cron",
-        cron_expression="*/5 * * * *",
-        interval_seconds=None,
-        run_at=None,
-        remaining_runs=None,
-        session_id=None,
-        project_id="vbot",
-    )
-
-
-@pytest.mark.asyncio
-async def test_cron_create_accepts_interval_repeat_and_omitted_name() -> None:
-    cron_service = Mock()
-    cron_service.create_job.return_value = _cron_job(
-        name="Check status",
-        schedule_type="interval",
-        cron_expression=None,
-        interval_seconds=7200,
-        interval_anchor_at="2026-07-28T12:00:00+00:00",
-        remaining_runs=3,
-    )
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.create",
-            "params": {
+            {"target": "builder@vbot", "project_id": "vbot"},
+            id="project-target",
+        ),
+        pytest.param(
+            {
                 "agent_id": "main",
                 "prompt": "Check status",
                 "schedule_type": "interval",
                 "interval_seconds": 7200,
                 "repeat": 3,
             },
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["schedule"] == "every 2h"
-    assert response["result"]["remaining_runs"] == 3
-    cron_service.create_job.assert_called_once_with(
-        agent_id="main",
-        name=None,
-        prompt="Check status",
-        schedule_type="interval",
-        cron_expression=None,
-        interval_seconds=7200,
-        run_at=None,
-        remaining_runs=3,
-        session_id=None,
-        project_id=None,
-    )
-
-
-@pytest.mark.asyncio
-async def test_cron_create_rejects_null_repeat_for_once_schedule() -> None:
-    cron_service = Mock()
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.create",
-            "params": {
+            _cron_job(
+                name="Check status",
+                schedule_type="interval",
+                cron_expression=None,
+                interval_seconds=7200,
+                interval_anchor_at="2026-07-28T12:00:00+00:00",
+                remaining_runs=3,
+            ),
+            {
                 "agent_id": "main",
-                "prompt": "Run once",
-                "schedule_type": "once",
-                "run_at": "2026-08-01T09:00:00+00:00",
-                "repeat": None,
+                "schedule_type": "interval",
+                "interval_seconds": 7200,
+                "remaining_runs": 3,
             },
-        },
-    )
+            {"schedule": "every 2h", "remaining_runs": 3},
+            id="interval-repeat-unnamed",
+        ),
+    ],
+)
+async def test_cron_create_passes_the_normalized_job_to_the_service(
+    params: JsonObject, job: SimpleNamespace, service_call: JsonObject, result: JsonObject
+) -> None:
+    state = _cron_state()
+    cron_service = state.runtime.cron_service
+    cron_service.create_job.return_value = job
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-    cron_service.create_job.assert_not_called()
+    created = await rpc_result(state, "cron.create", **params)
+
+    assert created.items() >= result.items()
+    cron_service.create_job.assert_called_once_with(
+        **{**_CREATE_DEFAULTS, "prompt": params["prompt"], **service_call}
+    )
 
 
 @pytest.mark.asyncio
-async def test_cron_list_happy_path_includes_canonical_service_projection() -> None:
-    job = SimpleNamespace(
-        id="job-1",
-        agent_id="builder",
-        project_id="vbot",
-        name="Report check",
-        prompt="Check reports",
-        schedule_type="cron",
-        cron_expression="*/5 * * * *",
-        interval_seconds=None,
-        interval_anchor_at=None,
-        run_at=None,
-        remaining_runs=None,
-        session_id="session-1",
-        status="active",
-        last_fired_at="2026-05-14T09:55:00+00:00",
-        last_attempt_at="2026-05-14T09:55:00+00:00",
-        last_completed_at="2026-05-14T09:56:00+00:00",
-        last_run_id="run-1",
-        last_outcome="success",
-        last_error=None,
-        consecutive_failures=0,
-        created_at="2026-05-14T09:00:00+00:00",
-    )
+async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
     cron_service = Mock()
-    cron_service.list_jobs.return_value = [job]
+    cron_service.list_jobs.return_value = [
+        _cron_job(
+            id="job-1",
+            agent_id="builder",
+            project_id="vbot",
+            name="Report check",
+            prompt="Check reports",
+            last_fired_at="2026-05-14T09:55:00+00:00",
+            last_attempt_at="2026-05-14T09:55:00+00:00",
+            last_completed_at="2026-05-14T09:56:00+00:00",
+            last_run_id="run-1",
+            last_outcome="success",
+        )
+    ]
     cron_service.system_timezone_name.return_value = "Europe/Berlin"
     cron_service.next_fire_at.return_value = "2026-05-14T10:05:00+00:00"
-    state = _state_with_cron_service(cron_service)
+    cron_service.format_schedule.side_effect = _format_schedule
 
-    response = await dispatch_rpc(state, {"method": "cron.list", "params": {}})
+    result = await rpc_result(_cron_state(cron_service), "cron.list")
 
-    assert response == {
-        "ok": True,
-        "result": {
-            "jobs": [
-                {
-                    "id": "job-1",
-                    "agent_id": "builder",
-                    "project_id": "vbot",
-                    "target": "builder@vbot",
-                    "name": "Report check",
-                    "prompt": "Check reports",
-                    "schedule_type": "cron",
-                    "schedule": "*/5 * * * *",
-                    "cron_expression": "*/5 * * * *",
-                    "interval_seconds": None,
-                    "interval_anchor_at": None,
-                    "run_at": None,
-                    "remaining_runs": None,
-                    "session_id": "session-1",
-                    "status": "active",
-                    "last_fired_at": "2026-05-14T09:55:00+00:00",
-                    "last_attempt_at": "2026-05-14T09:55:00+00:00",
-                    "last_completed_at": "2026-05-14T09:56:00+00:00",
-                    "last_run_id": "run-1",
-                    "last_outcome": "success",
-                    "last_error": None,
-                    "consecutive_failures": 0,
-                    "next_fire_at": "2026-05-14T10:05:00+00:00",
-                    "created_at": "2026-05-14T09:00:00+00:00",
-                }
-            ],
-            "system_timezone": "Europe/Berlin",
-        },
-    }
-    cron_service.list_jobs.assert_called_once_with()
-
-
-@pytest.mark.asyncio
-async def test_cron_update_happy_path() -> None:
-    cron_service = Mock()
-    cron_service.update_job.return_value = _cron_job(
-        name="Updated status check",
-        prompt="Updated prompt",
-        status="paused",
-    )
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.update",
-            "params": {
+    assert result == {
+        "jobs": [
+            {
                 "id": "job-1",
-                "name": "Updated status check",
-                "prompt": "Updated prompt",
-                "status": "paused",
-            },
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["id"] == "job-123"
-    assert response["result"]["name"] == "Updated status check"
-    assert response["result"]["status"] == "paused"
-    cron_service.update_job.assert_called_once_with(
-        "job-1",
-        name="Updated status check",
-        prompt="Updated prompt",
-        status="paused",
-    )
-
-
-@pytest.mark.asyncio
-async def test_cron_update_schedule_without_repeat_preserves_current_count() -> None:
-    cron_service = Mock()
-    cron_service.update_job.return_value = _cron_job(cron_expression="0 10 * * *")
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.update",
-            "params": {
-                "id": "job-1",
+                "agent_id": "builder",
+                "project_id": "vbot",
+                "target": "builder@vbot",
+                "name": "Report check",
+                "prompt": "Check reports",
                 "schedule_type": "cron",
-                "cron_expression": "0 10 * * *",
-            },
-        },
-    )
-
-    assert response["ok"] is True
-    cron_service.update_job.assert_called_once_with(
-        "job-1",
-        schedule_type="cron",
-        cron_expression="0 10 * * *",
-    )
-
-
-@pytest.mark.asyncio
-async def test_cron_update_accepts_null_repeat_for_recurring_job() -> None:
-    cron_service = Mock()
-    cron_service.update_job.return_value = _cron_job(remaining_runs=None)
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.update",
-            "params": {
-                "id": "job-1",
-                "repeat": None,
-            },
-        },
-    )
-
-    assert response["ok"] is True
-    cron_service.update_job.assert_called_once_with("job-1", remaining_runs=None)
+                "schedule": "*/5 * * * *",
+                "cron_expression": "*/5 * * * *",
+                "interval_seconds": None,
+                "interval_anchor_at": None,
+                "run_at": None,
+                "remaining_runs": None,
+                "session_id": "session-1",
+                "status": "active",
+                "last_fired_at": "2026-05-14T09:55:00+00:00",
+                "last_attempt_at": "2026-05-14T09:55:00+00:00",
+                "last_completed_at": "2026-05-14T09:56:00+00:00",
+                "last_run_id": "run-1",
+                "last_outcome": "success",
+                "last_error": None,
+                "consecutive_failures": 0,
+                "next_fire_at": "2026-05-14T10:05:00+00:00",
+                "created_at": "2026-05-14T09:00:00+00:00",
+            }
+        ],
+        "system_timezone": "Europe/Berlin",
+    }
 
 
 @pytest.mark.asyncio
-async def test_cron_update_rejects_null_repeat_with_once_schedule() -> None:
-    cron_service = Mock()
-    state = _state_with_cron_service(cron_service)
+@pytest.mark.parametrize(
+    ("params", "updates"),
+    [
+        pytest.param(
+            {"name": "Updated status check", "prompt": "Updated prompt", "status": "paused"},
+            {"name": "Updated status check", "prompt": "Updated prompt", "status": "paused"},
+            id="fields",
+        ),
+        # A schedule change without repeat keeps the job's remaining count.
+        pytest.param(
+            {"schedule_type": "cron", "cron_expression": "0 10 * * *"},
+            {"schedule_type": "cron", "cron_expression": "0 10 * * *"},
+            id="schedule-keeps-count",
+        ),
+        # A recurring job may clear its repeat count.
+        pytest.param({"repeat": None}, {"remaining_runs": None}, id="clear-repeat"),
+        # Re-targeting re-parses the address, so a bare target clears the Project.
+        pytest.param({"agent_id": "main"}, {"agent_id": "main", "project_id": None}, id="retarget"),
+    ],
+)
+async def test_cron_update_passes_only_the_given_fields(
+    params: JsonObject, updates: JsonObject
+) -> None:
+    state = _cron_state()
+    cron_service = state.runtime.cron_service
+    cron_service.update_job.return_value = _cron_job(status=updates.get("status", "active"))
 
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.update",
-            "params": {
-                "id": "job-1",
-                "schedule_type": "once",
-                "run_at": "2026-08-01T09:00:00+00:00",
-                "repeat": None,
-            },
-        },
-    )
+    result = await rpc_result(state, "cron.update", id="job-1", **params)
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-    cron_service.update_job.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_cron_update_parses_agent_address_when_agent_id_is_present() -> None:
-    cron_service = Mock()
-    cron_service.update_job.return_value = _cron_job()
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.update",
-            "params": {
-                "id": "job-1",
-                "agent_id": "main",
-            },
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["target"] == "main"
-    cron_service.update_job.assert_called_once_with("job-1", agent_id="main", project_id=None)
+    assert (result["id"], result["target"]) == ("job-123", "main")
+    assert result["status"] == updates.get("status", "active")
+    cron_service.update_job.assert_called_once_with("job-1", **updates)
 
 
 @pytest.mark.asyncio
-async def test_cron_delete_happy_path() -> None:
-    cron_service = Mock()
-    state = _state_with_cron_service(cron_service)
+@pytest.mark.parametrize(
+    ("method", "service_method", "job", "result"),
+    [
+        ("cron.delete", "delete_job", None, {"ok": True}),
+        ("cron.enable", "enable_job", _cron_job(status="active"), {"status": "active"}),
+        ("cron.disable", "disable_job", _cron_job(status="paused"), {"status": "paused"}),
+    ],
+)
+async def test_cron_job_actions_address_one_job(
+    method: str, service_method: str, job: SimpleNamespace | None, result: JsonObject
+) -> None:
+    state = _cron_state()
+    getattr(state.runtime.cron_service, service_method).return_value = job
 
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.delete",
-            "params": {"id": "job-1"},
-        },
-    )
+    response = await rpc_result(state, method, id="job-1")
 
-    assert response == {"ok": True, "result": {"ok": True}}
-    cron_service.delete_job.assert_called_once_with("job-1")
-
-
-@pytest.mark.asyncio
-async def test_cron_enable_happy_path() -> None:
-    cron_service = Mock()
-    cron_service.enable_job.return_value = _cron_job(status="active")
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.enable",
-            "params": {"id": "job-1"},
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["status"] == "active"
-    cron_service.enable_job.assert_called_once_with("job-1")
-
-
-@pytest.mark.asyncio
-async def test_cron_disable_happy_path() -> None:
-    cron_service = Mock()
-    cron_service.disable_job.return_value = _cron_job(status="paused")
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.disable",
-            "params": {"id": "job-1"},
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["status"] == "paused"
-    cron_service.disable_job.assert_called_once_with("job-1")
+    assert response.items() >= result.items()
+    getattr(state.runtime.cron_service, service_method).assert_called_once_with("job-1")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params"),
     [
-        (
-            "cron.create",
-            {
-                "name": "Status check",
-                "prompt": "Run status check",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
-            },
-        ),
+        ("cron.create", {key: value for key, value in _CRON_PARAMS.items() if key != "agent_id"}),
+        ("cron.create", {**_CRON_PARAMS, "timezone": "Europe/Berlin"}),
+        ("cron.create", {key: value for key, value in _CRON_PARAMS.items() if key != "prompt"}),
+        # A one-shot job cannot repeat, so an explicit null repeat is refused.
         (
             "cron.create",
             {
                 "agent_id": "main",
-                "name": "Status check",
-                "prompt": "Run status check",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
-                "timezone": "Europe/Berlin",
+                "prompt": "Run once",
+                "schedule_type": "once",
+                "run_at": "2026-08-01T09:00:00+00:00",
+                "repeat": None,
             },
         ),
         (
-            "cron.create",
+            "cron.update",
             {
-                "agent_id": "main",
-                "name": "Status check",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
+                "id": "job-1",
+                "schedule_type": "once",
+                "run_at": "2026-08-01T09:00:00+00:00",
+                "repeat": None,
             },
         ),
         ("cron.list", {"extra": True}),
@@ -603,47 +375,26 @@ async def test_cron_disable_happy_path() -> None:
         ("cron.delete", {}),
         ("cron.enable", {}),
         ("cron.disable", {}),
+        ("bootstrap.create", {"agent_id": "main", "prompt": "Check", "mode": "sometimes"}),
     ],
 )
-async def test_cron_methods_reject_invalid_params(method: str, params: dict[str, Any]) -> None:
-    cron_service = Mock()
-    state = _state_with_cron_service(cron_service)
+async def test_automation_rpcs_reject_invalid_params_before_the_service(
+    method: str, params: JsonObject
+) -> None:
+    state = _cron_state()
+    state.runtime.bootstrap_service = Mock()
 
-    response = await dispatch_rpc(state, {"method": method, "params": params})
+    error = await rpc_error(state, method, **params)
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_cron_create_wraps_expected_domain_errors() -> None:
-    cron_service = Mock()
-    cron_service.create_job.side_effect = CronServiceError("bad schedule")
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.create",
-            "params": {
-                "agent_id": "main",
-                "name": "Status check",
-                "prompt": "Run status check",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "domain_error"
+    assert error["code"] == "invalid_request"
+    assert state.runtime.cron_service.mock_calls == []
+    assert state.runtime.bootstrap_service.mock_calls == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("address", "resolver_error", "expected_code"),
     [
-        ("missing", ResolutionAgentNotFoundError("Agent not found: missing"), "agent_not_found"),
         (
             "ghost@vbot",
             ResolutionAgentNotFoundError("agent 'ghost' is not on project 'vbot' team"),
@@ -670,23 +421,10 @@ async def test_cron_target_resolution_failure_maps_to_precise_code(
     resolver = Mock()
     resolver.resolve_agent.side_effect = resolver_error
     cron_service, _trigger_service = make_service(tmp_path, agent_resolver=resolver)
-    state = _state_with_cron_service(cron_service, resolver=resolver)
+    state = _cron_state(cron_service, resolver=resolver)
 
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.create",
-            "params": {
-                "agent_id": address,
-                "name": "Status check",
-                "prompt": "Run status check",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
-            },
-        },
-    )
+    error = await rpc_error(state, "cron.create", **{**_CRON_PARAMS, "agent_id": address})
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == expected_code
+    assert error["code"] == expected_code
     resolver.resolve_agent.assert_called_once()
     assert cron_service.list_jobs() == []
