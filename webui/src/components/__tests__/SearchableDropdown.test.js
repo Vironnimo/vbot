@@ -51,6 +51,70 @@ describe('SearchableDropdown', () => {
     expect(chevron?.getAttribute('viewBox')).toBe('0 0 12 12');
   });
 
+  it('portals a fixed panel sized to its trigger and closes on outside mousedown or page scroll', async () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    mountedComponent = mount(SearchableDropdown, {
+      target: host,
+      props: {
+        id: 'floating-searchable-dropdown',
+        value: 'alpha',
+        options: ['alpha', 'beta'],
+      },
+    });
+    flushSync();
+
+    const trigger = document.querySelector('#floating-searchable-dropdown');
+    trigger.getBoundingClientRect = () => ({
+      x: 120,
+      y: 180,
+      left: 120,
+      top: 180,
+      right: 464,
+      bottom: 212,
+      width: 344,
+      height: 32,
+    });
+    const root = trigger.closest('.searchable-dropdown');
+    const panel = () => document.querySelector('.searchable-dropdown__panel');
+    const open = async () => {
+      trigger.click();
+      await vi.waitFor(() => {
+        expect(panel()?.getAttribute('style')).toContain('width: 344px');
+      });
+    };
+
+    // A mousedown while closed leaves the dropdown alone.
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    flushSync();
+    expect(root.dataset.state).toBe('closed');
+
+    await open();
+    expect(root.dataset.state).toBe('open');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    // Portaled to <body> so no card or modal ancestor can clip or cover it.
+    expect(panel().parentElement).toBe(document.body);
+    expect(host.contains(panel())).toBe(false);
+    expect(panel().dataset.positioning).toBe('fixed');
+    expect(panel().dataset.placement).toBe('bottom');
+
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    flushSync();
+    expect(root.dataset.state).toBe('closed');
+    expect(panel()).toBeNull();
+
+    await open();
+    panel()
+      .querySelector('.searchable-dropdown__options')
+      .dispatchEvent(new Event('scroll'));
+    flushSync();
+    expect(root.dataset.state).toBe('open');
+
+    window.dispatchEvent(new Event('scroll'));
+    flushSync();
+    expect(root.dataset.state).toBe('closed');
+  });
+
   it('uses combobox/listbox semantics and selects with arrow keys', async () => {
     const onValueChange = vi.fn();
     mountedComponent = mount(SearchableDropdown, {
