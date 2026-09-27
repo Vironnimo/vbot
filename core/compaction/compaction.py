@@ -73,16 +73,11 @@ SKILL_COMPACTION_GUIDANCE = (
 )
 
 MIN_AUTO_COMPACTION_RECLAIM_TOKENS = 4_096
-# ``tail_tokens`` is a target, not a hard limit: a Tail may grow to this share of
-# it, and any start at or above the floor share counts as close enough to prefer
-# a better cut point over a closer size.
+# ``tail_tokens`` is the size the Tail should reach: the first whole-step cut at
+# or above it wins up to the soft limit; without one, the largest cut down to the
+# floor; without that either, the first cut past the soft limit.
 TAIL_SOFT_LIMIT_PERCENT = 150
-TAIL_PREFERRED_FLOOR_PERCENT = 50
-# Cut quality, best first: a User turn start, a step opening with new input
-# (notes such as delivered messages), a continuation inside a Tool loop.
-_TAIL_CUT_USER_TURN = 2
-_TAIL_CUT_NEW_INPUT = 1
-_TAIL_CUT_CONTINUATION = 0
+TAIL_FLOOR_PERCENT = 70
 COMPACTION_WORKER_LIMIT = 4
 
 _COMPACTION_WORKERS = BoundedWorkerPool(
@@ -213,11 +208,10 @@ class _TailPlan:
 
 @dataclass(frozen=True)
 class _TailCandidate:
-    """One provider-safe Tail start with its cut quality and request-side size."""
+    """One provider-safe Tail start with its request-side size."""
 
     start_index: int
     request_start: int | None
-    cut_quality: int
     tokens: int
 
 
@@ -697,18 +691,15 @@ def _plan_working_tail(
     request_messages: tuple[JsonObject, ...] | None = None,
     estimate_tail_tokens: RequestTokenEstimator | None = None,
 ) -> _TailPlan:
-    """Choose a chronological suffix of whole steps around the Tail target.
+    """Choose a chronological suffix of whole steps that reaches ``tail_tokens``.
 
-    ``tail_tokens`` is a target: the Tail may grow to the soft limit, and among
-    starts between the preferred floor and that limit the best cut wins (User
-    turn start, then a step opening with new input, then a Tool-loop
-    continuation), closeness to the target breaking ties. Without such a start
-    the largest Tail within the soft limit is kept; only the newest indivisible
-    step may exceed it. Notes immediately before a step belong to that step, so
-    the input a response reacted to stays with the response. Retained steps
-    are never edited. Live request slices include replayed reasoning and
-    request-only Tool media; the selected Adapter counts the representation it
-    will actually serialize.
+    The first cut at or above ``tail_tokens`` wins while it stays within the
+    soft limit; otherwise the largest cut down to the floor; otherwise the first
+    cut past the soft limit (for example one oversized step). Notes immediately
+    before a step belong to that step, so the input a response reacted to stays
+    with the response. Retained steps are never edited. Live request slices
+    include replayed reasoning and request-only Tool media; the selected Adapter
+    counts the representation it will actually serialize.
     """
     if not messages:
         raise CompactionError("Cannot find tail boundary for an empty message list")
@@ -723,7 +714,6 @@ def _plan_working_tail(
         if request_messages is not None
         else {}
     )
-    soft_limit = _tail_soft_limit(tail_tokens)
     candidates: list[_TailCandidate] = []
     for boundary_index in reversed(safe_boundaries):
         start_index, request_start = _tail_step_start(
@@ -739,14 +729,11 @@ def _plan_working_tail(
             else estimate_request_input_tokens(candidate)[0]
         )
         candidates.append(
-            _TailCandidate(
-                start_index=start_index,
-                request_start=request_start,
-                cut_quality=_tail_cut_quality(messages, boundary_index, start_index),
-                tokens=tokens,
-            )
+            _TailCandidate(start_index=start_index, request_start=request_start, tokens=tokens)
         )
-        if tokens > soft_limit:
+        # Older starts only grow the Tail: the first one reaching the target
+        # is either the choice or, past the soft limit, the upward fallback.
+        if tokens >= tail_tokens:
             break
 
     selected = _select_tail_candidate(candidates, tail_tokens)
@@ -761,20 +748,19 @@ def _plan_working_tail(
 
 
 def _select_tail_candidate(candidates: list[_TailCandidate], tail_tokens: int) -> _TailCandidate:
-    """Prefer a good cut near the target; never grow past the soft limit."""
+    """Pick from newest-first candidates ending at the first one reaching the target.
 
-    soft_limit = _tail_soft_limit(tail_tokens)
-    within_limit = [candidate for candidate in candidates if candidate.tokens <= soft_limit]
-    if not within_limit:
-        return candidates[0]
-    floor = tail_tokens * TAIL_PREFERRED_FLOOR_PERCENT // 100
-    preferred = [candidate for candidate in within_limit if candidate.tokens >= floor]
-    if not preferred:
-        return within_limit[-1]
-    return max(
-        preferred,
-        key=lambda candidate: (candidate.cut_quality, -abs(candidate.tokens - tail_tokens)),
-    )
+    That last candidate is also the largest. It wins within the soft limit (or
+    when the whole history stays below the target); past the soft limit, the
+    largest earlier candidate down to the floor; without one, the last after all.
+    """
+
+    last = candidates[-1]
+    if last.tokens <= _tail_soft_limit(tail_tokens):
+        return last
+    floor = tail_tokens * TAIL_FLOOR_PERCENT // 100
+    below = [candidate for candidate in candidates[:-1] if candidate.tokens >= floor]
+    return max(below, key=lambda candidate: candidate.tokens) if below else last
 
 
 def _tail_soft_limit(tail_tokens: int) -> int:
@@ -817,14 +803,6 @@ def _tail_step_start(
 
 def _is_tail_lead_in_note(message: ChatMessage) -> bool:
     return message.role == "note" and not _is_compaction_checkpoint_note(message)
-
-
-def _tail_cut_quality(messages: list[ChatMessage], boundary_index: int, start_index: int) -> int:
-    if messages[boundary_index].role == "user":
-        return _TAIL_CUT_USER_TURN
-    if start_index < boundary_index:
-        return _TAIL_CUT_NEW_INPUT
-    return _TAIL_CUT_CONTINUATION
 
 
 def _safe_tail_boundary_indices(messages: list[ChatMessage]) -> list[int]:

@@ -159,7 +159,7 @@ def test_working_tail_summarizes_whole_older_steps_instead_of_anchoring_user() -
     active_user = user("u-active", "Keep working on this task.")
     older = assistant("a-old", "older work " * 4_000)
     recent = assistant("a-recent", "recent work " * 100)
-    target = _tail_token_span([recent]) + 100
+    target = _tail_token_span([recent]) + 20
 
     plan = _plan_working_tail([active_user, older, recent], target)
 
@@ -168,33 +168,32 @@ def test_working_tail_summarizes_whole_older_steps_instead_of_anchoring_user() -
     assert _tail_token_span(plan.retained_messages) <= target
 
 
-def test_working_tail_treats_budget_as_target_up_to_soft_limit() -> None:
-    steps = [assistant(f"a{index}", "step work " * 300) for index in range(4)]
+@pytest.mark.parametrize(
+    ("newest_first_words", "retained_steps"),
+    [
+        # Tails of 72% and 130%: the first cut reaching the target wins,
+        # although the smaller one is closer to it.
+        ((720, 580), 2),
+        # Tails of 40%, 80% and 200%: the first reaching cut is past the soft
+        # limit, so the largest cut down to the floor wins.
+        ((400, 400, 1_200), 2),
+        # Tails of 30%, 60% and 200%: nothing lies between floor and soft limit,
+        # so the Tail grows past the soft limit instead of shrinking further.
+        ((300, 300, 1_400), 3),
+    ],
+)
+def test_working_tail_takes_first_cut_reaching_the_target(
+    newest_first_words: tuple[int, ...], retained_steps: int
+) -> None:
+    steps = [
+        assistant(f"a{index}", "word " * words)
+        for index, words in reversed(list(enumerate(newest_first_words)))
+    ]
     messages = [user("u", "long task"), *steps]
-    # Each step is about 60% of the target: one step alone falls short, two
-    # overshoot a hard budget but stay within the soft limit and closer to it.
-    target = _tail_token_span(steps[-1:]) * 10 // 6
 
-    plan = _plan_working_tail(messages, target)
+    plan = _plan_working_tail(messages, 1_000)
 
-    assert list(plan.retained_messages) == steps[-2:]
-    assert _tail_token_span(plan.retained_messages) > target
-    assert _tail_token_span(plan.retained_messages) <= target * TAIL_SOFT_LIMIT_PERCENT // 100
-
-
-def test_working_tail_prefers_user_turn_start_over_closer_continuation() -> None:
-    older = assistant("a-old", "older work " * 4_000)
-    turn = user("u-turn", "Now adjust the parser " + "detail " * 400)
-    working = assistant("a-work", "working " * 700)
-    latest = assistant("a-latest", "latest " * 300)
-    messages = [older, turn, working, latest]
-    target = _tail_token_span([working, latest])
-    assert _tail_token_span([turn, working, latest]) <= target * TAIL_SOFT_LIMIT_PERCENT // 100
-
-    plan = _plan_working_tail(messages, target)
-
-    assert plan.boundary_id == "u-turn"
-    assert list(plan.retained_messages) == [turn, working, latest]
+    assert list(plan.retained_messages) == steps[-retained_steps:]
 
 
 def _tool_step(index: int, output: str) -> list[ChatMessage]:
@@ -272,7 +271,7 @@ async def test_summary_tail_summarizes_before_lead_in_notes_and_retains_them() -
         summary_adapter=adapter,
         summary_model_id="gpt-5",
         storage=StubStorage(),
-        settings=CompactionSettings(tail_tokens=100),
+        settings=CompactionSettings(tail_tokens=10),
         request_messages=live,
     )
 
@@ -283,16 +282,17 @@ async def test_summary_tail_summarizes_before_lead_in_notes_and_retains_them() -
 
 
 def test_working_tail_counts_live_reasoning_before_choosing_boundary() -> None:
-    older = assistant("a-old", "old step")
-    recent = assistant("a-new", "new step")
+    older = assistant("a-old", "old step " * 20)
+    recent = assistant("a-new", "new step " * 80)
     messages = [user("u", "do it"), older, recent]
     live = provider_request(messages)
     live[2]["reasoning"] = "retained reasoning " * 4_000
-    target = _tail_token_span(messages) + 100
+    target = _tail_token_span([older, recent])
     before = json.dumps(live)
 
     plan = _plan_working_tail(messages, target, request_messages=tuple(live))
 
+    assert list(_plan_working_tail(messages, target).retained_messages) == [older, recent]
     assert list(plan.retained_messages) == [recent]
     assert json.dumps(live) == before
 
@@ -301,15 +301,21 @@ def test_working_tail_counts_request_only_tool_media() -> None:
     calls = [{"id": "c", "name": "read", "arguments": {"path": "image.png"}}]
     carrier = message("a-old", "assistant", "", model="openai/gpt-5", tool_calls=calls)
     result = message("t", "tool", "image", tool_call_id="c", name="read")
-    recent = assistant("a-new", "image consumed")
+    recent = assistant("a-new", "image consumed " * 200)
     messages = [user("u", "inspect"), carrier, result, recent]
     live = provider_request(messages)
     live[3]["tool_result_content"] = [
         {"type": "media", "media_type": "image/png", "base64": "A" * 10_000}
     ]
+    target = _tail_token_span([carrier, result, recent])
 
-    plan = _plan_working_tail(messages, 1_000, request_messages=tuple(live))
+    plan = _plan_working_tail(messages, target, request_messages=tuple(live))
 
+    assert list(_plan_working_tail(messages, target).retained_messages) == [
+        carrier,
+        result,
+        recent,
+    ]
     assert list(plan.retained_messages) == [recent]
 
 
@@ -325,7 +331,7 @@ def test_working_tail_uses_selected_wire_estimate_for_opaque_state() -> None:
 
     def estimate(candidate):
         seen.append(candidate)
-        return 5_000 if any(item.get("reasoning_meta") for item in candidate) else 100
+        return 5_000 if any(item.get("reasoning_meta") for item in candidate) else 800
 
     plan = _plan_working_tail(
         messages, 1_000, request_messages=tuple(live), estimate_tail_tokens=estimate

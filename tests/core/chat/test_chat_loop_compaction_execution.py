@@ -370,7 +370,7 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(
             "trigger": {"type": "input_tokens", "tokens": 40_000},
             "strategy": {
                 "type": "summary_tail",
-                "tail_tokens": 1_000,
+                "tail_tokens": 1,  # the newest step only
                 "summary_model": None,
             },
         },
