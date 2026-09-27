@@ -8,8 +8,8 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
+from core.chat.usage import aggregate_session_usage
 from tests.core.sessions.history_fixtures import append_tool_fixture, complete_run
-from tests.core.sessions.sessions_test_support import manager as manager
 
 
 def read(session, **kwargs):
@@ -31,18 +31,14 @@ def summary(run_id):
     )
 
 
-def start(manager, session, run_id):
-    return session.start_run(run_id)
-
-
 def test_run_identity_survives_bounded_page_without_user_or_summary(manager):
     session = manager.create("coder")
-    session = start(manager, session, "first")
+    session = session.start_run("first")
     session.append_many(
         [ChatMessage.user("question"), ChatMessage.assistant(content="answer", model="test")]
     )
     complete_run(session, summary("first"))
-    session = start(manager, session, "automatic")
+    session = session.start_run("automatic")
     session.append_many(
         [
             ChatMessage.note("trigger"),
@@ -62,17 +58,17 @@ def test_run_identity_survives_bounded_page_without_user_or_summary(manager):
 
 def test_empty_runs_with_equal_start_sequence_do_not_claim_successor(manager):
     session = manager.create("coder")
-    session = start(manager, session, "empty")
-    session = start(manager, session, "successor")
+    session = session.start_run("empty")
+    session = session.start_run("successor")
     session.append(ChatMessage.assistant(content="output", model="test"))
     assert read(session).page.record_run_ids == ("successor",)
 
 
 def test_summary_does_not_assign_previous_failed_run_to_successor(manager):
     session = manager.create("coder")
-    session = start(manager, session, "missing-summary")
+    session = session.start_run("missing-summary")
     session.append(ChatMessage.assistant(content="partial", model="test"))
-    session = start(manager, session, "successor")
+    session = session.start_run("successor")
     session.append(ChatMessage.assistant(content="new", model="test"))
     complete_run(session, summary("successor"))
     assert read(session).page.record_run_ids == ("missing-summary", "successor", "successor")
@@ -95,7 +91,7 @@ def test_historical_summary_segments_and_fork_keep_read_identity(manager):
 
 def test_completed_run_does_not_claim_unrelated_later_records(manager):
     session = manager.create("coder")
-    session = start(manager, session, "one")
+    session = session.start_run("one")
     session.append(ChatMessage.assistant(content="one", model="test"))
     complete_run(session, summary("one"))
     manager.get(session.address).append(ChatMessage.user("external"))
@@ -145,12 +141,13 @@ def test_recreated_address_invalidates_append_cursor(manager):
     assert refreshed.page.messages[0].content == "new"
 
 
-def test_duplicate_checkpoint_ids_have_distinct_record_sequences(manager):
+def test_repeated_message_ids_keep_their_order_and_distinct_record_sequences(manager):
     session = manager.create("coder")
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="saved", projection=[], compacted_token_count=1
     )
     session.append_many([checkpoint, checkpoint])
+    assert session.load() == [checkpoint, checkpoint]
     newest = read(session, limit=1)
     older = read(session, before=newest.page.before_cursor, limit=1)
     assert newest.page.messages[0].id == older.page.messages[0].id
@@ -239,3 +236,47 @@ def test_background_candidates_are_narrow_and_follow_the_read_range(manager):
     assert delta.incremental
     assert candidates(delta) == [("tool", "bash", "bash result")]
     assert read(session, after=delta.after_cursor, **background).background_records == ()
+
+
+def test_session_usage_matches_the_canonical_python_aggregation(manager):
+    session = manager.create("coder", session_id="usage-projection")
+    messages = [
+        ChatMessage.assistant(
+            model="test",
+            content="measured",
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_read_tokens": 60,
+                "cache_write_tokens": 5,
+                "reasoning_tokens": 7,
+            },
+        ),
+        ChatMessage.assistant(
+            model="test",
+            content="estimated input",
+            usage={
+                "input_tokens": 80,
+                "output_tokens": 10,
+                "input_tokens_estimated": True,
+                "output_tokens_estimated": False,
+                "estimated": True,
+            },
+        ),
+        ChatMessage.assistant(
+            model="test",
+            content="estimated output",
+            usage={
+                "input_tokens": 50,
+                "output_tokens": 12,
+                "cache_read_tokens": 25,
+                "input_tokens_estimated": False,
+                "output_tokens_estimated": True,
+                "estimated": True,
+            },
+        ),
+    ]
+    session.append_many(messages)
+
+    # The usage covers the whole Session, not only the one-record page.
+    assert read(session, limit=1).session_usage == aggregate_session_usage(messages)

@@ -1,15 +1,8 @@
-"""Shared fixtures and fakes for sessions behavior tests."""
+"""Shared helpers for Session behavior tests; the ``manager`` fixture is in conftest."""
 
 from __future__ import annotations
 
-import shutil
-
-import pytest
-
-from core.sessions import (
-    ChatSessionManager,
-    SessionAddress,
-)
+from core.sessions import SessionAddress
 
 
 def _address(agent_id: str, session_id: str, project_id: str | None = None) -> SessionAddress:
@@ -26,12 +19,3 @@ def _continuation_start() -> dict[str, object]:
         "timestamp": "2026-08-31T12:00:00+00:00",
         "request": "continue this work",
     }
-
-
-@pytest.fixture
-def manager(tmp_path, current_session_store_template):
-    shutil.copy2(current_session_store_template / "data-store.json", tmp_path)
-    shutil.copy2(current_session_store_template / "sessions.db", tmp_path)
-    sessions = ChatSessionManager(tmp_path)
-    yield sessions
-    sessions.close()

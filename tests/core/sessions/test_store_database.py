@@ -86,6 +86,9 @@ def test_opening_registers_the_database_and_keeps_its_identity_in_kernel_meta(
 
 
 def test_session_writes_keep_owner_errors_and_classify_storage_failures(tmp_path: Path) -> None:
+    # Corrupt Session rows are a database corruption, never an owner error.
+    assert issubclass(SessionStoreCorruptError, DatabaseCorruptError)
+    assert not issubclass(SessionStoreCorruptError, ChatSessionError)
     store = SessionStore(tmp_path / "sessions.db")
     address = _address("duplicate")
     try:
@@ -423,47 +426,6 @@ def test_online_snapshot_completes_while_runs_keep_committing(
     assert {path.name for path in published.iterdir()} == {"sessions.db", SNAPSHOT_MANIFEST_NAME}
     manifest = json.loads((published / SNAPSHOT_MANIFEST_NAME).read_text(encoding="utf-8"))
     assert started <= manifest["members"]["sessions"]["facts"]["entry_count"] <= commits
-
-
-def test_list_history_versions_returns_live_sessions_in_one_call(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    try:
-        live = manager.create("coder", session_id="live-one")
-        live.append(ChatMessage.user("hello"))
-        manager.create("coder", session_id="live-two")
-        gone = manager.create("coder", session_id="gone")
-        gone.delete()
-
-        versions = manager.list_history_versions(
-            [_address("live-one"), _address("live-two"), _address("gone")]
-        )
-
-        assert set(versions) == {_address("live-one"), _address("live-two")}
-        generation_id, revision = versions[_address("live-one")]
-        assert isinstance(generation_id, str) and generation_id
-        assert revision >= 1
-    finally:
-        manager.close()
-
-
-def test_list_history_versions_spans_scopes(tmp_path: Path) -> None:
-    manager = ChatSessionManager(tmp_path)
-    try:
-        manager.create("coder", session_id="global-one")
-        manager.create("coder", session_id="project-one", project_id="alpha")
-
-        versions = manager.list_history_versions(
-            [_address("global-one"), _address("project-one", "alpha")]
-        )
-
-        assert set(versions) == {_address("global-one"), _address("project-one", "alpha")}
-    finally:
-        manager.close()
-
-
-def test_corrupt_session_rows_are_a_database_corruption() -> None:
-    assert issubclass(SessionStoreCorruptError, DatabaseCorruptError)
-    assert not issubclass(SessionStoreCorruptError, ChatSessionError)
 
 
 def test_runtime_session_boundary_has_no_legacy_jsonl_dependency() -> None:

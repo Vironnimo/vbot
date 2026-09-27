@@ -12,7 +12,6 @@ from core.chat.messages import ToolCall
 from core.runs import ChatRunManager, RunAdmission, RunKind
 from core.sessions import SESSION_RUN_KINDS_META_KEY
 from tests.core.sessions.history_fixtures import complete_run
-from tests.core.sessions.sessions_test_support import manager as manager
 
 
 def _summary(run_id: str) -> ChatMessage:

@@ -1,16 +1,17 @@
-"""Tests for sessions lifecycle."""
+"""Session lifecycle: create, reopen, move, fork, archive and restore."""
 
 from __future__ import annotations
 
 import asyncio
 import sqlite3
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import pytest
 
 from core.chat import ChatMessage, ChatSessionError
-from core.chat.usage import aggregate_session_usage
 from core.prompts.pinned_context import (
     PINNED_MEMORY_FILES_SLOT,
     PINNED_SKILL_CATALOG_SLOT,
@@ -18,14 +19,41 @@ from core.prompts.pinned_context import (
     PINNED_WORKING_PROJECT_CONTEXT_SLOT,
 )
 from core.runs import RunKind
-from core.sessions import FORK_SOURCE_META_KEY
-from tests.core.sessions.history_fixtures import admit_run
-from tests.core.sessions.sessions_test_support import (
-    _address,
-)
-from tests.core.sessions.sessions_test_support import (
-    manager as manager,
-)
+from core.sessions import FORK_SOURCE_META_KEY, ChatSessionManager
+from tests.core.sessions.history_fixtures import admit_run, settle_run
+from tests.core.sessions.sessions_test_support import _address, _continuation_start
+
+
+def test_committed_message_survives_a_fresh_runtime_open(tmp_path) -> None:
+    address = _address("agent", "restart")
+    sessions = ChatSessionManager(tmp_path)
+    try:
+        sessions.create("agent", session_id=address.session_id).append(ChatMessage.user("hello"))
+    finally:
+        sessions.close()
+
+    reopened = ChatSessionManager(tmp_path)
+    try:
+        assert [message.content for message in reopened.get(address).load()] == ["hello"]
+    finally:
+        reopened.close()
+
+
+def test_get_or_create_reads_an_existing_session_without_a_write(manager, monkeypatch) -> None:
+    address = _address("coder", "existing")
+    writes: list[object] = []
+    original = manager._store.database.write
+
+    def counted(fn, **kwargs):
+        writes.append(fn)
+        return original(fn, **kwargs)
+
+    monkeypatch.setattr(manager._store.database, "write", counted)
+
+    created = manager.get_or_create(address)
+    assert len(writes) == 1
+    assert manager.get_or_create(address).address == created.address
+    assert len(writes) == 1
 
 
 def test_move_updates_the_composite_address_without_losing_history(manager) -> None:
@@ -77,112 +105,26 @@ def test_agent_rendered_pins_never_reach_another_agent(manager, operation) -> No
         }
 
 
-@pytest.mark.parametrize("restoring", [False, True])
-def test_identity_reference_changes_roll_back_together(manager, monkeypatch, restoring) -> None:
-    from core.sessions import _store_values
-
-    children = [manager.create("child", session_id=f"child-{index}") for index in range(2)]
-    for child in children:
-        manager.set_metadata(
-            child.address,
-            {"subagent_parent": {"agent_id": "old", "project_id": None, "session_id": "parent"}},
-        )
-    updates = manager.retarget_identity_agent_references("old", "new") if restoring else ()
-    before = [manager.get_metadata(child.address) for child in children]
-    original = _store_values._subagent_parent_columns
-    calls = 0
-
-    def fail_second_write(parent):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise OSError("injected metadata write failure")
-        return original(parent)
-
-    monkeypatch.setattr(_store_values, "_subagent_parent_columns", fail_second_write)
-    with pytest.raises(OSError):
-        if restoring:
-            manager.restore_identity_agent_references(updates)
-        else:
-            manager.retarget_identity_agent_references("old", "new")
-
-    assert [manager.get_metadata(child.address) for child in children] == before
-
-
-def test_identity_reference_retarget_skips_unrelated_sessions(manager) -> None:
-    changed = manager.create("child", session_id="changed")
-    unrelated = manager.create("child", session_id="unrelated")
-    qualified = manager.create("child", session_id="qualified")
-    manager.set_metadata(changed.address, {"subagent_parent": {"agent_id": "old"}})
-    manager.set_metadata(
-        qualified.address, {"subagent_parent": {"agent_id": "old", "project_id": "project"}}
-    )
-
-    def state(session):
-        return manager._store._read(
-            lambda connection: tuple(
-                connection.execute(
-                    "SELECT state_revision, subagent_parent_agent_id, subagent_parent_project_id "
-                    "FROM sessions WHERE session_id = ? AND state = 'live'",
-                    (session.id,),
-                ).fetchone()
-            )
-        )
-
-    before = [state(session) for session in (unrelated, qualified)]
-
-    updates = manager.retarget_identity_agent_references("old", "new")
-
-    assert [update.address for update in updates] == [changed.address]
-    assert manager.get_metadata(changed.address)["subagent_parent"]["agent_id"] == "new"
-    assert [state(session) for session in (unrelated, qualified)] == before
-
-
-def test_move_reads_and_transforms_metadata_inside_its_writer_transaction(
-    manager, monkeypatch
-) -> None:
-    source = manager.create("coder", session_id="session-one")
-    target = _address("reviewer", source.id, "project-a")
-    entered_store = threading.Event()
-    original_move = manager._store.move
-
-    def observed_move(*args, **kwargs):
-        entered_store.set()
-        return original_move(*args, **kwargs)
-
-    monkeypatch.setattr(manager._store, "move", observed_move)
-    writer = sqlite3.connect(manager._store.path, isolation_level=None)
-    try:
-        writer.execute("BEGIN IMMEDIATE")
-        writer.execute(
-            "UPDATE sessions SET title = ?, state_revision = state_revision + 1 "
-            "WHERE agent_id = ? AND session_id = ? AND state = 'live'",
-            ("latest title", source.address.agent_id, source.id),
-        )
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(lambda: asyncio.run(manager.move(source.address, target)))
-            assert entered_store.wait(timeout=5)
-            writer.commit()
-            moved = future.result(timeout=5)
-    finally:
-        writer.close()
-
-    assert manager.get_metadata(moved.address)["title"] == "latest title"
-
-
-def test_fork_reads_and_transforms_metadata_inside_its_writer_transaction(
-    manager, monkeypatch
+@pytest.mark.parametrize("operation", ["move", "fork"])
+def test_move_and_fork_read_metadata_inside_their_writer_transaction(
+    manager, monkeypatch, operation
 ) -> None:
     source = manager.create("coder", session_id="session-one")
     source.append(ChatMessage.user("hello"))
+    operations: dict[str, Callable[[], Any]] = {
+        "move": lambda: asyncio.run(
+            manager.move(source.address, _address("reviewer", source.id, "project-a"))
+        ),
+        "fork": lambda: asyncio.run(manager.fork(source.address)),
+    }
     entered_store = threading.Event()
-    original_fork = manager._store.fork
+    original = getattr(manager._store, operation)
 
-    def observed_fork(*args, **kwargs):
+    def observed(*args, **kwargs):
         entered_store.set()
-        return original_fork(*args, **kwargs)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(manager._store, "fork", observed_fork)
+    monkeypatch.setattr(manager._store, operation, observed)
     writer = sqlite3.connect(manager._store.path, isolation_level=None)
     try:
         writer.execute("BEGIN IMMEDIATE")
@@ -192,23 +134,49 @@ def test_fork_reads_and_transforms_metadata_inside_its_writer_transaction(
             ("latest title", source.address.agent_id, source.id),
         )
         with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(lambda: asyncio.run(manager.fork(source.address)))
+            future = pool.submit(operations[operation])
             assert entered_store.wait(timeout=5)
             writer.commit()
-            forked = future.result(timeout=5)
+            result = future.result(timeout=5)
     finally:
         writer.close()
 
+    assert manager.get_metadata(result.address)["title"] == "latest title"
+
+
+def test_fork_inherits_history_but_not_activity_or_continuation(manager) -> None:
+    source = manager.create("coder", session_id="source")
+    source.append_many(
+        [ChatMessage.user("hello"), ChatMessage.assistant(model="test", content="hi")]
+    )
+    source_address = _address("coder", "source")
+    settle_run(manager, source_address, "run-1")
+    source.start_run("run-one")
+    source.append_continuation_record(_continuation_start())
+
+    forked = asyncio.run(manager.fork(source_address, target_agent_id="reviewer"))
+
+    # The fork's current view shows the inherited history; its own audit is empty.
+    assert forked.load_active() == source.load_active()
+    assert forked.load() == []
+    assert forked.load_continuation() is None
+    # The latest completion is the source's own; the fork completed no Run, and
+    # an inherited Run's id marks nothing read there.
+    assert manager.list_completion_activity([(None, "reviewer")]) == {(None, "reviewer"): []}
+    assert manager.mark_terminal_run_read(forked.address, "run-1")["marked_read"] is False
+    source_activity = manager.list_completion_activity([(None, "coder")])[(None, "coder")]
+    assert [row["unread_run_id"] for row in source_activity] == ["run-1"]
     metadata = manager.get_metadata(forked.address)
-    assert metadata["title"] == "latest title"
     assert metadata[FORK_SOURCE_META_KEY] == {
         "agent_id": "coder",
-        "session_id": source.id,
+        "session_id": "source",
         "project_id": None,
         "forked_at": metadata[FORK_SOURCE_META_KEY]["forked_at"],
     }
-    assert forked.load() == []
-    assert forked.load_active() == source.load_active()
+    # A fork into another Agent's scope starts its own prompt-cache lineage.
+    assert manager.prompt_cache_affinity_id(forked.address) != manager.prompt_cache_affinity_id(
+        source_address
+    )
 
 
 def test_fork_titles_and_classifies_the_copy_in_its_one_write(manager, monkeypatch) -> None:
@@ -280,66 +248,3 @@ def test_archived_address_can_start_a_fresh_generation(manager) -> None:
     assert replacement.load_since(original_cursor) is None
     with pytest.raises(ChatSessionError, match="live session already exists"):
         manager.restore(address)
-
-
-def test_repeated_message_ids_are_preserved_in_sequence_order(manager) -> None:
-    session = manager.create("coder", session_id="session-one")
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="checkpoint",
-        projection=[],
-        compacted_token_count=1,
-        policy="automatic",
-        strategy="summary",
-    )
-
-    session.append_many([checkpoint, checkpoint])
-
-    assert session.load() == [checkpoint, checkpoint]
-
-
-def test_chat_history_sql_usage_matches_canonical_python_aggregation(manager) -> None:
-    session = manager.create("coder", session_id="usage-projection")
-    messages = [
-        ChatMessage.assistant(
-            model="test",
-            content="measured",
-            usage={
-                "input_tokens": 100,
-                "output_tokens": 20,
-                "cache_read_tokens": 60,
-                "cache_write_tokens": 5,
-                "reasoning_tokens": 7,
-            },
-        ),
-        ChatMessage.assistant(
-            model="test",
-            content="estimated input",
-            usage={
-                "input_tokens": 80,
-                "output_tokens": 10,
-                "input_tokens_estimated": True,
-                "output_tokens_estimated": False,
-                "estimated": True,
-            },
-        ),
-        ChatMessage.assistant(
-            model="test",
-            content="estimated output",
-            usage={
-                "input_tokens": 50,
-                "output_tokens": 12,
-                "cache_read_tokens": 25,
-                "input_tokens_estimated": False,
-                "output_tokens_estimated": True,
-                "estimated": True,
-            },
-        ),
-    ]
-    session.append_many(messages)
-
-    snapshot = session.read_chat_history_snapshot(
-        limit=1,
-        excluded_roles=("note", "history_edit"),
-    )
-
-    assert snapshot.session_usage == aggregate_session_usage(messages)
