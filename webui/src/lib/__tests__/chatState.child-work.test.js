@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ensureSessionState } from '../chatState.js';
-import { setup } from './chatState.controller.support.js';
+import {
+  deferred,
+  reflectionRun,
+  setupController,
+} from './chatState.support.js';
 
-describe('chat controller', () => {
+describe('Subagent rows', () => {
   it('reconciles a persisted Subagent row through its exact durable work id', async () => {
     const inspectSubAgentWork = vi.fn().mockResolvedValue({
       id: 'sub-old-work',
@@ -14,7 +18,7 @@ describe('chat controller', () => {
       result: 'Exact older result',
       timing: { duration_ms: 4200 },
     });
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { inspectSubAgentWork },
     });
     const tool = {
@@ -75,7 +79,7 @@ describe('chat controller', () => {
       timing: { duration_ms: 4200 },
       tool_name: 'read',
     });
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { inspectSubAgentWork },
     });
     const tool = {
@@ -142,7 +146,7 @@ describe('chat controller', () => {
         status: 'completed',
         result: 'Live child result',
       });
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: { inspectSubAgentWork },
     });
     const tool = {
@@ -205,7 +209,7 @@ describe('chat controller', () => {
       result: null,
     });
     const cancelRun = vi.fn().mockResolvedValue({ status: 'cancelled' });
-    const { chatState, controller } = setup({
+    const { chatState, controller } = setupController({
       operationOverrides: {
         cancelRun,
         inspectSubAgentWork,
@@ -260,9 +264,107 @@ describe('chat controller', () => {
       'queueRun:queue-item-one': 'admitted-child-run',
     });
   });
+});
 
+describe('Reflection reviews', () => {
+  it('restores completed reflections on fresh history load without touching another Session', async () => {
+    const { chatState, controller } = setupController({
+      operationOverrides: {
+        loadChatHistory: vi.fn().mockResolvedValue({
+          messages: [],
+          reflection_runs: [reflectionRun()],
+        }),
+      },
+    });
+    const other = ensureSessionState(chatState, 'alpha', 'other');
+    await controller.loadHistoryForSession('alpha', 'source');
+    expect(
+      chatState.sessions['alpha::source'].reflectionTasks['review-one'],
+    ).toEqual({
+      sessionId: 'review-session',
+      runKind: 'memory_reflection',
+      status: 'completed',
+      startedAt: '2026-09-05T10:00:00Z',
+    });
+    expect(other.reflectionTasks).toEqual({});
+  });
+
+  it('recovers a reflection completed while disconnected and deduplicates connection snapshots', async () => {
+    const loadReflectionRuns = vi
+      .fn()
+      .mockResolvedValue({ reflection_runs: [reflectionRun()] });
+    const { chatState, controller } = setupController({
+      operationOverrides: { loadReflectionRuns },
+      isDisplayedSession: (agent, session) =>
+        agent === 'alpha@project' && session === 'source',
+    });
+    const source = ensureSessionState(chatState, 'alpha@project', 'source');
+    const snapshot = { active_runs: [], queues: [] };
+    controller.applyConnectionSnapshot(snapshot);
+    controller.applyConnectionSnapshot(snapshot);
+    await vi.waitFor(() =>
+      expect(source.reflectionTasks['review-one']?.status).toBe('completed'),
+    );
+    expect(loadReflectionRuns).toHaveBeenCalledExactlyOnceWith({
+      agent_id: 'alpha@project',
+      session_id: 'source',
+    });
+  });
+
+  it('keeps newer live results when a reflection restore response arrives late', async () => {
+    const response = deferred();
+    const { chatState, controller } = setupController({
+      operationOverrides: {
+        loadChatHistory: vi.fn().mockReturnValue(response.promise),
+      },
+    });
+    const source = ensureSessionState(chatState, 'alpha', 'source');
+    const loading = controller.loadHistoryForSession('alpha', 'source');
+    const terminal = {
+      sessionId: 'review-session',
+      runKind: 'memory_reflection',
+      status: 'failed',
+      startedAt: '2026-09-05T10:00:00Z',
+    };
+    source.reflectionTasks = {
+      'review-one': terminal,
+      'new-review': { ...terminal, status: 'running' },
+    };
+    response.resolve({
+      messages: [],
+      reflection_runs: [reflectionRun('running')],
+    });
+    await loading;
+    expect(source.reflectionTasks['review-one']).toBe(terminal);
+    expect(source.reflectionTasks['new-review'].status).toBe('running');
+  });
+
+  it('ignores an obsolete reconnect response and removes deleted review rows', async () => {
+    const response = deferred();
+    const { chatState, controller } = setupController({
+      operationOverrides: {
+        loadReflectionRuns: vi.fn().mockReturnValue(response.promise),
+        loadChatHistory: vi
+          .fn()
+          .mockResolvedValue({ messages: [], reflection_runs: [] }),
+      },
+      isDisplayedSession: () => true,
+    });
+    const source = ensureSessionState(chatState, 'alpha', 'source');
+    source.reflectionTasks = {
+      stale: { sessionId: 'deleted', status: 'completed' },
+    };
+    controller.applyConnectionSnapshot({ active_runs: [] });
+    await controller.loadHistoryForSession('alpha', 'source');
+    response.resolve({ reflection_runs: [reflectionRun('running')] });
+    await Promise.resolve();
+    expect(source.reflectionTasks).toEqual({});
+  });
+});
+
+describe('background Bash processes', () => {
   it('merges background Bash status events into the bounded process map', () => {
-    const { chatState, controller } = setup();
+    const { chatState, controller } = setupController();
 
     controller.applyBackgroundBashStatusEvents([
       {
@@ -286,13 +388,16 @@ describe('chat controller', () => {
         payload: { process_id: 'process-two', status: 'failed', exit_code: 1 },
       },
     ]);
-    // Re-applying the same event is idempotent.
+    // Re-applying the same event is idempotent; an event without a
+    // process id and an empty batch change nothing.
     controller.applyBackgroundBashStatusEvents([
       {
         type: 'bash_process_status_changed',
         payload: { process_id: 'process-two', status: 'failed', exit_code: 1 },
       },
+      { type: 'bash_process_status_changed', payload: { status: 'completed' } },
     ]);
+    controller.applyBackgroundBashStatusEvents([]);
 
     expect(chatState.backgroundBashProcesses['process-one']).toEqual({
       status: 'completed',
@@ -315,16 +420,5 @@ describe('chat controller', () => {
       logFile: '',
     });
     expect(Object.keys(chatState.backgroundBashProcesses)).toHaveLength(2);
-  });
-
-  it('ignores background Bash status events without a process id', () => {
-    const { chatState, controller } = setup();
-
-    controller.applyBackgroundBashStatusEvents([
-      { type: 'bash_process_status_changed', payload: { status: 'completed' } },
-    ]);
-    controller.applyBackgroundBashStatusEvents([]);
-
-    expect(chatState.backgroundBashProcesses).toEqual({});
   });
 });

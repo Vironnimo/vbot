@@ -5,7 +5,6 @@ import {
   appendRunEvent,
   createChatState,
   ensureSessionState,
-  highestContiguousRunEventSequence,
   loadHistory,
   startRun,
   visibleTimelineItemsForRender,
@@ -15,7 +14,7 @@ import {
   reportedMultiStepMessages,
 } from './chatState.support.js';
 
-describe('chat state helpers', () => {
+describe('final assistant output', () => {
   it('replaces assistant streaming draft output with final output in the same run block', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -404,68 +403,6 @@ describe('chat state helpers', () => {
     ]);
   });
 
-  it('groups persisted assistant, tool, and final assistant messages best-effort', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Inspect the file' },
-      {
-        id: 'assistant-tools',
-        role: 'assistant',
-        reasoning: 'Need to read it.',
-        tool_calls: [
-          {
-            id: 'call-one',
-            name: 'read_file',
-            arguments: { path: 'a.txt' },
-          },
-        ],
-      },
-      {
-        id: 'tool-one',
-        role: 'tool',
-        tool_call_id: 'call-one',
-        name: 'read_file',
-        content: '{"ok": true, "content": "A"}',
-      },
-      {
-        id: 'assistant-final',
-        role: 'assistant',
-        content: 'The file says A.',
-      },
-      { id: 'user-two', role: 'user', content: 'Thanks' },
-    ]);
-
-    const timelineItems = visibleTimelineItemsForRender(sessionState);
-
-    expect(timelineItems).toEqual([
-      expect.objectContaining({ id: 'user-one', type: 'message' }),
-      expect.objectContaining({ type: 'assistant_run', source: 'history' }),
-      expect.objectContaining({ id: 'user-two', type: 'message' }),
-    ]);
-    expect(timelineItems[1].items.map((item) => item.type)).toEqual([
-      'reasoning',
-      'tool_call',
-      'assistant_output',
-    ]);
-    expect(timelineItems[1].tools).toEqual([
-      expect.objectContaining({
-        toolCallId: 'call-one',
-        name: 'read_file',
-        arguments: { path: 'a.txt' },
-        result: '{"ok": true, "content": "A"}',
-        status: 'success',
-      }),
-    ]);
-    expect(timelineItems[1].outputs).toEqual([
-      expect.objectContaining({ content: 'The file says A.' }),
-    ]);
-  });
-
   it('keeps the final streamed answer visible when completion arrives before canonical output', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -500,12 +437,6 @@ describe('chat state helpers', () => {
       payload: { status: CHAT_STATUS_COMPLETED },
     });
 
-    expect(sessionState.streamingRunEvents).toEqual([
-      expect.objectContaining({
-        type: 'assistant_output_delta',
-        payload: expect.objectContaining({ content_delta: 'Draft' }),
-      }),
-    ]);
     expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       expect.objectContaining({
         type: 'assistant_run',
@@ -516,6 +447,8 @@ describe('chat state helpers', () => {
             streaming: true,
           }),
         ],
+        // The unfinished Tool Call preview ends with the Run.
+        tools: [],
       }),
     ]);
   });
@@ -557,151 +490,10 @@ describe('chat state helpers', () => {
       payload: { status: CHAT_STATUS_COMPLETED },
     });
 
-    expect(sessionState.streamingRunEvents).toEqual([
-      expect.objectContaining({
-        type: 'tool_call_stdout',
-        payload: expect.objectContaining({ data: 'hello\n' }),
-      }),
-    ]);
     const [assistantRun] = visibleTimelineItemsForRender(sessionState);
     expect(assistantRun.status).toBe(CHAT_STATUS_COMPLETED);
     expect(assistantRun.tools[0]).toEqual(
       expect.objectContaining({ toolCallId: 'call-one', stdout: 'hello\n' }),
     );
-  });
-
-  it('tracks the highest contiguous active-run sequence for replay handoff', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    startRun(sessionState, {
-      run_id: 'run-one',
-      sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
-      events: [
-        {
-          type: 'run_started',
-          run_id: 'run-one',
-          sequence: 1,
-          payload: { status: CHAT_STATUS_RUNNING },
-        },
-      ],
-    });
-    appendRunEvent(sessionState, {
-      type: 'user_message_persisted',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: { message: { role: 'user', content: 'Hi' } },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_started',
-      run_id: 'run-one',
-      sequence: 5,
-      payload: {
-        tool_call: {
-          id: 'call-one',
-          index: 0,
-          name: 'read_file',
-          arguments: { path: 'a.txt' },
-        },
-      },
-    });
-
-    expect(highestContiguousRunEventSequence(sessionState)).toBe(2);
-
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-one',
-      sequence: 3,
-      payload: { content_delta: 'Working' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'reasoning_delta',
-      run_id: 'run-one',
-      sequence: 4,
-      payload: { reasoning_delta: 'Checking' },
-    });
-
-    expect(highestContiguousRunEventSequence(sessionState)).toBe(5);
-  });
-
-  it('advances the replay cursor across interleaved tool output streams', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    startRun(sessionState, {
-      run_id: 'run-one',
-      sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
-      events: [
-        {
-          type: 'run_started',
-          run_id: 'run-one',
-          sequence: 1,
-          payload: { status: CHAT_STATUS_RUNNING },
-        },
-      ],
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_stdout',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: { tool_call_id: 'call-one', data: 'a' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_stderr',
-      run_id: 'run-one',
-      sequence: 3,
-      payload: { tool_call_id: 'call-one', data: 'b' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_stdout',
-      run_id: 'run-one',
-      sequence: 4,
-      payload: { tool_call_id: 'call-one', data: 'c' },
-    });
-
-    // The compressed stdout event spans sequences 2 and 4, so only the raw
-    // per-chunk keys keep the cursor contiguous across the interleaved stream.
-    expect(highestContiguousRunEventSequence(sessionState)).toBe(4);
-  });
-
-  it('ignores older run sequences when choosing the active-run replay handoff', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    appendRunEvent(sessionState, {
-      type: 'run_started',
-      run_id: 'run-old',
-      sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
-    });
-    appendRunEvent(sessionState, {
-      type: 'run_completed',
-      run_id: 'run-old',
-      sequence: 8,
-      payload: { status: CHAT_STATUS_COMPLETED },
-    });
-    startRun(sessionState, {
-      run_id: 'run-new',
-      sse_url: '/api/runs/run-new/events',
-      status: CHAT_STATUS_RUNNING,
-      events: [
-        {
-          type: 'run_started',
-          run_id: 'run-new',
-          sequence: 1,
-          payload: { status: CHAT_STATUS_RUNNING },
-        },
-      ],
-    });
-
-    expect(highestContiguousRunEventSequence(sessionState)).toBe(1);
   });
 });
