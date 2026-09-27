@@ -1,17 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
-import { SvelteMap } from 'svelte/reactivity';
 import { init, t } from '../../lib/i18n.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 vi.mock(
   'svelte',
   async () => import('../../../node_modules/svelte/src/index-client.js'),
-);
-vi.mock(
-  'svelte/reactivity',
-  async () =>
-    import('../../../node_modules/svelte/src/reactivity/index-client.js'),
 );
 const { status, factory, desktop } = vi.hoisted(() => ({
   status: vi.fn(),
@@ -49,24 +44,8 @@ function render(props = {}) {
 
 // Mounts with reactive props so a test can change them after mount.
 function renderReactive(initial) {
-  const props = new SvelteMap(Object.entries(initial));
-  component = mount(LiveVoice, {
-    target: document.body,
-    props: {
-      get configured() {
-        return props.get('configured');
-      },
-      get serverUnavailable() {
-        return props.get('serverUnavailable');
-      },
-      get onToast() {
-        return props.get('onToast');
-      },
-      get voiceStatus() {
-        return props.get('voiceStatus') ?? null;
-      },
-    },
-  });
+  const props = reactiveProps(initial);
+  component = mount(LiveVoice, { target: document.body, props });
   flushSync();
   return props;
 }
@@ -111,7 +90,7 @@ function simulateController() {
 
 const toggle = () => document.querySelector('.live-voice__toggle');
 const muteButton = () =>
-  document.querySelector('button[aria-label="Mute microphone"]');
+  document.querySelector(`button[aria-label="${t('live.mute')}"]`);
 const caption = () => document.querySelector('.live-voice__caption');
 
 async function settle() {
@@ -152,18 +131,18 @@ describe('sidebar Live control', () => {
   it('starts and stops the call from one control', async () => {
     simulateController();
     render();
-    expect(toggle().getAttribute('aria-label')).toBe('Start Live');
+    expect(toggle().getAttribute('aria-label')).toBe(t('live.startButton'));
     expect(muteButton()).toBeNull();
     toggle().click();
     await settle();
     expect(fake.start).toHaveBeenCalledOnce();
-    expect(toggle().getAttribute('aria-label')).toBe('Stop Live');
+    expect(toggle().getAttribute('aria-label')).toBe(t('live.stopButton'));
     expect(muteButton()).not.toBeNull();
     expect(caption().dataset.role).toBe('status');
     toggle().click();
     flushSync();
     expect(fake.stop).toHaveBeenCalledOnce();
-    expect(toggle().getAttribute('aria-label')).toBe('Start Live');
+    expect(toggle().getAttribute('aria-label')).toBe(t('live.startButton'));
     expect(caption()).toBeNull();
   });
 
@@ -205,55 +184,53 @@ describe('sidebar Live control', () => {
     expect(fake.uiActions).toBe(uiActions);
   });
 
-  it('turns each controller notice into a shared toast with its severity', () => {
+  it('turns each controller notice into a shared toast with its message and severity', () => {
     simulateController();
     const onToast = vi.fn();
     render({ onToast });
-    fake.onNotice({ code: 'access_denied', severity: 'error' });
+    const messageKeys = {
+      not_configured: 'live.error.notConfigured',
+      not_usable: 'live.error.notUsable',
+      invalid_offer: 'live.error.invalidOffer',
+      access_denied: 'live.error.access',
+      rate_limited: 'live.error.rateLimited',
+      outcome_unknown: 'live.error.unknown',
+      provider_error: 'live.error.provider',
+      control_failed: 'live.error.control',
+      microphone_denied: 'live.error.permission',
+      microphone_unavailable: 'live.error.microphone',
+      connection_timeout: 'live.error.timeout',
+      connection_failed: 'live.error.connection',
+      connection_lost: 'live.error.connectionLost',
+      call_failed: 'live.error.callFailed',
+      playback_blocked: 'live.error.playback',
+      audio_unsupported: 'live.error.audioUnsupported',
+      media_mismatch: 'live.error.mediaMismatch',
+      desktop_restart_required: 'live.error.desktopRestart',
+      ui_action_failed: 'live.error.uiAction',
+      notification_failed: 'live.error.notification',
+      replaced: 'live.notice.replaced',
+      ended: 'live.notice.ended',
+    };
+    for (const code of Object.keys(messageKeys))
+      fake.onNotice({ code, severity: 'error' });
     fake.onNotice({ code: 'announcement_failed', severity: 'warn' });
     fake.onNotice({ code: 'replaced', severity: 'info' });
-    const toasts = onToast.mock.calls.map(([toast]) => toast);
-    expect(toasts.map((toast) => toast.variant)).toEqual([
-      'error',
-      'warn',
-      'info',
-    ]);
-    expect(toasts.every((toast) => toast.title === 'Live voice')).toBe(true);
-    expect(new Set(toasts.map((toast) => toast.message)).size).toBe(3);
-    expect(toasts[0].message).not.toContain('live.');
-    // Codes without a dedicated message still identify the problem.
-    expect(toasts[1].message).toContain('announcement_failed');
-  });
 
-  it.each([
-    'not_configured',
-    'not_usable',
-    'invalid_offer',
-    'access_denied',
-    'rate_limited',
-    'outcome_unknown',
-    'provider_error',
-    'control_failed',
-    'microphone_denied',
-    'microphone_unavailable',
-    'connection_timeout',
-    'connection_failed',
-    'connection_lost',
-    'call_failed',
-    'playback_blocked',
-    'desktop_restart_required',
-    'ui_action_failed',
-    'notification_failed',
-    'replaced',
-    'ended',
-  ])('has a dedicated message for %s', (code) => {
-    simulateController();
-    const onToast = vi.fn();
-    render({ onToast });
-    fake.onNotice({ code, severity: 'error' });
-    const [{ message }] = onToast.mock.calls[0];
-    expect(message).toBeTruthy();
-    expect(message).not.toBe(t('live.error.generic', '', { code }));
+    const toast = (message, variant) => ({
+      title: t('live.title'),
+      message,
+      variant,
+    });
+    expect(onToast.mock.calls.map(([shown]) => shown)).toEqual([
+      ...Object.values(messageKeys).map((key) => toast(t(key), 'error')),
+      // Codes without a dedicated message still identify the problem.
+      toast(
+        t('live.error.generic', '', { code: 'announcement_failed' }),
+        'warn',
+      ),
+      toast(t('live.notice.replaced'), 'info'),
+    ]);
   });
 
   it('surfaces a missing Live voice binding from the real controller', async () => {
@@ -269,8 +246,11 @@ describe('sidebar Live control', () => {
       flushSync();
       expect(onToast).toHaveBeenCalledOnce();
     });
-    expect(onToast.mock.calls[0][0].variant).toBe('error');
-    expect(toggle().getAttribute('aria-label')).toBe('Start Live');
+    expect(onToast.mock.calls[0][0]).toMatchObject({
+      message: t('live.error.notConfigured'),
+      variant: 'error',
+    });
+    expect(toggle().getAttribute('aria-label')).toBe(t('live.startButton'));
   });
 });
 
@@ -314,7 +294,7 @@ describe('Live voice in the Desktop app', () => {
     expect(fake.stop).not.toHaveBeenCalled();
   });
 
-  it('toggles the call from the global shortcut', async () => {
+  it('toggles the call from the global shortcut but leaves a closing call alone', async () => {
     simulateController();
     desktop.isDesktopAccessor.mockReturnValue(true);
     render();
@@ -322,20 +302,17 @@ describe('Live voice in the Desktop app', () => {
     desktopRequest({ action: 'toggle', source: 'hotkey' });
     await settle();
     expect(fake.start).toHaveBeenCalledOnce();
-    desktopRequest({ action: 'toggle', source: 'hotkey' });
-    flushSync();
-    expect(fake.stop).toHaveBeenCalledOnce();
-    expect(toggle().getAttribute('aria-label')).toBe('Start Live');
-  });
 
-  it('leaves a closing call alone', () => {
-    simulateController();
-    desktop.isDesktopAccessor.mockReturnValue(true);
-    render();
     fake.state.phase = 'closing';
     desktopRequest({ action: 'toggle', source: 'hotkey' });
     expect(fake.stop).not.toHaveBeenCalled();
-    expect(fake.start).not.toHaveBeenCalled();
+
+    fake.state.phase = 'live';
+    desktopRequest({ action: 'toggle', source: 'hotkey' });
+    flushSync();
+    expect(fake.stop).toHaveBeenCalledOnce();
+    expect(fake.start).toHaveBeenCalledOnce();
+    expect(toggle().getAttribute('aria-label')).toBe(t('live.startButton'));
   });
 
   it('explains a missing Live voice Model instead of starting', () => {
@@ -348,7 +325,7 @@ describe('Live voice in the Desktop app', () => {
     expect(fake.start).not.toHaveBeenCalled();
     expect(onToast).toHaveBeenCalledOnce();
     expect(onToast.mock.calls[0][0].message).toBe(
-      t('live.error.notConfigured', ''),
+      t('live.error.notConfigured'),
     );
   });
 
@@ -399,13 +376,13 @@ describe('Live voice with Desktop Voice', () => {
     const props = renderReactive({ configured: true, voiceStatus: null });
     expect(fake.wakePhrases()).toEqual([]);
 
-    props.set('voiceStatus', voiceStatus());
+    props.voiceStatus = voiceStatus();
     expect(fake.wakePhrases()).toEqual(['Okay Nabu']);
 
-    props.set('voiceStatus', voiceStatus({ state: 'microphone_disconnected' }));
+    props.voiceStatus = voiceStatus({ state: 'microphone_disconnected' });
     expect(fake.wakePhrases()).toEqual(['Okay Nabu']);
 
-    props.set('voiceStatus', voiceStatus({ enabled: false }));
+    props.voiceStatus = voiceStatus({ enabled: false });
     expect(fake.wakePhrases()).toEqual([]);
   });
 
@@ -421,20 +398,14 @@ describe('Live voice with Desktop Voice', () => {
     fake.state.captions = [{ role: 'assistant', text: 'Hello', final: true }];
     flushSync();
 
-    props.set(
-      'voiceStatus',
-      voiceStatus({ sequence: 4, recording: RECORDING }),
-    );
+    props.voiceStatus = voiceStatus({ sequence: 4, recording: RECORDING });
     flushSync();
     expect(fake.hold).toHaveBeenCalledExactlyOnceWith('wakeword');
-    expect(caption().textContent).toBe('Paused for a voice command');
+    expect(caption().textContent).toBe(t('live.state.held'));
     expect(caption().dataset.role).toBe('status');
 
     // A newer snapshot of the same recording keeps the one hold.
-    props.set(
-      'voiceStatus',
-      voiceStatus({ sequence: 5, recording: RECORDING }),
-    );
+    props.voiceStatus = voiceStatus({ sequence: 5, recording: RECORDING });
     flushSync();
     expect(fake.hold).toHaveBeenCalledOnce();
 
@@ -443,7 +414,7 @@ describe('Live voice with Desktop Voice', () => {
     flushSync();
     expect(muteButton().getAttribute('aria-pressed')).toBe('true');
 
-    props.set('voiceStatus', voiceStatus({ sequence: 6, recording: null }));
+    props.voiceStatus = voiceStatus({ sequence: 6, recording: null });
     flushSync();
     expect(fake.release).toHaveBeenCalledExactlyOnceWith('wakeword');
     expect(caption().textContent).toBe('Hello');
@@ -461,7 +432,7 @@ describe('Live voice with Desktop Voice', () => {
     // A call that starts during a recording is held at once.
     expect(fake.hold).toHaveBeenCalledExactlyOnceWith('wakeword');
 
-    props.set('voiceStatus', null);
+    props.voiceStatus = null;
     flushSync();
     expect(fake.release).toHaveBeenCalledExactlyOnceWith('wakeword');
     expect(fake.state.held).toBe(false);
@@ -470,7 +441,7 @@ describe('Live voice with Desktop Voice', () => {
   it('holds nothing without a call', () => {
     simulateController();
     const props = renderReactive({ configured: true, voiceStatus: null });
-    props.set('voiceStatus', voiceStatus({ recording: RECORDING }));
+    props.voiceStatus = voiceStatus({ recording: RECORDING });
     flushSync();
     expect(fake.hold).not.toHaveBeenCalled();
   });
@@ -490,7 +461,7 @@ describe('Live control conflicts', () => {
     });
     toggle().click();
     await settle();
-    props.set(prop, value);
+    props[prop] = value;
     flushSync();
     expect(fake.stop).toHaveBeenCalledOnce();
     expect(onToast).not.toHaveBeenCalled();

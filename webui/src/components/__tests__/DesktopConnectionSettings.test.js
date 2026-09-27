@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -58,15 +58,17 @@ describe('DesktopConnectionSettings', () => {
     expect(
       document.querySelector('.desktop-server-row .chip.success'),
     ).toBeTruthy();
-    expect(buttonsByText('Connect')).toHaveLength(1);
-    expect(buttonsByText('Remove')).toHaveLength(1);
+    const connect = t('settings.desktop.connection.connect');
+    const remove = t('common.remove');
+    expect(buttonsByText(connect)).toHaveLength(1);
+    expect(buttonsByText(remove)).toHaveLength(1);
 
-    buttonsByText('Connect')[0].click();
+    buttonsByText(connect)[0].click();
     flushSync();
     await waitForText('Server unreachable — Try again.');
     expect(selectServer).toHaveBeenCalledWith('office.lan', 9000);
 
-    buttonsByText('Remove')[0].click();
+    buttonsByText(remove)[0].click();
     flushSync();
     await waitForCondition(() => removeServer.mock.calls.length === 1);
     expect(removeServer).toHaveBeenCalledWith('office.lan', 9000);
@@ -95,12 +97,12 @@ describe('DesktopConnectionSettings', () => {
       target: document.body,
     });
     flushSync();
-    await waitForText('No saved servers');
+    await waitForText(t('settings.desktop.connection.emptyTitle'));
 
     setInput('desktop-settings-server-host', 'pi.lan');
     setInput('desktop-settings-server-port', '9000');
     setInput('desktop-settings-server-label', 'Pi');
-    buttonsByText('Add server')[0].click();
+    buttonsByText(t('settings.desktop.connection.addAction'))[0].click();
     flushSync();
 
     await waitForCondition(() => addServer.mock.calls.length === 1);

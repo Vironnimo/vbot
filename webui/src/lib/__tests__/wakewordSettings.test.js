@@ -119,13 +119,6 @@ describe('voiceConfigFromStatus', () => {
 });
 
 describe('buildVoiceConfigChanges', () => {
-  it('is empty when nothing differs', () => {
-    const baseline = voiceConfigFromStatus(status());
-    expect(
-      buildVoiceConfigChanges(cloneVoiceConfig(baseline), baseline),
-    ).toEqual({});
-  });
-
   it('sends only the changed values and phrases', () => {
     const baseline = voiceConfigFromStatus(
       status({
@@ -144,6 +137,8 @@ describe('buildVoiceConfigChanges', () => {
       }),
     );
     const draft = cloneVoiceConfig(baseline);
+    expect(buildVoiceConfigChanges(draft, baseline)).toEqual({});
+
     draft.microphone = { index: 5, name: 'Headset', host_api: 'MME' };
     draft.echo_cancellation = false;
     draft.active_model_ids = [NABU, HEY_NABU, JARVIS];
@@ -352,29 +347,22 @@ describe('overlappingPhraseConflicts', () => {
     });
   });
 
-  it('accepts overlapping phrases with the same effective action', () => {
+  it.each([
+    [
+      'overlapping phrases with the same effective action',
+      [
+        phrase(NABU),
+        // The explicit default Agent does the same as no override.
+        phrase(HEY_NABU, {
+          action: { type: 'command', agent_id: 'main', session_behavior: null },
+        }),
+      ],
+    ],
+    ['an inactive overlapping phrase', [phrase(NABU)]],
+  ])('accepts %s', (_label, phrases) => {
     const config = voiceConfigFromStatus(
-      status({
-        default_agent_id: 'main',
-        phrases: [
-          phrase(NABU),
-          // The explicit default Agent does the same as no override.
-          phrase(HEY_NABU, {
-            action: {
-              type: 'command',
-              agent_id: 'main',
-              session_behavior: null,
-            },
-          }),
-        ],
-      }),
+      status({ default_agent_id: 'main', phrases }),
     );
-
-    expect(overlappingPhraseConflicts(config, models).size).toBe(0);
-  });
-
-  it('ignores an inactive overlapping phrase', () => {
-    const config = voiceConfigFromStatus(status({ phrases: [phrase(NABU)] }));
 
     expect(overlappingPhraseConflicts(config, models).size).toBe(0);
   });
