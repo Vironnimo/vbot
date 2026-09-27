@@ -1,4 +1,5 @@
-"""Chat-loop tests grouped by lifecycle."""
+"""Chat Run lifecycle: run-end observers, admission records, restart Continuations and
+failure outcomes."""
 
 from __future__ import annotations
 
@@ -11,83 +12,121 @@ from typing import Any
 import pytest
 
 import core.tools.change_tracker as change_tracker_module
-from core.chat.continuation import ContinuationTracker
-from core.providers.errors import ProviderTimeoutError
-from core.runs import RunAdmission, RunCancelledError, RunExecutionOwner, RunStatus
+from core.chat import ChatSessionError
+from core.chat.continuation import ContinuationCause, ContinuationTracker
+from core.chat.streaming import StreamingChunkTimeoutError
+from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
+from core.runs import (
+    PROVIDER_REQUEST_STATUS_EVENT,
+    RunAdmission,
+    RunCancelledError,
+    RunExecutionOwner,
+    RunStatus,
+)
 from core.tools.change_tracker import ChangeTracker
-from core.utils.retry import retry_async
+from core.utils.errors import VBotError
 from tests.core.chat.chat_loop_support import (
     RecordingReflection,
     StubAdapter,
     StubAgent,
     StubRuntime,
     build_chat_loop,
+    history,
     session_address,
 )
 
 JsonObject = dict[str, Any]
 
+MODEL = "openrouter/anthropic/claude-sonnet-4"
+SESSION = session_address("coder", "session-one")
+
+
+def _runtime(tmp_path: Path, responses: list[Any], **adapter_options: Any) -> Any:
+    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"])
+    adapter = StubAdapter(responses, **adapter_options)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    return runtime
+
+
+def _answer(content: str = "Done") -> JsonObject:
+    return {"content": content, "reasoning": None, "tool_calls": None}
+
+
+async def _interrupted_by_restart(
+    runtime: Any, cause: ContinuationCause = "process_restart"
+) -> Any:
+    """A Session whose previous Run was interrupted, by default by a process restart."""
+    session = runtime.chat_sessions.get(SESSION)
+    session.start_run("run-before-restart")
+    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
+    await tracker.interrupt(cause)
+    return session
+
+
+def _sent_text(runtime: Any) -> str:
+    return "\n".join(
+        str(message.get("content") or "") for message in runtime.adapter.requests[0]["messages"]
+    )
+
 
 @pytest.mark.asyncio
-async def test_run_end_notifies_reflection_service_on_success(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openrouter/anthropic/claude-sonnet-4",
-        allowed_tools=["*"],
-        workspace=tmp_path / "workspace-coder",
-    )
-    adapter = StubAdapter([{"content": "Hello", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+async def test_start_run_without_an_existing_session_sends_and_creates_nothing(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path, [_answer()])
+
+    with pytest.raises(ChatSessionError):
+        await build_chat_loop(runtime).start_run("coder", "Hi", session_id="missing-session")
+
+    assert runtime.adapter.requests == []
+    assert not runtime.chat_sessions.exists(session_address("coder", "missing-session"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["user", "internal", "child-loop"])
+async def test_run_end_notifies_the_reflection_service(tmp_path: Path, origin: str) -> None:
+    runtime = _runtime(tmp_path, [_answer("Hello")])
     reflection = RecordingReflection()
+    loop = build_chat_loop(runtime, reflection_service=reflection)
+    if origin == "child-loop":
+        loop = loop.child_loop(nesting_depth=1)
 
-    await build_chat_loop(runtime, reflection_service=reflection).send(
-        "coder", "Hi", session_id="session-one"
+    run = await loop.start_run(
+        "coder", "Hi", session_id="session-one", internal=origin == "internal"
     )
+    await run.wait()
 
+    # The loop reports the internal flag verbatim; the service is the one that gates it.
     assert len(reflection.calls) == 1
     call = reflection.calls[0]
-    assert call["agent_id"] == "coder"
-    assert call["session_id"] == "session-one"
+    assert (call["agent_id"], call["session_id"], call["agent"].id) == (
+        "coder",
+        "session-one",
+        "coder",
+    )
     assert call["iteration_count"] == 1
-    assert call["agent"].id == "coder"
-    assert call["internal"] is False
+    assert call["internal"] is (origin == "internal")
     assert call["outcome"] == "success"
 
 
 @pytest.mark.asyncio
-async def test_run_end_notifies_reflection_with_internal_flag(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openrouter/anthropic/claude-sonnet-4",
-        allowed_tools=["*"],
-        workspace=tmp_path / "workspace-coder",
-    )
-    adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
-    reflection = RecordingReflection()
+async def test_run_end_notification_failure_never_breaks_the_run(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path, [_answer("Hello")])
+    reflection = RecordingReflection(raise_on_notify=True)
 
-    run = await build_chat_loop(runtime, reflection_service=reflection).start_run(
-        "coder", "internal note", session_id="session-one", internal=True
+    assistant = await build_chat_loop(runtime, reflection_service=reflection).send(
+        "coder", "Hi", session_id="session-one"
     )
-    await run.wait()
 
-    # The loop reports the flag verbatim; the service is the one that gates it.
-    assert len(reflection.calls) == 1
-    assert reflection.calls[0]["internal"] is True
+    assert assistant.content == "Hello"
 
 
 @pytest.mark.asyncio
-async def test_owned_descendant_skips_titles_and_reflection(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openrouter/anthropic/claude-sonnet-4",
-        allowed_tools=["*"],
-        workspace=tmp_path / "workspace-coder",
-    )
-    adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
+async def test_owned_descendant_records_its_admission_and_skips_titles_and_reflection(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path, [_answer()])
     # The owner's participant binding lives in its own bound Session; the owned
     # Run executes in a descendant Session the owner continues.
     binding = runtime.chat_sessions.create_bound_temporary_session(
@@ -98,86 +137,84 @@ async def test_owned_descendant_skips_titles_and_reflection(tmp_path: Path) -> N
         config={},
     )
     reflection = RecordingReflection()
+    title_calls: list[dict[str, Any]] = []
 
     class Titles:
-        calls: list[dict[str, Any]] = []
-
         def notify_user_message(self, **kwargs: Any) -> None:
-            self.calls.append(kwargs)
+            title_calls.append(kwargs)
 
     loop = build_chat_loop(runtime, reflection_service=reflection, session_title_service=Titles())
     owner = RunExecutionOwner("swarm", "group", "participant", binding.generation_id, "epoch")
     run = await runtime.chat_run_manager.start(
-        session_address("coder", "session-one"),
+        SESSION,
         loop.run_executor("Continue the assigned task"),
-        admission=RunAdmission(owner=owner),
+        admission=RunAdmission(owner=owner, work_id="sub-work-one"),
     )
     await run.wait()
 
     assert reflection.calls == []
-    assert Titles.calls == []
-    # Admission recorded the execution owner with the Run.
+    assert title_calls == []
     owned = runtime.chat_sessions.owned_runs(owner_name="swarm", group_id="group")
     assert [(record.run_id, record.owner, record.address) for record in owned] == [
-        (run.id, owner, session_address("coder", "session-one"))
+        (run.id, owner, SESSION)
     ]
     assert owned[0].terminal_status == "completed"
+    summary = history(runtime)[-1]
+    assert (summary.role, summary.run_id, summary.work_id) == (
+        "run_summary",
+        run.id,
+        "sub-work-one",
+    )
 
 
 @pytest.mark.asyncio
-async def test_internal_bootstrap_can_resume_process_restart_continuation(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    adapter = StubAdapter([{"content": "Verified", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.start_run("run-before-restart")
-    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
-    await tracker.interrupt("process_restart")
+@pytest.mark.parametrize(
+    ("cause", "resume", "consumed"),
+    [
+        ("process_restart", False, False),
+        ("process_restart", True, True),
+        ("network", True, False),
+    ],
+    ids=["not-resuming", "resuming", "not-a-restart"],
+)
+async def test_only_a_resuming_internal_run_consumes_a_restart_continuation(
+    tmp_path: Path, cause: ContinuationCause, resume: bool, consumed: bool
+) -> None:
+    runtime = _runtime(tmp_path, [_answer("Verified")])
+    session = await _interrupted_by_restart(runtime, cause)
+    before = session.load_continuation()
+    assert before is not None
 
     run = await build_chat_loop(runtime).start_run(
         "coder",
         "Verify the update and report",
         session_id="session-one",
         internal=True,
-        resume_process_restart=True,
+        resume_process_restart=resume,
     )
     await run.wait()
 
-    assert session.load_continuation() is None
-
-
-@pytest.mark.asyncio
-async def test_ordinary_internal_run_does_not_consume_continuation(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.start_run("run-before-restart")
-    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
-    await tracker.interrupt("process_restart")
-
-    run = await build_chat_loop(runtime).start_run(
-        "coder", "unrelated internal work", session_id="session-one", internal=True
-    )
-    await run.wait()
-
-    assert session.load_continuation() is not None
+    # Any other internal Run leaves the checkpoint untouched for the next user Run.
+    assert ("<continuation-checkpoint" in _sent_text(runtime)) is consumed
+    after = session.load_continuation()
+    if consumed:
+        assert after is None
+    else:
+        assert after is not None
+        assert (after.checkpoint_id, after.latest_run_id) == (
+            before.checkpoint_id,
+            before.latest_run_id,
+        )
 
 
 @pytest.mark.asyncio
 async def test_run_commit_failure_preserves_output_and_recoverable_continuation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    adapter = StubAdapter([{"content": "Verified", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.start_run("run-before-restart")
-    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
-    await tracker.interrupt("process_restart")
+    runtime = _runtime(tmp_path, [_answer("Verified")])
+    session = await _interrupted_by_restart(runtime)
 
-    async def fail_finish(*args):
+    async def fail_finish(*_args: Any) -> None:
         raise OSError("injected Run transaction failure")
 
     monkeypatch.setattr(runtime.chat_sessions, "finish_run", fail_finish)
@@ -201,18 +238,12 @@ async def test_run_commit_failure_preserves_output_and_recoverable_continuation(
 
 @pytest.mark.asyncio
 async def test_continuation_finalization_failure_does_not_replace_run_result(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    adapter = StubAdapter([{"content": "Done", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.start_run("run-before-restart")
-    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
-    await tracker.interrupt("process_restart")
+    runtime = _runtime(tmp_path, [_answer()])
+    await _interrupted_by_restart(runtime)
 
-    async def fail_resolve(_self):
+    async def fail_resolve(_self: ContinuationTracker) -> None:
         raise OSError("injected Continuation finalization failure")
 
     monkeypatch.setattr(ContinuationTracker, "resolve", fail_resolve)
@@ -234,10 +265,7 @@ async def test_continuation_finalization_failure_does_not_replace_run_result(
 async def test_run_excluded_from_agent_activity_still_persists_its_session_history(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    adapter = StubAdapter([{"content": "System work done", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
+    runtime = _runtime(tmp_path, [_answer("System work done")])
 
     run = await build_chat_loop(runtime).start_run(
         "coder",
@@ -250,7 +278,7 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
     await run.wait()
 
     assert run.source_session_id == "reviewed-session"
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    persisted = history(runtime)
     assert [message.role for message in persisted] == ["note", "assistant", "run_summary"]
     assert persisted[-1].run_id == run.id
     assert persisted[-1].status == "completed"
@@ -263,123 +291,82 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
 
 
 @pytest.mark.asyncio
-async def test_run_summary_persists_durable_work_id(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    adapter = StubAdapter([{"content": "Sub-Agent done", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = build_chat_loop(runtime)
-
-    run = await runtime.chat_run_manager.start(
-        session_address("coder", "session-one"),
-        loop.run_executor("Do work"),
-        admission=RunAdmission(work_id="sub-work-one"),
+@pytest.mark.parametrize(
+    ("failure", "error_kind", "streaming"),
+    [
+        (ProviderTimeoutError("private-provider-detail"), "timeout", False),
+        (NetworkError("private-provider-detail"), "network_error", False),
+        (StreamingChunkTimeoutError("private-provider-detail"), "timeout", True),
+    ],
+    ids=["provider-timeout", "network", "chunk-stall"],
+)
+async def test_provider_retry_is_visible_before_answer_without_leaking_error(
+    tmp_path: Path,
+    recovery_waits: list[float],
+    failure: VBotError,
+    error_kind: str,
+    streaming: bool,
+) -> None:
+    streamed_answer = [
+        {"type": "content_delta", "text": "done"},
+        {"type": "finish", "reason": "stop"},
+    ]
+    runtime = _runtime(
+        tmp_path, [failure, {"content": "done"}], stream_responses=[[failure], streamed_answer]
     )
-    await run.wait()
 
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert persisted[-1].role == "run_summary"
-    assert persisted[-1].run_id == run.id
-    assert persisted[-1].work_id == "sub-work-one"
-
-
-@pytest.mark.asyncio
-async def test_run_end_notification_failure_never_breaks_the_run(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openrouter/anthropic/claude-sonnet-4",
-        allowed_tools=["*"],
-        workspace=tmp_path / "workspace-coder",
-    )
-    adapter = StubAdapter([{"content": "Hello", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    reflection = RecordingReflection(raise_on_notify=True)
-
-    assistant = await build_chat_loop(runtime, reflection_service=reflection).send(
+    run = await build_chat_loop(runtime, streaming=streaming).start_run(
         "coder", "Hi", session_id="session-one"
     )
-
-    assert assistant.content == "Hello"
-
-
-@pytest.mark.asyncio
-async def test_child_loop_shares_the_reflection_service(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    adapter = StubAdapter([{"content": "Hello", "reasoning": None, "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    reflection = RecordingReflection()
-
-    parent = build_chat_loop(runtime, reflection_service=reflection)
-    child = parent.child_loop(nesting_depth=1)
-
-    assert child._reflection_service is reflection
-
-
-@pytest.mark.asyncio
-async def test_provider_retry_is_visible_before_answer_without_leaking_error(tmp_path):
-    class RetryingAdapter(StubAdapter):
-        attempts = 0
-
-        async def send(self, messages, *, model_id, **kwargs):
-            async def request():
-                self.attempts += 1
-                if self.attempts == 1:
-                    raise ProviderTimeoutError("private-provider-detail")
-                return await super(RetryingAdapter, self).send(
-                    messages, model_id=model_id, **kwargs
-                )
-
-            return await retry_async(request, initial_delay=0)
-
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    runtime = StubRuntime(
-        data_dir=tmp_path, agent=agent, adapter=RetryingAdapter([{"content": "done"}])
-    )
-    runtime.chat_sessions.create("coder", session_id="session-one")
-    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await run.wait()
-    status = [event.payload for event in run.events if event.type == "provider_request_status"]
-    assert [item["state"] for item in status] == ["waiting", "retrying", "waiting", "finished"]
-    assert status[1]["error_kind"] == "timeout"
-    assert status[1]["attempt"] == 2
-    assert status[1]["max_attempts"] == 9
+
+    status = [event.payload for event in run.events if event.type == PROVIDER_REQUEST_STATUS_EVENT]
+    retrying = [item for item in status if item["state"] == "retrying"]
+    # A stalled stream announces its retry before the recovery backoff does.
+    assert [item["state"] for item in status] == [
+        "waiting",
+        *["retrying"] * len(retrying),
+        "waiting",
+        "finished",
+    ]
+    assert {item["error_kind"] for item in retrying} == {error_kind}
+    scheduled = next(item for item in retrying if "attempt" in item)
+    assert (scheduled["attempt"], scheduled["max_attempts"]) == (2, 9)
     assert "private-provider-detail" not in str(status)
+    assert len(recovery_waits) == 1
     assert run.iteration_count == 1
-    assert not any(
-        message.role == "error"
-        for message in runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    )
+    assert all(message.role != "error" for message in history(runtime))
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected", [False, True])
-async def test_run_failures_remain_visible_in_history_once(tmp_path, expected, caplog, monkeypatch):
-    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
-    failure = (
-        ProviderTimeoutError("timeout sentinel")
-        if expected
-        else RuntimeError("private-internal-detail")
-    )
+@pytest.mark.parametrize(
+    ("failure", "error_kind", "expected"),
+    [
+        (RuntimeError("private-internal-detail"), "internal_error", False),
+        (ProviderTimeoutError("timeout sentinel"), "timeout", True),
+        (ProviderError("provider failed", retryable=False), "provider_fatal", True),
+    ],
+    ids=["unexpected", "exhausted-retries", "fatal-provider-error"],
+)
+async def test_run_failures_remain_visible_in_history_once(
+    tmp_path: Path,
+    recovery_waits: list[float],
+    caplog: pytest.LogCaptureFixture,
+    failure: Exception,
+    error_kind: str,
+    expected: bool,
+) -> None:
+    runtime = _runtime(tmp_path, [failure] * 9)
 
-    class FailingAdapter(StubAdapter):
-        async def send(self, *_args, **_kwargs):
-            raise failure
-
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=FailingAdapter([]))
-    runtime.chat_sessions.create("coder", session_id="session-one")
     run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     with pytest.raises(type(failure)) as raised:
         await run.wait()
+
     assert raised.value is failure
-    errors = [
-        message
-        for message in runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-        if message.role == "error"
-    ]
+    errors = [message for message in history(runtime) if message.role == "error"]
     assert len(errors) == 1
-    assert errors[0].error_kind == ("timeout" if expected else "internal_error")
-    assert "private-internal-detail" not in errors[0].content
+    assert errors[0].error_kind == error_kind
+    assert "private-internal-detail" not in str(errors[0].content)
     assert run.events[-1].payload["error_message_id"] == errors[0].id
     diagnostics = [
         record
@@ -395,26 +382,26 @@ async def test_run_failures_remain_visible_in_history_once(tmp_path, expected, c
 
 
 @pytest.mark.asyncio
-async def test_preparation_failure_reaches_summary_and_completion_observers(tmp_path):
+async def test_preparation_failure_reaches_summary_and_completion_observers(
+    tmp_path: Path,
+) -> None:
     class BrokenTitles:
-        def notify_user_message(self, **kwargs):
+        def notify_user_message(self, **_kwargs: Any) -> None:
             raise RuntimeError("preparation sentinel")
 
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
-    runtime.chat_sessions.create("coder", session_id="session-one")
+    runtime = _runtime(tmp_path, [])
     reflection = RecordingReflection()
     loop = build_chat_loop(
         runtime, reflection_service=reflection, session_title_service=BrokenTitles()
     )
+
     run = await loop.start_run("coder", "Hi", session_id="session-one")
     with pytest.raises(RuntimeError):
         await run.wait()
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert messages[-1].role == "run_summary"
-    assert messages[-1].status == "failed"
-    assert messages[-2].role == "error"
-    assert messages[-2].error_kind == "internal_error"
+
+    messages = history(runtime)
+    assert (messages[-1].role, messages[-1].status) == ("run_summary", "failed")
+    assert (messages[-2].role, messages[-2].error_kind) == ("error", "internal_error")
     assert reflection.calls[0]["outcome"] == "error"
     assert run.status is RunStatus.FAILED
     assert run.iteration_count == 0
@@ -423,23 +410,20 @@ async def test_preparation_failure_reaches_summary_and_completion_observers(tmp_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_final_change_stats_allow_loop_progress_and_survive_cancel(
-    tmp_path, monkeypatch, cancel
-):
-    agent = StubAgent(id="coder", model="openai/test")
-    runtime = StubRuntime(
-        data_dir=tmp_path, agent=agent, adapter=StubAdapter([{"content": "Done"}])
-    )
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
+    runtime = _runtime(tmp_path, [{"content": "Done"}])
     tracker = ChangeTracker()
     runtime.change_tracker = tracker
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session = runtime.chat_sessions.get(SESSION)
     entered = asyncio.Event()
     release = threading.Event()
     event_loop = asyncio.get_running_loop()
     event_loop_thread = threading.get_ident()
-    diff_threads = []
+    diff_threads: list[int] = []
     original_diff = change_tracker_module._line_diff_counts
 
-    def slow_diff(before, after):
+    def slow_diff(before: str, after: str) -> tuple[int, int]:
         diff_threads.append(threading.get_ident())
         event_loop.call_soon_threadsafe(entered.set)
         assert release.wait(5), "Event Loop did not progress while final statistics were computed"

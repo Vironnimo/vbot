@@ -1,4 +1,5 @@
-"""Chat-loop tests grouped by continuation."""
+"""Continuation across Chat Runs: the checkpoint journal an interrupted Run leaves and the
+single reminder the next Run sends from it."""
 
 from __future__ import annotations
 
@@ -7,36 +8,18 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat import (
-    ChatMessage,
-    ChatSessionError,
-)
+from core.chat import ChatMessage
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
-from core.chat.continuation import (
-    ContinuationTracker,
-    recover_continuation,
-)
-from core.providers.errors import (
-    NetworkError,
-)
+from core.chat.continuation import ContinuationTracker, recover_continuation
+from core.providers.errors import NetworkError
 from core.providers.reasoning import (
     REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
     ReasoningReplayPolicy,
 )
-from core.runs import (
-    ActiveRunError,
-    RunCancelledError,
-    RunInterruptedError,
-    RunStatus,
-)
-from core.tools import (
-    ToolRegistry,
-    tool_success,
-)
+from core.runs import RunCancelledError, RunInterruptedError, RunStatus
+from core.tools import ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import (
-    BlockingReasoningStreamingStubAdapter,
-    BlockingStubAdapter,
     PolicyStubAdapter,
     StubAdapter,
     StubAgent,
@@ -45,70 +28,11 @@ from tests.core.chat.chat_loop_support import (
     StubSkills,
     TenToolsThenBlockingReasoningAdapter,
     build_chat_loop,
-    persisted_roles,
     quoted_json_objects,
     session_address,
 )
 
 JsonObject = dict[str, Any]
-
-
-@pytest.mark.asyncio
-async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    with pytest.raises(ChatSessionError):
-        await build_chat_loop(runtime).start_run("coder", "Hi", session_id="missing-session")
-
-    assert adapter.requests == []
-
-
-@pytest.mark.asyncio
-async def test_content_block_request_is_serialized_in_continuation_journal(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [],
-        stream_responses=[NetworkError("offline") for _ in range(9)],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    content: list[ContentBlock] = [
-        TextBlock(type="text", text="Describe this image"),
-        MediaBlock(
-            type="media",
-            attachment_id="attachment-one",
-            filename="photo.jpg",
-            media_type="image/jpeg",
-        ),
-    ]
-
-    with pytest.raises(RunInterruptedError, match="network"):
-        await build_chat_loop(runtime, streaming=True).send(
-            "coder",
-            content,
-            session_id="session-one",
-        )
-
-    state = await recover_continuation(
-        runtime.chat_sessions.get(session_address("coder", "session-one"))
-    )
-    assert state is not None
-    assert state.original_requests == [
-        [
-            {"type": "text", "text": "Describe this image"},
-            {
-                "type": "media",
-                "attachment_id": "attachment-one",
-                "filename": "photo.jpg",
-                "media_type": "image/jpeg",
-            },
-        ]
-    ]
 
 
 @pytest.mark.asyncio
@@ -156,97 +80,6 @@ async def test_input_append_is_the_only_write_between_admission_and_the_first_re
     assert [message.role for message in history[-2:]] == ["note", "user"]
     assert "deploy: Ship the app." in cast(str, history[-2].content)
     assert runtime.chat_sessions.seen_skills(address) == frozenset({"deploy"})
-
-
-@pytest.mark.asyncio
-async def test_initial_session_validation_failure_creates_no_checkpoint(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "unused", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    with pytest.raises(ChatSessionError):
-        await build_chat_loop(runtime).start_run("coder", "work", session_id="missing-session")
-
-    assert not runtime.chat_sessions.exists(session_address("coder", "missing-session"))
-
-
-@pytest.mark.asyncio
-async def test_internal_run_neither_consumes_nor_resolves_continuation(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Background work complete", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.start_run("interrupted-run")
-    tracker = ContinuationTracker(session, run_id="interrupted-run", request="visible work")
-    await tracker.interrupt("network")
-    before = await recover_continuation(session)
-    assert before is not None
-
-    run = await build_chat_loop(runtime).start_run(
-        "coder",
-        "background note",
-        session_id="session-one",
-        internal=True,
-    )
-    await run.wait()
-
-    after = await recover_continuation(session)
-    assert after is not None
-    assert after.checkpoint_id == before.checkpoint_id
-    assert after.cause == before.cause
-    assert all(
-        "continuation-checkpoint" not in str(message.get("content") or "")
-        for message in adapter.requests[0]["messages"]
-    )
-
-
-@pytest.mark.asyncio
-async def test_cancel_then_immediate_queued_correction_receives_finalized_checkpoint(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    first_adapter = BlockingReasoningStreamingStubAdapter()
-    second_adapter = StubAdapter(
-        [],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Corrected"},
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = build_chat_loop(runtime, streaming=True)
-
-    first_run = await loop.start_run("coder", "Use the first folder", session_id="session-one")
-    await first_adapter.stream_started.wait()
-    runtime.adapter = second_adapter
-    first_run.request_cancel(reason="user")
-    queued = await loop.queue_run(
-        "coder",
-        "Not this folder; use the second one",
-        session_id="session-one",
-    )
-
-    with pytest.raises(RunCancelledError):
-        await first_run.wait()
-    second_run = await queued.future
-    assistant = await second_run.wait()
-
-    assert assistant.content == "Corrected"
-    request_messages = second_adapter.stream_requests[0]["messages"]
-    request_texts = [str(message.get("content") or "") for message in request_messages]
-    correction_index = request_texts.index("Not this folder; use the second one")
-    assert "<continuation-checkpoint" in request_texts[correction_index - 1]
-    assert "The previous Run was interrupted." in request_texts[correction_index - 1]
-    assert "Resume the interrupted work" not in request_texts[correction_index - 1]
-    assert "Thinking hard." in request_texts[correction_index - 1]
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert [message.content for message in persisted if message.role == "user"] == [
-        "Use the first folder",
-        "Not this folder; use the second one",
-    ]
 
 
 @pytest.mark.asyncio
@@ -320,58 +153,71 @@ async def test_cancel_after_ten_tools_then_correction_reuses_canonical_results_o
 
 
 @pytest.mark.asyncio
-async def test_second_interrupted_message_extends_same_checkpoint(
-    tmp_path: Path, monkeypatch
+async def test_interrupted_runs_extend_one_checkpoint_journal(
+    tmp_path: Path, recovery_waits: list[float]
 ) -> None:
-    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    first_adapter = StubAdapter(
-        [],
-        stream_responses=[NetworkError("offline") for _ in range(9)],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
+    adapter = StubAdapter([], stream_responses=[NetworkError("offline") for _ in range(9)])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     loop = build_chat_loop(runtime, streaming=True)
+    content: list[ContentBlock] = [
+        TextBlock(type="text", text="Describe this image"),
+        MediaBlock(
+            type="media",
+            attachment_id="attachment-one",
+            filename="photo.jpg",
+            media_type="image/jpeg",
+        ),
+    ]
+
+    async def journal() -> Any:
+        state = await recover_continuation(
+            runtime.chat_sessions.get(session_address("coder", "session-one"))
+        )
+        assert state is not None
+        return state
+
     with pytest.raises(RunInterruptedError, match="network"):
-        await loop.send("coder", "Do the work", session_id="session-one")
-    first_state = await recover_continuation(
-        runtime.chat_sessions.get(session_address("coder", "session-one"))
-    )
-    assert first_state is not None
+        await loop.send("coder", content, session_id="session-one")
+    first = await journal()
+    # Content-block input is journaled in its serialized form.
+    serialized = [
+        {"type": "text", "text": "Describe this image"},
+        {
+            "type": "media",
+            "attachment_id": "attachment-one",
+            "filename": "photo.jpg",
+            "media_type": "image/jpeg",
+        },
+    ]
+    assert first.original_requests == [serialized]
 
     runtime.adapter = StubAdapter(
         [],
         stream_responses=[
-            [
-                {"type": "reasoning_delta", "text": "Resume plan"},
-                NetworkError("offline again"),
-            ]
+            [{"type": "reasoning_delta", "text": "Resume plan"}, NetworkError("offline again")]
             for _ in range(9)
         ],
     )
-    second_run = await loop.start_run(
-        "coder",
-        "Try again",
-        session_id="session-one",
-    )
+    second_run = await loop.start_run("coder", "Try again", session_id="session-one")
     with pytest.raises(RunInterruptedError, match="network"):
         await second_run.wait()
 
-    second_state = await recover_continuation(
-        runtime.chat_sessions.get(session_address("coder", "session-one"))
+    second = await journal()
+    assert (second.checkpoint_id, second.origin_run_id) == (
+        first.checkpoint_id,
+        first.origin_run_id,
     )
-    assert second_state is not None
-    assert second_state.checkpoint_id == first_state.checkpoint_id
-    assert second_state.origin_run_id == first_state.origin_run_id
-    assert second_state.latest_run_id == second_run.id
-    assert second_state.reasoning == "Resume plan"
+    assert second.latest_run_id == second_run.id
+    assert second.original_requests == [serialized, "Try again"]
+    assert second.reasoning == "Resume plan"
+    assert len(recovery_waits) == 16
 
 
 @pytest.mark.asyncio
 async def test_next_run_receives_partial_and_reasoning_after_exhausted_replays(
-    tmp_path: Path,
-    monkeypatch,
+    tmp_path: Path, recovery_waits: list[float]
 ) -> None:
-    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     adapter = StubAdapter(
         [],
         stream_responses=[
@@ -409,8 +255,9 @@ async def test_next_run_receives_partial_and_reasoning_after_exhausted_replays(
 
 
 @pytest.mark.asyncio
-async def test_interrupted_edit_run_keeps_its_own_checkpoint(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
+async def test_interrupted_edit_run_keeps_its_own_checkpoint(
+    tmp_path: Path, recovery_waits: list[float]
+) -> None:
     adapter = StubAdapter(
         [],
         stream_responses=[
@@ -501,69 +348,3 @@ async def test_continuation_reminder_is_single_and_provider_policy_neutral(
     assert "reasoning_meta" not in assistant_entries[0]
     assert interrupted.reasoning == "Readable plan"
     assert interrupted.reasoning_meta == {"signature": "interrupted-signed-state"}
-
-
-@pytest.mark.asyncio
-async def test_start_run_rejects_second_run_for_same_session(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = BlockingStubAdapter()
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
-
-    first_run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
-    await adapter.request_started.wait()
-
-    with pytest.raises(ActiveRunError):
-        await build_chat_loop(runtime).start_run("coder", "Again", session_id="session-one")
-
-    first_run.request_cancel()
-    adapter.release.set()
-    with pytest.raises(RunCancelledError):
-        await first_run.wait()
-
-
-@pytest.mark.asyncio
-async def test_start_run_allows_parallel_different_sessions(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    first_adapter = BlockingStubAdapter()
-    second_adapter = StubAdapter([{"content": "Second", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
-    adapters = [first_adapter, second_adapter]
-    runtime.get_adapter = lambda connection: adapters.pop(0)  # type: ignore[method-assign]
-    runtime.chat_sessions.create("coder", session_id="session-one")
-    runtime.chat_sessions.create("coder", session_id="session-two")
-
-    first_run = await build_chat_loop(runtime).start_run("coder", "First", session_id="session-one")
-    await first_adapter.request_started.wait()
-    second_run = await build_chat_loop(runtime).start_run(
-        "coder", "Second", session_id="session-two"
-    )
-
-    second_assistant = await second_run.wait()
-    first_run.request_cancel()
-    first_adapter.release.set()
-
-    assert second_assistant.content == "Second"
-    with pytest.raises(RunCancelledError):
-        await first_run.wait()
-
-
-@pytest.mark.asyncio
-async def test_cancelled_run_ignores_late_assistant_output(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = BlockingStubAdapter()
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
-
-    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
-    await adapter.request_started.wait()
-    run.request_cancel()
-    adapter.release.set()
-
-    with pytest.raises(RunCancelledError):
-        await run.wait()
-
-    session_messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert run.status == RunStatus.CANCELLED
-    assert persisted_roles(session_messages) == ["user"]
-    assert "assistant_output" not in [event.type for event in run.events]

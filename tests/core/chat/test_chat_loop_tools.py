@@ -33,13 +33,13 @@ from tests.core.chat.chat_loop_support import (
     StubModels,
     StubStorage,
     build_chat_loop,
+    history,
     persisted_roles,
 )
 from tests.core.chat.chat_loop_tools_test_support import (
     WAIT_SECONDS,
     JsonObject,
     final,
-    history,
     tool_results,
     tool_runtime,
     tool_turn,
@@ -295,9 +295,6 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
             self.request_messages: list[JsonObject] = []
             self.checks = 0
 
-        def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
-            return 90
-
         def has_new_compactable_context(self, *_args: Any, **_kwargs: Any) -> bool:
             return True
 
@@ -418,8 +415,11 @@ async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
 
     after_cancel = history(runtime)
     assert cancel_callbacks == ["call_slow"]
-    assert runtime.process_manager.cancelled_scopes == [cancelled_run.id]
-    assert runtime.process_manager.released_scopes == [cancelled_run.id]
+    # The settled Run releases its process scope only after cancelling it.
+    assert runtime.process_manager.scope_events == [
+        ("cancel", cancelled_run.id),
+        ("release", cancelled_run.id),
+    ]
     assert persisted_roles(after_cancel) == ["user", "assistant"]
     assert [m.status for m in after_cancel if m.role == "run_summary"] == ["cancelled"]
 

@@ -1,5 +1,5 @@
-"""Chat history primitives: checkpoint ordinals, history guidance, compaction overlays and
-reply-surface state."""
+"""Chat history primitives: checkpoint ordinals, history guidance, compaction overlays,
+reply-surface state and Session image references."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from core.chat._message_history import (
     reply_surface_from_note,
     should_append_reply_surface_note,
 )
+from core.chat._request_history import _assign_session_image_references
+from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.messages import COMPACTION_SUMMARY_END_MARKER, HISTORY_COMPACTION_GUIDANCE
 
 
@@ -130,3 +132,28 @@ def test_old_untagged_channel_note_is_not_reply_surface_state() -> None:
 
     assert reply_surface_from_note(old_note) is None
     assert should_append_reply_surface_note([old_note], ReplySurface.webui()) is True
+
+
+def _image(attachment_id: str, reference: int | None = None) -> MediaBlock:
+    return MediaBlock(
+        type="media",
+        attachment_id=attachment_id,
+        filename="image.png",
+        media_type="image/png",
+        image_reference=reference,
+    )
+
+
+def test_new_images_continue_the_sessions_image_references() -> None:
+    earlier = ChatMessage.user([_image("image-one", 1)])
+    content: list[ContentBlock] = [
+        TextBlock(type="text", text="Compare these."),
+        _image("image-two"),
+        _image("image-three"),
+    ]
+
+    assert _assign_session_image_references(content, [earlier]) == [
+        TextBlock(type="text", text="Compare these."),
+        _image("image-two", 2),
+        _image("image-three", 3),
+    ]

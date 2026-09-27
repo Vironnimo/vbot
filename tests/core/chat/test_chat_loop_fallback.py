@@ -29,7 +29,6 @@ from core.tools import (
 from core.tools.file_state import FileReadState
 from core.tools.read import register_read_tool
 from core.utils.errors import ConfigError, ProviderError
-from tests.core.chat.chat_loop_streaming_test_support import event_types, history, last_run
 from tests.core.chat.chat_loop_support import (
     ClosingStubAdapter,
     StubAdapter,
@@ -37,6 +36,9 @@ from tests.core.chat.chat_loop_support import (
     StubModels,
     StubRuntime,
     build_chat_loop,
+    event_types,
+    history,
+    last_run,
     persisted_roles,
 )
 

@@ -1,18 +1,16 @@
-"""Chat-loop tests grouped by skills."""
+"""Skills in Chat Runs: trigger activation, unmatched-trigger reminders, expiry at Compaction
+and announcements of newly available Skills."""
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
-from core.chat import (
-    ChatMessage,
-)
-from core.chat.wire_shaping import _notes_to_synthetic_user_message
-from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, is_skill_available_note
+from core.chat import ChatMessage
+from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, ChatSession, is_skill_available_note
 from core.skills.skills import SkillRegistry
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -20,327 +18,213 @@ from tests.core.chat.chat_loop_support import (
     StubRuntime,
     StubSkill,
     StubSkills,
-    _write_test_skill,
     build_chat_loop,
     build_request_messages,
+    history,
     persisted_roles,
-    session_address,
 )
 
 JsonObject = dict[str, Any]
 
+SKILL_CONTENT = '<skill_content name="debugging">'
 
-@pytest.mark.asyncio
-async def test_slash_skill_trigger_activates_before_provider_request(tmp_path: Path) -> None:
-    skill_file = _write_test_skill(tmp_path, "debugging")
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["*"],
-        allowed_skills=["debugging"],
+
+def _write_skill(skills_dir: Path, name: str, *, requirements: str = "") -> Path:
+    skill_dir = skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        f"---\nname: {name}\ndescription: Test skill.\n{requirements}---\n\n# {name}\n\n"
+        "Use this skill content.\n",
+        encoding="utf-8",
     )
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
-
-    await build_chat_loop(runtime).send("coder", "/debugging fix this", session_id="session-one")
-
-    request_messages = adapter.requests[0]["messages"]
-    # The skill content sits directly under the triggering user message — in
-    # place, not hoisted to the front of the request.
-    assert request_messages[1]["content"] == "/debugging fix this"
-    assert request_messages[2]["content"].startswith('<skill_content name="debugging">')
-    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
-    assert "[skill-context]" not in request_text
-    assert "<system-reminder>\n[skill-context]" not in request_text
+    return skill_file
 
 
-@pytest.mark.asyncio
-async def test_skill_context_persists_across_later_sends_without_visible_user_message(
-    tmp_path: Path,
-) -> None:
-    skill_file = _write_test_skill(tmp_path, "debugging")
+def _runtime(tmp_path: Path, responses: int, *, allowed_skills: list[str], skills: Any) -> Any:
     agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["*"],
-        allowed_skills=["debugging"],
+        id="coder", model="openai/gpt-5.2", allowed_tools=["*"], allowed_skills=allowed_skills
     )
     adapter = StubAdapter(
-        [
-            {"content": "First", "tool_calls": None},
-            {"content": "Second", "tool_calls": None},
-        ]
+        [{"content": f"Answer {i}", "tool_calls": None} for i in range(responses)]
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
-
-    await build_chat_loop(runtime).send("coder", "/debugging fix this", session_id="session-one")
-    await build_chat_loop(runtime).send("coder", "continue", session_id="session-one")
-
-    second_request_messages = adapter.requests[1]["messages"]
-    # The activation note replays at its chronological position: right after the
-    # triggering user message, before the first assistant reply.
-    assert second_request_messages[1]["content"] == "/debugging fix this"
-    assert second_request_messages[2]["content"].startswith('<skill_content name="debugging">')
-    assert second_request_messages[-1]["content"] == "continue"
-    persisted_messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    visible_messages = [message for message in persisted_messages if message.role != "note"]
-    assert persisted_roles(visible_messages) == [
-        "user",
-        "assistant",
-        "user",
-        "assistant",
-    ]
-    assert all(
-        not (
-            message.role == "user"
-            and isinstance(message.content, str)
-            and message.content.startswith("<skill_content ")
-        )
-        for message in visible_messages
-    )
+    runtime.skills = skills
+    return runtime
 
 
-@pytest.mark.asyncio
-async def test_inline_skill_trigger_preserves_original_message(tmp_path: Path) -> None:
-    skill_file = _write_test_skill(tmp_path, "debugging")
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["*"],
-        allowed_skills=["debugging"],
-    )
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
-
-    await build_chat_loop(runtime).send(
-        "coder",
-        "Please use $debugging on this issue",
-        session_id="session-one",
-    )
-
-    request_messages = adapter.requests[0]["messages"]
-    assert request_messages[1]["content"] == "Please use $debugging on this issue"
-    assert request_messages[2]["content"].startswith('<skill_content name="debugging">')
+def _debugging_skills(tmp_path: Path) -> StubSkills:
+    skill_file = _write_skill(tmp_path / "skills", "debugging")
+    return StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
 
 
-def test_compaction_checkpoint_expires_triggered_skill_content(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-
-    session.append(ChatMessage.user("Old question"))
-    session.activate_skill_context(
-        "debugging",
-        {"activation_content": '<skill_content name="debugging">Steps</skill_content>'},
-    )
-    session.append(ChatMessage.assistant(model=agent.model, content="Old answer"))
-    tail_user = ChatMessage.user("Tail question")
-    session.append(tail_user)
-    session.append(ChatMessage.assistant(model=agent.model, content="Tail answer"))
-    session.append(
-        ChatMessage.compaction_checkpoint(
-            summary="Compacted historical context.",
-            projection=session.load()[-2:],
-            compacted_token_count=123,
-        )
-    )
-
-    request_messages = asyncio.run(build_request_messages(build_chat_loop(runtime), agent, session))
-
-    contents = [message.get("content", "") or "" for message in request_messages]
-    assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
-    assert contents[2] == "Tail question"
-    assert all("<skill_content" not in content for content in contents)
-    assert session.activated_skill_contents() == {}
-
-
-def test_skill_carried_in_checkpoint_tail_is_expired(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-
-    session.append(ChatMessage.user("Old question"))
-    session.append(ChatMessage.assistant(model=agent.model, content="Old answer"))
-    tail_user = ChatMessage.user("/debugging fix this")
-    session.append(tail_user)
-    session.activate_skill_context(
-        "debugging",
-        {"activation_content": '<skill_content name="debugging">Steps</skill_content>'},
-    )
-    session.append(ChatMessage.assistant(model=agent.model, content="Tail answer"))
-    session.append(
-        ChatMessage.compaction_checkpoint(
-            summary="Compacted historical context.",
-            projection=session.load()[-3:],
-            compacted_token_count=123,
-        )
-    )
-
-    request_messages = asyncio.run(build_request_messages(build_chat_loop(runtime), agent, session))
-
-    contents = [message.get("content", "") or "" for message in request_messages]
-    assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
-    assert contents[2] == "/debugging fix this"
-    assert all("<skill_content" not in content for content in contents)
-
-
-def test_changed_skill_versions_do_not_cross_compaction(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-
-    session.append(ChatMessage.user("Old question"))
-    session.activate_skill_context(
-        "debugging",
-        {"activation_content": '<skill_content name="debugging">Old steps</skill_content>'},
-    )
-    old_carrier = session.load()[-1]
-    session.activate_skill_context(
-        "debugging",
-        {"activation_content": '<skill_content name="debugging">New steps</skill_content>'},
-    )
-    session.append(
-        ChatMessage.compaction_checkpoint(
-            summary="Compacted historical context.",
-            projection=[old_carrier],
-            compacted_token_count=123,
-        )
-    )
-
-    request_messages = asyncio.run(build_request_messages(build_chat_loop(runtime), agent, session))
-
-    contents = [message.get("content", "") or "" for message in request_messages]
-    assert all("<skill_content" not in content for content in contents)
-    assert all("Old steps" not in content and "New steps" not in content for content in contents)
+def _contents(request_messages: list[JsonObject]) -> list[str]:
+    return [message.get("content", "") or "" for message in request_messages]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "message",
+    "trigger",
     ["/debugging fix this", "Please use $debugging on this issue"],
+    ids=["slash", "inline"],
 )
-async def test_skill_trigger_does_not_activate_when_allowed_skills_empty(
-    tmp_path: Path,
-    message: str,
+async def test_skill_trigger_places_its_content_under_the_input_for_later_requests(
+    tmp_path: Path, trigger: str
 ) -> None:
-    skill_file = _write_test_skill(tmp_path, "debugging")
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["*"],
-        allowed_skills=[],
+    runtime = _runtime(
+        tmp_path, 2, allowed_skills=["debugging"], skills=_debugging_skills(tmp_path)
     )
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
+    loop = build_chat_loop(runtime)
 
-    await build_chat_loop(runtime).send("coder", message, session_id="session-one")
+    await loop.send("coder", trigger, session_id="session-one")
+    await loop.send("coder", "continue", session_id="session-one")
 
-    request_messages = adapter.requests[0]["messages"]
-    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
-    assert '<skill_content name="debugging">' not in request_text
-    assert request_messages[1]["content"] == message
-    assert "Skill trigger 'debugging' did not match" in request_messages[2]["content"]
+    first, second = (request["messages"] for request in runtime.adapter.requests)
+    # The Skill content sits directly under the triggering user message — in
+    # place, not hoisted — and replays there in later requests.
+    for request_messages in (first, second):
+        assert request_messages[1]["content"] == trigger
+        assert request_messages[2]["content"].startswith(SKILL_CONTENT)
+    assert second[-1]["content"] == "continue"
+    assert all("[skill-context]" not in content for content in _contents(second))
+    visible = [message for message in history(runtime) if message.role != "note"]
+    assert persisted_roles(visible) == ["user", "assistant", "user", "assistant"]
+    assert all(SKILL_CONTENT not in str(message.content) for message in visible)
+
+
+def _unavailable_skills(tmp_path: Path) -> SkillRegistry:
+    _write_skill(
+        tmp_path / "skills",
+        "openai-helper",
+        requirements=("metadata:\n  vbot:\n    requirements:\n      env: OPENAI_API_KEY\n"),
+    )
+    return SkillRegistry.load(tmp_path / "skills", environment={})
 
 
 @pytest.mark.asyncio
-async def test_skill_trigger_does_not_activate_unavailable_skill(tmp_path: Path) -> None:
-    skills_dir = tmp_path / "skills"
-    skill_dir = skills_dir / "openai-helper"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        """---
-name: openai-helper
-description: Use OpenAI.
-metadata:
-    vbot:
-        requirements:
-            env: OPENAI_API_KEY
----
-
-# OpenAI Helper
-""",
-        encoding="utf-8",
-    )
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["*"],
-        allowed_skills=["openai-helper"],
-    )
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.skills = SkillRegistry.load(skills_dir, environment={})
-
-    await build_chat_loop(runtime).send("coder", "/openai-helper help", session_id="session-one")
-
-    request_messages = adapter.requests[0]["messages"]
-    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
-    assert '<skill_content name="openai-helper">' not in request_text
-    assert request_messages[1]["content"] == "/openai-helper help"
-    assert "Skill trigger 'openai-helper' matched a skill, but it is unavailable" in request_text
-    assert "missing environment variable 'OPENAI_API_KEY'" in request_text
-
-
-@pytest.mark.asyncio
-async def test_unknown_skill_trigger_adds_system_reminder(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["*"],
-        allowed_skills=[],
-    )
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime).send("coder", "/missing do it", session_id="session-one")
-
-    request_messages = adapter.requests[0]["messages"]
-    assert request_messages[1]["content"] == "/missing do it"
-    assert "Skill trigger 'missing' did not match" in request_messages[2]["content"]
-
-
-@pytest.mark.asyncio
-async def test_unknown_skill_trigger_reminder_appears_once_in_first_request(
+@pytest.mark.parametrize(
+    ("trigger", "allowed_skills", "skills", "reminders"),
+    [
+        ("/missing do it", [], lambda _path: StubSkills([]), ["'missing' did not match"]),
+        (
+            "Please use $debugging on this issue",
+            [],
+            _debugging_skills,
+            ["'debugging' did not match"],
+        ),
+        (
+            "/openai-helper help",
+            ["openai-helper"],
+            _unavailable_skills,
+            [
+                "'openai-helper' matched a skill, but it is unavailable",
+                "missing environment variable 'OPENAI_API_KEY'",
+            ],
+        ),
+    ],
+    ids=["unknown", "not-allowed", "unavailable"],
+)
+async def test_unmatched_skill_trigger_adds_one_reminder_instead_of_content(
     tmp_path: Path,
+    trigger: str,
+    allowed_skills: list[str],
+    skills: Callable[[Path], Any],
+    reminders: list[str],
 ) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["*"],
-        allowed_skills=[],
-    )
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime = _runtime(tmp_path, 1, allowed_skills=allowed_skills, skills=skills(tmp_path))
 
-    await build_chat_loop(runtime).send("coder", "/missing do it", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", trigger, session_id="session-one")
 
-    request_text = "\n".join(
-        message.get("content", "") or "" for message in adapter.requests[0]["messages"]
+    contents = _contents(runtime.adapter.requests[0]["messages"])
+    assert contents[1] == trigger
+    assert all("<skill_content" not in content for content in contents)
+    for reminder in reminders:
+        assert reminder in contents[2]
+        assert "\n".join(contents).count(reminder) == 1
+
+
+def _activate(session: ChatSession, steps: str) -> ChatMessage:
+    session.activate_skill_context(
+        "debugging",
+        {"activation_content": f'<skill_content name="debugging">{steps}</skill_content>'},
     )
-    assert request_text.count("Skill trigger 'missing' did not match") == 1
+    return session.load()[-1]
+
+
+def _skill_before_the_tail(session: ChatSession) -> list[ChatMessage]:
+    session.append(ChatMessage.user("Old question"))
+    _activate(session, "Steps")
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Old answer"))
+    session.append(ChatMessage.user("Tail question"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Tail answer"))
+    return session.load()[-2:]
+
+
+def _skill_inside_the_tail(session: ChatSession) -> list[ChatMessage]:
+    session.append(ChatMessage.user("Old question"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Old answer"))
+    session.append(ChatMessage.user("/debugging fix this"))
+    _activate(session, "Steps")
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Tail answer"))
+    return session.load()[-3:]
+
+
+def _superseded_skill_in_the_tail(session: ChatSession) -> list[ChatMessage]:
+    session.append(ChatMessage.user("Old question"))
+    old_carrier = _activate(session, "Old steps")
+    _activate(session, "New steps")
+    return [old_carrier]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("seed", "tail_input"),
+    [
+        (_skill_before_the_tail, "Tail question"),
+        (_skill_inside_the_tail, "/debugging fix this"),
+        (_superseded_skill_in_the_tail, None),
+    ],
+    ids=["before-tail", "inside-tail", "superseded-version"],
+)
+async def test_compaction_checkpoint_expires_triggered_skill_content(
+    tmp_path: Path,
+    seed: Callable[[ChatSession], list[ChatMessage]],
+    tail_input: str | None,
+) -> None:
+    runtime = _runtime(tmp_path, 0, allowed_skills=["*"], skills=StubSkills([]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    projection = seed(session)
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Compacted historical context.",
+            projection=projection,
+            compacted_token_count=123,
+        )
+    )
+
+    request_messages = await build_request_messages(
+        build_chat_loop(runtime), runtime.agents.get("coder"), session
+    )
+
+    contents = _contents(request_messages)
+    assert all(
+        "<skill_content" not in content and "steps" not in content.lower() for content in contents
+    )
+    assert session.activated_skill_contents() == {}
+    if tail_input is not None:
+        assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
+        assert contents[2] == tail_input
 
 
 @pytest.mark.asyncio
 async def test_newly_available_skills_are_announced_once_with_the_run_input(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_skills=["*"])
-    adapter = StubAdapter([{"content": f"reply {index}", "tool_calls": None} for index in range(4)])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.skills = StubSkills([])
+    runtime = _runtime(tmp_path, 4, allowed_skills=["*"], skills=StubSkills([]))
     loop = build_chat_loop(runtime)
 
-    def history() -> list[ChatMessage]:
-        return cast(
-            list[ChatMessage], runtime.chat_sessions.get(session_address("coder", "s1")).load()
-        )
-
     def available_notes() -> list[ChatMessage]:
-        return [message for message in history() if is_skill_available_note(message)]
+        return [message for message in history(runtime, "s1") if is_skill_available_note(message)]
 
     # The first Run seeds the baseline (here empty) without announcing anything.
     await loop.send("coder", "first", session_id="s1")
@@ -352,11 +236,15 @@ async def test_newly_available_skills_are_announced_once_with_the_run_input(
     await loop.send("coder", "second", session_id="s1")
     notes = available_notes()
     assert len(notes) == 1
-    assert "deploy: Ship the app." in cast(str, notes[0].content)
-    messages = history()
-    note_index = next(i for i, message in enumerate(messages) if is_skill_available_note(message))
-    assert messages[note_index + 1].role == "user"
-    assert messages[note_index + 1].content == "second"
+    assert "deploy: Ship the app." in str(notes[0].content)
+    messages = history(runtime, "s1")
+    note_index = messages.index(notes[0])
+    assert (messages[note_index + 1].role, messages[note_index + 1].content) == ("user", "second")
+    # The Model sees the announcement as a reminder, without the internal prefix.
+    reminder = runtime.adapter.requests[1]["messages"][-2]["content"]
+    assert reminder.startswith("<system-reminder>")
+    assert "- deploy: Ship the app." in reminder
+    assert SKILL_AVAILABLE_NOTE_PREFIX not in reminder
 
     # Later Runs with the same catalog do not re-announce it.
     await loop.send("coder", "third", session_id="s1")
@@ -366,14 +254,3 @@ async def test_newly_available_skills_are_announced_once_with_the_run_input(
     runtime.skills = StubSkills([])
     await loop.send("coder", "fourth", session_id="s1")
     assert len(available_notes()) == 1
-
-
-def test_skill_available_note_renders_as_reminder_without_prefix() -> None:
-    note = ChatMessage.note(SKILL_AVAILABLE_NOTE_PREFIX + "New skills:\n- deploy: Ship the app.")
-
-    rendered = cast(str, _notes_to_synthetic_user_message([note])["content"])
-
-    assert "<system-reminder>" in rendered
-    assert "New skills:" in rendered
-    assert "- deploy: Ship the app." in rendered
-    assert SKILL_AVAILABLE_NOTE_PREFIX not in rendered

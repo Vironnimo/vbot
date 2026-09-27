@@ -19,9 +19,7 @@ from core.database import write_bootstrap_marker
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import AgentResolutionError, ConfigAgent
 from core.providers.accounts import ConnectionRef
-from core.runs import (
-    ChatRunManager,
-)
+from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ChatRunManager, Run
 from core.sessions import ChatSession, SessionAddress
 from core.tools import (
     ToolRegistry,
@@ -38,7 +36,6 @@ from tests.core.chat.chat_loop_adapter_support import (
     PolicyStubAdapter,
     SilentBlockingStreamingStubAdapter,
     SlowStreamingStubAdapter,
-    StalledStreamingStubAdapter,
     StubAdapter,
     TenToolsThenBlockingReasoningAdapter,
 )
@@ -52,7 +49,6 @@ __all__ = [
     "PolicyStubAdapter",
     "SilentBlockingStreamingStubAdapter",
     "SlowStreamingStubAdapter",
-    "StalledStreamingStubAdapter",
     "StubAdapter",
     "TenToolsThenBlockingReasoningAdapter",
 ]
@@ -126,6 +122,27 @@ def persisted_roles(messages: list[ChatMessage]) -> list[str]:
 
 def persisted_dict_roles(messages: list[JsonObject]) -> list[str]:
     return [str(message["role"]) for message in messages if message.get("role") != "run_summary"]
+
+
+def history(
+    runtime: Any, session_id: str = "session-one", agent_id: str = "coder"
+) -> list[ChatMessage]:
+    """The Session's persisted history, including notes and Run summaries."""
+    return cast(
+        list[ChatMessage], runtime.chat_sessions.get(session_address(agent_id, session_id)).load()
+    )
+
+
+def last_run(runtime: Any, session_id: str = "session-one", agent_id: str = "coder") -> Run:
+    """The Run that wrote the Session's latest Run summary."""
+    messages = history(runtime, session_id, agent_id)
+    summary = next(m for m in reversed(messages) if m.role == "run_summary")
+    return cast(Run, runtime.chat_runs.get(summary.run_id))
+
+
+def event_types(run: Run) -> list[str]:
+    """Run event types without the Provider request status updates."""
+    return [event.type for event in run.events if event.type != PROVIDER_REQUEST_STATUS_EVENT]
 
 
 def quoted_json_objects(text: str) -> list[JsonObject]:
@@ -494,15 +511,16 @@ class StubSkills:
 
 
 class StubProcessManager:
+    """Record Run process-scope cleanup in call order."""
+
     def __init__(self) -> None:
-        self.cancelled_scopes: list[str] = []
-        self.released_scopes: list[str] = []
+        self.scope_events: list[tuple[str, str]] = []
 
     async def cancel_scope_async(self, run_id: str) -> None:
-        self.cancelled_scopes.append(run_id)
+        self.scope_events.append(("cancel", run_id))
 
     def release_scope(self, run_id: str) -> None:
-        self.released_scopes.append(run_id)
+        self.scope_events.append(("release", run_id))
 
 
 class StubRuntime:
@@ -800,25 +818,6 @@ class StubCompactionService:
         if self._checkpoint is None:
             raise AssertionError("StubCompactionService requires checkpoint for successful compact")
         return self._checkpoint
-
-
-def _write_test_skill(tmp_path: Path, name: str) -> Path:
-    skill_dir = tmp_path / "skills" / name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_file = skill_dir / "SKILL.md"
-    skill_file.write_text(
-        f"""---
-name: {name}
-description: Test skill.
----
-
-# {name}
-
-Use this skill content.
-""",
-        encoding="utf-8",
-    )
-    return skill_file
 
 
 class RecordingReflection:

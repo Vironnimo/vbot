@@ -9,7 +9,7 @@ These tests cover how the chat loop feeds the prompt builder:
   prompt is unchanged. Foreign Project Context is loaded only by the explicit
   ``project`` Tool and is therefore outside Chat's request-building path.
 
-The doubles are shared with ``test_chat_loop`` (the canonical chat-loop stubs);
+The doubles are shared with ``chat_loop_support`` (the canonical chat-loop stubs);
 only the project-specific wiring is asserted here.
 """
 
@@ -25,13 +25,14 @@ from core.projects.resolver import ConfigAgent
 from core.prompts import ProjectPromptContext
 from core.tools import ToolContext, ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
-from tests.core.chat.chat_loop_support import build_chat_loop, session_address
-from tests.core.chat.test_chat_loop import (
+from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubProject,
     StubProjects,
     StubRuntime,
+    build_chat_loop,
+    session_address,
 )
 
 PROJECT_ID = "vbot"

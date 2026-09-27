@@ -23,11 +23,16 @@ from core.tools import (
     model_tool_name,
     tool_success,
 )
-from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubModels, build_chat_loop
+from tests.core.chat.chat_loop_support import (
+    StubAdapter,
+    StubAgent,
+    StubModels,
+    build_chat_loop,
+    history,
+)
 from tests.core.chat.chat_loop_tools_test_support import (
     JsonObject,
     final,
-    history,
     tool_results,
     tool_runtime,
     tool_turn,

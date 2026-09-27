@@ -1,4 +1,5 @@
-"""Provider request projection: presentation fields, notes, senders and Tool-cycle repair."""
+"""Provider request projection: presentation fields, notes, senders, Tool-cycle repair and
+Run-local Tool media."""
 
 from __future__ import annotations
 
@@ -23,7 +24,15 @@ from core.chat.wire_shaping import (
     _message_to_request_dict,
     _repair_dangling_tool_calls,
 )
-from tests.core.chat.chat_loop_support import build_chat_loop, build_request_messages
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
+from core.tools import read_media_artifact, tool_success
+from tests.core.chat.chat_loop_support import (
+    StubAdapter,
+    StubAgent,
+    StubRuntime,
+    build_chat_loop,
+    build_request_messages,
+)
 from tests.core.chat.messages_test_support import FIXED_TIMESTAMP, FIXED_TIMING
 from tests.core.sessions.history_fixtures import history_revision
 
@@ -73,8 +82,20 @@ _OK_RESULT = json.dumps({"ok": True, "error": None, "data": {}, "artifacts": []}
             replace(ChatMessage.assistant(model="test/model", content="Answer"), run_id="run-one"),
             "run_id",
         ),
+        (
+            ChatMessage.assistant(
+                model="openai/gpt-4.1", content="Answer", usage={"input_tokens": 100}
+            ),
+            "usage",
+        ),
+        (
+            ChatMessage.tool(
+                tool_call_id="call_abc", name="read", content='{"ok":true}', timing=FIXED_TIMING
+            ),
+            "timing",
+        ),
     ],
-    ids=["tool-display", "output-files", "reasoning-timing", "run-id"],
+    ids=["tool-display", "output-files", "reasoning-timing", "run-id", "usage", "tool-timing"],
 )
 def test_provider_requests_never_carry_presentation_or_run_fields(
     message: ChatMessage, field: str
@@ -215,16 +236,92 @@ def test_observed_quotes_cannot_mimic_context_structure_or_merge_across_reminder
     assert "<system-reminder>" not in request[3]["content"]
 
 
-def test_agent_takeover_divider_never_reaches_the_provider() -> None:
+@pytest.mark.parametrize(
+    "entry",
+    [
+        ChatMessage.agent_takeover(from_address="assistant", to_address="builder@vbot"),
+        ChatMessage.run_summary(
+            run_id="run-one", status="completed", iteration_count=1, timing=FIXED_TIMING
+        ),
+        # Without a replay policy, a reasoning-only turn has nothing to send.
+        ChatMessage.assistant(model="openai/gpt-5.2", content=None, reasoning="Old reasoning"),
+    ],
+    ids=["agent-takeover", "run-summary", "reasoning-only-turn"],
+)
+def test_history_only_entries_never_reach_the_provider(entry: ChatMessage) -> None:
     messages = [
         ChatMessage.user("Earlier turn", timestamp=FIXED_TIMESTAMP),
-        ChatMessage.agent_takeover(from_address="assistant", to_address="builder@vbot"),
-        ChatMessage.user("New owner continues", timestamp=FIXED_TIMESTAMP),
+        entry,
+        ChatMessage.user("Later turn", timestamp=FIXED_TIMESTAMP),
     ]
 
     request = _embed_notes_into_request(messages)
 
-    assert [entry["content"] for entry in request] == ["Earlier turn", "New owner continues"]
+    assert [(item["role"], item["content"]) for item in request] == [
+        ("user", "Earlier turn"),
+        ("user", "Later turn"),
+    ]
+
+
+def _calls(*call_ids: str) -> ChatMessage:
+    return ChatMessage.assistant(
+        model="openai/gpt-5.2",
+        content=None,
+        tool_calls=[ToolCall(id=call_id, name="probe", arguments={}) for call_id in call_ids],
+    )
+
+
+def _result(call_id: str) -> ChatMessage:
+    return ChatMessage.tool(tool_call_id=call_id, name="probe", content=_OK_RESULT)
+
+
+def _reminders(*texts: str) -> str:
+    return "\n".join(f"<system-reminder>\n{text}\n</system-reminder>" for text in texts)
+
+
+@pytest.mark.parametrize(
+    ("messages", "roles", "reminder_index", "notes"),
+    [
+        (
+            [_calls("a"), ChatMessage.note("A"), _result("a")],
+            ["assistant", "tool", "user"],
+            2,
+            ["A"],
+        ),
+        (
+            [
+                _calls("a", "b"),
+                ChatMessage.note("A"),
+                _result("a"),
+                ChatMessage.note("B"),
+                _result("b"),
+            ],
+            ["assistant", "tool", "tool", "user"],
+            3,
+            ["A", "B"],
+        ),
+        (
+            [_calls("a"), _result("a"), ChatMessage.note("A"), _calls("b"), _result("b")],
+            ["assistant", "tool", "user", "assistant", "tool"],
+            2,
+            ["A"],
+        ),
+        (
+            [ChatMessage.note("A"), _calls("a"), _result("a")],
+            ["user", "assistant", "tool"],
+            0,
+            ["A"],
+        ),
+    ],
+    ids=["inside-a-batch", "several-inside-a-batch", "between-batches", "before-a-batch"],
+)
+def test_notes_never_split_a_tool_batch_from_its_results(
+    messages: list[ChatMessage], roles: list[str], reminder_index: int, notes: list[str]
+) -> None:
+    request = _embed_notes_into_request(messages)
+
+    assert [item["role"] for item in request] == roles
+    assert request[reminder_index] == {"role": "user", "content": _reminders(*notes)}
 
 
 def test_dangling_tool_calls_before_an_error_get_synthesized_results() -> None:
@@ -322,8 +419,6 @@ def test_repair_answers_only_unanswered_calls_and_names_unknown_tools() -> None:
 def test_compacted_request_uses_the_projection_and_repairs_only_in_the_request(
     tmp_path: Path,
 ) -> None:
-    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
-
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     session = runtime.chat_sessions.create("coder", session_id="session-one")
@@ -363,3 +458,59 @@ def test_compacted_request_uses_the_projection_and_repairs_only_in_the_request(
     # The repair is request-only: persisted history keeps the dangling turn.
     assert session.load() == history_before
     assert history_revision(runtime.chat_sessions, session.address) == revision_before
+
+
+def test_rebuilt_request_gives_each_tool_result_only_its_own_media(tmp_path: Path) -> None:
+    class NamingResolver:
+        """Resolve each media block to a text block naming its attachment."""
+
+        async def resolve_messages(
+            self, messages: list[dict[str, Any]], **_kwargs: Any
+        ) -> list[dict[str, Any]]:
+            return [
+                {
+                    **message,
+                    "content": [
+                        {"type": "text", "text": block["attachment_id"]}
+                        for block in message["content"]
+                    ],
+                }
+                for message in messages
+            ]
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Read both images", timestamp=FIXED_TIMESTAMP))
+    # Providers may name the first call of every response tool_call_0.
+    for attachment_id in ("first-image", "second-image"):
+        carrier = ChatMessage.assistant(
+            model=agent.model,
+            content=None,
+            tool_calls=[ToolCall(id="tool_call_0", name="read", arguments={})],
+        )
+        session.append(carrier)
+        session.assistant_message_id = carrier.id
+        result = tool_success(
+            {"read": attachment_id},
+            artifacts=[
+                read_media_artifact(
+                    attachment_id=attachment_id,
+                    filename=f"{attachment_id}.png",
+                    media_type="image/png",
+                )
+            ],
+        )
+        session.append(
+            ChatMessage.tool(tool_call_id="tool_call_0", name="read", content=json.dumps(result))
+        )
+    loop = build_chat_loop(runtime, attachment_resolver=NamingResolver())
+
+    request = asyncio.run(build_request_messages(loop, agent, session))
+
+    assert [
+        entry[TOOL_RESULT_CONTENT_BLOCKS_FIELD] for entry in request if entry["role"] == "tool"
+    ] == [
+        [{"type": "text", "text": "first-image"}],
+        [{"type": "text", "text": "second-image"}],
+    ]

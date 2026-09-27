@@ -1,8 +1,10 @@
-"""Tests for chat model identifier and modality resolution helpers."""
+"""Model resolution rules: Model bindings, request sampling parameters, input modalities,
+Provider Connections and the fallback chain."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -10,17 +12,16 @@ import pytest
 
 from core.chat.errors import ChatError
 from core.chat.model_resolution import (
-    _first_usable_connection_id,
-    _model_connection_allowlist,
     _model_input_modalities,
     _resolve_agent_connection,
     _resolve_fallback_chain,
+    parse_bare_model,
+    parse_model_with_connection,
+    resolve_request_temperature,
+    resolve_request_top_p,
 )
 from core.utils.errors import ConfigError
-
-
-def _runtime_with_models_get(get: Any) -> Any:
-    return cast(Any, SimpleNamespace(models=SimpleNamespace(get=get)))
+from tests.core.chat.chat_loop_support import StubModels
 
 
 def _agent(model: str, *, fallback_models: list[str] | None = None) -> Any:
@@ -28,24 +29,20 @@ def _agent(model: str, *, fallback_models: list[str] | None = None) -> Any:
 
 
 def _runtime_for_connection(
-    *,
-    provider_connections: list[str],
-    usable: set[str],
-    models: dict[tuple[str, str], tuple[str, ...]] | None = None,
+    *, usable: set[str], models: dict[tuple[str, str], tuple[str, ...]]
 ) -> Any:
-    """Build a runtime stub for connection resolution.
+    """A runtime whose ``openai`` Provider lists the api-key, then the subscription Connection.
 
-    ``provider_connections`` is the provider's connection ids in config order;
-    ``usable`` is the set of full ``<provider>:<connection>`` ids with credentials;
-    ``models`` maps ``(provider_id, model_id)`` to its connection allowlist
-    (a missing entry raises ``KeyError``, i.e. an unknown/custom model).
+    ``usable`` holds the full ``<provider>:<connection>`` ids with credentials; ``models``
+    maps ``(provider_id, model_id)`` to its Connection allowlist, and any other Model is
+    unknown to the registry.
     """
     provider_config = SimpleNamespace(
-        connections=[SimpleNamespace(id=connection_id) for connection_id in provider_connections]
+        connections=[SimpleNamespace(id="api-key"), SimpleNamespace(id="subscription")]
     )
 
     def models_get(provider_id: str, model_id: str) -> Any:
-        if models is None or (provider_id, model_id) not in models:
+        if (provider_id, model_id) not in models:
             raise KeyError(model_id)
         return SimpleNamespace(connections=models[(provider_id, model_id)])
 
@@ -54,262 +51,196 @@ def _runtime_for_connection(
         SimpleNamespace(
             providers=SimpleNamespace(get=lambda _provider_id: provider_config),
             provider_credentials=SimpleNamespace(
-                has_credentials=lambda _provider_id, connection_id: connection_id in usable,
-                is_usable=lambda _provider_id, connection_id: connection_id in usable,
+                is_usable=lambda _provider_id, connection_id: connection_id in usable
             ),
             models=SimpleNamespace(get=models_get),
         ),
     )
 
 
-class TestModelInputModalities:
-    def test_returns_model_input_modalities_on_success(self) -> None:
-        model = SimpleNamespace(capabilities=SimpleNamespace(input_modalities=("text", "image")))
-        runtime = _runtime_with_models_get(lambda _provider, _model: model)
-
-        modalities = _model_input_modalities(runtime, _agent("openai/gpt-5.2"))
-
-        assert modalities == frozenset({"text", "image"})
-
-    def test_unknown_model_logs_warning_and_returns_empty(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        def raise_key_error(_provider: str, _model: str) -> Any:
-            raise KeyError("Model not found: openai/ghost")
-
-        runtime = _runtime_with_models_get(raise_key_error)
-
-        caplog.set_level(logging.WARNING, logger="vbot.chat")
-        modalities = _model_input_modalities(runtime, _agent("openai/ghost"))
-
-        assert modalities == frozenset()
-        warning_records = [
-            record
-            for record in caplog.records
-            if record.name == "vbot.chat" and record.levelno == logging.WARNING
-        ]
-        assert len(warning_records) == 1
-        assert "openai/ghost" in warning_records[0].getMessage()
-
-    def test_malformed_agent_model_logs_warning_and_returns_empty(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        # A bare model with no "<provider>/<model-id>" makes _split_agent_model
-        # raise ChatError before the registry is consulted.
-        def unreachable_get(_provider: str, _model: str) -> Any:
-            raise AssertionError("registry should not be consulted for a malformed model")
-
-        runtime = _runtime_with_models_get(unreachable_get)
-
-        caplog.set_level(logging.WARNING, logger="vbot.chat")
-        modalities = _model_input_modalities(runtime, _agent("no-slash-model"))
-
-        assert modalities == frozenset()
-        warning_records = [
-            record
-            for record in caplog.records
-            if record.name == "vbot.chat" and record.levelno == logging.WARNING
-        ]
-        assert len(warning_records) == 1
-        assert "no-slash-model" in warning_records[0].getMessage()
-
-    def test_chat_error_is_caught_and_does_not_propagate(self) -> None:
-        def raise_chat_error(_provider: str, _model: str) -> Any:
-            raise ChatError("boom")
-
-        runtime = _runtime_with_models_get(raise_chat_error)
-
-        assert _model_input_modalities(runtime, _agent("openai/gpt-5.2")) == frozenset()
+CONNECTION_BOUND = {("openai", "codex-auto-review"): ("subscription",), ("openai", "gpt-5.2"): ()}
+BOTH_USABLE = {"openai:api-key", "openai:subscription"}
 
 
-class TestModelConnectionAllowlist:
-    def test_returns_model_connections(self) -> None:
-        runtime = _runtime_with_models_get(
-            lambda _provider, _model: SimpleNamespace(connections=("subscription",))
-        )
+@pytest.mark.parametrize(
+    ("model", "parts"),
+    [
+        ("openai/gpt-5.2", ("openai", "gpt-5.2", "")),
+        ("openai/gpt-5.2::oauth", ("openai", "gpt-5.2", "oauth")),
+        (
+            "openrouter/anthropic/claude-sonnet-4::oauth",
+            ("openrouter", "anthropic/claude-sonnet-4", "oauth"),
+        ),
+        (
+            "openrouter/poolside/laguna-xs.2:free::api-key",
+            ("openrouter", "poolside/laguna-xs.2:free", "api-key"),
+        ),
+    ],
+    ids=["no-suffix", "suffix", "slashes-in-model-id", "colon-in-model-id"],
+)
+def test_model_binding_splits_into_provider_model_and_connection(
+    model: str, parts: tuple[str, str, str]
+) -> None:
+    provider_id, model_id, _connection = parts
 
-        assert _model_connection_allowlist(runtime, "openai", "codex-auto-review") == (
-            "subscription",
-        )
-
-    def test_unknown_model_is_unrestricted(self) -> None:
-        def raise_key_error(_provider: str, _model: str) -> Any:
-            raise KeyError("Model not found")
-
-        runtime = _runtime_with_models_get(raise_key_error)
-
-        assert _model_connection_allowlist(runtime, "openai", "ghost") == ()
+    assert parse_model_with_connection(model) == parts
+    assert parse_bare_model(model) == f"{provider_id}/{model_id}"
 
 
-class TestFirstUsableConnectionId:
-    def test_allowlist_skips_a_forbidden_first_connection(self) -> None:
-        # api-key is usable and listed first, but the allowlist permits only
-        # subscription, so the choke point must skip past api-key.
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key", "openai:subscription"},
-        )
+@pytest.mark.parametrize(
+    "model", ["", "openai/gpt-5.2::", "no-slash-model"], ids=["empty", "dangling-suffix", "bare"]
+)
+def test_invalid_model_binding_is_a_chat_error(model: str) -> None:
+    with pytest.raises(ChatError):
+        parse_model_with_connection(model)
 
-        assert (
-            _first_usable_connection_id(runtime, "openai", ("subscription",))
-            == "openai:subscription"
-        )
 
-    def test_empty_allowlist_picks_first_usable(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key", "openai:subscription"},
-        )
+RECOMMENDING_MODELS = StubModels(
+    {("ollama-cloud", "glm-5.2"): 200_000, ("openai", "gpt-5.2"): 128_000},
+    recommended_temperatures={("ollama-cloud", "glm-5.2"): 1.0},
+    recommended_top_ps={("ollama-cloud", "glm-5.2"): 0.95},
+)
 
-        assert _first_usable_connection_id(runtime, "openai", ()) == "openai:api-key"
 
-    def test_raises_clear_error_when_no_allowed_connection_is_usable(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key"},
-        )
+@pytest.mark.parametrize(
+    ("agent_temperature", "provider_id", "model_id", "temperature", "top_p"),
+    [
+        (0.1, "ollama-cloud", "glm-5.2", 0.1, 0.95),
+        (0.0, "ollama-cloud", "glm-5.2", 0.0, 0.95),
+        (None, "ollama-cloud", "glm-5.2", 1.0, 0.95),
+        (None, "openai", "gpt-5.2", None, None),
+        (None, "ollama-cloud", "unknown", None, None),
+        (None, "", "glm-5.2", None, None),
+    ],
+    ids=[
+        "agent-wins",
+        "agent-zero-wins",
+        "model-recommendation",
+        "no-recommendation",
+        "unknown-model",
+        "no-provider",
+    ],
+)
+def test_request_sampling_prefers_the_agent_then_the_model_recommendation(
+    agent_temperature: float | None,
+    provider_id: str,
+    model_id: str,
+    temperature: float | None,
+    top_p: float | None,
+) -> None:
+    # None leaves the choice to the Provider configuration or the API default.
+    assert (
+        resolve_request_temperature(agent_temperature, RECOMMENDING_MODELS, provider_id, model_id)
+        == temperature
+    )
+    assert resolve_request_top_p(RECOMMENDING_MODELS, provider_id, model_id) == top_p
 
+
+def _raising(error: BaseException) -> Callable[[str, str], Any]:
+    def get(_provider_id: str, _model_id: str) -> Any:
+        raise error
+
+    return get
+
+
+@pytest.mark.parametrize(
+    ("model", "models_get", "modalities"),
+    [
+        (
+            "openai/gpt-5.2",
+            lambda _provider_id, _model_id: SimpleNamespace(
+                capabilities=SimpleNamespace(input_modalities=("text", "image"))
+            ),
+            {"text", "image"},
+        ),
+        ("openai/ghost", _raising(KeyError("Model not found: openai/ghost")), set()),
+        ("openai/gpt-5.2", _raising(ChatError("boom")), set()),
+        ("no-slash-model", _raising(AssertionError("registry must not be consulted")), set()),
+    ],
+    ids=["known-model", "unknown-model", "registry-error", "malformed-binding"],
+)
+def test_input_modalities_degrade_visibly_to_none(
+    caplog: pytest.LogCaptureFixture,
+    model: str,
+    models_get: Callable[[str, str], Any],
+    modalities: set[str],
+) -> None:
+    caplog.set_level(logging.WARNING, logger="vbot.chat")
+    runtime = cast(Any, SimpleNamespace(models=SimpleNamespace(get=models_get)))
+
+    assert _model_input_modalities(runtime, _agent(model)) == frozenset(modalities)
+
+    # No modalities silently drop image and audio attachments, so the degrade warns.
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.chat" and record.levelno == logging.WARNING
+    ]
+    assert len(warnings) == (0 if modalities else 1)
+    assert all(model in warning for warning in warnings)
+
+
+@pytest.mark.parametrize(
+    ("model", "usable", "connection"),
+    [
+        ("openai/codex-auto-review", BOTH_USABLE, "openai:subscription"),
+        ("openai/gpt-5.2", BOTH_USABLE, "openai:api-key"),
+        ("openai/custom-thing", BOTH_USABLE, "openai:api-key"),
+        ("openai/codex-auto-review::subscription", BOTH_USABLE, "openai:subscription"),
+        ("openai/codex-auto-review", {"openai:api-key"}, None),
+    ],
+    ids=[
+        "connection-bound-model",
+        "unrestricted-model",
+        "unknown-model",
+        "explicit-suffix",
+        "no-allowed-connection-usable",
+    ],
+)
+def test_agent_connection_is_the_first_usable_one_the_model_allows(
+    model: str, usable: set[str], connection: str | None
+) -> None:
+    # A connection-bound Model never lands on the api-key Connection just because it
+    # is configured first; an unknown Model is unrestricted.
+    runtime = _runtime_for_connection(usable=usable, models=CONNECTION_BOUND)
+
+    if connection is None:
         with pytest.raises(ChatError):
-            _first_usable_connection_id(runtime, "openai", ("subscription",))
+            _resolve_agent_connection(runtime, _agent(model))
+    else:
+        assert _resolve_agent_connection(runtime, _agent(model)) == ("openai", connection)
 
 
-class TestResolveAgentConnection:
-    def test_bare_connection_bound_model_resolves_to_allowed_connection(self) -> None:
-        # The reported bug: a bare subscription-only model must not land on the
-        # api-key connection even though it is configured and listed first.
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key", "openai:subscription"},
-            models={("openai", "codex-auto-review"): ("subscription",)},
-        )
+def test_fallback_chain_keeps_only_resolvable_distinct_candidates_in_order() -> None:
+    runtime = _runtime_for_connection(
+        usable=BOTH_USABLE,
+        models={**CONNECTION_BOUND, ("openai", "enterprise-only"): ("enterprise",)},
+    )
 
-        provider_id, connection_id = _resolve_agent_connection(
-            runtime, _agent("openai/codex-auto-review")
-        )
+    def is_usable(_provider_id: str, connection_id: str) -> bool:
+        if connection_id == "openai:missing":
+            raise ConfigError("Unknown connection: openai:missing")
+        return connection_id in BOTH_USABLE
 
-        assert provider_id == "openai"
-        assert connection_id == "openai:subscription"
-
-    def test_bare_unrestricted_model_picks_first_usable_connection(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key", "openai:subscription"},
-            models={("openai", "gpt-5.2"): ()},
-        )
-
-        _provider_id, connection_id = _resolve_agent_connection(runtime, _agent("openai/gpt-5.2"))
-
-        assert connection_id == "openai:api-key"
-
-    def test_explicit_connection_suffix_is_used_verbatim(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key", "openai:subscription"},
-            models={("openai", "codex-auto-review"): ("subscription",)},
-        )
-
-        _provider_id, connection_id = _resolve_agent_connection(
-            runtime, _agent("openai/codex-auto-review::subscription")
-        )
-
-        assert connection_id == "openai:subscription"
-
-    def test_bare_model_errors_when_no_allowed_connection_is_usable(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key"},
-            models={("openai", "codex-auto-review"): ("subscription",)},
-        )
-
-        with pytest.raises(ChatError):
-            _resolve_agent_connection(runtime, _agent("openai/codex-auto-review"))
-
-    def test_unknown_bare_model_is_unrestricted(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key", "openai:subscription"},
-            models={},
-        )
-
-        _provider_id, connection_id = _resolve_agent_connection(
-            runtime, _agent("openai/custom-thing")
-        )
-
-        assert connection_id == "openai:api-key"
-
-
-class TestResolveFallbackChain:
-    def test_bare_connection_bound_candidate_resolves_to_allowed_connection(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key", "openai:subscription"},
-            models={("openai", "codex-auto-review"): ("subscription",)},
-        )
-        agent = _agent("openai/gpt-5.2::api-key", fallback_models=["openai/codex-auto-review"])
-
-        assert _resolve_fallback_chain(runtime, agent) == [
-            ("openai/codex-auto-review", "openai", "openai:subscription"),
-        ]
-
-    def test_unresolvable_candidate_is_skipped_and_rest_resolve_in_order(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key", "openai:subscription"},
-            models={("openai", "codex-auto-review"): ("subscription",)},
-        )
-        agent = _agent(
+    runtime.provider_credentials.is_usable = is_usable
+    agent = _agent(
+        "openai/gpt-5.2::api-key",
+        fallback_models=[
+            "ghost/ghost-model::api-key",
+            "openai/codex-auto-review",
             "openai/gpt-5.2::api-key",
-            fallback_models=[
-                "ghost/ghost-model::api-key",
-                "openai/codex-auto-review",
-                "openai/gpt-5.2::api-key",
-            ],
-        )
+            "openai/dead::missing",
+            "openai/enterprise-only",
+            "not-a-binding",
+            "openai/working::subscription",
+            "openai/codex-auto-review",
+        ],
+    )
 
-        chain = _resolve_fallback_chain(runtime, agent)
-
-        # The ghost binding is unusable and the primary-equal entry is deduped;
-        # only the resolvable, distinct candidate survives.
-        assert chain == [("openai/codex-auto-review", "openai", "openai:subscription")]
-
-    def test_unknown_pinned_connection_is_skipped_and_rest_resolve(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:subscription"},
-        )
-
-        def is_usable(_provider_id: str, connection_id: str) -> bool:
-            if connection_id == "openai:missing":
-                raise ConfigError("Unknown connection: openai:missing")
-            return connection_id == "openai:subscription"
-
-        runtime.provider_credentials.is_usable = is_usable
-        agent = _agent(
-            "openai/gpt-5.2::api-key",
-            fallback_models=[
-                "openai/dead::missing",
-                "openai/working::subscription",
-            ],
-        )
-
-        assert _resolve_fallback_chain(runtime, agent) == [
-            ("openai/working::subscription", "openai", "openai:subscription")
-        ]
-
-    def test_returns_empty_when_no_allowed_connection_is_usable(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key", "subscription"],
-            usable={"openai:api-key"},
-            models={("openai", "codex-auto-review"): ("subscription",)},
-        )
-        agent = _agent("openai/gpt-5.2::api-key", fallback_models=["openai/codex-auto-review"])
-
-        assert _resolve_fallback_chain(runtime, agent) == []
-
-    def test_returns_empty_without_candidates(self) -> None:
-        runtime = _runtime_for_connection(
-            provider_connections=["api-key"],
-            usable={"openai:api-key"},
-        )
-
-        assert _resolve_fallback_chain(runtime, _agent("openai/gpt-5.2")) == []
+    # Uncredentialed, unknown, disallowed and malformed candidates are skipped, as are
+    # the primary binding and repeats; one broken entry never drops the rest.
+    assert _resolve_fallback_chain(runtime, agent) == [
+        ("openai/codex-auto-review", "openai", "openai:subscription"),
+        ("openai/working::subscription", "openai", "openai:subscription"),
+    ]
+    assert _resolve_fallback_chain(runtime, _agent("openai/gpt-5.2")) == []

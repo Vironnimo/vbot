@@ -28,9 +28,6 @@ from core.utils.errors import ProviderError
 from tests.core.chat.chat_loop_streaming_test_support import (
     JsonObject,
     answer,
-    event_types,
-    history,
-    last_run,
     send_streaming,
     stream_runtime,
 )
@@ -40,6 +37,9 @@ from tests.core.chat.chat_loop_support import (
     StubAgent,
     StubRuntime,
     build_chat_loop,
+    event_types,
+    history,
+    last_run,
     persisted_roles,
     session_address,
 )
