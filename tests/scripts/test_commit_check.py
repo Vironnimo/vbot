@@ -121,9 +121,11 @@ IMPACT_PROJECT = {
     "test_factor.py": (
         "from pathlib import Path\n"
         "\n"
+        "import calc\n"
+        "\n"
         "\n"
         "def test_factor():\n"
-        '    assert Path("factor.txt").read_text() == "2"\n'
+        '    assert calc.double(int(Path("factor.txt").read_text())) < 10\n'
     ),
     "test_git.py": (
         "import subprocess\n"
@@ -136,6 +138,9 @@ IMPACT_PROJECT = {
 HARMLESS_CALC = "def double(x):\n    return x * 2\n\n\ndef half(x):\n    return x / 2\n"
 BROKEN_CALC = "def double(x):\n    return x * 3\n"
 BROKEN_WIP = "def triple(x):\n    return x * 4\n"
+HARMLESS_WIP = "def triple(x):\n    return x * 3\n\n\ndef third(x):\n    return x / 3\n"
+# Keeps test_calc passing, but doubles a factor above 2 to 10 or more.
+SKEWED_CALC = "def double(x):\n    return x * 2 if x < 3 else x * 3\n"
 
 
 @pytest.fixture(scope="module")
@@ -223,7 +228,7 @@ def test_failure_on_committed_code_blocks_every_commit(impact_project: Path) -> 
 
 
 def test_staged_data_file_runs_the_tests_that_read_it(impact_project: Path) -> None:
-    _write(impact_project, "factor.txt", "3")
+    _write(impact_project, "factor.txt", "9")
     _git(impact_project, "add", "factor.txt")
 
     results = _check_tests(impact_project)
@@ -253,18 +258,46 @@ def test_tests_run_by_the_hook_cannot_reach_the_committing_repository(
     assert _git(impact_project, "config", "core.bare").strip() == "false"
 
 
-def test_merge_commit_reuses_the_test_runs_of_the_merged_worktree(
+def _merge_after_checked_commits(
+    primary: Path, worktree: Path, main_change: tuple[str, str], branch_change: tuple[str, str]
+) -> None:
+    """Commit *branch_change* in a new worktree and *main_change* in *primary*, each
+    after a passing commit check, and start merging the worktree's branch."""
+    _git(primary, "worktree", "add", "-q", "-b", "task", str(worktree))
+    for root, (path, content) in ((worktree, branch_change), (primary, main_change)):
+        _write(root, path, content)
+        _git(root, "add", path)
+        assert _check_tests(root) == {"PASS": (False, "")}
+        _git(root, "commit", "-q", "-m", path, "--no-verify")
+    _git(primary, "merge", "-q", "--no-ff", "--no-commit", "task")
+
+
+def test_merge_commit_reuses_the_test_runs_of_both_sides(
     impact_project: Path, tmp_path: Path
 ) -> None:
-    worktree = tmp_path / "worktree"
-    _git(impact_project, "worktree", "add", "-q", "-b", "task", str(worktree))
-    _write(worktree, "calc.py", HARMLESS_CALC)
-    _git(worktree, "add", "calc.py")
-    assert _check_tests(worktree) == {"PASS": (False, "")}
-    _git(worktree, "commit", "-q", "-m", "task", "--no-verify")
-    _git(impact_project, "merge", "-q", "--no-ff", "--no-commit", "task")
+    _merge_after_checked_commits(
+        impact_project, tmp_path / "worktree", ("wip.py", HARMLESS_WIP), ("calc.py", HARMLESS_CALC)
+    )
 
     assert _check_tests(impact_project) == {"PASS (no test affected)": (False, "")}
+
+    # The merged checkout adopted the branch's runs: calc.py is as the branch tested it.
+    _git(impact_project, "commit", "-q", "-m", "merge", "--no-verify")
+    _write(impact_project, "notes.py", "NOTE = 1\n")
+    _git(impact_project, "add", "notes.py")
+    assert _check_tests(impact_project) == {"PASS (no test affected)": (False, "")}
+
+
+def test_merge_commit_runs_a_test_both_sides_changed(impact_project: Path, tmp_path: Path) -> None:
+    # Each side passes alone; merged, test_factor doubles the factor 4 to 12.
+    _merge_after_checked_commits(
+        impact_project, tmp_path / "worktree", ("factor.txt", "4"), ("calc.py", SKEWED_CALC)
+    )
+
+    blocking, details = _check_tests(impact_project)["FAIL: tests affected by this commit"]
+
+    assert blocking
+    assert "test_factor.py::test_factor" in details
 
 
 def test_first_commit_in_a_worktree_adopts_the_primary_checkout_data(
