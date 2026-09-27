@@ -9,6 +9,7 @@ import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.
 import { onMount, tick } from 'svelte';
 import { createExtensionPageClient } from '$lib/extensionPageClient.js';
 import { createPageRefresh } from './pageRefresh.js';
+import { referenceLinks } from './referenceLinks.js';
 
 export function createSwarmPageModel(host) {
   let client = $state(null);
@@ -102,6 +103,11 @@ export function createSwarmPageModel(host) {
   let usageLoading = $state(false);
 
   let directoryRequest = 0;
+
+  let revealRequest = 0;
+
+  // Tooltip content for "#N" and "wN" links, by "post:N" and "page:N".
+  const references = new SvelteMap();
 
   let disposed = false;
 
@@ -270,6 +276,9 @@ export function createSwarmPageModel(host) {
     const selection = selectionRequest;
     // Invalidation must not unmount an active form or Run inspection.
     loading = loading && !editor;
+    // Posts never change; a Wiki page's title and text can.
+    for (const key of references.keys())
+      if (key.startsWith('page:')) references.delete(key);
     error = '';
     try {
       const [nextProfiles, nextSwarms] = await Promise.all([
@@ -324,6 +333,7 @@ export function createSwarmPageModel(host) {
       const swarm = (await call('swarms.get', { swarm_id: id })).swarm;
       if (disposed || request !== selectionRequest) return;
       if (selectedSwarm?.id !== id) {
+        references.clear();
         selectedDiscussion = swarm.main_discussion_id;
         discussions = [];
         board = [];
@@ -724,17 +734,190 @@ export function createSwarmPageModel(host) {
     }
   }
 
-  function contentLinks(node) {
+  function contentLinks(node, { references: linked = true } = {}) {
     node.addEventListener('click', openContentLink);
+    const numbers = linked
+      ? referenceLinks(node, {
+          target: referenceTarget,
+          describe: describeReference,
+          loading: (reference) => ({
+            title: reference,
+            text: t('swarm.references.loading', 'Loading…'),
+          }),
+        })
+      : null;
     return {
-      destroy: () => node.removeEventListener('click', openContentLink),
+      destroy: () => {
+        node.removeEventListener('click', openContentLink);
+        numbers?.destroy();
+      },
     };
+  }
+
+  // "#N" names a post and "wN" a Wiki page. A post cites only earlier posts;
+  // other Markdown cites any post or page that exists.
+  function referenceTarget(kind, number, text) {
+    const swarm = selectedSwarm;
+    if (!swarm) return null;
+    if (kind === 'page')
+      return number >= 1 && number <= (swarm.newest_wiki_page_number ?? 0)
+        ? `#wiki/w${number}`
+        : null;
+    const post = text.parentElement?.closest('[data-post-number]');
+    const newest = post
+      ? Number(post.dataset.postNumber) - 1
+      : swarm.newest_post_sequence;
+    return newest != null && number <= newest ? `#post/${number}` : null;
+  }
+
+  function describeReference(kind, number) {
+    const key = `${kind}:${number}`;
+    if (!references.has(key))
+      references.set(
+        key,
+        (kind === 'post' ? describePost(number) : describePage(number)).catch(
+          () => {
+            references.delete(key);
+            return t(
+              'swarm.references.unavailable',
+              'Could not load {reference}.',
+              {
+                reference: kind === 'post' ? `#${number}` : `w${number}`,
+              },
+            );
+          },
+        ),
+      );
+    return references.get(key);
+  }
+
+  const opening = (text) => {
+    const value = String(text ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return value.length > 200 ? `${value.slice(0, 199)}…` : value;
+  };
+
+  async function describePost(number) {
+    const post =
+      board.find((item) => item.sequence === number) ??
+      page(
+        await call('board.read', {
+          swarm_id: selectedSwarm.id,
+          message_id: `#${number}`,
+        }),
+      )[0];
+    return {
+      title: `#${number} · ${post.author?.name ?? t('swarm.participant', 'Participant')}`,
+      text: opening(post.text),
+    };
+  }
+
+  async function describePage(number) {
+    const result = await call('wiki', {
+      swarm_id: selectedSwarm.id,
+      action: 'read',
+      page_id: `w${number}`,
+      limit: 300,
+    });
+    return {
+      title: result.deleted
+        ? t('swarm.references.deletedPage', '{reference} · {title} (deleted)', {
+            reference: `w${number}`,
+            title: result.title,
+          })
+        : `w${number} · ${result.title}`,
+      text: opening(result.content),
+    };
+  }
+
+  // Show a cited post on the Board: open its discussion and load earlier
+  // pages until it appears.
+  async function revealPost(number) {
+    const swarm = selectedSwarm;
+    if (!swarm) return;
+    const request = ++revealRequest;
+    const current = () =>
+      !disposed && request === revealRequest && selectedSwarm?.id === swarm.id;
+    activeTab = 'board';
+    if (number === swarm.goal_post_sequence) {
+      await tick();
+      const goal = document.querySelector('.swarm-goal-post');
+      if (goal && current()) {
+        goal.open = true;
+        revealElement(goal);
+      }
+      return;
+    }
+    const [post] = page(
+      await call('board.read', {
+        swarm_id: swarm.id,
+        message_id: `#${number}`,
+      }),
+    );
+    if (!post || !current()) return;
+    const discussionId = post.discussion_id;
+    if (selectedDiscussion !== discussionId || !board.length) {
+      if (!discussions.length) await loadDiscussions(swarm);
+      while (
+        !discussions.some((item) => item.id === discussionId) &&
+        discussionCursor &&
+        current()
+      ) {
+        const cursor = discussionCursor;
+        await loadDiscussions(swarm, cursor);
+        if (discussionCursor === cursor) break;
+      }
+      if (!current()) return;
+      if (!discussions.some((item) => item.id === discussionId))
+        discussions = [...discussions, { id: discussionId }];
+      await chooseDiscussion(discussionId);
+    }
+    while (
+      current() &&
+      selectedDiscussion === discussionId &&
+      boardCursor &&
+      !board.some((item) => item.sequence === number)
+    ) {
+      const cursor = boardCursor;
+      await loadBoard(swarm, discussionId, cursor);
+      if (boardCursor === cursor) break;
+    }
+    if (!current()) return;
+    await tick();
+    revealElement(
+      document.querySelector(`.board > li[data-post-number="${number}"]`),
+    );
+  }
+
+  function revealElement(element) {
+    if (!element) return;
+    const reduced = window.matchMedia?.(
+      '(prefers-reduced-motion: reduce)',
+    )?.matches;
+    element.scrollIntoView?.({
+      block: 'center',
+      behavior: reduced ? 'auto' : 'smooth',
+    });
+    element.tabIndex = -1;
+    element.focus({ preventScroll: true });
+    element.dataset.revealed = '';
+    setTimeout(() => delete element.dataset.revealed, 2000);
   }
 
   function openContentLink(event) {
     const link = event.target.closest('a[href]');
     if (!link || !client) return;
     event.preventDefault();
+    const post = /^#post\/(\d+)$/.exec(link.getAttribute('href') ?? '');
+    if (post) {
+      void Promise.resolve(navigate(() => revealPost(Number(post[1])))).catch(
+        (cause) => {
+          if (!disposed) error = cause.message;
+        },
+      );
+      return;
+    }
     const wiki = /^#wiki\/([^/]+)$/.exec(link.getAttribute('href') ?? '');
     if (wiki) {
       void navigate(async () => {

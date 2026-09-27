@@ -201,6 +201,16 @@ def _post_suggestions(db: SwarmDatabase, swarm_id: str, value: str) -> list[Json
         ]
 
 
+def _newest_post_number(db: SwarmDatabase, swarm_id: str) -> int | None:
+    """Return the Board number of the Swarm's newest post, or None without posts."""
+
+    with db._read() as connection:
+        row = connection.execute(
+            "SELECT MAX(sequence) FROM posts WHERE swarm_id=?", (swarm_id,)
+        ).fetchone()
+    return None if row[0] is None else int(row[0])
+
+
 def _read_human_posts(
     db: SwarmDatabase,
     swarm_id: str,

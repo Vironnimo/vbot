@@ -486,11 +486,27 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
     assert events == {"entries": [], "has_more": False}
     snapshot = await operations.invoke("swarms.get", {"swarm_id": board.swarm["id"]})
     assert snapshot["swarm"]["main_discussion_id"] == board.swarm["main_discussion_id"]
+    assert snapshot["swarm"]["newest_wiki_page_number"] is None
     posted = await operations.invoke(
         "board.post",
         {"swarm_id": board.swarm["id"], "text": "operator note", "request_id": "operator"},
     )
     assert posted["discussion_id"] == board.swarm["main_discussion_id"]
+    await operations.invoke(
+        "wiki",
+        {
+            "swarm_id": board.swarm["id"],
+            "action": "create",
+            "title": "Notes",
+            "content": "x",
+            "request_id": "page",
+        },
+    )
+    # The page links "#N" and "wN" only up to the newest post and page.
+    snapshot = await operations.invoke("swarms.get", {"swarm_id": board.swarm["id"]})
+    newest = await board.store.read_human_posts(board.swarm["id"], limit=1)
+    assert snapshot["swarm"]["newest_post_sequence"] == newest.entries[0]["sequence"]
+    assert snapshot["swarm"]["newest_wiki_page_number"] == 1
     discussions = await operations.invoke("board.list", {"swarm_id": board.swarm["id"]})
     assert discussions["entries"][0]["id"] == board.swarm["main_discussion_id"]
     page = await operations.invoke("board.read", {"swarm_id": board.swarm["id"]})
@@ -1129,6 +1145,17 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
     assert "note" not in by_number["data"]
     answer, _ = await dispatch(board, {"text": "answer", "reply_to": first}, peer=1)
     assert answer["ok"] and _reaches(_name(board, 0)) in answer["data"]["delivery"]
+    # Every post is older than a number past the newest post.
+    ahead, _ = await dispatch(board, {"action": "read", "before": "#9"})
+    assert ahead["data"]["note"] == (
+        'before "#9" names no post yet; the newest post is #4, so this shows the newest posts.'
+    )
+    assert ahead["data"]["page"].startswith("Newest posts of the main discussion (d1)")
+    assert ahead["data"]["content"].endswith(":\nanswer")
+    unposted, _ = await dispatch(board, {"action": "read", "message_id": "#9"})
+    assert unposted["error"]["message"] == (
+        'message_id "#9" names no post yet; the newest post is #4.'
+    )
 
     near_post = stored[:-1] + ("x" if stored[-1] != "x" else "y")
     close_message, _ = await dispatch(board, {"action": "read", "message_id": near_post})
@@ -1200,27 +1227,28 @@ async def test_board_extra_targets_run_only_when_they_change_nothing(board):
     assert sorted(row["title"] for row in listed.entries) == ["First", "Main", "Second", "Third"]
 
     target = first["data"]["opening_post_id"]
+    # A post that names a post with message_id answers it, as with reply_to.
     only_message, _ = await dispatch(
         board, {"action": "post", "message_id": target, "text": "answer"}
     )
-    assert only_message["error"]["message"] == (
-        f"post does not use message_id, which selects a post to read. To answer post {target}, "
-        "repeat the call without message_id and write @ before its author's name in text. "
-        "Nothing was saved."
-    )
+    assert only_message["ok"], only_message
     differing, _ = await dispatch(
-        board, {"action": "post", "message_id": main, "reply_to": target, "text": "answer"}
+        board, {"action": "post", "message_id": main, "reply_to": target, "text": "other"}
     )
-    assert "it differs from reply_to" in differing["error"]["message"]
+    assert differing["error"]["message"] == (
+        "message_id and reply_to name different posts. Repeat the call with only reply_to, set "
+        "to the post you answer. Nothing was saved."
+    )
     same, _ = await dispatch(
-        board, {"action": "post", "message_id": target, "reply_to": target, "text": "answer"}
+        board, {"action": "post", "message_id": target, "reply_to": target, "text": "again"}
     )
     assert same["ok"], same
     replies = [
         post for post in await board_posts(board, discussion_id=existing) if post["reply_to"]
     ]
-    assert [(post["text"], f"#{post['reply_sequence']}") for post in replies] == [
-        ("answer", target)
+    assert sorted((post["text"], f"#{post['reply_sequence']}") for post in replies) == [
+        ("again", target),
+        ("answer", target),
     ]
 
 

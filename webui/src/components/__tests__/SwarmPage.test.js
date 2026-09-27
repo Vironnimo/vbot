@@ -584,6 +584,124 @@ describe('SwarmPage', () => {
     });
     expect(button('Load earlier messages')).toBeUndefined();
   });
+
+  it('links cited post and Wiki page numbers and reveals a cited post', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    const post = (sequence, discussionId, name, text, extra = {}) => ({
+      id: `pst-${sequence}`,
+      sequence,
+      discussion_id: discussionId,
+      author: { id: `prt-${name}`, kind: 'participant', name },
+      text,
+      ...extra,
+    });
+    const baseline = post(5, 'dsc-main', 'Beta', 'Baseline   measured.');
+    const finding = post(3, 'dsc-findings', 'Beta', 'Findings detail');
+    const citing = post(
+      7,
+      'dsc-main',
+      'Alpha',
+      'Agrees with #5 and w2 after #3; not #7, #99, w3, `#5` or abc#5.',
+      { reply_to: 'pst-5', reply_sequence: 5 },
+    );
+    operation.mockImplementation((name, args) => {
+      if (name === 'swarms.get')
+        return Promise.resolve({
+          swarm: {
+            ...structuredClone(swarm),
+            prompt: 'Investigate #5 and w2',
+            goal_post_sequence: 0,
+            newest_post_sequence: 12,
+            newest_wiki_page_number: 2,
+          },
+        });
+      if (name === 'board.read' && args.message_id === '#3')
+        return Promise.resolve({ entries: [finding], has_more: false });
+      if (name === 'board.read')
+        return Promise.resolve({
+          entries:
+            args.discussion_id === 'dsc-findings'
+              ? [finding]
+              : [baseline, citing],
+          has_more: false,
+        });
+      if (name === 'wiki')
+        return Promise.resolve({
+          title: 'Benchmarks',
+          content: 'Median latency by build.',
+          deleted: false,
+        });
+      return original(name, args);
+    });
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelectorAll('.board > li')).toHaveLength(2),
+    );
+    const references = () =>
+      [
+        ...document.querySelectorAll(
+          '.board > li[data-post-number="7"] a[data-swarm-reference]',
+        ),
+      ].map((link) => [link.textContent, link.getAttribute('href')]);
+    // A post cites only earlier posts and existing pages, outside code.
+    expect(references()).toEqual([
+      ['#5', '#post/5'],
+      ['w2', '#wiki/w2'],
+      ['#3', '#post/3'],
+    ]);
+    expect(
+      document.querySelector('.swarm-goal-post a[data-swarm-reference]'),
+    ).toBeNull();
+
+    const tooltipText = () =>
+      document.querySelector('#app-tooltip')?.textContent ?? '';
+    const link = (text) =>
+      [...document.querySelectorAll('a[data-swarm-reference]')].find(
+        (item) => item.textContent === text,
+      );
+    link('#5').focus();
+    await vi.waitFor(() =>
+      expect(tooltipText()).toContain('Baseline measured.'),
+    );
+    expect(tooltipText()).toContain('#5 · Beta');
+    link('w2').focus();
+    await vi.waitFor(() =>
+      expect(tooltipText()).toContain('Median latency by build.'),
+    );
+    expect(tooltipText()).toContain('w2 · Benchmarks');
+    expect(operation).toHaveBeenCalledWith('wiki', {
+      swarm_id: swarm.id,
+      action: 'read',
+      page_id: 'w2',
+      limit: 300,
+    });
+    // The loaded post described itself; only the page needed a read.
+    expect(operation).not.toHaveBeenCalledWith(
+      'board.read',
+      expect.objectContaining({ message_id: '#5' }),
+    );
+
+    document
+      .querySelector('.board a[href="#post/5"]:not([data-swarm-reference])')
+      .click();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('.board > li[data-post-number="5"]').dataset
+          .revealed,
+      ).toBe(''),
+    );
+
+    link('#3').click();
+    await vi.waitFor(() =>
+      expect(document.activeElement.dataset.postNumber).toBe('3'),
+    );
+    expect(document.querySelector('#swarm-discussion').value).toBe(
+      'dsc-findings',
+    );
+    expect(operation).not.toHaveBeenCalledWith('link.open', expect.anything());
+  });
 });
 
 it('shows compact discussion members with live status and refreshes join/leave changes', async () => {

@@ -63,6 +63,7 @@ from ._store_profiles import (
 from ._store_reads import (
     _list_discussions,
     _list_human_discussions,
+    _newest_post_number,
     _post_suggestions,
     _read_human_posts,
     _read_posts,
@@ -480,6 +481,10 @@ class SwarmStore:
         """Return posts that a post reference which matched nothing may mean."""
         return await self._run(_post_suggestions, swarm_id, value)
 
+    async def newest_post_number(self, swarm_id: str) -> int | None:
+        """Return the Board number of the newest post, or None without posts."""
+        return cast(int | None, await self._run(_newest_post_number, swarm_id))
+
     async def read_human_posts(
         self,
         swarm_id: str,
@@ -627,11 +632,21 @@ class SwarmStore:
 
         return await self._run(wiki, swarm_id, actor_id, arguments, expected_epoch)
 
-    async def wiki_pages(self, swarm_id: str) -> list[Json]:
-        """Return every Wiki page's ID, current title and deletion state."""
+    async def wiki_pages(self, swarm_id: str, containing: str | None = None) -> list[Json]:
+        """Return every Wiki page's ID, current title and deletion state.
+
+        With ``containing``, return only the live pages whose current content
+        contains that exact text.
+        """
         from ._store_wiki import wiki_pages
 
-        return cast(list[Json], await self._run(wiki_pages, swarm_id))
+        return cast(list[Json], await self._run(wiki_pages, swarm_id, containing))
+
+    async def newest_wiki_page_number(self, swarm_id: str) -> int | None:
+        """Return the number of the newest Wiki page, or None without pages."""
+        from ._store_wiki import newest_wiki_page_number
+
+        return cast(int | None, await self._run(newest_wiki_page_number, swarm_id))
 
     async def wiki_contents(
         self, swarm_id: str, page_id: str, revisions: list[int]

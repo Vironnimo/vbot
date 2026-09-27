@@ -268,6 +268,11 @@ USER_RECIPIENT = (
 POST_CLOSE_MATCH = (
     '{field} "{value}" does not exist; this uses post {post_id}, its only close match.'
 )
+BEFORE_PAST_NEWEST = (
+    'before "{value}" names no post yet; the newest post is {newest}, so this shows the '
+    "newest posts."
+)
+MESSAGE_PAST_NEWEST = '{field} "{value}" names no post yet; the newest post is {newest}.'
 DISCUSSION_CLOSE_MATCH = (
     'discussion_id "{value}" does not exist; this shows {discussion}, its only close match.'
 )
@@ -363,14 +368,9 @@ CREATE_IN_DISCUSSION = (
     'message to that discussion, use action post with discussion_id "{discussion_id}" and text. '
     "Nothing was saved."
 )
-POST_WITH_MESSAGE_ID = (
-    "post does not use message_id, which selects a post to read. To answer post {post_id}, "
-    "repeat the call without message_id and write @ before its author's name in text. Nothing "
-    "was saved."
-)
 POST_WITH_TWO_TARGETS = (
-    "message_id is only for read, and it differs from reply_to. Repeat the call with only "
-    "reply_to, set to the post you answer. Nothing was saved."
+    "message_id and reply_to name different posts. Repeat the call with only reply_to, set to "
+    "the post you answer. Nothing was saved."
 )
 NOTHING_CHANGED = "Nothing was changed."
 FIELD_FOR_OTHER_ACTION = (

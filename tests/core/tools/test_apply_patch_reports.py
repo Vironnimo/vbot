@@ -522,8 +522,16 @@ async def test_missing_suffix_keeps_end_of_line_and_extra_text_visible(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_candidate_cut_between_lines_resumes_at_next_line(tmp_path):
-    lines = [f"section_{index} = value_{index}" for index in range(12)]
+@pytest.mark.parametrize(
+    ("count", "first", "resume"),
+    [
+        (12, 0, 9),
+        # Overlapping closest excerpts merge; one continuation follows all of them.
+        (30, 10, 18),
+    ],
+)
+async def test_candidate_cut_between_lines_resumes_at_next_line(tmp_path, count, first, resume):
+    lines = [f"section_{index} = value_{index}" for index in range(count)]
     before = "\n".join(lines) + "\n"
     path = tmp_path / "file.txt"
     path.write_bytes(before.encode())
@@ -532,7 +540,8 @@ async def test_candidate_cut_between_lines_resumes_at_next_line(tmp_path):
         tmp_path,
         {
             "path": "file.txt",
-            "old_string": before.replace("value_10", "value_99"),
+            "old_string": "\n".join(lines[first : first + 12]).replace("value_10", "value_99")
+            + "\n",
             "new_string": "changed",
             "replace_all": True,
         },
@@ -541,11 +550,12 @@ async def test_candidate_cut_between_lines_resumes_at_next_line(tmp_path):
     assert result["error"]["code"] == "text_not_found"
     assert path.read_bytes() == before.encode()
     assert "value_10" in text(result) and "value_99" in text(result)
+    assert f"\n{resume - 1}| " in text(result) and f"\n{resume}| " not in text(result)
     calls = _read_calls(text(result))
-    assert calls == [{"path": "file.txt", "offset": "9:1", "limit": 4}]
+    assert calls == [{"path": "file.txt", "offset": f"{resume}:1", "limit": 4}]
     continued = await call(tmp_path, calls[0], tools=tools, name="read")
     assert continued["data"]["content"].split("\n")[:4] == [
-        f"{number}| {lines[number - 1]}" for number in range(9, 13)
+        f"{number}| {lines[number - 1]}" for number in range(resume, resume + 4)
     ]
 
 

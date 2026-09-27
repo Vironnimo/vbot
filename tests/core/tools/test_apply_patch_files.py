@@ -935,7 +935,9 @@ async def test_two_sessions_use_same_path_lock_during_retry(tmp_path, monkeypatc
     assert path.read_bytes() == b"first=new\nsecond=new\n"
 
 
-@pytest.mark.parametrize(("code", "other_file"), [(5, True), (5, False), (28, True), (None, False)])
+@pytest.mark.parametrize(
+    ("code", "other_file"), [(5, True), (5, False), (32, False), (28, True), (None, False)]
+)
 def test_replace_failure_is_bounded_and_keeps_other_operations(
     tmp_path, monkeypatch, code, other_file
 ):
@@ -960,22 +962,29 @@ def test_replace_failure_is_bounded_and_keeps_other_operations(
     if other_file:
         patch += "\n*** Add File: other.txt\n+done"
     result = apply(tmp_path, patch)
-    assert 1 < len(attempts) <= 10 if code == 5 else len(attempts) == 1
-    busy = f"The file was busy; {len(attempts)} attempts were made."
+    retried = code in {5, 32}
+    assert 1 < len(attempts) <= 10 if retried else len(attempts) == 1
+    tried = f"The write was attempted {len(attempts)} times."
     if other_file:
         assert result["data"]["status"] == "partial"
         assert "Created other.txt (1 line).\nFailed: Could not change file.txt" in text(result)
-        assert (busy in text(result)) is (code == 5)
+        assert (tried in text(result)) is retried
         assert (tmp_path / "other.txt").read_bytes() == b"done\n"
     else:
         error = result["error"]
         assert error["code"] == "file_write_error"
-        if code == 5:
+        if retried:
             assert error["retryable"] and error["attempts_made"] == len(attempts)
-            assert busy in error["message"]
+            assert tried in error["message"]
         else:
             assert "retryable" not in error and "attempts_made" not in error
-    assert len(sleeps) == len(attempts) - 1 and sum(sleeps) < 2
+        if code == 32:
+            assert error["message"].startswith(
+                "Could not change file.txt: another program is using it. file.txt is "
+                "unchanged; send this change again after that program has finished, for "
+                "example a running test or script."
+            )
+    assert len(sleeps) == len(attempts) - 1 and sum(sleeps) < 6
     assert path.read_bytes() == b"old\n"
     assert sorted(p.name for p in tmp_path.iterdir()) == (
         ["file.txt", "other.txt"] if other_file else ["file.txt"]

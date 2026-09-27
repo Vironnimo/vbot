@@ -631,7 +631,30 @@ async def test_wiki_edit_misses_show_the_closest_passage(board):
     assert await edit("Row 2: valeu") == (
         "Error (wiki_edit_conflict): old_text does not occur in the current page (revision 1). "
         "Nothing changed.\nClosest passages:\nline 4:\nRow 2: value\nline 3:\nRow 1: value\n"
+        "First difference, line 4: the page has 'Row 2: value' where old_text has "
+        "'Row 2: valeu'.\n"
         f"Copy old_text exactly from the page, or read it with {read_call}."
+    )
+    # Closest passages that overlap show each page line once.
+    reviews = await create(
+        board,
+        "# Reviews\nThe team reviews the rollout plan.\nThe team reviews the rollback plan.\n"
+        "The team reviews the release notes.",
+        "Reviews",
+    )
+    old = "The team reviewed the rollout plan.\nThe team reviewed the rollback plan."
+    assert visible(
+        await invoke(
+            board,
+            {"action": "update", "page_id": reviews, "old_text": old, "new_text": "x"},
+        )
+    ) == (
+        "Error (wiki_edit_conflict): old_text does not occur in the current page (revision 1). "
+        "Nothing changed.\nClosest passage, at line 2:\nThe team reviews the rollout plan.\n"
+        "The team reviews the rollback plan.\nFirst difference, line 2: the page has 'The team "
+        "reviews the rollout plan.' where old_text has 'The team reviewed the rollout plan.'.\n"
+        'Copy old_text exactly from the page, or read it with {"action": "read", "page_id": '
+        f'"{reviews}"}}.'
     )
     # A fragment of a longer line points at that line.
     assert await edit("three replicas behind the proxy") == (
@@ -715,6 +738,23 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
         'closest page is "Release plan" (w1). Repeat the call with page_id "w1" if you meant '
         "it. Nothing changed."
     )
+    # Without page_id, an update names the pages that hold its old_text, newest change first.
+    changed = {"action": "update", "page_id": "w2", "old_text": "x", "new_text": "no"}
+    assert (await invoke(board, changed))["ok"]
+    for old_text, named in (
+        ("Body", 'old_text occurs in w1 ("Release plan"); repeat the call with page_id "w1".'),
+        (
+            "o",
+            'old_text occurs in w2 ("B") and w1 ("Release plan"); repeat the call with the '
+            "page_id of the page you mean.",
+        ),
+        ("Missing", 'Find pages with {"action": "list"}.'),
+    ):
+        unnamed = await invoke(board, {"action": "update", "old_text": old_text, "new_text": "y"})
+        assert visible(unnamed) == (
+            f"Error (invalid_arguments): update needs page_id. {named} Nothing changed."
+        )
+    assert (await stored(board, "w1"))["content"] == "Body"
     for unknown in ("w9", "wpg_unrelated"):
         missing = await invoke(board, {"action": "read", "page_id": unknown})
         assert visible(missing) == (

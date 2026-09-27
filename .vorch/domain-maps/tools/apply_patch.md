@@ -186,8 +186,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   copied lines and from distinctive copied lines (at most 3 occurrences) the file
   holds exactly; a window at least 2 such lines place is shown even below the
   0.60 similarity floor (`find_closest_candidates`). The line-by-line comparison
-  starts at the first copied line with a word the file holds near the window
-  (`_aligned_start`), because a window starts wherever its best-matching lines
+  (`fuzzy_match.first_difference`, shared with Swarm Wiki edits) starts at the
+  first copied line with a word the file holds near the window, because a window starts wherever its best-matching lines
   put it, shifted by every line the copy added or dropped before them. Closing
   quotes and brackets occur too often to align by; when the file holds no other
   copied line there, the nearby file line most similar (>= 0.50) to the start of
@@ -202,6 +202,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   character coordinates and explicit truncation. Truncated candidate excerpts
   name a callable `read(path=..., offset="line:character", limit=...)` continuation;
   positions count Unicode characters and preserve LF/CRLF/CR line semantics.
+  Overlapping excerpts merge before continuations are named: a continuation
+  starts after the text any excerpt shows, and overlapping ones join into one
+  call. Separately named continuations of adjacent candidates mostly repeated
+  shown lines (26 of 34 merged reports, Sessions, 2026-09).
   Diagnostics also note when the new
   text already occurs (a change made earlier; not when `old_string` contains
   `new_string`, as after a deletion); without candidates the text names
@@ -428,7 +432,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   checks plus atomic replace are not a portable filesystem compare-and-swap.
   Filesystem failures name their reason in English without the absolute path
   (`file_state.os_error_reason`, e.g. `another program is using it`), not the
-  localized Windows message.
+  localized Windows message. A write, delete or rename that another program
+  blocks (Windows 32/33) says the file is unchanged and to send the change again
+  after that program finishes, instead of asking to check the path; exhausted
+  retries add `The write was attempted N times.` Swarm Agents met a file held
+  open for 5 to 30 seconds and read the former `permission denied` as a real
+  permission problem (Sessions, 2026-09).
 - Successful surviving files, including verified no-ops, receive Session read
   stamps. Metadata drift can produce a post-success warning. Text mutations
   feed the existing ChangeTracker with actual before/after contents and publish
@@ -474,7 +483,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Sessions, cancellation, failure containment, concurrent drift and bounded
   guarded retries. `test_file_state.py` covers which Windows sharing errors are
   retried behind a precondition check and includes a real Windows reader handle
-  without delete sharing, not just injected exceptions.
+  without delete sharing, released during the retries or held through them,
+  not just injected exceptions.
 - `test_copy_match.py` covers shared prose/identifier distinctions and target
   IDs in substring recovery.
 - Existing fuzzy-match, file-state, Runtime and Provider-schema

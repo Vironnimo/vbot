@@ -151,9 +151,10 @@ def test_failed_replacement_keeps_the_target_and_removes_the_temporary_copy(
 @pytest.mark.parametrize(
     ("code", "precondition", "attempts", "reason"),
     [
-        (5, True, 7, "permission denied"),
-        (32, True, 7, "another program is using it"),
-        (33, True, 7, "another program has locked part of it"),
+        # Without another program holding the file, access denied is a permission problem.
+        (5, True, 9, "permission denied"),
+        (32, True, 9, "another program is using it"),
+        (33, True, 9, "another program has locked part of it"),
         # Other failures, or a caller without a precondition check, fail at once.
         (28, True, 1, "permission denied"),
         (32, False, 1, "another program is using it"),
@@ -188,11 +189,8 @@ def test_replace_retries_only_windows_sharing_failures_behind_a_precondition_che
 
     assert len(replaces) == attempts
     assert len(checks) == (attempts if precondition else 0)
-    assert len(sleeps) == attempts - 1 and sum(sleeps) < 2
+    assert len(sleeps) == attempts - 1 and sum(sleeps) < 6
     assert getattr(raised.value, "attempts_made", None) == (attempts if attempts > 1 else None)
-    if attempts > 1 and os.name != "nt":
-        # Only Windows keeps a Windows error code on a wrapped error.
-        reason = "permission denied"
     assert os_error_reason(raised.value) == reason
     assert target.read_bytes() == b"before"
     assert list(tmp_path.iterdir()) == [target]
@@ -221,7 +219,10 @@ def test_read_only_target_fails_immediately_without_temporary_files(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows sharing handles")
-def test_atomic_replace_recovers_from_a_real_reader_without_delete_sharing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("released", [True, False])
+def test_atomic_replace_waits_for_a_real_reader_without_delete_sharing(
+    tmp_path, monkeypatch, released
+):
     import ctypes
     from ctypes import wintypes
 
@@ -251,8 +252,9 @@ def test_atomic_replace_recovers_from_a_real_reader_without_delete_sharing(tmp_p
     def release_reader(delay):
         nonlocal handle
         releases.append(delay)
-        assert close(handle)
-        handle = None
+        if released:
+            assert close(handle)
+            handle = None
 
     def check_before_replace():
         checks.append(target.read_bytes())
@@ -260,12 +262,20 @@ def test_atomic_replace_recovers_from_a_real_reader_without_delete_sharing(tmp_p
 
     monkeypatch.setattr(file_state_module.time, "sleep", release_reader)
     try:
-        atomic_write_bytes(target, b"after", before_replace=check_before_replace)
+        if released:
+            atomic_write_bytes(target, b"after", before_replace=check_before_replace)
+        else:
+            with pytest.raises(OSError) as raised:
+                atomic_write_bytes(target, b"after", before_replace=check_before_replace)
+            # Windows answers "access denied"; the reason names the program holding the file.
+            assert os_error_reason(raised.value) == "another program is using it"
+            assert raised.value.attempts_made == len(releases) + 1  # type: ignore[attr-defined]
     finally:
         if handle is not None:
             close(handle)
-    assert len(releases) == 1 and checks == [b"before", b"before"]
-    assert target.read_bytes() == b"after"
+    if released:
+        assert len(releases) == 1 and checks == [b"before", b"before"]
+    assert target.read_bytes() == (b"after" if released else b"before")
     assert list(tmp_path.iterdir()) == [target]
 
 

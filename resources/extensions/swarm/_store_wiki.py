@@ -125,6 +125,17 @@ def _page_numbers(connection: sqlite3.Connection, swarm_id: str) -> dict[str, in
     return {row["page_id"]: number for number, row in enumerate(rows, 1)}
 
 
+def newest_wiki_page_number(db: SwarmDatabase, swarm_id: str) -> int | None:
+    """Return the number of the Swarm's newest page, or None without pages."""
+
+    with db._read() as connection:
+        count = connection.execute(
+            "SELECT COUNT(DISTINCT page_id) FROM wiki_revisions WHERE swarm_id=?", (swarm_id,)
+        ).fetchone()[0]
+    # Numbers are dense in creation order (see _page_numbers).
+    return int(count) or None
+
+
 def _page_id(connection: sqlite3.Connection, swarm_id: str, reference: str) -> str:
     """Return the ID of the page ``reference`` numbers ("w3"); any other value unchanged."""
 
@@ -190,14 +201,19 @@ def _read(
     return result
 
 
-def wiki_pages(db: SwarmDatabase, swarm_id: str) -> list[Json]:
-    """Return every page's ID, number, current title and deletion state, newest change first."""
+def wiki_pages(db: SwarmDatabase, swarm_id: str, containing: str | None = None) -> list[Json]:
+    """Return every page's ID, number, current title and deletion state, newest change first.
+
+    With ``containing``, return only the live pages whose current content contains
+    that exact text.
+    """
 
     with db._read() as connection:
         rows = connection.execute(
             "SELECT p.id,r.title,r.deleted FROM wiki_pages p JOIN wiki_revisions r "
-            "ON r.page_id=p.id AND r.revision=p.revision WHERE p.swarm_id=? ORDER BY r.id DESC",
-            (swarm_id,),
+            "ON r.page_id=p.id AND r.revision=p.revision WHERE p.swarm_id=? "
+            "AND (? IS NULL OR (r.deleted=0 AND instr(r.content,?)>0)) ORDER BY r.id DESC",
+            (swarm_id, containing, containing),
         ).fetchall()
         numbers = _page_numbers(connection, swarm_id)
     return [
@@ -437,6 +453,7 @@ def _mutate(
                             {"line": item.line, "text": item.text, "truncated": item.truncated}
                             for item in edit.passages
                         ],
+                        "difference": edit.difference,
                     },
                 )
             content, line, notes = edit.content, edit.line, list(edit.notes)

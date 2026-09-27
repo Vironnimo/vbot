@@ -392,6 +392,29 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             return REASONING_REPLAY_FIDELITY_READABLE_ONLY
         return super().reasoning_replay_fidelity(model_id)
 
+    def _format_assistant_message(
+        self,
+        message: dict[str, Any],
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Give every Chat-routed Assistant Tool Call its ``reasoning_content``.
+
+        DeepSeek's thinking mode rejects a request whose historical Tool Call
+        lacks ``reasoning_content``, also when the Model produced no Reasoning
+        for that call or its Reasoning belongs to another route. An empty
+        carrier states exactly that.
+        """
+
+        wire = super()._format_assistant_message(message, model_id=model_id)
+        if (
+            wire.get("tool_calls")
+            and self.reasoning_replay_fidelity(model_id or "")
+            == REASONING_REPLAY_FIDELITY_READABLE_ONLY
+        ):
+            wire.setdefault("reasoning_content", "")
+        return wire
+
     @classmethod
     def describe_reasoning_render(
         cls,

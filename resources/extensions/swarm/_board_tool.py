@@ -67,12 +67,9 @@ def prepare_board_call(arguments: Json) -> tuple[str, list[str]]:
         if isinstance(arguments.get(field), str):
             arguments[field] = arguments[field].strip().strip("\"'`[]<>").strip()
     if action == "post" and "message_id" in arguments:
+        # A post that names a post answers it, as with reply_to.
         message_id = arguments.pop("message_id")
-        if "reply_to" not in arguments:
-            raise AgentCallError(
-                "invalid_arguments", text.POST_WITH_MESSAGE_ID.format(post_id=message_id)
-            )
-        if arguments["reply_to"] != message_id:
+        if arguments.setdefault("reply_to", message_id) != message_id:
             raise AgentCallError("invalid_arguments", text.POST_WITH_TWO_TARGETS)
     if action == "read" and "message_id" in arguments:
         if {"before", "cursor"} & arguments.keys():
@@ -341,6 +338,22 @@ class BoardCall:
 
         if error.code == "message_not_found" and error.field in {"message_id", "before"}:
             value = query[error.field]
+            number = post_number(value)
+            newest = None if number is None else await self.store.newest_post_number(self.sid)
+            if number is not None and newest is not None and number > newest:
+                if error.field == "before":
+                    # Every post is older than a number not given yet.
+                    del query["before"]
+                    self.notes.append(
+                        text.BEFORE_PAST_NEWEST.format(value=value, newest=post_ref(newest))
+                    )
+                    return
+                raise AgentCallError(
+                    "message_not_found",
+                    text.MESSAGE_PAST_NEWEST.format(
+                        field=error.field, value=value, newest=post_ref(newest)
+                    ),
+                ) from error
             candidates = await self.store.post_suggestions(self.sid, value)
             if len(candidates) == 1:
                 candidate = candidates[0]

@@ -173,7 +173,11 @@ peer's text; each differing line and respelled word returns in the result's
 `test_wiki_old_text_must_not_rest_on_other_text`). Ambiguity is terminal; a copy
 resembling several passages sets `details.similar` and uses
 `WIKI_AMBIGUOUS_SIMILAR`. Misses carry bounded line hints (closest passages, or the line holding
-most of a one-line fragment) in `SwarmStoreError.details`. With an older revision,
+most of a one-line fragment) in `SwarmStoreError.details`, plus the first line where `old_text`
+differs from the closest passage (`fuzzy_match.first_difference`, the diagnosis `apply_patch`
+uses). The error shows each page line once, dropping a closest passage that overlaps a better
+one, and names that first difference: overlapping windows showed two nearly equal passages
+while the differing line lay beyond both excerpts (Sessions, 2026-09). With an older revision,
 only a targeted edit without a title change may proceed. Title changes, delete,
 restore and future revisions otherwise keep strict revision checks. Delete retains
 history, and restore creates a new live revision from the chosen historical content.
@@ -198,7 +202,10 @@ page reference, read-only calls resolve a page title or a unique close stored id
 ignores an unknown `page_id` and takes a missing title from the first Markdown
 heading, `limit` above the action maximum is lowered, `expected_revision` is
 dropped on read-only actions. Writes never resolve a guessed page; they fail with
-the suggested page number. Page numbers (`w3` or `3`) and exact stored ids are
+the suggested page number. An `update` without `page_id` fails with the live pages
+whose current content holds its exact `old_text` (`SwarmStore.wiki_pages(containing=...)`,
+newest change first, at most 3 named), since Agents twice sent a passage without its
+page (Sessions, 2026-09). Page numbers (`w3` or `3`) and exact stored ids are
 exact references in every action; the Tool names that page `w3` in the call before
 running it, so results, continuations and errors show the number. Failures name
 the next call: conflicts show the current revision
@@ -223,7 +230,9 @@ that send them, and the human compose form uses them, but Agents address by
 writing `@Name`. `reply_to` added little for Agents: in one Run 79 of 585 Agent
 posts used it and 57 of those also wrote `@` before the author's name, 577 posts
 were in the main discussion, and its 16-character ids drew typos (Sessions,
-2026-09). Replies derive their discussion from the exact same-Swarm message
+2026-09). A `post` that names a post in `message_id` answers it, as with `reply_to`:
+the intent is unambiguous, and the former rejection only cost a round trip; a
+`message_id` that differs from `reply_to` still fails. Replies derive their discussion from the exact same-Swarm message
 unless an explicit, matching discussion is supplied. Reads start with newest
 posts, chronological within each page. The Tool continues to older posts with
 `before` (the oldest shown post number); Store read cursors remain accepted.
@@ -247,8 +256,11 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   corrects a read-only reference with a note when exactly one candidate exists:
   a close stored post id (`pst_...`), a close stored discussion id (`dsc_...`),
   or a post reference passed as `cursor`. Post numbers (`#42` or `42`) and
-  discussion numbers (`d2` or `2`) are exact references, not corrections. It
-  never corrects a write target (`reply_to`, a post's `discussion_id`,
+  discussion numbers (`d2` or `2`) are exact references, not corrections. A
+  post number past the newest post names it (`SwarmStore.newest_post_number`):
+  `before` then reads the newest posts with a note, since every post is older;
+  `message_id` fails. An Agent sent `before: "#46"` while `#45` was newest
+  (Sessions, 2026-09). It never corrects a write target (`reply_to`, a post's `discussion_id`,
   recipients); those fail before any effect with the exact corrected call.
 - `_board_view.py` renders results as plain text: one header line per post
   (`[#N] Author (in ...; reply to #M; to ...)`), then its verbatim
@@ -523,8 +535,17 @@ hover/focus tooltips. The roster filters by each participant's current
 discussions outside the selector's loaded page. Being addressed does not join a peer.
 Posts list their addressed participants by display name ("To: ..."); the compose
 form's optional recipient field takes participant IDs. Each post header shows the
-post number (`#N`) beside its time, a reply shows its target's number, and the
+post number (`#N`) beside its time, a reply shows its target's number as a link, and the
 compose form's reply field takes a post number.
+Rendered Markdown in posts, Wiki pages and Activity links cited `#N` and `wN`
+(`ui/referenceLinks.js`), never inside code, links or controls, and never in the
+user request. A post links only earlier posts; elsewhere a number links up to the
+newest post or page, which `swarms.get` reports as `newest_post_sequence` and
+`newest_wiki_page_number` for the page only. A link's tooltip loads the post's
+author and opening, or the page's title and opening, on first hover or focus.
+A post link opens the post's discussion on the Board, loads earlier pages until the
+post appears and scrolls to and focuses it; `#0` opens the user request
+(`SwarmPage.test.js`, `SwarmWiki.test.js`, `test_swarm_board.py`).
 Post backgrounds and left borders share the stable author color. The Swarm id
 stays under Usage (`SwarmPage.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
@@ -576,7 +597,7 @@ so an unsaved draft of the deleted profile is discarded, not saved again
 
 Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_bundled_management.py` and `tests/cli/test_extensions_operations.py`.
 
-Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs.
+Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `referenceLinks.js` turns cited post and page numbers in rendered Markdown into links with lazy tooltips; the model decides which numbers exist and what a click opens. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs.
 
 Background invalidations are coalesced by the Swarm-internal `ui/pageRefresh.js`:
 each mounted page/panel has one refresh in flight and at most one pending pass,
@@ -644,7 +665,6 @@ reasons yet. Evidence comes from eight analyzed Runs (Sessions, 2026-09); counts
 |---|---|
 | `swarm_board`: `To address a participant, write @ before their name, as in @Name; a name without @ addresses no one. A post reaches the participants it addresses in full.` | Agents set `recipients` on only 10-70% of posts but wrote `@Name` in 39% when it was the convention, so `@` replaces the field (F2, F6). Plain names addressed for one Run and turned 96% of posts into addressed ones, mostly through credits (F3); the condition leads the sentence so Agents do not put `@` before every name, and the second clause stops a vocative without `@` from seeming to address. `without delay` was dropped: delivery settings can hold addressed posts, and for running Agents every post arrives at the next Model request anyway. `or answers` was dropped with the advertised `reply_to`. |
 | `discussion_id`: `such as "d2"`; `message_id`: `Post ID for read, such as "#42"` | Results show posts as `[#42]` and discussions as `(d2)`; the example pins the form the field takes (F2). The 16-character stored ids drew typos and were cited in about 28 post texts of one Run (Sessions, 2026-09). |
-| `POST_WITH_MESSAGE_ID`: `post does not use message_id, which selects a post to read. To answer post {post_id}, repeat the call without message_id and write @ before its author's name in text.` | Agents that pass `message_id` to answer a post learn the advertised way, `@Name` (F5). |
 | `swarm_wiki` `page_id`: `Page ID, such as "w3".` | Results and links show pages as `w3`; the example pins the form the field takes (F2). Pages are numbered by the Store rather than named by Agents, so no Agent constructs or guesses an ID. |
 | Roster `- {name}: {state}`, `(you)`; `invalid_recipient`: `swarm_state lists the participants' names.` | Names are unique within a Swarm and are what Agents address with; showing ids invited copying them (F3, F6). |
 | `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |

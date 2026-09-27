@@ -151,13 +151,21 @@ def _file_text(report: _FileReport) -> str:
 
 
 def _excerpts(candidates: list[JsonObject], path: str | None = None) -> list[str]:
-    """Render file excerpts with line numbers; touching or overlapping ones merge."""
+    """Render file excerpts with line numbers; touching or overlapping ones merge.
+
+    Read continuations cover only text that no excerpt shows.
+    """
     groups: list[dict[int, str]] = []
+    complete: set[int] = set()
     for candidate in sorted(candidates, key=lambda item: int(item["line"])):
         start = int(candidate["line"])
         lines = dict(enumerate(candidate["text"].split("\n"), start))
+        cut = {line for line, character in _continuations(candidate) if character > 1}
+        complete.update(set(lines) - cut)
         if groups and start <= max(groups[-1]) + 1:
-            groups[-1].update(lines)
+            # Every excerpt line starts at its line's start; the longest shows the most.
+            for number, text in lines.items():
+                groups[-1][number] = max(groups[-1].get(number, ""), text, key=len)
         else:
             groups.append(lines)
     rendered: list[str] = []
@@ -165,28 +173,51 @@ def _excerpts(candidates: list[JsonObject], path: str | None = None) -> list[str
         if index:
             rendered.append("--")
         rendered.extend(_gutter(number, group[number]) for number in sorted(group))
-    continuations = {
-        (item["offset"], item["limit"])
-        for candidate in candidates
-        for item in candidate.get("continuations", [])
-    }
+    shown = {number: len(text) for group in groups for number, text in group.items()}
+    windows = []
+    for candidate in candidates:
+        for (line, character), item in zip(
+            _continuations(candidate), candidate.get("continuations", []), strict=True
+        ):
+            end = line + int(item["limit"])
+            while line < end and line in complete:
+                line, character = line + 1, 1
+            if line < end:
+                windows.append((line, max(character, shown.get(line, 0) + 1), end))
+    continuations: list[tuple[int, int, int]] = []
+    for line, character, end in sorted(windows):
+        if continuations and line < continuations[-1][2]:
+            first, first_character, last_end = continuations[-1]
+            continuations[-1] = (first, first_character, max(last_end, end))
+        else:
+            continuations.append((line, character, end))
     if path and continuations:
         read = model_tool_name("read")
         calls = [
             f"{read}(path={json.dumps(path, ensure_ascii=False)}, "
-            f"offset={json.dumps(offset)}, limit={limit})"
-            for offset, limit in sorted(
-                continuations, key=lambda item: tuple(map(int, item[0].split(":")))
-            )
+            f'offset="{line}:{character}", limit={end - line})'
+            for line, character, end in continuations
         ]
         rendered.append(
             f"Excerpt truncated. If {read} is available, continue with "
             + "; ".join(calls)
             + "; otherwise use another file reader."
         )
-    elif any(candidate.get("truncated") for candidate in candidates):
+    elif continuations or any(
+        candidate.get("truncated") and not candidate.get("continuations")
+        for candidate in candidates
+    ):
         rendered.append("Excerpt truncated.")
     return rendered
+
+
+def _continuations(candidate: JsonObject) -> list[tuple[int, int]]:
+    """Return a candidate's read continuations as (line, character) positions."""
+    positions = []
+    for item in candidate.get("continuations", []):
+        line, _, character = str(item["offset"]).partition(":")
+        positions.append((int(line), int(character or 1)))
+    return positions
 
 
 def _difference_text(difference: JsonObject) -> list[str]:
@@ -290,7 +321,7 @@ def failure_text(error: JsonObject) -> str:
             done += " Not done: " + ", ".join(error["pending_paths"]) + "."
         lines.append(done)
     if error.get("attempts_made"):
-        lines.append(f"The file was busy; {error['attempts_made']} attempts were made.")
+        lines.append(f"The write was attempted {error['attempts_made']} times.")
     return "\n".join(lines)
 
 

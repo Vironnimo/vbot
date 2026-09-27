@@ -22,6 +22,7 @@ from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
     find_closest_candidates,
+    first_difference,
     replace_fuzzy,
 )
 
@@ -64,13 +65,15 @@ class EditMiss:
     ``lines`` names every distinct line an ambiguous ``old_text`` starts on;
     ``passages`` shows a bounded few of them, or the closest text on a miss.
     ``similar`` marks an ``old_text`` that matched nowhere exactly but resembles
-    several passages.
+    several passages. ``difference`` locates where a missing ``old_text`` first
+    differs from the closest passage (``fuzzy_match.first_difference``).
     """
 
     occurrences: int
     passages: tuple[Passage, ...]
     lines: tuple[int, ...] = ()
     similar: bool = False
+    difference: dict[str, int | str | bool] | None = None
 
 
 def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
@@ -99,11 +102,13 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
         if copied is not None:
             notes = tuple(copy_warnings(copied))
             return TextEdit(copied.new_content, copied.first_changed_line, True, notes)
+    candidates = find_closest_candidates(content, old)
     passages = tuple(
         Passage(candidate.line_number, candidate.text, candidate.truncated)
-        for candidate in find_closest_candidates(content, old)
+        for candidate in candidates
     )
-    return EditMiss(0, passages or _fragment_hint(content, old))
+    difference = first_difference(content, old, candidates[0].line_number) if candidates else None
+    return EditMiss(0, passages or _fragment_hint(content, old), difference=difference)
 
 
 def _emphasis_copy(content: str, old: str, new: str) -> TextEdit | EditMiss | None:
