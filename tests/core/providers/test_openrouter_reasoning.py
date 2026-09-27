@@ -1,8 +1,8 @@
-"""Openrouter: reasoning behavior."""
+"""OpenRouter Reasoning: mandatory-Reasoning Models, reasoning_details replay, the
+zero-Reasoning warning, and newline-run noise in visible Reasoning."""
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -11,328 +11,224 @@ import httpx
 import pytest
 import respx
 
-from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
-from core.providers._openrouter_constants import (
-    _REASONING_TRAILING_NEWLINES_STATE_KEY,
-)
-from core.providers._openrouter_policy import (
-    _collapse_reasoning_newline_runs,
-)
-from core.providers.openrouter import (
-    OpenRouterAdapter,
-)
-from core.providers.providers import ProviderConfig
-from tests.core.providers.openrouter_helpers import (
-    API_KEY,
-    OPENROUTER_URL,
-    SUCCESS_RESPONSE,
-)
-from tests.core.providers.openrouter_helpers import (
-    openrouter_adapter as openrouter_adapter,
-)
-from tests.core.providers.openrouter_helpers import (
-    openrouter_config as openrouter_config,
+from core.models.models import ModelRegistry
+from tests.core.providers.openrouter_test_support import (
+    CHAT_SUCCESS,
+    CHAT_URL,
+    HELLO,
+    RESPONSES_MODEL,
+    RESPONSES_URL,
+    catalog_lookup,
+    catalog_model,
+    chat_sse,
+    openrouter_adapter,
+    responses_sse,
+    sent_body,
 )
 
-
-def test_reasoning_replay_policy_is_model_specific(
-    openrouter_config: ProviderConfig,
-) -> None:
-    models = {
-        "google/gemini-2.5-pro": Model(
-            model_id="google/gemini-2.5-pro",
-            name="Gemini",
-            capabilities=Capabilities(
-                vision=True,
-                tools=True,
-                json_mode=True,
-                reasoning=ReasoningCapabilities(supported=True),
-            ),
-            context_window=1_000_000,
-            max_output_tokens=64_000,
-            reasoning_replay="none",
-        ),
-        "openai/gpt-4o": Model(
-            model_id="openai/gpt-4o",
-            name="GPT-4o",
-            capabilities=Capabilities(
-                vision=True,
-                tools=True,
-                json_mode=True,
-                reasoning=ReasoningCapabilities(supported=False),
-            ),
-            context_window=128_000,
-            max_output_tokens=16_384,
-            reasoning_replay="current_run",
-        ),
-    }
-    adapter = OpenRouterAdapter(
-        openrouter_config,
-        API_KEY,
-        model_lookup=models.get,
-    )
-
-    assert adapter.reasoning_replay_policy("google/gemini-2.5-pro") == "none"
-    assert adapter.reasoning_replay_policy("openai/gpt-4o") == "current_run"
-    assert adapter.reasoning_replay_policy("unknown/new-model") == "full_history"
+SPACE_BUNNY = "stealth/space-bunny-alpha"
 
 
 @pytest.mark.parametrize(
     ("effort", "expected"),
-    [(None, None), ("none", "low"), ("high", "high")],
+    [
+        pytest.param(None, None, id="omitted-keeps-provider-default"),
+        pytest.param("none", "low", id="off-becomes-cheapest-supported-effort"),
+    ],
 )
-def test_space_bunny_mandatory_reasoning_uses_supported_effort(
-    openrouter_config: ProviderConfig, effort: str | None, expected: str | None
+@respx.mock
+@pytest.mark.asyncio
+async def test_mandatory_reasoning_model_never_renders_off(
+    effort: str | None, expected: str | None
 ) -> None:
-    resources = Path(__file__).resolve().parents[3] / "resources"
-    registry = ModelRegistry.load(resources)
+    registry = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
 
-    def lookup(model_id):
+    def lookup(model_id: str) -> Any:
         return registry.get("openrouter", model_id)
 
-    adapter = OpenRouterAdapter(openrouter_config, API_KEY, model_lookup=lookup)
+    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
+    adapter = openrouter_adapter(lookup)
 
-    payload = adapter._build_payload(
-        [{"role": "user", "content": "Hello"}],
-        "stealth/space-bunny-alpha",
-        thinking_effort=effort,
-    )
+    await adapter.send(HELLO, model_id=SPACE_BUNNY, thinking_effort=effort)
+
+    body = sent_body(route)
     intent = adapter.describe_reasoning_render(
-        model_lookup=lookup, model_id="stealth/space-bunny-alpha", effort=effort
+        model_lookup=lookup, model_id=SPACE_BUNNY, effort=effort
     )
-
     if expected is None:
-        assert "reasoning" not in payload
+        assert "reasoning" not in body
         assert intent.kind == "default"
     else:
-        assert payload["reasoning"] == {"effort": expected}
-        assert payload["include_reasoning"] is True
+        assert body["reasoning"] == {"effort": expected}
+        assert body["include_reasoning"] is True
         assert intent.kind == "effort"
         assert intent.effort_level == expected
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_in_run_round_trips_reasoning_details(
-    openrouter_adapter: OpenRouterAdapter,
-) -> None:
-    """In-run replay must echo reasoning_details unchanged (Gemini upstreams 400 without it)."""
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+async def test_in_run_replay_echoes_reasoning_details_unchanged() -> None:
+    """Gemini upstreams reject an in-run Tool continuation without its reasoning_details."""
+
+    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
     reasoning_details = [
         {"type": "reasoning.encrypted", "data": "enc-signature-blob"},
         {"type": "reasoning.text", "text": "step one", "signature": "sig-1"},
     ]
-    history: list[dict[str, Any]] = [
-        {"role": "user", "content": "Use the tool"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": "call_1", "name": "lookup", "arguments": {"q": "x"}}],
-            "reasoning_meta": {"reasoning_details": reasoning_details},
-        },
-        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
-    ]
 
-    await openrouter_adapter.send(history, model_id="google/gemini-2.5-pro")
-
-    request_body = json.loads(route.calls.last.request.content)
-    assistant_message = request_body["messages"][1]
-    assert assistant_message["reasoning_details"] == reasoning_details
-
-
-def _zero_reasoning_token_response(**message_fields: Any) -> dict[str, Any]:
-    return {
-        "choices": [
+    await openrouter_adapter().send(
+        [
+            {"role": "user", "content": "Use the tool"},
             {
-                "message": {"role": "assistant", "content": "ok", **message_fields},
-                "finish_reason": "stop",
-            }
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "lookup", "arguments": {"q": "x"}}],
+                "reasoning_meta": {"reasoning_details": reasoning_details},
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "result"},
         ],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "completion_tokens_details": {"reasoning_tokens": 0},
-        },
-    }
-
-
-def _openrouter_catalog_adapter(
-    openrouter_config: ProviderConfig, *, reasoning_supported: bool
-) -> OpenRouterAdapter:
-    model = Model(
-        model_id="openai/gpt-4o",
-        name="GPT-4o",
-        capabilities=Capabilities(
-            vision=True,
-            tools=True,
-            json_mode=True,
-            reasoning=ReasoningCapabilities(supported=reasoning_supported),
-        ),
-        context_window=128_000,
-        max_output_tokens=16_384,
+        model_id="google/gemini-2.5-pro",
     )
-    return OpenRouterAdapter(openrouter_config, API_KEY, model_lookup={"openai/gpt-4o": model}.get)
+
+    assert sent_body(route)["messages"][1]["reasoning_details"] == reasoning_details
 
 
+@pytest.mark.parametrize(
+    ("reasoning_supported", "returned_reasoning", "expected_warnings"),
+    [
+        pytest.param(False, {}, 0, id="catalog-non-reasoning-model-expects-zero"),
+        pytest.param(True, {}, 1, id="rendered-effort-swallowed"),
+        pytest.param(
+            True,
+            {
+                "reasoning": "Thinking it through.",
+                "reasoning_details": [{"type": "reasoning.text", "text": "Thinking it through."}],
+            },
+            0,
+            id="zero-counter-with-returned-reasoning",
+        ),
+    ],
+)
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("reasoning_supported", "expected_warnings"), [(False, 0), (True, 1)])
-async def test_swallowed_effort_warning_follows_rendered_reasoning(
-    openrouter_config: ProviderConfig,
+async def test_zero_reasoning_token_warning_follows_rendered_and_returned_reasoning(
     caplog: pytest.LogCaptureFixture,
     reasoning_supported: bool,
+    returned_reasoning: dict[str, Any],
     expected_warnings: int,
 ) -> None:
-    """A catalog non-reasoning Model gets no reasoning field, so 0 tokens is expected."""
-    adapter = _openrouter_catalog_adapter(
-        openrouter_config, reasoning_supported=reasoning_supported
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "ok", **returned_reasoning},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "completion_tokens_details": {"reasoning_tokens": 0},
+                },
+            },
+        )
     )
-    route = respx.post(OPENROUTER_URL).mock(
-        return_value=httpx.Response(200, json=_zero_reasoning_token_response())
+    adapter = openrouter_adapter(
+        catalog_lookup(catalog_model("openai/gpt-4o", reasoning=reasoning_supported))
     )
 
     with caplog.at_level(logging.WARNING, logger="vbot.providers.openai_compatible"):
-        await adapter.send(
-            [{"role": "user", "content": "Hello"}],
-            model_id="openai/gpt-4o",
-            thinking_effort="high",
-        )
+        await adapter.send(HELLO, model_id="openai/gpt-4o", thinking_effort="high")
 
-    request_body = json.loads(route.calls.last.request.content)
-    assert ("reasoning" in request_body) is reasoning_supported
+    assert ("reasoning" in sent_body(route)) is reasoning_supported
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == expected_warnings
     if expected_warnings:
         assert "rendered_reasoning=high" in warnings[0].getMessage()
 
 
+@pytest.mark.parametrize(
+    ("wire", "fragments", "expected"),
+    [
+        pytest.param(
+            "chat",
+            ["first\n\n\n\n\n\n\n\n\nsecond"],
+            ["first\n\nsecond"],
+            id="interior-run-collapses-to-paragraph-break",
+        ),
+        pytest.param(
+            "chat", ["para one\n\npara two"], ["para one\n\npara two"], id="paragraph-break-kept"
+        ),
+        pytest.param(
+            "chat", ["word\n", "\n\n\nnext"], ["word\n", "\nnext"], id="run-across-deltas-bounded"
+        ),
+        pytest.param(
+            "chat",
+            ["word\n\n", "\n\n\n", "\nnext"],
+            ["word\n\n", "next"],
+            id="noise-only-delta-dropped-without-resetting-the-run",
+        ),
+        pytest.param(
+            "responses", ["word\n", "\n\n\nnext"], ["word\n", "\nnext"], id="responses-stream"
+        ),
+    ],
+)
 @respx.mock
 @pytest.mark.asyncio
-async def test_zero_reasoning_counter_with_returned_reasoning_does_not_warn(
-    openrouter_config: ProviderConfig, caplog: pytest.LogCaptureFixture
+async def test_streamed_reasoning_collapses_newline_runs_and_leaves_content(
+    wire: str, fragments: list[str], expected: list[str]
 ) -> None:
-    """OpenRouter can report 0 reasoning tokens while returning Reasoning."""
-    adapter = _openrouter_catalog_adapter(openrouter_config, reasoning_supported=True)
-    respx.post(OPENROUTER_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json=_zero_reasoning_token_response(
-                reasoning="Thinking it through.",
-                reasoning_details=[{"type": "reasoning.text", "text": "Thinking it through."}],
-            ),
+    if wire == "chat":
+        model_id = "stealth/ox-alpha"
+        respx.post(CHAT_URL).mock(
+            return_value=chat_sse(
+                *({"choices": [{"delta": {"reasoning": fragment}}]} for fragment in fragments),
+                {"choices": [{"delta": {"content": "answer"}, "finish_reason": "stop"}]},
+            )
         )
+    else:
+        model_id = RESPONSES_MODEL
+        completed = {
+            "id": "resp_reasoning",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "answer"}],
+                }
+            ],
+        }
+        respx.post(RESPONSES_URL).mock(
+            return_value=responses_sse(
+                *(("response.reasoning.delta", {"delta": fragment}) for fragment in fragments),
+                ("response.output_text.delta", {"delta": "answer"}),
+                ("response.completed", {"response": completed}),
+            )
+        )
+
+    deltas = [delta async for delta in openrouter_adapter().stream(HELLO, model_id=model_id)]
+
+    assert [d["text"] for d in deltas if d["type"] == "reasoning_delta"] == expected
+    assert [d["text"] for d in deltas if d["type"] == "content_delta"] == ["answer"]
+
+
+def test_completed_response_collapses_reasoning_newline_runs() -> None:
+    normalized = openrouter_adapter().normalize_response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "ok",
+                        "reasoning": "why\n\n\n\n\n\n\n\n\nbecause",
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+        model_id="stealth/ox-alpha",
     )
 
-    with caplog.at_level(logging.WARNING, logger="vbot.providers.openai_compatible"):
-        await adapter.send(
-            [{"role": "user", "content": "Hello"}],
-            model_id="openai/gpt-4o",
-            thinking_effort="high",
-        )
-
-    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
-
-
-def test_collapse_reasoning_newline_runs_collapses_interior_runs() -> None:
-    # Arrange
-    text = "first\n\n\n\n\n\n\n\n\nsecond"
-
-    # Act
-    collapsed = _collapse_reasoning_newline_runs(text, None)
-
-    # Assert
-    assert collapsed == "first\n\nsecond"
-
-
-def test_collapse_reasoning_newline_runs_keeps_paragraph_breaks() -> None:
-    # Arrange
-    text = "para one\n\npara two"
-
-    # Act
-    collapsed = _collapse_reasoning_newline_runs(text, None)
-
-    # Assert
-    assert collapsed == text
-
-
-def test_collapse_reasoning_newline_runs_bounds_cross_delta_run() -> None:
-    # Arrange
-    state: dict[str, Any] = {}
-
-    # Act
-    first = _collapse_reasoning_newline_runs("word\n", state)
-    second = _collapse_reasoning_newline_runs("\n\n\nnext", state)
-
-    # Assert
-    assert first == "word\n"
-    assert second == "\nnext"
-    assert "".join([first, second]).endswith("word\n\nnext")
-
-
-def test_collapse_reasoning_newline_runs_empty_fragment_keeps_trailing_state() -> None:
-    # Arrange
-    state: dict[str, Any] = {}
-    _collapse_reasoning_newline_runs("word\n\n", state)
-    assert state[_REASONING_TRAILING_NEWLINES_STATE_KEY] == 2
-
-    # Act
-    noise = _collapse_reasoning_newline_runs("\n\n\n", state)
-
-    # Assert
-    assert noise == ""
-    # The dropped fragment must not reset the emitted stream's trailing run.
-    assert state[_REASONING_TRAILING_NEWLINES_STATE_KEY] == 2
-    after = _collapse_reasoning_newline_runs("\nnext", state)
-    assert after == "next"
-
-
-def test_normalize_stream_chunk_collapses_reasoning_noise_only(
-    openrouter_adapter: OpenRouterAdapter,
-) -> None:
-    # Arrange
-    raw_chunk = {
-        "choices": [
-            {
-                "delta": {
-                    "content": "answer",
-                    "reasoning": "This\n\n\n\n\n\n\n\n\n trace",
-                },
-            }
-        ]
-    }
-    state: dict[str, Any] = {}
-
-    # Act
-    deltas = openrouter_adapter._normalize_stream_chunk(raw_chunk, set(), state)
-
-    # Assert
-    reasoning = [delta["text"] for delta in deltas if delta.get("type") == "reasoning_delta"]
-    content = [delta["text"] for delta in deltas if delta.get("type") == "content_delta"]
-    assert reasoning == ["This\n\n trace"]
-    assert content == ["answer"]
-
-
-def test_normalize_response_collapses_reasoning_newline_runs(
-    openrouter_adapter: OpenRouterAdapter,
-) -> None:
-    """Non-streaming responses get the same newline-run collapse."""
-
-    # Arrange
-    raw_response = {
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": "ok",
-                    "reasoning": "why\n\n\n\n\n\n\n\n\nbecause",
-                },
-                "finish_reason": "stop",
-            }
-        ]
-    }
-
-    # Act
-    response = openrouter_adapter.normalize_response(raw_response, model_id="stealth/ox-alpha")
-
-    # Assert
-    assert response["reasoning"] == "why\n\nbecause"
+    assert normalized["reasoning"] == "why\n\nbecause"

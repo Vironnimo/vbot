@@ -479,7 +479,7 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   IDs in substring recovery.
 - Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
-  `tests/core/providers/test_ollama.py` verifies intact patch arguments through
+  `tests/core/providers/test_ollama_cloud.py` verifies intact patch arguments through
   Cloud response normalization and Chat ingestion.
 - `python -m scripts.probe_provider_tool_call --scenario apply_patch` uses the
   production registry and disposable files. Its matrix separates natural batching tasks
