@@ -88,9 +88,13 @@ _TOOL_PARAMETERS = (
     ("swarm_state", STATE_PARAMETERS, "status"),
     ("swarm_wiki", WIKI_PARAMETERS, None),
 )
+# Actions that only read; with swarm_inbox and swarm_state they are not acting
+# for wake pacing.
+_BOARD_READS = frozenset({"list", "read"})
+_WIKI_READS = frozenset({"list", "read", "history"})
 # Accepted without being offered: a Participant's own identity copied from its
 # reminders, the single action of the inbox and state Tools, and explicit Board
-# recipients, which names in the post text replace.
+# recipients, which "@" before names in the post text replaces.
 UNADVERTISED_PARAMETERS: dict[str, Json] = {
     name: {
         **({"action": {"type": "string", "enum": [action]}} if action else {}),
@@ -240,6 +244,10 @@ class SwarmExtension:
                 context, "swarm_board", arguments
             )
             action, notes = prepare_board_call(arguments)
+            if action in _BOARD_READS:
+                self._pacing.read_only(
+                    binding.group_id, binding.participant_id, context.tool_call_id
+                )
             call = BoardCall(self, context, binding, swarm, notes)
             if action in {"post", "create"} and "recipients" in arguments:
                 recipients = resolve_recipients(arguments["recipients"], call.roster)
@@ -279,6 +287,7 @@ class SwarmExtension:
             binding, swarm, arguments = await self._bound_arguments(
                 context, "swarm_inbox", arguments
             )
+            self._pacing.read_only(binding.group_id, binding.participant_id, context.tool_call_id)
             if arguments.get("action") == "receive":
                 arguments.pop("action")
             unexpected = sorted(set(arguments) - {"limit"})
@@ -314,6 +323,7 @@ class SwarmExtension:
             binding, swarm, arguments = await self._bound_arguments(
                 context, "swarm_state", arguments
             )
+            self._pacing.read_only(binding.group_id, binding.participant_id, context.tool_call_id)
             if arguments.get("action") == "status":
                 arguments.pop("action")
             _validate_state(arguments)
@@ -342,6 +352,10 @@ class SwarmExtension:
             binding, swarm, arguments = await self._bound_arguments(
                 context, "swarm_wiki", arguments
             )
+            if arguments.get("action") in _WIKI_READS:
+                self._pacing.read_only(
+                    binding.group_id, binding.participant_id, context.tool_call_id
+                )
             notes: list[str] = []
             call = WikiCall(
                 self._store(),
@@ -1144,9 +1158,10 @@ class SwarmExtension:
         owner = context.execution_owner
         if owner is None:
             return ToolBatchDecision(end=turn_end_requested)
-        if persisted_call_ids:
-            binding = context.binding
-            self._pacing.tool_used(binding.group_id, binding.participant_id, context.run_id)
+        binding = context.binding
+        self._pacing.tools_used(
+            binding.group_id, binding.participant_id, context.run_id, persisted_call_ids
+        )
         for _, receipt_id, _, _ in receipts:
             if not await self._store().reconcile_delivery(receipt_id):
                 raise SwarmStoreError("delivery_unacknowledged")
