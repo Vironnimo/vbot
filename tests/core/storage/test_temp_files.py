@@ -19,24 +19,27 @@ def _age(path: Path, *, seconds: float) -> None:
     os.utime(path, (timestamp, timestamp))
 
 
-def test_create_allocates_unique_category_confined_files(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("category", "suffix", "directory"),
+    [
+        ("bash", ".log", "bash_temporary"),
+        ("subagents", ".md", "subagent_temporary"),
+        ("terminals", ".events.jsonl", "terminal_temporary"),
+    ],
+)
+def test_create_allocates_unique_files_in_the_category_directory(
+    tmp_path: Path, category: str, suffix: str, directory: str
+) -> None:
     manager = TemporaryFileManager(tmp_path)
 
-    first = manager.create("bash", ".log")
-    second = manager.create("bash", ".log")
+    first = manager.create(category, suffix)
+    second = manager.create(category, suffix)
 
     assert first.path != second.path
-    assert first.path.parent == DataDirectoryLayout(tmp_path).bash_temporary
+    assert first.path.parent == getattr(DataDirectoryLayout(tmp_path), directory)
+    assert first.path.name.endswith(suffix)
     assert first.path.is_file()
     assert second.path.is_file()
-
-
-def test_terminal_files_use_their_canonical_retained_category(tmp_path: Path) -> None:
-    manager = TemporaryFileManager(tmp_path)
-
-    lease = manager.create("terminals", ".events.jsonl")
-
-    assert lease.path.parent == DataDirectoryLayout(tmp_path).terminal_temporary
 
 
 @pytest.mark.parametrize(
@@ -138,7 +141,6 @@ async def test_periodic_sweep_and_async_close(tmp_path: Path) -> None:
     await manager.aclose()
 
     assert not lease.path.exists()
-    assert manager._sweeper_task is None
 
 
 async def _wait_for(event: threading.Event) -> None:

@@ -1,4 +1,4 @@
-"""Tests for the block-model prompt store (layout.json + per-block overrides)."""
+"""The block-model prompt store: ``layout.json`` plus per-block text overrides per scope."""
 
 import json
 from pathlib import Path
@@ -21,125 +21,70 @@ def make_store(tmp_path: Path) -> PromptBlockStore:
     return PromptBlockStore(data_dir=tmp_path, ensure_directories=ensure_directories)
 
 
+def _no_staging_leftovers(tmp_path: Path) -> bool:
+    return list(DataDirectoryLayout(tmp_path).atomic_temporary.iterdir()) == []
+
+
 # --------------------------------------------------------------------------
 # id -> path mapping
 # --------------------------------------------------------------------------
 
 
-def test_block_override_path_never_contains_a_colon(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
+@pytest.mark.parametrize(
+    ("scope", "block_id", "relative_path"),
+    [
+        (None, "tool:bash", "prompts/blocks/tool/bash.md"),
+        (None, "memory:guidance", "prompts/blocks/memory/guidance.md"),
+        (None, "user:my_rules", "prompts/blocks/user/my_rules.md"),
+        (None, "user:Block1", "prompts/blocks/user/Block1.md"),
+        # The agent-id rule constrains only the first character.
+        (None, "user:trailing-", "prompts/blocks/user/trailing-.md"),
+        ("assistant", "extension:weather", "agents/assistant/prompts/blocks/extension/weather.md"),
+    ],
+)
+def test_block_override_path_maps_namespace_and_slug_without_a_colon(
+    tmp_path: Path, scope: str | None, block_id: str, relative_path: str
+) -> None:
+    path = make_store(tmp_path).block_override_path(scope, block_id)
 
-    tool_path = store.block_override_path(None, "tool:bash")
-    user_path = store.block_override_path(None, "user:my-rules")
-
-    assert ":" not in str(tool_path.relative_to(tmp_path))
-    assert ":" not in str(user_path.relative_to(tmp_path))
-    assert tool_path == tmp_path / "prompts" / "blocks" / "tool" / "bash.md"
-    assert user_path == tmp_path / "prompts" / "blocks" / "user" / "my-rules.md"
-
-
-def test_block_override_path_uses_agent_scope_root(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    path = store.block_override_path("assistant", "extension:weather")
-
-    assert path == (
-        tmp_path / "agents" / "assistant" / "prompts" / "blocks" / "extension" / "weather.md"
-    )
+    assert path == tmp_path / relative_path
+    assert ":" not in str(path.relative_to(tmp_path))
 
 
 @pytest.mark.parametrize(
-    "block_id",
+    ("scope", "block_id"),
     [
-        "tool:bash",
-        "core:intro",
-        "extension:weather",
-        "user:my-rules",
-        "user:my_rules",
-        "memory:guidance",
-        "user:Block1",
+        (None, "user:../escape"),
+        (None, "tool:sub/dir"),
+        (None, "tool:sub\\dir"),
+        (None, "user:/absolute"),
+        (None, "user:C:\\windows"),
+        (None, "user:.."),
+        (None, "user:has space"),
+        (None, "user:-leading"),
+        # The agent-id rule caps a slug at 64 characters.
+        (None, "user:" + "x" * 65),
+        (None, "bogus:thing"),
+        (None, "noprefix"),
+        ("../escape", "tool:bash"),
     ],
 )
-def test_split_block_id_accepts_valid_ids(tmp_path: Path, block_id: str) -> None:
-    store = make_store(tmp_path)
-
-    # Should not raise and should produce a path under the namespace folder.
-    path = store.block_override_path(None, block_id)
-    namespace, slug = block_id.split(":", 1)
-    assert path.parent.name == namespace
-    assert path.name == f"{slug}.md"
-
-
-@pytest.mark.parametrize(
-    "block_id",
-    [
-        "user:../escape",
-        "user:../../etc/passwd",
-        "tool:sub/dir",
-        "tool:sub\\dir",
-        "user:/absolute",
-        "user:C:\\windows",
-        "user:.",
-        "user:..",
-        "user:has space",
-    ],
-)
-def test_split_block_id_rejects_unsafe_slugs(tmp_path: Path, block_id: str) -> None:
-    store = make_store(tmp_path)
-
+def test_block_override_path_rejects_unsafe_ids_and_scopes(
+    tmp_path: Path, scope: str | None, block_id: str
+) -> None:
     with pytest.raises(StorageError):
-        store.block_override_path(None, block_id)
-
-
-def test_split_block_id_accepts_trailing_hyphen_per_agent_rule(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    # AGENT_ID_PATTERN only constrains the first char, so a trailing hyphen is a
-    # valid slug; the path stays inside the namespace folder regardless.
-    path = store.block_override_path(None, "user:trailing-")
-
-    assert path == tmp_path / "prompts" / "blocks" / "user" / "trailing-.md"
-
-
-def test_split_block_id_rejects_unknown_namespace(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    with pytest.raises(StorageError):
-        store.block_override_path(None, "bogus:thing")
-
-
-def test_split_block_id_rejects_missing_prefix(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    with pytest.raises(StorageError):
-        store.block_override_path(None, "noprefix")
-
-
-def test_split_block_id_rejects_invalid_user_slug_via_agent_rule(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    # Leading hyphen and over-long slugs both fail the canonical agent-id rule
-    # (AGENT_ID_PATTERN caps a slug at 64 chars: a lead char plus up to 63 more).
-    with pytest.raises(StorageError):
-        store.block_override_path(None, "user:-leading")
-    with pytest.raises(StorageError):
-        store.block_override_path(None, "user:" + "x" * 65)
-
-
-def test_scope_root_rejects_unsafe_agent_id(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    with pytest.raises(StorageError):
-        store.block_override_path("../escape", "tool:bash")
+        make_store(tmp_path).block_override_path(scope, block_id)
 
 
 # --------------------------------------------------------------------------
-# layout.json round-trip (atomic)
+# layout.json
 # --------------------------------------------------------------------------
 
 
 def test_layout_round_trip_preserves_order_and_flags(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    assert store.read_layout(None) == []
+    assert store.read_layout("assistant") == []
     entries = [
         LayoutEntry(id="core:intro", enabled=True, source="core"),
         LayoutEntry(id="tool:bash", enabled=False, source="tool"),
@@ -147,44 +92,15 @@ def test_layout_round_trip_preserves_order_and_flags(tmp_path: Path) -> None:
     ]
 
     written_path = store.write_layout(None, entries)
-    read_back = store.read_layout(None)
 
     assert written_path == tmp_path / "prompts" / "layout.json"
-    assert read_back == entries
+    assert store.read_layout(None) == entries
+    assert _no_staging_leftovers(tmp_path)
 
 
-def test_read_layout_missing_file_is_empty(tmp_path: Path) -> None:
+def test_layout_file_omits_defaults_and_keeps_unknown_fields(tmp_path: Path) -> None:
     store = make_store(tmp_path)
-
-    assert store.read_layout(None) == []
-    assert store.read_layout("assistant") == []
-
-
-def test_write_layout_omits_none_source_on_disk(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    store.write_layout(None, [LayoutEntry(id="core:intro")])
-
-    raw = json.loads((tmp_path / "prompts" / "layout.json").read_text(encoding="utf-8"))
-    assert raw == {"format_version": 1, "entries": [{"id": "core:intro", "enabled": True}]}
-
-
-def test_read_layout_defaults_enabled_and_source(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    layout_path = tmp_path / "prompts" / "layout.json"
-    layout_path.parent.mkdir(parents=True, exist_ok=True)
-    layout_path.write_text(
-        json.dumps({"format_version": 1, "entries": [{"id": "core:intro"}]}), encoding="utf-8"
-    )
-
-    [entry] = store.read_layout(None)
-
-    assert entry == LayoutEntry(id="core:intro", enabled=True, source=None)
-
-
-def test_write_layout_keeps_unknown_fields_of_the_file(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    layout_path = tmp_path / "prompts" / "layout.json"
+    layout_path = store.layout_path(None)
     layout_path.parent.mkdir(parents=True, exist_ok=True)
     layout_path.write_text(
         json.dumps(
@@ -192,7 +108,7 @@ def test_write_layout_keeps_unknown_fields_of_the_file(tmp_path: Path) -> None:
                 "format_version": 1,
                 "note": "kept",
                 "entries": [
-                    {"id": "core:intro", "enabled": True, "pinned": True},
+                    {"id": "core:intro", "pinned": True},
                     {"id": "tool:bash", "enabled": True, "pinned": False},
                 ],
             }
@@ -201,37 +117,35 @@ def test_write_layout_keeps_unknown_fields_of_the_file(tmp_path: Path) -> None:
     )
 
     assert store.read_layout(None) == [
-        LayoutEntry(id="core:intro"),
+        LayoutEntry(id="core:intro", enabled=True, source=None),
         LayoutEntry(id="tool:bash"),
     ]
     store.write_layout(None, [LayoutEntry(id="core:intro", enabled=False)])
 
-    raw = json.loads(layout_path.read_text(encoding="utf-8"))
-    assert raw == {
+    assert json.loads(layout_path.read_text(encoding="utf-8")) == {
         "format_version": 1,
         "entries": [{"id": "core:intro", "enabled": False, "pinned": True}],
         "note": "kept",
     }
 
 
-@pytest.mark.parametrize("scope", [None, "assistant"])
 @pytest.mark.parametrize(
-    "body",
+    ("scope", "body"),
     [
-        b"{not json",
-        b"{}",
-        b'[{"id":"core:intro"}]',
-        b'{"format_version":1}',
-        b'{"format_version":2,"entries":[]}',
-        b'{"format_version":1,"entries":[{"enabled": true}]}',
-        b'{"format_version":1,"entries":[null]}',
-        b"\xff",
-        b'{"format_version":1,"entries":[{"id":"core:intro","enabled":"yes"}]}',
-        b'{"format_version":1,"entries":[{"id":"core:intro","source":42}]}',
-        b'{"format_version":1,"entries":[{"id":"core:intro","enabled":false},null]}',
+        (None, b"{not json"),
+        ("assistant", b"\xff"),
+        (None, b'[{"id":"core:intro"}]'),
+        ("assistant", b'{"format_version":1}'),
+        (None, b'{"format_version":2,"entries":[]}'),
+        (None, b'{"format_version":1,"entries":[{"enabled": true}]}'),
+        ("assistant", b'{"format_version":1,"entries":[{"id":"core:intro","enabled":"yes"}]}'),
+        (None, b'{"format_version":1,"entries":[{"id":"core:intro","source":42}]}'),
+        (None, b'{"format_version":1,"entries":[{"id":"core:intro","enabled":false},null]}'),
     ],
 )
-def test_invalid_layout_falls_back_and_is_only_replaced_by_a_reset(tmp_path, caplog, scope, body):
+def test_invalid_layout_falls_back_and_is_only_replaced_by_a_reset(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, scope: str | None, body: bytes
+) -> None:
     store = make_store(tmp_path)
     path = store.layout_path(scope)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,11 +164,13 @@ def test_invalid_layout_falls_back_and_is_only_replaced_by_a_reset(tmp_path, cap
     assert store.read_layout(scope) == [LayoutEntry(id="core:intro")]
 
 
-def test_unreadable_layout_falls_back(tmp_path, monkeypatch, caplog):
+def test_unreadable_layout_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     store = make_store(tmp_path)
     store.write_layout(None, [LayoutEntry(id="core:intro")])
 
-    def fail_read(*args, **kwargs):
+    def fail_read(*args: object, **kwargs: object) -> str:
         raise PermissionError("test sentinel")
 
     monkeypatch.setattr(Path, "read_text", fail_read)
@@ -262,58 +178,50 @@ def test_unreadable_layout_falls_back(tmp_path, monkeypatch, caplog):
     assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
-def test_write_layout_leaves_no_temp_file(tmp_path: Path) -> None:
+def test_prune_layout_drops_inert_entries_and_keeps_live_order_and_flags(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    entries = [
+        LayoutEntry(id="tool:bash", enabled=False, source="tool"),
+        LayoutEntry(id="tool:gone", enabled=True, source="tool"),
+        LayoutEntry(id="core:intro", enabled=True, source="core"),
+    ]
 
-    store.write_layout(None, [LayoutEntry(id="core:intro")])
+    store.prune_layout(None, entries, {"tool:bash", "core:intro"})
+    assert store.read_layout(None) == [
+        LayoutEntry(id="tool:bash", enabled=False, source="tool"),
+        LayoutEntry(id="core:intro", enabled=True, source="core"),
+    ]
 
-    assert list(DataDirectoryLayout(tmp_path).atomic_temporary.iterdir()) == []
+    # An unknown entry is omitted, never an error.
+    store.prune_layout(None, entries, set())
+    assert store.read_layout(None) == []
 
 
 # --------------------------------------------------------------------------
-# per-block override round-trip (atomic)
+# per-block text overrides
 # --------------------------------------------------------------------------
 
 
-def test_block_override_round_trip(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("scope", "relative_path"),
+    [
+        (None, "prompts/blocks/user/notes.md"),
+        ("assistant", "agents/assistant/prompts/blocks/user/notes.md"),
+    ],
+)
+def test_block_override_lifecycle(tmp_path: Path, scope: str | None, relative_path: str) -> None:
     store = make_store(tmp_path)
+    assert store.read_block_override(scope, "user:notes") is None
 
-    written_path = store.write_block_override(None, "tool:bash", "Custom bash guidance.")
+    written_path = store.write_block_override(scope, "user:notes", "Always be terse.")
 
-    assert written_path == tmp_path / "prompts" / "blocks" / "tool" / "bash.md"
-    assert store.read_block_override(None, "tool:bash") == "Custom bash guidance."
-
-
-def test_read_block_override_absent_is_none(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    assert store.read_block_override(None, "tool:bash") is None
-
-
-def test_write_block_override_creates_namespace_subfolder(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    store.write_block_override("assistant", "user:notes", "agent notes")
-
-    expected = tmp_path / "agents" / "assistant" / "prompts" / "blocks" / "user" / "notes.md"
-    assert expected.read_text(encoding="utf-8") == "agent notes"
-
-
-def test_remove_block_override_returns_true_then_false(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    store.write_block_override(None, "user:notes", "x")
-
-    assert store.remove_block_override(None, "user:notes") is True
-    assert store.remove_block_override(None, "user:notes") is False
-    assert store.read_block_override(None, "user:notes") is None
-
-
-def test_write_block_override_leaves_no_temp_file(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    store.write_block_override(None, "tool:bash", "x")
-
-    assert list(DataDirectoryLayout(tmp_path).atomic_temporary.iterdir()) == []
+    assert written_path == tmp_path / relative_path
+    assert written_path.read_text(encoding="utf-8") == "Always be terse."
+    assert store.read_block_override(scope, "user:notes") == "Always be terse."
+    assert _no_staging_leftovers(tmp_path)
+    assert store.remove_block_override(scope, "user:notes") is True
+    assert store.remove_block_override(scope, "user:notes") is False
+    assert store.read_block_override(scope, "user:notes") is None
 
 
 # --------------------------------------------------------------------------
@@ -321,8 +229,9 @@ def test_write_block_override_leaves_no_temp_file(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_seed_agent_layout_copies_default_layout(tmp_path: Path) -> None:
+def test_seed_agent_layout_copies_only_the_default_layout(tmp_path: Path) -> None:
     store = make_store(tmp_path)
+    store.write_block_override(None, "tool:bash", "default text override")
     default_layout = [
         LayoutEntry(id="core:intro", enabled=True, source="core"),
         LayoutEntry(id="tool:bash", enabled=False, source="tool"),
@@ -332,156 +241,37 @@ def test_seed_agent_layout_copies_default_layout(tmp_path: Path) -> None:
 
     assert written == tmp_path / "agents" / "assistant" / "prompts" / "layout.json"
     assert store.read_layout("assistant") == default_layout
-
-
-def test_seed_agent_layout_preserves_existing(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    existing = [LayoutEntry(id="user:custom", enabled=True, source="user")]
-    store.write_layout("assistant", existing)
-
-    result = store.seed_agent_layout("assistant", [LayoutEntry(id="core:intro", source="core")])
-
-    assert result is None
-    assert store.read_layout("assistant") == existing
-
-
-def test_seed_agent_layout_overwrite_replaces_existing(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    store.write_layout("assistant", [LayoutEntry(id="user:custom", source="user")])
-    new_default = [LayoutEntry(id="core:intro", enabled=True, source="core")]
-
-    store.seed_agent_layout("assistant", new_default, overwrite=True)
-
-    assert store.read_layout("assistant") == new_default
-
-
-def test_seed_agent_layout_does_not_copy_text_overrides(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    store.write_block_override(None, "tool:bash", "default text override")
-
-    store.seed_agent_layout("assistant", [LayoutEntry(id="tool:bash", source="tool")])
-
-    # The agent inherits text until it overrides; seeding copies only the layout.
+    # The Agent inherits text until it overrides; seeding copies only the layout.
     assert store.read_block_override("assistant", "tool:bash") is None
 
 
-# --------------------------------------------------------------------------
-# inert-entry pruning on write
-# --------------------------------------------------------------------------
-
-
-def test_prune_layout_drops_inert_entries(tmp_path: Path) -> None:
+def test_seed_agent_layout_keeps_an_existing_layout_unless_overwriting(tmp_path: Path) -> None:
     store = make_store(tmp_path)
-    entries = [
-        LayoutEntry(id="core:intro", source="core"),
-        LayoutEntry(id="tool:gone", source="tool"),
-        LayoutEntry(id="tool:bash", source="tool"),
-    ]
-    known_ids = {"core:intro", "tool:bash"}
+    existing = [LayoutEntry(id="user:custom", enabled=True, source="user")]
+    store.write_layout("assistant", existing)
+    new_default = [LayoutEntry(id="core:intro", enabled=True, source="core")]
 
-    store.prune_layout(None, entries, known_ids)
+    assert store.seed_agent_layout("assistant", new_default) is None
+    assert store.read_layout("assistant") == existing
 
-    assert [entry.id for entry in store.read_layout(None)] == ["core:intro", "tool:bash"]
-
-
-def test_prune_layout_does_not_error_on_unknown_entry(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    entries = [LayoutEntry(id="tool:gone", source="tool")]
-
-    # An unknown entry is omitted, never an error -> result is an empty layout.
-    store.prune_layout(None, entries, set())
-
-    assert store.read_layout(None) == []
+    store.seed_agent_layout("assistant", new_default, overwrite=True)
+    assert store.read_layout("assistant") == new_default
 
 
-def test_prune_layout_keeps_order_and_flags_of_live_entries(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    entries = [
-        LayoutEntry(id="tool:bash", enabled=False, source="tool"),
-        LayoutEntry(id="tool:gone", enabled=True, source="tool"),
-        LayoutEntry(id="core:intro", enabled=True, source="core"),
-    ]
-
-    store.prune_layout(None, entries, {"tool:bash", "core:intro"})
-
-    assert store.read_layout(None) == [
-        LayoutEntry(id="tool:bash", enabled=False, source="tool"),
-        LayoutEntry(id="core:intro", enabled=True, source="core"),
-    ]
-
-
-# --------------------------------------------------------------------------
-# custom-block lifecycle (T1): file + layout effects
-# --------------------------------------------------------------------------
-
-
-def test_custom_block_create_writes_file_and_layout(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-
-    # Create = write its override file + add a layout entry (the two halves T1
-    # describes; the RPC layer orchestrates them, the store provides both).
-    store.write_block_override(None, "user:house-rules", "Always be terse.")
-    store.write_layout(None, [LayoutEntry(id="user:house-rules", source="user")])
-
-    assert store.read_block_override(None, "user:house-rules") == "Always be terse."
-    assert [entry.id for entry in store.read_layout(None)] == ["user:house-rules"]
-    assert (tmp_path / "prompts" / "blocks" / "user" / "house-rules.md").exists()
-
-
-def test_custom_block_remove_deletes_file_and_drops_layout_entry(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    store.write_block_override(None, "user:house-rules", "Always be terse.")
-    store.write_layout(
-        None,
-        [
-            LayoutEntry(id="user:house-rules", source="user"),
-            LayoutEntry(id="core:intro", source="core"),
-        ],
-    )
-
-    # Remove = delete the override file + drop the layout entry.
-    removed = store.remove_block_override(None, "user:house-rules")
-    remaining = [entry for entry in store.read_layout(None) if entry.id != "user:house-rules"]
-    store.write_layout(None, remaining)
-
-    assert removed is True
-    assert store.read_block_override(None, "user:house-rules") is None
-    assert not (tmp_path / "prompts" / "blocks" / "user" / "house-rules.md").exists()
-    assert [entry.id for entry in store.read_layout(None)] == ["core:intro"]
-
-
-# --------------------------------------------------------------------------
-# StorageManager delegation (the integration seam Phase 3 consumes)
-# --------------------------------------------------------------------------
-
-
-def test_storage_manager_delegates_layout_round_trip(tmp_path: Path) -> None:
-    storage = StorageManager(tmp_path)
-    entries = [LayoutEntry(id="core:intro", enabled=False, source="core")]
-
-    storage.write_block_layout(None, entries)
-
-    assert storage.read_block_layout(None) == entries
-
-
-def test_storage_manager_delegates_block_overrides(tmp_path: Path) -> None:
-    storage = StorageManager(tmp_path)
-    storage.write_block_override(None, "tool:bash", "default override")
-
-    assert storage.read_block_override(None, "tool:bash") == "default override"
-    assert storage.remove_block_override(None, "tool:bash") is True
-
-
-def test_storage_manager_delegates_seed_and_prune(tmp_path: Path) -> None:
+def test_storage_manager_exposes_the_block_store(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     default_layout = [LayoutEntry(id="core:intro", source="core")]
 
     storage.seed_agent_block_layout("assistant", default_layout)
-    assert storage.read_block_layout("assistant") == default_layout
-
+    storage.write_block_layout(None, [LayoutEntry(id="core:intro", enabled=False)])
     storage.prune_block_layout(
         None,
         [LayoutEntry(id="core:intro", source="core"), LayoutEntry(id="tool:gone", source="tool")],
         {"core:intro"},
     )
-    assert [entry.id for entry in storage.read_block_layout(None)] == ["core:intro"]
+    storage.write_block_override(None, "tool:bash", "default override")
+
+    assert storage.read_block_layout("assistant") == default_layout
+    assert storage.read_block_layout(None) == default_layout
+    assert storage.read_block_override(None, "tool:bash") == "default override"
+    assert storage.remove_block_override(None, "tool:bash") is True

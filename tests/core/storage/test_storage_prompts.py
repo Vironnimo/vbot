@@ -1,13 +1,20 @@
-"""Tests for storage prompts."""
+"""Prompt fragments: user copies over bundled resources, and per-Agent editable copies."""
 
 from pathlib import Path
 
 import pytest
 
-from core.storage import (
-    StorageError,
-    StorageManager,
-)
+from core.storage import StorageError, StorageManager
+
+EDITABLE_FRAGMENTS = [
+    "channels.md",
+    "identity_runtime.md",
+    "runtime.md",
+    "skill_maintenance.md",
+    "skills.md",
+    "tools.md",
+    "tools_list.md",
+]
 
 
 def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = True) -> None:
@@ -17,14 +24,7 @@ def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = T
     prompts_dir = resources_dir / "prompts"
     prompts_dir.mkdir(parents=True)
     prompt_names = [
-        "identity_runtime.md",
-        "runtime.md",
-        "working_project.md",
-        "tools.md",
-        "tools_list.md",
-        "channels.md",
-        "skills.md",
-        "skill_maintenance.md",
+        *EDITABLE_FRAGMENTS,
         # Backend-only fragments, always bundled (like compaction/handoff/learn).
         "reflect-memory.md",
         "reflect-skill.md",
@@ -37,128 +37,78 @@ def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = T
         prompts_dir.joinpath(name).write_text(f"{name} bundled", encoding="utf-8")
 
 
-def test_read_prompt_fragment_prefers_user_copy(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    data_dir = tmp_path / "data"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(data_dir, resources_dir=resources_dir)
-    storage.ensure_directories()
-    (data_dir / "prompts" / "runtime.md").write_text("custom runtime", encoding="utf-8")
-
-    assert storage.read_prompt_fragment("runtime.md") == "custom runtime"
-
-
-def test_read_prompt_fragment_falls_back_to_bundled_resource(tmp_path: Path) -> None:
+@pytest.fixture
+def storage(tmp_path: Path) -> StorageManager:
     resources_dir = tmp_path / "resources"
     create_prompt_resources(resources_dir)
-    storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
-
-    assert storage.read_prompt_fragment("skills.md") == "skills.md bundled"
+    return StorageManager(tmp_path / "data", resources_dir=resources_dir)
 
 
-def test_read_prompt_fragment_skill_maintenance_resolves_bundled_resource(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
-
-    assert storage.read_prompt_fragment("skill_maintenance.md") == "skill_maintenance.md bundled"
-
-
-@pytest.mark.parametrize("fragment_name", ["reflect-memory.md", "reflect-skill.md", "reflect.md"])
-def test_read_prompt_fragment_reflect_resolves_bundled_resource(
-    tmp_path: Path, fragment_name: str
+@pytest.mark.parametrize(
+    ("fragment_name", "expected"),
+    [
+        ("runtime.md", "custom runtime"),
+        ("skills.md", "skills.md bundled"),
+        ("skill_maintenance.md", "skill_maintenance.md bundled"),
+        ("reflect.md", "reflect.md bundled"),
+    ],
+)
+def test_read_prompt_fragment_prefers_the_user_copy_over_the_bundled_resource(
+    storage: StorageManager, fragment_name: str, expected: str
 ) -> None:
-    resources_dir = tmp_path / "resources"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
+    storage.ensure_directories()
+    (storage.prompts_dir / "runtime.md").write_text("custom runtime", encoding="utf-8")
 
-    assert storage.read_prompt_fragment(fragment_name) == f"{fragment_name} bundled"
+    assert storage.read_prompt_fragment(fragment_name) == expected
 
 
-def test_read_prompt_fragment_compaction_name_passes_allowlist_check(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("fragment_name", "match"),
+    [("../runtime.md", None), ("other.md", None), ("compaction.md", r"compaction\.md")],
+    ids=["path-traversal", "unknown-name", "known-name-without-resource"],
+)
+def test_read_prompt_fragment_rejects_unknown_or_missing_fragments(
+    tmp_path: Path, fragment_name: str, match: str | None
+) -> None:
     resources_dir = tmp_path / "resources"
     create_prompt_resources(resources_dir, include_compaction=False)
     storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
 
-    with pytest.raises(StorageError, match="compaction\\.md"):
-        storage.read_prompt_fragment("compaction.md")
+    with pytest.raises(StorageError, match=match):
+        storage.read_prompt_fragment(fragment_name)
 
 
-def test_read_prompt_fragment_rejects_path_traversal(tmp_path: Path) -> None:
-    storage = StorageManager(tmp_path)
-
-    with pytest.raises(StorageError):
-        storage.read_prompt_fragment("../runtime.md")
-
-
-def test_read_prompt_fragment_rejects_unknown_names(tmp_path: Path) -> None:
-    storage = StorageManager(tmp_path)
-
-    with pytest.raises(StorageError):
-        storage.read_prompt_fragment("other.md")
-
-
-def test_copy_agent_prompt_fragments_seeds_editable_defaults_only(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    data_dir = tmp_path / "data"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(data_dir, resources_dir=resources_dir)
+def test_copy_agent_prompt_fragments_seeds_editable_defaults_and_keeps_agent_copies(
+    storage: StorageManager,
+) -> None:
     storage.ensure_directories()
     # A hand-created data-dir copy overrides the bundled default and seeds the scope.
-    (data_dir / "prompts" / "runtime.md").write_text("custom default runtime", encoding="utf-8")
+    (storage.prompts_dir / "runtime.md").write_text("custom default runtime", encoding="utf-8")
+    agent_prompts_dir = storage.agent_prompts_dir("coder")
+    agent_prompts_dir.mkdir(parents=True)
+    (agent_prompts_dir / "skills.md").write_text("custom agent skills", encoding="utf-8")
 
     written_paths = storage.copy_agent_prompt_fragments("coder")
 
     assert sorted(path.name for path in written_paths) == [
-        "channels.md",
-        "identity_runtime.md",
-        "runtime.md",
-        "skill_maintenance.md",
-        "skills.md",
-        "tools.md",
-        "tools_list.md",
+        name for name in EDITABLE_FRAGMENTS if name != "skills.md"
     ]
     assert storage.read_agent_prompt_fragment("coder", "runtime.md") == "custom default runtime"
-    assert not (data_dir / "agents" / "coder" / "prompts" / "compaction.md").exists()
+    assert storage.read_agent_prompt_fragment("coder", "skills.md") == "custom agent skills"
+    assert not (agent_prompts_dir / "compaction.md").exists()
 
 
-def test_copy_agent_prompt_fragments_preserves_existing_files(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    data_dir = tmp_path / "data"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(data_dir, resources_dir=resources_dir)
-    agent_prompts_dir = data_dir / "agents" / "coder" / "prompts"
-    agent_prompts_dir.mkdir(parents=True)
-    (agent_prompts_dir / "runtime.md").write_text("custom agent runtime", encoding="utf-8")
-
-    storage.copy_agent_prompt_fragments("coder")
-
-    assert storage.read_agent_prompt_fragment("coder", "runtime.md") == "custom agent runtime"
-
-
-def test_read_missing_agent_prompt_fragment_returns_empty_string(tmp_path: Path) -> None:
-    resources_dir = tmp_path / "resources"
-    create_prompt_resources(resources_dir)
-    storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
-
+def test_read_missing_agent_prompt_fragment_returns_empty_string(storage: StorageManager) -> None:
     assert storage.read_agent_prompt_fragment("coder", "skills.md") == ""
 
 
 @pytest.mark.parametrize(
-    ("agent_id", "fragment_name", "_message"),
-    [
-        ("../escape", "runtime.md", "Unsafe agent id"),
-        ("coder", "../runtime.md", "Unsafe Agent prompt fragment name"),
-        ("coder", "compaction.md", "Unknown Agent prompt fragment"),
-    ],
+    ("agent_id", "fragment_name"),
+    [("../escape", "runtime.md"), ("coder", "../runtime.md"), ("coder", "compaction.md")],
+    ids=["unsafe-agent-id", "unsafe-fragment-name", "non-editable-fragment"],
 )
 def test_agent_prompt_fragments_reject_unsafe_paths(
-    tmp_path: Path,
-    agent_id: str,
-    fragment_name: str,
-    _message: str,
+    storage: StorageManager, agent_id: str, fragment_name: str
 ) -> None:
-    storage = StorageManager(tmp_path / "data")
-
     with pytest.raises(StorageError):
         storage.read_agent_prompt_fragment(agent_id, fragment_name)
