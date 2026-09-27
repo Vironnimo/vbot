@@ -1,32 +1,28 @@
-"""Tests for public Settings schema parsing."""
+"""Tests for the ``settings.update`` section schema and stored-section normalization."""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
+import re
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
-from core.settings import (
-    SettingsValidationError,
-    SettingsValidationReport,
-    is_valid_agent_id,
-    parse_settings_update,
-    validate_settings_file,
+from core.settings import SettingsValidationError, is_valid_agent_id, parse_settings_update
+from core.settings.agent_defaults import normalize_agent_default_value
+from core.settings.normalizers import (
+    REFLECTION_SETTING_DEFAULTS,
+    normalize_appearance_settings,
+    normalize_compaction_settings,
+    normalize_reflection_settings,
 )
-
-
-def diagnostics_as_tuples(report: SettingsValidationReport) -> list[tuple[str, str, str]]:
-    return [
-        (diagnostic.severity, diagnostic.path, diagnostic.message)
-        for diagnostic in report.diagnostics
-    ]
+from core.utils.errors import StorageError
 
 
 def test_parse_settings_update_normalizes_all_supported_sections() -> None:
     parsed = parse_settings_update(
         {
-            "appearance": {"language": "en"},
+            "appearance": {"language": "en", "chat_width": "wide", "chat_working_mode": "compact"},
             "skills": {"directories": ["~/skills", " C:/skills/team "]},
             "subagents": {
                 "max_subagent_depth": 6,
@@ -62,10 +58,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                     "options": {"language": "auto"},
                 }
             },
-            "session_titles": {
-                "enabled": True,
-                "model": "openai/gpt-4.1-mini::api-key",
-            },
+            "session_titles": {"enabled": True, "model": " openai/gpt-4.1-mini::api-key "},
             "speech": {
                 "transcription_audio": {
                     "profile": "custom",
@@ -73,11 +66,26 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                     "sample_rate_hz": 24_000,
                 }
             },
+            "extensions": {
+                "disabled": [" legacy ", "old"],
+                "config": {"guard_bash": {"deny": ["rm -rf"]}},
+            },
+            "debug": {"enabled": True, "trace_limit": 100},
+            "reflection": {
+                "enabled": True,
+                "memory_turn_interval": 5,
+                "skill_model_step_interval": 40,
+            },
+            # ``null`` marks a context window for removal.
+            "local_models": {
+                "context_windows": {"ollama/ministral-3:8b": 16384, "ollama/old:1b": None}
+            },
+            "server": {"keep_awake": True, "timezone": "Europe/Berlin"},
         }
     )
 
     assert parsed == {
-        "appearance": {"language": "en"},
+        "appearance": {"language": "en", "chat_width": "wide", "chat_working_mode": "compact"},
         "skills": {"directories": ["~/skills", " C:/skills/team "]},
         "subagents": {
             "max_subagent_depth": 6,
@@ -113,10 +121,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "options": {"language": "auto"},
             }
         },
-        "session_titles": {
-            "enabled": True,
-            "model": "openai/gpt-4.1-mini::api-key",
-        },
+        "session_titles": {"enabled": True, "model": "openai/gpt-4.1-mini::api-key"},
         "speech": {
             "transcription_audio": {
                 "profile": "custom",
@@ -124,70 +129,60 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "sample_rate_hz": 24_000,
             }
         },
+        "extensions": {
+            "disabled": ["legacy", "old"],
+            "config": {"guard_bash": {"deny": ["rm -rf"]}},
+        },
+        "debug": {"enabled": True, "trace_limit": 100},
+        "reflection": {
+            "enabled": True,
+            "memory_turn_interval": 5,
+            "skill_model_step_interval": 40,
+        },
+        "local_models": {
+            "context_windows": {"ollama/ministral-3:8b": 16384, "ollama/old:1b": None}
+        },
+        "server": {"keep_awake": True, "timezone": "Europe/Berlin"},
     }
 
 
-@pytest.mark.parametrize("chat_width", ["comfortable", "wide", "full"])
-def test_parse_settings_update_accepts_each_supported_chat_width(chat_width: str) -> None:
-    parsed = parse_settings_update({"appearance": {"language": "en", "chat_width": chat_width}})
-
-    assert parsed == {"appearance": {"language": "en", "chat_width": chat_width}}
-
-
-@pytest.mark.parametrize("chat_working_mode", ["normal", "compact"])
-def test_parse_settings_update_accepts_each_supported_chat_working_mode(
-    chat_working_mode: str,
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        # Sparse sections keep only the fields they name.
+        pytest.param({"appearance": {"language": "en"}}, None, id="appearance-language-only"),
+        pytest.param(
+            {"appearance": {"language": "en", "chat_width": "comfortable"}},
+            None,
+            id="chat-width-comfortable",
+        ),
+        pytest.param(
+            {"appearance": {"language": "en", "chat_width": "full"}}, None, id="chat-width-full"
+        ),
+        pytest.param(
+            {"appearance": {"language": "en", "chat_working_mode": "normal"}},
+            None,
+            id="chat-working-mode-normal",
+        ),
+        pytest.param({"debug": {}}, None, id="empty-debug"),
+        pytest.param({"debug": {"trace_limit": 1}}, None, id="trace-limit-minimum"),
+        pytest.param({"debug": {"trace_limit": 500}}, None, id="trace-limit-maximum"),
+        pytest.param({"reflection": {}}, None, id="empty-reflection"),
+        pytest.param({"reflection": {"memory_turn_interval": 3}}, None, id="one-interval"),
+        pytest.param({"server": {}}, None, id="empty-server"),
+        pytest.param({"local_models": {"context_windows": {}}}, None, id="no-context-windows"),
+        # The extensions section is a full replacement.
+        pytest.param(
+            {"extensions": {}},
+            {"extensions": {"disabled": [], "config": {}}},
+            id="extensions-default-to-empty",
+        ),
+    ],
+)
+def test_parse_settings_update_keeps_the_semantics_of_each_section(
+    params: dict[str, Any], expected: dict[str, Any] | None
 ) -> None:
-    parsed = parse_settings_update(
-        {"appearance": {"language": "en", "chat_working_mode": chat_working_mode}}
-    )
-
-    assert parsed == {"appearance": {"language": "en", "chat_working_mode": chat_working_mode}}
-
-
-def test_parse_settings_update_omits_absent_chat_width() -> None:
-    parsed = parse_settings_update({"appearance": {"language": "en"}})
-
-    assert parsed == {"appearance": {"language": "en"}}
-
-
-@pytest.mark.parametrize("field", ["chat_width", "chat_working_mode"])
-@pytest.mark.parametrize("value", [[], {}])
-def test_appearance_rejects_container_values(field: str, value: object) -> None:
-    from core.settings.normalizers import normalize_appearance_settings
-
-    appearance = {"language": "en", field: value}
-    with pytest.raises(SettingsValidationError):
-        parse_settings_update({"appearance": appearance})
-    assert normalize_appearance_settings(appearance)[field] == (
-        "comfortable" if field == "chat_width" else "normal"
-    )
-
-
-@pytest.mark.parametrize("threshold", [10**400, -(10**400), float("nan")])
-def test_compaction_rejects_unusable_numeric_thresholds(threshold: int | float) -> None:
-    from core.settings.normalizers import normalize_compaction_settings
-    from core.utils.errors import StorageError
-
-    compaction = {
-        "enabled": True,
-        "trigger": {"type": "context_ratio", "threshold": threshold},
-        "strategy": {"type": "continuation"},
-    }
-    with pytest.raises(SettingsValidationError):
-        parse_settings_update({"compaction": compaction})
-    with pytest.raises(StorageError):
-        normalize_compaction_settings(compaction)
-
-
-def test_temperature_rejects_integer_larger_than_float_range() -> None:
-    from core.settings.agent_defaults import normalize_agent_default_value
-    from core.utils.errors import StorageError
-
-    with pytest.raises(SettingsValidationError):
-        parse_settings_update({"defaults": {"agent": {"temperature": 10**400}}})
-    with pytest.raises(StorageError):
-        normalize_agent_default_value("temperature", 10**400)
+    assert parse_settings_update(params) == (params if expected is None else expected)
 
 
 def test_parse_settings_update_normalizes_openrouter_routing() -> None:
@@ -238,117 +233,77 @@ def test_parse_settings_update_normalizes_openrouter_routing() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    ("routing", "_message"),
-    [
-        (
-            {"default": {"mode": "allowed", "providers": []}},
-            "providers must not be empty",
-        ),
-        (
-            {
-                "default": {
-                    "mode": "ordered",
-                    "providers": ["deepinfra/turbo"],
-                    "blocked": ["deepinfra"],
-                }
-            },
-            "contains blocked provider",
-        ),
-        (
-            {
-                "default": {"blocked": ["google-vertex"]},
-                "models": {
-                    "anthropic/claude-sonnet-4": {
-                        "mode": "allowed",
-                        "providers": ["google-vertex/europe"],
-                    }
-                },
-            },
-            "globally blocked provider",
-        ),
-        (
-            {"default": {"blocked": ["not a slug"]}},
-            "valid OpenRouter provider slugs",
-        ),
-    ],
-)
-def test_parse_settings_update_rejects_conflicting_openrouter_routing(
-    routing: dict,
-    _message: str,
-) -> None:
-    with pytest.raises(SettingsValidationError):
-        parse_settings_update({"providers": {"openrouter": {"routing": routing}}})
+def _routing(routing: dict[str, Any]) -> dict[str, Any]:
+    return {"providers": {"openrouter": {"routing": routing}}}
+
+
+def _compaction_threshold(threshold: object) -> dict[str, Any]:
+    return {
+        "compaction": {
+            "enabled": True,
+            "trigger": {"type": "context_ratio", "threshold": threshold},
+            "strategy": {"type": "continuation"},
+        }
+    }
 
 
 @pytest.mark.parametrize(
-    ("params", "_message"),
+    ("params", "message"),
     [
         ({}, "settings.update requires a section"),
         ({"general": {}}, "unsupported settings sections: general"),
         ({"appearance": []}, "params.appearance must be an object"),
-        ({"session_titles": []}, "params.session_titles must be an object"),
-        (
-            {"session_titles": {"enabled": "yes"}},
-            "params.session_titles.enabled must be a boolean",
-        ),
-        (
-            {"session_titles": {"enabled": True, "model": 5}},
-            "params.session_titles.model must be a string",
-        ),
         (
             {"appearance": {"language": "en", "chat_width": "huge"}},
+            "params.appearance.chat_width must be one of: comfortable, full, wide",
+        ),
+        # A container value is rejected, not looked up.
+        (
+            {"appearance": {"language": "en", "chat_width": []}},
             "params.appearance.chat_width must be one of",
         ),
         (
             {"appearance": {"language": "en", "chat_working_mode": "dense"}},
-            "params.appearance.chat_working_mode must be one of",
+            "params.appearance.chat_working_mode must be one of: compact, normal",
         ),
         (
             {"appearance": {"language": "en", "theme": "dark"}},
             "unsupported appearance settings: theme",
         ),
-        ({"skills": {"directories": [1]}}, "params.skills.directories"),
+        ({"session_titles": []}, "params.session_titles must be an object"),
+        ({"session_titles": {"enabled": "yes"}}, "params.session_titles.enabled must be a boolean"),
         (
-            {
-                "subagents": {
-                    "max_subagent_depth": 4,
-                    "max_subagents_per_turn": 8,
-                }
-            },
+            {"session_titles": {"enabled": True, "model": 5}},
+            "params.session_titles.model must be a string",
+        ),
+        ({"skills": {"directories": [1]}}, "params.skills.directories must be a list of strings"),
+        (
+            {"subagents": {"max_subagent_depth": 4, "max_subagents_per_turn": 8}},
             "missing sub-agent settings: subagent_timeout_minutes",
         ),
+        (_compaction_threshold(1.5), "params.compaction.trigger.threshold must be in (0, 1]"),
+        # Bounds are checked before float conversion; NaN never compares in range.
+        (_compaction_threshold(10**400), "params.compaction.trigger.threshold must be in (0, 1]"),
         (
-            {
-                "compaction": {
-                    "enabled": True,
-                    "trigger": {"type": "context_ratio", "threshold": 1.5},
-                    "strategy": {
-                        "type": "summary_tail",
-                        "tail_tokens": 15_000,
-                        "summary_model": None,
-                    },
-                }
-            },
-            "params.compaction.trigger.threshold must be in",
+            _compaction_threshold(float("nan")),
+            "params.compaction.trigger.threshold must be in (0, 1]",
         ),
         (
             {"defaults": {"agent": {"unknown_field": True}}},
             "unsupported defaults.agent settings: unknown_field",
         ),
+        (
+            {"defaults": {"agent": {"temperature": 10**400}}},
+            "params.defaults.agent.temperature must be between 0 and 2",
+        ),
         ({"recall": []}, "params.recall must be an object"),
-        (
-            {"recall": {"backend": "Bad Backend"}},
-            "params.recall.backend must use lowercase snake_case",
-        ),
-        (
-            {"recall": {"backend": ""}},
-            "params.recall.backend must be a non-empty string",
-        ),
+        ({"recall": {"backend": "Bad Backend"}}, "params.recall.backend must use lowercase"),
+        ({"recall": {"backend": ""}}, "params.recall.backend must be a non-empty string"),
         ({"web_search": []}, "params.web_search must be an object"),
         (
             {"web_search": {"provider": "unknown"}},
-            "params.web_search.provider must be one of",
+            "params.web_search.provider must be one of: brave, duckduckgo, exa, firecrawl, "
+            "perplexity, searxng, serper, tavily",
         ),
         (
             {"web_search": {"provider": "searxng", "searxng": {"base_url": ""}}},
@@ -373,11 +328,12 @@ def test_parse_settings_update_rejects_conflicting_openrouter_routing(
         ),
         (
             {"model_tasks": {"text_embedding": {"options": {"dimensions": 0}}}},
-            "params.model_tasks.text_embedding.dimensions must be a positive integer or null",
+            "params.model_tasks.text_embedding dimensions must be a positive integer or null",
         ),
         (
-            {"model_tasks": {"text_embedding": {"options": {"extra_options": {"input": "wrong"}}}}},
-            "params.model_tasks.text_embedding.extra_options cannot override reserved fields",
+            {"model_tasks": {"text_embedding": {"options": {"extra_options": {"input": "x"}}}}},
+            "params.model_tasks.text_embedding extra_options cannot override reserved fields: "
+            "input",
         ),
         (
             {
@@ -389,50 +345,10 @@ def test_parse_settings_update_rejects_conflicting_openrouter_routing(
                     }
                 }
             },
-            "must use format='wav'",
+            "params.speech.transcription_audio must use format='wav' and sample_rate_hz=16000",
         ),
-    ],
-)
-def test_parse_settings_update_rejects_invalid_payloads(
-    params: dict,
-    _message: str,
-) -> None:
-    with pytest.raises(SettingsValidationError):
-        parse_settings_update(params)
-
-
-def test_parse_settings_update_normalizes_extensions_section() -> None:
-    parsed = parse_settings_update(
-        {
-            "extensions": {
-                "disabled": [" legacy ", "old"],
-                "config": {"guard_bash": {"deny": ["rm -rf"]}},
-            }
-        }
-    )
-
-    assert parsed == {
-        "extensions": {
-            "disabled": ["legacy", "old"],
-            "config": {"guard_bash": {"deny": ["rm -rf"]}},
-        }
-    }
-
-
-def test_parse_settings_update_defaults_empty_extensions_fields() -> None:
-    assert parse_settings_update({"extensions": {}}) == {
-        "extensions": {"disabled": [], "config": {}}
-    }
-
-
-@pytest.mark.parametrize(
-    ("params", "_message"),
-    [
         ({"extensions": []}, "params.extensions must be an object"),
-        (
-            {"extensions": {"unknown": True}},
-            "unsupported extensions settings: unknown",
-        ),
+        ({"extensions": {"unknown": True}}, "unsupported extensions settings: unknown"),
         (
             {"extensions": {"disabled": ["ok", ""]}},
             "params.extensions.disabled must be a list of non-empty strings",
@@ -445,295 +361,194 @@ def test_parse_settings_update_defaults_empty_extensions_fields() -> None:
             {"extensions": {"config": {"ext": "not-an-object"}}},
             "params.extensions.config must be an object of objects",
         ),
+        (
+            _routing({"default": {"mode": "allowed", "providers": []}}),
+            "params.providers.openrouter.routing.default.providers must not be empty",
+        ),
+        (
+            _routing(
+                {
+                    "default": {
+                        "mode": "ordered",
+                        "providers": ["deepinfra/turbo"],
+                        "blocked": ["deepinfra"],
+                    }
+                }
+            ),
+            "routing.default.providers contains blocked provider 'deepinfra/turbo'",
+        ),
+        (
+            _routing(
+                {
+                    "default": {"blocked": ["google-vertex"]},
+                    "models": {
+                        "anthropic/claude-sonnet-4": {
+                            "mode": "allowed",
+                            "providers": ["google-vertex/europe"],
+                        }
+                    },
+                }
+            ),
+            "contains globally blocked provider 'google-vertex/europe'",
+        ),
+        (
+            _routing({"default": {"blocked": ["not a slug"]}}),
+            "routing.default.blocked entries must be valid OpenRouter provider slugs",
+        ),
+        ({"debug": []}, "params.debug must be an object"),
+        ({"debug": {"enabled": True, "b": 2, "a": 1}}, "unsupported debug settings: a, b"),
+        ({"debug": {"enabled": 1}}, "params.debug.enabled must be a boolean"),
+        ({"debug": {"trace_limit": True}}, "params.debug.trace_limit must be a positive integer"),
+        ({"debug": {"trace_limit": 0}}, "params.debug.trace_limit must be a positive integer"),
+        ({"debug": {"trace_limit": 501}}, "params.debug.trace_limit must not exceed 500"),
+        ({"reflection": []}, "params.reflection must be an object"),
+        ({"reflection": {"extra": 1}}, "unsupported reflection settings: extra"),
+        ({"reflection": {"enabled": "yes"}}, "params.reflection.enabled must be a boolean"),
+        (
+            {"reflection": {"memory_turn_interval": "five"}},
+            "params.reflection.memory_turn_interval must be a positive integer",
+        ),
+        (
+            {"reflection": {"skill_model_step_interval": 0}},
+            "params.reflection.skill_model_step_interval must be a positive integer",
+        ),
+        ({"local_models": []}, "params.local_models must be an object"),
+        ({"local_models": {}}, "params.local_models requires context_windows"),
+        (
+            {"local_models": {"context_windows": {}, "extra": 1}},
+            "unsupported local_models settings: extra",
+        ),
+        (
+            {"local_models": {"context_windows": []}},
+            "params.local_models.context_windows must be an object",
+        ),
+        (
+            {"local_models": {"context_windows": {"no-slash": 4096}}},
+            "params.local_models.context_windows keys must be '<provider>/<model_id>' strings",
+        ),
+        (
+            {"local_models": {"context_windows": {"ollama/m": "16384"}}},
+            "params.local_models.context_windows['ollama/m'] must be a positive integer",
+        ),
+        ({"server": []}, "params.server must be an object"),
+        ({"server": {"extra_key": 1}}, "unsupported server settings: extra_key"),
+        ({"server": {"keep_awake": "yes"}}, "params.server.keep_awake must be a boolean"),
+        (
+            {"server": {"timezone": "Berlin"}},
+            "params.server.timezone is not a known IANA timezone",
+        ),
+        (
+            {"server": {"timezone": ""}},
+            "params.server.timezone must be a non-empty IANA timezone name",
+        ),
     ],
 )
-def test_parse_settings_update_rejects_invalid_extensions(
-    params: dict,
-    _message: str,
+def test_parse_settings_update_rejects_invalid_payloads(
+    params: dict[str, Any], message: str
 ) -> None:
-    with pytest.raises(SettingsValidationError):
+    with pytest.raises(SettingsValidationError, match=re.escape(message)):
         parse_settings_update(params)
 
 
-def test_validate_settings_file_accepts_missing_settings(tmp_path: Path) -> None:
-    report = validate_settings_file(tmp_path / "settings.json")
-
-    assert report.ok is True
-    assert report.exists is False
-    assert report.diagnostics == ()
-
-
-def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "server_port": 8500,
-                "appearance": {
-                    "language": "en",
-                    "chat_width": "wide",
-                    "chat_working_mode": "compact",
-                },
-                "skill_directories": ["~/skills"],
-                "extension_directories": ["C:/vbot/extensions"],
-                "attachment_max_size_bytes": 1024,
-                "speech_upload_max_size_bytes": 2048,
-                "speech": {
-                    "transcription_audio": {
-                        "profile": "custom",
-                        "format": "flac",
-                        "sample_rate_hz": 24_000,
-                    }
-                },
-                "max_subagent_depth": 4,
-                "max_subagents_per_turn": 8,
-                "subagent_timeout_minutes": 60,
-                "compaction": {
-                    "enabled": True,
-                    "trigger": {"type": "context_ratio", "threshold": 0.8},
-                    "strategy": {
-                        "type": "summary_tail",
-                        "tail_tokens": 15_000,
-                        "summary_model": None,
-                    },
-                },
-                "recall": {"backend": "sqlite_fts"},
-                "extensions": {
-                    "disabled": ["legacy-ext"],
-                    "config": {"weather": {"api_key": "x", "units": "metric"}},
-                },
-                "web_search": {
-                    "provider": "searxng",
-                    "default_count": 12,
-                    "searxng": {"base_url": "http://localhost:8888"},
-                },
-                "defaults": {
-                    "agent": {
-                        "model": "openai/gpt-5.2",
-                        "fallback_models": [],
-                        "temperature": 0.7,
-                        "thinking_effort": "medium",
-                    }
-                },
-                "model_tasks": {
-                    "speech_to_text": {
-                        "target": "openrouter/openai/gpt-4o-transcribe::api-key",
-                        "options": {"language": "auto"},
-                    }
-                },
-            }
+@pytest.mark.parametrize(
+    ("section", "expected"),
+    [
+        pytest.param(None, REFLECTION_SETTING_DEFAULTS, id="absent"),
+        pytest.param(
+            {"enabled": False},
+            {**REFLECTION_SETTING_DEFAULTS, "enabled": False},
+            id="partial-fills-defaults",
         ),
-        encoding="utf-8",
-    )
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is True
-    assert report.exists is True
-    assert report.diagnostics == ()
-
-
-def test_validate_settings_file_reports_invalid_json(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text("{", encoding="utf-8")
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is False
-    assert diagnostics_as_tuples(report) == [
-        (
-            "error",
-            "$",
-            "Invalid JSON: Expecting property name enclosed in double quotes at line 1 column 2",
-        )
-    ]
-
-
-def test_validate_settings_file_reports_wrong_root_type(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text("[]", encoding="utf-8")
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is False
-    assert diagnostics_as_tuples(report) == [("error", "$", "Expected a JSON object, got list")]
-
-
-def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "server_port": 70000,
-                "skill_directories": ["relative/path"],
-                "attachment_max_size_bytes": 0,
-                "speech_upload_max_size_bytes": 0,
-                "compaction": {
-                    "enabled": True,
-                    "trigger": {"type": "context_ratio", "threshold": 2},
-                    "strategy": {"type": "summary_tail", "tail_tokens": False},
-                },
-                "defaults": {"agent": {"temperature": "warm", "unknown": True}},
-                "web_search": {
-                    "provider": "unknown",
-                    "default_count": 25,
-                    "searxng": {"base_url": ""},
-                },
-                "model_tasks": {"speech_to_text": {"target": "", "options": []}},
-                "typo": True,
-            }
+        pytest.param(
+            {"enabled": True, "memory_turn_interval": 3, "skill_model_step_interval": 7},
+            {"enabled": True, "memory_turn_interval": 3, "skill_model_step_interval": 7},
+            id="complete",
         ),
-        encoding="utf-8",
-    )
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is False
-    assert diagnostics_as_tuples(report) == [
-        ("warning", "$.typo", "unknown settings key: typo"),
-        ("error", "$.server_port", "must be between 1 and 65535"),
-        ("error", "$.skill_directories[0]", "must be an absolute or home-relative path"),
-        ("error", "$.attachment_max_size_bytes", "must be a positive integer"),
-        ("error", "$.speech_upload_max_size_bytes", "must be a positive integer"),
-        ("error", "$.compaction.trigger.threshold", "must be in (0, 1]"),
-        ("error", "$.compaction.strategy.tail_tokens", "must be a positive integer"),
-        (
-            "warning",
-            "$.defaults.agent.unknown",
-            "unknown defaults.agent setting: unknown",
-        ),
-        ("error", "$.defaults.agent.temperature", "must be a number"),
-        (
-            "error",
-            "$.web_search.provider",
-            "must be one of: brave, duckduckgo, exa, firecrawl, "
-            "perplexity, searxng, serper, tavily",
-        ),
-        ("error", "$.web_search.default_count", "must be an integer between 1 and 20"),
-        ("error", "$.web_search.searxng.base_url", "must be a non-empty string"),
-        ("error", "$.model_tasks.speech_to_text.target", "must be a non-empty string"),
-        ("error", "$.model_tasks.speech_to_text.options", "must be an object"),
-    ]
-
-
-def test_validate_settings_file_reports_invalid_chat_width(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"format_version": 1, "appearance": {"language": "en", "chat_width": "huge"}}),
-        encoding="utf-8",
-    )
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is False
-    assert diagnostics_as_tuples(report) == [
-        (
-            "error",
-            "$.appearance.chat_width",
-            "unsupported chat width; supported: comfortable, full, wide",
-        )
-    ]
-
-
-def test_validate_settings_file_reports_invalid_chat_working_mode(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {"format_version": 1, "appearance": {"language": "en", "chat_working_mode": "dense"}}
-        ),
-        encoding="utf-8",
-    )
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is False
-    assert diagnostics_as_tuples(report) == [
-        (
-            "error",
-            "$.appearance.chat_working_mode",
-            "unsupported chat working mode; supported: compact, normal",
-        )
-    ]
-
-
-def test_validate_settings_file_reports_invalid_recall_backend(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"format_version": 1, "recall": {"backend": "SQLite FTS"}}), encoding="utf-8"
-    )
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is False
-    assert diagnostics_as_tuples(report) == [
-        ("error", "$.recall.backend", "must use lowercase snake_case")
-    ]
-
-
-def test_validate_settings_file_rejects_non_object_extensions(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"format_version": 1, "extensions": []}), encoding="utf-8")
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is False
-    assert diagnostics_as_tuples(report) == [("error", "$.extensions", "must be an object")]
-
-
-def test_validate_settings_file_reports_invalid_extensions_fields(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "extensions": {
-                    "disabled": ["ok", "", 5],
-                    "config": {"good": {}, "bad": ["x"]},
-                    "weird": True,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is False
-    assert diagnostics_as_tuples(report) == [
-        ("warning", "$.extensions.weird", "unknown extensions field: weird"),
-        ("error", "$.extensions.disabled[1]", "must be a non-empty string"),
-        ("error", "$.extensions.disabled[2]", "must be a non-empty string"),
-        ("error", "$.extensions.config.bad", "must be an object"),
-    ]
-
-
-def test_validate_settings_file_rejects_non_list_disabled_extensions(tmp_path: Path) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text(
-        json.dumps({"format_version": 1, "extensions": {"disabled": "solo"}}), encoding="utf-8"
-    )
-
-    report = validate_settings_file(settings_path)
-
-    assert report.ok is False
-    assert diagnostics_as_tuples(report) == [("error", "$.extensions.disabled", "must be a list")]
-
-
-@pytest.mark.parametrize("agent_id", ["coder", "a", "Agent_1", "x-y_z", "0", "a" * 64])
-def test_is_valid_agent_id_accepts_filesystem_safe_slugs(agent_id: str) -> None:
-    assert is_valid_agent_id(agent_id) is True
+    ],
+)
+def test_stored_reflection_section_fills_defaults(
+    section: dict[str, Any] | None, expected: dict[str, Any]
+) -> None:
+    assert REFLECTION_SETTING_DEFAULTS["enabled"] is True
+    assert normalize_reflection_settings(section) == expected
 
 
 @pytest.mark.parametrize(
-    "agent_id",
-    ["", ".hidden", "../escape", "with space", "slash/name", "_leading", "-leading", "a" * 65],
+    ("normalize", "value", "message"),
+    [
+        (normalize_reflection_settings, "on", "Expected settings.reflection to be an object"),
+        (normalize_reflection_settings, {"enabled": "yes"}, "enabled must be a boolean"),
+        (
+            normalize_reflection_settings,
+            {"memory_turn_interval": "five"},
+            "memory_turn_interval must be an integer",
+        ),
+        (
+            normalize_reflection_settings,
+            {"skill_model_step_interval": True},
+            "skill_model_step_interval must be an integer",
+        ),
+        (
+            normalize_reflection_settings,
+            {"memory_turn_interval": 0},
+            "memory_turn_interval must be positive",
+        ),
+        (
+            normalize_compaction_settings,
+            _compaction_threshold(10**400)["compaction"],
+            "threshold must be in (0, 1]",
+        ),
+        (
+            normalize_compaction_settings,
+            _compaction_threshold(float("nan"))["compaction"],
+            "threshold must be in (0, 1]",
+        ),
+        (
+            lambda value: normalize_agent_default_value("temperature", value),
+            10**400,
+            "temperature",
+        ),
+    ],
 )
-def test_is_valid_agent_id_rejects_unsafe_values(agent_id: str) -> None:
-    assert is_valid_agent_id(agent_id) is False
+def test_stored_sections_reject_unusable_values(
+    normalize: Callable[[Any], object], value: object, message: str
+) -> None:
+    with pytest.raises(StorageError, match=re.escape(message)):
+        normalize(value)
 
 
-def test_is_valid_agent_id_rejects_non_string() -> None:
-    assert is_valid_agent_id(123) is False
-    assert is_valid_agent_id(None) is False
+@pytest.mark.parametrize(
+    ("field", "value", "default"),
+    [("chat_width", [], "comfortable"), ("chat_working_mode", {}, "normal")],
+)
+def test_stored_appearance_display_preferences_fall_back_to_defaults(
+    field: str, value: object, default: str
+) -> None:
+    assert normalize_appearance_settings({"language": "en", field: value})[field] == default
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "valid"),
+    [
+        ("coder", True),
+        ("a", True),
+        ("Agent_1", True),
+        ("x-y_z", True),
+        ("0", True),
+        ("a" * 64, True),
+        ("", False),
+        (".hidden", False),
+        ("../escape", False),
+        ("with space", False),
+        ("slash/name", False),
+        ("_leading", False),
+        ("-leading", False),
+        ("a" * 65, False),
+        (123, False),
+        (None, False),
+    ],
+)
+def test_is_valid_agent_id_accepts_only_filesystem_safe_slugs(
+    agent_id: object, valid: bool
+) -> None:
+    assert is_valid_agent_id(agent_id) is valid

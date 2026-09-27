@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from core.settings.paths import (
@@ -39,9 +41,27 @@ def test_parse_settings_path_rejects_invalid_syntax(path: str) -> None:
         parse_settings_path(path)
 
 
-def test_dynamic_keys_require_bracket_quoting() -> None:
-    with pytest.raises(SettingsPathError):
-        resolve_setting("local_models.context_windows.ollama")
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        # Dynamic keys need bracket quoting.
+        pytest.param(
+            "local_models.context_windows.ollama",
+            'did you mean: local_models.context_windows["<model>"]',
+            id="unquoted-dynamic-key",
+        ),
+        pytest.param("web_search.providr", "did you mean: web_search.provider", id="typo"),
+        # Live voice is configured as a Task Model binding, not a visibility toggle.
+        pytest.param(
+            "live_voice.enabled",
+            "unknown settings path 'live_voice.enabled'",
+            id="removed-live-voice",
+        ),
+    ],
+)
+def test_unknown_path_suggests_catalog_candidates(path: str, message: str) -> None:
+    with pytest.raises(SettingsPathError, match=re.escape(message)):
+        resolve_setting(path)
 
 
 def test_atomic_patch_sets_multiple_nested_values() -> None:
@@ -68,25 +88,46 @@ def test_atomic_patch_sets_multiple_nested_values() -> None:
     assert build_effective_settings(updated)["web_search"]["provider"] == "searxng"
 
 
-def test_invalid_patch_leaves_input_unchanged() -> None:
-    original = {"web_search": {"provider": "brave"}}
-
-    with pytest.raises(SettingsPathError):
-        parse_patch_operations([{"op": "set", "path": "web_search.provider", "value": "invalid"}])
-
-    assert original == {"web_search": {"provider": "brave"}}
-
-
-@pytest.mark.parametrize("operation", [[], {}, None, True, 1])
-def test_patch_rejects_non_string_operations(operation: object) -> None:
-    with pytest.raises(SettingsPathError):
-        parse_patch_operations([{"op": operation, "path": "server.port", "value": 8420}])
-
-
-@pytest.mark.parametrize("path", ["server.port", "compaction.trigger.threshold"])
-def test_patch_rejects_oversized_numbers_as_validation_errors(path: str) -> None:
-    with pytest.raises(SettingsPathError):
-        parse_patch_operations([{"op": "set", "path": path, "value": 10**400}])
+@pytest.mark.parametrize(
+    ("operations", "message"),
+    [
+        pytest.param(
+            [{"op": "set", "path": "web_search.provider", "value": "invalid"}],
+            "web_search.provider must be one of",
+            id="invalid-value",
+        ),
+        # An unhashable operation name must not crash the set lookup.
+        pytest.param(
+            [{"op": [], "path": "server.port", "value": 8420}],
+            "operations[0].op must be set or unset",
+            id="non-string-op",
+        ),
+        # Oversized numbers are validation errors, not overflow crashes.
+        pytest.param(
+            [{"op": "set", "path": "server.port", "value": 10**400}],
+            "server.port must be at most 65535",
+            id="oversized-integer",
+        ),
+        pytest.param(
+            [{"op": "set", "path": "compaction.trigger.threshold", "value": 10**400}],
+            "compaction.trigger.threshold must be at most 1",
+            id="oversized-float",
+        ),
+        pytest.param(
+            [
+                {"op": "set", "path": "compaction.trigger", "value": {}},
+                {"op": "set", "path": "compaction.trigger.type", "value": "context_ratio"},
+            ],
+            "must not duplicate or overlap paths",
+            id="overlapping-paths",
+        ),
+    ],
+)
+def test_patch_rejects_invalid_operations(
+    operations: list[dict[str, object]], message: str
+) -> None:
+    with pytest.raises(SettingsPathError, match=re.escape(message)):
+        parse_patch_operations(operations)
 
 
 def test_integer_patch_does_not_require_float_representation() -> None:
@@ -98,20 +139,6 @@ def test_integer_patch_does_not_require_float_representation() -> None:
     updated, _changed = apply_settings_patch({}, operations)
 
     assert updated["attachment_max_size_bytes"] == value
-
-
-def test_patch_rejects_overlapping_paths() -> None:
-    with pytest.raises(SettingsPathError):
-        parse_patch_operations(
-            [
-                {"op": "set", "path": "compaction.trigger", "value": {}},
-                {
-                    "op": "set",
-                    "path": "compaction.trigger.type",
-                    "value": "context_ratio",
-                },
-            ]
-        )
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -387,6 +414,7 @@ def test_public_document_hides_flat_storage_keys() -> None:
             "server_port": 9000,
             "skill_directories": ["~/skills"],
             "max_subagent_depth": 2,
+            "live_voice": {"enabled": True},
         }
     )
 
@@ -397,6 +425,8 @@ def test_public_document_hides_flat_storage_keys() -> None:
     assert effective["subagents"]["max_subagent_depth"] == 2
     assert "server_port" not in effective
     assert "skill_directories" not in effective
+    # Live voice is a Task Model binding; its old opt-in is not a setting.
+    assert "live_voice" not in effective
 
 
 def test_speech_defaults_to_compatibility_profile_and_100_mib_uploads() -> None:
@@ -454,53 +484,29 @@ def test_catalog_contains_static_and_dynamic_public_paths() -> None:
     assert 'model_tasks["<task>"].options["<option_path>"]...' in paths
 
 
-def test_unknown_path_suggests_catalog_candidate() -> None:
-    with pytest.raises(SettingsPathError):
-        resolve_setting("web_search.providr")
+@pytest.mark.parametrize(
+    ("raw", "keep_awake"),
+    [({}, False), ({"keep_awake": True}, True), ({"keep_awake": "yes"}, False)],
+    ids=["default", "configured", "unusable-falls-back"],
+)
+def test_server_keep_awake_reads_the_flat_raw_key(raw: dict[str, object], keep_awake: bool) -> None:
+    assert build_effective_settings(raw)["server"]["keep_awake"] is keep_awake
+    assert setting_details(raw, "server.keep_awake")["value"] is keep_awake
 
 
-def test_server_keep_awake_defaults_to_false() -> None:
-    details = setting_details({}, "server.keep_awake")
-
-    assert details["value"] is False
-    assert build_effective_settings({})["server"]["keep_awake"] is False
-
-
-def test_server_keep_awake_effective_value_reads_flat_raw_key() -> None:
-    assert build_effective_settings({"keep_awake": True})["server"]["keep_awake"] is True
-    assert build_effective_settings({"keep_awake": "yes"})["server"]["keep_awake"] is False
-
-
-def test_server_keep_awake_patch_maps_to_flat_raw_key() -> None:
-    operations = parse_patch_operations([{"op": "set", "path": "server.keep_awake", "value": True}])
-
-    updated, changed = apply_settings_patch({}, operations)
-
-    assert updated == {"keep_awake": True}
-    assert changed == ("server.keep_awake",)
-    assert build_effective_settings(updated)["server"]["keep_awake"] is True
-
-    unset_operations = parse_patch_operations([{"op": "unset", "path": "server.keep_awake"}])
-    cleared, _ = apply_settings_patch(updated, unset_operations)
-
-    assert cleared == {}
-
-
-def test_server_timezone_patch_maps_to_flat_raw_key() -> None:
-    operations = parse_patch_operations(
-        [{"op": "set", "path": "server.timezone", "value": "Europe/Berlin"}]
+@pytest.mark.parametrize(
+    ("path", "raw_key", "value"),
+    [("server.keep_awake", "keep_awake", True), ("server.timezone", "timezone", "Europe/Berlin")],
+)
+def test_server_patch_maps_to_a_flat_raw_key(path: str, raw_key: str, value: object) -> None:
+    updated, changed = apply_settings_patch(
+        {}, parse_patch_operations([{"op": "set", "path": path, "value": value}])
+    )
+    cleared, _changed = apply_settings_patch(
+        updated, parse_patch_operations([{"op": "unset", "path": path}])
     )
 
-    updated, changed = apply_settings_patch({}, operations)
-
-    assert updated == {"timezone": "Europe/Berlin"}
-    assert changed == ("server.timezone",)
-    assert build_effective_settings(updated)["server"]["timezone"] == "Europe/Berlin"
-
-
-def test_removed_live_voice_opt_in_is_not_a_settings_path() -> None:
-    """Live voice is configured as a Task Model binding, not a visibility toggle."""
-
-    assert "live_voice" not in build_effective_settings({"live_voice": {"enabled": True}})
-    with pytest.raises(SettingsPathError):
-        resolve_setting("live_voice.enabled")
+    assert updated == {raw_key: value}
+    assert changed == (path,)
+    assert build_effective_settings(updated)["server"][raw_key] == value
+    assert cleared == {}
