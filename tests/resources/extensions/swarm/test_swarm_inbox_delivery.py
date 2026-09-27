@@ -1,8 +1,7 @@
-"""Focused durable Inbox Tool coverage."""
+"""Swarm delivery: the Inbox Tool and automatic delivery through the Session hooks."""
 
 import json
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 
@@ -13,21 +12,18 @@ from resources.extensions.swarm.agent_text import (
     EMPTY_INBOX,
 )
 from resources.extensions.swarm.store import SwarmStoreError
-from tests.resources.extensions.test_swarm_board import (
+from tests.resources.extensions.swarm.swarm_test_support import (
     Received,
     _name,
     call,
     continuation,
-    deny_inbox,
+    delivery_request,
     dispatch,
     persist_carriers,
     post_ref,
     received,
     visible,
 )
-from tests.resources.extensions.test_swarm_board import board as board_fixture
-
-board = board_fixture
 
 
 @pytest.mark.asyncio
@@ -44,17 +40,15 @@ async def test_delivery_invalidates_pending_only_after_canonical_receipt(board, 
     context = replace(
         board.contexts[1], tool_name="swarm_inbox" if delivery == "inbox" else "swarm_board"
     )
-    request = SimpleNamespace(
-        binding=binding, execution_owner=context.execution_owner, run_id=context.run_id
-    )
+    request = delivery_request(board, 1)
     if delivery == "automatic":
-        prepared = await board.service._before_request(request)
+        prepared = await board.runtime.before_request(request)
         assert prepared is not None
         message = ChatMessage.note("\n\n".join(prepared.entries))
         receipt = (0, prepared.delivery_id, prepared.content_hash, prepared.effect_kind, "note")
 
         async def reconcile():
-            await board.service._acknowledge_delivery(request, prepared)
+            await board.runtime.acknowledge_delivery(request, prepared)
     else:
         result = (
             await board.service.inbox(context, {})
@@ -71,7 +65,7 @@ async def test_delivery_invalidates_pending_only_after_canonical_receipt(board, 
         )
 
         async def reconcile():
-            await board.service._reconcile_tool_batch(
+            await board.runtime.reconcile_tool_batch(
                 request,
                 receipts=((context.tool_call_id, receipt_id, content_hash, effect),),
                 persisted_call_ids=(context.tool_call_id,),
@@ -97,7 +91,7 @@ async def test_delivery_invalidates_pending_only_after_canonical_receipt(board, 
     assert (await board.store.participant_status(sid, recipient))["pending_count"] == 0
     assert [change[0:2] for change in changes] == [("swarms", [sid])]
     changes.clear()
-    await board.service._reconcile_tool_batch(
+    await board.runtime.reconcile_tool_batch(
         request,
         receipts=(),
         persisted_call_ids=("state",),
@@ -184,14 +178,12 @@ async def test_wake_scan_does_not_replay_messages_read_during_a_run(board):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "arguments", [{"limit": 0}, {"limit": True}, {"limit": "unknown"}, {"other": 1}]
-)
-async def test_inbox_rejects_invalid_arguments_without_a_receipt(board, arguments):
-    context = replace(board.contexts[0], tool_name="swarm_inbox")
-    result = await board.tools.get("swarm_inbox").handler(context, arguments)
-    assert not result["ok"]
-    assert context._delivery_receipts == []
+async def test_inbox_rejects_invalid_arguments_without_a_receipt(board):
+    for arguments in [{"limit": 0}, {"limit": True}, {"limit": "unknown"}, {"other": 1}]:
+        context = replace(board.contexts[0], tool_name="swarm_inbox")
+        result = await board.tools.get("swarm_inbox").handler(context, arguments)
+        assert not result["ok"], arguments
+        assert context._delivery_receipts == [], arguments
 
 
 @pytest.mark.asyncio
@@ -301,20 +293,16 @@ async def test_delivery_preserves_message_context_across_batches(board, delivery
     )
     binding = board.bindings[1]
     context = replace(board.contexts[1], tool_name="swarm_inbox")
-    request_context = SimpleNamespace(
-        binding=binding,
-        execution_owner=context.execution_owner,
-        run_id=context.run_id,
-    )
+    request_context = delivery_request(board, 1)
     batches = []
     remaining = []
     for index in range(3):
         if delivery == "automatic":
-            prepared = await board.service._before_request(request_context)
+            prepared = await board.runtime.before_request(request_context)
             assert prepared is not None
             [text] = prepared.entries
             # Replaying an unacknowledged batch retains both its identity and its text.
-            assert await board.service._before_request(request_context) == prepared
+            assert await board.runtime.before_request(request_context) == prepared
             assert text.startswith(f"{DELIVERY_PREFIX}\n\nIn ")
             remaining.append(text.rpartition("\n\n")[2] if "more pending" in text else None)
             message = ChatMessage.note(text)
@@ -411,12 +399,7 @@ async def test_delayed_board_message_keeps_original_order_and_context(board):
         request_id="newer",
     )
     binding = board.bindings[1]
-    context = SimpleNamespace(
-        binding=binding,
-        execution_owner=board.contexts[1].execution_owner,
-        run_id="delivery-run",
-    )
-    prepared = await board.service._before_request(context)
+    prepared = await board.runtime.before_request(delivery_request(board, 1))
     [text] = prepared.entries
     main = "the main discussion (d1)"
     author = _name(board, 0)
@@ -437,8 +420,10 @@ async def test_delayed_board_message_keeps_original_order_and_context(board):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("inbox", [True, False])
-async def test_delivery_names_swarm_inbox_only_when_it_is_available(board, monkeypatch, inbox):
+@pytest.mark.parametrize(
+    ("board", "inbox"), [(True, True), (False, False)], indirect=["board"], ids=["inbox", "board"]
+)
+async def test_delivery_names_swarm_inbox_only_when_it_is_available(board, inbox):
     sid = board.swarm["id"]
     sender, recipient = [binding.participant_id for binding in board.bindings[:2]]
     await board.store.apply_delivery_settings(
@@ -450,14 +435,7 @@ async def test_delivery_names_swarm_inbox_only_when_it_is_available(board, monke
     )
     for text in ("one", "two"):
         await board.store.post(sid, sender, text=text, request_id=text)
-    if not inbox:
-        deny_inbox(board, monkeypatch)
-    request = SimpleNamespace(
-        binding=board.bindings[1],
-        execution_owner=board.contexts[1].execution_owner,
-        run_id="delivery-run",
-    )
-    [text] = (await board.service._before_request(request)).entries
+    [text] = (await board.runtime.before_request(delivery_request(board, 1))).entries
     assert [message.text for message in received(text)] == ["one"]
     assert text.endswith(
         "\n\n1 more pending; receive them with swarm_inbox." if inbox else "\n\n1 more pending."
@@ -521,12 +499,7 @@ async def test_long_main_posts_reach_unaddressed_readers_as_their_opening(board)
     discussion = await board.store.post(
         sid, sender, discussion_id=opened["discussion_id"], text=long_text, request_id="long"
     )
-    request = SimpleNamespace(
-        binding=board.bindings[1],
-        execution_owner=board.contexts[1].execution_owner,
-        run_id="delivery-run",
-    )
-    [text] = (await board.service._before_request(request)).entries
+    [text] = (await board.runtime.before_request(delivery_request(board, 1))).entries
     delivered = {message.post_id: message.text for message in received(text)}
 
     post_id = unaddressed["data"]["post_id"]

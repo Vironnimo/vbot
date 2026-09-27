@@ -1,6 +1,6 @@
 """Wake policy: ping-only settings, quiet participants, and wake announcements."""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +12,11 @@ from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBindi
 from resources.extensions.swarm import _wake_pacing
 from resources.extensions.swarm._wake_pacing import ADDRESSED_ROUTES, WakePacing
 from resources.extensions.swarm.store import SwarmStore
-from tests.resources.extensions.swarm_store_helpers import _swarm, open_swarm_database
+from tests.resources.extensions.swarm.swarm_test_support import (
+    QuietTimers,
+    _swarm,
+    open_swarm_database,
+)
 
 
 @asynccontextmanager
@@ -233,31 +237,10 @@ async def test_wake_announces_only_its_first_batch_so_the_remainder_wakes_again(
         assert not (await store.prepare_wake(env.sid, env.recipient, expected_epoch=0))["wake"]
 
 
-class _Timer:
-    def __init__(self, delay: float, callback: Callable[..., None], args: tuple[Any, ...]):
-        self.delay, self.callback, self.args = delay, callback, args
-        self.cancelled = False
-
-    def cancel(self) -> None:
-        self.cancelled = True
-
-    def fire(self) -> None:
-        self.callback(*self.args)
-
-
-class _Loop:
-    def __init__(self) -> None:
-        self.timers: list[_Timer] = []
-
-    def call_later(self, delay: float, callback: Callable[..., None], *args: Any) -> _Timer:
-        self.timers.append(_Timer(delay, callback, args))
-        return self.timers[-1]
-
-
 @pytest.fixture
 def paced(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    loop = _Loop()
-    monkeypatch.setattr(_wake_pacing.asyncio, "get_running_loop", lambda: loop)
+    loop = QuietTimers()
+    monkeypatch.setattr(_wake_pacing, "asyncio", SimpleNamespace(get_running_loop=lambda: loop))
     ended: list[str] = []
     return SimpleNamespace(loop=loop, ended=ended, pacing=WakePacing(ended.append))
 
@@ -335,9 +318,14 @@ def test_forgetting_a_swarm_or_closing_cancels_its_quiet_periods(paced) -> None:
     pacing, loop = paced.pacing, paced.loop
     pacing.run_finished("stopped", "reader", "run-1", completed=True)
     pacing.run_finished("running", "reader", "run-2", completed=True)
+    pacing.run_finished("running", "writer", "run-3", completed=True)
+    loop.timers[2].fire()
     pacing.forget("stopped")
-    assert [timer.cancelled for timer in loop.timers] == [True, False]
+    assert [timer.cancelled for timer in loop.timers] == [True, False, False]
     assert pacing.wake_routes("stopped", "reader") is None
     assert pacing.wake_routes("running", "reader") == ADDRESSED_ROUTES
     pacing.close()
     assert loop.timers[1].cancelled and pacing.wake_routes("running", "reader") is None
+    # Closing also forgets the level that an ended quiet period keeps.
+    pacing.run_finished("running", "writer", "run-4", completed=True)
+    assert loop.timers[-1].delay == 30.0

@@ -84,7 +84,7 @@ as a Run, without a Model call. Extension prompt inspection uses this to keep
 native Tool definitions and System Prompt Tool-owner gates aligned. Empty
 continuation notes retain their canonical receipts but produce no request message.
 Evidence: `_request_builder.py`, `wire_shaping.py`, `test_chat_loop_tool_definitions.py`,
-`tests/resources/extensions/test_swarm_lifecycle.py`.
+`tests/resources/extensions/swarm/test_swarm_stop_resume.py`.
 
 - Canonical messages: `core/chat/messages.py`; wire shaping and response ingestion: `core/chat/wire_shaping.py`; tests under `tests/core/chat/test_messages_*.py`, `test_wire_shaping_*.py`, `test_chat_loop_requests.py`, `test_chat_loop_reasoning_replay.py`, `test_chat_loop_fallback.py`, and `tests/core/providers/test_reasoning_route_switch_conformance.py`.
 - Skills and Tool definitions: `core/chat/tool_dispatch.py`, `core/chat/_request_builder.py`, `core/chat/_skill_activation.py`; tests in `test_chat_loop_skills.py`, `test_tool_dispatch.py`, and `test_chat_prompt.py`.

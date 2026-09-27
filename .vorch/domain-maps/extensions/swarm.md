@@ -5,7 +5,7 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
 
 Private Session Tools use owner-selected call repair before scoped execution (`_tool_calls.py`; details under the Board section), including encoded counts and known wrappers. Bound identities remain exact; optional values are not erased merely because their schema rejects them. Field aliases are explicit lists (the `limti` typo among them); there is no general nearest-name matching of field names. Inbox and State accept their single action under common synonyms (`receive`, `status`) and reject other actions with a message naming the Swarm Tool that has them. Recognizable wrappers and explicit identities matching the bound Session are accepted (the identity fields and redundant action labels are declared `unadvertised_parameters`, so dispatch validates them without offering them); unsupported operations and scope mismatches remain failures. The probe executes the Model's emitted arguments, compares them with independently prescribed conformance inputs, and verifies canonical receipts.
 
-Swarm Activity uses live `run_active` as authoritative over an older persisted Session status. Failed/interrupted participants remain visible in an overview warning, and partial Resume failures name the affected participants after refresh. `swarms.get` inspects every participant's lifecycle Run with one batched `temporary_agents.owned_runs` read; only a Run id without an owned record counts as inactive, and unexpected host failures propagate instead of looking idle. Completion callbacks arriving after Stop or a newer lifecycle epoch quietly defer to that lifecycle outcome (`test_swarm_lifecycle.py`, `SwarmPage.test.activity-and-usage.test.js`). Temporary participants inherit the Runtime streaming loop; request diagnostics use the shared Chat timeline.
+Swarm Activity uses live `run_active` as authoritative over an older persisted Session status. Failed/interrupted participants remain visible in an overview warning, and partial Resume failures name the affected participants after refresh. `swarms.get` inspects every participant's lifecycle Run with one batched `temporary_agents.owned_runs` read; only a Run id without an owned record counts as inactive, and unexpected host failures propagate instead of looking idle. Completion callbacks arriving after Stop or a newer lifecycle epoch quietly defer to that lifecycle outcome (`test_swarm_stop_resume.py`, `SwarmPage.test.activity-and-usage.test.js`). Temporary participants inherit the Runtime streaming loop; request diagnostics use the shared Chat timeline.
 
 ## Terms
 
@@ -58,7 +58,7 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   existing profiles are not backfilled and runtime adds no fallback.
   Omitted effort uses the Provider default, not shared Agent defaults.
   All/None Tool actions materialize a selected policy through `toolAccess.js`.
-  Tests: `SwarmPage.test.js` and `test_swarm_store.py`.
+  Tests: `SwarmPage.test.js` and `test_swarm_store_profiles.py`.
 
 Profiles select every additional System Prompt block explicitly; Tool Call Style
 and Skills start enabled, other blocks (including Runtime and Working Project)
@@ -68,17 +68,17 @@ persisted in temporary Agent bindings and each started Swarm's profile snapshot.
 `profiles.preview` accepts an unsaved profile and formation row, using the host's
 read-only prompt inspection with the same Project ceilings and Model Tool routing.
 It returns rendered block details and separately transmitted Tool definitions;
-draft changes invalidate the displayed preview. Evidence: `test_swarm_lifecycle.py`,
+draft changes invalidate the displayed preview. Evidence:
 `test_runtime_extension_host.py`, `test_prompts_layouts_overrides.py`, `SwarmPage.test.js`.
 
 Delivery and explicit Resume guidance are individually
 switchable in the snapshot. Their complete wording is inspectable in the editor.
 Disabling guidance preserves Board payloads and lifecycle behavior; empty
 continuation receipts add no Model-visible reminder. Existing Session history is
-not rewritten. Evidence: `extension.py`, `test_swarm_store.py`,
-`test_swarm_lifecycle.py`.
+not rewritten. Evidence: `extension.py`, `test_swarm_store_profiles.py`,
+`test_swarm_wakes.py`, `test_swarm_stop_resume.py`.
 
-Profiles expose all four private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_lifecycle.py`, `SwarmPage.test.profiles.test.js`).
+Profiles expose all four private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_start.py`, `SwarmPage.test.profiles.test.js`).
 `swarm_inbox` is offered only when some route (`main`, `discussion`, `ping`) can hold messages back, i.e. its mode is not `all`: with every route on `all` (the default), pending posts reach the next Model request anyway, and Inbox-only requests cost 3-10% of input in the eight analyzed Runs (Sessions, 2026-09). `_participant_config` decides from the profile (snapshot) delivery and denies it through `_tool_access` when a Session is created (start, Resume of a missing participant, preview). Live `swarms.settings` changes do not add or remove it from existing Sessions; Agent texts check `_inbox_available(binding)` (`test_swarm_inbox_is_offered_only_when_a_route_can_wait`).
 
 Profiles carry an optional `compaction_policy`. `null` (materialized on save) or an
@@ -93,7 +93,7 @@ Compaction (`agent.md`, `compaction.md`). Edits apply to future Runs; Resume cre
 missing participants from the saved snapshot. The editor's Overview Compaction
 section reuses the shared `CompactionPolicyEditor`; turning the override on starts
 from the WebUI default Policy because the catalog carries no global Policy
-(`test_swarm_store.py`, `test_swarm_lifecycle.py`, `SwarmPage.test.profiles.test.js`).
+(`test_swarm_store_profiles.py`, `test_swarm_start.py`, `SwarmPage.test.profiles.test.js`).
 
 ## Invariants that affect changes
 
@@ -120,7 +120,7 @@ act; no fixed roles, discussion rounds, plan template or approval phase are impo
 Resume preserves admitted Session history and supplies the same initial message to
 participants not yet admitted. Existing profiles and historical messages are not
 rewritten. New profile defaults orient participants toward the shared collaboration Tools available to them and ask for posts that add information, answer questions, report results or request action; acknowledgments of acknowledgments and empty closing posts are unnecessary. Existing profile instructions and started snapshots remain as saved. When Board is disabled, the initial message carries the exact original request directly. With Wiki available it retains peer discussion guidance; with Wiki disabled it avoids requiring inaccessible collaboration. Disabling Inbox also removes Inbox-specific delivery guidance.
-Evidence: `agent_text.py`, `test_swarm_lifecycle.py`, `test_swarm_wiki.py`.
+Evidence: `agent_text.py`, `test_swarm_start.py`, `test_swarm_wiki.py`.
 
 `swarm_wiki` is available only to bound participant Sessions of the owning Swarm.
 The human page and CLI use the equivalent `wiki` management operation. Pages are
@@ -242,7 +242,7 @@ Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
 typography, including fenced-code Copy actions. Raw HTML stays escaped and links
 open through the same host bridge handler as Activity. Discussion announcements
 retain their dedicated navigation action (`SwarmPage.test.js`).
-Coverage: `test_swarm_board.py` and the production `swarm_tool` probe.
+Coverage: `test_swarm_board_tool.py` and the production `swarm_tool` probe.
 
 Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
 - `_tool_calls.py` repairs call syntax for all four Tools before validation:
@@ -297,7 +297,7 @@ carrier is saved. Successful automatic and Tool delivery acknowledgments publish
 a page invalidation, so pending counts refresh during an active Run without
 waiting for another Board mutation or Run completion. Failed acknowledgments
 retain pending state; empty Tool batches do not invalidate the page. Evidence:
-`test_swarm_inbox.py`, `test_swarm_lifecycle.py`, `SwarmPage.test.js`.
+`test_swarm_inbox_delivery.py`, `test_swarm_wakes.py`, `SwarmPage.test.js`.
 Delivery mode and idle wake permission are independent. A wake
 always delivers actual pending Board content, including pull-mode messages on a
 wake-enabled route; it never asks the Agent to fetch the first batch. Bounded
@@ -307,12 +307,12 @@ the Session offers it. Read pages are bounded and cursors cannot cross queries.
 Background wake scans prepare batches only for idle participants, checking state
 inside the Store transaction. Running participants select pending content at the
 next Model request, so a concurrent Inbox or Board read cannot leave a prematurely
-prepared wake batch that later repeats its delivered messages (`test_swarm_inbox.py`).
+prepared wake batch that later repeats its delivered messages (`test_swarm_inbox_delivery.py`).
 An already prepared wake batch remains replayable while its Run is active.
 New posts on an idle-mode route wait until the participant is idle again or
 explicitly reads Inbox; the retained wake boundary does not permit automatic
 delivery during later Model requests of that Run. All-mode delivery still reaches
-the next Model request while running (`test_swarm_lifecycle.py`).
+the next Model request while running (`test_swarm_wakes.py`).
 
 Store delivery entries retain the Swarm-wide post sequence, UTC creation time,
 author identity, discussion id/title, reply target, addressed participants
@@ -340,14 +340,14 @@ the rule `post_block` renders with), while Board read pages count whole posts
 (`_store_records._budgeted_rows`). Counting whole posts filled the budget after
 about 4 posts while ~75% of it stayed unused: 278 of 293 posts in one Swarm were
 longer than 1000 characters, and a slow participant fell 109 posts behind
-(Sessions, 2026-09). Tests: `test_swarm_inbox.py`, `test_swarm_lifecycle.py` and
+(Sessions, 2026-09). Tests: `test_swarm_inbox_delivery.py`, `test_swarm_wakes.py` and
 `test_inbox_batches_complete_posts_within_the_delivered_character_budget`.
 
 Inbox reads are nonblocking and consume only messages in their saved carrier. A
 limit above 100 runs as 100 with a note. When more remain, the `more` line names
 the exact repeat call, preserving an omitted limit. Empty results return only the
 empty-Inbox guidance and permit a normal final reply; no Swarm Tool requests a Run
-end (`test_swarm_inbox.py`). The Inbox description says new messages also arrive by
+end (`test_swarm_inbox_delivery.py`). The Inbox description says new messages also arrive by
 delivery, so checking right after posting is unnecessary: in session evidence ~19%
 of Inbox calls were empty, most of them directly after a post.
 
@@ -356,7 +356,7 @@ with a note). It returns readable fields: `you` (name, state), `pending`
 (count and how to receive it), `delivery` and `wake` (the route policies as
 sentences), `participants` (count by state), `more` with a copyable continuation,
 and a roster listing "- Name: state" that marks the reader "(you)"; cursors bind
-page size (`test_swarm_board.py`). Participant ids stay out of all Agent text,
+page size (`test_swarm_state_tool.py`). Participant ids stay out of all Agent text,
 since names are unique within a Swarm. Participants cannot rename themselves. The Store shuffles a pool of 300 modern
 first names (`_participant_names.py`) once per new Swarm, assigning without
 replacement across formation rows. Larger Swarms use numbered suffixes after the
@@ -367,13 +367,13 @@ nobody, Sessions 2026-09), must not
 read as old-fashioned, and no two may be one edit apart
 (`test_participant_name_pool_is_short_and_unique`). Existing Swarms keep their
 saved names. Saved names survive request replay, restart and Resume; stored
-recipients remain participant ids (`test_swarm_store.py`). For explicit
+recipients remain participant ids (`test_swarm_store_profiles.py`). For explicit
 `recipients` the Board Tool also resolves exact display names, `all`/`*` (every
 other participant), and words meaning the user. The user is not a participant,
 so that recipient is dropped with a note. Values
 matching no participant fail with the roster and any unique participant whose
 name or id is close, named by display name; the Tool never guesses between
-participants (`test_swarm_board.py`). Progress, results and requests for help belong on the
+participants (`test_swarm_board_tool.py`). Progress, results and requests for help belong on the
 Board, not in participant lifecycle fields. There is no participant-owned wait, blocked, finishing or done state,
 completion reservation, structured participant summary field or automatic group completion.
 
@@ -382,12 +382,13 @@ Participant status is an execution projection: `idle`, `running`, `failed`,
 same Session reachable. All-idle Swarms remain open without polling Models;
 eligible new Board messages trigger Runs through the existing wake/receipt path.
 Successful wake admission publishes a page invalidation so an open participant
-Session can attach to the new Run before it finishes (`test_swarm_lifecycle.py`).
+Session can attach to the new Run before it finishes (`test_swarm_wakes.py`).
 Messages are retained for every addressed participant, including failed or
 cancelled peers. Automatic wakes apply to idle peers; explicit Resume recovers
 failed/cancelled/interrupted peers. Stop and startup recovery mark only active
 Runs cancelled/interrupted, retaining other participants' last outcomes.
-Evidence: `test_swarm_store_execution.py`, `test_swarm_board.py`, `test_swarm_lifecycle.py`.
+Evidence: `test_swarm_store_execution.py`, `test_swarm_operations.py`,
+`test_swarm_stop_resume.py`.
 
 Wake pacing (`_wake_pacing.py`): after a completed Run in which the participant
 did not act, a Quiet period of 30, 60, 120, then 240 s per further such Run
@@ -447,22 +448,25 @@ A completed Stop returns its saved drain result, and an
 unfinished Stop can drain only its original lifecycle epoch. The receipts survive
 restart and later Resume attempts. An interrupted admission requires a new explicit
 Resume request, not replay of the old Start/Resume request. Evidence:
-`test_swarm_store_execution.py`, `test_swarm_lifecycle.py`.
+`test_swarm_store_execution.py`, `test_swarm_start.py`, `test_swarm_stop_resume.py`.
 
 ## Verification routes
 
-Store source routing: `store.py` retains asynchronous validation/admission and the public `SwarmStore` API. `_store_database.py` wraps the host-opened kernel `Database`: each `_write` is one kernel write transaction (retried as a whole on a busy database), each `_read` one read transaction, and the signed cursor key is cached at open. `_store_profiles.py`, `_store_lifecycle.py`, `_store_delivery.py`, `_store_reads.py` and `_store_board.py` implement concrete operations against that database capability; they do not receive the Swarm service or public Store. Shared row checks/projections live in `_store_records.py`, pure input/value rules in `_store_values.py`, and the existing name pool in `_participant_names.py`. Worker dispatch (`SwarmDatabase.run`) runs each operation on the host database's own worker pool through `Database.run_async`, without a Store lock or a Swarm pool; once the host closes the database, Store operations raise the kernel's `DatabaseUnavailableError`; the kernel serializes writes, so a state-dependent decision belongs inside the write operation, not in a preceding read. Delivery receipt lookups run outside any database transaction. Store tests open the same kernel spec offline through `open_swarm_database` (`tests/resources/extensions/swarm_store_helpers.py`).
+Store source routing: `store.py` retains asynchronous validation/admission and the public `SwarmStore` API. `_store_database.py` wraps the host-opened kernel `Database`: each `_write` is one kernel write transaction (retried as a whole on a busy database), each `_read` one read transaction, and the signed cursor key is cached at open. `_store_profiles.py`, `_store_lifecycle.py`, `_store_delivery.py`, `_store_reads.py` and `_store_board.py` implement concrete operations against that database capability; they do not receive the Swarm service or public Store. Shared row checks/projections live in `_store_records.py`, pure input/value rules in `_store_values.py`, and the existing name pool in `_participant_names.py`. Worker dispatch (`SwarmDatabase.run`) runs each operation on the host database's own worker pool through `Database.run_async`, without a Store lock or a Swarm pool; once the host closes the database, Store operations raise the kernel's `DatabaseUnavailableError`; the kernel serializes writes, so a state-dependent decision belongs inside the write operation, not in a preceding read. Delivery receipt lookups run outside any database transaction. Store tests open the same kernel spec offline through `open_swarm_database` (`tests/resources/extensions/swarm/swarm_test_support.py`).
 
 Internal Extension source routing: `extension.py` owns the live Swarm service and participant callbacks; `_extension_values.py` holds pure argument/projection/configuration helpers, `_operation_schemas.py` the management schemas, and `_registration.py` binds the existing service to Extension capabilities. Registration constructs that service lazily to keep imports acyclic. Tool/schema/reminder wording is preserved.
 
 - Board/profile/policy transactions, races, receipt recovery and lifecycle:
-  `tests/resources/extensions/test_swarm_store.py` (profiles),
+  `tests/resources/extensions/swarm/test_swarm_store_profiles.py` (profiles),
   `test_swarm_store_board.py`, `test_swarm_store_delivery.py`, and
   `test_swarm_store_execution.py`.
 - Registered private Tool behavior and management boundaries:
-  `tests/resources/extensions/test_swarm_board.py`.
+  `tests/resources/extensions/swarm/test_swarm_board_tool.py`,
+  `test_swarm_inbox_delivery.py`, `test_swarm_state_tool.py`, `test_swarm_wiki.py`,
+  `test_swarm_wiki_evidence.py`, and `test_swarm_operations.py`.
 - Actual Chat participants, terminal proofs and Stop/Resume:
-  `tests/resources/extensions/test_swarm_lifecycle.py`.
+  `tests/resources/extensions/swarm/test_swarm_start.py`, `test_swarm_wakes.py`,
+  and `test_swarm_stop_resume.py`.
 - Idle wake policy: `test_swarm_wake_policy.py` covers ordinary and
   addressed main/discussion routes, retention until explicit wake, canonical
   receipt acknowledgment, narrowed wakes during a Quiet period, announcement
@@ -510,7 +514,7 @@ directory-only execution, without inferring Project identity from a path.
 Start validates the effective directory and catalog before creating Sessions.
 The stored profile and profile snapshot stay unchanged; `effective_configuration`
 records the Run directory and Project selection for Resume and request replay.
-Evidence: `SwarmPage.test.js` and `test_swarm_lifecycle.py`.
+Evidence: `SwarmPage.test.js` and `test_swarm_start.py`.
 Activity forwards running Tool Call cancellation through the generic page bridge with the exact Swarm group, Run and Tool Call ids. The host verifies current page registration and canonical Run ownership before requesting call-local cancellation; failures stay visible and the Run continues (`SwarmPage.test.activity-and-usage.test.js`, `test_extensions_methods.py`).
 Participant selection opens Activity and disposes the previous Run subscription;
 late history/subscription replies cannot replace a newer participant selection.
@@ -545,7 +549,7 @@ newest post or page, which `swarms.get` reports as `newest_post_sequence` and
 author and opening, or the page's title and opening, on first hover or focus.
 A post link opens the post's discussion on the Board, loads earlier pages until the
 post appears and scrolls to and focuses it; `#0` opens the user request
-(`SwarmPage.test.js`, `SwarmWiki.test.js`, `test_swarm_board.py`).
+(`SwarmPage.test.js`, `SwarmWiki.test.js`, `test_swarm_operations.py`).
 Post backgrounds and left borders share the stable author color. The Swarm id
 stays under Usage (`SwarmPage.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
@@ -560,7 +564,7 @@ Management Resume accepts an optional participant id. Store validation and
 request replay bind that exact target; reopening a closed epoch resets only the
 selected participant, leaving other participants unchanged. The existing group
 admission path starts only the returned targets (test_swarm_store_execution.py,
-test_swarm_board.py). Activity offers this action for an inactive
+test_swarm_operations.py). Activity offers this action for an inactive
 participant and consumes canonical context usage from history and Run events;
 it never substitutes cumulative Session usage.
 
@@ -586,7 +590,7 @@ transactionally removes its Board, Wiki pages and revisions, participants, event
 and request receipts.
 The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; the durable
 deletion marker blocks Resume, including request replay, and survives restart so
-a failed deletion can be retried. Tests: `test_swarm_board.py`, `SwarmPage.test.js`.
+a failed deletion can be retried. Tests: `test_swarm_operations.py`, `SwarmPage.test.js`.
 
 A saved Swarm profile is deleted through `profiles.delete` from its editor header or
 beside the goal form's Swarm selector, after the same kind of confirmation (failures
@@ -639,7 +643,7 @@ all Swarm participants and marks the selected Session with a pressed state.
 The human page omits the Delivery audit tab; internal events and canonical receipts
 remain available for diagnosis. Usage requests one combined group report, including
 participant breakdowns, and shares an in-flight request across refreshes. It retains
-the last report while refreshing silently, without transient progress text. Evidence: `test_swarm_lifecycle.py`,
+the last report while refreshing silently, without transient progress text. Evidence:
 `SwarmPage.test.activity-and-usage.test.js`, `SwarmPage.test.reconciliation.test.js`.
 
 Pending Board reads, automatic delivery, and participant counts use the partial

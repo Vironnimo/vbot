@@ -10,13 +10,7 @@ import pytest
 
 from core.sessions import SessionAddress, TemporarySessionBinding
 from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
-from tests.resources.extensions.swarm_store_helpers import (
-    _profile,
-    _swarm,
-)
-from tests.resources.extensions.swarm_store_helpers import (
-    store as store,
-)
+from tests.resources.extensions.swarm.swarm_test_support import _profile, _swarm
 
 
 @pytest.mark.asyncio
