@@ -11,7 +11,7 @@ This document explains how to find out where vBot spends time and how to prove t
 
 The usual loop: measure a baseline (load test and/or benchmarks) → find the slow phase (report, recording, stalls) → find the cause (trace, flamegraph, stall stacks) → change the code → rerun with `--compare` against the baseline.
 
-None of this runs in the quality gates. Timing measurements are slow and noisy, so they stay manual. Results land in the git-ignored `perf-results/` folder; they are machine-specific and never committed.
+None of this runs in the regular test suites or CI. Timing measurements are slow and noisy, so they stay manual. Results land in the git-ignored `perf-results/` folder; they are machine-specific and never committed.
 
 ## In-app measurement
 

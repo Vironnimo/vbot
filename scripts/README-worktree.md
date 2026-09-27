@@ -9,7 +9,7 @@ The short version:
 - list active managed worktrees when you need orientation
 - work from inside that worktree directory
 - start and stop the complete vBot + fake Provider test instance from inside the worktree with `scripts/test-env.py`
-- merge the finished task branch into `main` with `worktree.py merge` when the quality gates are green
+- merge the finished task branch into `main` with `worktree.py merge` once the affected tests pass and everything is committed
 - delete the worktree only when abandoning it without merging
 
 ## What the script does
@@ -112,8 +112,8 @@ Examples:
 python cli/main.py server status
 python cli/main.py server start
 python scripts/test-env.py start
-python scripts/quality.py tests/scripts/test_test_env.py
-python scripts/quality-frontend.py webui/src/lib/__tests__/i18n.test.js
+python -m pytest tests/scripts/test_test_env.py
+cd webui && npx vitest run src/lib/__tests__/i18n.test.js
 ```
 
 ### 4. List managed worktrees
@@ -141,7 +141,7 @@ the worktree. The important boundary is the current working directory.
 
 ### 6. Merge the finished task into `main`
 
-When the quality gates are green (they stay the agent's responsibility — the merge tooling never runs them), merge from anywhere:
+When the affected tests pass and every change is committed (verification stays the agent's responsibility — the merge tooling never runs tests; the commit hook checks formatting, lint and types, and CI runs the complete suite after the push), merge from anywhere:
 
 ```bash
 python scripts/worktree.py merge my-task
@@ -231,7 +231,7 @@ On success it prints `status: merged` with the merge commit, removes the worktre
 A conflicted merge rolls back completely — `main` stays untouched — and prints the conflicted files plus recovery hints:
 
 1. Open the window with `python scripts/worktree.py repair-start <name>`. A small detached keeper process holds the merge lock on your behalf, so no other session can move `main` while you fix. The window expires after 15 minutes (`--window` to change); expiry is harmless because all fixing happens in your worktree and `main` stays clean until your final merge.
-2. Fix in your own worktree: bring `main` into your branch (`git rebase main`), resolve, commit, rerun the quality gates.
+2. Fix in your own worktree: bring `main` into your branch (`git rebase main`), resolve, commit, rerun the affected tests.
 3. Retry `python scripts/worktree.py merge <name>`. The command recognizes its own open window and merges under it without waiting again; success closes the window automatically.
 
 Because `main` cannot move during a repair, every conflict is resolved exactly once against a frozen base — concurrent sessions cannot invalidate each other's resolutions into an endless loop. If you abandon the repair, close the window explicitly with `python scripts/worktree.py repair-finish <name>`; closing a window that already ended is a harmless `already-closed`.
@@ -359,26 +359,16 @@ From inside the worktree:
 python scripts/test-env.py stop
 ```
 
-### Run quality checks inside the worktree
+### Run tests inside the worktree
 
-Backend:
-
-```bash
-python scripts/quality.py
-```
-
-Frontend:
+Run the tests that cover the change with the test runners directly, from inside the worktree:
 
 ```bash
-python scripts/quality-frontend.py
+python -m pytest tests/scripts/test_test_env.py
+cd webui && npx vitest run src/lib/__tests__/i18n.test.js
 ```
 
-Or scope them to a smaller target:
-
-```bash
-python scripts/quality.py tests/scripts/test_test_env.py
-python scripts/quality-frontend.py webui/src/lib/__tests__/i18n.test.js
-```
+Commits in the worktree run the tracked pre-commit hook (formatting, lint, type check), because worktrees share the repository's `core.hooksPath` setting.
 
 ## Files generated per worktree
 
@@ -521,7 +511,7 @@ The usual cause is a shell whose working directory is still inside the worktree:
 2. Create one worktree per task with `python scripts/worktree.py create <name>`.
 3. Change into that worktree before running any vBot command.
 4. Use normal relative entrypoints from inside the worktree.
-5. Run tests and quality gates inside the worktree — they stay the agent's responsibility.
+5. Run the affected tests inside the worktree — they stay the agent's responsibility.
 6. Stop the local worktree server when done.
 7. Merge with `python scripts/worktree.py merge <name>` when everything is green; use `delete <name>` only for abandoned tasks.
 

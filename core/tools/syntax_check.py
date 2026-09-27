@@ -4,8 +4,8 @@ After a successful write or edit, a fast whole-file parse catches the corruption
 class — mashed quotes, truncated content, broken brackets or indentation — at the
 moment of the edit instead of much later when something else trips over it. The
 check is syntax-only and dependency-free (stdlib parsers plus the already-present
-PyYAML); it is **not** a linter, a type checker, or the quality gates, and it
-never blocks the write. Callers surface the returned message as a non-fatal
+PyYAML); it is **not** a linter or a type checker, and it never blocks the
+write. Callers surface the returned message as a non-fatal
 warning in the success envelope so the model can fix what it just broke.
 
 Two entry points mirror the two tools:
