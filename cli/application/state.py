@@ -27,7 +27,7 @@ PHASES = TERMINAL | {
     "activating",
     "verifying",
 }
-_NATIVE_HOST_NAMES = frozenset(
+NATIVE_HOST_NAMES = frozenset(
     {
         "vbot.exe",
         "vbot.gui.exe",
@@ -174,7 +174,7 @@ def _native_install_root(executable: Path) -> Path | None:
     """Return the install recorded by a native vBot host path, when available."""
 
     executable = executable.resolve()
-    if executable.name.casefold() not in _NATIVE_HOST_NAMES:
+    if executable.name.casefold() not in NATIVE_HOST_NAMES:
         return None
     candidates = (executable.parent, executable.parent.parent.parent.parent)
     return next((path for path in candidates if (path / "application.json").is_file()), None)
@@ -195,7 +195,7 @@ def discover(root: Path | None = None) -> Installation | None:
         return load_installation(native_root)
     # Temporary native payloads used during install do not yet have a recorded
     # ancestor, so their native host may use the explicit destination root.
-    if executable.name.casefold() in _NATIVE_HOST_NAMES:
+    if executable.name.casefold() in NATIVE_HOST_NAMES:
         explicit = os.environ.get("VBOT_INSTALL_ROOT")
         if explicit:
             return load_installation(Path(explicit))

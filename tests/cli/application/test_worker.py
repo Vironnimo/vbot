@@ -766,3 +766,66 @@ def test_worker_holds_operation_lock_for_the_entire_transaction(
         release.set()
         thread.join(timeout=_THREAD_COORDINATION_TIMEOUT_SECONDS)
     assert not thread.is_alive()
+
+
+def test_a_completed_update_deletes_retired_versions_after_releasing_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    operation = Operation(id="upd_cleanup", previous_version="rel_old")
+    operation.save(install)
+    retired = [tmp_path / "staging" / "retired-versions-rel_older"]
+    events: list[str] = []
+
+    def completed(_install: Installation, current: Operation) -> None:
+        current.transition(install, "completed", "Application update completed")
+
+    def lock_state() -> str:
+        try:
+            with exclusive(install.root, "operation"):
+                return "free"
+        except ApplicationError:
+            return "held"
+
+    def retire(_install: Installation) -> list[Path]:
+        events.append(f"retire:{lock_state()}")
+        return retired
+
+    def remove(paths: list[Path]) -> None:
+        events.append(f"remove:{lock_state()}:{[path.name for path in paths]}")
+        assert load_operation(install, operation.id).phase == "completed"
+
+    monkeypatch.setattr(worker, "execute", completed)
+    monkeypatch.setattr(worker, "retire_unneeded", retire)
+    monkeypatch.setattr(worker, "remove_retired", remove)
+
+    worker.run(install, operation.id)
+
+    assert events == ["retire:held", "remove:free:['retired-versions-rel_older']"]
+
+
+@pytest.mark.parametrize("outcome", ["prepared", "rolled_back", "failed", "raised"])
+def test_an_update_that_did_not_complete_retires_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+):
+    install = _install(tmp_path, shape="desktop-client")
+    operation = Operation(id="upd_kept", previous_version="rel_old")
+    operation.save(install)
+
+    def finish(_install: Installation, current: Operation) -> None:
+        if outcome == "raised":
+            raise ApplicationError("preparation failed")
+        current.transition(install, outcome, "Not activated")
+
+    def retire(_install: Installation) -> list[Path]:
+        raise AssertionError("only a completed update retires versions")
+
+    monkeypatch.setattr(worker, "execute", finish)
+    monkeypatch.setattr(worker, "retire_unneeded", retire)
+
+    worker.run(install, operation.id)
+
+    assert load_operation(install, operation.id).phase == (
+        "failed" if outcome == "raised" else outcome
+    )
+    assert {path.name for path in (tmp_path / "versions").iterdir()} == {"rel_old", "rel_new"}
