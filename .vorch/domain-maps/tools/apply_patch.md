@@ -184,8 +184,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   (`_aligned_start`), because a window starts wherever its best-matching lines
   put it, shifted by every line the copy added or dropped before them. Closing
   quotes and brackets occur too often to align by; when the file holds no other
-  copied line there, the file line most similar (>= 0.50) to the first copied
-  line starts it (a reworded copy), else the window start does. Evidence:
+  copied line there, the nearby file line most similar (>= 0.50) to the start of
+  the first copied line starts it (a reworded copy resembles its line; a copy
+  that joins lines starts like the first of them, which whole-line similarity
+  missed once in a replay), else the window start does. Evidence:
   the longest lines were often added text copied without `+`, so 43 of 133 failed
   hunks in one Swarm said `No similar text` although most copied lines were in
   the file, and 10 of 76 checkable first differences named a line one to seven

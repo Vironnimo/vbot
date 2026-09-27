@@ -417,6 +417,29 @@ def test_first_difference_of_reworded_lines_is_their_counterpart_not_a_quote_lin
     assert path.read_bytes() == before
 
 
+def test_first_difference_of_joined_lines_is_the_first_of_them(tmp_path):
+    path = tmp_path / "file.py"
+    filler = "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 21))
+    before = (
+        f"{filler}\n\ndef owners(table, owner):\n"
+        "    query = select(table.c.name, table.c.owner,\n"
+        "                   from_=table, limit=100)\n"
+        "    rows = run(query)\n    return [row.name for row in rows]\n"
+    ).encode()
+    path.write_bytes(before)
+    # The copy joins lines 24 and 25 into one; the closest text starts at line 25.
+    body = (
+        "@@ def owners(table, owner):\n"
+        "     query = select(table.c.title, from_=table, limit=100)\n"
+        "     rows = execute(query)\n-    return [row.title for row in rows]\n"
+        "+    return sorted(row.title for row in rows)"
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert "First difference, line 24: the file has '    query = select(" in text(result)
+    assert path.read_bytes() == before
+
+
 def test_closest_text_is_shown_when_long_new_lines_hide_the_copied_ones(tmp_path):
     path = tmp_path / "file.py"
     filler = "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 40))
