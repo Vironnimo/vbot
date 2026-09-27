@@ -453,10 +453,11 @@ def test_apply_changes_moves_an_alias_profile_to_the_canonical_key() -> None:
             "phrase_actions",
         ),
         ({"phrase_actions": {"": None}}, "phrase_actions"),
+        (["echo_cancellation"], None),  # not an object at all
     ],
 )
 def test_apply_changes_rejects_invalid_input_with_the_offending_field(
-    changes: dict[str, Any], field: str
+    changes: object, field: str | None
 ) -> None:
     raw = {"enabled": True}
 
@@ -491,11 +492,6 @@ def test_apply_changes_rejects_a_whole_change_when_one_part_is_invalid() -> None
 
     assert raised.value.field == "active_model_ids"
     assert raw == {}
-
-
-def test_apply_changes_rejects_a_non_object_change() -> None:
-    with pytest.raises(VoiceConfigError):
-        _apply({}, ["echo_cancellation"])
 
 
 @pytest.mark.parametrize("key", ["default_agent_id", "default_session_behavior", "phrase_actions"])

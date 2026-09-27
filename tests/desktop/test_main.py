@@ -1,14 +1,16 @@
-"""Tests for Desktop probing primitives and the controller-wired launch."""
+"""Desktop entry point: arguments, probing, window layout, and the whole launch."""
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
+import subprocess
 import sys
 import threading
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,7 @@ from desktop import page_events as desktop_page_events
 from desktop.main import DesktopProbeResult, DesktopTarget
 
 _TEST_DESKTOP_SESSION_ID = "desktop-test-session"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _FixedUuid:
@@ -127,26 +130,6 @@ class FakeResponse:
         return self.payload
 
 
-@pytest.mark.parametrize("missing_module", ["pyopen_wakeword", "sounddevice", "webrtcvad"])
-def test_real_wakeword_availability_requires_complete_voice_stack(
-    monkeypatch: pytest.MonkeyPatch, missing_module: str
-) -> None:
-    for module_name in ("pyopen_wakeword", "sounddevice", "webrtcvad"):
-        monkeypatch.setitem(sys.modules, module_name, types.ModuleType(module_name))
-    monkeypatch.setitem(sys.modules, missing_module, None)
-
-    assert desktop_main._real_wakeword_available() is False
-
-
-def test_real_wakeword_availability_accepts_complete_voice_stack(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for module_name in ("pyopen_wakeword", "sounddevice", "webrtcvad"):
-        monkeypatch.setitem(sys.modules, module_name, types.ModuleType(module_name))
-
-    assert desktop_main._real_wakeword_available() is True
-
-
 class FakeWindow:
     """Live-window double recording the navigation the controller drives."""
 
@@ -240,7 +223,7 @@ class FakeWebview:
     def __init__(self) -> None:
         self.created_windows: list[tuple[str, dict[str, Any]]] = []
         self.window = FakeWindow()
-        self.screens = [FakeScreen()]
+        self.screens: list[Any] = [FakeScreen()]
         self.start_calls: list[dict[str, Any]] = []
         self.start_func: Callable[[], Any] | None = None
         self.launch_events: list[str] | None = None
@@ -261,727 +244,9 @@ class FakeWebview:
         self.window.events.shown.emit()
 
 
-def fake_get_for(
-    responses: dict[str, FakeResponse | httpx.RequestError],
-) -> desktop_main.HttpGet:
-    class FakeGet:
-        def __call__(
-            self, url: str, *, timeout: float, trust_env: bool
-        ) -> desktop_main.HttpResponse:
-            assert timeout == desktop_main.PROBE_TIMEOUT_SECONDS
-            assert trust_env is False
-            response = responses[url]
-            if isinstance(response, httpx.RequestError):
-                raise response
-            return response
-
-    return FakeGet()
-
-
-def _write_servers(settings_file: Path, servers: list[dict[str, Any]]) -> None:
-    settings_file.write_text(json.dumps({"servers": servers}), encoding="utf-8")
-
-
-# -- Argument parsing --------------------------------------------------------
-
-
-def test_parse_args_accepts_host_and_port() -> None:
-    args = desktop_main.parse_args(["--host", "192.168.1.50", "--port", "9000"])
-
-    assert args.host == "192.168.1.50"
-    assert args.port == 9000
-
-
-@pytest.mark.parametrize("port", ["0", "65536", "not-a-port"])
-def test_parse_args_rejects_invalid_ports(port: str) -> None:
-    with pytest.raises(SystemExit):
-        desktop_main.parse_args(["--port", port])
-
-
-def test_parse_args_accepts_mock_wakeword_flag() -> None:
-    args = desktop_main.parse_args(["--mock-wakeword"])
-
-    assert args.mock_wakeword is True
-
-
-# -- Module boundaries -------------------------------------------------------
-
-
-def test_desktop_main_does_not_import_server_or_core_business_logic() -> None:
-    source = Path(desktop_main.__file__).read_text(encoding="utf-8")
-
-    assert "from server" not in source
-    assert "import server" not in source
-    assert "from core" not in source
-    assert "import core" not in source
-
-
-def test_desktop_main_does_not_import_cli_server_management() -> None:
-    source = Path(desktop_main.__file__).read_text(encoding="utf-8")
-
-    assert "cli.server_management" not in source
-    assert "from cli" not in source
-    assert "import cli" not in source
-
-
-def test_icon_path_selects_the_platform_native_asset(tmp_path: Path) -> None:
-    assert desktop_main.icon_path(tmp_path, platform="win32") == tmp_path / "icon.ico"
-    assert desktop_main.icon_path(tmp_path, platform="linux") == tmp_path / "icon.png"
-    assert desktop_main.icon_path(tmp_path, platform="darwin") == tmp_path / "icon.png"
-
-
-def test_bundled_windows_icon_is_a_multiresolution_ico() -> None:
-    icon_data = desktop_main.icon_path(platform="win32").read_bytes()
-
-    assert icon_data[:4] == b"\x00\x00\x01\x00"
-    assert int.from_bytes(icon_data[4:6], byteorder="little") > 1
-
-
-def test_desktop_main_keeps_out_of_server_lifecycle_management() -> None:
-    source = Path(desktop_main.__file__).read_text(encoding="utf-8")
-
-    assert "server start" not in source.lower()
-    assert "server stop" not in source.lower()
-    assert "server restart" not in source.lower()
-
-
-def test_desktop_logging_writes_structured_daily_file(tmp_path: Path) -> None:
-    handler = desktop_main.configure_desktop_logging(tmp_path)
-    assert handler is not None
-    try:
-        logging.getLogger("vbot.desktop.wakeword.controller").warning(
-            "Voice state: error (speech_to_text_unconfigured)"
-        )
-        handler.flush()
-
-        log_files = list((tmp_path / "logs").glob("*.log"))
-        assert len(log_files) == 1
-        content = log_files[0].read_text(encoding="utf-8")
-        assert "[WARN] vbot.desktop.wakeword.controller" in content
-        assert "error (speech_to_text_unconfigured)" in content
-    finally:
-        desktop_main.close_desktop_logging(handler)
-
-
-def test_desktop_main_logs_normal_shutdown(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    monkeypatch.setattr(desktop_main, "configure_desktop_logging", lambda: None)
-    monkeypatch.setattr(desktop_main, "close_desktop_logging", lambda _handler: None)
-    monkeypatch.setattr(desktop_main, "launch_desktop", lambda _argv: True)
-
-    with caplog.at_level("INFO", logger="vbot.desktop"):
-        desktop_main.main([])
-
-    records = [
-        record
-        for record in caplog.records
-        if record.name == "vbot.desktop" and record.levelno == logging.INFO
-    ]
-    assert len(records) == 1
-
-
-def test_desktop_main_does_not_report_a_shutdown_when_another_desktop_was_focused(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    monkeypatch.setattr(desktop_main, "configure_desktop_logging", lambda: None)
-    monkeypatch.setattr(desktop_main, "close_desktop_logging", lambda _handler: None)
-    monkeypatch.setattr(desktop_main, "launch_desktop", lambda _argv: False)
-
-    with caplog.at_level("INFO", logger="vbot.desktop"):
-        desktop_main.main([])
-
-    assert [record for record in caplog.records if record.name == "vbot.desktop"] == []
-
-
-# -- Probe classification ----------------------------------------------------
-
-
-@pytest.mark.parametrize("root_fails", [False, True])
-def test_probe_reuses_one_unproxied_client_and_closes_it(monkeypatch, root_fails):
-    clients: list[httpx.Client] = []
-    requests: list[httpx.Request] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok"})
-        if root_fails:
-            raise httpx.ConnectError("test transport unavailable", request=request)
-        return httpx.Response(200, text="test WebUI")
-
-    class ProbeClient(httpx.Client):
-        def __init__(self, **kwargs):
-            assert kwargs["trust_env"] is False
-            super().__init__(transport=httpx.MockTransport(respond), **kwargs)
-            clients.append(self)
-
-    monkeypatch.setattr(desktop_main.httpx, "Client", ProbeClient)
-    target = DesktopTarget("vbot.test", 8420, "http://vbot.test:8420/")
-    result = desktop_main.probe_target(target, timeout=0.75)
-
-    assert result.status == (
-        desktop_main.PROBE_WEBUI_UNAVAILABLE if root_fails else desktop_main.PROBE_WEBUI_AVAILABLE
-    )
-    assert len(clients) == 1
-    assert clients[0].is_closed
-    assert [request.url.path for request in requests] == ["/health", "/"]
-    assert all(request.extensions["timeout"]["connect"] == 0.75 for request in requests)
-
-
-def test_probe_target_classifies_available_webui() -> None:
-    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
-
-    result = desktop_main.probe_target(
-        target,
-        get=fake_get_for(
-            {
-                "http://127.0.0.1:8420/health": FakeResponse(200, {"status": "ok"}),
-                "http://127.0.0.1:8420/": FakeResponse(200),
-            }
-        ),
-    )
-
-    assert result.status == desktop_main.PROBE_WEBUI_AVAILABLE
-
-
-@pytest.mark.parametrize("status_code", [200, 204, 301, 302, 399])
-def test_probe_target_accepts_2xx_and_3xx_webui_responses(status_code: int) -> None:
-    target = DesktopTarget("vbot.lan", 9000, "http://vbot.lan:9000/")
-
-    result = desktop_main.probe_target(
-        target,
-        get=fake_get_for(
-            {
-                "http://vbot.lan:9000/health": FakeResponse(200, {"status": "ok"}),
-                "http://vbot.lan:9000/": FakeResponse(status_code),
-            }
-        ),
-    )
-
-    assert result.status == desktop_main.PROBE_WEBUI_AVAILABLE
-
-
-@pytest.mark.parametrize("status_code", [400, 404, 500])
-def test_probe_target_classifies_missing_webui(status_code: int) -> None:
-    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
-
-    result = desktop_main.probe_target(
-        target,
-        get=fake_get_for(
-            {
-                "http://127.0.0.1:8420/health": FakeResponse(200, {"status": "ok"}),
-                "http://127.0.0.1:8420/": FakeResponse(status_code),
-            }
-        ),
-    )
-
-    assert result.status == desktop_main.PROBE_WEBUI_UNAVAILABLE
-
-
-def test_probe_target_classifies_root_request_error_as_missing_webui() -> None:
-    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
-
-    result = desktop_main.probe_target(
-        target,
-        get=fake_get_for(
-            {
-                "http://127.0.0.1:8420/health": FakeResponse(200, {"status": "ok"}),
-                "http://127.0.0.1:8420/": httpx.ConnectError("connection closed"),
-            }
-        ),
-    )
-
-    assert result.status == desktop_main.PROBE_WEBUI_UNAVAILABLE
-
-
-def test_probe_target_classifies_unreachable_server() -> None:
-    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
-
-    result = desktop_main.probe_target(
-        target,
-        get=fake_get_for(
-            {"http://127.0.0.1:8420/health": httpx.ConnectError("connection refused")}
-        ),
-    )
-
-    assert result.status == desktop_main.PROBE_SERVER_UNREACHABLE
-
-
-@pytest.mark.parametrize(
-    ("health_response"),
-    [
-        FakeResponse(503, {"status": "ok"}),
-        FakeResponse(200, {"status": "starting"}),
-        FakeResponse(200, {"status": "ok", "extra": True}),
-        FakeResponse(200, {"status": "ok", "version": "dev"}),
-        FakeResponse(200, ValueError("invalid json")),
-        FakeResponse(200, ["ok"]),
-    ],
-)
-def test_probe_target_classifies_non_vbot_server(health_response: FakeResponse) -> None:
-    target = DesktopTarget("example.test", 8080, "http://example.test:8080/")
-
-    result = desktop_main.probe_target(
-        target,
-        get=fake_get_for({"http://example.test:8080/health": health_response}),
-    )
-
-    assert result.status == desktop_main.PROBE_NOT_VBOT_SERVER
-
-
-def test_probe_target_classifies_configuration_error_as_invalid_target() -> None:
-    target = DesktopTarget("bad host", 8420, "", configuration_error="bad host")
-
-    result = desktop_main.probe_target(target)
-
-    assert result.status == desktop_main.PROBE_INVALID_TARGET
-
-
-def test_probe_target_has_no_retry_loop() -> None:
-    target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
-    requested_urls: list[str] = []
-
-    def record_get(url: str, *, timeout: float, trust_env: bool) -> FakeResponse:
-        assert trust_env is False
-        requested_urls.append(url)
-        if url.endswith("/health"):
-            return FakeResponse(200, {"status": "ok"})
-        return FakeResponse(404)
-
-    result = desktop_main.probe_target(target, get=record_get)
-
-    assert result.status == desktop_main.PROBE_WEBUI_UNAVAILABLE
-    assert requested_urls == ["http://127.0.0.1:8420/health", "http://127.0.0.1:8420/"]
-
-
-# -- Host/port validation and URL building -----------------------------------
-
-
-@pytest.mark.parametrize("host", ["", "   ", "http://localhost", "bad host", "host/path"])
-def test_validate_host_rejects_non_host_values(host: str) -> None:
-    with pytest.raises(ValueError):
-        desktop_main.validate_host(host)
-
-
-def test_validate_host_rejects_url_with_clear_message() -> None:
-    with pytest.raises(ValueError):
-        desktop_main.validate_host("http://localhost", source="settings.host")
-
-
-@pytest.mark.parametrize("port", [0, 65536, "not-a-port", None])
-def test_validate_port_rejects_out_of_range_and_non_numeric(port: object) -> None:
-    with pytest.raises(ValueError):
-        desktop_main.validate_port(port)
-
-
-def test_build_target_url_formats_local_and_lan_targets_as_plain_http() -> None:
-    assert desktop_main.build_target_url("127.0.0.1", 8420) == "http://127.0.0.1:8420/"
-    assert desktop_main.build_target_url("192.168.1.44", 9000) == "http://192.168.1.44:9000/"
-    assert desktop_main.build_target_url("vbot.lan", 8500) == "http://vbot.lan:8500/"
-
-
-# -- Launch wiring -----------------------------------------------------------
-
-
-def test_launch_creates_window_before_loop_with_html_and_bridge_js_api(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    assert len(fake_webview.created_windows) == 1
-    title, kwargs = fake_webview.created_windows[0]
-    assert title == desktop_main.WINDOW_TITLE
-    # The window opens on the neutral connection screen (no URL pre-loop), and
-    # the same bridge object is its single js_api for both screen and WebUI.
-    assert "url" not in kwargs
-    assert 'id="connect-form"' in kwargs["html"]
-    assert kwargs["background_color"] == desktop_main.APP_BACKGROUND_COLOR
-    assert kwargs["text_select"] is True
-    assert kwargs["js_api"] is not None
-    assert kwargs["width"] == 1280
-    assert kwargs["height"] == 800
-    assert kwargs["min_size"] == (800, 600)
-    # The window is explicitly placed on the primary screen so DPI scaling and
-    # multi-monitor layouts don't push it off-screen.
-    assert kwargs["screen"] is not None
-    assert hasattr(kwargs["js_api"], "connect")
-    assert hasattr(kwargs["js_api"], "getVoiceStatus")
-
-
-def test_resolve_window_layout_uses_screen_aware_first_run_size() -> None:
-    screen = FakeScreen(width=1920, height=1080)
-    layout = desktop_main.resolve_window_layout(None, screen)
-
-    assert (layout.width, layout.height) == (1440, 864)
-    assert (layout.minimum_width, layout.minimum_height) == (800, 600)
-
-
-def test_resolve_window_layout_keeps_remembered_size_that_fits() -> None:
-    screen = FakeScreen(width=1920, height=1080)
-    layout = desktop_main.resolve_window_layout((1380, 900), screen)
-
-    assert (layout.width, layout.height) == (1380, 900)
-
-
-def test_resolve_window_layout_clamps_remembered_size_to_smaller_screen() -> None:
-    screen = FakeScreen(width=1280, height=720)
-    layout = desktop_main.resolve_window_layout((1800, 1100), screen)
-
-    assert (layout.width, layout.height) == (1280, 720)
-    assert (layout.minimum_width, layout.minimum_height) == (800, 600)
-
-
-def test_resolve_window_layout_clamps_to_work_area_excluding_taskbar() -> None:
-    """The work area (Screen.frame) excludes the taskbar, so a saved size that
-    fits the full screen bounds but exceeds the work area is clamped down."""
-    screen = FakeScreen(width=2048, height=1152, frame=FakeFrame(Width=2048, Height=1104))
-    layout = desktop_main.resolve_window_layout((2048, 1152), screen)
-
-    assert (layout.width, layout.height) == (2048, 1104)
-
-
-def test_resolve_window_layout_passes_screen_through_for_placement() -> None:
-    screen = FakeScreen(width=1920, height=1080)
-    layout = desktop_main.resolve_window_layout(None, screen)
-
-    assert layout.screen is screen
-
-
-def test_resolve_window_layout_with_no_screen_uses_fallback_and_no_placement() -> None:
-    layout = desktop_main.resolve_window_layout(None, None)
-
-    assert layout.width > 0
-    assert layout.height > 0
-    assert layout.screen is None
-
-
-def test_resolve_window_layout_clamps_against_primary_not_first_screen() -> None:
-    """screens[0] may be a secondary monitor; the primary contains (0,0)."""
-    # Secondary screen on the left, screens[0] by WinForms enumeration order
-    secondary = FakeScreen(width=1920, height=1080, x=-1920, y=270)
-    primary = FakeScreen(width=2048, height=1152, x=0, y=0, scale=1.25)
-    assert (
-        desktop_main._primary_screen(types.SimpleNamespace(screens=[secondary, primary])) is primary
-    )
-
-
-def test_primary_screen_falls_back_to_first_when_origin_not_contained() -> None:
-    only = FakeScreen(width=1920, height=1080, x=-1920, y=0)
-    result = desktop_main._primary_screen(types.SimpleNamespace(screens=[only]))
-    assert result is only
-
-
-def test_primary_screen_returns_none_when_no_screens() -> None:
-    assert desktop_main._primary_screen(types.SimpleNamespace(screens=[])) is None
-
-
-def test_launch_restores_remembered_window_size(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps({"window": {"width": 1400, "height": 900}}),
-        encoding="utf-8",
-    )
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=settings_file,
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    _, kwargs = fake_webview.created_windows[0]
-    assert kwargs["width"] == 1400
-    assert kwargs["height"] == 900
-
-
-def test_launch_persists_window_size_when_window_closes(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    settings_file = tmp_path / "settings.json"
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=settings_file,
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-    fake_webview.window.width = 1500
-    fake_webview.window.height = 920
-
-    fake_webview.window.events.closing.emit()
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["window"] == {"width": 1500, "height": 920}
-
-
-def test_launch_runs_auto_connect_after_window_is_shown(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    settings_file = tmp_path / "settings.json"
-    _write_servers(settings_file, [{"host": "pi.lan", "port": 9000}])
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=settings_file,
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    # The shown event navigated the live window to the saved server's WebUI with
-    # the accessor marker; start() itself received no eager startup callback.
-    assert fake_webview.start_func is None
-    assert len(fake_webview.window.events.shown.handlers) == 1
-    assert fake_webview.window.loaded_urls == [
-        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
-
-
-def test_launch_first_run_shows_connection_screen_via_auto_connect(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    # No saved server: auto_connect renders the connection screen, never a URL.
-    assert fake_webview.window.loaded_urls == []
-    assert len(fake_webview.window.loaded_html) == 1
-    assert 'id="connect-form"' in fake_webview.window.loaded_html[0]
-
-
-def test_launch_does_not_auto_connect_to_default_localhost(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    probed_targets: list[DesktopTarget] = []
-
-    def record_probe(target: DesktopTarget) -> DesktopProbeResult:
-        probed_targets.append(target)
-        return DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target)
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=record_probe,
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    # The old silent 127.0.0.1:8420 default is gone: with nothing saved, nothing
-    # is probed and the window never navigates to localhost.
-    assert probed_targets == []
-    assert fake_webview.window.loaded_urls == []
-
-
-# -- Launch with explicit --host/--port override -----------------------------
-
-
-def test_launch_host_port_override_connects_directly_even_on_first_run(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_desktop(
-        ["--host", "pi.lan", "--port", "9000"],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    # An explicit override is a deliberate target: it connects straight to the
-    # WebUI (with the accessor marker), not to the connection screen, even with
-    # nothing saved.
-    assert fake_webview.window.loaded_urls == [
-        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
-    assert fake_webview.window.loaded_html == []
-
-
-def test_launch_override_remembers_target_as_last_used(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    settings_file = tmp_path / "settings.json"
-
-    desktop_main.launch_desktop(
-        ["--host", "pi.lan", "--port", "9000"],
-        settings_file=settings_file,
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    stored = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert stored["servers"] == [{"host": "pi.lan", "port": 9000}]
-    assert stored["last_used"] == {"host": "pi.lan", "port": 9000}
-
-
-def test_launch_port_only_override_fills_default_host(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_desktop(
-        ["--port", "9000"],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    expected_url = (
-        f"http://{desktop_main.DEFAULT_HOST}:9000/?accessor=desktop"
-        "&desktop_session=desktop-test-session"
-    )
-    assert fake_webview.window.loaded_urls == [expected_url]
-
-
-def test_launch_host_only_override_fills_default_port(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_desktop(
-        ["--host", "pi.lan"],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    expected_url = (
-        f"http://pi.lan:{desktop_main.DEFAULT_PORT}/?accessor=desktop"
-        "&desktop_session=desktop-test-session"
-    )
-    assert fake_webview.window.loaded_urls == [expected_url]
-
-
-def test_launch_override_takes_precedence_over_saved_last_used(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(
-        json.dumps(
-            {
-                "servers": [{"host": "old.lan", "port": 8420}],
-                "last_used": {"host": "old.lan", "port": 8420},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    desktop_main.launch_desktop(
-        ["--host", "new.lan", "--port", "9000"],
-        settings_file=settings_file,
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    # The override wins over the saved last-used target.
-    assert fake_webview.window.loaded_urls == [
-        "http://new.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
-
-
-def test_resolve_launch_server_url_prefers_override_for_worker(tmp_path: Path) -> None:
-    from desktop.connection import ConnectionController
-
-    settings_file = tmp_path / "settings.json"
-    _write_servers(settings_file, [{"host": "saved.lan", "port": 8420}])
-    controller = ConnectionController(settings_file=settings_file)
-
-    # Override → the worker's server_url targets the override, not last-used, so
-    # window and voice point at the same server on an override first-run.
-    override_url = desktop_main._resolve_launch_server_url(("pi.lan", 9000), controller)
-    assert override_url == "http://pi.lan:9000/"
-
-    # No override → falls back to the controller's last-used resolution.
-    fallback_url = desktop_main._resolve_launch_server_url(None, controller)
-    assert fallback_url == "http://saved.lan:8420/"
-
-    # No override and nothing saved → empty (worker skips network calls).
-    empty_controller = ConnectionController(settings_file=tmp_path / "empty.json")
-    assert desktop_main._resolve_launch_server_url(None, empty_controller) == ""
-
-
-def test_launch_starts_without_native_menu(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    assert len(fake_webview.start_calls) == 1
-    assert "menu" not in fake_webview.start_calls[0]
-    assert "icon" not in fake_webview.start_calls[0]
-
-
-def test_launch_persists_webview_profile_beside_settings(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    settings_file = tmp_path / "settings.json"
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=settings_file,
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    # The WebView2 profile must survive Desktop restarts: private mode off
-    # (pywebview would otherwise delete the user-data folder on close) and a
-    # stable storage path next to the Desktop settings file.
-    assert fake_webview.start_calls[0]["private_mode"] is False
-    assert fake_webview.start_calls[0]["storage_path"] == str(
-        tmp_path / desktop_main.WEBVIEW_STORAGE_DIR_NAME
-    )
-
-
-def test_launch_passes_icon_only_when_icon_exists(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    icon_file = tmp_path / "icon.ico"
-    icon_file.write_bytes(b"fake-icon")
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=icon_file,
-    )
-
-    assert fake_webview.start_calls[0]["icon"] == str(icon_file)
-
-
-def test_launch_attaches_the_created_window_to_the_controller(tmp_path: Path) -> None:
-    fake_webview = FakeWebview()
-    settings_file = tmp_path / "settings.json"
-    _write_servers(settings_file, [{"host": "pi.lan", "port": 9000}])
-
-    desktop_main.launch_desktop(
-        [],
-        settings_file=settings_file,
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    # Proof the controller drove *the created window*: that exact FakeWindow saw
-    # the navigation. (If attach_window were skipped, the controller would have
-    # no window and raise.)
-    assert fake_webview.window.loaded_urls == [
-        "http://pi.lan:9000/?accessor=desktop&desktop_session=desktop-test-session"
-    ]
+class StartRaisesWebview(FakeWebview):
+    def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
+        raise RuntimeError("gui loop crashed")
 
 
 class RecordingVoice:
@@ -1004,54 +269,585 @@ class RecordingVoice:
         self.server_urls.append(server_url)
 
 
-def test_launch_does_not_start_voice_when_gui_fails_before_window_is_shown(
+def _available(target: DesktopTarget) -> DesktopProbeResult:
+    return DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target)
+
+
+def _launch(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    argv: Sequence[str] = (),
+    *,
+    webview: FakeWebview | None = None,
+    settings: dict[str, Any] | None = None,
+    probe: Callable[[DesktopTarget], DesktopProbeResult] = _available,
+    icon: Path | None = None,
+) -> FakeWebview:
+    """Run a whole launch that owns the Desktop instance against a fake pywebview."""
+
+    settings_file = tmp_path / "settings.json"
+    if settings is not None:
+        settings_file.write_text(json.dumps(settings), encoding="utf-8")
+    fake_webview = webview if webview is not None else FakeWebview()
+    opened = desktop_main.launch_desktop(
+        list(argv),
+        settings_file=settings_file,
+        probe=probe,
+        webview_module=fake_webview,
+        app_icon_path=icon if icon is not None else tmp_path / "missing-icon.png",
+    )
+    assert opened is True
+    return fake_webview
+
+
+def _bridge(fake_webview: FakeWebview) -> Any:
+    return fake_webview.created_windows[0][1]["js_api"]
+
+
+def _webui_url(host: str, port: int) -> str:
+    return f"http://{host}:{port}/?accessor=desktop&desktop_session={_TEST_DESKTOP_SESSION_ID}"
+
+
+def _stored(tmp_path: Path) -> dict[str, Any]:
+    stored: dict[str, Any] = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    return stored
+
+
+SAVED_PI = {"servers": [{"host": "pi.lan", "port": 9000}]}
+
+
+# -- Arguments and entry point -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "host", "port", "mock_wakeword"),
+    [
+        ([], None, None, False),
+        (["--host", "192.168.1.50", "--port", "9000"], "192.168.1.50", 9000, False),
+        (["--mock-wakeword"], None, None, True),
+    ],
+)
+def test_parse_args_reads_the_target_and_the_mock_wakeword_flag(
+    argv: list[str], host: str | None, port: int | None, mock_wakeword: bool
 ) -> None:
-    events: list[str] = []
+    args = desktop_main.parse_args(argv)
 
-    class StartRaisesWebview(FakeWebview):
-        def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
-            raise RuntimeError("gui loop crashed")
+    assert (args.host, args.port, args.mock_wakeword) == (host, port, mock_wakeword)
 
-    monkeypatch.setattr(desktop_main, "_create_voice", lambda *_args: RecordingVoice(events))
 
-    with pytest.raises(RuntimeError, match="gui loop crashed"):
-        desktop_main.launch_desktop(
-            [],
-            settings_file=tmp_path / "settings.json",
-            probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-            webview_module=StartRaisesWebview(),
-            app_icon_path=tmp_path / "missing-icon.png",
+@pytest.mark.parametrize("port", ["0", "65536", "not-a-port"])
+def test_parse_args_rejects_invalid_ports(port: str) -> None:
+    with pytest.raises(SystemExit):
+        desktop_main.parse_args(["--port", port])
+
+
+@pytest.mark.parametrize(("opened", "records"), [(True, 1), (False, 0)])
+def test_main_reports_a_normal_shutdown_only_after_its_own_window(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    opened: bool,
+    records: int,
+) -> None:
+    """A launch that only focused an already running Desktop stops silently."""
+
+    monkeypatch.setattr(desktop_main, "configure_desktop_logging", lambda: None)
+    monkeypatch.setattr(desktop_main, "close_desktop_logging", lambda _handler: None)
+    monkeypatch.setattr(desktop_main, "launch_desktop", lambda _argv: opened)
+
+    with caplog.at_level("INFO", logger="vbot.desktop"):
+        desktop_main.main([])
+
+    assert len([record for record in caplog.records if record.name == "vbot.desktop"]) == records
+
+
+def test_desktop_logging_writes_structured_daily_file(tmp_path: Path) -> None:
+    handler = desktop_main.configure_desktop_logging(tmp_path)
+    assert handler is not None
+    try:
+        logging.getLogger("vbot.desktop.wakeword.controller").warning(
+            "Voice state: error (speech_to_text_unconfigured)"
         )
+        handler.flush()
 
-    assert events == ["voice.close"]
+        log_files = list((tmp_path / "logs").glob("*.log"))
+        assert len(log_files) == 1
+        content = log_files[0].read_text(encoding="utf-8")
+        assert "[WARN] vbot.desktop.wakeword.controller" in content
+        assert "error (speech_to_text_unconfigured)" in content
+    finally:
+        desktop_main.close_desktop_logging(handler)
 
 
-def test_launch_starts_voice_only_after_window_is_shown_and_follows_the_server(
+def test_icon_path_selects_the_platform_native_asset(tmp_path: Path) -> None:
+    assert desktop_main.icon_path(tmp_path, platform="win32") == tmp_path / "icon.ico"
+    assert desktop_main.icon_path(tmp_path, platform="linux") == tmp_path / "icon.png"
+    assert desktop_main.icon_path(tmp_path, platform="darwin") == tmp_path / "icon.png"
+
+
+def test_bundled_windows_icon_is_a_multiresolution_ico() -> None:
+    icon_data = desktop_main.icon_path(platform="win32").read_bytes()
+
+    assert icon_data[:4] == b"\x00\x00\x01\x00"
+    assert int.from_bytes(icon_data[4:6], byteorder="little") > 1
+
+
+# -- Package boundaries ----------------------------------------------------------
+
+
+def _imported_packages(path: Path) -> set[str]:
+    packages: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            packages.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            packages.add(node.module.split(".")[0])
+    return packages
+
+
+def test_desktop_stays_a_thin_client_of_the_server() -> None:
+    """Desktop imports no server, core, or CLI code and never manages server processes."""
+
+    modules = sorted((REPO_ROOT / "desktop").rglob("*.py"))
+    assert len(modules) > 10
+
+    for module in modules:
+        assert not _imported_packages(module) & {"server", "core", "cli"}, module
+        source = module.read_text(encoding="utf-8").lower()
+        for verb in ("start", "stop", "restart"):
+            assert f"server {verb}" not in source, module
+
+
+def test_disabled_voice_builds_its_bridge_without_loading_the_audio_stack(
+    tmp_path: Path,
+) -> None:
+    """Only a fresh process shows which modules Desktop startup imports."""
+
+    script = """
+import sys
+from pathlib import Path
+from desktop.bridge import DesktopBridge
+from desktop.connection import ConnectionController
+from desktop.main import _create_voice, parse_args
+from desktop.page_events import PageEventDispatcher
+
+settings = Path(sys.argv[1]) / 'settings.json'
+controller = ConnectionController(settings_file=settings)
+page_events = PageEventDispatcher()
+voice = _create_voice(parse_args([]), settings, '', page_events)
+bridge = DesktopBridge(voice=voice, connection=controller)
+voice.start()
+assert bridge.getDesktopCapabilities()['voiceApi'] == 2
+assert bridge.getVoiceStatus()['state'] == 'off'
+voice.close()
+page_events.close()
+audio_modules = {
+    'desktop.wakeword.capture',
+    'desktop.wakeword.detection',
+    'desktop.wakeword.commands',
+    'desktop.wakeword.echo',
+    'desktop.wakeword._speech_detection',
+}
+assert not audio_modules & sys.modules.keys(), audio_modules & sys.modules.keys()
+heavy = {'numpy', 'sounddevice', 'pyopen_wakeword', 'onnxruntime', 'soxr', 'livekit'}
+assert not heavy & sys.modules.keys(), heavy & sys.modules.keys()
+
+# The package still exposes Voice when a caller actually needs it.
+from desktop.wakeword import VoiceController
+assert VoiceController.__module__ == 'desktop.wakeword.controller'
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "missing_module", [None, "pyopen_wakeword", "sounddevice", "soxr", "webrtcvad"]
+)
+def test_real_wakeword_availability_requires_the_complete_voice_stack(
+    monkeypatch: pytest.MonkeyPatch, missing_module: str | None
+) -> None:
+    for module_name in ("pyopen_wakeword", "sounddevice", "soxr", "webrtcvad"):
+        monkeypatch.setitem(sys.modules, module_name, types.ModuleType(module_name))
+    if missing_module is not None:
+        monkeypatch.setitem(sys.modules, missing_module, None)
+
+    assert desktop_main._real_wakeword_available() is (missing_module is None)
+
+
+# -- Probe classification --------------------------------------------------------
+
+PROBE_TARGET = DesktopTarget("vbot.lan", 9000, "http://vbot.lan:9000/")
+HEALTH_URL = "http://vbot.lan:9000/health"
+ROOT_URL = "http://vbot.lan:9000/"
+HEALTH_OK = FakeResponse(200, {"status": "ok"})
+
+
+@pytest.mark.parametrize(
+    ("health", "root", "status"),
+    [
+        (HEALTH_OK, FakeResponse(200), desktop_main.PROBE_WEBUI_AVAILABLE),
+        (HEALTH_OK, FakeResponse(399), desktop_main.PROBE_WEBUI_AVAILABLE),
+        (HEALTH_OK, FakeResponse(400), desktop_main.PROBE_WEBUI_UNAVAILABLE),
+        (HEALTH_OK, FakeResponse(500), desktop_main.PROBE_WEBUI_UNAVAILABLE),
+        (HEALTH_OK, httpx.ConnectError("closed"), desktop_main.PROBE_WEBUI_UNAVAILABLE),
+        (httpx.ConnectError("refused"), None, desktop_main.PROBE_SERVER_UNREACHABLE),
+        (FakeResponse(503, {"status": "ok"}), None, desktop_main.PROBE_NOT_VBOT_SERVER),
+        (FakeResponse(200, {"status": "starting"}), None, desktop_main.PROBE_NOT_VBOT_SERVER),
+        (
+            FakeResponse(200, {"status": "ok", "version": "dev"}),
+            None,
+            desktop_main.PROBE_NOT_VBOT_SERVER,
+        ),
+        (FakeResponse(200, ValueError("no json")), None, desktop_main.PROBE_NOT_VBOT_SERVER),
+        (FakeResponse(200, ["ok"]), None, desktop_main.PROBE_NOT_VBOT_SERVER),
+    ],
+    ids=[
+        "webui-200",
+        "webui-399",
+        "webui-400",
+        "webui-500",
+        "webui-request-error",
+        "health-request-error",
+        "health-503",
+        "health-starting",
+        "health-extra-keys",
+        "health-not-json",
+        "health-not-object",
+    ],
+)
+def test_probe_target_classifies_the_server_with_one_request_per_step(
+    health: FakeResponse | httpx.RequestError,
+    root: FakeResponse | httpx.RequestError | None,
+    status: str,
+) -> None:
+    replies = {HEALTH_URL: health, ROOT_URL: root}
+    requested: list[str] = []
+
+    def get(url: str, *, timeout: float, trust_env: bool) -> FakeResponse:
+        assert (timeout, trust_env) == (desktop_main.PROBE_TIMEOUT_SECONDS, False)
+        requested.append(url)
+        reply = replies[url]
+        assert reply is not None, f"unexpected request: {url}"
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    result = desktop_main.probe_target(PROBE_TARGET, get=get)
+
+    assert result.status == status
+    # No retry loop: /health once, then the WebUI root once when /health is vBot's.
+    assert requested == ([HEALTH_URL] if root is None else [HEALTH_URL, ROOT_URL])
+
+
+def test_probe_target_reports_a_configuration_error_without_a_request() -> None:
+    def get(url: str, *, timeout: float, trust_env: bool) -> FakeResponse:
+        raise AssertionError(f"unexpected request: {url}")
+
+    target = DesktopTarget("bad host", 8420, "", configuration_error="bad host")
+
+    assert desktop_main.probe_target(target, get=get).status == desktop_main.PROBE_INVALID_TARGET
+
+
+@pytest.mark.parametrize("root_fails", [False, True])
+def test_probe_reuses_one_unproxied_client_and_closes_it(
+    monkeypatch: pytest.MonkeyPatch, root_fails: bool
+) -> None:
+    clients: list[httpx.Client] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if root_fails:
+            raise httpx.ConnectError("test transport unavailable", request=request)
+        return httpx.Response(200, text="test WebUI")
+
+    class ProbeClient(httpx.Client):
+        def __init__(self, **kwargs: Any) -> None:
+            assert kwargs["trust_env"] is False
+            super().__init__(transport=httpx.MockTransport(respond), **kwargs)
+            clients.append(self)
+
+    monkeypatch.setattr(desktop_main.httpx, "Client", ProbeClient)
+    target = DesktopTarget("vbot.test", 8420, "http://vbot.test:8420/")
+    result = desktop_main.probe_target(target, timeout=0.75)
+
+    assert result.status == (
+        desktop_main.PROBE_WEBUI_UNAVAILABLE if root_fails else desktop_main.PROBE_WEBUI_AVAILABLE
+    )
+    assert len(clients) == 1
+    assert clients[0].is_closed
+    assert [request.url.path for request in requests] == ["/health", "/"]
+    assert all(request.extensions["timeout"]["connect"] == 0.75 for request in requests)
+
+
+# -- Host/port validation and URL building ---------------------------------------
+
+
+@pytest.mark.parametrize("host", ["", "   ", "http://localhost", "bad host", "host/path", None])
+def test_validate_host_rejects_non_host_values_naming_their_source(host: object) -> None:
+    with pytest.raises(ValueError, match="^settings.host "):
+        desktop_main.validate_host(host, source="settings.host")
+
+
+@pytest.mark.parametrize("port", [0, 65536, "not-a-port", None])
+def test_validate_port_rejects_out_of_range_and_non_numeric(port: object) -> None:
+    with pytest.raises(ValueError):
+        desktop_main.validate_port(port)
+
+
+def test_build_target_url_formats_local_and_lan_targets_as_plain_http() -> None:
+    assert desktop_main.build_target_url("127.0.0.1", 8420) == "http://127.0.0.1:8420/"
+    assert desktop_main.build_target_url("192.168.1.44", 9000) == "http://192.168.1.44:9000/"
+    assert desktop_main.build_target_url("vbot.lan", 8500) == "http://vbot.lan:8500/"
+
+
+# -- Window layout -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("saved_size", "screen", "size"),
+    [
+        (None, FakeScreen(1920, 1080), (1440, 864)),
+        ((1380, 900), FakeScreen(1920, 1080), (1380, 900)),
+        ((1800, 1100), FakeScreen(1280, 720), (1280, 720)),
+        (
+            (2048, 1152),
+            FakeScreen(2048, 1152, frame=FakeFrame(Width=2048, Height=1104)),
+            (2048, 1104),
+        ),
+        (None, None, (1280, 800)),
+    ],
+    ids=["first-run", "remembered-fits", "smaller-screen", "taskbar-work-area", "no-screen"],
+)
+def test_resolve_window_layout_bounds_the_size_to_the_primary_work_area(
+    saved_size: tuple[int, int] | None, screen: FakeScreen | None, size: tuple[int, int]
+) -> None:
+    layout = desktop_main.resolve_window_layout(saved_size, screen)
+
+    assert (layout.width, layout.height) == size
+    assert (layout.minimum_width, layout.minimum_height) == (800, 600)
+    assert layout.screen is screen
+
+
+@pytest.mark.parametrize(
+    ("screens", "placed_on"),
+    [
+        ([FakeScreen(1920, 1080, x=-1920, y=270), FakeScreen(2048, 1152)], 1),
+        ([FakeScreen(1920, 1080, x=-1920)], 0),
+        ([], None),
+    ],
+    ids=["primary-holds-the-origin", "first-screen-fallback", "no-screens"],
+)
+def test_launch_places_the_window_on_the_primary_screen(
+    tmp_path: Path, screens: list[FakeScreen], placed_on: int | None
+) -> None:
+    fake_webview = FakeWebview()
+    fake_webview.screens = screens
+
+    _launch(tmp_path, webview=fake_webview)
+
+    screen = fake_webview.created_windows[0][1]["screen"]
+    assert screen is (None if placed_on is None else screens[placed_on])
+
+
+@pytest.mark.parametrize("scale", [1.25, 2.0])
+def test_launch_converts_a_physical_primary_screen_to_logical_pixels_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scale: float
+) -> None:
+    monkeypatch.setattr(desktop_main._windows, "primary_scale", lambda: scale)
+    physical = types.SimpleNamespace(
+        x=0,
+        y=0,
+        width=2560,
+        height=1440,
+        scale=1.0,
+        frame=types.SimpleNamespace(X=0, Y=0, Width=2560, Height=1380),
+    )
+    fake_webview = FakeWebview()
+    fake_webview.screens = [physical]
+
+    _launch(tmp_path, webview=fake_webview, settings={"window": {"width": 3000, "height": 2000}})
+
+    kwargs = fake_webview.created_windows[0][1]
+    screen = kwargs["screen"]
+    assert (screen.width, screen.height, screen.scale) == (
+        int(2560 / scale),
+        int(1440 / scale),
+        scale,
+    )
+    assert kwargs["width"] * scale <= 2560
+    assert kwargs["height"] * scale <= 1380
+    assert (physical.width, physical.frame.Height) == (2560, 1380)
+
+
+# -- Launch --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("icon_exists", [False, True])
+def test_launch_creates_the_window_before_one_gui_loop(tmp_path: Path, icon_exists: bool) -> None:
+    icon = tmp_path / "icon.ico"
+    if icon_exists:
+        icon.write_bytes(b"fake-icon")
+
+    fake_webview = _launch(tmp_path, icon=icon)
+
+    [(title, kwargs)] = fake_webview.created_windows
+    assert title == desktop_main.WINDOW_TITLE
+    # The window opens on the neutral connection screen (no URL before the loop),
+    # and the same bridge object is its single js_api for both screen and WebUI.
+    assert "url" not in kwargs
+    assert 'id="connect-form"' in kwargs["html"]
+    assert kwargs["background_color"] == desktop_main.APP_BACKGROUND_COLOR
+    assert kwargs["text_select"] is True
+    assert (kwargs["width"], kwargs["height"], kwargs["min_size"]) == (1280, 800, (800, 600))
+    assert kwargs["screen"] is fake_webview.screens[0]
+    assert hasattr(kwargs["js_api"], "connect")
+    assert hasattr(kwargs["js_api"], "getVoiceStatus")
+    # No native menu; the WebView2 profile survives restarts beside the settings
+    # file (pywebview's private mode would delete it); the icon is optional.
+    [start] = fake_webview.start_calls
+    assert "menu" not in start
+    assert start["private_mode"] is False
+    assert start["storage_path"] == str(tmp_path / desktop_main.WEBVIEW_STORAGE_DIR_NAME)
+    assert start.get("icon") == (str(icon) if icon_exists else None)
+
+
+def test_launch_restores_and_persists_the_window_size(tmp_path: Path) -> None:
+    fake_webview = _launch(tmp_path, settings={"window": {"width": 1400, "height": 900}})
+    _, kwargs = fake_webview.created_windows[0]
+    assert (kwargs["width"], kwargs["height"]) == (1400, 900)
+
+    fake_webview.window.width, fake_webview.window.height = 1500, 920
+    fake_webview.window.events.closing.emit()
+
+    assert _stored(tmp_path)["window"] == {"width": 1500, "height": 920}
+
+
+def test_launch_connects_the_created_window_to_the_saved_server_once_shown(
+    tmp_path: Path,
+) -> None:
+    fake_webview = _launch(tmp_path, settings=SAVED_PI)
+
+    # start() received no eager callback: the shown event navigated the window.
+    assert fake_webview.start_func is None
+    assert len(fake_webview.window.events.shown.handlers) == 1
+    assert fake_webview.window.loaded_urls == [_webui_url("pi.lan", 9000)]
+
+
+def test_first_launch_shows_the_connection_screen_without_probing_localhost(
+    tmp_path: Path,
+) -> None:
+    probed: list[DesktopTarget] = []
+
+    def record_probe(target: DesktopTarget) -> DesktopProbeResult:
+        probed.append(target)
+        return _available(target)
+
+    fake_webview = _launch(tmp_path, probe=record_probe)
+
+    assert probed == []
+    assert fake_webview.window.loaded_urls == []
+    [html] = fake_webview.window.loaded_html
+    assert 'id="connect-form"' in html
+
+
+@pytest.mark.parametrize(
+    ("argv", "saved", "target"),
+    [
+        (["--host", "pi.lan", "--port", "9000"], None, ("pi.lan", 9000)),
+        (["--port", "9000"], None, (desktop_main.DEFAULT_HOST, 9000)),
+        (["--host", "pi.lan"], None, ("pi.lan", desktop_main.DEFAULT_PORT)),
+        (
+            ["--host", "new.lan", "--port", "9000"],
+            {
+                "servers": [{"host": "old.lan", "port": 8420}],
+                "last_used": {"host": "old.lan", "port": 8420},
+            },
+            ("new.lan", 9000),
+        ),
+    ],
+    ids=["first-run", "port-only", "host-only", "over-last-used"],
+)
+def test_a_target_override_connects_directly_and_becomes_last_used(
+    tmp_path: Path,
+    argv: list[str],
+    saved: dict[str, Any] | None,
+    target: tuple[str, int],
+) -> None:
+    fake_webview = _launch(tmp_path, argv, settings=saved)
+
+    host, port = target
+    assert fake_webview.window.loaded_urls == [_webui_url(host, port)]
+    assert fake_webview.window.loaded_html == []
+    stored = _stored(tmp_path)
+    assert stored["last_used"] == {"host": host, "port": port}
+    assert {"host": host, "port": port} in stored["servers"]
+    assert len(stored["servers"]) == (1 if saved is None else 2)
+
+
+# -- Voice during a launch ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "saved", "server_url"),
+    [
+        (["--host", "pi.lan", "--port", "9000"], SAVED_PI, "http://pi.lan:9000/"),
+        ([], SAVED_PI, "http://pi.lan:9000/"),
+        ([], None, ""),
+    ],
+    ids=["override", "last-used", "nothing-saved"],
+)
+def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    saved: dict[str, Any] | None,
+    server_url: str,
 ) -> None:
     fake_webview = FakeWebview()
     events: list[str] = []
+    created_for: list[str] = []
 
-    def window_exists() -> None:
+    def window_shown_first() -> None:
         assert len(fake_webview.created_windows) == 1
-        assert fake_webview.window.loaded_urls  # the window connected first
+        assert fake_webview.window.loaded_urls or fake_webview.window.loaded_html
 
-    voice = RecordingVoice(events, on_start=window_exists)
-    monkeypatch.setattr(desktop_main, "_create_voice", lambda *_args: voice)
+    voice = RecordingVoice(events, on_start=window_shown_first)
 
-    desktop_main.launch_desktop(
-        ["--host", "pi.lan", "--port", "9000"],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
+    def create_voice(_args: Any, _settings: Any, url: str, _page_events: Any) -> RecordingVoice:
+        created_for.append(url)
+        return voice
 
+    monkeypatch.setattr(desktop_main, "_create_voice", create_voice)
+
+    _launch(tmp_path, argv, webview=fake_webview, settings=saved)
+
+    assert created_for == [server_url]
     assert events == ["voice.start", "voice.close"]
-    assert voice.server_urls == ["http://pi.lan:9000/"]
+    # Every successful in-window connect retargets Voice.
+    assert voice.server_urls == ([server_url] if server_url else [])
+
+
+def test_a_failing_gui_loop_closes_voice_hotkey_and_instance_without_starting_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launch_seams: LaunchSeams
+) -> None:
+    voice_events: list[str] = []
+    monkeypatch.setattr(desktop_main, "_create_voice", lambda *_args: RecordingVoice(voice_events))
+
+    with pytest.raises(RuntimeError, match="gui loop crashed"):
+        _launch(tmp_path, webview=StartRaisesWebview())
+
+    assert voice_events == ["voice.close"]
+    assert launch_seams.instance is not None
+    assert launch_seams.instance.closed is True
+    assert launch_seams.events == ["apply_browser_arguments", "hotkey.stop"]
 
 
 def test_launch_with_disabled_voice_never_probes_wakeword_dependencies(
@@ -1065,21 +861,13 @@ def test_launch_with_disabled_voice_never_probes_wakeword_dependencies(
     monkeypatch.setitem(sys.modules, "desktop.wakeword.capture", None)
     monkeypatch.setitem(sys.modules, "desktop.wakeword.echo", None)
 
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=FakeWebview(),
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
+    _launch(tmp_path)
 
 
 def test_enabled_voice_probes_dependencies_only_after_window_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps({"wakeword": {"enabled": True}}), encoding="utf-8")
     probed = threading.Event()
 
     class RunningWebview(FakeWebview):
@@ -1087,7 +875,7 @@ def test_enabled_voice_probes_dependencies_only_after_window_exists(
 
         def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
             super().start(func, **kwargs)
-            bridge = self.created_windows[0][1]["js_api"]
+            bridge = _bridge(self)
             deadline = time.monotonic() + 5
             while bridge.getVoiceStatus()["state"] != "error" and time.monotonic() < deadline:
                 time.sleep(0.01)
@@ -1099,30 +887,21 @@ def test_enabled_voice_probes_dependencies_only_after_window_exists(
         probed.set()
         return False
 
-    monkeypatch.setattr(
-        desktop_main,
-        "_real_wakeword_available",
-        unavailable_after_window_created,
-    )
+    monkeypatch.setattr(desktop_main, "_real_wakeword_available", unavailable_after_window_created)
 
-    desktop_main.launch_desktop(
-        [],
-        settings_file=settings_file,
-        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
+    _launch(tmp_path, webview=fake_webview, settings={"wakeword": {"enabled": True}})
 
     assert probed.is_set()
-    status = fake_webview.created_windows[0][1]["js_api"].getVoiceStatus()
-    assert status["mode"] == "unavailable"
+    assert _bridge(fake_webview).getVoiceStatus()["mode"] == "unavailable"
 
 
-# -- Single instance, browser arguments, and Live voice integration ----------
+def test_mock_wakeword_flag_selects_the_mock_voice_mode(tmp_path: Path) -> None:
+    fake_webview = _launch(tmp_path, ["--mock-wakeword"])
+
+    assert _bridge(fake_webview).getVoiceStatus()["mode"] == "mock"
 
 
-def _available(target: DesktopTarget) -> DesktopProbeResult:
-    return DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target)
+# -- Single instance, browser arguments, and Live voice ------------------------------
 
 
 def test_second_launch_focuses_the_running_desktop_without_a_window(
@@ -1151,112 +930,70 @@ def test_second_launch_focuses_the_running_desktop_without_a_window(
     assert "ignored the requested target pi.lan:9000" in caplog.text
 
 
-def test_launch_owns_the_instance_until_the_window_closes(
+@pytest.mark.parametrize(
+    ("window_events", "focus_calls"),
+    [
+        ([], ["show"]),
+        (["minimized"], ["restore", "show"]),
+        (["maximized", "minimized"], ["maximize", "show"]),
+        (["maximized", "minimized", "restored"], ["show"]),
+        (["minimized", "maximized"], ["show"]),
+    ],
+)
+def test_a_second_launch_brings_the_window_back_at_its_previous_size(
     tmp_path: Path,
     launch_seams: LaunchSeams,
+    window_events: list[str],
+    focus_calls: list[str],
 ) -> None:
-    fake_webview = FakeWebview()
-
-    opened = desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=_available,
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
+    fake_webview = _launch(tmp_path)
     instance = launch_seams.instance
-    assert opened is True
     assert instance is not None
-    assert instance.closed is True
-    # A second launch asks this window to come to the front.
+    assert instance.closed is True  # released when the window closed
     assert instance.on_activate is not None
+
+    for name in window_events:
+        getattr(fake_webview.window.events, name).emit()
     instance.on_activate()
-    assert fake_webview.window.focus_calls == ["show"]
 
-
-def test_launch_closes_the_instance_when_the_gui_loop_fails(
-    tmp_path: Path,
-    launch_seams: LaunchSeams,
-) -> None:
-    class StartRaisesWebview(FakeWebview):
-        def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
-            raise RuntimeError("gui loop crashed")
-
-    with pytest.raises(RuntimeError, match="gui loop crashed"):
-        desktop_main.launch_desktop(
-            [],
-            settings_file=tmp_path / "settings.json",
-            probe=_available,
-            webview_module=StartRaisesWebview(),
-            app_icon_path=tmp_path / "missing-icon.png",
-        )
-
-    assert launch_seams.instance is not None
-    assert launch_seams.instance.closed is True
-    assert launch_seams.events == ["apply_browser_arguments", "hotkey.stop"]
+    assert fake_webview.window.focus_calls == focus_calls
 
 
 def test_launch_makes_every_known_server_a_secure_origin_before_webview_starts(
     tmp_path: Path,
     launch_seams: LaunchSeams,
 ) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write_servers(settings_file, [{"host": "a.lan", "port": 8420}])
     fake_webview = FakeWebview()
     fake_webview.launch_events = launch_seams.events
 
-    desktop_main.launch_desktop(
+    _launch(
+        tmp_path,
         ["--host", "pi.lan", "--port", "9000"],
-        settings_file=settings_file,
-        probe=_available,
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
+        webview=fake_webview,
+        settings={"servers": [{"host": "a.lan", "port": 8420}]},
     )
 
     assert launch_seams.secure_origin_targets == [[("a.lan", 8420), ("pi.lan", 9000)]]
     assert launch_seams.browser_origins == [("http://a.lan:8420", "http://pi.lan:9000")]
     assert launch_seams.events[:2] == ["apply_browser_arguments", "webview.start"]
-    bridge = fake_webview.created_windows[0][1]["js_api"]
-    assert bridge.getDesktopCapabilities()["secureOrigins"] == [
+    assert _bridge(fake_webview).getDesktopCapabilities()["secureOrigins"] == [
         "http://a.lan:8420",
         "http://pi.lan:9000",
     ]
 
 
+@pytest.mark.parametrize(
+    ("argv", "origin"),
+    [(["--host", "pi.lan", "--port", "9000"], "http://pi.lan:9000"), ([], None)],
+    ids=["connected", "connection-screen"],
+)
 def test_microphone_permission_follows_the_connected_server(
-    tmp_path: Path,
-    launch_seams: LaunchSeams,
+    tmp_path: Path, launch_seams: LaunchSeams, argv: list[str], origin: str | None
 ) -> None:
-    fake_webview = FakeWebview()
-
-    desktop_main.launch_desktop(
-        ["--host", "pi.lan", "--port", "9000"],
-        settings_file=tmp_path / "settings.json",
-        probe=_available,
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
+    _launch(tmp_path, argv)
 
     assert launch_seams.microphone_origin is not None
-    assert launch_seams.microphone_origin() == "http://pi.lan:9000"
-
-
-def test_microphone_permission_has_no_origin_before_a_server_connects(
-    tmp_path: Path,
-    launch_seams: LaunchSeams,
-) -> None:
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=_available,
-        webview_module=FakeWebview(),
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
-
-    # First run shows the connection screen: nothing may use the microphone yet.
-    assert launch_seams.microphone_origin is not None
-    assert launch_seams.microphone_origin() is None
+    assert launch_seams.microphone_origin() == origin
 
 
 def test_live_hotkey_runs_only_while_the_window_is_shown(
@@ -1266,13 +1003,7 @@ def test_live_hotkey_runs_only_while_the_window_is_shown(
     fake_webview = FakeWebview()
     fake_webview.launch_events = launch_seams.events
 
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=_available,
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
+    _launch(tmp_path, webview=fake_webview)
 
     assert launch_seams.events == [
         "apply_browser_arguments",
@@ -1281,8 +1012,7 @@ def test_live_hotkey_runs_only_while_the_window_is_shown(
         "hotkey.stop",
     ]
     assert launch_seams.hotkeys[0].settings_path == tmp_path / "settings.json"
-    bridge = fake_webview.created_windows[0][1]["js_api"]
-    assert bridge.getDesktopCapabilities()["liveHotkey"] is True
+    assert _bridge(fake_webview).getDesktopCapabilities()["liveHotkey"] is True
 
 
 def test_page_pushes_reach_the_window_page_until_it_closes(
@@ -1323,15 +1053,8 @@ def test_page_pushes_reach_the_window_page_until_it_closes(
 
     monkeypatch.setattr(desktop_page_events, "PageEventDispatcher", RecordingDispatcher)
     monkeypatch.setattr(desktop_main, "_create_voice", create_voice)
-    fake_webview = FakeWebview()
 
-    desktop_main.launch_desktop(
-        [],
-        settings_file=tmp_path / "settings.json",
-        probe=_available,
-        webview_module=fake_webview,
-        app_icon_path=tmp_path / "missing-icon.png",
-    )
+    fake_webview = _launch(tmp_path)
 
     dispatcher = dispatchers[0]
     assert dispatcher.window is fake_webview.window
@@ -1339,42 +1062,3 @@ def test_page_pushes_reach_the_window_page_until_it_closes(
     assert voice_sinks == [dispatcher]
     launch_seams.hotkeys[0].on_press()
     assert dispatcher.requests == [("toggle", "hotkey")]
-
-
-def test_create_voice_selects_the_mock_mode_from_the_flag(tmp_path: Path) -> None:
-    page_events = desktop_page_events.PageEventDispatcher()
-    voice = desktop_main._create_voice(
-        desktop_main.parse_args(["--mock-wakeword"]),
-        tmp_path / "settings.json",
-        "http://pi.lan:9000",
-        page_events,
-    )
-    try:
-        assert voice.status()["mode"] == "mock"
-    finally:
-        voice.close()
-        page_events.close()
-
-
-@pytest.mark.parametrize(
-    ("window_events", "expected_calls"),
-    [
-        ([], ["show"]),
-        (["minimized"], ["restore", "show"]),
-        (["maximized", "minimized"], ["maximize", "show"]),
-        (["maximized", "minimized", "restored"], ["show"]),
-        (["minimized", "maximized"], ["show"]),
-    ],
-)
-def test_window_focus_restores_a_minimized_window_to_its_previous_size(
-    window_events: list[str],
-    expected_calls: list[str],
-) -> None:
-    window = FakeWindow()
-    focus = desktop_main._WindowFocus(window)
-
-    for name in window_events:
-        getattr(window.events, name).emit()
-    focus.bring_to_front()
-
-    assert window.focus_calls == expected_calls

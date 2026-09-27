@@ -5,14 +5,16 @@ from __future__ import annotations
 import base64
 import inspect
 import logging
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from desktop import connection as desktop_connection
 from desktop.bridge import BridgeError, DesktopBridge
-from desktop.connection import PreparedConnection, ServerEntry
+from desktop.connection import ConnectionController
 from desktop.main import DesktopProbeResult, DesktopTarget
 from desktop.page_events import PageEventDispatcher
 from desktop.system_actions import DesktopSystemActions
@@ -51,45 +53,6 @@ class FakeVoice:
             return {"from": name}
 
         return call
-
-
-@dataclass
-class FakeConnection:
-    """Records the connection calls the bridge's server methods delegate to."""
-
-    connect_status: str = "webui_available"
-    active_url: str | None = None
-    prepare_calls: list[tuple[str, Any]] = field(default_factory=list)
-    add_calls: list[tuple[str, Any, str | None]] = field(default_factory=list)
-    remove_calls: list[tuple[str, Any]] = field(default_factory=list)
-    servers: list[ServerEntry] = field(default_factory=list)
-    remove_result: bool = True
-
-    def prepare_connect(self, host: str, port: Any, label: str | None = None) -> PreparedConnection:
-        self.prepare_calls.append((host, port))
-        target = DesktopTarget(host=str(host), port=port if isinstance(port, int) else 0, url="")
-        result = DesktopProbeResult(status=self.connect_status, target=target)
-        if self.connect_status == "webui_available":
-            return PreparedConnection(
-                result=result, navigation_url="http://pi.lan:9000/?accessor=desktop"
-            )
-        return PreparedConnection(
-            result=result, error_title="Server unreachable", error_body="Try again."
-        )
-
-    def add_server(self, host: str, port: Any, label: str | None = None) -> ServerEntry:
-        self.add_calls.append((host, port, label))
-        return ServerEntry(host=host, port=port, label=label)
-
-    def remove_server(self, host: str, port: Any) -> bool:
-        self.remove_calls.append((host, port))
-        return self.remove_result
-
-    def list_servers(self) -> list[ServerEntry]:
-        return list(self.servers)
-
-    def active_server_url(self) -> str | None:
-        return self.active_url
 
 
 class FakeHotkey:
@@ -188,32 +151,39 @@ def test_a_known_failure_rejects_with_exactly_its_error_code(
     assert logged in caplog.text
 
 
-def test_an_unexpected_failure_keeps_its_message_and_logs_the_traceback(
-    caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (OSError("disk full"), "disk full"),
+        (RuntimeError("timeout"), "The Desktop could not complete retryVoice"),
+    ],
+    ids=["keeps-its-message", "never-looks-like-an-error-code"],
+)
+def test_an_unexpected_failure_logs_its_traceback_and_rejects_without_an_error_code(
+    error: Exception, message: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    bridge, _ = _bridge(error=OSError("disk full"))
+    bridge, _ = _bridge(error=error)
 
     with (
         caplog.at_level(logging.ERROR, logger="vbot.desktop.bridge"),
-        pytest.raises(OSError, match="^disk full$"),
+        pytest.raises(type(error)) as rejected,
     ):
         bridge.retryVoice()
 
+    assert str(rejected.value) == message
     assert caplog.records[-1].exc_info is not None
 
 
-def test_an_unexpected_failure_never_looks_like_an_error_code() -> None:
-    bridge, _ = _bridge(error=RuntimeError("timeout"))
-
-    with pytest.raises(RuntimeError) as rejected:
-        bridge.retryVoice()
-
-    assert str(rejected.value) == "The Desktop could not complete retryVoice"
-
-
-def test_capabilities_announce_the_voice_bridge_version() -> None:
+@pytest.mark.parametrize(
+    ("hotkey", "live_hotkey"),
+    [(FakeHotkey(), True), (None, False), (FakeHotkey(supported=False), False)],
+    ids=["supported-hotkey", "no-hotkey", "unsupported-hotkey"],
+)
+def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
+    hotkey: FakeHotkey | None, live_hotkey: bool
+) -> None:
     bridge, _ = _bridge(
-        live_hotkey=FakeHotkey(), secure_origins=("http://a.lan:8420", "http://pi.lan:9000")
+        live_hotkey=hotkey, secure_origins=("http://a.lan:8420", "http://pi.lan:9000")
     )
 
     assert bridge.getDesktopCapabilities() == {
@@ -221,16 +191,9 @@ def test_capabilities_announce_the_voice_bridge_version() -> None:
         "voiceApi": 2,
         "serverSelection": True,
         "contextMenu": True,
-        "liveHotkey": True,
+        "liveHotkey": live_hotkey,
         "secureOrigins": ["http://a.lan:8420", "http://pi.lan:9000"],
     }
-
-
-@pytest.mark.parametrize("hotkey", [None, FakeHotkey(supported=False)])
-def test_capabilities_report_a_missing_or_unsupported_hotkey(hotkey: FakeHotkey | None) -> None:
-    bridge, _ = _bridge(live_hotkey=hotkey)
-
-    assert bridge.getDesktopCapabilities()["liveHotkey"] is False
 
 
 def test_system_actions_validate_and_delegate() -> None:
@@ -347,96 +310,105 @@ def test_live_hotkey_methods_delegate() -> None:
     assert hotkey.updates == [{"enabled": True}]
 
 
-def test_live_hotkey_methods_raise_without_a_hotkey() -> None:
-    bridge, _ = _bridge()
-
-    with pytest.raises(RuntimeError, match="not available"):
-        bridge.getLiveHotkey()
-    with pytest.raises(RuntimeError, match="not available"):
-        bridge.setLiveHotkey({"enabled": True})
-
-
 # -- Server selection ------------------------------------------------------------------
 
 
-def test_connect_prepares_the_result_for_javascript_navigation() -> None:
-    connection = FakeConnection()
-    bridge, _ = _bridge(connection=connection)
+def _server_bridge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str = "webui_available"
+) -> tuple[DesktopBridge, list[tuple[str, int]]]:
+    """A bridge over a real connection controller whose probe records its targets."""
 
-    result = bridge.connect("pi.lan", 9000)
+    monkeypatch.setattr(desktop_connection, "uuid4", lambda: SimpleNamespace(hex="s1"))
+    probed: list[tuple[str, int]] = []
 
-    assert connection.prepare_calls == [("pi.lan", 9000)]
-    assert result == {"status": "webui_available", "url": "http://pi.lan:9000/?accessor=desktop"}
+    def probe(target: DesktopTarget) -> DesktopProbeResult:
+        if target.configuration_error is not None:
+            return DesktopProbeResult(status="invalid_target", target=target)
+        probed.append((target.host, target.port))
+        return DesktopProbeResult(status=status, target=target)
+
+    controller = ConnectionController(settings_file=tmp_path / "settings.json", probe=probe)
+    bridge, _ = _bridge(connection=controller)
+    return bridge, probed
 
 
-def test_connect_reports_a_failure_status() -> None:
-    bridge, _ = _bridge(connection=FakeConnection(connect_status="server_unreachable"))
+@pytest.mark.parametrize("method", ["connect", "selectServer"])
+def test_connecting_returns_the_prepared_result_for_javascript_navigation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    bridge, probed = _server_bridge(tmp_path, monkeypatch)
+    failing, _ = _server_bridge(tmp_path / "failing", monkeypatch, "server_unreachable")
 
-    assert bridge.connect("pi.lan", 9000) == {
-        "status": "server_unreachable",
-        "error_title": "Server unreachable",
-        "error_body": "Try again.",
+    assert getattr(bridge, method)("pi.lan", 9000) == {
+        "status": "webui_available",
+        "url": "http://pi.lan:9000/?accessor=desktop&desktop_session=s1",
     }
+    assert probed == [("pi.lan", 9000)]
+    failure = getattr(failing, method)("pi.lan", 9000)
+    assert set(failure) == {"status", "error_title", "error_body"}
+    assert failure["status"] == "server_unreachable"
 
 
 @pytest.mark.parametrize(
-    ("port", "expected"),
-    [("9000", 9000), (" 9000 ", 9000), ("not-a-port", "not-a-port"), (True, 1), (9000, 9000)],
+    ("port", "probed_port"),
+    [("9000", 9000), (" 9000 ", 9000), (True, 1), (9000, 9000), ("not-a-port", None)],
 )
-def test_ports_are_coerced_where_possible(port: Any, expected: Any) -> None:
-    connection = FakeConnection()
-    bridge, _ = _bridge(connection=connection)
+def test_ports_are_coerced_where_possible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, port: Any, probed_port: int | None
+) -> None:
+    bridge, probed = _server_bridge(tmp_path, monkeypatch)
 
-    bridge.selectServer("pi.lan", port)
+    result = bridge.selectServer("pi.lan", port)
 
-    # Non-numeric input is left for the controller to reject with a clear message.
-    assert connection.prepare_calls == [("pi.lan", expected)]
-
-
-def test_list_servers_marks_the_active_server() -> None:
-    connection = FakeConnection(
-        servers=[ServerEntry("pi.lan", 9000, "Pi"), ServerEntry("10.0.0.5", 8500)],
-        active_url="http://pi.lan:9000/",
-    )
-    bridge, _ = _bridge(connection=connection)
-
-    assert bridge.listServers() == [
-        {"host": "pi.lan", "port": 9000, "label": "Pi", "active": True},
-        {"host": "10.0.0.5", "port": 8500, "active": False},
-    ]
+    # Non-numeric input reaches the controller, which rejects it with a clear message.
+    if probed_port is None:
+        assert probed == []
+        assert result["status"] == "invalid_target"
+    else:
+        assert probed == [("pi.lan", probed_port)]
 
 
-def test_list_servers_without_an_active_server() -> None:
-    connection = FakeConnection(servers=[ServerEntry("pi.lan", 9000)])
-    bridge, _ = _bridge(connection=connection)
+def test_servers_are_remembered_listed_with_the_active_one_and_forgotten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge, probed = _server_bridge(tmp_path, monkeypatch)
+    assert bridge.addServer("10.0.0.5", 8500, "") == {"host": "10.0.0.5", "port": 8500}
+    assert bridge.listServers() == [{"host": "10.0.0.5", "port": 8500, "active": False}]
 
-    assert bridge.listServers() == [{"host": "pi.lan", "port": 9000, "active": False}]
-
-
-def test_add_and_remove_server_delegate() -> None:
-    connection = FakeConnection(remove_result=True)
-    bridge, _ = _bridge(connection=connection)
-
+    bridge.connect("pi.lan", 9000)
     assert bridge.addServer("pi.lan", "9000", "Pi") == {
         "host": "pi.lan",
         "port": 9000,
         "label": "Pi",
     }
-    bridge.addServer("pi.lan", 9000, "")
-    assert bridge.removeServer("pi.lan", 9000) == {"removed": True}
-    assert connection.add_calls == [("pi.lan", 9000, "Pi"), ("pi.lan", 9000, None)]
-    assert connection.remove_calls == [("pi.lan", 9000)]
+
+    assert bridge.listServers() == [
+        {"host": "10.0.0.5", "port": 8500, "active": False},
+        {"host": "pi.lan", "port": 9000, "label": "Pi", "active": True},
+    ]
+    assert bridge.removeServer("10.0.0.5", "8500") == {"removed": True}
+    assert bridge.removeServer("10.0.0.5", 8500) == {"removed": False}
+    assert [server["host"] for server in bridge.listServers()] == ["pi.lan"]
+    assert probed == [("pi.lan", 9000)]
 
 
-def test_server_methods_raise_without_a_connection() -> None:
+def test_optional_services_raise_without_their_owner() -> None:
     bridge, _ = _bridge()
 
-    for call in (
+    hotkey_calls: tuple[Callable[[], object], ...] = (
+        bridge.getLiveHotkey,
+        lambda: bridge.setLiveHotkey({"enabled": True}),
+    )
+    for call in hotkey_calls:
+        with pytest.raises(RuntimeError, match="hotkey is not available"):
+            call()
+    server_calls: tuple[Callable[[], object], ...] = (
         lambda: bridge.connect("pi.lan", 9000),
         bridge.listServers,
         lambda: bridge.addServer("pi.lan", 9000),
         lambda: bridge.removeServer("pi.lan", 9000),
         lambda: bridge.selectServer("pi.lan", 9000),
-    ):
-        with pytest.raises(RuntimeError, match="not available"):
+    )
+    for call in server_calls:
+        with pytest.raises(RuntimeError, match="Server selection is not available"):
             call()

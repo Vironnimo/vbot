@@ -29,7 +29,13 @@ from desktop.wakeword.server_client import (
     VoiceServerClient,
     VoiceServerError,
 )
-from tests.desktop.voice_fakes import AmplitudeVad, FakeSubscription, silence, tone, wait_until
+from tests.desktop.wakeword.voice_test_support import (
+    AmplitudeVad,
+    FakeSubscription,
+    silence,
+    tone,
+    wait_until,
+)
 
 QUIET = 100  # audible background below the speech level
 

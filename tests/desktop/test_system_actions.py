@@ -1,4 +1,4 @@
-"""Tests for validated native Desktop system actions."""
+"""Validation of native Desktop system actions; the bridge test covers delegation."""
 
 from __future__ import annotations
 
@@ -7,28 +7,6 @@ from typing import Any, cast
 import pytest
 
 from desktop.system_actions import DesktopSystemActions
-
-
-def test_system_actions_delegate_valid_clipboard_and_browser_requests() -> None:
-    copied: list[str] = []
-    opened: list[str] = []
-
-    def open_url(url: str) -> bool:
-        opened.append(url)
-        return True
-
-    actions = DesktopSystemActions(
-        clipboard_writer=copied.append,
-        clipboard_reader=lambda: "paste me",
-        external_url_opener=open_url,
-    )
-
-    actions.set_clipboard_text("copy me")
-    assert actions.get_clipboard_text() == "paste me"
-    actions.open_external_url("https://example.com/path?q=1")
-
-    assert copied == ["copy me"]
-    assert opened == ["https://example.com/path?q=1"]
 
 
 @pytest.mark.parametrize(

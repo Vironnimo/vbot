@@ -55,6 +55,10 @@ def _voice_detail(script: str) -> dict[str, Any]:
     return detail
 
 
+# Deliveries are FIFO, so a delivered sentinel proves nothing else is still coming.
+SENTINEL = {"sequence": 99, "kind": "sent"}
+
+
 def _wait_until(condition: Callable[[], bool], timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
     while not condition():
@@ -125,11 +129,12 @@ def test_live_requests_never_block_the_producer_and_drop_excess(dispatchers: Any
     # once, four requests wait, and the rest are dropped.
     for _ in range(10):
         dispatcher.request_live("toggle", "hotkey")
+    dispatcher.publish_event(SENTINEL)
     release.set()
 
-    _wait_until(lambda: len(window.scripts) == 5)
-    time.sleep(0.05)
-    assert len(window.scripts) == 5
+    _wait_until(lambda: len(window.scripts) == 6)
+    assert sum("vbot-desktop-live" in script for script in window.scripts) == 5
+    assert _voice_detail(window.scripts[-1])["event"] == SENTINEL
 
 
 def test_stale_live_requests_are_dropped(dispatchers: Any) -> None:
@@ -159,9 +164,10 @@ def test_invalid_live_requests_are_ignored(dispatchers: Any, action: str, source
     dispatcher.attach_window(window)
 
     dispatcher.request_live(action, source)
-    dispatcher.close()
+    dispatcher.publish_event(SENTINEL)
 
-    assert window.scripts == []
+    _wait_until(lambda: len(window.scripts) == 1)
+    assert _voice_detail(window.scripts[0])["event"] == SENTINEL
 
 
 def test_missing_window_and_unhandled_page_are_only_logged(
@@ -205,7 +211,8 @@ def test_pushes_after_close_are_ignored(dispatchers: Any) -> None:
     dispatcher.publish_status({"sequence": 1})
     dispatcher.publish_event({"sequence": 2, "kind": "detected"})
 
-    time.sleep(0.05)
+    # Nothing can arrive to wait for, so a short bounded wait proves no delivery thread started.
+    assert not window.started.wait(timeout=0.05)
     assert window.scripts == []
 
 
@@ -240,15 +247,16 @@ def test_a_waiting_status_is_replaced_by_the_newest_snapshot(dispatchers: Any) -
     dispatcher.publish_status({"sequence": 2})
     dispatcher.publish_event({"sequence": 3, "kind": "detected"})
     dispatcher.publish_status({"sequence": 4})
+    dispatcher.publish_event(SENTINEL)
     release.set()
 
-    _wait_until(lambda: len(window.scripts) == 3)
-    time.sleep(0.05)
+    _wait_until(lambda: len(window.scripts) == 4)
     # The waiting snapshot keeps its place in the queue but carries the newest content.
     assert [_voice_detail(script) for script in window.scripts] == [
         {"type": "status", "status": {"sequence": 1}},
         {"type": "status", "status": {"sequence": 4}},
         {"type": "event", "event": {"sequence": 3, "kind": "detected"}},
+        {"type": "event", "event": SENTINEL},
     ]
 
 

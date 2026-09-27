@@ -17,7 +17,7 @@ from desktop.wakeword.capture import CaptureSubscription
 from desktop.wakeword.config import DEFAULT_MODEL_IDS, PhraseConfig
 from desktop.wakeword.detection import PRE_ROLL_SECONDS, Detection, DetectionLoop
 from desktop.wakeword.engine import MultiWakewordEngine, WakewordModelCatalog
-from tests.desktop.voice_fakes import (
+from tests.desktop.wakeword.voice_test_support import (
     AmplitudeVad,
     FakeSubscription,
     ScriptedEngine,
@@ -111,7 +111,9 @@ def start_loop() -> Iterator[Callable[..., Loop]]:
 
     yield start
     for state in loops:
+        # Like a stopping capture: the stop event plus a closed subscription end the loop at once.
         state.stop.set()
+        state.subscription.close()
         assert state.loop.join(5), "detection thread did not stop"
 
 
