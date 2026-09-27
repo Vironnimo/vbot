@@ -185,7 +185,7 @@ async def test_status_with_process_id_returns_non_consuming_snapshot(
     assert first_data["status"] == "completed"
     assert first_data["exit_code"] == 0
     assert first_data["output"].strip() == "snapshot-output"
-    assert first_data["truncated"] is False
+    assert "truncated" not in first_data
     assert "stdin_open" not in first_data
     assert "waiting_for_input" not in first_data
     assert first_data["log_file"] is None
@@ -320,7 +320,7 @@ def test_output_line_budget_preserves_text_and_log_reference(newline, line_count
     output = "".join(line.replace("\n", newline) for line in lines)
     log_file = "C:/logs/command.log" if has_log else None
     fields = process_module.shape_process_output(output, log_file=log_file)
-    assert fields["truncated"] is (line_count > 100)
+    assert fields.get("truncated", False) is (line_count > 100)
     assert len(fields["output"]) <= 8000
     if line_count > 100:
         marker, tail = fields["output"].split("\n", 1)
@@ -354,9 +354,9 @@ def test_output_shows_carriage_returns_as_a_terminal_leaves_them(output, shown):
 def test_output_character_budget_includes_marker(size, already_truncated):
     output = "x" * size
     fields = process_module.shape_process_output(output, truncated=already_truncated)
-    assert fields["truncated"] is (already_truncated or size > 8000)
+    assert fields.get("truncated", False) is (already_truncated or size > 8000)
     assert len(fields["output"]) <= 8000
-    if fields["truncated"]:
+    if fields.get("truncated"):
         assert output.endswith(fields["output"].split("\n", 1)[1])
     else:
         assert fields["output"] == output

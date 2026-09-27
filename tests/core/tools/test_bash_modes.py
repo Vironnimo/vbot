@@ -111,7 +111,7 @@ async def test_automatic_handoff_includes_capped_output_and_usable_process(
         assert isinstance(process_id, str) and process_id
         # Handoff can beat child startup or stdout collection. Its snapshot is
         # bounded even when the command has not produced its output yet.
-        assert isinstance(data["truncated"], bool)
+        assert data.get("truncated") in {None, True}
         assert len(data["output"]) <= 4000
         if "HANDOFF-END" in data["output"]:
             assert data["truncated"] is True
