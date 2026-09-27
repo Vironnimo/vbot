@@ -38,6 +38,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from heapq import heappush, heapreplace
+from os.path import commonprefix
 
 from core.tools.arguments import TEXT_LINE_BREAK, split_text_lines
 
@@ -52,6 +53,8 @@ _CANDIDATE_MIN_SIMILARITY = 0.60
 _CANDIDATE_RESULT_LIMIT = 3
 _CANDIDATE_OUTPUT_MAX_LINES = 8
 _CANDIDATE_OUTPUT_MAX_CHARS = 1_200
+# A copied line this similar to a file line is a reworded copy of it.
+_SIMILAR_LINE = 0.5
 
 # Visually-equivalent characters models emit in place of their ASCII forms, keyed
 # by code point so the source stays pure ASCII and the entries are unambiguous.
@@ -337,6 +340,108 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
         if len(candidates) >= _CANDIDATE_RESULT_LIMIT:
             break
     return candidates
+
+
+def first_difference(content: str, copy: str, start: int) -> dict[str, int | str | bool] | None:
+    """Locate where ``copy`` first differs from ``content`` near line ``start``.
+
+    ``start`` is the 1-based line of the closest candidate for ``copy``. Lines
+    compare with runs of whitespace collapsed. The result names the file line
+    and the copied line with 1-based character positions, and at most
+    240-character windows of both lines around the difference. ``None`` means
+    every copied line matches the file from the aligned position on.
+    """
+    file_lines = split_text_lines(content)
+    wanted_lines = split_text_lines(copy)
+    first = next((index for index, line in enumerate(wanted_lines) if line.strip()), 0)
+    aligned = _aligned_start(file_lines, start, wanted_lines, first)
+    for position, wanted in enumerate(wanted_lines[first:], first):
+        number = aligned + position - first
+        if number > len(file_lines):
+            return None
+        actual = file_lines[number - 1]
+        if _loose(actual) != _loose(wanted):
+            file_position, copy_position = _difference_positions(actual, wanted)
+            file_start, file_text = _difference_window(actual, file_position)
+            copy_start, copy_text = _difference_window(wanted, copy_position)
+            return {
+                "line": number,
+                "character": file_position + 1,
+                "copy_line": position + 1,
+                "copy_character": copy_position + 1,
+                "file_start": file_start,
+                "copy_start": copy_start,
+                "file": file_text,
+                "copy": copy_text,
+                "truncated": len(file_text) < len(actual) or len(copy_text) < len(wanted),
+            }
+    return None
+
+
+def _loose(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _difference_positions(actual: str, wanted: str) -> tuple[int, int]:
+    """Locate the first different token, ignoring earlier spacing-only differences."""
+    actual_words = list(re.finditer(r"\S+", actual))
+    wanted_words = list(re.finditer(r"\S+", wanted))
+    for file_word, copy_word in zip(actual_words, wanted_words, strict=False):
+        if file_word[0] != copy_word[0]:
+            shared = len(commonprefix((file_word[0], copy_word[0])))
+            return file_word.start() + shared, copy_word.start() + shared
+    shared_words = min(len(actual_words), len(wanted_words))
+    return (
+        actual_words[shared_words].start() if shared_words < len(actual_words) else len(actual),
+        wanted_words[shared_words].start() if shared_words < len(wanted_words) else len(wanted),
+    )
+
+
+def _difference_window(text: str, position: int) -> tuple[int, str]:
+    """Keep the actual mismatch in a bounded window, including a missing suffix."""
+    if len(text) <= 240:
+        return 1, text
+    start = max(0, position - 120)
+    return start + 1, text[start : start + 240]
+
+
+def _aligned_start(file_lines: list[str], start: int, wanted_lines: list[str], first: int) -> int:
+    """Return the file line where patch line ``first`` belongs.
+
+    A candidate window starts where its best-matching lines put it, so every line
+    the copy added or dropped before them shifts it. The first patch line the
+    file holds near the window fixes the alignment instead; the lines before it
+    belong directly above it. Lines without a word, such as a closing quote or
+    bracket, occur too often to fix it. When the file holds none of the patch
+    lines, patch line ``first`` belongs at the nearby file line most like its
+    start: a reworded copy resembles its line, and a copy that joins lines
+    starts like the first of them.
+    """
+    span = len(wanted_lines) - first
+    for position in range(first, len(wanted_lines)):
+        text = _loose(wanted_lines[position])
+        if not re.search(r"\w", text):
+            continue
+        expected = start - 1 + position - first
+        near = [
+            index
+            for index in range(max(0, expected - span), min(len(file_lines), expected + span + 1))
+            if _loose(file_lines[index]) == text
+        ]
+        if near:
+            index = min(near, key=lambda index: (abs(index - expected), index))
+            return max(1, index + 1 - (position - first))
+    text = _loose(wanted_lines[first])
+    expected = start - 1
+    scores = [
+        (SequenceMatcher(None, text[: len(line)], line).ratio(), index)
+        for index in range(max(0, expected - span), min(len(file_lines), expected + span + 1))
+        if len(line := _loose(file_lines[index])) >= 4 and re.search(r"\w", line)
+    ]
+    if not scores:
+        return start
+    similarity, index = max(scores, key=lambda score: (score[0], -abs(score[1] - expected)))
+    return index + 1 if similarity >= _SIMILAR_LINE else start
 
 
 def _normalize_newlines(text: str) -> str:

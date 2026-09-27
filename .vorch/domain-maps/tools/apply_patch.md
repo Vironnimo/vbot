@@ -186,8 +186,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   copied lines and from distinctive copied lines (at most 3 occurrences) the file
   holds exactly; a window at least 2 such lines place is shown even below the
   0.60 similarity floor (`find_closest_candidates`). The line-by-line comparison
-  starts at the first copied line with a word the file holds near the window
-  (`_aligned_start`), because a window starts wherever its best-matching lines
+  (`fuzzy_match.first_difference`, shared with Swarm Wiki edits) starts at the
+  first copied line with a word the file holds near the window, because a window starts wherever its best-matching lines
   put it, shifted by every line the copy added or dropped before them. Closing
   quotes and brackets occur too often to align by; when the file holds no other
   copied line there, the nearby file line most similar (>= 0.50) to the start of
