@@ -141,6 +141,7 @@ Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsd
 ```bash
 python -m pytest tests/core/tools/test_bash_modes.py   # file, directory, node id; -k/-x/--lf as usual
 python -m pytest --durations=25 tests/core/chat        # plus the slowest tests
+python -m pytest tests/core/calendar --cov=core/calendar --cov-branch   # coverage of an owner
 python -m ruff check --fix <paths>; python -m ruff format <paths>
 python -m mypy                                         # configured project; seconds with a warm cache
 cd webui && npx vitest run src/lib/__tests__/i18n.test.js
