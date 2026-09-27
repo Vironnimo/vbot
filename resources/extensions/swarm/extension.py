@@ -40,6 +40,7 @@ from ._extension_values import (
     _clamped_limit,
     _exact,
     _failure,
+    _inbox_available,
     _initial_message,
     _integer,
     _management_page,
@@ -51,7 +52,6 @@ from ._extension_values import (
     _string,
     _swarm_command_argument,
     _swarm_projection,
-    _tool_available,
     _validate_profile_catalog,
     _validate_state,
 )
@@ -60,6 +60,7 @@ from ._registration import session_tool_catalog
 from ._store_values import _validate_profile
 from ._store_wiki import MUTATIONS
 from ._tool_calls import normalize_board, normalize_inbox, normalize_state, normalize_wiki
+from ._wake_pacing import WakePacing
 from ._wiki_tool import WikiCall
 from .agent_text import (
     BOARD_PARAMETERS,
@@ -88,11 +89,17 @@ _TOOL_PARAMETERS = (
     ("swarm_wiki", WIKI_PARAMETERS, None),
 )
 # Accepted without being offered: a Participant's own identity copied from its
-# reminders, and the single action of the inbox and state Tools.
+# reminders, the single action of the inbox and state Tools, and explicit Board
+# recipients, which names in the post text replace.
 UNADVERTISED_PARAMETERS: dict[str, Json] = {
     name: {
         **({"action": {"type": "string", "enum": [action]}} if action else {}),
         **{field: {"type": "string"} for field in ("swarm_id", "participant_id", "sender")},
+        **(
+            {"recipients": {"type": "array", "items": {"type": "string"}}}
+            if name == "swarm_board"
+            else {}
+        ),
     }
     for name, _parameters, action in _TOOL_PARAMETERS
 }
@@ -132,6 +139,7 @@ class SwarmExtension:
         self._title_tasks: set[asyncio.Task[None]] = set()
         self._wake_tasks: dict[str, asyncio.Task[None]] = {}
         self._wake_dirty: set[str] = set()
+        self._pacing = WakePacing(self._enqueue_wakes)
         self._control_lock = asyncio.Lock()
 
     async def start(self, host: ExtensionHost) -> None:
@@ -160,6 +168,7 @@ class SwarmExtension:
             task.cancel()
         if self._title_tasks:
             await asyncio.gather(*self._title_tasks, return_exceptions=True)
+        self._pacing.close()
         for task in self._wake_tasks.values():
             task.cancel()
         if self._wake_tasks:
@@ -319,7 +328,7 @@ class SwarmExtension:
             data = status_data(
                 status,
                 Roster.of(swarm, binding.participant_id),
-                inbox=_tool_available(swarm, "swarm_inbox"),
+                inbox=_inbox_available(binding),
             )
             if status["has_more"]:
                 continuation = {**arguments, "cursor": status["cursor"]}
@@ -553,6 +562,7 @@ class SwarmExtension:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
             self._wake_dirty.discard(swarm_id)
+            self._pacing.forget(swarm_id)
             host = self.host
             if host is None or host.temporary_agents is None:
                 raise SwarmStoreError("swarm_closed")
@@ -581,6 +591,7 @@ class SwarmExtension:
         task = self._wake_tasks.get(result["swarm_id"])
         if task is not None:
             task.cancel()
+        self._pacing.forget(result["swarm_id"])
         report = await host.temporary_agents.close_group(result["swarm_id"], reason="swarm_stop")
         finished = await self._store().finish_stop(
             result["swarm_id"],
@@ -832,7 +843,10 @@ class SwarmExtension:
             handle = await host.temporary_agents.open_group(swarm_id)
             for participant in swarm["participants"]:
                 await self._store().prepare_wake(
-                    swarm_id, participant["id"], expected_epoch=swarm["epoch"]
+                    swarm_id,
+                    participant["id"],
+                    expected_epoch=swarm["epoch"],
+                    wake_routes=self._pacing.wake_routes(swarm_id, participant["id"]),
                 )
             while True:
                 page = await self._store().list_wake_intents(swarm_id, limit=100)
@@ -1101,7 +1115,7 @@ class SwarmExtension:
             prepared["pending_remaining"],
             Roster.of(swarm, binding.participant_id),
             swarm["main_discussion_id"],
-            inbox=_tool_available(swarm, "swarm_inbox"),
+            inbox=_inbox_available(binding),
         )
         return PreparedSessionDelivery(
             prepared["receipt_id"],
@@ -1130,6 +1144,9 @@ class SwarmExtension:
         owner = context.execution_owner
         if owner is None:
             return ToolBatchDecision(end=turn_end_requested)
+        if persisted_call_ids:
+            binding = context.binding
+            self._pacing.tool_used(binding.group_id, binding.participant_id, context.run_id)
         for _, receipt_id, _, _ in receipts:
             if not await self._store().reconcile_delivery(receipt_id):
                 raise SwarmStoreError("delivery_unacknowledged")
@@ -1158,6 +1175,12 @@ class SwarmExtension:
             if error.code in {"swarm_closed", "stale_epoch", "stale_run"}:
                 return
             raise
+        self._pacing.run_finished(
+            binding.group_id,
+            binding.participant_id,
+            context.run_id,
+            completed=terminal_outcome == "completed",
+        )
         if terminal_outcome == "completed":
             self._enqueue_wakes(binding.group_id)
         self._changed(binding.group_id, snapshot["settings_revision"])

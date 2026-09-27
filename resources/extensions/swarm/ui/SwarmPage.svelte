@@ -50,6 +50,12 @@
   });
   // The goal form is the page's home: "New run" is its navigation entry.
   const startVisible = $derived(!model.editor && !model.selectedSwarm);
+  // Same route names as the profile editor's delivery settings.
+  const routeLabels = $derived({
+    main: t('swarm.profile.mainMessages', 'Main discussion'),
+    discussion: t('swarm.profile.joinedMessages', 'Joined discussions'),
+    ping: t('swarm.profile.mentions', 'Direct mentions'),
+  });
 </script>
 
 {#snippet participantAvatar(id, name, kind = 'participant')}
@@ -476,8 +482,15 @@
                             id: post.reply_to,
                           })}</small
                         >{/if}{#if post.recipients?.length}<small
-                          >{t('swarm.board.pinged', 'Pinged: {names}', {
-                            names: post.recipients.join(', '),
+                          >{t('swarm.board.addressed', 'To: {names}', {
+                            names: post.recipients
+                              .map(
+                                (id) =>
+                                  model.selectedSwarm?.participants?.find(
+                                    (participant) => participant.id === id,
+                                  )?.display_name ?? id,
+                              )
+                              .join(', '),
                           })}</small
                         >{/if}
                     </li>{/each}
@@ -805,8 +818,8 @@
           ><FormField
             controlId="swarm-pings"
             label={t(
-              'swarm.board.pings',
-              'Ping participant IDs (comma-separated)',
+              'swarm.board.recipients',
+              'To participant IDs (optional, comma-separated)',
             )}
             ><input
               class="s-input"
@@ -886,7 +899,7 @@
     onClose={() => (model.settingsOpen = false)}
     >{#snippet body()}<div class="communication swarm-page-communication">
         {#each ['main', 'discussion', 'ping'] as route (route)}<section>
-            <h3>{t(`swarm.delivery.${route}`, route)}</h3>
+            <h3>{routeLabels[route]}</h3>
             <FormField
               controlId={`live-delivery-${route}`}
               label={t('swarm.delivery.mode', 'Mode')}

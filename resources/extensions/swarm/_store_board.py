@@ -30,6 +30,7 @@ from ._store_values import (
     _dump,
     _hash,
     _load,
+    mentioned_participants,
 )
 from .agent_text import DISCUSSION_ANNOUNCEMENT
 
@@ -64,7 +65,7 @@ def _post_message(
         target = None
         if reply_to is not None:
             target = connection.execute(
-                "SELECT discussion_id FROM posts WHERE id=? AND swarm_id=?",
+                "SELECT discussion_id,author_kind,author_id FROM posts WHERE id=? AND swarm_id=?",
                 (reply_to, swarm_id),
             ).fetchone()
             if target is None:
@@ -103,16 +104,16 @@ def _post_message(
             else "discussion"
             for row in members
         }
-        for recipient in recipients:
-            if (
-                connection.execute(
-                    "SELECT 1 FROM participants WHERE swarm_id=? AND id=?",
-                    (swarm_id, recipient),
-                ).fetchone()
-                is None
-            ):
-                raise SwarmStoreError("invalid_recipient")
-            audience[recipient] = "ping"
+        names = _roster_names(connection, swarm_id)
+        if any(recipient not in names for recipient in recipients):
+            raise SwarmStoreError("invalid_recipient")
+        answered = (
+            str(target["author_id"])
+            if target is not None and target["author_kind"] == "participant"
+            else None
+        )
+        addressed = _addressed(text, names, recipients, answered, sender_id)
+        audience.update(dict.fromkeys(addressed, "ping"))
         audience.pop(sender_id, None)
         sequence = int(
             connection.execute(
@@ -133,7 +134,7 @@ def _post_message(
                 name,
                 text,
                 reply_to,
-                _dump(list(recipients)),
+                _dump(addressed),
                 utc_now_timestamp(),
             ),
         )
@@ -150,6 +151,7 @@ def _post_message(
                 route: sum(1 for value in audience.values() if value == route)
                 for route in ("ping", "discussion", "main")
             },
+            "addressed": addressed,
         }
         connection.execute(
             "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
@@ -193,15 +195,9 @@ def _create_discussion(
                 (swarm_id,),
             ).fetchone()[0]
         )
-        for recipient in recipients:
-            if (
-                connection.execute(
-                    "SELECT 1 FROM participants WHERE swarm_id=? AND id=?",
-                    (swarm_id, recipient),
-                ).fetchone()
-                is None
-            ):
-                raise SwarmStoreError("invalid_recipient")
+        names = _roster_names(connection, swarm_id)
+        if any(recipient not in names for recipient in recipients):
+            raise SwarmStoreError("invalid_recipient")
         discussion_id = new_id("dsc")
         connection.execute(
             "INSERT INTO discussions(id,swarm_id,title,sequence,is_main,created_at) VALUES(?,?,?,?,0,?)",
@@ -268,6 +264,7 @@ def _insert_post(
     author_name: str | None,
 ) -> str:
     sender = _participant(connection, swarm_id, sender_id)
+    addressed = _addressed(text, _roster_names(connection, swarm_id), recipients, None, sender_id)
     sequence = int(
         connection.execute(
             "SELECT COALESCE(MAX(sequence),0)+1 FROM posts WHERE swarm_id=?", (swarm_id,)
@@ -286,7 +283,7 @@ def _insert_post(
             author_name or sender["display_name"],
             text,
             reply_to,
-            _dump(list(recipients)),
+            _dump(addressed),
             utc_now_timestamp(),
         ),
     )
@@ -298,7 +295,7 @@ def _insert_post(
             "SELECT participant_id FROM memberships WHERE discussion_id=?", (discussion_id,)
         )
     }
-    audience.update(dict.fromkeys(recipients, "ping"))
+    audience.update(dict.fromkeys(addressed, "ping"))
     audience.pop(sender_id, None)
     for recipient, route in audience.items():
         connection.execute(
@@ -306,6 +303,32 @@ def _insert_post(
             (post_id, recipient, route),
         )
     return post_id
+
+
+def _roster_names(connection: sqlite3.Connection, swarm_id: str) -> dict[str, str]:
+    return {
+        str(row["id"]): str(row["display_name"])
+        for row in connection.execute(
+            "SELECT id,display_name FROM participants WHERE swarm_id=? ORDER BY ordinal",
+            (swarm_id,),
+        )
+    }
+
+
+def _addressed(
+    text: str,
+    names: dict[str, str],
+    recipients: tuple[str, ...],
+    answered: str | None,
+    sender_id: str,
+) -> list[str]:
+    """Participants a post concerns, in roster order: explicit recipients, the
+    participants its text names, and the author of the post it answers."""
+
+    concerned = {*recipients, *mentioned_participants(text, names)}
+    if answered is not None:
+        concerned.add(answered)
+    return [participant_id for participant_id in names if participant_id in concerned - {sender_id}]
 
 
 def _membership(

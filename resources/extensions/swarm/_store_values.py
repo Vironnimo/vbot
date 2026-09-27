@@ -286,6 +286,28 @@ def _recipient_ids(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(sorted(set(values)))
 
 
+def mentioned_participants(text: str, names: Mapping[str, str]) -> list[str]:
+    """Return the IDs of participants whose display name or ID ``text`` contains as a word.
+
+    A name matches as the roster spells it, or in any case after "@". Longer
+    names match first, so "Zoe12" is never read as "Zoe".
+    """
+
+    by_name = {name: participant_id for participant_id, name in names.items()}
+    if not by_name:
+        return []
+    by_name.update({participant_id: participant_id for participant_id in names})
+    by_folded = {name.casefold(): participant_id for name, participant_id in by_name.items()}
+    alternation = "|".join(re.escape(name) for name in sorted(by_name, key=len, reverse=True))
+    found: list[str] = []
+    for match in re.finditer(rf"(?<!\w)(@?)({alternation})(?!\w)", text, re.IGNORECASE):
+        prefix, word = match.groups()
+        participant_id = by_name.get(word) or (by_folded.get(word.casefold()) if prefix else None)
+        if participant_id is not None and participant_id not in found:
+            found.append(participant_id)
+    return found
+
+
 def _limit(value: int) -> int:
     if type(value) is not int or not 1 <= value <= _MAX_LIMIT:
         raise SwarmStoreError("invalid_arguments", field="limit")

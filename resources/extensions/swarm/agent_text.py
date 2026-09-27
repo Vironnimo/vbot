@@ -2,13 +2,21 @@
 
 from typing import Any
 
+# Other participants receive a longer main-discussion post as its opening only.
+FULL_POST_CHARS = 1000
+OPENING_CHARS = 400
+
 BOARD_DESCRIPTION = (
     "Read and contribute to your group's shared Board. Use the main discussion for shared "
-    "conversation and coordination. Create an additional discussion when several Agents "
-    "need to work through a specific problem together; creating it joins it and announces "
-    "it in the main discussion. Every participant can read every discussion; joining one "
-    "makes its future posts reach you and returns its recent posts. Pending messages among "
-    "the posts you read count as received and are not delivered again."
+    "conversation and coordination. Write a participant's name in a post to address them; a "
+    "post reaches the participants it names or answers in full and without delay. Other "
+    f"participants receive a main-discussion post longer than {FULL_POST_CHARS} characters as its "
+    "opening lines with the call to read the rest, so state the main point first. Create an "
+    "additional discussion when several Agents need to work through a specific problem "
+    "together; creating it joins it and announces it in the main discussion. Every participant "
+    "can read every discussion; joining one makes its future posts reach you in full and "
+    "returns its recent posts. Pending messages among the posts you read count as received "
+    "and are not delivered again."
 )
 
 INBOX_DESCRIPTION = (
@@ -107,13 +115,6 @@ BOARD_PARAMETERS: dict[str, Any] = {
             "type": "string",
             "description": "Post ID to answer with post. Omit for a new message.",
         },
-        "recipients": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Participants to publicly ping with post or on the opening message "
-            'of create, by name or ID; "all" pings every other participant. Omit when no '
-            "explicit ping is needed.",
-        },
     },
     "required": ["action"],
 }
@@ -195,8 +196,9 @@ ERRORS = {
 BOARD_FOREIGN_ACTIONS = {
     "swarm_state": "swarm_board has no {action} action. Use swarm_state to see participants, "
     "their Run activity, and your pending message count.",
-    "swarm_inbox": "swarm_board has no {action} action. Use swarm_inbox to receive your pending "
-    "Board messages.",
+    "swarm_inbox": 'swarm_board has no {action} action. Use {{"action": "read"}} to read the '
+    "newest posts of the main discussion. If swarm_inbox is among your Tools, it receives all "
+    "your pending Board messages.",
     "swarm_wiki": "swarm_board has no {action} action. Use swarm_wiki to create, find, and edit "
     "shared pages.",
 }
@@ -231,7 +233,7 @@ STATE_PENDING = {
 STATE_ROUTES = {
     "main": "main-discussion posts",
     "discussion": "posts in discussions you joined",
-    "ping": "pings",
+    "ping": "posts that name or answer you",
 }
 STATE_DELIVERY = {
     "automatic": "{routes} reach you automatically, also while you are running.",
@@ -241,6 +243,11 @@ STATE_DELIVERY = {
 }
 STATE_WAKE = "{routes} start a Run when you are idle."
 STATE_NO_WAKE = "New messages do not start a Run when you are idle."
+STATE_WAKE_PACED = (
+    "After a Run in which you used no Tool, only posts by the user{addressed} start your next "
+    "Run at once; other posts wait up to {minutes} minutes."
+)
+STATE_WAKE_ADDRESSED = " and posts that name or answer you"
 STATE_PARTICIPANTS = "{count} ({totals})"
 STATE_ROSTER_HEADER = "Participants:"
 STATE_ROSTER_LINE = "- {name} ({participant_id}{you}): {state}"
@@ -259,7 +266,7 @@ MESSAGE_DISCUSSION_IGNORED = (
     "discussion_id was ignored: post {post_id} belongs to the discussion shown with it."
 )
 USER_RECIPIENT = (
-    "The user is not a participant and sees every Board post, so no ping was needed for the user."
+    "The user is not a participant and sees every Board post, so the user needs no recipient entry."
 )
 POST_BY_NUMBER = (
     '{field} "{value}" is not a post ID; this uses post {post_id}, which has that number.'
@@ -283,10 +290,14 @@ BOARD_ONE_POST = "Post {post_id} in {discussion}."
 BOARD_OLDER = "Older posts exist. Continue with {call}"
 BOARD_MORE_DISCUSSIONS = "More discussions exist. Continue with {call}"
 BOARD_USER_REQUEST = "Post {post_id} holds the user's request. Read it with {call}"
-BOARD_QUEUED = "Queued for {participants}{pinged}."
+BOARD_QUEUED = "Queued for {participants}."
 BOARD_PARTICIPANTS = {"one": "1 participant", "many": "{count} participants"}
 BOARD_QUEUED_NONE = "No other participant receives it; it stays readable on the Board."
-BOARD_PINGED = " ({count} pinged)"
+BOARD_ADDRESSED = "It reaches {names} in full without delay because it names or answers them."
+BOARD_OPENING = {
+    "one": "1 participant receives only its opening lines and the call to read the rest.",
+    "many": "{count} participants receive only its opening lines and the call to read the rest.",
+}
 BOARD_CREATED = "You joined it, and the main discussion announces it."
 BOARD_JOINED = "Joined. New posts in this discussion now reach you."
 BOARD_ALREADY_JOINED = "You had already joined; nothing changed."
@@ -300,7 +311,8 @@ BOARD_NOT_JOINED_DETAIL = "not joined"
 BOARD_MEMBERS_DETAIL = "members: {count}"
 BOARD_PENDING_DETAIL = "pending for you: {count}"
 POST_HEADER_REPLY = "reply to {post_id}"
-POST_HEADER_PINGED = "pinged {names}"
+POST_HEADER_TO = "to {names}"
+POST_SHORTENED = "[{count} more characters not shown. Read the whole post with swarm_board {call}]"
 POST_HEADER_IN = "in {discussion}"
 POST_HEADER_MAIN = "the main discussion {discussion_id}"
 POST_HEADER_DISCUSSION = '"{title}" {discussion_id}'
@@ -319,12 +331,12 @@ RECIPIENT_UNKNOWN = "recipients: {values} {verb} not a participant in your group
 RECIPIENT_SUGGESTIONS = "Did you mean {suggestions}?"
 RECIPIENT_ROSTER = "Participants: {roster}."
 RECIPIENT_RETRY = (
-    'Repeat the call with recipients {corrected}. Names also work, and "all" pings every other '
-    "participant. Nothing was saved."
+    'Repeat the call with recipients {corrected}. Names also work, and "all" addresses every '
+    "other participant. Nothing was saved."
 )
 RECIPIENT_CHOOSE = (
     'Repeat the call with recipients chosen from these participants; names also work, and "all" '
-    "pings every other participant. Nothing was saved."
+    "addresses every other participant. Nothing was saved."
 )
 REPLY_NOT_FOUND = 'reply_to "{value}" is not a post ID in your group.'
 POST_SUGGESTION = 'Did you mean post {post_id} by {author} in {discussion}: "{excerpt}"?'

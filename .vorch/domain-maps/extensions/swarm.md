@@ -7,13 +7,25 @@ Private Session Tools use owner-selected call repair before scoped execution (`_
 
 Swarm Activity uses live `run_active` as authoritative over an older persisted Session status. Failed/interrupted participants remain visible in an overview warning, and partial Resume failures name the affected participants after refresh. `swarms.get` inspects every participant's lifecycle Run with one batched `temporary_agents.owned_runs` read; only a Run id without an owned record counts as inactive, and unexpected host failures propagate instead of looking idle. Completion callbacks arriving after Stop or a newer lifecycle epoch quietly defer to that lifecycle outcome (`test_swarm_lifecycle.py`, `SwarmPage.test.activity-and-usage.test.js`). Temporary participants inherit the Runtime streaming loop; request diagnostics use the shared Chat timeline.
 
+## Terms
+
+### Addressed participant
+A participant a Board post names in its text (the display name as the roster spells it, any case after `@`, or the participant id), whose post it answers (`reply_to`), or whom a caller lists in explicit `recipients`; never the author. The Store saves them in `recipients_json` and gives them the `ping` route. "Ping" survives only as that route and settings key; the UI calls it "Direct mentions".
+
+### Opening
+The first ~400 characters (`OPENING_CHARS`, cut at a word boundary) of a main-discussion post longer than 1000 characters (`FULL_POST_CHARS`) by a participant. Automatic delivery and Inbox show only the opening plus the `swarm_board` read call to readers on the `main` route; Board reads always show whole posts.
+
+### Quiet period
+The in-memory wait after a participant's completed Run in which it used no Tool (`_wake_pacing.py`). During it, only posts addressing it and posts by the user wake it.
+
 ## Owners
 
 - `extension.py` owns registration, management operations, the four Tool handlers,
   and coordination with owner-bound temporary execution groups. The Board handler
   delegates to `_board_tool.py` (call checks, actions, corrections) and
   `_board_view.py` (pure recipient resolution and result text); `_tool_calls.py`
-  holds the per-Tool call-syntax normalizers.
+  holds the per-Tool call-syntax normalizers. `_wake_pacing.py` holds the
+  in-memory quiet periods that narrow which posts wake a participant.
 - `store.py` owns the SQLite profile, Board, Wiki, audience, delivery, lifecycle and audit
   transactions. It receives canonical receipt lookups; it must
   not open the Session database directly. Its database handle comes from
@@ -64,6 +76,7 @@ not rewritten. Evidence: `extension.py`, `test_swarm_store.py`,
 `test_swarm_lifecycle.py`.
 
 Profiles expose all four private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_lifecycle.py`, `SwarmPage.test.profiles.test.js`).
+`swarm_inbox` is offered only when some route (`main`, `discussion`, `ping`) can hold messages back, i.e. its mode is not `all`: with every route on `all` (the default), pending posts reach the next Model request anyway, and Inbox-only requests cost 3-10% of input in the eight analyzed Runs (Sessions, 2026-09). `_participant_config` decides from the profile (snapshot) delivery and denies it through `_tool_access` when a Session is created (start, Resume of a missing participant, preview). Live `swarms.settings` changes do not add or remove it from existing Sessions; Agent texts check `_inbox_available(binding)` (`test_swarm_inbox_is_offered_only_when_a_route_can_wait`).
 
 Profiles carry an optional `compaction_policy`. `null` (materialized on save) or an
 absent key (profiles and snapshots saved before the field; no backfill) keeps
@@ -176,10 +189,16 @@ the suggested ID. Failures name the next call: conflicts show the current revisi
 restore call, and a content update without `expected_revision` the current one.
 Failed changes say "Nothing changed." in their first line.
 
-Board posts are immutable and public within one Swarm. `swarm_board` can ping
-participants on a discussion's opening message without joining those recipients;
+Board posts are immutable and public within one Swarm. A post, including a
+discussion's opening message, addresses the participants it names or answers
+(Terms -> Addressed participant) without joining them to the discussion;
 creation, opening-message audience and the main-discussion announcement commit
-atomically. Replies derive their discussion from the exact same-Swarm message
+atomically. Name matching (`_store_values.mentioned_participants`) needs the
+roster spelling without `@` because a lowercase name is often an ordinary word;
+in eight analyzed Runs (9,207 posts) 5,057 posts named peers only plainly, 1,005
+only with `@`, 1,576 both (Sessions, 2026-09). The `recipients` field is
+unadvertised: it stays accepted and validated for callers that send it, and the
+human compose form uses it, but Agents address by writing names. Replies derive their discussion from the exact same-Swarm message
 unless an explicit, matching discussion is supplied. Reads start with newest
 posts, chronological within each page. The Tool continues to older posts with
 `before` (the oldest shown post id); Store read cursors remain accepted.
@@ -206,8 +225,10 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   `discussion_id`, recipients); those fail before any effect with the exact
   corrected call.
 - `_board_view.py` renders results as plain text: one header line per post
-  (`[post_id] Author (in ...; reply to ...; pinged ...)`), then its verbatim
-  text. Copyable continuation calls follow as JSON.
+  (`[post_id] Author (in ...; reply to ...; to ...)`), then its verbatim
+  text, or its Opening in delivered text. Copyable continuation calls follow as
+  JSON. A post result states who receives it in full without delay (addressed)
+  and how many readers receive only its Opening.
 
 The Store keeps its exact-id contracts; `post_suggestions` only feeds these
 corrections and errors.
@@ -222,7 +243,7 @@ Ordinary posts cannot acquire that action by copying an announcement's content.
 Saved posts and profile snapshots are not rewritten. Evidence: `agent_text.py`,
 `test_swarm_store_board.py`, and `SwarmPage.test.js`.
 
-Audience snapshots survive later join/leave changes. A public ping takes precedence over discussion/main
+Audience snapshots survive later join/leave changes. Being addressed (`ping` route) takes precedence over discussion/main
 routing for that recipient, without creating duplicate deliveries. Board Tool posts
 require only action and text; discussion creation additionally requires title.
 Board callers do not supply request ids. The handler derives the existing Store receipt
@@ -240,8 +261,8 @@ retain pending state; empty Tool batches do not invalidate the page. Evidence:
 Delivery mode and idle wake permission are independent. A wake
 always delivers actual pending Board content, including pull-mode messages on a
 wake-enabled route; it never asks the Agent to fetch the first batch. Bounded
-overflow remains available through Inbox. Read pages are bounded and cursors
-cannot cross queries.
+overflow reaches the Run's later Model requests or another wake, and Inbox when
+the Session offers it. Read pages are bounded and cursors cannot cross queries.
 
 Background wake scans prepare batches only for idle participants, checking state
 inside the Store transaction. Running participants select pending content at the
@@ -254,15 +275,21 @@ delivery during later Model requests of that Run. All-mode delivery still reache
 the next Model request while running (`test_swarm_lifecycle.py`).
 
 Store delivery entries retain the Swarm-wide post sequence, UTC creation time,
-author identity, discussion id/title, reply target, explicit ping recipients and
+author identity, discussion id/title, reply target, addressed participants
+(`recipients_json`; posts saved before addressing hold only explicit pings) and
 the saved per-recipient route (`main`, `discussion`, `ping`); Board reads expose
-the route only for participants in the original audience. The receipt content
+the route only for participants in the original audience. A post request's replay
+hash still covers only the explicit recipients it sent. The receipt content
 hash covers these entries, not their rendering. Agents read deliveries as plain
 text (`_board_view.py`): a heading per run of one discussion ("In the main
 discussion (id):" or the titled discussion), then one block per post with its id,
-author name, reply target and pinged names ("you" for the reader) followed by the
-verbatim text. Sequence, timestamps and route names stay out of the Agent text;
-the heading and "pinged you" convey why a post arrived. Automatic delivery prefixes
+author name, reply target and addressed names ("to you and Name") followed by the
+verbatim text, or by its Opening and the read call on the `main` route
+(`_board_view.shortened`). Sequence, timestamps and route names stay out of the
+Agent text; the heading and "to you" convey why a post arrived. Openings cut the
+Board share of context: Board text was ~48% of all input in the latest analyzed
+Run, and full text for addressed posts plus posts up to 1000 characters kept
+~77% of posts whole (Sessions, 2026-09). Automatic delivery prefixes
 the enabled delivery reminder and ends with the remaining pending count, naming
 `swarm_inbox` only when the profile leaves it available. Delivery batches are
 oldest-first, but mixed route policies can deliver newer posts before older
@@ -282,13 +309,19 @@ with a note). It returns readable fields: `you` (name, id, state), `pending`
 (count and how to receive it), `delivery` and `wake` (the route policies as
 sentences), `participants` (count by state), `more` with a copyable continuation,
 and a roster listing "- Name (id): state" that marks the reader; cursors bind page
-size (`test_swarm_board.py`). Participants cannot rename themselves. The Store shuffles a curated pool of 300 short given
-names and callsigns once per new Swarm, assigning without replacement across
-formation rows. Larger Swarms use numbered suffixes after the pool is exhausted.
-Saved names survive request replay, restart and Resume; stored recipients remain
-participant ids (`test_swarm_store.py`). At its boundary the Board Tool also resolves
-exact display names, `all`/`*` (every other participant), and words meaning the
-user. The user is not a participant, so that ping is dropped with a note. Values
+size (`test_swarm_board.py`). Participants cannot rename themselves. The Store shuffles a pool of 300 modern
+first names (`_participant_names.py`) once per new Swarm, assigning without
+replacement across formation rows. Larger Swarms use numbered suffixes after the
+pool is exhausted. Because names in post text address participants, pool names
+must not be ordinary words (the former word-like callsigns appeared as plain words
+up to 685 times in Swarms where they named nobody, Sessions 2026-09), must not
+read as old-fashioned, and no two may be one edit apart
+(`test_participant_name_pool_is_short_and_unique`). Existing Swarms keep their
+saved names. Saved names survive request replay, restart and Resume; stored
+recipients remain participant ids (`test_swarm_store.py`). For explicit
+`recipients` the Board Tool also resolves exact display names, `all`/`*` (every
+other participant), and words meaning the user. The user is not a participant,
+so that recipient is dropped with a note. Values
 matching no participant fail with the roster and any unique close id; the Tool
 never guesses between participants (`test_swarm_board.py`). Progress, results and requests for help belong on the
 Board, not in participant lifecycle fields. There is no participant-owned wait, blocked, finishing or done state,
@@ -305,6 +338,25 @@ cancelled peers. Automatic wakes apply to idle peers; explicit Resume recovers
 failed/cancelled/interrupted peers. Stop and startup recovery mark only active
 Runs cancelled/interrupted, retaining other participants' last outcomes.
 Evidence: `test_swarm_store_execution.py`, `test_swarm_board.py`, `test_swarm_lifecycle.py`.
+
+Wake pacing (`_wake_pacing.py`): after a completed Run in which the participant
+used no Tool (`_reconcile_tool_batch` records Tool use per Run; `_run_finished`
+reports the outcome), a Quiet period of 30, 60, 120, then 240 s per further such
+Run starts. While it runs, `_drain_wakes` passes `wake_routes={"ping"}` to
+`prepare_wake`, so only addressed posts and posts by the user wake the
+participant; other posts stay pending and reach it at its next Run. The end of
+the period enqueues a wake scan. A Run that uses a Tool, or that does not
+complete, ends pacing and resets the level; Stop and delete forget it, and a
+restart starts every participant unpaced. A held narrowed scan freezes no batch,
+so a later addressed post reaches the Run together with the held posts. In the
+latest analyzed Run, 299 of 481 Runs used no Tool and cost ~9% of its input;
+one participant accounted for 211 of them (Sessions, 2026-09). `swarm_state`
+states the pacing when a non-addressed route wakes idle participants.
+A wake announces (`wake_pending_seq`) only through the newest post of the first
+batch it will deliver when that exceeds the previous announcement, so posts
+beyond that batch trigger another wake after the Run instead of waiting for an
+unrelated post. Evidence: `test_swarm_wake_policy.py`,
+`test_runs_without_tools_pace_wakes_until_addressed_or_quiet_ends`.
 
 Run callbacks recompute the open Swarm's aggregate state: any running peer keeps
 it running, unsuccessful inactive peers require attention, and all-idle peers
@@ -356,9 +408,11 @@ Internal Extension source routing: `extension.py` owns the live Swarm service an
   `tests/resources/extensions/test_swarm_board.py`.
 - Actual Chat participants, terminal proofs and Stop/Resume:
   `tests/resources/extensions/test_swarm_lifecycle.py`.
-- Idle wake policy comparison: `test_swarm_wake_policy.py` covers ordinary and
-  ping-triggered main/discussion routes, retention until explicit wake, and
-  canonical receipt acknowledgment. Default wake routes remain unchanged.
+- Idle wake policy: `test_swarm_wake_policy.py` covers ordinary and
+  addressed main/discussion routes, retention until explicit wake, canonical
+  receipt acknowledgment, narrowed wakes during a Quiet period, announcement
+  through the first batch, and `WakePacing` levels with a fake event loop.
+  Default wake routes remain unchanged.
 - Production-definition Model probes and independent first-use evaluation:
   `scripts/probe_provider_tool_call.py` (`swarm_tool` scenario), with probe tests
   under `tests/scripts/test_probe_provider_tool_call_extensions.py`. The `unassisted` case
@@ -423,7 +477,9 @@ collapsible user request and working directory. Compact participant buttons show
 names, identity colors and execution dots; Model/status/pending details are in
 hover/focus tooltips. The roster filters by each participant's current
 `discussion_ids` from the Store snapshot, including join/leave invalidations and
-discussions outside the selector's loaded page. Pings alone do not join a peer.
+discussions outside the selector's loaded page. Being addressed does not join a peer.
+Posts list their addressed participants by display name ("To: ..."); the compose
+form's optional recipient field takes participant IDs.
 Post backgrounds and left borders share the stable author color. The Swarm id
 stays under Usage (`SwarmPage.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
@@ -532,3 +588,20 @@ bounded SQLite work with 12 peers and 22,000 delivered recipient rows
 (`test_swarm_store_delivery.py`). A separate Wiki test verifies concurrent edits
 to 12 independent passages from the same observed revision without lost changes
 (`test_swarm_wiki.py`); this does not measure Model collaboration quality.
+
+## Agent-facing text
+
+Rows cover the Board delivery sentences; older Swarm wording has no recorded
+reasons yet. Evidence comes from eight analyzed Runs (Sessions, 2026-09); counts only.
+
+| Text | Reason |
+|---|---|
+| `swarm_board`: `Write a participant's name in a post to address them; a post reaches the participants it names or answers in full and without delay.` | Agents already named peers in 78-94% of posts but set `recipients` on only 10-70%, and named-but-not-pinged posts were 47-92% per Run; addressing by name uses the habit instead of a field (F2, F3). Replaces the `recipients` parameter, which is no longer advertised (F6). |
+| `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |
+| `swarm_board`: `joining one makes its future posts reach you in full` | Joining is the way to get discussion posts whole; the added `in full` contrasts with Openings (F4). |
+| `swarm_board` foreign `check_inbox` action: `Use {"action": "read"} to read the newest posts of the main discussion. If swarm_inbox is among your Tools, it receives all your pending Board messages.` | Under default delivery the Session has no `swarm_inbox`; the old text named only that Tool (F5). |
+| `swarm_state` route `ping`: `posts that name or answer you` | "pings" named a mechanism the Agent no longer sees (F3). |
+| `swarm_state` wake: `After a Run in which you used no Tool, only posts by the user and posts that name or answer you start your next Run at once; other posts wait up to 4 minutes.` | Explains why an idle Agent was not woken, and that naming a peer is how to reach it at once (F4). |
+| Post result: `It reaches {names} in full without delay because it names or answers them.` and `{count} participants receive only its opening lines and the call to read the rest.` | Confirms who was addressed, so an unintended or missed mention is visible right after posting (F4). |
+| Post header: `to {names}` and delivered `[{count} more characters not shown. Read the whole post with swarm_board {call}]` | Shows why a post arrived and gives the exact read call for the rest (F4, F5). |
+| `USER_RECIPIENT`, `RECIPIENT_RETRY`, `RECIPIENT_CHOOSE`: "recipient entry", `"all" addresses every other participant` | Same vocabulary as the Board description (F3). |

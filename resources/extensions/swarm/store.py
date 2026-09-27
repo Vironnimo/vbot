@@ -396,9 +396,19 @@ class SwarmStore:
         )
 
     async def prepare_wake(
-        self, swarm_id: str, participant_id: str, *, expected_epoch: int, announce: bool = True
+        self,
+        swarm_id: str,
+        participant_id: str,
+        *,
+        expected_epoch: int,
+        announce: bool = True,
+        wake_routes: frozenset[str] | None = None,
     ) -> Json:
-        """Prepare idle delivery; explicit Resume does not announce an automatic wake."""
+        """Prepare idle delivery; explicit Resume does not announce an automatic wake.
+
+        ``wake_routes`` narrows which pending routes announce a wake; posts by the
+        user always do. ``None`` lets every route whose settings wake idle Agents.
+        """
         if type(expected_epoch) is not int or expected_epoch < 0:
             raise SwarmStoreError("invalid_arguments", field="expected_epoch")
         return await self._run(
@@ -409,6 +419,7 @@ class SwarmStore:
             None,
             True,
             announce,
+            wake_routes,
         )
 
     async def reconcile_delivery(self, receipt_id: str) -> bool:

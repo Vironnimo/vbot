@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 
 from core.sessions import DeliveryReceipt, SessionAddress
 from core.utils.ids import new_id
@@ -113,7 +114,14 @@ def _prepare_automatic_delivery(
     boundary: int | None,
     wake_only: bool,
     announce: bool = True,
+    wake_routes: frozenset[str] | None = None,
 ) -> Json:
+    def wakes(settings: Json, route: str, author_kind: str) -> bool:
+        # A narrowed wake still lets the user reach every idle participant at once.
+        return bool(settings[route]["wake_idle"]) and (
+            wake_routes is None or route in wake_routes or author_kind == "user"
+        )
+
     def operation(connection: sqlite3.Connection) -> Json:
         _assert_epoch(connection, swarm_id, expected_epoch)
         participant = _participant(connection, swarm_id, participant_id)
@@ -138,6 +146,7 @@ def _prepare_automatic_delivery(
             "ORDER BY created_at LIMIT 1",
             (participant_id,),
         ).fetchone()
+        announced = int(participant["wake_announced_seq"] or 0)
         if prepared is not None:
             newest = int(
                 connection.execute(
@@ -146,15 +155,22 @@ def _prepare_automatic_delivery(
                     (swarm_id, participant_id),
                 ).fetchone()[0]
             )
+            rows = connection.execute(
+                f"SELECT {ALIASED_POST_COLUMNS},r.route_class,d.title AS discussion_title FROM delivery_batch_entries e JOIN posts p ON p.id=e.post_id "
+                "JOIN recipients r ON r.post_id=p.id AND r.participant_id=e.participant_id "
+                "JOIN discussions d ON d.id=p.discussion_id "
+                "WHERE e.receipt_id=? ORDER BY p.sequence",
+                (prepared["receipt_id"],),
+            ).fetchall()
             wake = (
                 announce
-                and newest > int(participant["wake_announced_seq"] or 0)
+                and newest > announced
                 and not participant["wake_pending"]
                 and participant["state"] in {"idle"}
                 and any(
-                    settings[row["route_class"]]["wake_idle"]
+                    wakes(settings, row["route_class"], row["author_kind"])
                     for row in connection.execute(
-                        "SELECT r.route_class FROM recipients r JOIN posts p ON p.id=r.post_id "
+                        "SELECT r.route_class,p.author_kind FROM recipients r JOIN posts p ON p.id=r.post_id "
                         "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL",
                         (swarm_id, participant_id),
                     )
@@ -163,15 +179,8 @@ def _prepare_automatic_delivery(
             if wake:
                 connection.execute(
                     "UPDATE participants SET wake_epoch=?,wake_pending=1,wake_pending_seq=? WHERE id=?",
-                    (expected_epoch, newest, participant_id),
+                    (expected_epoch, _announced_through(rows, newest, announced), participant_id),
                 )
-            rows = connection.execute(
-                f"SELECT {ALIASED_POST_COLUMNS},r.route_class,d.title AS discussion_title FROM delivery_batch_entries e JOIN posts p ON p.id=e.post_id "
-                "JOIN recipients r ON r.post_id=p.id AND r.participant_id=e.participant_id "
-                "JOIN discussions d ON d.id=p.discussion_id "
-                "WHERE e.receipt_id=? ORDER BY p.sequence",
-                (prepared["receipt_id"],),
-            ).fetchall()
             return {
                 "entries": [_post(row) for row in rows],
                 "receipt_id": prepared["receipt_id"],
@@ -206,20 +215,31 @@ def _prepare_automatic_delivery(
         if not epoch["is_open"] or int(epoch["epoch"]) != expected_epoch:
             raise SwarmStoreError("stale_epoch")
         epoch_value = int(epoch["epoch"])
-        announced = int(participant["wake_announced_seq"] or 0)
         wake = bool(
             announce
             and newest > announced
             and not participant["wake_pending"]
-            and any(settings[row["route_class"]]["wake_idle"] for row in pending)
+            and any(wakes(settings, row["route_class"], row["author_kind"]) for row in pending)
             and participant["state"] in {"idle"}
+        )
+        rows = (
+            _pending_rows_from_rows(eligible, settings["batch_messages"], settings["batch_chars"])
+            if eligible
+            else []
         )
         if wake:
             connection.execute(
                 "UPDATE participants SET wake_epoch=?,wake_pending=1,wake_pending_seq=?,idle_boundary=? WHERE id=?",
-                (epoch_value, newest, resolved_boundary, participant_id),
+                (
+                    epoch_value,
+                    _announced_through(rows, newest, announced),
+                    resolved_boundary,
+                    participant_id,
+                ),
             )
-        if not eligible:
+        # A held wake freezes nothing, so the Run that eventually starts receives
+        # the posts pending then rather than a batch selected while it waited.
+        if not rows or (wake_routes is not None and not wake):
             return {
                 "entries": [],
                 "wake": wake,
@@ -227,9 +247,6 @@ def _prepare_automatic_delivery(
                 "settings_revision": int(settings_row["revision"]),
                 "admission_boundary": resolved_boundary,
             }
-        rows = _pending_rows_from_rows(
-            eligible, settings["batch_messages"], settings["batch_chars"]
-        )
         receipt_id = new_id("rcp")
         entries = [_post(row) for row in rows]
         content_hash = _hash(
@@ -267,6 +284,18 @@ def _prepare_automatic_delivery(
         }
 
     return db._write(operation)
+
+
+def _announced_through(rows: Sequence[sqlite3.Row], newest: int, announced: int) -> int:
+    """Return the sequence a wake announces: through the batch its Run receives first.
+
+    Posts beyond that batch stay unannounced, so if the Run ends before receiving
+    them they start another wake. The fallback to ``newest`` keeps announcements
+    strictly increasing, which the wake's admission key relies on.
+    """
+
+    delivered = max((int(row["sequence"]) for row in rows), default=0)
+    return delivered if delivered > announced else newest
 
 
 def _list_prepared_deliveries(db: SwarmDatabase, cursor: str | None, limit: int) -> Page:

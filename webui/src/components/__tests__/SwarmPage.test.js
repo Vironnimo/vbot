@@ -253,6 +253,8 @@ describe('SwarmPage', () => {
               kind: 'participant',
             },
             text: `message-${participant.id}`,
+            recipients:
+              participant === participants[0] ? [participants[1].id] : [],
             created_at: '2026-09-08T09:15:00+00:00',
           })),
         });
@@ -277,6 +279,10 @@ describe('SwarmPage', () => {
         expect(postAvatar.getAttribute('aria-hidden')).toBe('true');
         expect(post.querySelector('strong').textContent).toBe(
           participant.display_name,
+        );
+        // Addressed participants appear by name, not by id.
+        expect(post.textContent.includes('To: Participant 10')).toBe(
+          index === 0,
         );
         const color = postAvatar.style.getPropertyValue('--participant-color');
         expect(color).toBe(
