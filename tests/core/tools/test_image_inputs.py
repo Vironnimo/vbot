@@ -1,106 +1,84 @@
-"""The image Tools run clear calls in other dialects and explain unusable images."""
+"""analyze_image with local images: the calls it reads in other dialects, the images it
+cannot use, what failed analyses say, and what the row keeps."""
 
 from __future__ import annotations
 
-import os
+import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from core.chat import ChatMessage
 from core.model_tasks import (
-    ImageConfigurationError,
     ImageExecutionError,
+    ImageInputError,
+    ImageNotFoundError,
+    ImageTooLargeError,
     ImageUnderstandingRunContext,
+    ImageUnderstandingUnavailableError,
+    ImageUnsupportedMediaTypeError,
 )
-from core.providers.errors import (
-    NetworkError,
-    ProviderAuthError,
-    ProviderRateLimitError,
-)
-from core.tools import ToolContractError
-from core.tools.image import (
-    ANALYZE_IMAGE_TOOL_NAME,
-    IMAGE_GENERATION_TOOL_NAME,
-    register_analyze_image_tool,
-    register_image_generation_tool,
-)
-from core.tools.tools import ToolContext, ToolRegistry
+from core.providers.errors import NetworkError, ProviderAuthError, ProviderRateLimitError
+from core.tools import InvalidToolResultError
+from core.tools.image import ANALYZE_IMAGE_TOOL_NAME
 from core.utils.errors import ProviderError
-
-
-class _Service:
-    def __init__(self, error: Exception | None = None) -> None:
-        self.error = error
-        self.analyzed: tuple[str, tuple[Path, ...]] | None = None
-        self.generated: tuple[str, tuple[Path, ...]] | None = None
-
-    def generation_supports_source_images(self) -> bool:
-        return True
-
-    async def analyze(
-        self,
-        prompt: str,
-        *,
-        image_paths: tuple[Path, ...],
-        run_context: ImageUnderstandingRunContext,
-    ) -> object:
-        self.analyzed = (prompt, image_paths)
-        if self.error is not None:
-            raise self.error
-        return SimpleNamespace(content="A cat on a sofa.")
-
-    async def generate_artifacts(
-        self,
-        prompt: str,
-        *,
-        output_dir: Path,
-        call_options: dict[str, object] | None = None,
-        source_paths: tuple[Path, ...] = (),
-        usage_context: object = None,
-    ) -> tuple[object, ...]:
-        self.generated = (prompt, source_paths)
-        if self.error is not None:
-            raise self.error
-        return (
-            SimpleNamespace(file_path=output_dir / "a.png", media_type="image/png", size_bytes=3),
-        )
-
-
-def _context(root: Path, tool_name: str = ANALYZE_IMAGE_TOOL_NAME) -> ToolContext:
-    return ToolContext(
-        agent_id="agent",
-        session_id="session",
-        run_id="run",
-        tool_call_id="call",
-        tool_name=tool_name,
-        tool_call_index=0,
-        workspace=root,
-        vbot_root=root,
-        data_root=root,
-    )
+from tests.core.tools.image_test_support import (
+    ANALYSIS,
+    PNG,
+    ImageService,
+    analyze,
+    contract_refusal,
+    dispatch,
+    failure,
+    image_registry,
+    make_context,
+    write_image,
+)
 
 
 @pytest.fixture
 def photos(tmp_path: Path) -> Path:
-    (tmp_path / "photos").mkdir()
-    for name in ("cat.png", "garden.jpg"):
-        (tmp_path / "photos" / name).write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    """A Workspace with photos/cat.png, photos/garden.jpg and a text file."""
+    write_image(tmp_path / "photos" / "cat.png")
+    write_image(tmp_path / "photos" / "garden.jpg")
     (tmp_path / "notes.txt").write_text("text", encoding="utf-8")
     return tmp_path
 
 
-async def analyze(root: Path, arguments: Any, service: _Service | None = None) -> dict[str, Any]:
-    registry = ToolRegistry()
-    register_analyze_image_tool(registry, service or _Service(), attachment_store=None)
-    return await registry.dispatch(_context(root), arguments)
+@pytest.mark.asyncio
+async def test_analysis_reads_the_named_images_for_this_run(photos: Path) -> None:
+    service = ImageService()
+
+    result = await analyze(
+        photos,
+        {
+            "prompt": "Read the ingredients.",
+            "images": ["photos/cat.png", str(photos / "photos" / "garden.jpg")],
+        },
+        service,
+        iteration_number=4,
+    )
+
+    assert result == {"ok": True, "error": None, "data": {"analysis": ANALYSIS}, "artifacts": []}
+    assert service.analyzed == {
+        "prompt": "Read the ingredients.",
+        "paths": (
+            (photos / "photos" / "cat.png").resolve(),
+            (photos / "photos" / "garden.jpg").resolve(),
+        ),
+        "contents": [PNG, PNG],
+        "run_context": ImageUnderstandingRunContext(
+            run_id="run", agent_id="agent", session_id="session", iteration_number=4
+        ),
+    }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "arguments",
     [
+        {"prompt": "What animal?", "images": "photos/cat.png"},
         {"prompt": "What animal?", "image": "photos/cat.png"},
         {"question": "What animal?", "image_path": "photos/cat.png"},
         {"query": "What animal?", "imageUrl": "photos/cat.png"},
@@ -113,89 +91,148 @@ async def analyze(root: Path, arguments: Any, service: _Service | None = None) -
             "images": [{"type": "image_url", "image_url": {"url": "photos/cat.png"}}],
         },
         {"prompt": "What animal?", "images": ["photos/cat.png"], "image": "photos/cat.png"},
+        # A file URL keeps its drive letter on Windows.
+        {"prompt": "What animal?", "image_url": "<cat.png as file URL>"},
     ],
 )
 async def test_other_image_dialects_analyze_the_same_file(
     photos: Path, arguments: dict[str, Any]
 ) -> None:
-    service = _Service()
+    cat = (photos / "photos" / "cat.png").resolve()
+    arguments = {
+        name: cat.as_uri() if value == "<cat.png as file URL>" else value
+        for name, value in arguments.items()
+    }
+    service = ImageService()
 
     result = await analyze(photos, arguments, service)
 
-    assert result["data"] == {"analysis": "A cat on a sofa."}
-    assert service.analyzed == ("What animal?", ((photos / "photos" / "cat.png").resolve(),))
-
-
-@pytest.mark.asyncio
-async def test_a_file_url_names_the_local_file(photos: Path) -> None:
-    service = _Service()
-    url = (photos / "photos" / "cat.png").resolve().as_uri()
-
-    result = await analyze(photos, {"prompt": "What animal?", "image_url": url}, service)
-
-    assert result["ok"] is True
+    assert result["data"] == {"analysis": ANALYSIS}
     assert service.analyzed is not None
-    assert service.analyzed[1] == ((photos / "photos" / "cat.png").resolve(),)
+    assert (service.analyzed["prompt"], service.analyzed["paths"]) == ("What animal?", (cat,))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("arguments", "error"),
     [
-        (
+        pytest.param(
             {"prompt": "a", "image": "photos/cat.png", "images": ["photos/garden.jpg"]},
-            "Conflicting values for images",
+            contract_refusal(
+                'Conflicting values for images: image is "photos/cat.png" and images is '
+                '["photos/garden.jpg"]. Send only the intended one.'
+            ),
+            id="two-image-lists",
         ),
-        ({"prompt": "a", "question": "b", "images": ["photos/cat.png"]}, "Conflicting values"),
-        ({"images": ["photos/cat.png"]}, '"prompt" is required'),
+        pytest.param(
+            {"prompt": "a", "question": "b", "images": ["photos/cat.png"]},
+            contract_refusal(
+                'Conflicting values for prompt: prompt is "a" and question is "b". Send only '
+                "the intended one."
+            ),
+            id="two-prompts",
+        ),
+        pytest.param(
+            {"images": ["photos/cat.png"]},
+            contract_refusal(
+                "analyze_image was not run:\n"
+                '- "prompt" is required: What to inspect or extract, including the needed '
+                "detail or uncertainty.\n"
+                "analyze_image parameters: prompt (required), images (required)."
+            ),
+            id="no-prompt",
+        ),
+        pytest.param(
+            {"prompt": "   ", "images": ["photos/cat.png"]},
+            failure(
+                "invalid_arguments",
+                'Pass what to look for as prompt, for example {"prompt": "Read the text on '
+                'the label"}.',
+            ),
+            id="blank-prompt",
+        ),
+        pytest.param(
+            {"prompt": "a", "images": []},
+            contract_refusal('analyze_image was not run: "images" must not be empty.'),
+            id="no-images",
+        ),
+        pytest.param(
+            {"prompt": "a", "images": ["photos/cat.png"], "extra": True},
+            contract_refusal(
+                "analyze_image was not run:\n"
+                '- "extra" is not a parameter.\n'
+                "analyze_image parameters: prompt (required), images (required)."
+            ),
+            id="unknown-argument",
+        ),
     ],
 )
 async def test_unclear_calls_are_refused_before_analysis(
-    photos: Path, arguments: dict[str, Any], message: str
+    photos: Path, arguments: dict[str, Any], error: dict[str, Any]
 ) -> None:
-    service = _Service()
+    service = ImageService()
 
-    with pytest.raises(ToolContractError) as error:
-        await analyze(photos, arguments, service)
+    result = await analyze(photos, arguments, service)
 
-    assert message in str(error.value)
+    assert result["error"] == error
     assert service.analyzed is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("images", "message"),
+    ("images", "error"),
     [
-        (
+        pytest.param(
             ["photos/cat.jpg"],
-            "No image at photos/cat.jpg (similar: photos/cat.png).\n"
-            'If you meant that file, pass {"images": ["photos/cat.png"]}.',
+            failure(
+                "image_not_found",
+                "No image at photos/cat.jpg (similar: photos/cat.png).\n"
+                'If you meant that file, pass {"images": ["photos/cat.png"]}.',
+            ),
+            id="similar-file",
         ),
-        (
+        pytest.param(
             ["photos/cat.jpg", "photos/garden.jpg", "photo/garden.jpeg"],
-            "No image at photos/cat.jpg (similar: photos/cat.png).\n"
-            "No image at photo/garden.jpeg (similar: photos/garden.jpg).\n"
-            'If you meant those files, pass {"images": ["photos/cat.png", '
-            '"photos/garden.jpg", "photos/garden.jpg"]}.',
+            failure(
+                "image_not_found",
+                "No image at photos/cat.jpg (similar: photos/cat.png).\n"
+                "No image at photo/garden.jpeg (similar: photos/garden.jpg).\n"
+                'If you meant those files, pass {"images": ["photos/cat.png", '
+                '"photos/garden.jpg", "photos/garden.jpg"]}.',
+            ),
+            id="similar-files",
         ),
-        (
+        pytest.param(
             ["photos/cat.jpg", "photos/zebra.png"],
-            "No image at photos/cat.jpg (similar: photos/cat.png).\n"
-            "No image at photos/zebra.png, and no similar file is beside it.",
+            failure(
+                "image_not_found",
+                "No image at photos/cat.jpg (similar: photos/cat.png).\n"
+                "No image at photos/zebra.png, and no similar file is beside it.",
+            ),
+            id="no-similar-file",
+        ),
+        pytest.param(
+            ["photos"],
+            failure(
+                "image_read_error",
+                "photos is a folder, not an image. Pass image files from it, for example "
+                '{"images": ["photos/cat.png", "photos/garden.jpg"]}.',
+            ),
+            id="folder",
         ),
     ],
 )
-async def test_missing_images_name_similar_files_without_substituting(
-    photos: Path, images: list[str], message: str
+async def test_unusable_local_images_name_the_files_meant_without_substituting(
+    photos: Path, images: list[str], error: dict[str, Any]
 ) -> None:
-    service = _Service()
-    registry = ToolRegistry()
-    register_analyze_image_tool(registry, service, attachment_store=None)
-    context = _context(photos)
+    service = ImageService()
+    context = make_context(photos, ANALYZE_IMAGE_TOOL_NAME)
 
-    result = await registry.dispatch(context, {"prompt": "Describe", "images": images})
+    result = await dispatch(
+        image_registry(service), context, {"prompt": "Describe", "images": images}
+    )
 
-    assert result["error"] == {"code": "image_not_found", "message": message, "retryable": False}
+    assert result["error"] == error
     assert service.analyzed is None
     # The row still shows an unavailable-image placeholder for each requested path.
     assert [item["filename"] for item in context.presentation_images] == [
@@ -203,209 +240,154 @@ async def test_missing_images_name_similar_files_without_substituting(
     ]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("image", "message"),
-    [
-        (
-            "https://example.com/cat.png",
-            "source_images must be local image files; web addresses such as "
-            "https://example.com/cat.png cannot be opened. Save the image to a file first, "
-            "then pass that file's path.",
-        ),
-        (
-            "<https:/example.com/cat.png>",
-            "source_images must be local image files; web addresses such as "
-            "https://example.com/cat.png cannot be opened. Save the image to a file first, "
-            "then pass that file's path.",
-        ),
-        (
-            "data:image/png;base64,iVBORw0KGgo=",
-            "source_images must be local image files; data: URLs cannot be opened. Save the "
-            "image to a file first, then pass that file's path.",
-        ),
-    ],
-)
-async def test_generation_refuses_web_and_data_addresses_with_the_reason(
-    photos: Path, image: str, message: str
-) -> None:
-    service = _Service()
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-    context = _context(photos, IMAGE_GENERATION_TOOL_NAME)
-
-    result = await registry.dispatch(context, {"prompt": "Rainy", "source_images": [image]})
-
-    assert result["error"] == {"code": "invalid_arguments", "message": message, "retryable": False}
-    assert service.generated is None
-    assert context.presentation_images == []
-
-
-@pytest.mark.asyncio
-async def test_a_folder_names_the_images_inside_it(photos: Path) -> None:
-    result = await analyze(photos, {"prompt": "Describe", "images": ["photos"]})
-
-    assert result["error"]["code"] == "image_read_error"
-    assert result["error"]["message"] == (
-        "photos is a folder, not an image. Pass image files from it, for example "
-        '{"images": ["photos/cat.png", "photos/garden.jpg"]}.'
-    )
-
-
-def _failure(cause: Exception, *, retryable: bool = False) -> ImageExecutionError:
+def _provider_failure(
+    cause: Exception, status: int | None = None, *, retryable: bool = False
+) -> ImageExecutionError:
+    if status is not None:
+        cause.status_code = status  # type: ignore[attr-defined]
     try:
-        raise cause
-    except Exception as error:
-        try:
-            raise ImageExecutionError(str(error), retryable=retryable) from error
-        except ImageExecutionError as wrapped:
-            return wrapped
-
-
-def _with_status(error: Exception, status: int) -> Exception:
-    error.status_code = status  # type: ignore[attr-defined]
-    return error
+        raise ImageExecutionError(str(cause), retryable=retryable) from cause
+    except ImageExecutionError as error:
+        return error
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("error", "message"),
+    ("error", "expected"),
     [
-        (
-            _failure(
-                _with_status(
-                    ProviderAuthError(
-                        'Authentication error: 401 {"error": {"message": "Provided '
-                        'authentication token is expired."}}'
-                    ),
-                    401,
-                )
-            ),
-            "The image-understanding provider rejected its credentials (HTTP 401: Provided "
-            "authentication token is expired.). Tell the user to check that provider's API "
-            "key or sign-in in Settings.",
+        pytest.param(
+            ImageNotFoundError("missing"), failure("image_not_found", "missing"), id="not-found"
         ),
-        (
-            _failure(
-                _with_status(
-                    ProviderRateLimitError(
-                        'Rate limited: 429 {"error":{"type":"usage_limit_reached",'
-                        '"message":"The usage limit has been reached"}}'
-                    ),
-                    429,
+        pytest.param(
+            ImageInputError("bad image"), failure("image_read_error", "bad image"), id="bad-input"
+        ),
+        pytest.param(
+            ImageTooLargeError("too large"), failure("image_too_large", "too large"), id="too-large"
+        ),
+        pytest.param(
+            ImageUnsupportedMediaTypeError("unsupported"),
+            failure("unsupported_image_type", "unsupported"),
+            id="unsupported-type",
+        ),
+        pytest.param(
+            ImageUnderstandingUnavailableError("not configured"),
+            failure(
+                "image_understanding_unavailable",
+                "Image understanding is not available (not configured). Tell the user to "
+                "choose a working Image understanding model in Settings under Specialized "
+                "Models.",
+            ),
+            id="unavailable",
+        ),
+        pytest.param(
+            ImageExecutionError("rate limited", retryable=True, attempts_made=4),
+            failure(
+                "provider_error",
+                "The image-understanding provider failed (rate limited). Try again later.",
+                retryable=True,
+                attempts_made=4,
+            ),
+            id="retries-spent",
+        ),
+        pytest.param(
+            _provider_failure(
+                ProviderAuthError(
+                    'Authentication error: 401 {"error": {"message": "Provided '
+                    'authentication token is expired."}}'
                 ),
+                401,
+            ),
+            failure(
+                "provider_error",
+                "The image-understanding provider rejected its credentials (HTTP 401: Provided "
+                "authentication token is expired.). Tell the user to check that provider's API "
+                "key or sign-in in Settings.",
+            ),
+            id="credentials",
+        ),
+        pytest.param(
+            _provider_failure(
+                ProviderRateLimitError(
+                    'Rate limited: 429 {"error":{"type":"usage_limit_reached",'
+                    '"message":"The usage limit has been reached"}}'
+                ),
+                429,
                 retryable=True,
             ),
-            "The image-understanding provider is limiting requests or its usage limit is "
-            "reached (HTTP 429: The usage limit has been reached). Wait before trying again, "
-            "and tell the user if it keeps happening.",
-        ),
-        (
-            _failure(NetworkError("Connection reset by peer"), retryable=True),
-            "The image-understanding provider did not answer (Connection reset by peer). Try "
-            "again later.",
-        ),
-        (
-            _failure(
-                _with_status(
-                    ProviderError(
-                        "Provider error: 400 <html><head><title>Bad Request</title></head>"
-                        "<body>...</body></html>",
-                        retryable=False,
-                    ),
-                    400,
-                )
+            failure(
+                "provider_error",
+                "The image-understanding provider is limiting requests or its usage limit is "
+                "reached (HTTP 429: The usage limit has been reached). Wait before trying "
+                "again, and tell the user if it keeps happening.",
+                retryable=True,
             ),
-            "The image-understanding provider rejected the request (HTTP 400: Bad Request). "
-            "If the reason concerns the request, change it; otherwise tell the user, who may "
-            "need to choose another Image understanding model in Settings under Specialized "
-            "Models.",
+            id="rate-limit",
+        ),
+        pytest.param(
+            _provider_failure(NetworkError("Connection reset by peer"), retryable=True),
+            failure(
+                "provider_error",
+                "The image-understanding provider did not answer (Connection reset by peer). "
+                "Try again later.",
+                retryable=True,
+            ),
+            id="no-answer",
+        ),
+        pytest.param(
+            _provider_failure(
+                ProviderError(
+                    "Provider error: 400 <html><head><title>Bad Request</title></head>"
+                    "<body>...</body></html>",
+                    retryable=False,
+                ),
+                400,
+            ),
+            failure(
+                "provider_error",
+                "The image-understanding provider rejected the request (HTTP 400: Bad "
+                "Request). If the reason concerns the request, change it; otherwise tell the "
+                "user, who may need to choose another Image understanding model in Settings "
+                "under Specialized Models.",
+            ),
+            id="request-rejected",
         ),
     ],
 )
-async def test_provider_failures_say_what_happened_and_what_to_do(
-    photos: Path, error: ImageExecutionError, message: str
+async def test_failed_analyses_say_what_happened_and_what_to_do(
+    photos: Path, error: Exception, expected: dict[str, Any]
 ) -> None:
     result = await analyze(
-        photos, {"prompt": "Describe", "images": ["photos/cat.png"]}, _Service(error)
+        photos, {"prompt": "Describe", "images": ["photos/cat.png"]}, ImageService(error=error)
     )
 
-    assert result["error"]["code"] == "provider_error"
-    assert result["error"]["message"] == message
-    assert result["error"]["retryable"] is error.retryable
-
-
-async def generate(root: Path, arguments: Any, service: _Service) -> dict[str, Any]:
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-    return await registry.dispatch(_context(root, IMAGE_GENERATION_TOOL_NAME), arguments)
+    assert result["error"] == expected
 
 
 @pytest.mark.asyncio
-async def test_generation_source_aliases_and_missing_sources(photos: Path) -> None:
-    service = _Service()
+async def test_an_unexpected_failure_is_not_masked(photos: Path) -> None:
+    service = ImageService(error=RuntimeError("implementation defect"))
 
-    result = await generate(
-        photos, {"prompt": "make it rainy", "input_image": "photos/cat.png"}, service
-    )
-    assert result["ok"] is True
-    assert service.generated == ("make it rainy", ((photos / "photos" / "cat.png").resolve(),))
-
-    service = _Service()
-    result = await generate(
-        photos, {"prompt": "make it rainy", "source_images": ["photos/cat.jpg"]}, service
-    )
-    assert result["error"] == {
-        "code": "image_not_found",
-        "message": "No image at photos/cat.jpg (similar: photos/cat.png).\n"
-        'If you meant that file, pass {"source_images": ["photos/cat.png"]}.',
-        "retryable": False,
-    }
-    assert service.generated is None
+    with pytest.raises(RuntimeError, match="implementation defect"):
+        await analyze(photos, {"prompt": "Describe", "images": ["photos/cat.png"]}, service)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("error", "code", "message"),
-    [
-        (
-            ImageConfigurationError("No task model configured for image_generation"),
-            "image_error",
-            "Image generation is not available (No task model configured for "
-            "image_generation). Tell the user to choose a working Image generation model in "
-            "Settings under Specialized Models.",
-        ),
-        (
-            _failure(
-                _with_status(
-                    ProviderError(
-                        'Provider error: 400 {"error":{"message":"Invalid background_hex_color '
-                        '\\"\\": expected a #RRGGBB value"}}',
-                        retryable=False,
-                    ),
-                    400,
-                )
-            ),
-            "provider_error",
-            "The image-generation provider rejected the request (HTTP 400: Invalid "
-            'background_hex_color "": expected a #RRGGBB value). If the reason concerns the '
-            "request, change it; otherwise tell the user, who may need to choose another "
-            "Image generation model in Settings under Specialized Models.",
-        ),
-    ],
-)
-async def test_generation_failures_keep_their_code_and_name_the_fix(
-    tmp_path: Path, error: Exception, code: str, message: str
-) -> None:
-    result = await generate(tmp_path, {"prompt": "a red bicycle"}, _Service(error))
+def test_results_carry_only_the_analysis() -> None:
+    registry = image_registry(ImageService())
 
-    assert result["error"]["code"] == code
-    assert result["error"]["message"] == message
+    with pytest.raises(InvalidToolResultError):
+        registry.validate_result(
+            ANALYZE_IMAGE_TOOL_NAME,
+            {
+                "ok": True,
+                "error": None,
+                "data": {"analysis": ANALYSIS, "model": "vision-model"},
+                "artifacts": [],
+            },
+        )
 
 
-def test_display_shows_the_request_under_any_spelling(tmp_path: Path) -> None:
-    registry = ToolRegistry()
-    register_analyze_image_tool(registry, _Service(), attachment_store=None)
+def test_display_shows_the_request_under_any_spelling() -> None:
+    registry = image_registry(ImageService())
 
     display = registry.display_for_call(
         ANALYZE_IMAGE_TOOL_NAME, {"question": "What animal?", "image": "cat.png"}
@@ -414,16 +396,36 @@ def test_display_shows_the_request_under_any_spelling(tmp_path: Path) -> None:
     assert [part["value"] for part in display["primary"]] == ["What animal?"]
 
 
-@pytest.mark.skipif(os.name != "nt", reason="drive letters exist only on Windows")
 @pytest.mark.asyncio
-async def test_a_windows_file_url_keeps_its_drive(photos: Path) -> None:
-    service = _Service()
-    target = (photos / "photos" / "cat.png").resolve()
+@pytest.mark.parametrize("missing", [False, True])
+async def test_the_row_keeps_only_the_original_paths_without_writing_files(
+    tmp_path: Path, missing: bool
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    image = project / "original image.png"
+    if not missing:
+        write_image(image)
+    before = set(tmp_path.rglob("*"))
+    registry = image_registry(ImageService())
+    context = make_context(tmp_path, ANALYZE_IMAGE_TOOL_NAME, cwd=project)
+    arguments = {"prompt": "Inspect", "images": [image.name]}
 
-    result = await analyze(
-        photos, {"prompt": "What animal?", "images": [f"file:///{target.as_posix()}"]}, service
+    result = await dispatch(registry, context, arguments)
+    display = registry.display_for_call(
+        ANALYZE_IMAGE_TOOL_NAME, arguments, context=context, result=result
+    )
+    restored = ChatMessage.from_dict(
+        ChatMessage.tool(
+            tool_call_id="call",
+            name=ANALYZE_IMAGE_TOOL_NAME,
+            content=json.dumps(result),
+            tool_display=display,
+        ).to_dict()
     )
 
-    assert result["ok"] is True
-    assert service.analyzed is not None
-    assert service.analyzed[1] == (target,)
+    assert result["ok"] is not missing
+    assert restored.tool_display is not None
+    assert restored.tool_display["image_files"] == [{"path": str(image), "filename": image.name}]
+    assert result["artifacts"] == []
+    assert set(tmp_path.rglob("*")) == before

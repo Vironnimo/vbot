@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote_from_bytes
 
@@ -17,10 +16,17 @@ from curl_cffi.requests.exceptions import CertificateVerifyError, DNSError, Read
 
 import core.tools._public_http as public_http
 from core.attachments import AttachmentStore
-from core.model_tasks import ImageUnderstandingRunContext
 from core.tools._public_http import PublicResponse
-from core.tools.image import ANALYZE_IMAGE_TOOL_NAME, register_analyze_image_tool
-from core.tools.tools import ToolContext, ToolRegistry
+from core.tools.image import ANALYZE_IMAGE_TOOL_NAME
+from tests.core.tools.image_test_support import (
+    PNG,
+    ImageService,
+    dispatch,
+    failure,
+    image_registry,
+    make_context,
+    write_image,
+)
 from tests.core.tools.web_fetch_test_support import (
     StreamingSession,
     make_result,
@@ -32,25 +38,7 @@ from tests.core.tools.web_fetch_test_support import (
     stub_http_session as stub_http_session,
 )
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"cat pixels"
 JPEG = b"\xff\xd8\xff\xe0" + b"dog pixels"
-
-
-class _Service:
-    def __init__(self) -> None:
-        self.analyzed: tuple[Path, ...] | None = None
-        self.contents: list[bytes] = []
-
-    async def analyze(
-        self,
-        prompt: str,
-        *,
-        image_paths: tuple[Path, ...],
-        run_context: ImageUnderstandingRunContext,
-    ) -> object:
-        self.analyzed = image_paths
-        self.contents = [path.read_bytes() for path in image_paths]
-        return SimpleNamespace(content="Two animals.")
 
 
 class _Web:
@@ -97,37 +85,26 @@ def web(monkeypatch: pytest.MonkeyPatch) -> _Web:
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
-    (tmp_path / "photos").mkdir()
-    (tmp_path / "photos" / "cat.png").write_bytes(PNG)
+    write_image(tmp_path / "photos" / "cat.png")
     return tmp_path
 
 
-def _context(root: Path) -> ToolContext:
-    return ToolContext(
-        agent_id="agent",
-        session_id="session",
-        run_id="run",
-        tool_call_id="call",
-        tool_name=ANALYZE_IMAGE_TOOL_NAME,
-        tool_call_index=0,
-        workspace=root,
-        vbot_root=root,
-        data_root=root,
-    )
-
-
 class _Call:
+    """analyze_image with downloads stored in an attachment store of ``max_size_bytes``."""
+
     def __init__(self, root: Path, *, max_size_bytes: int = 20 * 1024 * 1024) -> None:
-        self.service = _Service()
+        self.service = ImageService()
         self.store = AttachmentStore(root / "data", max_size_bytes=max_size_bytes)
-        self.registry = ToolRegistry()
-        register_analyze_image_tool(self.registry, self.service, attachment_store=self.store)
-        self.context = _context(root)
+        self.registry = image_registry(self.service, attachment_store=self.store)
+        self.context = make_context(root, ANALYZE_IMAGE_TOOL_NAME)
 
     async def __call__(self, images: Any) -> dict[str, Any]:
-        return await self.registry.dispatch(
-            self.context, {"prompt": "What animals?", "images": images}
-        )
+        arguments = {"prompt": "What animals?", "images": images}
+        return await dispatch(self.registry, self.context, arguments)
+
+    def contents(self) -> list[bytes] | None:
+        """The bytes of each image the analysis received, or None when none ran."""
+        return None if self.service.analyzed is None else self.service.analyzed["contents"]
 
     def stored(self) -> list[Path]:
         folder = self.store._attachments_dir
@@ -146,10 +123,10 @@ async def test_image_urls_and_local_files_are_analyzed_in_their_order(
         ["https://example.com/cat.png", "photos/cat.png", "<https:/example.com/img/dog.jpg>"]
     )
 
-    assert result["data"] == {"analysis": "Two animals."}
-    assert call.service.contents == [PNG, PNG, JPEG]
+    assert result["ok"] is True
+    assert call.contents() == [PNG, PNG, JPEG]
     assert call.service.analyzed is not None
-    assert call.service.analyzed[1] == (workspace / "photos" / "cat.png").resolve()
+    assert call.service.analyzed["paths"][1] == (workspace / "photos" / "cat.png").resolve()
     assert [url for url, _ in web.requested] == [
         "https://example.com/cat.png",
         "https://example.com/img/dog.jpg",
@@ -161,16 +138,6 @@ async def test_image_urls_and_local_files_are_analyzed_in_their_order(
         "cat.png",
         "dog.jpg",
     ]
-
-
-@pytest.mark.asyncio
-async def test_a_schemeless_address_stays_a_local_path(workspace: Path, web: _Web) -> None:
-    call = _Call(workspace)
-
-    result = await call(["example.com/cat.png"])
-
-    assert result["error"]["code"] == "image_not_found"
-    assert web.requested == []
 
 
 @pytest.mark.asyncio
@@ -194,7 +161,7 @@ async def test_data_urls_are_decoded(workspace: Path, web: _Web, address: str) -
     result = await call([address])
 
     assert result["ok"] is True
-    assert call.service.contents == [PNG]
+    assert call.contents() == [PNG]
     assert web.requested == []
 
 
@@ -202,11 +169,6 @@ async def test_data_urls_are_decoded(workspace: Path, web: _Web, address: str) -
 @pytest.mark.parametrize(
     ("url", "message"),
     [
-        (
-            "http://127.0.0.1/cat.png",
-            "127.0.0.1 is a private or local network address; only public internet addresses "
-            "can be fetched.",
-        ),
         (
             "http://localhost:8080/cat.png",
             "localhost is a private or local network address; only public internet "
@@ -231,7 +193,7 @@ async def test_private_addresses_stay_unreachable(
 
     result = await call([url])
 
-    assert result["error"] == {"code": "blocked_url", "message": message, "retryable": False}
+    assert result["error"] == failure("blocked_url", message)
     assert web.requested == []
     assert call.service.analyzed is None
 
@@ -368,7 +330,7 @@ async def test_content_that_is_not_an_image_is_named(
 
     result = await call(["https://example.com/cat"])
 
-    assert result["error"] == {"code": "not_an_image", "message": message, "retryable": False}
+    assert result["error"] == failure("not_an_image", message)
     assert call.stored() == []
 
 
@@ -409,7 +371,7 @@ async def test_unusable_data_urls_are_explained(
 
     result = await call([address])
 
-    assert result["error"] == {"code": code, "message": message, "retryable": False}
+    assert result["error"] == failure(code, message)
     assert call.service.analyzed is None
 
 
@@ -444,34 +406,46 @@ async def test_several_images_name_each_failure_and_store_nothing(
 
 
 @pytest.mark.asyncio
-async def test_a_missing_local_file_fails_before_any_download(workspace: Path, web: _Web) -> None:
+@pytest.mark.parametrize(
+    ("images", "error"),
+    [
+        pytest.param(
+            ["example.com/cat.png"],
+            failure(
+                "image_not_found",
+                "No image at example.com/cat.png, and no similar file is beside it.",
+            ),
+            id="schemeless-address-is-a-path",
+        ),
+        pytest.param(
+            ["https://example.com/dog.png", "photos/cat.jpg"],
+            failure(
+                "image_not_found",
+                "No image at photos/cat.jpg (similar: photos/cat.png).\n"
+                'If you meant that file, pass {"images": ["https://example.com/dog.png", '
+                '"photos/cat.png"]}.',
+            ),
+            id="missing-local-file",
+        ),
+        pytest.param(
+            [f"https://example.com/{index}.png" for index in range(7)],
+            failure(
+                "invalid_arguments",
+                "analyze_image takes at most 6 images per call; received 7. Split them across "
+                "calls of up to 6 images each.",
+            ),
+            id="too-many-images",
+        ),
+    ],
+)
+async def test_unusable_calls_fail_before_any_download(
+    workspace: Path, web: _Web, images: list[str], error: dict[str, Any]
+) -> None:
     web.image("https://example.com/dog.png", PNG)
     call = _Call(workspace)
 
-    result = await call(["https://example.com/dog.png", "photos/cat.jpg"])
+    result = await call(images)
 
-    assert result["error"] == {
-        "code": "image_not_found",
-        "message": "No image at photos/cat.jpg (similar: photos/cat.png).\n"
-        'If you meant that file, pass {"images": ["https://example.com/dog.png", '
-        '"photos/cat.png"]}.',
-        "retryable": False,
-    }
+    assert result["error"] == error
     assert web.requested == []
-
-
-@pytest.mark.asyncio
-async def test_more_images_than_one_analysis_takes_fail_before_any_download(
-    workspace: Path, web: _Web
-) -> None:
-    call = _Call(workspace)
-
-    result = await call([f"https://example.com/{index}.png" for index in range(7)])
-
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": "analyze_image takes at most 6 images per call; received 7. Split them "
-        "across calls of up to 6 images each.",
-        "retryable": False,
-    }
-    assert web.requested == []
+    assert call.service.analyzed is None

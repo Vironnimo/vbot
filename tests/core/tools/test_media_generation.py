@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,8 +15,9 @@ from core.tools.media_generation import (
     register_generate_music_tool,
     register_generate_video_tool,
 )
-from core.tools.tools import ToolContext, ToolDefinitionProfileContext, ToolRegistry
+from core.tools.tools import ToolDefinitionProfileContext, ToolRegistry
 from core.utils.paths import model_path
+from tests.core.tools.image_test_support import make_context, write_image
 
 
 def test_video_profile_only_exposes_configured_model_capabilities(tmp_path: Path) -> None:
@@ -48,8 +48,8 @@ async def test_video_tool_resolves_frames_and_caller_owned_default(tmp_path: Pat
     service = _VideoService(tmp_path / "video.mp4", {"duration", "first_frame"})
     registry = ToolRegistry()
     register_generate_video_tool(registry, service)
-    context = _context(tmp_path, GENERATE_VIDEO_TOOL_NAME)
-    _image(tmp_path / "start.png")
+    context = make_context(tmp_path, GENERATE_VIDEO_TOOL_NAME)
+    write_image(tmp_path / "start.png")
 
     result = await registry.dispatch(
         context,
@@ -93,8 +93,8 @@ async def test_music_tool_returns_local_artifact_facts(tmp_path: Path) -> None:
         [GENERATE_MUSIC_TOOL_NAME], profile_context=profile_context
     )
     contract = registry.contracts_for_provider_definitions(definitions)[GENERATE_MUSIC_TOOL_NAME]
-    context = replace(_context(tmp_path, GENERATE_MUSIC_TOOL_NAME), input_contract=contract)
-    _image(tmp_path / "cover.png")
+    context = make_context(tmp_path, GENERATE_MUSIC_TOOL_NAME, input_contract=contract)
+    write_image(tmp_path / "cover.png")
 
     result = await registry.dispatch(
         context,
@@ -115,11 +115,11 @@ async def test_video_tool_accepts_other_spellings_and_empty_options(tmp_path: Pa
     service = _VideoService(tmp_path / "video.mp4", {"first_frame", "last_frame", "resolution"})
     registry = ToolRegistry()
     register_generate_video_tool(registry, service)
-    start = _image(tmp_path / "start.png")
-    end = _image(tmp_path / "end.png")
+    start = write_image(tmp_path / "start.png")
+    end = write_image(tmp_path / "end.png")
 
     result = await registry.dispatch(
-        _context(tmp_path, GENERATE_VIDEO_TOOL_NAME),
+        make_context(tmp_path, GENERATE_VIDEO_TOOL_NAME),
         {
             "prompt": "A river at dawn",
             "start_frame": "start.png",
@@ -140,10 +140,10 @@ async def test_missing_frame_names_the_similar_file_as_a_single_path(tmp_path: P
     service = _VideoService(tmp_path / "video.mp4", {"first_frame"})
     registry = ToolRegistry()
     register_generate_video_tool(registry, service)
-    _image(tmp_path / "start.png")
+    write_image(tmp_path / "start.png")
 
     result = await registry.dispatch(
-        _context(tmp_path, GENERATE_VIDEO_TOOL_NAME),
+        make_context(tmp_path, GENERATE_VIDEO_TOOL_NAME),
         {"prompt": "A river at dawn", "first_frame": "start.jpg"},
     )
 
@@ -161,10 +161,10 @@ async def test_music_source_alias_and_provider_wording(tmp_path: Path) -> None:
     service = _MusicService(tmp_path / "music.mp3", supports_images=True)
     registry = ToolRegistry()
     register_generate_music_tool(registry, service)
-    cover = _image(tmp_path / "cover.png")
+    cover = write_image(tmp_path / "cover.png")
 
     result = await registry.dispatch(
-        _context(tmp_path, GENERATE_MUSIC_TOOL_NAME),
+        make_context(tmp_path, GENERATE_MUSIC_TOOL_NAME),
         {"prompt": "Dreamy synthwave", "reference_images": "cover.png"},
     )
     assert result["ok"] is True
@@ -177,7 +177,7 @@ async def test_music_source_alias_and_provider_wording(tmp_path: Path) -> None:
     except MusicExecutionError as error:
         service.error = error
     result = await registry.dispatch(
-        _context(tmp_path, GENERATE_MUSIC_TOOL_NAME), {"prompt": "Dreamy synthwave"}
+        make_context(tmp_path, GENERATE_MUSIC_TOOL_NAME), {"prompt": "Dreamy synthwave"}
     )
     assert result["error"]["code"] == "provider_error"
     assert result["error"]["message"] == (
@@ -194,7 +194,7 @@ async def test_video_failures_keep_request_fixes_and_reword_provider_refusals(
     service = _VideoService(tmp_path / "video.mp4", {"duration"})
     registry = ToolRegistry()
     register_generate_video_tool(registry, service)
-    context = _context(tmp_path, GENERATE_VIDEO_TOOL_NAME)
+    context = make_context(tmp_path, GENERATE_VIDEO_TOOL_NAME)
 
     service.error = VideoConfigurationError(
         "duration must be one of the values supported by the configured model: 5, 10."
@@ -211,25 +211,6 @@ async def test_video_failures_keep_request_fixes_and_reword_provider_refusals(
         "safety filter). If the reason concerns the request, change it; otherwise "
         "tell the user, who may need to choose another Video generation model in Settings "
         "under Specialized Models."
-    )
-
-
-def _image(path: Path) -> Path:
-    path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
-    return path
-
-
-def _context(tmp_path: Path, tool_name: str) -> ToolContext:
-    return ToolContext(
-        agent_id="agent",
-        session_id="session",
-        run_id="run",
-        tool_call_id="tool-call",
-        tool_name=tool_name,
-        tool_call_index=0,
-        workspace=tmp_path,
-        vbot_root=tmp_path,
-        data_root=tmp_path,
     )
 
 

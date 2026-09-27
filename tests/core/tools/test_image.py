@@ -1,751 +1,341 @@
-"""Tests for the image_generation built-in tool."""
+"""image_generation: the profile the configured model allows, the files it returns, where
+they go, source images, and what refused or failed calls say."""
 
 from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from core.model_tasks import (
-    ImageExecutionError,
-    ImageInputError,
-    ImageNotFoundError,
-    ImageOutcomeUnknownError,
-    ImageReadError,
-    ImageTooLargeError,
-    ImageUnderstandingRunContext,
-    ImageUnderstandingUnavailableError,
-    ImageUnsupportedMediaTypeError,
-)
-from core.tools import InvalidToolResultError, ToolContractError
+from core.model_tasks import ImageConfigurationError, ImageExecutionError, ImageOutcomeUnknownError
 from core.tools.image import (
-    ANALYZE_IMAGE_TOOL_DESCRIPTION,
-    ANALYZE_IMAGE_TOOL_NAME,
-    ANALYZE_IMAGE_TOOL_PARAMETERS,
     IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
-    IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS,
     IMAGE_GENERATION_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_NAME,
-    make_image_generation_handler,
-    register_analyze_image_tool,
-    register_image_generation_tool,
 )
-from core.tools.tools import ToolContext, ToolDefinitionProfileContext, ToolRegistry
+from core.tools.tools import ToolDefinitionProfileContext, ToolRegistry
+from core.utils.errors import ProviderError
 from core.utils.paths import model_path
+from tests.core.tools.image_test_support import (
+    ImageService,
+    contract_refusal,
+    dispatch,
+    failure,
+    generate,
+    image_registry,
+    make_context,
+    write_image,
+)
+
+_TEXT_ONLY_REFUSAL = (
+    "The configured image model only generates from text, so it cannot use source_images. "
+    "Remove source_images, or ask the user to choose an Image generation model that accepts "
+    "images in Settings under Specialized Models."
+)
 
 
-def test_image_generation_profile_matches_configured_model_capability(tmp_path: Path) -> None:
-    text_only_service = _ImageService(
-        tmp_path / "text.png",
-        supports_source_images=False,
-    )
-    editing_service = _ImageService(
-        tmp_path / "editing.png",
-        supports_source_images=True,
-    )
-    text_only_registry = ToolRegistry()
-    editing_registry = ToolRegistry()
-    register_image_generation_tool(text_only_registry, text_only_service)
-    register_image_generation_tool(editing_registry, editing_service)
-    profile_context = ToolDefinitionProfileContext(agent_id="agent-1")
-
-    text_only = text_only_registry.provider_definitions(
+def _definition(registry: ToolRegistry) -> dict[str, Any]:
+    [definition] = registry.provider_definitions(
         [IMAGE_GENERATION_TOOL_NAME],
-        profile_context=profile_context,
+        profile_context=ToolDefinitionProfileContext(agent_id="agent"),
     )
-    editing = editing_registry.provider_definitions(
-        [IMAGE_GENERATION_TOOL_NAME],
-        profile_context=profile_context,
-    )
+    return definition
 
-    text_only_properties = text_only[0]["parameters"]["properties"]
-    editing_properties = editing[0]["parameters"]["properties"]
-    assert text_only[0]["description"] == IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION
-    assert "additionalProperties" not in text_only[0]["parameters"]
-    assert "additionalProperties" not in editing[0]["parameters"]
-    assert text_only_registry.get(IMAGE_GENERATION_TOOL_NAME).open_input_schema is True
-    assert editing_registry.get(IMAGE_GENERATION_TOOL_NAME).open_input_schema is True
-    assert "source_images" not in text_only_properties
-    assert {"prompt", "aspect_ratio", "resolution", "output_dir"} == set(text_only_properties)
-    assert editing[0]["description"] == IMAGE_GENERATION_TOOL_DESCRIPTION
-    assert "source_images" in editing_properties
-    assert text_only == text_only_registry.provider_definitions(
-        [IMAGE_GENERATION_TOOL_NAME],
-        profile_context=profile_context,
-    )
+
+def test_profile_offers_source_images_only_to_a_model_that_edits() -> None:
+    text_only_registry = image_registry(ImageService(supports_source_images=False))
+    text_only = _definition(text_only_registry)
+    editing = _definition(image_registry(ImageService(supports_source_images=True)))
+
+    assert text_only == _definition(text_only_registry)
+    assert text_only["description"] == IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION
+    assert editing["description"] == IMAGE_GENERATION_TOOL_DESCRIPTION
+    fields = {"prompt", "aspect_ratio", "resolution", "output_dir"}
+    assert set(text_only["parameters"]["properties"]) == fields
+    assert set(editing["parameters"]["properties"]) == fields | {"source_images"}
+    for parameters in (text_only["parameters"], editing["parameters"]):
+        assert "additionalProperties" not in parameters
+        assert parameters["required"] == ["prompt"]
+        assert parameters["properties"]["output_dir"]["description"]
 
 
 @pytest.mark.asyncio
-async def test_image_generation_text_only_profile_rejects_source_images_in_handler(
-    tmp_path: Path,
-) -> None:
-    service = _ImageService(
-        tmp_path / "unused.png",
-        supports_source_images=False,
-    )
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-    definitions = registry.provider_definitions(
-        [IMAGE_GENERATION_TOOL_NAME],
-        profile_context=ToolDefinitionProfileContext(agent_id="agent-1"),
-    )
-    contract = registry.contracts_for_provider_definitions(definitions)[IMAGE_GENERATION_TOOL_NAME]
-    arguments = {"prompt": "make it rainy", "source_images": ["photo.png"]}
+async def test_generated_images_are_returned_as_local_file_facts(tmp_path: Path) -> None:
+    service = ImageService(image_path=tmp_path / "artifact-1.png")
+    registry = image_registry(service)
+    context = make_context(tmp_path, IMAGE_GENERATION_TOOL_NAME)
 
-    # The advertised text-only contract rejects the parameter before the handler.
-    with pytest.raises(ToolContractError, match='"source_images" is not a parameter'):
-        await registry.dispatch(
-            replace(_make_context(tmp_path), input_contract=contract), arguments
-        )
-    # A call validated against the full schema still meets the handler guard.
-    result = await registry.dispatch(_make_context(tmp_path), arguments)
+    result = await dispatch(registry, context, {"prompt": "a red fox"})
 
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-    assert service.received_prompt is None
-
-
-@pytest.mark.asyncio
-async def test_image_generation_tool_returns_model_file_facts(tmp_path: Path) -> None:
-    image_path = tmp_path / "artifact-1.png"
-    service = _ImageService(image_path)
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-    tool = registry.get(IMAGE_GENERATION_TOOL_NAME)
-    assert "additionalProperties" not in tool.parameters
-    assert "additionalProperties" not in IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS
-    assert tool.open_input_schema is True
-    output_dir_parameter = tool.parameters["properties"]["output_dir"]
-    assert output_dir_parameter["type"] == "string"
-    assert isinstance(output_dir_parameter["description"], str)
-    assert output_dir_parameter["description"]
-    assert "output_dir" not in tool.parameters["required"]
-    context = _make_context(tmp_path)
-
-    result = await registry.dispatch(context, {"prompt": "a red fox"})
-
-    assert result["ok"] is True
-    assert result["artifacts"] == []
-    data = result["data"]
-    assert isinstance(data, dict)
     # Model-facing data carries the path and useful file facts, without transport identity.
-    assert data == {
-        "images": [
-            {
-                "path": model_path(image_path),
-                "media_type": "image/png",
-                "size_bytes": 5,
-            }
-        ]
+    assert result == {
+        "ok": True,
+        "error": None,
+        "data": {
+            "images": [
+                {
+                    "path": model_path(tmp_path / "artifact-1.png"),
+                    "media_type": "image/png",
+                    "size_bytes": 5,
+                }
+            ]
+        },
+        "artifacts": [],
     }
     display = registry.display_for_call(
-        IMAGE_GENERATION_TOOL_NAME,
-        {"prompt": "a red fox"},
-        context=context,
-        result=result,
+        IMAGE_GENERATION_TOOL_NAME, {"prompt": "a red fox"}, context=context, result=result
     )
     assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": False}]
-    assert service.received_output_dirs == [tmp_path / "image-gen"]
 
 
 @pytest.mark.asyncio
-async def test_image_generation_output_directory_follows_agent_kind(tmp_path: Path) -> None:
-    workspace = tmp_path / "identity-workspace"
-    project_cwd = tmp_path / "project"
-    service = _ImageService(tmp_path / "artifact.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-    identity_context = replace(
-        _make_context(tmp_path),
-        workspace=workspace,
-        cwd=project_cwd,
+@pytest.mark.parametrize(
+    ("project_id", "output_dir", "expected"),
+    [
+        pytest.param(None, None, "workspace/image-gen", id="identity-default"),
+        pytest.param("project-1", None, "project/image-gen", id="project-default"),
+        pytest.param(None, "   ", "workspace/image-gen", id="blank"),
+        pytest.param(None, "assets/generated", "project/assets/generated", id="relative"),
+        pytest.param(None, "<tmp>/exports", "exports", id="absolute"),
+    ],
+)
+async def test_images_go_to_the_callers_directory(
+    tmp_path: Path, project_id: str | None, output_dir: str | None, expected: str
+) -> None:
+    service = ImageService()
+    arguments: dict[str, Any] = {"prompt": "a red fox"}
+    if output_dir is not None:
+        arguments["output_dir"] = output_dir.replace("<tmp>", str(tmp_path))
+
+    result = await generate(
+        tmp_path / "workspace",
+        arguments,
+        service,
+        cwd=tmp_path / "project",
+        project_id=project_id,
     )
-    config_context = replace(identity_context, project_id="project-1")
 
-    identity_result = await registry.dispatch(identity_context, {"prompt": "identity image"})
-    config_result = await registry.dispatch(config_context, {"prompt": "project image"})
-
-    assert identity_result["ok"] is True
-    assert config_result["ok"] is True
-    assert service.received_output_dirs == [
-        workspace / "image-gen",
-        project_cwd / "image-gen",
-    ]
+    assert result["ok"] is True
+    assert service.output_dirs == [(tmp_path / expected).resolve()]
 
 
 @pytest.mark.asyncio
-async def test_image_generation_resolves_explicit_output_directory_from_working_directory(
+@pytest.mark.parametrize(
+    ("arguments", "call_options", "sources"),
+    [
+        pytest.param(
+            {"aspect_ratio": "16:9", "resolution": "4K", "source_images": ["photo.png"]},
+            {"aspect_ratio": "16:9", "resolution": "4K"},
+            ("photo.png",),
+            id="canonical",
+        ),
+        pytest.param({"source_images": "<root>/photo.png"}, {}, ("photo.png",), id="one-path"),
+        pytest.param(
+            {"source_images": {"path": "photo.png"}}, {}, ("photo.png",), id="one-path-object"
+        ),
+        pytest.param({"input_image": "photo.png"}, {}, ("photo.png",), id="other-spelling"),
+    ],
+)
+async def test_the_call_reaches_the_image_model(
     tmp_path: Path,
+    arguments: dict[str, Any],
+    call_options: dict[str, str],
+    sources: tuple[str, ...],
 ) -> None:
-    workspace = tmp_path / "identity-workspace"
-    project_cwd = tmp_path / "project"
-    service = _ImageService(tmp_path / "artifact.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-    context = replace(
-        _make_context(tmp_path),
-        workspace=workspace,
-        cwd=project_cwd,
-    )
+    write_image(tmp_path / "photo.png")
+    service = ImageService()
+    arguments = {
+        name: value.replace("<root>", str(tmp_path)) if isinstance(value, str) else value
+        for name, value in arguments.items()
+    }
 
-    result = await registry.dispatch(
-        context,
-        {"prompt": "identity image", "output_dir": "assets/generated"},
-    )
+    result = await generate(tmp_path, {"prompt": "make it rainy", **arguments}, service)
 
     assert result["ok"] is True
-    assert service.received_output_dirs == [(project_cwd / "assets" / "generated").resolve()]
+    assert service.generated == {
+        "prompt": "make it rainy",
+        "call_options": call_options,
+        "source_paths": tuple((tmp_path / name).resolve() for name in sources),
+    }
 
 
 @pytest.mark.asyncio
-async def test_image_generation_accepts_absolute_output_directory(tmp_path: Path) -> None:
-    output_dir = tmp_path / "exports"
-    service = _ImageService(tmp_path / "artifact.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-
-    result = await registry.dispatch(
-        _make_context(tmp_path),
-        {"prompt": "export image", "output_dir": str(output_dir)},
-    )
-
-    assert result["ok"] is True
-    assert service.received_output_dirs == [output_dir.resolve()]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("blank", ["", "   "])
-async def test_image_generation_blank_output_directory_uses_the_default(
-    tmp_path: Path, blank: str
+@pytest.mark.parametrize(
+    ("arguments", "error"),
+    [
+        pytest.param(
+            {"prompt": "   "},
+            failure(
+                "invalid_arguments",
+                'Describe the image as prompt, for example {"prompt": "A red bicycle against '
+                'a white wall, studio photograph"}.',
+            ),
+            id="blank-prompt",
+        ),
+        pytest.param(
+            {"prompt": "a", "unexpected": True},
+            contract_refusal(
+                "image_generation was not run:\n"
+                '- "unexpected" is not a parameter.\n'
+                "image_generation parameters: prompt (required), source_images, aspect_ratio, "
+                "resolution, output_dir."
+            ),
+            id="unknown-argument",
+        ),
+        pytest.param(
+            {"prompt": "a", "aspect_ratio": "  ", "resolution": ""},
+            contract_refusal(
+                r'image_generation was not run: "aspect_ratio" must match the pattern .*\S.*; '
+                'received "  ".'
+            ),
+            id="blank-options",
+        ),
+        pytest.param(
+            {"prompt": "a", "source_images": []},
+            contract_refusal('image_generation was not run: "source_images" must not be empty.'),
+            id="no-source-images",
+        ),
+        pytest.param(
+            {"prompt": "a", "source_images": {"path": "a.png", "url": "b.png"}},
+            contract_refusal(
+                'image_generation was not run: "source_images[0]" must be a string; received '
+                "an object."
+            ),
+            id="two-paths-in-one-object",
+        ),
+        pytest.param(
+            {"prompt": "a", "source_images": ["photo.jpg"]},
+            failure(
+                "image_not_found",
+                "No image at photo.jpg (similar: photo.png).\n"
+                'If you meant that file, pass {"source_images": ["photo.png"]}.',
+            ),
+            id="missing-source",
+        ),
+        *(
+            pytest.param(
+                {"prompt": "a", "source_images": [address]},
+                failure(
+                    "invalid_arguments",
+                    f"source_images must be local image files; {reason} cannot be opened. Save "
+                    "the image to a file first, then pass that file's path.",
+                ),
+                id=f"web-address-{index}",
+            )
+            for index, (address, reason) in enumerate(
+                [
+                    (
+                        "https://example.com/cat.png",
+                        "web addresses such as https://example.com/cat.png",
+                    ),
+                    (
+                        "<https:/example.com/cat.png>",
+                        "web addresses such as https://example.com/cat.png",
+                    ),
+                    ("data:image/png;base64,iVBORw0KGgo=", "data: URLs"),
+                ]
+            )
+        ),
+    ],
+)
+async def test_unusable_calls_are_refused_before_generating(
+    tmp_path: Path, arguments: dict[str, Any], error: dict[str, Any]
 ) -> None:
-    service = _ImageService(tmp_path / "artifact.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
+    write_image(tmp_path / "photo.png")
+    service = ImageService()
+    context = make_context(tmp_path, IMAGE_GENERATION_TOOL_NAME)
 
-    result = await registry.dispatch(
-        _make_context(tmp_path),
-        {"prompt": "export image", "output_dir": blank},
-    )
-
-    assert result["ok"] is True
-    assert service.received_output_dirs == [tmp_path / "image-gen"]
-
-
-@pytest.mark.asyncio
-async def test_image_generation_tool_rejects_empty_prompt(tmp_path: Path) -> None:
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, _ImageService(tmp_path / "unused.png"))
-    context = _make_context(tmp_path)
-
-    result = await registry.dispatch(context, {"prompt": "   "})
+    result = await dispatch(image_registry(service), context, arguments)
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"] == error
+    assert service.output_dirs == []
+    # Only a missing local file leaves an unavailable-image placeholder in the row.
+    shown = ["photo.jpg"] if error["code"] == "image_not_found" else []
+    assert [item["filename"] for item in context.presentation_images] == shown
 
 
 @pytest.mark.asyncio
-async def test_image_generation_tool_rejects_unknown_arguments(tmp_path: Path) -> None:
-    service = _ImageService(tmp_path / "unused.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
+async def test_a_text_only_model_refuses_source_images(tmp_path: Path) -> None:
+    service = ImageService(supports_source_images=False)
+    registry = image_registry(service)
+    contract = registry.contracts_for_provider_definitions([_definition(registry)])[
+        IMAGE_GENERATION_TOOL_NAME
+    ]
+    context = make_context(tmp_path, IMAGE_GENERATION_TOOL_NAME)
+    arguments = {"prompt": "make it rainy", "source_images": ["photo.png"]}
 
-    with pytest.raises(ToolContractError, match='"unexpected" is not a parameter'):
-        await registry.dispatch(
-            _make_context(tmp_path),
-            {"prompt": "a red fox", "unexpected": True},
-        )
+    # The profile contract refuses the field; without it, the Tool still refuses.
+    offered = await dispatch(registry, replace(context, input_contract=contract), arguments)
+    unoffered = await dispatch(registry, context, arguments)
 
-    assert service.received_prompt is None
-
-
-@pytest.mark.asyncio
-async def test_image_generation_tool_forwards_per_call_knobs(tmp_path: Path) -> None:
-    service = _ImageService(tmp_path / "artifact-1.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-    context = _make_context(tmp_path)
-
-    result = await registry.dispatch(
-        context,
-        {"prompt": "a red fox", "aspect_ratio": "16:9", "resolution": "4K"},
+    assert offered["error"] == contract_refusal(
+        "image_generation was not run:\n"
+        '- "source_images" is not a parameter.\n'
+        "image_generation parameters: prompt (required), aspect_ratio, resolution, output_dir."
     )
-
-    assert result["ok"] is True
-    assert service.received_call_options == {"aspect_ratio": "16:9", "resolution": "4K"}
-
-
-@pytest.mark.asyncio
-async def test_image_generation_tool_rejects_blank_knobs(tmp_path: Path) -> None:
-    service = _ImageService(tmp_path / "artifact-1.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-    context = _make_context(tmp_path)
-
-    with pytest.raises(ToolContractError, match=r"aspect_ratio|resolution"):
-        await registry.dispatch(
-            context,
-            {"prompt": "a red fox", "aspect_ratio": "  ", "resolution": ""},
-        )
-
-    assert service.received_call_options is None
+    assert unoffered["error"] == failure("invalid_arguments", _TEXT_ONLY_REFUSAL)
+    assert service.output_dirs == []
 
 
-@pytest.mark.asyncio
-async def test_image_generation_tool_exposes_unknown_provider_outcome(tmp_path: Path) -> None:
-    service = _ImageService(
-        tmp_path / "unused.png",
-        generation_error=ImageOutcomeUnknownError(
-            "provider_outcome_unknown (operation_key=image-op): request may have completed",
-            operation_key="image-op",
-        ),
-    )
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-
-    result = await registry.dispatch(_make_context(tmp_path), {"prompt": "a red fox"})
-
-    assert result["error"]["code"] == "provider_outcome_unknown"
-    assert result["error"]["retryable"] is False
-    assert "operation_key=image-op" in result["error"]["message"]
-
-
-@pytest.mark.asyncio
-async def test_image_generation_tool_resolves_local_source_images(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    source = workspace / "photo.png"
-    source.write_bytes(b"\x89PNG\r\n\x1a\nsource")
-    service = _ImageService(tmp_path / "artifact-1.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-    context = _make_context(workspace)
-
-    result = await registry.dispatch(
-        context,
-        {"prompt": "make it rainy", "source_images": ["photo.png"]},
-    )
-
-    assert result["ok"] is True
-    assert service.received_source_paths == (source.resolve(),)
-
-
-@pytest.mark.asyncio
-async def test_image_generation_tool_accepts_single_source_path_string(tmp_path: Path) -> None:
-    source = tmp_path / "photo.png"
-    source.write_bytes(b"\x89PNG\r\n\x1a\nsource")
-    service = _ImageService(tmp_path / "artifact-1.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-
-    result = await registry.dispatch(
-        _make_context(tmp_path),
-        {"prompt": "make it rainy", "source_images": str(source)},
-    )
-
-    assert result["ok"] is True
-    assert service.received_source_paths == (source.resolve(),)
-
-
-@pytest.mark.asyncio
-async def test_image_generation_tool_rejects_empty_source_images(tmp_path: Path) -> None:
-    service = _ImageService(tmp_path / "artifact-1.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-
-    with pytest.raises(ToolContractError):
-        await registry.dispatch(
-            _make_context(tmp_path),
-            {"prompt": "make it rainy", "source_images": []},
-        )
-
-    handler_result = await make_image_generation_handler(service)(
-        _make_context(tmp_path),
-        {"prompt": "make it rainy", "source_images": []},
-    )
-    assert handler_result["error"] == {
-        "code": "invalid_arguments",
-        "message": "source_images is empty; pass at least one local image path.",
-        "retryable": False,
-    }
-    assert service.received_source_paths is None
-
-
-@pytest.mark.asyncio
-async def test_image_generation_tool_unwraps_one_path_object_only(tmp_path: Path) -> None:
-    source = _image(tmp_path / "photo.png")
-    service = _ImageService(tmp_path / "artifact-1.png")
-    registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
-
-    result = await registry.dispatch(
-        _make_context(tmp_path),
-        {"prompt": "make it rainy", "source_images": {"path": "photo.png"}},
-    )
-    assert result["ok"] is True
-    assert service.received_source_paths == (source.resolve(),)
-
-    with pytest.raises(ToolContractError):
-        await registry.dispatch(
-            _make_context(tmp_path),
-            {"prompt": "make it rainy", "source_images": {"path": "a.png", "url": "b.png"}},
-        )
-
-
-@pytest.mark.asyncio
-async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    first = _image(workspace / "first.png")
-    second = _image(workspace / "second.png")
-    service = _ImageService(tmp_path / "unused.png")
-    registry = ToolRegistry()
-    register_analyze_image_tool(registry, service, attachment_store=None)
-    tool = registry.get(ANALYZE_IMAGE_TOOL_NAME)
-    assert tool.parameters == ANALYZE_IMAGE_TOOL_PARAMETERS
-    assert "additionalProperties" not in tool.parameters
-    assert tool.open_input_schema is True
-
-    context = replace(
-        _make_context(workspace, tool_name=ANALYZE_IMAGE_TOOL_NAME),
-        iteration_number=4,
-    )
-    result = await registry.dispatch(
-        context,
-        {
-            "prompt": "Read the ingredients.",
-            "images": ["first.png", str(second)],
-        },
-    )
-
-    assert result["ok"] is True
-    assert result["data"] == {"analysis": "Visible details"}
-    assert service.received_analysis_prompt == "Read the ingredients."
-    assert service.received_analysis_paths == (first.resolve(), second.resolve())
-    assert service.received_analysis_run_context == ImageUnderstandingRunContext(
-        run_id="run",
-        agent_id="agent",
-        session_id="session",
-        iteration_number=4,
-    )
-    assert ANALYZE_IMAGE_TOOL_DESCRIPTION
-
-
-@pytest.mark.parametrize(
-    "invalid_data",
-    [
-        {},
-        {
-            "analysis": "Visible details",
-            "image_count": 1,
-        },
-        {
-            "analysis": "Visible details",
-            "model": "vision-model",
-        },
-    ],
-)
-def test_analyze_image_tool_has_closed_result_contract(
-    tmp_path: Path,
-    invalid_data: dict[str, object],
-) -> None:
-    registry = ToolRegistry()
-    register_analyze_image_tool(
-        registry, _ImageService(tmp_path / "unused.png"), attachment_store=None
-    )
-    tool = registry.get(ANALYZE_IMAGE_TOOL_NAME)
-
-    assert tool.result_schema == {
-        "type": "object",
-        "properties": {
-            "analysis": {"type": "string", "minLength": 1},
-        },
-        "required": ["analysis"],
-        "additionalProperties": False,
-    }
-    with pytest.raises(InvalidToolResultError):
-        registry.validate_result(
-            ANALYZE_IMAGE_TOOL_NAME,
-            {"ok": True, "error": None, "data": invalid_data, "artifacts": []},
-        )
-
-
-@pytest.mark.asyncio
-async def test_analyze_image_tool_accepts_single_path_string(tmp_path: Path) -> None:
-    image = tmp_path / "photo.png"
-    image.write_bytes(b"\x89PNG\r\n\x1a\nsource")
-    service = _ImageService(tmp_path / "unused.png")
-    registry = ToolRegistry()
-    register_analyze_image_tool(registry, service, attachment_store=None)
-
-    result = await registry.dispatch(
-        _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
-        {"prompt": "Describe it.", "images": "photo.png"},
-    )
-
-    assert result["ok"] is True
-    assert service.received_analysis_paths == (image.resolve(),)
-
-
-@pytest.mark.asyncio
-async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error(
-    tmp_path: Path,
-) -> None:
-    registry = ToolRegistry()
-    service = _ImageService(
-        tmp_path / "unused.png",
-        analysis_error=ImageInputError("bad image"),
-    )
-    register_analyze_image_tool(registry, service, attachment_store=None)
-    context = _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME)
-    _image(tmp_path / "photo.png")
-
-    with pytest.raises(ToolContractError):
-        await registry.dispatch(context, {"prompt": "Describe it.", "images": []})
-    with pytest.raises(ToolContractError, match='"extra" is not a parameter'):
-        await registry.dispatch(
-            context,
-            {"prompt": "Describe it.", "images": ["photo.png"], "extra": True},
-        )
-    image_error = await registry.dispatch(
-        context,
-        {"prompt": "Describe it.", "images": ["photo.png"]},
-    )
-
-    assert image_error["error"] == {
-        "code": "image_read_error",
-        "message": "bad image",
-        "retryable": False,
-    }
+def _provider_failure(cause: Exception, status: int) -> ImageExecutionError:
+    cause.status_code = status  # type: ignore[attr-defined]
+    try:
+        raise ImageExecutionError(str(cause), retryable=False) from cause
+    except ImageExecutionError as error:
+        return error
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("analysis_error", "expected_code", "expected_message"),
+    ("error", "expected"),
     [
-        (ImageNotFoundError("missing"), "image_not_found", "missing"),
-        (ImageReadError("unreadable"), "image_read_error", "unreadable"),
-        (ImageTooLargeError("too large"), "image_too_large", "too large"),
-        (
-            ImageUnsupportedMediaTypeError("unsupported"),
-            "unsupported_image_type",
-            "unsupported",
-        ),
-        (
-            ImageUnderstandingUnavailableError("not configured"),
-            "image_understanding_unavailable",
-            "Image understanding is not available (not configured). Tell the user to choose "
-            "a working Image understanding model in Settings under Specialized Models.",
-        ),
-    ],
-)
-async def test_analyze_image_tool_projects_stable_expected_error_codes(
-    tmp_path: Path,
-    analysis_error: ImageInputError | ImageUnderstandingUnavailableError,
-    expected_code: str,
-    expected_message: str,
-) -> None:
-    registry = ToolRegistry()
-    register_analyze_image_tool(
-        registry,
-        _ImageService(tmp_path / "unused.png", analysis_error=analysis_error),
-        attachment_store=None,
-    )
-    _image(tmp_path / "photo.png")
-
-    result = await registry.dispatch(
-        _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
-        {"prompt": "Describe it.", "images": ["photo.png"]},
-    )
-
-    assert result["error"] == {
-        "code": expected_code,
-        "message": expected_message,
-        "retryable": False,
-    }
-
-
-@pytest.mark.asyncio
-async def test_analyze_image_tool_preserves_provider_retry_metadata(tmp_path: Path) -> None:
-    provider_error = ImageExecutionError(
-        "rate limited",
-        retryable=True,
-        attempts_made=4,
-    )
-    registry = ToolRegistry()
-    register_analyze_image_tool(
-        registry,
-        _ImageService(tmp_path / "unused.png", analysis_error=provider_error),
-        attachment_store=None,
-    )
-    _image(tmp_path / "photo.png")
-
-    result = await registry.dispatch(
-        _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
-        {"prompt": "Describe it.", "images": ["photo.png"]},
-    )
-
-    assert result["error"] == {
-        "code": "provider_error",
-        "message": "The image-understanding provider failed (rate limited). Try again later.",
-        "retryable": True,
-        "attempts_made": 4,
-    }
-
-
-@pytest.mark.asyncio
-async def test_analyze_image_tool_does_not_mask_unexpected_failure(tmp_path: Path) -> None:
-    registry = ToolRegistry()
-    register_analyze_image_tool(
-        registry,
-        _ImageService(
-            tmp_path / "unused.png",
-            analysis_error=RuntimeError("implementation defect"),
-        ),
-        attachment_store=None,
-    )
-    _image(tmp_path / "photo.png")
-
-    with pytest.raises(RuntimeError):
-        await registry.dispatch(
-            _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
-            {"prompt": "Describe it.", "images": ["photo.png"]},
-        )
-
-
-def _image(path: Path) -> Path:
-    path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
-    return path
-
-
-def _make_context(
-    tmp_path: Path,
-    *,
-    tool_name: str = IMAGE_GENERATION_TOOL_NAME,
-) -> ToolContext:
-    return ToolContext(
-        agent_id="agent",
-        session_id="session",
-        run_id="run",
-        tool_call_id="tool-call",
-        tool_name=tool_name,
-        tool_call_index=0,
-        workspace=tmp_path,
-        vbot_root=tmp_path,
-        data_root=tmp_path,
-    )
-
-
-class _ImageService:
-    def __init__(
-        self,
-        file_path: Path,
-        *,
-        generation_error: Exception | None = None,
-        analysis_error: Exception | None = None,
-        supports_source_images: bool = True,
-    ) -> None:
-        self._file_path = file_path
-        self._generation_error = generation_error
-        self._analysis_error = analysis_error
-        self._supports_source_images = supports_source_images
-        self.received_prompt: str | None = None
-        self.received_call_options: dict[str, object] | None = None
-        self.received_source_paths: tuple[Path, ...] | None = None
-        self.received_output_dirs: list[Path] = []
-        self.received_analysis_prompt: str | None = None
-        self.received_analysis_paths: tuple[Path, ...] | None = None
-        self.received_analysis_run_context: ImageUnderstandingRunContext | None = None
-
-    def generation_supports_source_images(self) -> bool:
-        return self._supports_source_images
-
-    async def generate_artifacts(
-        self,
-        prompt: str,
-        *,
-        output_dir: Path,
-        call_options: dict[str, object] | None = None,
-        source_paths: tuple[Path, ...] | None = None,
-        usage_context: object = None,
-    ) -> tuple[object, ...]:
-        self.received_prompt = prompt
-        self.received_output_dirs.append(output_dir)
-        self.received_call_options = call_options
-        self.received_source_paths = source_paths
-        self.received_usage_context = usage_context
-        if self._generation_error is not None:
-            raise self._generation_error
-        return (
-            SimpleNamespace(
-                file_path=self._file_path,
-                media_type="image/png",
-                size_bytes=5,
+        pytest.param(
+            ImageOutcomeUnknownError(
+                "provider_outcome_unknown (operation_key=image-op): request may have completed",
+                operation_key="image-op",
             ),
-        )
-
-    async def analyze(
-        self,
-        prompt: str,
-        *,
-        image_paths: tuple[Path, ...],
-        run_context: ImageUnderstandingRunContext,
-    ) -> object:
-        self.received_analysis_prompt = prompt
-        self.received_analysis_paths = image_paths
-        self.received_analysis_run_context = run_context
-        if self._analysis_error is not None:
-            raise self._analysis_error
-        return SimpleNamespace(
-            content="Visible details",
-            model="vision-model",
-            image_count=len(image_paths),
-            usage={"input_tokens": 12, "output_tokens": 7},
-        )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("missing", [False, True])
-async def test_analysis_preview_retains_only_original_paths_without_writing_files(
-    tmp_path: Path,
-    missing: bool,
+            failure(
+                "provider_outcome_unknown",
+                "provider_outcome_unknown (operation_key=image-op): request may have completed",
+            ),
+            id="outcome-unknown",
+        ),
+        pytest.param(
+            ImageConfigurationError("No task model configured for image_generation"),
+            failure(
+                "image_error",
+                "Image generation is not available (No task model configured for "
+                "image_generation). Tell the user to choose a working Image generation model "
+                "in Settings under Specialized Models.",
+            ),
+            id="not-configured",
+        ),
+        pytest.param(
+            _provider_failure(
+                ProviderError(
+                    'Provider error: 400 {"error":{"message":"Invalid background_hex_color '
+                    '\\"\\": expected a #RRGGBB value"}}',
+                    retryable=False,
+                ),
+                400,
+            ),
+            failure(
+                "provider_error",
+                "The image-generation provider rejected the request (HTTP 400: Invalid "
+                'background_hex_color "": expected a #RRGGBB value). If the reason concerns '
+                "the request, change it; otherwise tell the user, who may need to choose "
+                "another Image generation model in Settings under Specialized Models.",
+            ),
+            id="provider-rejection",
+        ),
+    ],
+)
+async def test_generation_failures_say_what_happened_and_what_to_do(
+    tmp_path: Path, error: Exception, expected: dict[str, Any]
 ) -> None:
-    import json
+    result = await generate(tmp_path, {"prompt": "a red bicycle"}, ImageService(error=error))
 
-    from core.chat import ChatMessage
-
-    project = tmp_path / "project"
-    project.mkdir()
-    image = project / "original image.png"
-    if not missing:
-        image.write_bytes(b"\x89PNG\r\n\x1a\noriginal")
-    before = set(tmp_path.rglob("*"))
-    service = _ImageService(
-        image,
-        analysis_error=ImageNotFoundError("missing") if missing else None,
-    )
-    registry = ToolRegistry()
-    register_analyze_image_tool(registry, service, attachment_store=None)
-    context = replace(_make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME), cwd=project)
-    args = {"prompt": "Inspect", "images": [image.name]}
-    result = await registry.dispatch(context, args)
-    assert result["ok"] is not missing
-    display = registry.display_for_call(
-        ANALYZE_IMAGE_TOOL_NAME, args, context=context, result=result
-    )
-    restored = ChatMessage.from_dict(
-        ChatMessage.tool(
-            tool_call_id="call",
-            name=ANALYZE_IMAGE_TOOL_NAME,
-            content=json.dumps(result),
-            tool_display=display,
-        ).to_dict()
-    )
-    assert restored.tool_display is not None
-    assert restored.tool_display["image_files"] == [{"path": str(image), "filename": image.name}]
-    assert result["artifacts"] == []
-    assert "image_files" not in result
-    assert set(tmp_path.rglob("*")) == before
+    assert result["error"] == expected
