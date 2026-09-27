@@ -1,227 +1,174 @@
-"""Tests for GitHubCopilotAdapter behavior."""
+"""GitHub Copilot catalog normalization: capabilities, limits, runtime metadata, skips."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from core.models.models import Model
 from core.providers.errors import CatalogEntrySkipped
-from core.providers.github_copilot import (
-    GitHubCopilotAdapter,
+from core.providers.github_copilot import GitHubCopilotAdapter
+from tests.core.providers.github_copilot_test_support import raw_copilot_models
+
+
+def _capability_facts(model: Model) -> dict[str, Any]:
+    reasoning = model.capabilities.reasoning
+    return {
+        "vision": model.capabilities.vision,
+        "tools": model.capabilities.tools,
+        "json_mode": model.capabilities.json_mode,
+        "reasoning": (reasoning.supported, reasoning.control, reasoning.levels),
+        "budget_max": reasoning.budget_max,
+    }
+
+
+@pytest.mark.parametrize(
+    ("model_id", "expected_facts", "expected_metadata"),
+    [
+        pytest.param(
+            "gpt-4o",
+            {
+                "vision": True,
+                "tools": True,
+                "json_mode": False,
+                "reasoning": (False, None, ()),
+                "budget_max": None,
+            },
+            {"tool_calls": True},
+            id="vision-and-tools",
+        ),
+        pytest.param(
+            "gpt-5-mini",
+            {
+                "vision": True,
+                "tools": True,
+                "json_mode": True,
+                "reasoning": (True, "levels", ("low", "medium", "high")),
+                "budget_max": None,
+            },
+            {
+                "reasoning_efforts": ("low", "medium", "high"),
+                "supported_endpoints": ("/chat/completions", "/responses", "ws:/responses"),
+            },
+            id="effort-ladder-and-endpoints",
+        ),
+        pytest.param(
+            "gemini-2.5-pro",
+            {
+                "vision": True,
+                "tools": True,
+                "json_mode": False,
+                "reasoning": (True, "budget", ()),
+                "budget_max": 32768,
+            },
+            {"min_thinking_budget": 128, "max_thinking_budget": 32768},
+            id="thinking-budget",
+        ),
+    ],
 )
-from tests.core.providers.github_copilot_test_support import (
-    _raw_copilot_models,
-)
+def test_fixture_entries_map_capabilities_limits_and_runtime_metadata(
+    model_id: str, expected_facts: dict[str, Any], expected_metadata: dict[str, Any]
+) -> None:
+    raw_model = raw_copilot_models()[model_id]
 
-
-def test_gpt_4o_reads_vision_context_and_max_output_from_copilot_capabilities() -> None:
-    raw_models = _raw_copilot_models()
-    raw_model = raw_models["gpt-4o"]
-
+    # Provider defaults never replace the catalog's own limits.
     model = GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
 
-    assert model.model_id == "gpt-4o"
-    assert model.name == "GPT-4o"
-    assert model.capabilities.vision is True
-    assert model.context_window == raw_model["capabilities"]["limits"]["max_context_window_tokens"]
-    assert model.max_output_tokens == raw_model["capabilities"]["limits"]["max_output_tokens"]
-    assert model.max_output_tokens == 4096
+    limits = raw_model["capabilities"]["limits"]
+    assert model.model_id == model_id
+    assert model.name == raw_model["name"]
+    assert _capability_facts(model) == expected_facts
+    assert model.context_window == limits["max_context_window_tokens"]
+    assert model.max_output_tokens == limits["max_output_tokens"]
+    copilot_metadata = model.metadata["github_copilot"]
+    assert {key: copilot_metadata[key] for key in expected_metadata} == expected_metadata
+    assert "policy" not in copilot_metadata
+    assert "model_picker_enabled" not in copilot_metadata
 
 
-def test_reasoning_effort_list_marks_o_series_model_as_reasoning_capable() -> None:
-    raw_models = _raw_copilot_models()
-
-    model = GitHubCopilotAdapter.normalize_catalog_entry(raw_models["gpt-5-mini"], {})
-
-    assert model.capabilities.reasoning.supported is True
-    assert model.capabilities.reasoning.control == "levels"
-    assert model.capabilities.reasoning.levels == ("low", "medium", "high")
-    assert model.metadata["github_copilot"]["reasoning_efforts"] == ("low", "medium", "high")
-    assert model.metadata["github_copilot"]["supported_endpoints"] == (
-        "/chat/completions",
-        "/responses",
-        "ws:/responses",
-    )
-
-
-def test_thinking_budget_marks_gemini_model_as_reasoning_capable() -> None:
-    raw_models = _raw_copilot_models()
-
-    model = GitHubCopilotAdapter.normalize_catalog_entry(raw_models["gemini-2.5-pro"], {})
-
-    assert model.capabilities.reasoning.supported is True
-    assert model.metadata["github_copilot"]["min_thinking_budget"] == 128
-    assert model.metadata["github_copilot"]["max_thinking_budget"] == 32768
-
-
-def test_supported_flags_map_to_capabilities_from_captured_schema() -> None:
-    raw_models = _raw_copilot_models()
-
-    model = GitHubCopilotAdapter.normalize_catalog_entry(raw_models["gpt-4o"], {})
-
-    assert model.capabilities.tools is True
-    assert model.capabilities.json_mode is False
-    assert model.capabilities.reasoning.supported is False
-    assert "policy" not in model.metadata.get("github_copilot", {})
-    assert "model_picker_enabled" not in model.metadata.get("github_copilot", {})
-
-
-def test_missing_optional_copilot_limits_fall_back_without_dropping_model() -> None:
+@pytest.mark.parametrize(
+    ("capabilities", "expected_limits"),
+    [
+        pytest.param({"limits": {"max_output_tokens": 2048}}, (None, 2048), id="partial"),
+        pytest.param(
+            {"limits": {"max_context_window_tokens": None, "max_output_tokens": None}},
+            (None, None),
+            id="null-values",
+        ),
+        pytest.param({"limits": None}, (None, None), id="non-object-limits"),
+    ],
+)
+def test_missing_or_invalid_limits_are_unknown_without_dropping_the_model(
+    capabilities: dict[str, Any], expected_limits: tuple[int | None, int | None]
+) -> None:
     raw_model = {
         "id": "partial-copilot-model",
         "name": "Partial Copilot Model",
-        "capabilities": {
-            "limits": {
-                "max_output_tokens": 2048,
-            },
-            "supports": {
-                "tool_calls": True,
-            },
-        },
+        "capabilities": {**capabilities, "supports": {"tool_calls": True}},
     }
 
     model = GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
 
     assert model.model_id == "partial-copilot-model"
-    # Absent context window → honest None, not a fake 0 (Phase 6).
-    assert model.context_window is None
-    assert model.max_output_tokens == 2048
+    assert (model.context_window, model.max_output_tokens) == expected_limits
 
 
-def test_non_integer_optional_copilot_output_limit_is_unknown() -> None:
+def test_non_object_supports_disable_every_capability() -> None:
     raw_model = {
-        "id": "partial-copilot-model",
-        "name": "Partial Copilot Model",
+        "id": "supports-model",
+        "name": "Supports Model",
         "capabilities": {
-            "limits": {
-                "max_context_window_tokens": None,
-                "max_output_tokens": None,
-            },
-            "supports": {},
-        },
-    }
-
-    model = GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
-
-    assert model.context_window is None
-    assert model.max_output_tokens is None
-
-
-def test_missing_or_non_object_copilot_output_limits_are_unknown() -> None:
-    raw_model_with_missing_limits = {
-        "id": "missing-limits-model",
-        "name": "Missing Limits Model",
-        "capabilities": {
-            "supports": {
-                "tool_calls": True,
-            },
-        },
-    }
-    raw_model_with_null_limits = {
-        "id": "null-limits-model",
-        "name": "Null Limits Model",
-        "capabilities": {
-            "limits": None,
-            "supports": {
-                "tool_calls": True,
-            },
-        },
-    }
-
-    missing_limits_model = GitHubCopilotAdapter.normalize_catalog_entry(
-        raw_model_with_missing_limits,
-        {"max_tokens": 8192},
-    )
-    null_limits_model = GitHubCopilotAdapter.normalize_catalog_entry(
-        raw_model_with_null_limits,
-        {"max_tokens": 8192},
-    )
-
-    assert missing_limits_model.context_window is None
-    assert missing_limits_model.max_output_tokens is None
-    assert null_limits_model.context_window is None
-    assert null_limits_model.max_output_tokens is None
-
-
-def test_missing_or_non_object_copilot_supports_use_empty_mapping() -> None:
-    raw_model_with_missing_supports = {
-        "id": "missing-supports-model",
-        "name": "Missing Supports Model",
-        "capabilities": {
-            "limits": {
-                "max_context_window_tokens": 128000,
-                "max_output_tokens": 4096,
-            },
-        },
-    }
-    raw_model_with_string_supports = {
-        "id": "string-supports-model",
-        "name": "String Supports Model",
-        "capabilities": {
-            "limits": {
-                "max_context_window_tokens": 128000,
-                "max_output_tokens": 4096,
-            },
+            "limits": {"max_context_window_tokens": 128000, "max_output_tokens": 4096},
             "supports": "invalid",
         },
     }
 
-    missing_supports_model = GitHubCopilotAdapter.normalize_catalog_entry(
-        raw_model_with_missing_supports,
-        {},
-    )
-    string_supports_model = GitHubCopilotAdapter.normalize_catalog_entry(
-        raw_model_with_string_supports,
-        {},
-    )
+    model = GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {})
 
-    assert missing_supports_model.capabilities.vision is False
-    assert missing_supports_model.capabilities.tools is False
-    assert missing_supports_model.capabilities.json_mode is False
-    assert missing_supports_model.capabilities.reasoning.supported is False
-    assert string_supports_model.capabilities.vision is False
-    assert string_supports_model.capabilities.tools is False
-    assert string_supports_model.capabilities.json_mode is False
-    assert string_supports_model.capabilities.reasoning.supported is False
-
-
-def test_invalid_copilot_capabilities_shape_still_fails() -> None:
-    raw_model = {
-        "id": "invalid-copilot-model",
-        "name": "Invalid Copilot Model",
-        "capabilities": None,
+    assert _capability_facts(model) == {
+        "vision": False,
+        "tools": False,
+        "json_mode": False,
+        "reasoning": (False, None, ()),
+        "budget_max": None,
     }
 
-    try:
+
+def test_non_object_capabilities_are_rejected() -> None:
+    raw_model = {"id": "invalid-copilot-model", "name": "Invalid", "capabilities": None}
+
+    with pytest.raises(ValueError, match="capabilities"):
         GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {})
-    except ValueError as exc:
-        assert str(exc) == "Expected 'capabilities' to be an object"
-    else:
-        raise AssertionError("Expected invalid capabilities shape to fail")
 
 
 @pytest.mark.parametrize(
     "raw_model",
     [
-        {
-            "id": "hidden-utility",
-            "model_picker_enabled": False,
-            "capabilities": {"type": "chat"},
-        },
-        {
-            "id": "embedding-only",
-            "capabilities": {"type": "embeddings"},
-        },
-        {
-            "id": "websocket-only",
-            "supported_endpoints": ["ws:/responses"],
-            "capabilities": {"type": "chat"},
-        },
+        pytest.param(
+            {
+                "id": "hidden-utility",
+                "model_picker_enabled": False,
+                "capabilities": {"type": "chat"},
+            },
+            id="hidden",
+        ),
+        pytest.param(
+            {"id": "embedding-only", "capabilities": {"type": "embeddings"}}, id="not-chat"
+        ),
+        pytest.param(
+            {
+                "id": "websocket-only",
+                "supported_endpoints": ["ws:/responses"],
+                "capabilities": {"type": "chat"},
+            },
+            id="no-supported-endpoint",
+        ),
     ],
 )
-def test_non_selectable_copilot_catalog_entries_are_skipped(raw_model: dict) -> None:
+def test_non_selectable_catalog_entries_are_skipped(raw_model: dict[str, Any]) -> None:
     with pytest.raises(CatalogEntrySkipped):
         GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {})
 
