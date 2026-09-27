@@ -1,123 +1,33 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  RESOURCE_KIND_DATA_STORE,
-  RESOURCE_TOKEN_AGENTS,
-  RESOURCE_TOKEN_CHANNELS,
-  RESOURCE_TOKEN_CLIENTS,
-  RESOURCE_TOKEN_CRON,
-  RESOURCE_TOKEN_COMMANDS,
-  RESOURCE_TOKEN_DEBUG_TRACES,
-  RESOURCE_TOKEN_MODELS,
-  RESOURCE_TOKEN_MEMORIES,
-  RESOURCE_TOKEN_SESSIONS,
-  RESOURCE_TOKEN_TERMINALS,
   SURFACE_DISPLAY,
   SURFACE_FORM,
-  isSurfaceBusy,
   shouldApplyReloadNow,
-  tokenKeysForKind,
 } from '../resourceInvalidation.js';
 
-describe('tokenKeysForKind()', () => {
-  it('keeps data-store health outside refresh-token groups', () => {
-    expect(RESOURCE_KIND_DATA_STORE).toBe('data_store');
-    expect(tokenKeysForKind(RESOURCE_KIND_DATA_STORE)).toEqual([]);
-  });
-  it('routes a model-catalog change to the models token', () => {
-    expect(tokenKeysForKind('models')).toEqual([RESOURCE_TOKEN_MODELS]);
-  });
-
-  it('routes a provider change to the models token (availability changed)', () => {
-    expect(tokenKeysForKind('providers')).toEqual([RESOURCE_TOKEN_MODELS]);
-  });
-
-  it('routes an agents change to the agents token', () => {
-    expect(tokenKeysForKind('agents')).toEqual([RESOURCE_TOKEN_AGENTS]);
-  });
-
-  it('routes a Memory change to the memories token', () => {
-    expect(tokenKeysForKind('memories')).toEqual([RESOURCE_TOKEN_MEMORIES]);
-  });
-
-  it('routes a sessions change to the sessions token', () => {
-    expect(tokenKeysForKind('sessions')).toEqual([RESOURCE_TOKEN_SESSIONS]);
-  });
-
-  it('routes a clients change to the clients token', () => {
-    expect(tokenKeysForKind('clients')).toEqual([RESOURCE_TOKEN_CLIENTS]);
-  });
-
-  it('routes channels and debug traces to their own tokens', () => {
-    expect(tokenKeysForKind('channels')).toEqual([RESOURCE_TOKEN_CHANNELS]);
-    expect(tokenKeysForKind('debug_traces')).toEqual([
-      RESOURCE_TOKEN_DEBUG_TRACES,
-    ]);
-  });
-
-  it('routes cron changes to the cron token', () => {
-    expect(tokenKeysForKind('cron')).toEqual([RESOURCE_TOKEN_CRON]);
-  });
-
-  it('routes command catalog changes to the commands token', () => {
-    expect(tokenKeysForKind('commands')).toEqual([RESOURCE_TOKEN_COMMANDS]);
-  });
-
-  it('routes Terminal Session changes to the terminals token', () => {
-    expect(tokenKeysForKind('terminals')).toEqual([RESOURCE_TOKEN_TERMINALS]);
-  });
-
-  it('returns no tokens for the queue kind (scope-routed, not token-routed)', () => {
-    // `queue` carries a session scope the watcher must match, so App routes it
-    // directly rather than through a counter — it has no token group.
-    expect(tokenKeysForKind('queue')).toEqual([]);
-  });
-
-  it('returns no tokens for an unknown kind', () => {
-    expect(tokenKeysForKind('mystery')).toEqual([]);
-    expect(tokenKeysForKind(undefined)).toEqual([]);
-  });
-});
-
-describe('isSurfaceBusy()', () => {
-  it('is idle with no signals', () => {
-    expect(isSurfaceBusy()).toBe(false);
-    expect(isSurfaceBusy({})).toBe(false);
-  });
-
-  it('is busy while a dropdown is open', () => {
-    expect(isSurfaceBusy({ dropdownOpen: true })).toBe(true);
-  });
-
-  it('is busy while a field holds focus', () => {
-    expect(isSurfaceBusy({ focused: true })).toBe(true);
-  });
-
-  it('is busy while a debounced save is pending', () => {
-    expect(isSurfaceBusy({ savePending: true })).toBe(true);
-  });
-});
-
+// Which resource kind bumps which refresh token is covered through its owner,
+// appController (`resource_changed` routing).
 describe('shouldApplyReloadNow()', () => {
-  it('always applies immediately for a pure display', () => {
-    expect(shouldApplyReloadNow(SURFACE_DISPLAY)).toBe(true);
-    expect(shouldApplyReloadNow(SURFACE_DISPLAY, { dropdownOpen: true })).toBe(
+  it.each([
+    ['a display', SURFACE_DISPLAY, undefined, true],
+    [
+      'a display with an open dropdown',
+      SURFACE_DISPLAY,
+      { dropdownOpen: true },
       true,
-    );
-  });
-
-  it('applies a form reload when the form is idle', () => {
-    expect(shouldApplyReloadNow(SURFACE_FORM)).toBe(true);
-    expect(shouldApplyReloadNow(SURFACE_FORM, {})).toBe(true);
-  });
-
-  it('defers a form reload while it is actively edited', () => {
-    expect(shouldApplyReloadNow(SURFACE_FORM, { dropdownOpen: true })).toBe(
+    ],
+    ['an idle form', SURFACE_FORM, undefined, true],
+    ['a form without busy signals', SURFACE_FORM, {}, true],
+    [
+      'a form with an open dropdown',
+      SURFACE_FORM,
+      { dropdownOpen: true },
       false,
-    );
-    expect(shouldApplyReloadNow(SURFACE_FORM, { focused: true })).toBe(false);
-    expect(shouldApplyReloadNow(SURFACE_FORM, { savePending: true })).toBe(
-      false,
-    );
+    ],
+    ['a form with a focused field', SURFACE_FORM, { focused: true }, false],
+    ['a form with a pending save', SURFACE_FORM, { savePending: true }, false],
+  ])('for %s returns %s', (_label, surface, signals, applyNow) => {
+    expect(shouldApplyReloadNow(surface, signals)).toBe(applyNow);
   });
 });

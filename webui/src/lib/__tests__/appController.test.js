@@ -49,6 +49,28 @@ function setup(overrides = {}) {
   return { actions, browserHistory, browserWindow, controller, state };
 }
 
+// Every refresh token of the App projection, e.g. { models: 0, cron: 1 }.
+function refreshTokens(state) {
+  return Object.fromEntries(
+    Object.entries(state)
+      .filter(([key]) => key.endsWith('RefreshToken'))
+      .map(([key, value]) => [key.replace(/RefreshToken$/, ''), value]),
+  );
+}
+
+const tokensBumped = (state, bumped) =>
+  Object.fromEntries(
+    Object.keys(refreshTokens(state)).map((name) => [
+      name,
+      bumped.includes(name) ? 1 : 0,
+    ]),
+  );
+
+const resourceChanged = (kind, scope) => ({
+  type: 'resource_changed',
+  payload: scope === undefined ? { kind } : { kind, scope },
+});
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -183,7 +205,7 @@ describe('App controller', () => {
   });
 
   it('projects server events into run state and scoped invalidations', async () => {
-    const { actions, controller, state } = setup();
+    const { controller, state } = setup();
     const hello = { type: 'connection_ready', active_runs: [] };
 
     await controller.handleServerEvent(hello);
@@ -191,17 +213,12 @@ describe('App controller', () => {
       type: 'run_started',
       payload: { run_id: 'run-one' },
     });
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: {
-        kind: 'queue',
-        scope: { agent_id: 'alpha', session_id: 'session-one' },
-      },
-    });
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: { kind: 'agents' },
-    });
+    await controller.handleServerEvent(
+      resourceChanged('queue', {
+        agent_id: 'alpha',
+        session_id: 'session-one',
+      }),
+    );
 
     expect(state.connectionSnapshot).toBe(hello);
     expect(state.runServerEvents).toHaveLength(1);
@@ -210,15 +227,11 @@ describe('App controller', () => {
       agentId: 'alpha',
       sessionId: 'session-one',
     });
-    expect(actions.onReloadAgents).toHaveBeenCalledOnce();
   });
 
   it('records each sessions invalidation scope without a full refresh', async () => {
     const { controller, state } = setup();
-    const sessionsEvent = (scope) => ({
-      type: 'resource_changed',
-      payload: { kind: 'sessions', scope },
-    });
+    const sessionsEvent = (scope) => resourceChanged('sessions', scope);
     const terminalScope = {
       project_id: null,
       agent_id: 'alpha',
@@ -227,10 +240,7 @@ describe('App controller', () => {
     };
 
     await controller.handleServerEvent(sessionsEvent(terminalScope));
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: { kind: 'sessions' },
-    });
+    await controller.handleServerEvent(resourceChanged('sessions'));
 
     expect(state.sessionsRefreshToken).toBe(0);
     expect(state.sessionInvalidations).toEqual([
@@ -250,10 +260,7 @@ describe('App controller', () => {
 
   it('turns a sessions deletion event into a Session deletion for Chat', async () => {
     const { controller, state } = setup();
-    const deletionEvent = (scope) => ({
-      type: 'resource_changed',
-      payload: { kind: 'sessions', scope },
-    });
+    const deletionEvent = (scope) => resourceChanged('sessions', scope);
 
     // A plain list change (create/rename) names no deleted Session.
     await controller.handleServerEvent(
@@ -363,17 +370,18 @@ describe('App controller', () => {
 
   it('reloads the data-store projection on connect and invalidation', async () => {
     const onLoadDataStoreStatus = vi.fn().mockResolvedValue(undefined);
-    const { controller } = setup({ onLoadDataStoreStatus });
+    const { controller, state } = setup({ onLoadDataStoreStatus });
+    expect(state).toMatchObject({
+      dataStoreHealth: null,
+      dataStoreIncident: null,
+    });
 
     await controller.handleServerEvent({
       type: 'connection_ready',
       replay_status: 'resumed',
       active_runs: [],
     });
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: { kind: 'data_store' },
-    });
+    await controller.handleServerEvent(resourceChanged('data_store'));
 
     expect(onLoadDataStoreStatus).toHaveBeenCalledTimes(2);
   });
@@ -460,18 +468,14 @@ describe('App controller', () => {
     const onReloadExtensionPages = vi.fn().mockResolvedValue(undefined);
     const { controller } = setup({ onReloadExtensionPages });
 
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: {
-        kind: 'extensions',
-        scope: {
-          owner: 'swarm',
-          resource: 'board',
-          ids: ['swarm-one'],
-          revision: 7,
-        },
-      },
-    });
+    await controller.handleServerEvent(
+      resourceChanged('extensions', {
+        owner: 'swarm',
+        resource: 'board',
+        ids: ['swarm-one'],
+        revision: 7,
+      }),
+    );
 
     expect(onReloadExtensionPages).toHaveBeenCalledOnce();
   });
@@ -485,13 +489,12 @@ describe('App controller', () => {
       selection: { agentId: 'alpha', projectId: '', projectAgentId: null },
     });
 
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: {
-        kind: 'agents',
-        scope: { old_agent_id: 'alpha', new_agent_id: 'researcher' },
-      },
-    });
+    await controller.handleServerEvent(
+      resourceChanged('agents', {
+        old_agent_id: 'alpha',
+        new_agent_id: 'researcher',
+      }),
+    );
 
     expect(onAgentIdChanged).toHaveBeenCalledWith('alpha', 'researcher');
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
@@ -513,9 +516,13 @@ describe('App controller', () => {
     });
   });
 
-  it.each(['gap', 'epoch_changed'])(
-    'fully invalidates resource-backed projections after replay status %s',
-    async (replayStatus) => {
+  it.each([
+    ['gap', 1],
+    ['epoch_changed', 1],
+    ['resumed', 0],
+  ])(
+    'after replay status %s refreshes every resource-backed projection %i time(s)',
+    async (replayStatus, times) => {
       const { actions, controller, state } = setup();
 
       await controller.handleServerEvent({
@@ -525,87 +532,45 @@ describe('App controller', () => {
         queues: [],
       });
 
-      expect(state.modelsRefreshToken).toBe(1);
-      expect(state.memoriesRefreshToken).toBe(1);
-      expect(state.projectsRefreshToken).toBe(1);
-      expect(state.sessionsRefreshToken).toBe(1);
-      expect(state.clientsRefreshToken).toBe(1);
-      expect(state.channelsRefreshToken).toBe(1);
-      expect(state.cronRefreshToken).toBe(1);
-      expect(state.debugTracesRefreshToken).toBe(1);
-      expect(state.commandsRefreshToken).toBe(1);
-      expect(state.terminalsRefreshToken).toBe(1);
-      expect(actions.onLoadProjects).toHaveBeenCalledOnce();
-      expect(actions.onReloadAgents).toHaveBeenCalledOnce();
+      for (const token of Object.values(refreshTokens(state))) {
+        expect(token).toBe(times);
+      }
+      expect(actions.onLoadProjects).toHaveBeenCalledTimes(times);
+      expect(actions.onReloadAgents).toHaveBeenCalledTimes(times);
     },
   );
 
-  it('does not reload all resources after a complete replay resume', async () => {
+  // resource_changed names a kind of shared state; the controller bumps the
+  // refresh tokens its views watch or reloads the owning roster.
+  it.each([
+    ['models', ['models']],
+    ['providers', ['models']],
+    ['memories', ['memories']],
+    ['projects', ['projects']],
+    ['clients', ['clients']],
+    ['channels', ['channels']],
+    ['debug_traces', ['debugTraces']],
+    ['cron', ['cron']],
+    ['calendar', ['calendar']],
+    ['commands', ['commands']],
+    ['terminals', ['terminals']],
+    ['skills', ['skills']],
+    ['agents', []],
+    ['queue', []],
+    ['data_store', []],
+    ['mystery', []],
+  ])('routes resource_changed(%s) to the tokens %j', async (kind, bumped) => {
     const { actions, controller, state } = setup();
 
-    await controller.handleServerEvent({
-      type: 'connection_ready',
-      replay_status: 'resumed',
-      active_runs: [],
-      queues: [],
-    });
+    await controller.handleServerEvent(resourceChanged(kind));
 
-    expect(state.modelsRefreshToken).toBe(0);
-    expect(state.memoriesRefreshToken).toBe(0);
-    expect(state.projectsRefreshToken).toBe(0);
-    expect(state.sessionsRefreshToken).toBe(0);
-    expect(state.clientsRefreshToken).toBe(0);
-    expect(state.channelsRefreshToken).toBe(0);
-    expect(state.cronRefreshToken).toBe(0);
-    expect(state.debugTracesRefreshToken).toBe(0);
-    expect(state.commandsRefreshToken).toBe(0);
-    expect(state.terminalsRefreshToken).toBe(0);
-    expect(actions.onLoadProjects).not.toHaveBeenCalled();
-    expect(actions.onReloadAgents).not.toHaveBeenCalled();
-  });
-
-  it('bumps the cron refresh token for cron changes', async () => {
-    const { controller, state } = setup();
-
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: { kind: 'cron' },
-    });
-
-    expect(state.cronRefreshToken).toBe(1);
-  });
-
-  it('bumps the memories refresh token for Memory changes', async () => {
-    const { controller, state } = setup();
-
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: { kind: 'memories', scope: { agent_id: 'alpha' } },
-    });
-
-    expect(state.memoriesRefreshToken).toBe(1);
-  });
-
-  it('bumps the command refresh token for command catalog changes', async () => {
-    const { controller, state } = setup();
-
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: { kind: 'commands' },
-    });
-
-    expect(state.commandsRefreshToken).toBe(1);
-  });
-
-  it('bumps the terminals refresh token for Terminal Session changes', async () => {
-    const { controller, state } = setup();
-
-    await controller.handleServerEvent({
-      type: 'resource_changed',
-      payload: { kind: 'terminals' },
-    });
-
-    expect(state.terminalsRefreshToken).toBe(1);
+    expect(refreshTokens(state)).toEqual(tokensBumped(state, bumped));
+    expect(actions.onLoadProjects).toHaveBeenCalledTimes(
+      kind === 'projects' ? 1 : 0,
+    );
+    expect(actions.onReloadAgents).toHaveBeenCalledTimes(
+      kind === 'agents' ? 1 : 0,
+    );
   });
 
   it('owns delayed offline and restored connection notices', async () => {

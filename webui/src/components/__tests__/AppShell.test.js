@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRawSnippet, flushSync, mount, tick, unmount } from 'svelte';
 
 import { readStyleSheet } from '../../__tests__/styles.support.js';
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { CONNECTION_STATUS_CONNECTED } from '../../lib/connectionState.js';
 
 const appStyles = readStyleSheet(
@@ -27,67 +27,79 @@ vi.mock('svelte', async () => {
 
 const { default: AppShell } = await import('../AppShell.svelte');
 
-describe('AppShell Desktop context menu', () => {
-  let mountedComponent;
+const SIDEBAR_COLLAPSED_KEY = 'vbot.sidebar.collapsed.v1';
+const CHAT = {
+  id: 'chat',
+  labelKey: 'navigation.chat',
+  labelFallback: 'Chat',
+  section: 'work',
+};
+const SETTINGS = {
+  id: 'settings',
+  labelKey: 'navigation.settings',
+  labelFallback: 'Settings',
+  section: 'configure',
+};
+const originalMatchMedia = window.matchMedia;
 
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    localStorage.clear();
-    init('en');
-    mountedComponent = null;
-    vi.clearAllMocks();
-    desktopBridge.getDesktopClipboardText.mockResolvedValue('pasted');
-    desktopBridge.openDesktopExternalUrl.mockResolvedValue({ opened: true });
-    desktopBridge.setDesktopClipboardText.mockResolvedValue({ copied: true });
+let mountedComponent = null;
+
+beforeEach(() => {
+  document.body.innerHTML = '';
+  localStorage.clear();
+  init('en');
+  vi.clearAllMocks();
+  desktopBridge.getDesktopClipboardText.mockResolvedValue('pasted');
+  desktopBridge.openDesktopExternalUrl.mockResolvedValue({ opened: true });
+  desktopBridge.setDesktopClipboardText.mockResolvedValue({ copied: true });
+});
+
+afterEach(async () => {
+  if (mountedComponent) await unmount(mountedComponent);
+  mountedComponent = null;
+  document.body.innerHTML = '';
+  if (originalMatchMedia === undefined) delete window.matchMedia;
+  else window.matchMedia = originalMatchMedia;
+  vi.restoreAllMocks();
+});
+
+function mountShell(props = {}) {
+  mountedComponent = mount(AppShell, {
+    target: document.body,
+    props: { items: [], ...props },
   });
+  flushSync();
+}
 
-  afterEach(async () => {
-    if (mountedComponent) {
-      await unmount(mountedComponent);
-      mountedComponent = null;
-    }
-    document.body.innerHTML = '';
-    vi.restoreAllMocks();
-  });
+const shell = () => document.querySelector('.app-shell');
+const content = () => document.querySelector('.app-shell__content');
+const sidebarToggle = () =>
+  document.querySelector('.app-shell__sidebar-toggle');
+const navItem = (item) =>
+  [...document.querySelectorAll('.app-shell__nav-item')].find((element) =>
+    element.textContent.includes(t(item.labelKey, item.labelFallback)),
+  );
 
-  function mountShell(desktopContextMenuEnabled) {
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: {
-        items: [],
-        desktopContextMenuEnabled,
-      },
-    });
-    flushSync();
-    return document.querySelector('.app-shell__content');
-  }
-
+describe('AppShell sidebar', () => {
   it('places the optional Live control above microphone and connection status', () => {
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: {
-        items: [],
-        voiceAvailable: true,
-        sidebarFooter: createRawSnippet(() => ({
-          render: () => '<button data-live>Start Live</button>',
-        })),
-      },
+    mountShell({
+      voiceAvailable: true,
+      sidebarFooter: createRawSnippet(() => ({
+        render: () => '<button data-live>Start Live</button>',
+      })),
     });
-    flushSync();
     const footer = document.querySelector('.app-shell__footer');
     expect(footer.firstElementChild.hasAttribute('data-live')).toBe(true);
     expect(footer.querySelector('.sidebar-footer__mic')).not.toBeNull();
-    expect(
-      document.querySelector('.app-shell__content [data-live]'),
-    ).toBeNull();
+    expect(content().querySelector('[data-live]')).toBeNull();
   });
 
   it('keeps the sidebar toggle free of the shared button minimum height', () => {
-    mountShell(false);
+    mountShell();
     const stylesheet = document.createElement('style');
     stylesheet.textContent = appStyles;
     document.head.append(stylesheet);
-    const toggle = document.querySelector('.app-shell__sidebar-toggle');
+    const toggle = sidebarToggle();
     const ordinaryIconButton = toggle.cloneNode(false);
     ordinaryIconButton.classList.remove('app-shell__sidebar-toggle');
     document.body.append(ordinaryIconButton);
@@ -98,37 +110,14 @@ describe('AppShell Desktop context menu', () => {
       toggle.click();
       flushSync();
       expect(getComputedStyle(toggle).minHeight).toBe('0px');
-      toggle.click();
-      flushSync();
-      expect(getComputedStyle(toggle).minHeight).toBe('0px');
-      expect(toggle.getAttribute('aria-pressed')).toBe('false');
-      expect(toggle.getAttribute('aria-label')).toBe('Collapse sidebar');
-      expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('false');
     } finally {
       stylesheet.remove();
-      ordinaryIconButton.remove();
     }
   });
 
-  it('collapses navigation to accessible icons and saves the choice', () => {
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: {
-        activeViewId: 'chat',
-        items: [
-          {
-            id: 'chat',
-            labelKey: 'navigation.chat',
-            labelFallback: 'Chat',
-            section: 'work',
-          },
-        ],
-      },
-    });
-    flushSync();
-
-    const toggle = document.querySelector('.app-shell__sidebar-toggle');
-    const navItem = document.querySelector('.app-shell__nav-item');
+  it('collapses navigation to accessible icons, saves the choice and expands again', () => {
+    mountShell({ activeViewId: 'chat', items: [CHAT] });
+    const toggle = sidebarToggle();
 
     expect(
       toggle.parentElement.classList.contains('app-shell__sidebar-header'),
@@ -140,34 +129,40 @@ describe('AppShell Desktop context menu', () => {
     toggle.click();
     flushSync();
 
-    expect(document.querySelector('.app-shell').dataset.sidebarCollapsed).toBe(
-      'true',
+    expect(shell().dataset.sidebarCollapsed).toBe('true');
+    expect(navItem(CHAT).getAttribute('aria-label')).toBe(t(CHAT.labelKey));
+    expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('true');
+    expect(toggle.getAttribute('aria-label')).toBe(
+      t('navigation.expandSidebar'),
     );
-    expect(navItem.getAttribute('aria-label')).toBe('Chat');
-    expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('true');
-    expect(toggle.getAttribute('aria-label')).toBe('Expand sidebar');
+
+    toggle.click();
+    flushSync();
+
+    expect(shell().dataset.sidebarCollapsed).toBeUndefined();
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(toggle.getAttribute('aria-label')).toBe(
+      t('navigation.collapseSidebar'),
+    );
+    expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('false');
   });
 
   it('renders a visible symbol for Extension pages in expanded and collapsed navigation', () => {
     const onSelectView = vi.fn();
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: {
-        items: [
-          {
-            id: 'extension:swarm:swarms',
-            labelKey: '',
-            labelFallback: 'Swarms',
-            section: 'work',
-          },
-        ],
-        onSelectView,
-      },
+    mountShell({
+      items: [
+        {
+          id: 'extension:swarm:swarms',
+          labelKey: '',
+          labelFallback: 'Swarms',
+          section: 'work',
+        },
+      ],
+      onSelectView,
     });
-    flushSync();
     const item = document.querySelector('.app-shell__nav-item');
     expect(item.querySelector('svg').childElementCount).toBeGreaterThan(0);
-    document.querySelector('.app-shell__sidebar-toggle').click();
+    sidebarToggle().click();
     flushSync();
     expect(item.getAttribute('aria-label')).toBe('Swarms');
     expect(item.querySelector('svg').childElementCount).toBeGreaterThan(0);
@@ -175,23 +170,80 @@ describe('AppShell Desktop context menu', () => {
     expect(onSelectView).toHaveBeenCalledWith('extension:swarm:swarms');
   });
 
-  it('restores the saved collapsed navigation on mount', () => {
-    localStorage.setItem('vbot.sidebar.collapsed.v1', 'true');
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: { items: [] },
-    });
-    flushSync();
+  it('shows the connection status as an icon with the matching state class', () => {
+    mountShell({ connectionStatus: CONNECTION_STATUS_CONNECTED });
 
-    expect(document.querySelector('.app-shell').dataset.sidebarCollapsed).toBe(
-      'true',
-    );
     expect(
       document
-        .querySelector('.app-shell__sidebar-toggle')
-        .getAttribute('aria-label'),
-    ).toBe('Expand sidebar');
+        .querySelector('.conn-icon')
+        .classList.contains('conn-icon--connected'),
+    ).toBe(true);
+    expect(document.querySelector('.footer-text').textContent).toBe(
+      t('status.connected'),
+    );
   });
+
+  it.each([
+    [
+      'microphone',
+      '.sidebar-footer__mic',
+      {
+        voiceAvailable: true,
+        voiceStatus: { enabled: true, state: 'listening' },
+      },
+      'voice.mic.tooltip.listening',
+    ],
+    [
+      'connection',
+      '.conn-icon',
+      { connectionStatus: CONNECTION_STATUS_CONNECTED },
+      'status.connected',
+    ],
+  ])(
+    'shows the %s status as a tooltip when collapsed',
+    async (_label, selector, props, tooltipKey) => {
+      mountShell(props);
+      sidebarToggle().click();
+      flushSync();
+
+      document
+        .querySelector(selector)
+        .dispatchEvent(new MouseEvent('pointerenter', { bubbles: false }));
+
+      await vi.waitFor(() =>
+        expect(
+          document.querySelector('#app-tooltip')?.dataset.floatingOpen,
+        ).toBe('true'),
+      );
+      expect(document.querySelector('#app-tooltip').textContent).toBe(
+        t(tooltipKey),
+      );
+    },
+  );
+});
+
+describe('AppShell Desktop context menu', () => {
+  function mountContent(desktopContextMenuEnabled) {
+    mountShell({ desktopContextMenuEnabled });
+    return content();
+  }
+
+  function appendLink(container, href) {
+    const link = document.createElement('a');
+    link.href = href;
+    link.textContent = 'link-sentinel';
+    container.append(link);
+    return link;
+  }
+
+  function appendInput(container, type, value) {
+    const input = document.createElement('input');
+    input.type = type;
+    input.value = value;
+    container.append(input);
+    input.focus();
+    return input;
+  }
 
   function openContextMenu(target, options = {}) {
     const event = new MouseEvent('contextmenu', {
@@ -206,34 +258,31 @@ describe('AppShell Desktop context menu', () => {
     return event;
   }
 
+  const menu = () => document.querySelector('[role="menu"]');
+  const menuItem = (key) =>
+    [...document.querySelectorAll('[role="menuitem"]')].find((item) =>
+      item.textContent.includes(t(key)),
+    );
+
   it('leaves the browser native menu untouched outside Desktop mode', () => {
-    const content = mountShell(false);
-    const link = document.createElement('a');
-    link.href = 'https://example.com/docs';
-    content.append(link);
+    const link = appendLink(mountContent(false), 'https://example.com/docs');
 
     const event = openContextMenu(link);
 
     expect(event.defaultPrevented).toBe(false);
-    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(menu()).toBeNull();
   });
 
   it('copies safe link addresses and opens them in the host browser', async () => {
-    const content = mountShell(true);
-    const link = document.createElement('a');
-    link.href = 'https://example.com/docs?q=vbot';
-    link.textContent = 'Documentation';
-    content.append(link);
+    const link = appendLink(
+      mountContent(true),
+      'https://example.com/docs?q=vbot',
+    );
 
     const copyEvent = openContextMenu(link);
-    const menu = document.querySelector('[role="menu"]');
-    const copyLink = Array.from(
-      menu.querySelectorAll('[role="menuitem"]'),
-    ).find((item) => item.textContent.includes('Copy link address'));
-
     expect(copyEvent.defaultPrevented).toBe(true);
-    expect(menu.textContent).toContain('Open in browser');
-    copyLink.click();
+    expect(menuItem('desktop.contextMenu.openInBrowser')).toBeTruthy();
+    menuItem('desktop.contextMenu.copyLinkAddress').click();
     await vi.waitFor(() =>
       expect(desktopBridge.setDesktopClipboardText).toHaveBeenCalledWith(
         'https://example.com/docs?q=vbot',
@@ -241,10 +290,7 @@ describe('AppShell Desktop context menu', () => {
     );
 
     openContextMenu(link);
-    const openLink = Array.from(
-      document.querySelectorAll('[role="menuitem"]'),
-    ).find((item) => item.textContent.includes('Open in browser'));
-    openLink.click();
+    menuItem('desktop.contextMenu.openInBrowser').click();
     await vi.waitFor(() =>
       expect(desktopBridge.openDesktopExternalUrl).toHaveBeenCalledWith(
         'https://example.com/docs?q=vbot',
@@ -253,32 +299,27 @@ describe('AppShell Desktop context menu', () => {
   });
 
   it('does not expose executable or local link schemes', () => {
-    const content = mountShell(true);
-    const link = document.createElement('a');
-    link.href = 'javascript:alert(1)';
-    link.textContent = 'Unsafe';
-    content.append(link);
+    const link = appendLink(mountContent(true), 'javascript:alert(1)');
 
     const event = openContextMenu(link);
 
     expect(event.defaultPrevented).toBe(false);
-    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(menu()).toBeNull();
     expect(desktopBridge.setDesktopClipboardText).not.toHaveBeenCalled();
     expect(desktopBridge.openDesktopExternalUrl).not.toHaveBeenCalled();
   });
 
   it('copies selected page text', async () => {
-    const content = mountShell(true);
     const text = document.createElement('p');
     text.textContent = 'selected text';
-    content.append(text);
+    mountContent(true).append(text);
     const range = document.createRange();
     range.selectNodeContents(text);
     window.getSelection().removeAllRanges();
     window.getSelection().addRange(range);
 
     openContextMenu(text);
-    document.querySelector('[role="menuitem"]').click();
+    menuItem('common.copy').click();
 
     await vi.waitFor(() =>
       expect(desktopBridge.setDesktopClipboardText).toHaveBeenCalledWith(
@@ -288,66 +329,43 @@ describe('AppShell Desktop context menu', () => {
   });
 
   it('cuts and pastes text-field selections through the host clipboard', async () => {
-    const content = mountShell(true);
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = 'hello world';
-    content.append(input);
-    input.focus();
+    const input = appendInput(mountContent(true), 'text', 'hello world');
     input.setSelectionRange(0, 5);
 
     openContextMenu(input);
-    const cut = Array.from(document.querySelectorAll('[role="menuitem"]')).find(
-      (item) => item.textContent.includes('Cut'),
-    );
-    cut.click();
+    menuItem('desktop.contextMenu.cut').click();
     await vi.waitFor(() => expect(input.value).toBe(' world'));
     expect(desktopBridge.setDesktopClipboardText).toHaveBeenCalledWith('hello');
 
     input.setSelectionRange(0, 0);
     openContextMenu(input);
-    const paste = Array.from(
-      document.querySelectorAll('[role="menuitem"]'),
-    ).find((item) => item.textContent.includes('Paste'));
-    paste.click();
+    menuItem('desktop.contextMenu.paste').click();
     await vi.waitFor(() => expect(input.value).toBe('pasted world'));
     expect(desktopBridge.getDesktopClipboardText).toHaveBeenCalledOnce();
   });
 
   it('allows paste into password fields without exposing their selected text', async () => {
-    const content = mountShell(true);
-    const input = document.createElement('input');
-    input.type = 'password';
-    input.value = 'secret';
-    content.append(input);
-    input.focus();
+    const input = appendInput(mountContent(true), 'password', 'secret');
     input.setSelectionRange(0, input.value.length);
 
     openContextMenu(input);
-    const menuText = document.querySelector('[role="menu"]').textContent;
-    expect(menuText).toContain('Paste');
-    expect(menuText).not.toContain('Copy');
-    expect(menuText).not.toContain('Cut');
+    expect(menuItem('common.copy')).toBeUndefined();
+    expect(menuItem('desktop.contextMenu.cut')).toBeUndefined();
 
-    document.querySelector('[role="menuitem"]').click();
+    menuItem('desktop.contextMenu.paste').click();
     await vi.waitFor(() => expect(input.value).toBe('pasted'));
   });
 
   it('closes on Escape and restores focus to the context target', async () => {
-    const content = mountShell(true);
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = 'value';
-    content.append(input);
-    input.focus();
+    const input = appendInput(mountContent(true), 'text', 'value');
 
     openContextMenu(input);
-    expect(document.querySelector('[role="menu"]')).toBeTruthy();
+    expect(menu()).toBeTruthy();
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();
     await Promise.resolve();
 
-    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(menu()).toBeNull();
     expect(document.activeElement).toBe(input);
   });
 
@@ -363,59 +381,37 @@ describe('AppShell Desktop context menu', () => {
       y: 0,
       toJSON: () => ({}),
     });
-    const content = mountShell(true);
-    const link = document.createElement('a');
-    link.href = 'https://example.com/docs';
-    content.append(link);
+    const container = mountContent(true);
+    const link = appendLink(container, 'https://example.com/docs');
 
     openContextMenu(link, {
       clientX: window.innerWidth,
       clientY: window.innerHeight,
     });
     await vi.waitFor(() => {
-      const menu = document.querySelector('[role="menu"]');
-      expect(Number.parseFloat(menu.style.left)).toBeLessThan(
+      expect(Number.parseFloat(menu().style.left)).toBeLessThan(
         window.innerWidth,
       );
-      expect(Number.parseFloat(menu.style.top)).toBeLessThan(
+      expect(Number.parseFloat(menu().style.top)).toBeLessThan(
         window.innerHeight,
       );
-      expect(menu.style.visibility).toBe('visible');
+      expect(menu().style.visibility).toBe('visible');
     });
 
     document.body.dispatchEvent(
       new MouseEvent('pointerdown', { bubbles: true }),
     );
     flushSync();
-    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(menu()).toBeNull();
 
     openContextMenu(link);
-    content.dispatchEvent(new Event('scroll'));
+    container.dispatchEvent(new Event('scroll'));
     flushSync();
-    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(menu()).toBeNull();
   });
 });
 
 describe('AppShell Voice indicator', () => {
-  let mountedComponent;
-
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    localStorage.clear();
-    init('en');
-    mountedComponent = null;
-    vi.clearAllMocks();
-  });
-
-  afterEach(async () => {
-    if (mountedComponent) {
-      await unmount(mountedComponent);
-      mountedComponent = null;
-    }
-    document.body.innerHTML = '';
-    vi.restoreAllMocks();
-  });
-
   function voiceStatus(overrides = {}) {
     return {
       enabled: true,
@@ -433,17 +429,12 @@ describe('AppShell Voice indicator', () => {
     onStop = vi.fn(),
     onNavigate = vi.fn(),
   } = {}) {
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: {
-        items: [],
-        voiceAvailable,
-        voiceStatus: status,
-        onStopVoiceRecording: onStop,
-        onNavigateToVoiceSettings: onNavigate,
-      },
+    mountShell({
+      voiceAvailable,
+      voiceStatus: status,
+      onStopVoiceRecording: onStop,
+      onNavigateToVoiceSettings: onNavigate,
     });
-    flushSync();
     return document.querySelector('.sidebar-footer__mic');
   }
 
@@ -452,21 +443,21 @@ describe('AppShell Voice indicator', () => {
   });
 
   it.each([
-    ['off', voiceStatus({ enabled: false, state: 'off' }), 'off', 'Disabled'],
-    ['starting', voiceStatus({ state: 'starting' }), 'processing', 'Starting'],
-    ['listening', voiceStatus(), 'listening', 'Listening'],
+    ['off', voiceStatus({ enabled: false, state: 'off' }), 'off', 'off'],
+    ['starting', voiceStatus({ state: 'starting' }), 'processing', 'starting'],
+    ['listening', voiceStatus(), 'listening', 'listening'],
     [
       'a lost microphone',
       voiceStatus({ state: 'microphone_disconnected' }),
       'warning',
-      'Microphone disconnected',
+      'microphone_disconnected',
     ],
-    ['an error', voiceStatus({ state: 'error' }), 'error', 'Voice error'],
+    ['an error', voiceStatus({ state: 'error' }), 'error', 'error'],
     [
       'a recording',
       voiceStatus({ recording: { command_id: 'c-1' } }),
       'recording',
-      'Recording',
+      'recording',
     ],
     [
       'a command in flight',
@@ -474,52 +465,41 @@ describe('AppShell Voice indicator', () => {
         commands: [{ command_id: 'c-1', model_id: null, stage: 'sending' }],
       }),
       'processing',
-      'Sending',
+      'sending',
     ],
     [
       'an error during a recording',
       voiceStatus({ state: 'error', recording: { command_id: 'c-1' } }),
       'error',
-      'Voice error',
+      'error',
     ],
-    ['no status yet', null, 'off', 'Disabled'],
-  ])('shows %s', (_label, status, tone, text) => {
+    ['no status yet', null, 'off', 'off'],
+  ])('shows %s', (_label, status, tone, stateKey) => {
     const indicator = mountMicIndicator({ status });
     expect(indicator.querySelector(`.mic-icon--${tone}`)).toBeTruthy();
-    expect(indicator.textContent).toContain(text);
+    expect(indicator.textContent).toContain(t(`voice.state.${stateKey}`));
   });
 
-  it('stops the recording when the mic indicator is clicked during recording', () => {
-    const onStop = vi.fn();
-    const onNavigate = vi.fn();
-    mountMicIndicator({
-      status: voiceStatus({ recording: { command_id: 'c-1' } }),
-      onStop,
-      onNavigate,
-    }).click();
-    flushSync();
+  it.each(['.sidebar-footer__mic', '.mic-icon'])(
+    'stops the recording when %s is clicked during recording',
+    (selector) => {
+      const onStop = vi.fn();
+      const onNavigate = vi.fn();
+      mountMicIndicator({
+        status: voiceStatus({ recording: { command_id: 'c-1' } }),
+        onStop,
+        onNavigate,
+      });
 
-    expect(onStop).toHaveBeenCalledOnce();
-    expect(onNavigate).not.toHaveBeenCalled();
-  });
+      document
+        .querySelector(selector)
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      flushSync();
 
-  it('stops the recording when the mic icon is clicked during recording', () => {
-    const onStop = vi.fn();
-    const onNavigate = vi.fn();
-    mountMicIndicator({
-      status: voiceStatus({ recording: { command_id: 'c-1' } }),
-      onStop,
-      onNavigate,
-    });
-
-    document
-      .querySelector('.mic-icon')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    flushSync();
-
-    expect(onStop).toHaveBeenCalledOnce();
-    expect(onNavigate).not.toHaveBeenCalled();
-  });
+      expect(onStop).toHaveBeenCalledOnce();
+      expect(onNavigate).not.toHaveBeenCalled();
+    },
+  );
 
   it('navigates to voice settings when clicked while not recording', () => {
     const onStop = vi.fn();
@@ -530,142 +510,21 @@ describe('AppShell Voice indicator', () => {
     expect(onNavigate).toHaveBeenCalledOnce();
     expect(onStop).not.toHaveBeenCalled();
   });
-
-  it('shows the mic tooltip on the indicator when collapsed', async () => {
-    mountMicIndicator();
-
-    document.querySelector('.app-shell__sidebar-toggle').click();
-    flushSync();
-
-    document
-      .querySelector('.sidebar-footer__mic')
-      .dispatchEvent(new MouseEvent('pointerenter', { bubbles: false }));
-
-    await vi.waitFor(() =>
-      expect(document.querySelector('#app-tooltip')?.dataset.floatingOpen).toBe(
-        'true',
-      ),
-    );
-    expect(document.querySelector('#app-tooltip').textContent).toBe(
-      'Listening for wake phrases',
-    );
-  });
-});
-
-describe('AppShell sidebar status icons', () => {
-  let mountedComponent;
-
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    localStorage.clear();
-    init('en');
-    mountedComponent = null;
-    vi.clearAllMocks();
-  });
-
-  afterEach(async () => {
-    if (mountedComponent) {
-      await unmount(mountedComponent);
-      mountedComponent = null;
-    }
-    document.body.innerHTML = '';
-    vi.restoreAllMocks();
-  });
-
-  it('renders the connection status as an icon with the matching state class', () => {
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: {
-        items: [],
-        connectionStatus: CONNECTION_STATUS_CONNECTED,
-      },
-    });
-    flushSync();
-
-    const icon = document.querySelector('.conn-icon');
-    expect(icon).toBeTruthy();
-    expect(icon.classList.contains('conn-icon--connected')).toBe(true);
-    expect(document.querySelector('.footer-text').textContent).toBe(
-      'Connected',
-    );
-  });
-
-  it('shows the connection status tooltip on the icon when collapsed', async () => {
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: {
-        items: [],
-        connectionStatus: CONNECTION_STATUS_CONNECTED,
-      },
-    });
-    flushSync();
-
-    document.querySelector('.app-shell__sidebar-toggle').click();
-    flushSync();
-
-    document
-      .querySelector('.conn-icon')
-      .dispatchEvent(new MouseEvent('pointerenter', { bubbles: false }));
-
-    await vi.waitFor(() =>
-      expect(document.querySelector('#app-tooltip')?.dataset.floatingOpen).toBe(
-        'true',
-      ),
-    );
-    expect(document.querySelector('#app-tooltip').textContent).toBe(
-      'Connected',
-    );
-  });
 });
 
 describe('AppShell mobile More sheet', () => {
-  let mountedComponent;
-
-  const items = [
-    {
-      id: 'chat',
-      labelKey: 'navigation.chat',
-      labelFallback: 'Chat',
-      section: 'work',
-    },
-    {
-      id: 'settings',
-      labelKey: 'navigation.settings',
-      labelFallback: 'Settings',
-      section: 'configure',
-    },
-  ];
-
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    localStorage.clear();
-    init('en');
-  });
-
-  afterEach(async () => {
-    if (mountedComponent) await unmount(mountedComponent);
-    mountedComponent = null;
-    document.body.innerHTML = '';
-  });
-
-  function mountShell(onSelectView = vi.fn()) {
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: { items, activeViewId: 'settings', onSelectView },
+  function mountSheet(onSelectView = vi.fn()) {
+    mountShell({
+      items: [CHAT, SETTINGS],
+      activeViewId: 'settings',
+      onSelectView,
     });
-    flushSync();
-    return {
-      shell: document.querySelector('.app-shell'),
-      more: document.querySelector('.app-shell__nav-more'),
-      main: document.querySelector('.app-shell__content'),
-    };
+    return document.querySelector('.app-shell__nav-more');
   }
 
   it('marks sheet-only destinations and opens the sheet with focus on the current one', async () => {
-    const { shell, more, main } = mountShell();
-    const settingsItem = [
-      ...document.querySelectorAll('.app-shell__nav-item'),
-    ].find((item) => item.textContent.includes('Settings'));
+    const more = mountSheet();
+    const settingsItem = navItem(SETTINGS);
 
     expect(
       settingsItem.classList.contains('app-shell__nav-item--mobile-secondary'),
@@ -677,59 +536,40 @@ describe('AppShell mobile More sheet', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     flushSync();
 
-    expect(shell.dataset.mobileNavOpen).toBe('true');
+    expect(shell().dataset.mobileNavOpen).toBe('true');
     expect(more.getAttribute('aria-expanded')).toBe('true');
-    expect(main.inert).toBe(true);
+    expect(content().inert).toBe(true);
     expect(document.activeElement).toBe(settingsItem);
   });
 
   it('closes on Escape, restores focus to More and releases the content', () => {
-    const { shell, more, main } = mountShell();
+    const more = mountSheet();
     more.click();
     flushSync();
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();
 
-    expect(shell.dataset.mobileNavOpen).toBeUndefined();
-    expect(Boolean(main.inert)).toBe(false);
+    expect(shell().dataset.mobileNavOpen).toBeUndefined();
+    expect(Boolean(content().inert)).toBe(false);
     expect(document.activeElement).toBe(more);
   });
 
   it('closes when a destination is chosen from the sheet', () => {
     const onSelectView = vi.fn();
-    const { shell, more } = mountShell(onSelectView);
-    more.click();
+    mountSheet(onSelectView).click();
     flushSync();
 
-    [...document.querySelectorAll('.app-shell__nav-item')]
-      .find((item) => item.textContent.includes('Chat'))
-      .click();
+    navItem(CHAT).click();
     flushSync();
 
     expect(onSelectView).toHaveBeenCalledWith('chat');
-    expect(shell.dataset.mobileNavOpen).toBeUndefined();
+    expect(shell().dataset.mobileNavOpen).toBeUndefined();
   });
 });
 
 describe('AppShell tablet navigation', () => {
-  let mountedComponent;
   let viewport;
-
-  const items = [
-    {
-      id: 'chat',
-      labelKey: 'navigation.chat',
-      labelFallback: 'Chat',
-      section: 'work',
-    },
-    {
-      id: 'settings',
-      labelKey: 'navigation.settings',
-      labelFallback: 'Settings',
-      section: 'configure',
-    },
-  ];
 
   // A minimal matchMedia stand-in that evaluates the min/max-width queries
   // AppShell uses and notifies listeners when the simulated width changes.
@@ -773,114 +613,91 @@ describe('AppShell tablet navigation', () => {
     };
   }
 
-  beforeEach(() => {
-    document.body.innerHTML = '';
-    localStorage.clear();
-    init('en');
-    mountedComponent = null;
-  });
-
-  afterEach(async () => {
-    if (mountedComponent) await unmount(mountedComponent);
-    mountedComponent = null;
-    document.body.innerHTML = '';
-    delete window.matchMedia;
-    vi.restoreAllMocks();
-  });
-
-  function mountShell({ width, onSelectView = vi.fn() }) {
+  function mountAtWidth(width, onSelectView = vi.fn()) {
     viewport = stubViewport(width);
-    mountedComponent = mount(AppShell, {
-      target: document.body,
-      props: { items, activeViewId: 'settings', onSelectView },
+    mountShell({
+      items: [CHAT, SETTINGS],
+      activeViewId: 'settings',
+      onSelectView,
     });
-    flushSync();
-    return {
-      shell: document.querySelector('.app-shell'),
-      toggle: document.querySelector('.app-shell__sidebar-toggle'),
-      main: document.querySelector('.app-shell__content'),
-      settingsItem: [...document.querySelectorAll('.app-shell__nav-item')].find(
-        (item) => item.textContent.includes('Settings'),
-      ),
-    };
+    return sidebarToggle();
   }
 
-  async function settle() {
+  async function openTabletMenu(onSelectView) {
+    const toggle = mountAtWidth(800, onSelectView);
+    toggle.click();
     flushSync();
     await tick();
     flushSync();
+    return toggle;
   }
 
   it('forces the compact rail at tablet width and ignores the saved preference', () => {
-    localStorage.setItem('vbot.sidebar.collapsed.v1', 'false');
-    const { shell, toggle, settingsItem } = mountShell({ width: 800 });
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'false');
+    const toggle = mountAtWidth(800);
 
-    expect(shell.dataset.sidebarCollapsed).toBe('true');
-    expect(settingsItem.getAttribute('aria-label')).toBe('Settings');
-    expect(toggle.getAttribute('aria-label')).toBe('Expand sidebar');
+    expect(shell().dataset.sidebarCollapsed).toBe('true');
+    expect(navItem(SETTINGS).getAttribute('aria-label')).toBe(
+      t(SETTINGS.labelKey),
+    );
+    expect(toggle.getAttribute('aria-label')).toBe(
+      t('navigation.expandSidebar'),
+    );
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.hasAttribute('aria-pressed')).toBe(false);
-    expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('false');
+    expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('false');
   });
 
   it('opens the full menu as an overlay without changing the saved preference', async () => {
-    localStorage.setItem('vbot.sidebar.collapsed.v1', 'true');
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'true');
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
-    const { shell, toggle, main, settingsItem } = mountShell({ width: 800 });
+    const toggle = await openTabletMenu();
 
-    toggle.click();
-    await settle();
-
-    expect(shell.dataset.tabletMenuOpen).toBe('true');
-    expect(shell.dataset.sidebarCollapsed).toBeUndefined();
+    expect(shell().dataset.tabletMenuOpen).toBe('true');
+    expect(shell().dataset.sidebarCollapsed).toBeUndefined();
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    expect(toggle.getAttribute('aria-label')).toBe('Collapse sidebar');
-    expect(main.inert).toBe(true);
+    expect(toggle.getAttribute('aria-label')).toBe(
+      t('navigation.collapseSidebar'),
+    );
+    expect(content().inert).toBe(true);
     expect(document.querySelector('.app-shell__nav-backdrop')).not.toBeNull();
-    expect(document.activeElement).toBe(settingsItem);
-    expect(setItem).not.toHaveBeenCalled();
-    expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('true');
+    expect(document.activeElement).toBe(navItem(SETTINGS));
 
     toggle.click();
-    await settle();
-    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
-    expect(shell.dataset.sidebarCollapsed).toBe('true');
+    flushSync();
+    await tick();
+    flushSync();
+    expect(shell().dataset.tabletMenuOpen).toBeUndefined();
+    expect(shell().dataset.sidebarCollapsed).toBe('true');
     expect(setItem).not.toHaveBeenCalled();
+    expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('true');
   });
 
   it('closes the overlay when a destination is chosen', async () => {
     const onSelectView = vi.fn();
-    const { shell, toggle, main } = mountShell({ width: 800, onSelectView });
-    toggle.click();
-    await settle();
+    await openTabletMenu(onSelectView);
 
-    [...document.querySelectorAll('.app-shell__nav-item')]
-      .find((item) => item.textContent.includes('Chat'))
-      .click();
+    navItem(CHAT).click();
     flushSync();
 
     expect(onSelectView).toHaveBeenCalledWith('chat');
-    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
-    expect(Boolean(main.inert)).toBe(false);
+    expect(shell().dataset.tabletMenuOpen).toBeUndefined();
+    expect(Boolean(content().inert)).toBe(false);
   });
 
   it('closes on Escape and returns focus to the rail toggle', async () => {
-    const { shell, toggle, main } = mountShell({ width: 800 });
-    toggle.click();
-    await settle();
+    const toggle = await openTabletMenu();
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();
 
-    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
-    expect(Boolean(main.inert)).toBe(false);
+    expect(shell().dataset.tabletMenuOpen).toBeUndefined();
+    expect(Boolean(content().inert)).toBe(false);
     expect(document.activeElement).toBe(toggle);
   });
 
   it('leaves an Escape consumed by a floating layer to that layer', async () => {
-    const { shell, toggle } = mountShell({ width: 800 });
-    toggle.click();
-    await settle();
+    await openTabletMenu();
 
     const consumed = new KeyboardEvent('keydown', {
       key: 'Escape',
@@ -890,58 +707,57 @@ describe('AppShell tablet navigation', () => {
     window.dispatchEvent(consumed);
     flushSync();
 
-    expect(shell.dataset.tabletMenuOpen).toBe('true');
+    expect(shell().dataset.tabletMenuOpen).toBe('true');
   });
 
   it('closes on an outside click', async () => {
-    const { shell, toggle } = mountShell({ width: 800 });
-    toggle.click();
-    await settle();
+    await openTabletMenu();
 
     document.querySelector('.app-shell__nav-backdrop').click();
     flushSync();
 
-    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
+    expect(shell().dataset.tabletMenuOpen).toBeUndefined();
     expect(document.querySelector('.app-shell__nav-backdrop')).toBeNull();
   });
 
   it('closes when the viewport leaves the tablet range and restores the desktop preference', async () => {
-    localStorage.setItem('vbot.sidebar.collapsed.v1', 'false');
-    const { shell, toggle, main } = mountShell({ width: 800 });
-    toggle.click();
-    await settle();
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'false');
+    const toggle = await openTabletMenu();
 
     viewport.resize(1200);
 
-    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
-    expect(shell.dataset.sidebarCollapsed).toBeUndefined();
-    expect(Boolean(main.inert)).toBe(false);
+    expect(shell().dataset.tabletMenuOpen).toBeUndefined();
+    expect(shell().dataset.sidebarCollapsed).toBeUndefined();
+    expect(Boolean(content().inert)).toBe(false);
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
     expect(toggle.hasAttribute('aria-expanded')).toBe(false);
 
     viewport.resize(700);
-    expect(shell.dataset.sidebarCollapsed).toBe('true');
-    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
+    expect(shell().dataset.sidebarCollapsed).toBe('true');
+    expect(shell().dataset.tabletMenuOpen).toBeUndefined();
   });
 
-  it('keeps the saved compact preference on desktop and toggles it there', () => {
-    localStorage.setItem('vbot.sidebar.collapsed.v1', 'true');
-    const { shell, toggle, main } = mountShell({ width: 1400 });
+  it('restores the saved compact preference on desktop and toggles it there', () => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'true');
+    const toggle = mountAtWidth(1400);
 
-    expect(shell.dataset.sidebarCollapsed).toBe('true');
+    expect(shell().dataset.sidebarCollapsed).toBe('true');
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(toggle.getAttribute('aria-label')).toBe(
+      t('navigation.expandSidebar'),
+    );
 
     toggle.click();
     flushSync();
 
-    expect(shell.dataset.sidebarCollapsed).toBeUndefined();
-    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
-    expect(Boolean(main.inert)).toBe(false);
-    expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('false');
+    expect(shell().dataset.sidebarCollapsed).toBeUndefined();
+    expect(shell().dataset.tabletMenuOpen).toBeUndefined();
+    expect(Boolean(content().inert)).toBe(false);
+    expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('false');
   });
 
   it('removes its viewport listeners on unmount', async () => {
-    mountShell({ width: 800 });
+    mountAtWidth(800);
     expect(viewport.listenerCount()).toBe(2);
 
     await unmount(mountedComponent);

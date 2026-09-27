@@ -1,57 +1,57 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const STORAGE_KEY = 'vbot.clientConnectionId';
 
+// A fresh module per test resets the module-level id cache.
+const loadClientIdentity = () => import('../clientIdentity.js');
+
 describe('clientIdentity', () => {
   beforeEach(() => {
-    // A fresh module each test resets the in-tab module cache so the
-    // sessionStorage-driven paths are observable in isolation.
     vi.resetModules();
     sessionStorage.clear();
     window.history.replaceState({}, '', '/');
   });
 
-  it('mints a non-empty id and persists it to sessionStorage', async () => {
-    const { resolveClientConnectionId } = await import('../clientIdentity.js');
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('mints one id for the tab and keeps it in sessionStorage', async () => {
+    const { resolveClientConnectionId } = await loadClientIdentity();
 
     const id = resolveClientConnectionId();
 
     expect(id).toBeTruthy();
+    expect(resolveClientConnectionId()).toBe(id);
     expect(sessionStorage.getItem(STORAGE_KEY)).toBe(id);
   });
 
-  it('returns the same id across calls within the tab', async () => {
-    const { resolveClientConnectionId } = await import('../clientIdentity.js');
-
-    expect(resolveClientConnectionId()).toBe(resolveClientConnectionId());
-  });
-
-  it('reuses an id already stored for the tab', async () => {
+  it('reuses the id already stored for the tab', async () => {
     sessionStorage.setItem(STORAGE_KEY, 'tab-seed');
-    const { resolveClientConnectionId } = await import('../clientIdentity.js');
+    const { resolveClientConnectionId } = await loadClientIdentity();
 
     expect(resolveClientConnectionId()).toBe('tab-seed');
   });
 
-  it('does not read localStorage (per-tab id, not per-browser)', async () => {
+  it('ignores an id in localStorage, which every tab shares', async () => {
     localStorage.setItem(STORAGE_KEY, 'shared-across-tabs');
-    const { resolveClientConnectionId } = await import('../clientIdentity.js');
+    const { resolveClientConnectionId } = await loadClientIdentity();
 
     expect(resolveClientConnectionId()).not.toBe('shared-across-tabs');
   });
 
-  it('reports the browser accessor by default', async () => {
-    const { resolveAccessorType } = await import('../clientIdentity.js');
+  it.each([
+    ['/', 'browser'],
+    ['/?accessor=desktop', 'desktop'],
+  ])(
+    'reports the accessor of a window loaded at %s as %s',
+    async (url, type) => {
+      window.history.replaceState({}, '', url);
+      const { resolveAccessorType } = await loadClientIdentity();
 
-    expect(resolveAccessorType()).toBe('browser');
-  });
-
-  it('reports the desktop accessor when loaded via the desktop URL', async () => {
-    window.history.replaceState({}, '', '/?accessor=desktop');
-    const { resolveAccessorType } = await import('../clientIdentity.js');
-
-    expect(resolveAccessorType()).toBe('desktop');
-  });
+      expect(resolveAccessorType()).toBe(type);
+    },
+  );
 });

@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount } from 'svelte';
 
+import { t } from '../lib/i18n.js';
 import { App, cleanupAppHarness, resetAppHarness } from './App.support.js';
 
 vi.mock('svelte', async () => {
@@ -16,6 +17,8 @@ vi.mock('$lib/desktopBridge.js', async (importOriginal) => ({
 }));
 
 const VOICE_CAPABILITIES = { wakeword: true, voiceApi: 2 };
+// Longer than the auto-dismiss delay of non-error Toasts.
+const PAST_AUTO_DISMISS_MS = 10000;
 
 function voiceStatus(overrides = {}) {
   return {
@@ -68,11 +71,23 @@ function pushEvent(sequence, kind, extra = {}) {
 }
 
 const indicator = () => document.querySelector('.sidebar-footer__mic');
+const indicatorShows = (stateKey) =>
+  expect(indicator().textContent).toContain(t(`voice.state.${stateKey}`));
 const toasts = (variant) =>
   [...document.querySelectorAll(`.toast.${variant}`)].map((toast) => ({
     title: toast.querySelector('.toast-title')?.textContent,
     message: toast.querySelector('.toast-msg')?.textContent ?? '',
   }));
+const toast = (title, message = '') => ({ title, message });
+// The English catalog has no entry for these keys; the UI shows the fallback.
+const VOICE_ERROR_TITLE = t(
+  'settings.voice.errorTitle',
+  'Voice needs attention',
+);
+const MICROPHONE_UNAVAILABLE = t(
+  'settings.voice.error.microphone',
+  'No compatible microphone is available. Connect a microphone or choose another input device, then retry.',
+);
 
 describe('App Desktop Voice feedback', () => {
   let mountedComponent;
@@ -121,19 +136,19 @@ describe('App Desktop Voice feedback', () => {
 
     expect(api.getDesktopCapabilities).toHaveBeenCalledOnce();
     expect(api.getVoiceStatus).toHaveBeenCalledOnce();
-    expect(indicator().textContent).toContain('Listening');
+    indicatorShows('listening');
   });
 
   it('retries the first snapshot until the Desktop answers', async () => {
     installDesktop();
     api.getVoiceStatus.mockRejectedValueOnce(new Error('starting'));
     await mountApp();
-    expect(indicator().textContent).toContain('Disabled');
+    indicatorShows('off');
 
     await vi.advanceTimersByTimeAsync(1000);
     await settle();
     expect(api.getVoiceStatus).toHaveBeenCalledTimes(2);
-    expect(indicator().textContent).toContain('Listening');
+    indicatorShows('listening');
   });
 
   it('offers no Voice to a Desktop without the Voice bridge it speaks', async () => {
@@ -149,32 +164,32 @@ describe('App Desktop Voice feedback', () => {
   it('shows a sticky Toast when Voice already failed on load', async () => {
     installDesktop({
       status: voiceStatus({
-        enabled: true,
         state: 'error',
         error_code: 'speech_to_text_unconfigured',
       }),
     });
     await mountApp();
 
-    expect(toasts('error')).toEqual([
-      {
-        title: 'Voice needs attention',
-        message:
-          'Configure a Speech-to-text Model under Settings → Voice to send voice commands.',
-      },
-    ]);
-    await vi.advanceTimersByTimeAsync(10000);
+    const expected = [
+      toast(
+        VOICE_ERROR_TITLE,
+        t('settings.voice.error.speechToTextUnconfigured'),
+      ),
+    ];
+    expect(toasts('error')).toEqual(expected);
+    await vi.advanceTimersByTimeAsync(PAST_AUTO_DISMISS_MS);
     flushSync();
-    expect(toasts('error')).toHaveLength(1);
+    expect(toasts('error')).toEqual(expected);
   });
 
   it('gives no feedback for events from before the page loaded', async () => {
     installDesktop({ status: voiceStatus({ sequence: 5 }) });
     let resolveStatus;
-    const pending = new Promise((resolve) => {
-      resolveStatus = resolve;
-    });
-    api.getVoiceStatus.mockReturnValueOnce(pending);
+    api.getVoiceStatus.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      }),
+    );
     await mountApp();
 
     // Before the first snapshot nothing is known about the order.
@@ -189,9 +204,7 @@ describe('App Desktop Voice feedback', () => {
     expect(cues).not.toHaveBeenCalled();
 
     pushEvent(6, 'sent', { command_id: 'c-1' });
-    expect(toasts('success')).toEqual([
-      { title: 'Voice command sent', message: '' },
-    ]);
+    expect(toasts('success')).toEqual([toast(t('voice.toast.sentTitle'))]);
     expect(cues).toHaveBeenCalledExactlyOnceWith('sent');
 
     // The same event again runs once.
@@ -204,69 +217,56 @@ describe('App Desktop Voice feedback', () => {
       'no_speech',
       {},
       'warn',
-      {
-        title: 'No speech heard',
-        message:
-          'No command followed the wake phrase. Try again and speak after the cue.',
-      },
+      toast(t('voice.toast.noSpeechTitle'), t('voice.toast.noSpeechMessage')),
     ],
-    ['transcription_failed', {}, 'error', null],
+    [
+      'transcription_failed',
+      {},
+      'error',
+      toast(
+        t('voice.toast.transcriptionFailedTitle'),
+        t('voice.toast.transcriptionFailedMessage'),
+      ),
+    ],
     [
       'command_failed',
       { error_code: 'target_agent_unavailable' },
       'error',
-      {
-        title: 'Voice command not sent',
-        message:
-          'The chosen Agent no longer exists on this server. Choose another Agent.',
-      },
+      toast(
+        t('voice.toast.commandFailedTitle'),
+        t('settings.voice.error.targetUnavailable'),
+      ),
     ],
     [
       'command_failed',
       { error_code: 'something_new' },
       'error',
-      {
-        title: 'Voice command not sent',
-        message:
-          'The voice command could not be sent. The failure was written to the Desktop log.',
-      },
+      toast(
+        t('voice.toast.commandFailedTitle'),
+        t('voice.toast.commandFailedMessage'),
+      ),
     ],
     [
       'error',
       { error_code: 'microphone_unavailable' },
       'error',
-      {
-        title: 'Voice needs attention',
-        message:
-          'No compatible microphone is available. Connect a microphone or choose another input device, then retry.',
-      },
+      toast(VOICE_ERROR_TITLE, MICROPHONE_UNAVAILABLE),
     ],
   ])(
-    'reports %s %j with a cue and a Toast',
-    async (kind, extra, variant, toast) => {
+    'reports %s %j with a cue and a %s Toast that only an error keeps',
+    async (kind, extra, variant, expected) => {
       installDesktop();
       await mountApp();
 
       pushEvent(4, kind, extra);
 
       expect(cues).toHaveBeenCalledExactlyOnceWith(kind);
-      const shown = toasts(variant);
-      expect(shown).toHaveLength(1);
-      if (toast) expect(shown[0]).toEqual(toast);
+      expect(toasts(variant)).toEqual([expected]);
+      await vi.advanceTimersByTimeAsync(PAST_AUTO_DISMISS_MS);
+      flushSync();
+      expect(toasts(variant)).toEqual(variant === 'error' ? [expected] : []);
     },
   );
-
-  it('keeps error Toasts until dismissed', async () => {
-    installDesktop();
-    await mountApp();
-
-    pushEvent(4, 'command_failed', { error_code: 'send_failed' });
-    pushEvent(5, 'error', { error_code: 'pipeline_failed' });
-    await vi.advanceTimersByTimeAsync(10000);
-    flushSync();
-
-    expect(toasts('error')).toHaveLength(2);
-  });
 
   it('shows an auto-dismissing warning when a running microphone disconnects', async () => {
     installDesktop();
@@ -283,11 +283,16 @@ describe('App Desktop Voice feedback', () => {
       }),
     );
 
-    expect(toasts('warn')).toHaveLength(1);
+    expect(toasts('warn')).toEqual([
+      toast(
+        t('voice.toast.microphoneDisconnectedTitle'),
+        t('voice.toast.microphoneDisconnectedMessage'),
+      ),
+    ]);
     expect(toasts('error')).toHaveLength(0);
-    expect(indicator().textContent).toContain('Microphone disconnected');
+    indicatorShows('microphone_disconnected');
 
-    await vi.advanceTimersByTimeAsync(3200);
+    await vi.advanceTimersByTimeAsync(PAST_AUTO_DISMISS_MS);
     flushSync();
     expect(toasts('warn')).toHaveLength(0);
   });
@@ -311,13 +316,13 @@ describe('App Desktop Voice feedback', () => {
       command_id: 'c-1',
       model_id: 'builtin/okay_nabu',
     });
-    expect(indicator().textContent).toContain('Recording');
+    indicatorShows('recording');
 
     indicator().click();
     expect(api.stopVoiceRecording).toHaveBeenCalledOnce();
 
     pushEvent(5, 'recording_ended', { command_id: 'c-1' });
-    expect(indicator().textContent).toContain('Listening');
+    indicatorShows('listening');
   });
 
   it('does not bring back a recording a newer snapshot already covers', async () => {
@@ -328,7 +333,7 @@ describe('App Desktop Voice feedback', () => {
     // Delivered late: the snapshot at 6 already reflects it.
     pushEvent(4, 'recording_started', { command_id: 'c-1' });
 
-    expect(indicator().textContent).toContain('Listening');
+    indicatorShows('listening');
   });
 
   it('applies newer snapshots and ignores older ones', async () => {
@@ -336,11 +341,11 @@ describe('App Desktop Voice feedback', () => {
     await mountApp();
 
     pushStatus(voiceStatus({ sequence: 7, state: 'starting' }));
-    expect(indicator().textContent).toContain('Starting');
+    indicatorShows('starting');
     pushStatus(voiceStatus({ sequence: 6, state: 'error' }));
-    expect(indicator().textContent).toContain('Starting');
+    indicatorShows('starting');
     pushStatus({ sequence: 'late', state: 'error' });
-    expect(indicator().textContent).toContain('Starting');
+    indicatorShows('starting');
   });
 
   it('reads the snapshot again when events were missed', async () => {
@@ -361,6 +366,6 @@ describe('App Desktop Voice feedback', () => {
     expect(api.getVoiceStatus).toHaveBeenCalledTimes(2);
     // Missed events are not replayed; the ones received still gave feedback.
     expect(cues.mock.calls).toEqual([['sent'], ['no_speech']]);
-    expect(indicator().textContent).toContain('Microphone disconnected');
+    indicatorShows('microphone_disconnected');
   });
 });

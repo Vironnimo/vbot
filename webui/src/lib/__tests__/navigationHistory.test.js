@@ -9,182 +9,141 @@ import {
   viewIdFromLocationHash,
 } from '../navigationHistory.js';
 
-describe('createNavigationHistoryState', () => {
-  it('builds a marked state without a session override', () => {
+// The history.state entry format App.svelte and appController share.
+describe('createNavigationHistoryState()', () => {
+  it('builds a marked entry without session override or selection', () => {
     const state = createNavigationHistoryState('settings');
 
-    expect(state.view).toBe('settings');
-    expect(state.session).toBeNull();
+    expect(state).toMatchObject({
+      view: 'settings',
+      session: null,
+      selection: null,
+    });
     expect(isNavigationHistoryState(state)).toBe(true);
   });
 
-  it('normalizes the session override fields', () => {
-    const state = createNavigationHistoryState('chat', {
-      agentId: 'alpha',
-      sessionId: 'session-1',
-      subAgent: 'truthy-but-not-true',
-    });
+  it.each([
+    ['a non-true sub-agent flag as false', 'truthy-but-not-true', false],
+    ['an explicit sub-agent flag', true, true],
+  ])(
+    'normalizes the session override, keeping %s',
+    (_label, subAgent, flag) => {
+      expect(
+        createNavigationHistoryState('chat', {
+          agentId: 'alpha',
+          sessionId: 'session-1',
+          subAgent,
+        }).session,
+      ).toEqual({ agentId: 'alpha', sessionId: 'session-1', subAgent: flag });
+    },
+  );
 
-    expect(state.session).toEqual({
-      agentId: 'alpha',
-      sessionId: 'session-1',
-      subAgent: false,
-    });
-  });
-
-  it('keeps an explicit subAgent flag', () => {
-    const state = createNavigationHistoryState('chat', {
-      agentId: 'alpha',
-      sessionId: 'session-1',
-      subAgent: true,
-    });
-
-    expect(state.session.subAgent).toBe(true);
-  });
-
-  it('defaults the selection to null when none is given', () => {
-    const state = createNavigationHistoryState('chat', null);
-
-    expect(state.selection).toBeNull();
-  });
-
-  it('normalizes the selection fields, keeping the projectAgentId tri-state', () => {
-    const state = createNavigationHistoryState('chat', null, {
-      agentId: 'alpha',
-      projectId: 'vbot',
-      projectAgentId: 'builder',
-    });
-
-    expect(state.selection).toEqual({
-      agentId: 'alpha',
-      projectId: 'vbot',
-      projectAgentId: 'builder',
-    });
-
-    const identityAlongsideProject = createNavigationHistoryState(
-      'chat',
-      null,
-      {
-        agentId: 'alpha',
-        projectId: 'vbot',
-        projectAgentId: '',
-      },
-    );
-    expect(identityAlongsideProject.selection.projectAgentId).toBe('');
-
-    const nothingRemembered = createNavigationHistoryState('chat', null, {
-      agentId: 'alpha',
-    });
-    expect(nothingRemembered.selection).toEqual({
-      agentId: 'alpha',
-      projectId: '',
-      projectAgentId: null,
-    });
+  // projectAgentId is tri-state: a member id, '' for an identity Agent active
+  // alongside the Project, or null when nothing is remembered.
+  it.each([
+    [
+      'a Project member',
+      { agentId: 'alpha', projectId: 'vbot', projectAgentId: 'builder' },
+      { agentId: 'alpha', projectId: 'vbot', projectAgentId: 'builder' },
+    ],
+    [
+      'an identity Agent alongside the Project',
+      { agentId: 'alpha', projectId: 'vbot', projectAgentId: '' },
+      { agentId: 'alpha', projectId: 'vbot', projectAgentId: '' },
+    ],
+    [
+      'nothing remembered',
+      { agentId: 'alpha' },
+      { agentId: 'alpha', projectId: '', projectAgentId: null },
+    ],
+  ])('normalizes a selection with %s', (_label, selection, stored) => {
+    expect(
+      createNavigationHistoryState('chat', null, selection).selection,
+    ).toEqual(stored);
   });
 });
 
-describe('sameNavigationSelection', () => {
-  it('treats two empty selections as equal (legacy/foreign entries)', () => {
-    expect(sameNavigationSelection(null, null)).toBe(true);
-    expect(sameNavigationSelection(undefined, null)).toBe(true);
+describe('isNavigationHistoryState()', () => {
+  it.each([
+    null,
+    undefined,
+    {},
+    { view: 'chat' },
+    { marker: 'vbot.navigation', view: '' },
+  ])('rejects the foreign history state %j', (value) => {
+    expect(isNavigationHistoryState(value)).toBe(false);
   });
+});
 
-  it('distinguishes empty from set selections', () => {
-    const selection = { agentId: 'alpha', projectId: '', projectAgentId: null };
+describe('sameNavigationSelection()', () => {
+  const base = { agentId: 'alpha', projectId: 'vbot', projectAgentId: '' };
 
-    expect(sameNavigationSelection(null, selection)).toBe(false);
-    expect(sameNavigationSelection(selection, null)).toBe(false);
-  });
-
-  it('compares agent, project, and project-agent (tri-state) fields', () => {
-    const base = { agentId: 'alpha', projectId: 'vbot', projectAgentId: '' };
-
-    expect(sameNavigationSelection(base, { ...base })).toBe(true);
-    expect(sameNavigationSelection(base, { ...base, agentId: 'beta' })).toBe(
+  it.each([
+    ['two empty selections', null, undefined, true],
+    ['an empty and a set selection', null, base, false],
+    ['a set and an empty selection', base, null, false],
+    ['equal fields', base, { ...base }, true],
+    ['another Agent', base, { ...base, agentId: 'beta' }, false],
+    ['another Project', base, { ...base, projectId: '' }, false],
+    [
+      'a member instead of an identity Agent',
+      base,
+      { ...base, projectAgentId: 'builder' },
       false,
-    );
-    expect(sameNavigationSelection(base, { ...base, projectId: '' })).toBe(
+    ],
+    [
+      'nothing remembered instead of an identity Agent',
+      base,
+      { ...base, projectAgentId: null },
       false,
+    ],
+    [
+      'missing fields and their empty forms',
+      { agentId: 'alpha' },
+      { agentId: 'alpha', projectId: '', projectAgentId: null },
+      true,
+    ],
+  ])('compares %s', (_label, left, right, same) => {
+    expect(sameNavigationSelection(left, right)).toBe(same);
+  });
+});
+
+describe('sameSessionOverride()', () => {
+  const base = { agentId: 'alpha', sessionId: 's1', subAgent: true };
+
+  it.each([
+    ['two empty overrides', null, undefined, true],
+    ['an empty and a set override', null, base, false],
+    ['a set and an empty override', base, null, false],
+    ['equal fields', base, { ...base }, true],
+    ['another Agent', base, { ...base, agentId: 'beta' }, false],
+    ['another Session', base, { ...base, sessionId: 's2' }, false],
+    ['another sub-agent flag', base, { ...base, subAgent: false }, false],
+    [
+      'a missing and a false sub-agent flag',
+      { agentId: 'alpha', sessionId: 's1' },
+      { agentId: 'alpha', sessionId: 's1', subAgent: false },
+      true,
+    ],
+  ])('compares %s', (_label, left, right, same) => {
+    expect(sameSessionOverride(left, right)).toBe(same);
+  });
+});
+
+describe('location hash', () => {
+  it.each([
+    ['#settings', 'settings'],
+    ['#/logs', 'logs'],
+    ['#unknown', ''],
+    ['', ''],
+    [null, ''],
+  ])('resolves %j to the known view %j', (hash, viewId) => {
+    expect(viewIdFromLocationHash(hash, ['chat', 'settings', 'logs'])).toBe(
+      viewId,
     );
-    expect(
-      sameNavigationSelection(base, { ...base, projectAgentId: 'builder' }),
-    ).toBe(false);
-    expect(
-      sameNavigationSelection(base, { ...base, projectAgentId: null }),
-    ).toBe(false);
   });
 
-  it('coerces missing fields to their empty forms', () => {
-    expect(
-      sameNavigationSelection(
-        { agentId: 'alpha' },
-        { agentId: 'alpha', projectId: '', projectAgentId: null },
-      ),
-    ).toBe(true);
-  });
-});
-
-describe('isNavigationHistoryState', () => {
-  it('rejects null and foreign history states', () => {
-    expect(isNavigationHistoryState(null)).toBe(false);
-    expect(isNavigationHistoryState(undefined)).toBe(false);
-    expect(isNavigationHistoryState({})).toBe(false);
-    expect(isNavigationHistoryState({ view: 'chat' })).toBe(false);
-    expect(
-      isNavigationHistoryState({ marker: 'vbot.navigation', view: '' }),
-    ).toBe(false);
-  });
-});
-
-describe('sameSessionOverride', () => {
-  it('treats two empty overrides as equal', () => {
-    expect(sameSessionOverride(null, null)).toBe(true);
-    expect(sameSessionOverride(undefined, null)).toBe(true);
-  });
-
-  it('distinguishes empty from set overrides', () => {
-    const override = { agentId: 'alpha', sessionId: 's1', subAgent: false };
-
-    expect(sameSessionOverride(null, override)).toBe(false);
-    expect(sameSessionOverride(override, null)).toBe(false);
-  });
-
-  it('compares agent, session, and sub-agent flag', () => {
-    const base = { agentId: 'alpha', sessionId: 's1', subAgent: true };
-
-    expect(sameSessionOverride(base, { ...base })).toBe(true);
-    expect(sameSessionOverride(base, { ...base, agentId: 'beta' })).toBe(false);
-    expect(sameSessionOverride(base, { ...base, sessionId: 's2' })).toBe(false);
-    expect(sameSessionOverride(base, { ...base, subAgent: false })).toBe(false);
-  });
-
-  it('coerces a missing subAgent flag to false', () => {
-    expect(
-      sameSessionOverride(
-        { agentId: 'alpha', sessionId: 's1' },
-        { agentId: 'alpha', sessionId: 's1', subAgent: false },
-      ),
-    ).toBe(true);
-  });
-});
-
-describe('viewIdFromLocationHash', () => {
-  const knownViewIds = ['chat', 'settings', 'logs'];
-
-  it('resolves known view hashes with and without a leading slash', () => {
-    expect(viewIdFromLocationHash('#settings', knownViewIds)).toBe('settings');
-    expect(viewIdFromLocationHash('#/logs', knownViewIds)).toBe('logs');
-  });
-
-  it('returns empty for unknown, empty, or missing hashes', () => {
-    expect(viewIdFromLocationHash('#unknown', knownViewIds)).toBe('');
-    expect(viewIdFromLocationHash('', knownViewIds)).toBe('');
-    expect(viewIdFromLocationHash(null, knownViewIds)).toBe('');
-  });
-});
-
-describe('locationHashForView', () => {
-  it('prefixes the view id with a hash', () => {
+  it('names a view by its hash', () => {
     expect(locationHashForView('chat')).toBe('#chat');
   });
 });
