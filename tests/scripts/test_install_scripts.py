@@ -27,7 +27,6 @@ POWERSHELL_SCRIPTS = (
     PROJECT_ROOT / "scripts" / "uninstall.ps1",
 )
 
-
 # PowerShell that dot-sources the install.ps1 functions named in $Functions from
 # the script at $Source, so a harness can exercise them without running the
 # installer.
@@ -801,7 +800,7 @@ def test_windows_installer_refuses_accidental_elevation_before_install_mutation(
 
     guard = script.index("if ((Test-IsElevated) -and -not $AllowElevatedInstall)")
     assert guard < script.index("Confirm-Git", guard)
-    assert guard < script.index("$cloneOutput = @(git clone", guard)
+    assert guard < script.index('$cloneOutput = @(Invoke-CapturedNative -FilePath "git"', guard)
 
 
 def test_windows_installer_keeps_explicit_directory_and_existing_target_guard() -> None:
@@ -833,14 +832,16 @@ def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None
 
     summary_start = script.index("$summaryHost = $HostName")
     summary = script[summary_start:]
+    server_status = '"server", "status", "--host", $summaryHost, "--port", $summaryPort'
+    autostart_status = '"autostart", "status", "--host", $summaryHost, "--port", $summaryPort'
 
     assert ".vbot-install.json" in summary
-    assert "server status --host $summaryHost --port $summaryPort" in summary
-    assert "autostart status --host $summaryHost --port $summaryPort" in summary
+    assert server_status in summary
+    assert autostart_status in summary
     assert "$setupReportedProblems" in summary
     ready_guard = summary.index("if ($problems.Count -eq 0 -and $serverRunning)")
-    assert summary.index("server status --host $summaryHost --port $summaryPort") < ready_guard
-    assert summary.index("autostart status --host $summaryHost --port $summaryPort") < ready_guard
+    assert summary.index(server_status) < ready_guard
+    assert summary.index(autostart_status) < ready_guard
     assert ready_guard < summary.index("http://${summaryHost}:$summaryPort/")
 
 
@@ -1097,7 +1098,7 @@ def test_linux_public_installer_verifies_server_and_autostart_before_ready() -> 
 def test_windows_checkout_setup_does_not_claim_an_unverified_server_url() -> None:
     script = (PROJECT_ROOT / "scripts" / "setup.ps1").read_text(encoding="utf-8")
 
-    summary_start = script.index("$statusOutput = @(& $vbotPath server status")
+    summary_start = script.index("$statusOutput = @(& {")
     summary = script[summary_start:]
 
     assert "server status --host $HostName --port $effectivePort" in summary
@@ -1132,8 +1133,13 @@ def test_public_docs_install_only_through_install_files(doc_name: str) -> None:
 def test_public_installer_owns_fresh_install_and_calls_internal_setup(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
     setup_reference = "scripts/setup.sh" if script_name.endswith(".sh") else "scripts\\setup.ps1"
+    clone = (
+        "git clone"
+        if script_name.endswith(".sh")
+        else '-FilePath "git" -ArgumentList @(\n        "clone"'
+    )
 
-    assert "git clone" in script
+    assert clone in script
     assert ".venv" in script
     assert setup_reference in script
     assert ".vbot-install-root" in script
@@ -1170,19 +1176,18 @@ def test_native_installer_preserves_progress_labels_and_failure_log(tmp_path, ex
 $ErrorActionPreference = "Stop"
 $InstallDir = $Target
 $InstallLogPath = Join-Path $Target "output.log"
-$ast = [System.Management.Automation.Language.Parser]::ParseFile($Source, [ref]$null, [ref]$null)
-$node = $ast.FindAll({
-    param($item)
-    $item -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-        $item.Name -eq "Invoke-NativeCommand"
-}, $false) | Select-Object -First 1
-. ([scriptblock]::Create($node.Extent.Text))
+$Functions = @("Invoke-CapturedNative", "Invoke-NativeCommand")
+"""
+        + _LOAD_INSTALLER_FUNCTIONS
+        + r"""
 $script:statuses = @()
 function Write-Status { param($State, $Message) $script:statuses += "${State}:$Message" }
 # A function shadows only the executable in this disposable harness.
 $application = Join-Path $InstallDir "vBot.exe"
 Set-Item -LiteralPath "Function:$application" -Value {
     "[WORK] prepare-sentinel"
+    # The CLI reports command summaries on stderr.
+    cmd /c "1>&2 echo [OK] stderr-sentinel"
     "[WARN] warning-sentinel"
     "[ERROR] diagnostic-sentinel"
     "private-diagnostic-sentinel"
@@ -1215,6 +1220,7 @@ catch { $ok = $false; $detail = $_.Exception.Message }
     payload = json.loads(result.stdout)
     assert payload["statuses"] == [
         "WORK:prepare-sentinel",
+        "OK:stderr-sentinel",
         "WARN:warning-sentinel",
         "ERROR:diagnostic-sentinel",
     ]
@@ -1224,6 +1230,30 @@ catch { $ok = $false; $detail = $_.Exception.Message }
         assert "autostart enable" in payload["detail"]
         assert str(tmp_path / "output.log") in payload["detail"]
         assert "retrying vbot update" not in payload["detail"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell installer")
+@pytest.mark.parametrize(("exit_code", "usable"), [(0, True), (9009, False)])
+def test_windows_python_probe_reads_the_exit_code_despite_stderr_output(
+    tmp_path: Path, exit_code: int, usable: bool
+) -> None:
+    payload = _run_windows_powershell(
+        tmp_path,
+        r"""param($Source, $ExitCode)
+$ErrorActionPreference = "Stop"
+$Functions = @("Invoke-CapturedNative", "Test-Have", "Test-PythonOk")
+"""
+        + _LOAD_INSTALLER_FUNCTIONS
+        + r"""
+# Stands in for the Microsoft Store alias, which reports on stderr.
+function python { cmd /c "1>&2 echo Python was not found& exit $ExitCode" }
+@{usable = (Test-PythonOk)} | ConvertTo-Json -Compress
+""",
+        str(PROJECT_ROOT / "scripts/install.ps1"),
+        str(exit_code),
+    )
+
+    assert payload == {"usable": usable}
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell installer")
@@ -1249,3 +1279,32 @@ ConvertTo-Json -InputObject $urls -Compress
     )
 
     assert payload == [f"{build_server_base_url(host, 8420)}/health" for host in hosts]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell installer")
+def test_windows_installer_failure_returns_to_a_script_block_caller(tmp_path: Path) -> None:
+    command = (
+        "try { & ([scriptblock]::Create((Get-Content -Raw -Encoding UTF8 "
+        "-LiteralPath $env:VBOT_TEST_INSTALLER))) -Desktop -DesktopClient } "
+        "catch { 'caught: ' + $_.Exception.Message }; 'caller still running'"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={
+            **os.environ,
+            "TEMP": str(tmp_path),
+            "TMP": str(tmp_path),
+            "VBOT_TEST_INSTALLER": str(PROJECT_ROOT / "scripts/install.ps1"),
+        },
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+    message = "-Desktop and -DesktopClient are mutually exclusive."
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [f"caught: {message}", "caller still running"]
+    assert f"[ERROR] vBot installation failed: {message}" in result.stderr
+    (log,) = tmp_path.glob("vbot-install-*.log")
+    assert f"Error: {message}" in log.read_text(encoding="utf-8")

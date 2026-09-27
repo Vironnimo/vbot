@@ -361,7 +361,12 @@ function Resolve-VbotCommandPath {
 function Stop-VbotServer {
     $vbotCommand = Resolve-VbotCommandPath
     $stopArguments = Get-RecordedServerStopArguments
-    $stopOutput = @(& $vbotCommand @stopArguments 2>&1)
+    # Windows PowerShell 5.1 turns redirected stderr lines into error records that
+    # "Stop" would abort on; the exit code decides instead.
+    $stopOutput = @(& {
+        $ErrorActionPreference = "Continue"
+        & $vbotCommand @stopArguments 2>&1 | ForEach-Object { $_.ToString() }
+    })
     $stopExitCode = $LASTEXITCODE
     if ($stopExitCode -ne 0) {
         $detail = ($stopOutput | Out-String).Trim()

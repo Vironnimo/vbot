@@ -25,6 +25,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+# The trap below covers the whole script, including the option checks, and
+# reports this log.
+$InstallLogPath = Join-Path ([System.IO.Path]::GetTempPath()) ("vbot-install-{0:yyyyMMdd-HHmmss}-{1}.log" -f (Get-Date), $PID)
+$PreserveInstallLog = $false
+[System.IO.File]::WriteAllText($InstallLogPath, "vBot installation log`r`n", (New-Object System.Text.UTF8Encoding($false)))
 
 if ($Dev -and -not [string]::IsNullOrWhiteSpace($Version)) {
     throw "-Version selects a specific release tag and cannot be combined with -Dev."
@@ -50,9 +55,6 @@ $AssetPollSeconds = 10
 $RootMarkerName = ".vbot-install-root"
 $VenvMarkerName = ".vbot-install-venv"
 $LegacyRootMarkerName = ".vbot-bootstrap"
-$InstallLogPath = Join-Path ([System.IO.Path]::GetTempPath()) ("vbot-install-{0:yyyyMMdd-HHmmss}-{1}.log" -f (Get-Date), $PID)
-$PreserveInstallLog = $false
-[System.IO.File]::WriteAllText($InstallLogPath, "vBot installation log`r`n", (New-Object System.Text.UTF8Encoding($false)))
 
 trap {
     $message = $_.Exception.Message
@@ -65,7 +67,10 @@ trap {
     [Console]::Error.WriteLine("")
     [Console]::Error.WriteLine("[ERROR] vBot installation failed: $message")
     [Console]::Error.WriteLine("Technical details: $InstallLogPath")
-    exit 1
+    # Under `irm | iex` or a script block, exit would close the user's PowerShell
+    # window before the message can be read; rethrow there instead.
+    if ($PSCommandPath) { exit 1 }
+    break
 }
 
 function Write-Status {
@@ -87,6 +92,15 @@ function Write-Status {
     else { Write-Host "[$State] $Message" }
 }
 function Write-Step { param([string]$Message) Write-Status "WORK" $Message }
+
+function Invoke-CapturedNative {
+    # Windows PowerShell 5.1 turns each redirected stderr line of a native command
+    # into an error record, and "Stop" would abort on the first one, even for
+    # progress text. Return both streams as text; callers check $LASTEXITCODE.
+    param([string]$FilePath, [string[]]$ArgumentList)
+    $ErrorActionPreference = "Continue"
+    & $FilePath @ArgumentList 2>&1 | ForEach-Object { $_.ToString() }
+}
 
 function Invoke-SetupWithProgress {
     param([string]$Executable, [string]$Setup, [string[]]$SetupArguments)
@@ -171,7 +185,9 @@ function Test-PythonOk {
     if (-not (Test-Have "python")) {
         return $false
     }
-    & python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
+    $null = Invoke-CapturedNative -FilePath "python" -ArgumentList @(
+        "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"
+    )
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -252,8 +268,8 @@ function Invoke-NativeCommand {
     try {
         # Initial installation cannot resume a Run belonging to another instance.
         [Environment]::SetEnvironmentVariable("VBOT_UPDATE_HANDOFF", $null, "Process")
-        & $application @Arguments 2>&1 | ForEach-Object {
-            $line = $_.ToString()
+        Invoke-CapturedNative -FilePath $application -ArgumentList $Arguments | ForEach-Object {
+            $line = $_
             Add-Content -LiteralPath $InstallLogPath -Value $line -Encoding UTF8
             if ($VerbosePreference -eq "Continue") { Write-Host $line }
             elseif ($line -match '^\[(WORK|OK|WARN|ERROR|INFO)\] (.+)$') {
@@ -597,7 +613,8 @@ if ($useNativeInstaller) {
     if (-not $PreserveInstallLog) {
         Remove-Item -LiteralPath $InstallLogPath -Force -ErrorAction SilentlyContinue
     }
-    exit 0
+    # return, unlike exit, keeps an `irm | iex` window open to show the result.
+    return
 }
 
 Write-Step "Checking system requirements"
@@ -619,7 +636,9 @@ if ($useExistingCheckout) {
 }
 elseif ($Dev) {
     Write-Step "Downloading vBot from main"
-    $cloneOutput = @(git clone --quiet --depth 1 $RepoUrl $InstallDir 2>&1)
+    $cloneOutput = @(Invoke-CapturedNative -FilePath "git" -ArgumentList @(
+        "clone", "--quiet", "--depth", "1", $RepoUrl, $InstallDir
+    ))
     $cloneExitCode = $LASTEXITCODE
     if ($cloneOutput.Count -gt 0) {
         Add-Content -LiteralPath $InstallLogPath -Value $cloneOutput -Encoding UTF8
@@ -646,7 +665,9 @@ else {
     }
 
     Write-Step "Downloading vBot $tag"
-    $cloneOutput = @(git clone --quiet --depth 1 --branch $tag $RepoUrl $InstallDir 2>&1)
+    $cloneOutput = @(Invoke-CapturedNative -FilePath "git" -ArgumentList @(
+        "clone", "--quiet", "--depth", "1", "--branch", $tag, $RepoUrl, $InstallDir
+    ))
     $cloneExitCode = $LASTEXITCODE
     if ($cloneOutput.Count -gt 0) {
         Add-Content -LiteralPath $InstallLogPath -Value $cloneOutput -Encoding UTF8
@@ -678,7 +699,7 @@ else {
 
 Write-Step "Installing and configuring vBot"
 $venvDir = Join-Path $InstallDir ".venv"
-$venvOutput = @(& python -m venv $venvDir 2>&1)
+$venvOutput = @(Invoke-CapturedNative -FilePath "python" -ArgumentList @("-m", "venv", $venvDir))
 $venvExitCode = $LASTEXITCODE
 if ($venvOutput.Count -gt 0) {
     Add-Content -LiteralPath $InstallLogPath -Value $venvOutput -Encoding UTF8
@@ -783,9 +804,11 @@ else {
         }
     }
 
-    $serverStatusOutput = @(& $vbotExe server status --host $summaryHost --port $summaryPort --data-dir $summaryDataDir 2>&1)
+    $serverStatusOutput = @(Invoke-CapturedNative -FilePath $vbotExe -ArgumentList @(
+        "server", "status", "--host", $summaryHost, "--port", $summaryPort, "--data-dir", $summaryDataDir
+    ))
     $serverStatusExitCode = $LASTEXITCODE
-    $serverStatusText = ($serverStatusOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    $serverStatusText = $serverStatusOutput -join [Environment]::NewLine
     Add-Content -LiteralPath $InstallLogPath -Value $serverStatusText -Encoding UTF8
     $serverRunning = $serverStatusText -match '(?m)^running: yes\s*$'
     $portConflict = $serverStatusText -match '(?m)^conflict: port occupied by non-vBot process\s*$'
@@ -793,9 +816,12 @@ else {
     $autostartEnabled = $false
     $autostartStatusKnown = $true
     if (-not $NoAutostart) {
-        $autostartStatusOutput = @(& $vbotExe autostart status --host $summaryHost --port $summaryPort --data-dir $summaryDataDir --task-name $TaskName 2>&1)
+        $autostartStatusOutput = @(Invoke-CapturedNative -FilePath $vbotExe -ArgumentList @(
+            "autostart", "status", "--host", $summaryHost, "--port", $summaryPort,
+            "--data-dir", $summaryDataDir, "--task-name", $TaskName
+        ))
         $autostartStatusExitCode = $LASTEXITCODE
-        $autostartStatusText = ($autostartStatusOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+        $autostartStatusText = $autostartStatusOutput -join [Environment]::NewLine
         Add-Content -LiteralPath $InstallLogPath -Value $autostartStatusText -Encoding UTF8
         $autostartEnabled = $autostartStatusExitCode -eq 0 -and $autostartStatusText -match '(?m)^autostart: enabled\b'
         $autostartStatusKnown = $autostartStatusExitCode -eq 0

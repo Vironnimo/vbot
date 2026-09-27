@@ -671,9 +671,15 @@ if ($DesktopClient) {
 }
 else {
     Write-Host "Data directory: $resolvedDataDir"
-    $statusOutput = @(& $vbotPath server status --host $HostName --port $effectivePort --data-dir $resolvedDataDir 2>&1)
+    # Windows PowerShell 5.1 turns redirected stderr lines into error records that
+    # "Stop" would abort on; the exit code decides instead.
+    $statusOutput = @(& {
+        $ErrorActionPreference = "Continue"
+        & $vbotPath server status --host $HostName --port $effectivePort --data-dir $resolvedDataDir 2>&1 |
+            ForEach-Object { $_.ToString() }
+    })
     $statusExitCode = $LASTEXITCODE
-    $statusText = ($statusOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    $statusText = $statusOutput -join [Environment]::NewLine
     $serverRunning = $statusText -match '(?m)^running: yes\s*$'
     $portConflict = $statusText -match '(?m)^conflict: port occupied by non-vBot process\s*$'
 
