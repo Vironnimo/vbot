@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -236,6 +236,20 @@ async function connectProvider() {
   flushSync();
 }
 
+async function openModelPicker() {
+  await waitFor(() =>
+    expect(document.querySelector('#onboarding-model')).toBeTruthy(),
+  );
+  document.querySelector('#onboarding-model').click();
+  flushSync();
+}
+
+function connectedCount(count) {
+  return t('onboarding.service.connectedCount', '{count} connected', {
+    count,
+  });
+}
+
 async function continueToModels() {
   if (document.querySelector('.onboarding-model-body')) return;
   await waitFor(() =>
@@ -315,27 +329,31 @@ describe('OnboardingView', () => {
     expect(rpcMock).toHaveBeenCalledWith('model.list');
   });
 
-  it('starts with an unfiltered search and offers a visible, reversible free filter', async () => {
-    mountedComponent = mount(OnboardingView, {
-      target: document.body,
-      props: { onComplete: vi.fn(), onDismiss: vi.fn(), onToast: vi.fn() },
-    });
-    flushSync();
-
-    await connectProvider();
+  it('starts with an unfiltered Model search and offers a reversible free filter that clears a paid selection', async () => {
+    server.state.connected = true;
+    mountedComponent = mount(OnboardingView, { target: document.body });
     await continueToModels();
-
-    await waitFor(() => {
-      expect(document.querySelector('#onboarding-model')).toBeTruthy();
-    });
-    document.querySelector('#onboarding-model').click();
-    flushSync();
-
+    await openModelPicker();
     await waitFor(() => {
       const search = document.querySelector('.s-dropdown-search input');
       expect(search).toBeTruthy();
       expect(search.value).toBe('');
       expect(byText('.s-dropdown-opt', 'Claude Sonnet')).toBeTruthy();
+    });
+    byText('.s-dropdown-opt', 'Claude Sonnet').click();
+    flushSync();
+    expect(byText('button', 'Start chatting').disabled).toBe(false);
+
+    const freeFilter = document.querySelector('.onboarding-free-filter');
+    freeFilter.click();
+    flushSync();
+    expect(freeFilter.getAttribute('aria-pressed')).toBe('true');
+    expect(byText('button', 'Start chatting').disabled).toBe(true);
+    expect(document.querySelector('.onboarding-selection')).toBeNull();
+    await openModelPicker();
+    await waitFor(() => {
+      expect(byText('.s-dropdown-opt', ':free')).toBeTruthy();
+      expect(byText('.s-dropdown-opt', 'Claude Sonnet')).toBeFalsy();
     });
     document
       .querySelector('.s-dropdown-search input')
@@ -343,19 +361,14 @@ describe('OnboardingView', () => {
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
       );
     flushSync();
-    document.querySelector('.onboarding-free-filter').click();
+
+    freeFilter.click();
     flushSync();
-    expect(
-      document
-        .querySelector('.onboarding-free-filter')
-        .getAttribute('aria-pressed'),
-    ).toBe('true');
-    document.querySelector('#onboarding-model').click();
-    flushSync();
-    await waitFor(() => {
-      expect(byText('.s-dropdown-opt', ':free')).toBeTruthy();
-      expect(byText('.s-dropdown-opt', 'Claude Sonnet')).toBeFalsy();
-    });
+    expect(freeFilter.getAttribute('aria-pressed')).toBe('false');
+    await openModelPicker();
+    await waitFor(() =>
+      expect(byText('.s-dropdown-opt', 'Claude Sonnet')).toBeTruthy(),
+    );
   });
 
   it.each([
@@ -495,12 +508,12 @@ describe('OnboardingView', () => {
     expect(byText('.onboarding-provider-row', 'OpenAI').disabled).toBe(true);
     expect(
       document.querySelector('.onboarding-connected-summary').textContent,
-    ).toContain('1 connected');
+    ).toContain(connectedCount(1));
     await connectProvider();
     await waitFor(() => {
       expect(
         document.querySelector('.onboarding-connected-summary').textContent,
-      ).toContain('2 connected');
+      ).toContain(connectedCount(2));
       expect(
         document.querySelectorAll('.onboarding-provider-row'),
       ).toHaveLength(3);
@@ -516,57 +529,10 @@ describe('OnboardingView', () => {
     expect(document.querySelector('#onboarding-model-provider')).toBeTruthy();
   });
 
-  it('assigns the chosen model to the main agent on Start chatting', async () => {
-    const onComplete = vi.fn();
-    mountedComponent = mount(OnboardingView, {
-      target: document.body,
-      props: { onComplete, onDismiss: vi.fn(), onToast: vi.fn() },
-    });
-    flushSync();
-
-    await connectProvider();
-    await continueToModels();
-
-    await waitFor(() => {
-      expect(document.querySelector('#onboarding-model')).toBeTruthy();
-    });
-    document.querySelector('#onboarding-model').click();
-    flushSync();
-
-    await waitFor(() => {
-      expect(byText('.s-dropdown-opt', ':free')).toBeTruthy();
-    });
-    byText('.s-dropdown-opt', ':free').click();
-    flushSync();
-
-    await waitFor(() => {
-      expect(byText('.btn-primary', 'Start chatting').disabled).toBe(false);
-    });
-    byText('.btn-primary', 'Start chatting').click();
-    flushSync();
-
-    await waitFor(() => {
-      expect(onComplete).toHaveBeenCalledTimes(1);
-    });
-    expect(rpcMock).toHaveBeenCalledWith(
-      'agent.get',
-      expect.objectContaining({ id: 'main' }),
-    );
-    expect(server.state.lastAgentUpdate).toMatchObject({ id: 'main' });
-    expect(server.state.lastAgentUpdate.model).toContain(':free');
-  });
-
   it('shows a retry affordance when the model list is empty', async () => {
-    server = createServer({ modelsAvailable: false });
-    rpcMock.mockImplementation((...args) => server.rpc(...args));
-
-    mountedComponent = mount(OnboardingView, {
-      target: document.body,
-      props: { onComplete: vi.fn(), onDismiss: vi.fn(), onToast: vi.fn() },
-    });
-    flushSync();
-
-    await connectProvider();
+    server.state.connected = true;
+    server.state.modelsAvailable = false;
+    mountedComponent = mount(OnboardingView, { target: document.body });
     await continueToModels();
 
     await waitFor(() => {
@@ -586,9 +552,20 @@ describe('OnboardingView', () => {
     });
   });
 
-  it('recovers from initial settings failure without a blank setup page', async () => {
-    rpcMock.mockRejectedValueOnce(new Error('offline'));
+  it('shows a loading state, then recovers from an initial settings failure without a blank setup page', async () => {
+    let failSettings;
+    rpcMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failSettings = reject;
+        }),
+    );
     mountedComponent = mount(OnboardingView, { target: document.body });
+    flushSync();
+    expect(document.querySelector('[role="status"]')).toBeTruthy();
+    expect(byText('.onboarding-provider-row', 'OpenRouter')).toBeFalsy();
+
+    failSettings(new Error('offline'));
     await waitFor(() =>
       expect(document.querySelector('[role="alert"]')).toBeTruthy(),
     );
@@ -599,37 +576,7 @@ describe('OnboardingView', () => {
     expect(document.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it('shows a loading state while settings are pending', async () => {
-    let resolveSettings;
-    rpcMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveSettings = resolve;
-        }),
-    );
-    mountedComponent = mount(OnboardingView, { target: document.body });
-    flushSync();
-    expect(document.querySelector('[role="status"]')).toBeTruthy();
-    expect(byText('.onboarding-provider-row', 'OpenRouter')).toBeFalsy();
-    resolveSettings(settingsPayload(false));
-    await waitFor(() =>
-      expect(byText('.onboarding-provider-row', 'OpenRouter')).toBeTruthy(),
-    );
-  });
-
-  it('offers local setup without asking for an API key', async () => {
-    mountedComponent = mount(OnboardingView, { target: document.body });
-    await waitFor(() =>
-      expect(byText('.onboarding-provider-row', 'Ollama')).toBeTruthy(),
-    );
-    byText('.onboarding-provider-row', 'Ollama').click();
-    flushSync();
-    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
-    expect(document.querySelector('#provider-api-key')).toBeNull();
-    expect(byText('[role="dialog"] button', 'Add provider')).toBeTruthy();
-  });
-
-  it('hides optional account and storage details in guided key entry', async () => {
+  it('guides key entry without optional account and storage details, and offers local setup without a key', async () => {
     mountedComponent = mount(OnboardingView, { target: document.body });
     await waitFor(() =>
       expect(byText('.onboarding-provider-row', 'OpenRouter')).toBeTruthy(),
@@ -644,6 +591,14 @@ describe('OnboardingView', () => {
     expect(document.querySelector('[role="dialog"]').textContent).not.toContain(
       'OPENROUTER_API_KEY',
     );
+    byText('[role="dialog"] button', 'Cancel').click();
+    flushSync();
+
+    byText('.onboarding-provider-row', 'Ollama').click();
+    flushSync();
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+    expect(document.querySelector('#provider-api-key')).toBeNull();
+    expect(byText('[role="dialog"] button', 'Add provider')).toBeTruthy();
   });
 
   it('starts at Providers even with an existing connection and keeps Back available on a Model load error', async () => {
@@ -683,11 +638,7 @@ describe('OnboardingView', () => {
       props: { onComplete },
     });
     await continueToModels();
-    await waitFor(() =>
-      expect(document.querySelector('#onboarding-model')).toBeTruthy(),
-    );
-    document.querySelector('#onboarding-model').click();
-    flushSync();
+    await openModelPicker();
     byText('.s-dropdown-opt', ':free').click();
     flushSync();
     byText('button', 'Start chatting').click();
@@ -705,19 +656,27 @@ describe('OnboardingView', () => {
     });
   });
 
-  it('invalidates a selection when its Connection is removed', async () => {
+  it('keeps a selection across a catalog reload and invalidates it when its Connection is removed', async () => {
     server.state.connected = true;
     const props = reactiveProps({ modelsRefreshToken: 0 });
     mountedComponent = mount(OnboardingView, { target: document.body, props });
     await continueToModels();
-    await waitFor(() =>
-      expect(document.querySelector('#onboarding-model')).toBeTruthy(),
-    );
-    document.querySelector('#onboarding-model').click();
-    flushSync();
+    await openModelPicker();
     byText('.s-dropdown-opt', ':free').click();
     flushSync();
     expect(byText('button', 'Start chatting').disabled).toBe(false);
+
+    const modelReads = () =>
+      rpcMock.mock.calls.filter(([method]) => method === 'model.list').length;
+    const readsBefore = modelReads();
+    props.modelsRefreshToken += 1;
+    flushSync();
+    await waitFor(() => expect(modelReads()).toBeGreaterThan(readsBefore));
+    await waitFor(() =>
+      expect(byText('button', 'Start chatting').disabled).toBe(false),
+    );
+    expect(document.querySelector('.onboarding-selection')).toBeTruthy();
+
     server.state.connected = false;
     props.modelsRefreshToken += 1;
     flushSync();
@@ -755,11 +714,7 @@ describe('OnboardingView', () => {
     });
     mountedComponent = mount(OnboardingView, { target: document.body });
     await continueToModels();
-    await waitFor(() =>
-      expect(document.querySelector('#onboarding-model')).toBeTruthy(),
-    );
-    document.querySelector('#onboarding-model').click();
-    flushSync();
+    await openModelPicker();
     byText('.s-dropdown-opt', 'Claude Sonnet').click();
     flushSync();
     expect(byText('button', 'Start chatting').disabled).toBe(false);
@@ -773,24 +728,6 @@ describe('OnboardingView', () => {
     expect(byText('.s-dropdown-opt', 'Other Model')).toBeTruthy();
     expect(byText('.s-dropdown-opt', 'Claude Sonnet')).toBeFalsy();
     expect(document.querySelector('.onboarding-free-filter')).toBeNull();
-  });
-
-  it('clears a paid selection when the user enables the free filter', async () => {
-    server.state.connected = true;
-    mountedComponent = mount(OnboardingView, { target: document.body });
-    await continueToModels();
-    await waitFor(() =>
-      expect(document.querySelector('#onboarding-model')).toBeTruthy(),
-    );
-    document.querySelector('#onboarding-model').click();
-    flushSync();
-    byText('.s-dropdown-opt', 'Claude Sonnet').click();
-    flushSync();
-    expect(byText('button', 'Start chatting').disabled).toBe(false);
-    document.querySelector('.onboarding-free-filter').click();
-    flushSync();
-    expect(byText('button', 'Start chatting').disabled).toBe(true);
-    expect(document.querySelector('.onboarding-selection')).toBeNull();
   });
 
   it('lets users leave while a catalog read is pending and ignores its late result', async () => {
