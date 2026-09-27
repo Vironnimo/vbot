@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 from core.agents.agents import Agent
@@ -10,6 +11,7 @@ from core.chat import (
     CommandDispatcher,
     CommandExecutionContext,
     CommandOutcome,
+    CommandResourceChange,
     PreparedCommand,
     ReplySurface,
 )
@@ -29,6 +31,7 @@ async def _execute(
     agent_id: str = "coder",
     session_id: str = "session-one",
     project_id: str | None = None,
+    on_change: Callable[[CommandResourceChange], None] | None = None,
 ) -> CommandOutcome:
     return await dispatcher.execute(
         _prepared(dispatcher, message),
@@ -37,6 +40,7 @@ async def _execute(
             session_id=session_id,
             project_id=project_id,
             reply_surface=ReplySurface.webui(),
+            on_change=on_change,
         ),
     )
 
