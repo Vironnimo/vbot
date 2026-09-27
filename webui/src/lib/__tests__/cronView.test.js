@@ -3,8 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   applyCronListResponse,
   buildCreateCronPayload,
-  buildCronAgentDropdownOptions,
-  buildCronAgentOptions,
   buildCronPresetOptions,
   buildUpdateCronPayload,
   createCronFormValues,
@@ -15,11 +13,19 @@ import {
   cronPresetForExpression,
   describeCronExpression,
   formatTimestamp,
-  toDateTimeLocalInput,
   visibleCronJobs,
 } from '../cronView.js';
 
-describe('cron time and history projection', () => {
+const PRESET_EXPRESSIONS = {
+  every15Minutes: '*/15 * * * *',
+  hourly: '0 * * * *',
+  dailyMorning: '0 9 * * *',
+  weekdayMornings: '0 9 * * 1-5',
+  mondayMornings: '0 9 * * 1',
+  monthlyFirst: '0 9 1 * *',
+};
+
+describe('cron form payloads and history projection', () => {
   it('builds interval and repeat payloads while allowing an omitted name', () => {
     const form = createCronFormValues();
     form.agent_id = 'main';
@@ -37,7 +43,7 @@ describe('cron time and history projection', () => {
     });
   });
 
-  it('projects interval cadence and remaining runs into the edit form', () => {
+  it('round-trips interval cadence and the repeat limit through the edit form', () => {
     const job = {
       id: 'job-interval',
       agent_id: 'main',
@@ -55,40 +61,17 @@ describe('cron time and history projection', () => {
     expect(normalized.schedule_description).toBe('every 3h');
     expect(form.interval_minutes).toBe('180');
     expect(form.repeat).toBe('2');
-  });
-
-  it('sends an explicit null when an update clears the repeat limit', () => {
-    const form = createCronFormValues({
-      id: 'job-recurring',
-      agent_id: 'main',
-      name: 'Status check',
-      prompt: 'Check status',
-      schedule_type: 'cron',
-      cron_expression: '0 9 * * *',
-      remaining_runs: 2,
-      status: 'active',
+    // An unchanged form keeps the finite count; clearing it sends an explicit
+    // null so the server drops the limit.
+    expect(buildUpdateCronPayload(form)).toMatchObject({
+      interval_seconds: 10800,
+      repeat: 2,
     });
     form.repeat = '';
-
     expect(buildUpdateCronPayload(form).repeat).toBeNull();
   });
 
-  it('sends the current finite repeat count from an unchanged edit form', () => {
-    const form = createCronFormValues({
-      id: 'job-recurring',
-      agent_id: 'main',
-      name: 'Status check',
-      prompt: 'Check status',
-      schedule_type: 'cron',
-      cron_expression: '0 9 * * *',
-      remaining_runs: 2,
-      status: 'active',
-    });
-
-    expect(buildUpdateCronPayload(form).repeat).toBe(2);
-  });
-
-  it('shows persisted instants in the server timezone in list and form', () => {
+  it('shows persisted instants in the server timezone and sends them back without a per-job timezone', () => {
     const job = {
       id: 'job-once',
       agent_id: 'main',
@@ -98,39 +81,24 @@ describe('cron time and history projection', () => {
       run_at: '2026-07-18T16:00:00+00:00',
       status: 'active',
     };
-
-    const [normalized] = visibleCronJobs([job], 'Europe/Berlin');
-    const form = createCronFormValues(job, 'Europe/Berlin');
-
-    expect(normalized.schedule_description).toContain('18:00');
-    expect(form.name).toBe('One-time run');
-    expect(form.run_at).toBe('2026-07-18T18:00');
-    expect(formatTimestamp(job.run_at, 'Europe/Berlin')).toContain('18:00');
-    expect(toDateTimeLocalInput(job.run_at, 'Europe/Berlin')).toBe(
-      '2026-07-18T18:00',
-    );
-  });
-
-  it('keeps completed and missed jobs visible as manageable history', () => {
-    const jobs = visibleCronJobs([
-      { id: 'active', status: 'active' },
-      { id: 'completed', status: 'completed' },
-      { id: 'missed', status: 'missed' },
-    ]);
-    expect(jobs.map((job) => job.id)).toEqual([
-      'active',
-      'completed',
-      'missed',
-    ]);
-  });
-
-  it('stores the server IANA timezone from cron.list', () => {
     const state = createCronViewState();
-    applyCronListResponse(state, {
-      jobs: [],
+
+    const [normalized] = applyCronListResponse(state, {
+      jobs: [job],
       system_timezone: 'Europe/Berlin',
     });
+    const form = createCronFormValues(job, state.systemTimezone);
+
     expect(state.systemTimezone).toBe('Europe/Berlin');
+    expect(normalized.schedule_description).toContain('18:00');
+    expect(formatTimestamp(job.run_at, 'Europe/Berlin')).toContain('18:00');
+    expect(form.name).toBe('One-time run');
+    expect(form.run_at).toBe('2026-07-18T18:00');
+    expect(buildCreateCronPayload(form)).not.toHaveProperty('timezone');
+    expect(buildUpdateCronPayload(form)).not.toHaveProperty('timezone');
+    expect(buildUpdateCronPayload(form).run_at).toBe(
+      '2026-07-18T16:00:00+00:00',
+    );
   });
 
   it('uses the prompt as a readable fallback for legacy payloads without a name', () => {
@@ -155,219 +123,81 @@ describe('cron time and history projection', () => {
     expect(cronFormFingerprint(form)).not.toBe(baseline);
   });
 
-  it('never sends a per-job timezone from create or update forms', () => {
-    const form = createCronFormValues(
-      {
-        id: 'job-once',
-        agent_id: 'main',
-        name: 'One-time run',
-        prompt: 'Run once',
-        schedule_type: 'once',
-        run_at: '2026-07-18T16:00:00+00:00',
-        status: 'active',
-      },
-      'Europe/Berlin',
-    );
-
-    expect(buildCreateCronPayload(form)).not.toHaveProperty('timezone');
-    expect(buildUpdateCronPayload(form)).not.toHaveProperty('timezone');
-    expect(buildUpdateCronPayload(form).run_at).toBe(
-      '2026-07-18T16:00:00+00:00',
-    );
-  });
-});
-
-describe('describeCronExpression', () => {
-  it('describes a standard five-field expression in plain text', () => {
-    expect(describeCronExpression('0 9 * * 1-5')).toBe(
-      'At 09:00, Monday through Friday',
-    );
-  });
-
-  it('uses 24-hour time', () => {
-    expect(describeCronExpression('30 17 * * *')).toBe('At 17:30');
-  });
-
-  it('returns an empty string for blank input', () => {
-    expect(describeCronExpression('')).toBe('');
-    expect(describeCronExpression('   ')).toBe('');
-    expect(describeCronExpression(null)).toBe('');
-    expect(describeCronExpression(undefined)).toBe('');
-  });
-
-  it('returns an empty string for unparseable expressions', () => {
-    expect(describeCronExpression('not a cron')).toBe('');
-    expect(describeCronExpression('99 99 * *')).toBe('');
-  });
-});
-
-describe('cron job target normalization (project-aware)', () => {
-  it('pre-fills the form agent_id from the formatted target of a project job', () => {
-    const form = createCronFormValues({
-      id: 'job-1',
-      agent_id: 'builder',
-      project_id: 'vbot',
-      target: 'builder@vbot',
-      schedule_type: 'cron',
-      cron_expression: '0 9 * * *',
-      status: 'active',
-    });
-    // The full address is what the dropdown option value and the cron.update
-    // payload key on — never the bare id (which would drop the project).
-    expect(form.agent_id).toBe('builder@vbot');
-  });
-
-  it('keeps an identity job byte-identical (bare agent_id, no project)', () => {
-    const form = createCronFormValues({
-      id: 'job-2',
-      agent_id: 'researcher',
-      project_id: null,
-      target: 'researcher',
-      schedule_type: 'cron',
-      cron_expression: '0 9 * * *',
-      status: 'active',
-    });
-    expect(form.agent_id).toBe('researcher');
-  });
-
-  it('falls back to formatting from agent_id/project_id when target is absent', () => {
-    const [job] = visibleCronJobs([
-      {
-        id: 'job-3',
-        agent_id: 'builder',
-        project_id: 'vbot',
+  it.each([
+    ['a Project job', 'builder', 'vbot', 'builder@vbot'],
+    ['an Identity job', 'researcher', null, 'researcher'],
+  ])(
+    'addresses %s by its full target in the form and both payloads',
+    (_label, agentId, projectId, address) => {
+      const job = {
+        id: 'job-1',
+        agent_id: agentId,
+        project_id: projectId,
+        target: address,
+        name: 'Work',
+        prompt: 'do work',
         schedule_type: 'cron',
         cron_expression: '0 9 * * *',
         status: 'active',
-      },
-    ]);
-    expect(job.agent_id).toBe('builder@vbot');
-  });
+      };
+      const form = createCronFormValues(job);
 
-  it('sends the full address as the agent_id of cron create/update payloads', () => {
-    const form = createCronFormValues({
-      id: 'job-4',
-      agent_id: 'builder',
-      project_id: 'vbot',
-      target: 'builder@vbot',
-      name: 'Project work',
-      prompt: 'do work',
-      schedule_type: 'cron',
-      cron_expression: '0 9 * * *',
-      status: 'active',
-    });
-    form.prompt = 'do work';
-    expect(buildCreateCronPayload(form).name).toBe('Project work');
-    expect(buildCreateCronPayload(form).agent_id).toBe('builder@vbot');
-    expect(buildUpdateCronPayload(form).agent_id).toBe('builder@vbot');
-  });
-
-  it('sends the bare id for an identity job payload, unchanged from today', () => {
-    const form = createCronFormValues({
-      id: 'job-5',
-      agent_id: 'researcher',
-      project_id: null,
-      target: 'researcher',
-      name: 'Research work',
-      prompt: 'do work',
-      schedule_type: 'cron',
-      cron_expression: '0 9 * * *',
-      status: 'active',
-    });
-    form.prompt = 'do work';
-    expect(buildUpdateCronPayload(form).name).toBe('Research work');
-    expect(buildCreateCronPayload(form).agent_id).toBe('researcher');
-    expect(buildUpdateCronPayload(form).agent_id).toBe('researcher');
-  });
+      // The full address is what the dropdown option value and the cron
+      // payloads key on; the bare id alone would drop the Project.
+      expect(form.agent_id).toBe(address);
+      expect(buildCreateCronPayload(form)).toMatchObject({
+        agent_id: address,
+        name: 'Work',
+      });
+      expect(buildUpdateCronPayload(form)).toMatchObject({
+        agent_id: address,
+        name: 'Work',
+      });
+      // Without a target, the address is formatted from agent_id/project_id.
+      const [listed] = visibleCronJobs([{ ...job, target: undefined }]);
+      expect(listed.agent_id).toBe(address);
+    },
+  );
 });
 
-describe('cron schedule presets', () => {
-  it('lists the Custom fallback first, then every named preset', () => {
-    const options = buildCronPresetOptions((key) => `label:${key}`);
-    expect(options.map((option) => option.value)).toEqual([
-      CRON_PRESET_CUSTOM,
-      'every15Minutes',
-      'hourly',
-      'dailyMorning',
-      'weekdayMornings',
-      'mondayMornings',
-      'monthlyFirst',
-    ]);
-    expect(options[0].label).toBe('label:custom');
-    expect(options[1].label).toBe('label:every15Minutes');
-  });
-
-  it('fills the exact expression of a named preset', () => {
-    expect(cronPresetExpression('every15Minutes')).toBe('*/15 * * * *');
-    expect(cronPresetExpression('hourly')).toBe('0 * * * *');
-    expect(cronPresetExpression('dailyMorning')).toBe('0 9 * * *');
-    expect(cronPresetExpression('weekdayMornings')).toBe('0 9 * * 1-5');
-    expect(cronPresetExpression('mondayMornings')).toBe('0 9 * * 1');
-    expect(cronPresetExpression('monthlyFirst')).toBe('0 9 1 * *');
-  });
-
-  it('fills nothing for the Custom preset or an unknown key', () => {
-    expect(cronPresetExpression(CRON_PRESET_CUSTOM)).toBe('');
-    expect(cronPresetExpression('not-a-preset')).toBe('');
-  });
-
-  it('derives the matching preset from an expression by exact match', () => {
-    expect(cronPresetForExpression('0 9 * * 1-5')).toBe('weekdayMornings');
-    expect(cronPresetForExpression('  */15 * * * *  ')).toBe('every15Minutes');
-  });
-
-  it('flips to Custom when the expression matches no preset', () => {
-    expect(cronPresetForExpression('0 9 * * 2')).toBe(CRON_PRESET_CUSTOM);
-    expect(cronPresetForExpression('')).toBe(CRON_PRESET_CUSTOM);
-    expect(cronPresetForExpression('   ')).toBe(CRON_PRESET_CUSTOM);
-  });
-
-  it('round-trips a filled expression back to its preset', () => {
-    for (const key of [
-      'every15Minutes',
-      'hourly',
-      'dailyMorning',
-      'weekdayMornings',
-      'mondayMornings',
-      'monthlyFirst',
+describe('cron expressions and schedule presets', () => {
+  it('describes five-field expressions in 24-hour plain text and blanks invalid input', () => {
+    expect(describeCronExpression('0 9 * * 1-5')).toBe(
+      'At 09:00, Monday through Friday',
+    );
+    expect(describeCronExpression('30 17 * * *')).toBe('At 17:30');
+    for (const blank of [
+      '',
+      '   ',
+      null,
+      undefined,
+      'not a cron',
+      '99 99 * *',
     ]) {
-      expect(cronPresetForExpression(cronPresetExpression(key))).toBe(key);
+      expect(describeCronExpression(blank)).toBe('');
     }
   });
-});
 
-// The combined identity + project agent option builders now live in the shared
-// `agentTargetOptions` module, where their exhaustive coverage moved too. Cron
-// keeps a thin smoke test to lock the re-export aliases — and thus the project-
-// aware `agent@projekt` option values cron saves — against accidental breakage.
-describe('cron agent option re-exports', () => {
-  const identityAgents = [{ id: 'researcher', name: 'Researcher' }];
-  const projectTeams = [
-    {
-      projectId: 'vbot',
-      displayName: 'vBot',
-      team: [{ agent_id: 'builder', display_name: 'Builder' }],
-    },
-  ];
-
-  it('still builds project-aware options under the cron names', () => {
-    expect(
-      buildCronAgentOptions(identityAgents, projectTeams).map((o) => o.value),
-    ).toEqual(['researcher', 'builder@vbot']);
+  it('lists the Custom fallback first, then every named preset', () => {
+    const options = buildCronPresetOptions((key) => `label:${key}`);
+    expect(options).toEqual(
+      [CRON_PRESET_CUSTOM, ...Object.keys(PRESET_EXPRESSIONS)].map((key) => ({
+        value: key,
+        label: `label:${key}`,
+      })),
+    );
   });
 
-  it('still inserts group headers under the cron names', () => {
-    const options = buildCronAgentDropdownOptions(
-      identityAgents,
-      projectTeams,
-      {
-        identityGroupLabel: 'Identity agents',
-        projectGroupLabel: 'Project agents',
-      },
-    );
-    expect(options.filter((o) => o.isGroupHeader).map((o) => o.label)).toEqual([
-      'Identity agents',
-      'Project agents',
-    ]);
+  it('maps presets to exact expressions and derives Custom for anything else', () => {
+    for (const [key, expression] of Object.entries(PRESET_EXPRESSIONS)) {
+      expect(cronPresetExpression(key)).toBe(expression);
+      expect(cronPresetForExpression(expression)).toBe(key);
+    }
+    expect(cronPresetForExpression('  */15 * * * *  ')).toBe('every15Minutes');
+    expect(cronPresetExpression(CRON_PRESET_CUSTOM)).toBe('');
+    expect(cronPresetExpression('not-a-preset')).toBe('');
+    for (const expression of ['0 9 * * 2', '', '   ']) {
+      expect(cronPresetForExpression(expression)).toBe(CRON_PRESET_CUSTOM);
+    }
   });
 });

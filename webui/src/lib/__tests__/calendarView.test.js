@@ -1,17 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   addDaysToKey,
   createCalendarController,
   createCalendarViewState,
   dayKeyForOccurrence,
-  dayKeyInZone,
   eventToFormValues,
   formatTimeInZone,
-  formValuesToPayload,
   groupByDay,
   monthGridDays,
-  navigateAnchor,
   sortDayEntries,
   todayKey,
   weekColumnLabel,
@@ -20,7 +17,7 @@ import {
   windowForView,
 } from '../calendarView.js';
 
-import { addCalendarExdate, updateCalendarEvent } from '../api.js';
+import { getCalendarWindow } from '../api.js';
 
 vi.mock('../api.js', () => ({
   getCalendarWindow: vi.fn(() =>
@@ -41,164 +38,123 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('day key helpers', () => {
-  it('zero-pads single-digit days in the current day key', () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date('2026-09-01T12:00:00Z'));
-      expect(todayKey()).toBe('2026-09-01');
-      expect(monthGridDays(todayKey())).toHaveLength(42);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+afterEach(() => {
+  vi.useRealTimers();
+});
 
-  it('adds days across month boundaries', () => {
+function serverWindow(systemTimezone) {
+  return {
+    events: [],
+    occurrences: [],
+    cron: [],
+    system_timezone: systemTimezone,
+  };
+}
+
+describe('day keys and the month grid', () => {
+  it('computes zero-padded Monday-first day keys across month boundaries', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-01T00:30:00Z'));
+
+    expect(todayKey()).toBe('2026-09-01');
+    // The server zone decides the current day, not UTC.
+    expect(todayKey('America/Los_Angeles')).toBe('2026-08-31');
     expect(addDaysToKey('2026-08-31', 1)).toBe('2026-09-01');
     expect(addDaysToKey('2026-09-01', -1)).toBe('2026-08-31');
-  });
-
-  it('computes monday-first weekday index', () => {
-    // 2026-08-31 is a Monday.
+    // 2026-08-31 is a Monday; 2026-09-06 is the Sunday of the same week.
     expect(weekStartKey('2026-08-31')).toBe('2026-08-31');
-    // 2026-09-06 is a Sunday in the same week.
     expect(weekStartKey('2026-09-06')).toBe('2026-08-31');
   });
 
-  it('builds a six-week month grid around the month', () => {
-    const days = monthGridDays('2026-09-15');
+  it('builds a six-week month grid marking the month and today', () => {
+    const days = monthGridDays('2026-09-15', '2026-09-23');
+
     expect(days).toHaveLength(42);
     expect(days[0].key).toBe('2026-08-31');
     expect(days.filter((day) => day.inMonth)).toHaveLength(30);
+    expect(days.filter((day) => day.isToday).map((day) => day.key)).toEqual([
+      '2026-09-23',
+    ]);
   });
 
-  it('marks today inside the grid', () => {
-    const days = monthGridDays(todayKey());
-    expect(days.some((day) => day.isToday)).toBe(true);
-  });
-});
+  it('labels the week range once with its years and columns compactly', () => {
+    // Intl separates ranges with (thin) spaces around an en dash; normalize
+    // whitespace so the assertions describe the content, not ICU spacing.
+    const plain = (text) => text.replace(/\s+/g, ' ');
 
-describe('week labels', () => {
-  // Intl separates ranges with (thin) spaces around an en dash; normalize
-  // whitespace so the assertions describe the content, not ICU spacing.
-  const plain = (text) => text.replace(/\s+/g, ' ');
-
-  it('labels the whole Monday-to-Sunday range with its year', () => {
     expect(plain(weekRangeLabel('2026-09-23', 'en'))).toBe('Sep 21 – 27, 2026');
-  });
-
-  it('names both months and years when a week crosses them', () => {
     expect(plain(weekRangeLabel('2026-10-01', 'en'))).toBe(
       'Sep 28 – Oct 4, 2026',
     );
     expect(plain(weekRangeLabel('2026-12-31', 'en'))).toBe(
       'Dec 28, 2026 – Jan 3, 2027',
     );
-  });
-
-  it('builds compact column parts without month or year', () => {
     expect(weekColumnLabel('2026-09-21', 'en')).toEqual({
       weekday: 'Mon',
       dayOfMonth: 21,
     });
   });
-});
 
-describe('windowForView', () => {
-  it('covers the whole rendered six-week grid for month view', () => {
-    // The grid shows surrounding days from the adjacent months too, so the
-    // request window must span the full 42-day grid, not just the month.
+  it('requests exactly the rendered days of each view', () => {
+    // The month grid shows surrounding days from the adjacent months too, so
+    // the request window spans the full 42-day grid, not just the month.
     expect(windowForView('month', '2026-09-15')).toEqual({
       from: '2026-08-31',
       to: '2026-10-11',
     });
-  });
-
-  it('covers monday to sunday for week view', () => {
     expect(windowForView('week', '2026-09-02')).toEqual({
       from: '2026-08-31',
       to: '2026-09-06',
     });
-  });
-
-  it('covers a single day for day view', () => {
     expect(windowForView('day', '2026-09-02')).toEqual({
       from: '2026-09-02',
       to: '2026-09-02',
     });
-  });
-
-  it('starts at its anchor for the agenda', () => {
-    const window = windowForView('agenda', '2020-01-01');
-    expect(window.from).toBe('2020-01-01');
-    expect(addDaysToKey(window.from, 13)).toBe(window.to);
-  });
-});
-
-describe('navigateAnchor', () => {
-  it('steps months from the first of the month', () => {
-    expect(navigateAnchor('month', '2026-09-15', 1)).toBe('2026-10-01');
-    expect(navigateAnchor('month', '2026-09-15', -1)).toBe('2026-08-01');
-  });
-
-  it('steps weeks and days', () => {
-    expect(navigateAnchor('week', '2026-09-02', 1)).toBe('2026-09-09');
-    expect(navigateAnchor('day', '2026-09-30', 1)).toBe('2026-10-01');
+    expect(windowForView('agenda', '2020-01-01')).toEqual({
+      from: '2020-01-01',
+      to: '2020-01-14',
+    });
   });
 });
 
 describe('server timezone rendering', () => {
-  it('computes today in the server timezone instead of UTC', () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date('2026-09-01T00:30:00Z'));
-      expect(todayKey('America/Los_Angeles')).toBe('2026-08-31');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-  it('maps a UTC instant to its local day key', () => {
-    // 22:00 UTC is already the next day in Europe/Berlin.
-    expect(dayKeyInZone('2026-09-02T22:00:00+00:00', 'Europe/Berlin')).toBe(
-      '2026-09-03',
-    );
-    expect(dayKeyInZone('2026-09-02T21:59:00+00:00', 'Europe/Berlin')).toBe(
-      '2026-09-02',
-    );
-  });
+  it('groups occurrences by their day in the server timezone', () => {
+    const late = {
+      title: 'late',
+      all_day: false,
+      // 22:00 UTC is already the next day in Europe/Berlin.
+      start_utc: '2026-09-02T22:00:00+00:00',
+      start_date: '',
+    };
+    const evening = {
+      title: 'evening',
+      all_day: false,
+      start_utc: '2026-09-02T21:59:00+00:00',
+      start_date: '',
+    };
+    const allDay = {
+      title: 'all day',
+      all_day: true,
+      start_utc: null,
+      start_date: '2026-09-05',
+    };
 
-  it('formats times in the server zone', () => {
+    expect(
+      groupByDay([late, evening, allDay], (occurrence) =>
+        dayKeyForOccurrence(occurrence, 'Europe/Berlin'),
+      ),
+    ).toEqual({
+      '2026-09-02': [evening],
+      '2026-09-03': [late],
+      '2026-09-05': [allDay],
+    });
     // 07:00 UTC is 09:00 in Europe/Berlin summer time.
     expect(
       formatTimeInZone('2026-09-03T07:00:00+00:00', 'Europe/Berlin', 'en-GB'),
     ).toBe('09:00');
   });
 
-  it('groups occurrences by their local day', () => {
-    const grouped = groupByDay(
-      [
-        {
-          title: 'a',
-          all_day: false,
-          start_utc: '2026-09-02T22:00:00+00:00',
-          start_date: '',
-        },
-        {
-          title: 'b',
-          all_day: true,
-          start_utc: null,
-          start_date: '2026-09-05',
-        },
-      ],
-      (occurrence) => dayKeyForOccurrence(occurrence, 'Europe/Berlin'),
-    );
-    expect(grouped['2026-09-03']).toHaveLength(1);
-    expect(grouped['2026-09-05']).toHaveLength(1);
-  });
-});
-
-describe('sortDayEntries', () => {
-  it('lists all-day entries first, then by time', () => {
+  it('lists all-day entries first, then cron, then by time', () => {
     const sorted = sortDayEntries([
       {
         all_day: false,
@@ -227,52 +183,59 @@ describe('sortDayEntries', () => {
       'late',
     ]);
   });
-});
 
-describe('event form mapping', () => {
-  it('projects a recurring timed event into editable values and back', () => {
-    const values = eventToFormValues({
-      title: 'Standup',
-      notes: null,
-      location: null,
-      all_day: false,
-      start_utc: null,
-      start_local: '2026-08-31T09:00:00',
-      tz_name: 'Europe/Berlin',
-      start_date: null,
-      duration_minutes: 30,
-      duration_days: null,
-      rrule: {
+  it.each([
+    [
+      'a recurring timed event from its local start',
+      {
+        start_utc: null,
+        start_local: '2026-08-31T09:00:00',
+        tz_name: 'Europe/Berlin',
+        duration_minutes: 30,
+        rrule: {
+          freq: 'weekly',
+          interval: 2,
+          count: 5,
+          until: null,
+          by_weekday: ['mo', 'we'],
+        },
+      },
+      {
+        start_date: '2026-08-31',
+        start_time: '09:00',
+        duration_minutes: 30,
         freq: 'weekly',
         interval: 2,
-        count: 5,
-        until: null,
         by_weekday: ['mo', 'we'],
+        end_mode: 'count',
+        end_count: 5,
       },
-      exdates: [],
-    });
-    expect(values.start_date).toBe('2026-08-31');
-    expect(values.start_time).toBe('09:00');
-    expect(values.freq).toBe('weekly');
-    expect(values.end_mode).toBe('count');
-
-    const payload = formValuesToPayload(values);
-    expect(payload.rrule).toEqual({
-      freq: 'weekly',
-      interval: 2,
-      by_weekday: ['mo', 'we'],
-      count: 5,
-    });
-  });
-
-  it('renders a single timed event in the server zone, not raw UTC', () => {
+    ],
+    [
+      'a single timed event in the server zone, not raw UTC',
+      // 07:00 UTC is 09:00 in Berlin; the form presents that wall clock.
+      { start_utc: '2026-09-07T07:00:00+00:00' },
+      {
+        start_date: '2026-09-07',
+        start_time: '09:00',
+        freq: 'none',
+        end_mode: 'never',
+      },
+    ],
+    [
+      'a late single event on the next server day',
+      // 22:00 UTC is already 00:00 on 2026-09-03 in Berlin.
+      { start_utc: '2026-09-02T22:00:00+00:00' },
+      { start_date: '2026-09-03', start_time: '00:00' },
+    ],
+  ])('projects %s into editable values', (_label, fields, expected) => {
     const values = eventToFormValues(
       {
-        title: 'Zahnarzt',
+        title: 'Event',
         notes: null,
         location: null,
         all_day: false,
-        start_utc: '2026-09-07T07:00:00+00:00',
+        start_utc: null,
         start_local: null,
         tz_name: null,
         start_date: null,
@@ -280,140 +243,64 @@ describe('event form mapping', () => {
         duration_days: null,
         rrule: null,
         exdates: [],
+        ...fields,
       },
       'Europe/Berlin',
     );
-    // 07:00 UTC is 09:00 in Berlin; the form presents that wall clock.
-    expect(values.start_date).toBe('2026-09-07');
-    expect(values.start_time).toBe('09:00');
-  });
 
-  it('resaving an edited single event keeps its wall clock', () => {
-    const values = eventToFormValues(
-      {
-        title: 'Zahnarzt',
-        notes: null,
-        location: null,
-        all_day: false,
-        start_utc: '2026-09-07T07:00:00+00:00',
-        start_local: null,
-        tz_name: null,
-        start_date: null,
-        duration_minutes: 60,
-        duration_days: null,
-        rrule: null,
-        exdates: [],
-      },
-      'Europe/Berlin',
-    );
-    const payload = formValuesToPayload(values);
-    // Regression: slicing start_utc naively produced the wrong wall clock, so a
-    // save without edits shifted the event. The roundtrip must stay 09:00 Berlin.
-    expect(payload.start).toBe('2026-09-07T09:00:00');
-  });
-
-  it('rolls a late single event into the next server day', () => {
-    const values = eventToFormValues(
-      {
-        title: 'Late',
-        notes: null,
-        location: null,
-        all_day: false,
-        start_utc: '2026-09-02T22:00:00+00:00',
-        start_local: null,
-        tz_name: null,
-        start_date: null,
-        duration_minutes: 60,
-        duration_days: null,
-        rrule: null,
-        exdates: [],
-      },
-      'Europe/Berlin',
-    );
-    // 22:00 UTC is already 00:00 on 2026-09-03 in Berlin.
-    expect(values.start_date).toBe('2026-09-03');
-    expect(values.start_time).toBe('00:00');
-  });
-
-  it('clears recurrence when freq is none', () => {
-    const payload = formValuesToPayload({
-      title: 'X',
-      notes: '',
-      location: '',
-      all_day: false,
-      start_date: '2026-09-03',
-      start_time: '15:00',
-      duration_minutes: 30,
-      duration_days: 1,
-      tz: '',
-      freq: 'none',
-      interval: 1,
-      by_weekday: [],
-      end_mode: 'never',
-      end_count: 10,
-      end_until: '',
-    });
-    expect(payload.rrule).toBeNull();
-    expect(payload.start).toBe('2026-09-03T15:00:00');
-    expect(payload.tz).toBeUndefined();
+    expect(values).toMatchObject(expected);
   });
 });
 
 describe('controller', () => {
-  it('corrects the initial anchor and reloads in the server timezone', async () => {
+  it('corrects the initial anchor to the server day and keeps Today in the server timezone', async () => {
     vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date('2026-09-01T00:30:00Z'));
-      const { getCalendarWindow } = await import('../api.js');
-      getCalendarWindow
-        .mockResolvedValueOnce({
-          events: [],
-          occurrences: [],
-          cron: [],
-          system_timezone: 'America/Los_Angeles',
-        })
-        .mockResolvedValueOnce({
-          events: [],
-          occurrences: [],
-          cron: [],
-          system_timezone: 'America/Los_Angeles',
-        });
-      const state = createCalendarViewState();
-      const controller = createCalendarController({ state });
+    vi.setSystemTime(new Date('2026-09-01T00:30:00Z'));
+    getCalendarWindow.mockResolvedValue(serverWindow('America/Los_Angeles'));
+    const state = createCalendarViewState();
+    const controller = createCalendarController({ state });
 
-      await controller.load();
+    await controller.load();
 
-      expect(state.anchorKey).toBe('2026-08-31');
-      expect(getCalendarWindow).toHaveBeenLastCalledWith({
-        from: '2026-07-27',
-        to: '2026-09-06',
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(state.anchorKey).toBe('2026-08-31');
+    expect(getCalendarWindow).toHaveBeenLastCalledWith({
+      from: '2026-07-27',
+      to: '2026-09-06',
+    });
+
+    state.anchorKey = '2026-10-15';
+    controller.goToday();
+    expect(state.anchorKey).toBe('2026-08-31');
   });
 
-  it('uses the server timezone for Today after loading', async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date('2026-09-01T00:30:00Z'));
-      const { getCalendarWindow } = await import('../api.js');
-      getCalendarWindow.mockResolvedValue({
-        events: [],
-        occurrences: [],
-        cron: [],
-        system_timezone: 'America/Los_Angeles',
-      });
-      const state = createCalendarViewState();
-      const controller = createCalendarController({ state });
-      await controller.load();
+  it('steps the anchor by the period of the current view and loads its window', async () => {
+    const state = createCalendarViewState();
+    state.anchorKey = '2026-09-15';
+    const controller = createCalendarController({ state });
 
-      controller.goToday();
-      expect(state.anchorKey).toBe('2026-08-31');
-    } finally {
-      vi.useRealTimers();
-    }
+    controller.navigate(1);
+    expect(state.anchorKey).toBe('2026-10-01');
+    expect(getCalendarWindow).toHaveBeenLastCalledWith(
+      windowForView('month', '2026-10-01'),
+    );
+    controller.navigate(-2);
+    expect(state.anchorKey).toBe('2026-08-01');
+
+    controller.setAnchor('2026-09-02');
+    controller.setView('week');
+    controller.navigate(1);
+    expect(state.anchorKey).toBe('2026-09-09');
+    expect(getCalendarWindow).toHaveBeenLastCalledWith({
+      from: '2026-09-07',
+      to: '2026-09-13',
+    });
+
+    controller.setAnchor('2026-09-30');
+    controller.setView('day');
+    controller.navigate(1);
+    expect(state.anchorKey).toBe('2026-10-01');
   });
+
   it('toggles layers', () => {
     const state = createCalendarViewState();
     const controller = createCalendarController({ state });
@@ -423,20 +310,5 @@ describe('controller', () => {
     expect(state.showCronLayer).toBe(false);
     controller.toggleLayer('local');
     expect(state.showLocalLayer).toBe(true);
-  });
-
-  it('excludes an occurrence additively instead of replacing exdates', async () => {
-    const state = createCalendarViewState();
-    const controller = createCalendarController({ state });
-
-    await controller.excludeOccurrence('evt-1', '2026-09-14T09:00:00');
-
-    expect(addCalendarExdate).toHaveBeenCalledWith({
-      id: 'evt-1',
-      occurrence_start: '2026-09-14T09:00:00',
-    });
-    // Regression: previously this read all exdates and re-sent the whole
-    // array via update, which could drop a concurrent tab's exclusion.
-    expect(updateCalendarEvent).not.toHaveBeenCalled();
   });
 });

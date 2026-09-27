@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 
 const rpcMock = vi.fn();
@@ -16,8 +16,24 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: CalendarView } = await import('../CalendarView.svelte');
 
-function emptyWindow() {
-  return { events: [], occurrences: [], cron: [], system_timezone: 'UTC' };
+function calendarWindow({
+  events = [],
+  occurrences = [],
+  timezone = 'UTC',
+} = {}) {
+  return { events, occurrences, cron: [], system_timezone: timezone };
+}
+
+function serveWindow(window) {
+  rpcMock.mockImplementation((method) => {
+    if (method === 'calendar.window') {
+      return Promise.resolve(window);
+    }
+    if (method.startsWith('calendar.')) {
+      return Promise.resolve({});
+    }
+    return Promise.reject(new Error(`Unexpected RPC: ${method}`));
+  });
 }
 
 async function waitForCondition(predicate, attempts = 50) {
@@ -34,7 +50,8 @@ async function waitForCondition(predicate, attempts = 50) {
   }
 }
 
-function showView(label) {
+function showView(view) {
+  const label = t(`calendar.view.${view}`, view);
   [...document.querySelectorAll('[role="tab"]')]
     .find((tab) => tab.textContent.trim() === label)
     .click();
@@ -46,6 +63,14 @@ function plainText(element) {
   return element.textContent.replace(/\s+/g, ' ').trim();
 }
 
+function button(label, root = document) {
+  const match = [...root.querySelectorAll('button')].find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(match, `button not found: ${label}`).toBeTruthy();
+  return match;
+}
+
 function chooseOption(id, label) {
   document.getElementById(id).click();
   flushSync();
@@ -55,6 +80,19 @@ function chooseOption(id, label) {
   expect(option).toBeTruthy();
   option.click();
   flushSync();
+}
+
+function typeInto(id, value) {
+  const input = document.getElementById(id);
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
+}
+
+function rpcCalls(method) {
+  return rpcMock.mock.calls
+    .filter(([name]) => name === method)
+    .map(([, params]) => params);
 }
 
 async function mountCalendarView() {
@@ -71,12 +109,8 @@ describe('CalendarView', () => {
 
   beforeEach(() => {
     init('en');
-    rpcMock.mockImplementation((method) => {
-      if (method === 'calendar.window') {
-        return Promise.resolve(emptyWindow());
-      }
-      return Promise.reject(new Error(`Unexpected RPC: ${method}`));
-    });
+    rpcMock.mockReset();
+    serveWindow(calendarWindow());
   });
 
   afterEach(() => {
@@ -86,108 +120,15 @@ describe('CalendarView', () => {
     }
   });
 
-  it('renders the month grid when nothing is scheduled', async () => {
+  it('renders the month grid with today when nothing is scheduled', async () => {
     mountedComponent = await mountCalendarView();
 
     // Regression: an empty window used to replace the whole calendar with an
     // empty state; the grid itself shows that nothing is scheduled.
-    expect(document.querySelector('.calendar-grid')).not.toBeNull();
     expect(document.querySelectorAll('.calendar-weekday')).toHaveLength(7);
     expect(document.querySelectorAll('.calendar-cell')).toHaveLength(42);
-    expect(document.querySelector('.empty-state__title')).toBeNull();
-  });
-
-  it('opens the event form from the toolbar action', async () => {
-    mountedComponent = await mountCalendarView();
-
-    document.querySelector('.calendar-toolbar-right .btn-primary').click();
-    flushSync();
-
-    expect(document.querySelector('.calendar-form')).not.toBeNull();
-  });
-
-  it('insets the event form inside a padded modal body', async () => {
-    mountedComponent = await mountCalendarView();
-
-    document.querySelector('.calendar-toolbar-right .btn-primary').click();
-    flushSync();
-
-    // The Modal shell renders body snippets directly; callers own the padded
-    // `.modal-body` wrapper. Without it the form sits flush against the modal
-    // edges.
-    expect(document.querySelector('.modal-body .calendar-form')).not.toBeNull();
-  });
-
-  it('associates each event-form label with its control', async () => {
-    mountedComponent = await mountCalendarView();
-
-    document.querySelector('.calendar-toolbar-right .btn-primary').click();
-    flushSync();
-
-    const titleLabel = document.querySelector(
-      '.calendar-form label[for="calendar-form-title-input"]',
-    );
-    const titleInput = document.querySelector(
-      '.calendar-form input#calendar-form-title-input',
-    );
-    const dateLabel = document.querySelector(
-      '.calendar-form label[for="calendar-form-date"]',
-    );
-    const dateInput = document.querySelector(
-      '.calendar-form input#calendar-form-date',
-    );
-
-    expect(titleLabel).not.toBeNull();
-    expect(titleInput).not.toBeNull();
-    expect(dateLabel).not.toBeNull();
-    expect(dateInput).not.toBeNull();
-  });
-
-  it('sets recurrence and its end through the shared choice fields', async () => {
-    mountedComponent = await mountCalendarView();
-
-    document.querySelector('.calendar-toolbar-right .btn-primary').click();
-    flushSync();
-
-    // The labels still name the Dropdown triggers.
-    const freqTrigger = document.getElementById('calendar-form-freq');
-    expect(freqTrigger.tagName).toBe('BUTTON');
-    expect(
-      document.querySelector('.calendar-form label[for="calendar-form-freq"]'),
-    ).not.toBeNull();
-    expect(document.querySelector('.calendar-form select')).toBeNull();
-    expect(document.querySelector('.calendar-weekday-picker')).toBeNull();
-
-    chooseOption('calendar-form-freq', 'Weekly');
-    expect(freqTrigger.textContent.trim()).toBe('Weekly');
-    expect(document.querySelector('.calendar-weekday-picker')).not.toBeNull();
-
-    chooseOption('calendar-form-end-mode', 'After');
-    expect(
-      document.querySelector('.calendar-form-ends input[type="number"]'),
-    ).not.toBeNull();
-
-    chooseOption('calendar-form-end-mode', 'On date');
-    expect(
-      document.querySelector('.calendar-form-ends input[type="date"]'),
-    ).not.toBeNull();
-  });
-
-  it('opens the create form from clicking an empty cell surface', async () => {
-    mountedComponent = await mountCalendarView();
-
-    const surface = document.querySelector('.calendar-cell-surface');
-    expect(surface).not.toBeNull();
-    surface.click();
-    flushSync();
-
-    expect(document.querySelector('.calendar-form')).not.toBeNull();
-  });
-
-  it('marks today as a highlighted cell surface', async () => {
-    mountedComponent = await mountCalendarView();
-
     expect(document.querySelector('.calendar-cell.is-today')).not.toBeNull();
+    expect(document.querySelector('.empty-state__title')).toBeNull();
   });
 
   describe('on a fixed day', () => {
@@ -202,7 +143,7 @@ describe('CalendarView', () => {
 
     it('heads week columns with compact labels under a week range', async () => {
       mountedComponent = await mountCalendarView();
-      showView('Week');
+      showView('week');
 
       // The toolbar names the week once; columns show only weekday and day
       // instead of repeating the full date and year seven times.
@@ -232,7 +173,7 @@ describe('CalendarView', () => {
 
     it('names the shown day once in the day view', async () => {
       mountedComponent = await mountCalendarView();
-      showView('Day');
+      showView('day');
 
       expect(plainText(document.querySelector('.calendar-heading'))).toBe(
         'Wednesday, September 23, 2026',
@@ -256,54 +197,224 @@ describe('CalendarView', () => {
         ...Array.from({ length: 11 }, (_, index) => String(index + 1)),
       ]);
     });
-  });
 
-  it('opens the detail modal from an event entry, not the create form', async () => {
-    const now = new Date();
-    const todayNoonUtc = new Date(
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        now.getUTCDate(),
-        12,
-        0,
-        0,
-      ),
-    ).toISOString();
-    rpcMock.mockImplementation((method) => {
-      if (method === 'calendar.window') {
-        return Promise.resolve({
-          events: [{ id: 'evt-1', title: 'Standup', rrule: null }],
+    it('opens the create form from the toolbar or an empty day in a padded modal with labelled controls', async () => {
+      mountedComponent = await mountCalendarView();
+
+      button(t('calendar.newEvent', 'New event')).click();
+      flushSync();
+
+      // The Modal shell renders body snippets directly; callers own the padded
+      // `.modal-body` wrapper. Without it the form sits flush against the
+      // modal edges.
+      expect(
+        document.querySelector('.modal-body .calendar-form'),
+      ).not.toBeNull();
+      for (const id of ['calendar-form-title-input', 'calendar-form-date']) {
+        expect(
+          document.querySelector(`.calendar-form label[for="${id}"]`),
+        ).not.toBeNull();
+        expect(document.querySelector(`.calendar-form input#${id}`)).not.toBe(
+          null,
+        );
+      }
+      expect(document.getElementById('calendar-form-date').value).toBe(
+        '2026-09-23',
+      );
+
+      button(t('common.cancel', 'Cancel')).click();
+      flushSync();
+      expect(document.querySelector('.calendar-form')).toBeNull();
+
+      // The first surface of the September grid is Monday, August 31.
+      document.querySelector('.calendar-cell-surface').click();
+      flushSync();
+      expect(document.getElementById('calendar-form-date').value).toBe(
+        '2026-08-31',
+      );
+    });
+
+    it('creates a weekly recurring event through the shared choice fields', async () => {
+      mountedComponent = await mountCalendarView();
+      button(t('calendar.newEvent', 'New event')).click();
+      flushSync();
+
+      // The labels still name the Dropdown triggers.
+      const freqTrigger = document.getElementById('calendar-form-freq');
+      expect(freqTrigger.tagName).toBe('BUTTON');
+      expect(
+        document.querySelector(
+          '.calendar-form label[for="calendar-form-freq"]',
+        ),
+      ).not.toBeNull();
+      expect(document.querySelector('.calendar-form select')).toBeNull();
+      expect(document.querySelector('.calendar-weekday-picker')).toBeNull();
+
+      typeInto('calendar-form-title-input', 'Standup');
+      const weekly = t('calendar.form.freqWeekly', 'Weekly');
+      chooseOption('calendar-form-freq', weekly);
+      expect(freqTrigger.textContent.trim()).toBe(weekly);
+      expect(document.querySelector('.calendar-weekday-picker')).not.toBeNull();
+      chooseOption(
+        'calendar-form-end-mode',
+        t('calendar.form.endsUntil', 'On date'),
+      );
+      expect(
+        document.querySelector('.calendar-form-ends input[type="date"]'),
+      ).not.toBeNull();
+      chooseOption(
+        'calendar-form-end-mode',
+        t('calendar.form.endsCount', 'After'),
+      );
+      expect(
+        document.querySelector('.calendar-form-ends input[type="number"]'),
+      ).not.toBeNull();
+
+      button(t('calendar.form.create', 'Create event')).click();
+      await waitForCondition(
+        () => document.querySelector('.calendar-form') === null,
+      );
+
+      expect(rpcCalls('calendar.create')).toEqual([
+        {
+          title: 'Standup',
+          notes: null,
+          all_day: false,
+          start: '2026-09-23T09:00:00',
+          duration_minutes: 60,
+          rrule: {
+            freq: 'weekly',
+            interval: 1,
+            by_weekday: ['mo', 'tu', 'we', 'th', 'fr'],
+            count: 10,
+          },
+        },
+      ]);
+    });
+
+    it('opens an entry in the detail modal and saves an edit in the server wall clock', async () => {
+      const start = '2026-09-23T07:00:00+00:00';
+      serveWindow(
+        calendarWindow({
+          timezone: 'Europe/Berlin',
+          events: [
+            {
+              id: 'evt-1',
+              title: 'Dentist',
+              notes: null,
+              location: null,
+              all_day: false,
+              start_utc: start,
+              start_local: null,
+              tz_name: null,
+              start_date: null,
+              duration_minutes: 60,
+              duration_days: null,
+              rrule: null,
+              exdates: [],
+            },
+          ],
+          occurrences: [
+            {
+              event_id: 'evt-1',
+              title: 'Dentist',
+              all_day: false,
+              recurring: false,
+              notes: null,
+              start_utc: start,
+              end_utc: '2026-09-23T08:00:00+00:00',
+              start_date: null,
+              end_date: null,
+              occurrence_start: start,
+            },
+          ],
+        }),
+      );
+      mountedComponent = await mountCalendarView();
+
+      document.querySelector('.calendar-cell .calendar-entry').click();
+      flushSync();
+
+      // Regression: clicking an entry used to bubble to the create surface, so
+      // the form opened instead of the detail modal.
+      expect(document.querySelector('.calendar-detail')).not.toBeNull();
+      expect(document.querySelector('.calendar-form')).toBeNull();
+
+      button(t('common.edit', 'Edit')).click();
+      flushSync();
+      // 07:00 UTC is 09:00 in Berlin; the form presents that wall clock.
+      expect(document.getElementById('calendar-form-date').value).toBe(
+        '2026-09-23',
+      );
+      expect(document.getElementById('calendar-form-time').value).toBe('09:00');
+
+      button(t('common.save', 'Save')).click();
+      await waitForCondition(() => rpcCalls('calendar.update').length === 1);
+
+      // Regression: resaving without edits must not shift the event by the
+      // zone offset.
+      expect(rpcCalls('calendar.update')).toEqual([
+        {
+          id: 'evt-1',
+          title: 'Dentist',
+          notes: null,
+          all_day: false,
+          start: '2026-09-23T09:00:00',
+          duration_minutes: 60,
+          rrule: null,
+        },
+      ]);
+    });
+
+    it('deletes only the chosen occurrence of a recurring event additively', async () => {
+      serveWindow(
+        calendarWindow({
+          events: [
+            {
+              id: 'evt-1',
+              title: 'Standup',
+              rrule: { freq: 'weekly', interval: 1 },
+            },
+          ],
           occurrences: [
             {
               event_id: 'evt-1',
               title: 'Standup',
               all_day: false,
-              recurring: false,
+              recurring: true,
               notes: null,
-              start_utc: todayNoonUtc,
-              end_utc: todayNoonUtc,
+              start_utc: '2026-09-23T09:00:00+00:00',
+              end_utc: '2026-09-23T09:30:00+00:00',
               start_date: null,
               end_date: null,
-              occurrence_start: todayNoonUtc,
+              occurrence_start: '2026-09-23T09:00:00',
             },
           ],
-          cron: [],
-          system_timezone: 'UTC',
-        });
-      }
-      return Promise.reject(new Error(`Unexpected RPC: ${method}`));
+        }),
+      );
+      mountedComponent = await mountCalendarView();
+      document.querySelector('.calendar-cell .calendar-entry').click();
+      flushSync();
+
+      button(t('common.delete', 'Delete')).click();
+      flushSync();
+      document
+        .querySelectorAll('.calendar-delete-choice input[type="radio"]')[1]
+        .click();
+      flushSync();
+      button(
+        t('calendar.deleteOccurrence', 'Only this occurrence'),
+        document.querySelector('.modal-footer'),
+      ).click();
+      await waitForCondition(() => rpcCalls('calendar.add_exdate').length > 0);
+
+      expect(rpcCalls('calendar.add_exdate')).toEqual([
+        { id: 'evt-1', occurrence_start: '2026-09-23T09:00:00' },
+      ]);
+      // Regression: excluding used to re-send the whole exdates array through
+      // an update, which could drop a concurrent tab's exclusion.
+      expect(rpcCalls('calendar.update')).toEqual([]);
+      expect(rpcCalls('calendar.delete')).toEqual([]);
     });
-    mountedComponent = await mountCalendarView();
-
-    const entry = document.querySelector('.calendar-cell .calendar-entry');
-    expect(entry).not.toBeNull();
-    entry.click();
-    flushSync();
-
-    // Regression: clicking an entry used to bubble to the create surface, so
-    // the form opened instead of the detail modal.
-    expect(document.querySelector('.calendar-detail')).not.toBeNull();
-    expect(document.querySelector('.calendar-form')).toBeNull();
   });
 });
