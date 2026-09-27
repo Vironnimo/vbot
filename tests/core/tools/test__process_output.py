@@ -40,13 +40,28 @@ def test_complete_terminal_controls_are_removed(chunks: tuple[bytes, ...], expec
         # An aborted CSI must not consume the first character after the line break.
         ((b"\x1b[", b"\nResult: OK"), "\nResult: OK"),
         ((b"\x1b[12\r\nnext",), "\r\nnext"),
-        ((b"\x1b\nkept",), "\nkept"),
-        (("\x1bä".encode(),), "ä"),
+        ((b"\x1b\nkept",), "\\x1b\nkept"),
+        (("\x1bä".encode(),), "\\x1bä"),
         # A new escape inside an unterminated string starts a new sequence.
         ((b"\x1b]0;title\x1b[31mred\x1b[0m",), "red"),
     ],
 )
 def test_unterminated_controls_do_not_swallow_following_output(
+    chunks: tuple[bytes, ...], expected: str
+) -> None:
+    assert _decode(*chunks) == expected
+
+
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        # PowerShell turned the Markdown span `expected` into ESC + "xpected".
+        ((b"# \x1bxpected is None",), "# \\x1bxpected is None"),
+        ((b"a \x1b", b"lse b"), "a \\x1blse b"),
+        ((b"\x1b\x1b[31mred",), "\\x1bred"),
+    ],
+)
+def test_escape_that_starts_no_terminal_control_stays_visible(
     chunks: tuple[bytes, ...], expected: str
 ) -> None:
     assert _decode(*chunks) == expected
