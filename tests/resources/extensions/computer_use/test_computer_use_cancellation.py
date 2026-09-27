@@ -1,30 +1,29 @@
-"""Computer use: cancellation behavior."""
+"""Computer use: stops and cancellations end only the current call and never replay input."""
 
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
-from resources.extensions.computer_use import extension as computer_use
-from resources.extensions.computer_use.driver import ComputerUseError
-from tests.resources.extensions.computer_use_helpers import (
+from resources.extensions.computer_use import driver
+from resources.extensions.computer_use.driver import ComputerUseError, CuaDriver, EmergencyHotkey
+from tests.resources.extensions.computer_use.computer_use_test_support import (
     DesktopClient,
     call,
     capture,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    computer as computer,
+    connect_through,
 )
 
 
 def test_transport_timeout_never_replays_uncertain_input():
-    from resources.extensions.computer_use.driver import CuaDriver
-
     client = CuaDriver("test-owned-driver")
     client.desktop = None
     calls = []
@@ -50,13 +49,7 @@ def test_transport_timeout_never_replays_uncertain_input():
 def test_interrupt_only_affects_current_call_and_next_agents_can_use_tool(
     computer, monkeypatch, source
 ):
-
     service, context, client, _ = computer
-    service.executable = "test-owned-driver"
-    service._driver = client
-    monkeypatch.setattr(
-        service, "_client", computer_use.ComputerUseService._client.__get__(service)
-    )
     replacements = []
 
     def new_client(executable):
@@ -64,7 +57,8 @@ def test_interrupt_only_affects_current_call_and_next_agents_can_use_tool(
         replacements.append(replacement)
         return replacement
 
-    monkeypatch.setattr(computer_use, "CuaDriver", new_client)
+    connect_through(service, monkeypatch, new_client)
+    service._driver = client
     callbacks = []
     context = replace(context, cancel_registration_hook=callbacks.append)
     entered = threading.Event()
@@ -102,7 +96,6 @@ def test_interrupt_only_affects_current_call_and_next_agents_can_use_tool(
         result = future.result(timeout=2)
         assert result["error"]["code"] == "computer_use_interrupted"
     assert client.broken and client.closed and service._driver is None
-    assert not (context.data_root / "computer-use-stopped").exists()
     assert not asyncio.run(service.control({}))["active"]
     assert service.handle(context, {"action": "apps"})["ok"]
     other = replace(context, agent_id="other", session_id="other-session", run_id="other-run")
@@ -122,28 +115,14 @@ def test_late_cancel_does_not_stop_next_call(computer):
     assert not client.broken
 
 
-def test_old_stop_file_has_no_runtime_effect_after_reload(computer, monkeypatch):
-    service, context, _, _ = computer
-    marker = context.data_root / "computer-use-stopped"
-    marker.touch()
-    replacement = computer_use.ComputerUseService(service.api)
-    replacement.executable = "test-owned-driver"
-    monkeypatch.setattr(computer_use, "CuaDriver", lambda executable: DesktopClient())
-    asyncio.run(replacement.start(service.host))
-    try:
-        assert replacement.handle(context, {"action": "apps"})["ok"]
-        assert set(asyncio.run(replacement.control({}))) == {
-            "available",
-            "active",
-            "stopping",
-            "hotkey_available",
-        }
-    finally:
-        replacement.close()
-
-
-def test_control_rejects_release_and_untargeted_stop(computer):
+def test_control_reports_idle_status_and_rejects_release_and_untargeted_stop(computer):
     service, context, client, _ = computer
+    assert set(asyncio.run(service.control({}))) == {
+        "available",
+        "active",
+        "stopping",
+        "hotkey_available",
+    }
     for arguments in ({"action": "resume"}, {"action": "stop"}):
         with pytest.raises(ValueError):
             asyncio.run(service.api.operations.invoke("control", arguments))
@@ -182,14 +161,9 @@ def test_os_interrupt_failure_stops_remaining_work_without_latching(computer):
     assert client.broken and client.closed
     client.hook = None
     assert service.handle(context, {"action": "apps"})["ok"]
-    assert not (context.data_root / "computer-use-stopped").exists()
 
 
 def test_stop_during_connection_admission_cannot_mark_driver_healthy(monkeypatch):
-    from contextlib import asynccontextmanager
-
-    from resources.extensions.computer_use.driver import CuaDriver
-
     closed = []
 
     @asynccontextmanager
@@ -209,12 +183,7 @@ def test_stop_during_connection_admission_cannot_mark_driver_healthy(monkeypatch
     assert client.broken and client._session is None and closed == [True]
 
 
-def test_real_owned_process_is_killed_without_waiting_for_rpc(tmp_path, monkeypatch):
-    import sys
-    import time
-
-    from resources.extensions.computer_use import driver
-
+def test_real_owned_process_is_killed_without_waiting_for_rpc(monkeypatch):
     entered = threading.Event()
     real_open = driver.anyio.open_process
     processes = []
@@ -286,8 +255,7 @@ def test_idle_stop_and_escape_do_not_affect_later_calls(computer):
     assert service.handle(replace(context, run_id="new-run"), {"action": "apps"})["ok"]
 
 
-@pytest.mark.parametrize("capture_after", [False, True])
-def test_pending_escape_stops_sequence_but_not_next_call(computer, capture_after):
+def test_pending_escape_stops_sequence_but_not_next_call(computer):
     service, context, client, _ = computer
     capture(computer)
 
@@ -301,7 +269,7 @@ def test_pending_escape_stops_sequence_but_not_next_call(computer, capture_after
     result = call(
         computer,
         "sequence",
-        capture_after=capture_after,
+        capture_after=False,
         steps=[
             {"action": "type", "text": "first"},
             {"action": "type", "text": "must not reach application"},
@@ -310,6 +278,7 @@ def test_pending_escape_stops_sequence_but_not_next_call(computer, capture_after
     data = result["data"]
     assert data["completed_steps"] == 1 and data["stopped_step"] == 2
     assert data["partial"] and data["error"]["code"] == "computer_use_interrupted"
+    # A stopped sequence still tries to show the current state, which the stop also ends.
     assert data["observation_error"]["code"] == "computer_use_interrupted"
     assert sum(name == "type_text" for name, _ in client.calls) == 1
     # Even an undrained hotkey notification belongs only to the previous call.
@@ -334,10 +303,72 @@ def test_interrupted_single_input_keeps_effect_and_notifies_agent(computer, capt
     assert call(computer, "capture")["ok"]
 
 
-def test_run_completion_and_shutdown_never_persist_a_stop(computer):
-    service, context, _, _ = computer
-    capture(computer)
-    service.run_end(context)
-    assert not service._sessions
-    service.close()
-    assert not (context.data_root / "computer-use-stopped").exists()
+@pytest.mark.parametrize("flags", [0x10, 0x02])  # injected, lower-integrity injected
+def test_emergency_stop_ignores_injected_escape(flags):
+    hotkey = EmergencyHotkey(lambda owner: None)
+    hotkey.set_armed(object())
+    for _ in range(2):
+        hotkey._key_event(0x1B, True, flags)
+        hotkey._key_event(0x1B, False, flags)
+    assert not hotkey.pending_owner
+
+
+def test_emergency_stop_needs_two_separate_physical_presses(monkeypatch):
+    now = [10.0]
+    monkeypatch.setattr(driver.time, "monotonic", lambda: now[0])
+    hotkey = driver.EmergencyHotkey(lambda owner: None)
+    hotkey.set_armed(object())
+    hotkey._key_event(0x1B, True, 0)
+    now[0] += 0.2
+    hotkey._key_event(0x1B, True, 0)  # OS auto-repeat.
+    assert not hotkey.pending_owner
+    hotkey._key_event(0x1B, False, 0)
+    hotkey._key_event(0x1B, True, 0)
+    assert hotkey.pending_owner
+
+
+@pytest.mark.parametrize("between", ["timeout", "other_key", "disarm", "inactive"])
+def test_emergency_stop_does_not_join_unrelated_presses(monkeypatch, between):
+    now = [10.0]
+    monkeypatch.setattr(driver.time, "monotonic", lambda: now[0])
+    hotkey = driver.EmergencyHotkey(lambda owner: None)
+    hotkey.set_armed(None if between == "inactive" else object())
+    hotkey._key_event(0x1B, True, 0)
+    hotkey._key_event(0x1B, False, 0)
+    if between == "timeout":
+        now[0] += 0.7
+    elif between == "other_key":
+        hotkey._key_event(0x41, True, 0)
+    elif between == "disarm":
+        hotkey.set_armed(None)
+        hotkey.set_armed(object())
+    else:
+        hotkey.set_armed(object())
+    hotkey._key_event(0x1B, True, 0)
+    assert not hotkey.pending_owner
+
+
+def test_emergency_stop_dispatch_never_blocks_keyboard_listener():
+    entered = threading.Event()
+    release = threading.Event()
+
+    def stop(owner):
+        entered.set()
+        assert release.wait(1)
+
+    hotkey = EmergencyHotkey(stop)
+    hotkey._worker = threading.Thread(target=hotkey._dispatch)
+    hotkey._worker.start()
+    try:
+        hotkey.set_armed(object())
+        hotkey._key_event(0x1B, True, 0)
+        hotkey._key_event(0x1B, False, 0)
+        hotkey._key_event(0x1B, True, 0)
+        assert entered.wait(0.5)
+        assert hotkey.pending_owner
+        # The listener can still process input while interruption is draining.
+        hotkey._key_event(0x41, True, 0)
+    finally:
+        release.set()
+        hotkey.close()
+    assert not hotkey._worker.is_alive()

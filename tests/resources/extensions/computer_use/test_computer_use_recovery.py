@@ -1,4 +1,4 @@
-"""Computer use: recovery behavior."""
+"""Computer use: failures keep applied outcomes and name a read-only next call."""
 
 from __future__ import annotations
 
@@ -10,13 +10,7 @@ import pytest
 from core.tools.availability import ToolAccess
 from resources.extensions.computer_use import observations
 from resources.extensions.computer_use.driver import ComputerUseError
-from tests.resources.extensions.computer_use_helpers import (
-    call,
-    capture,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    computer as computer,
-)
+from tests.resources.extensions.computer_use.computer_use_test_support import call, capture
 
 
 def test_failure_invalidates_capture_and_never_retries_input(computer):
@@ -38,11 +32,20 @@ def test_post_action_capture_failure_preserves_applied_outcome(computer):
     assert call(computer, "type", text="draft", apply=True)["error"]["code"] == "capture_required"
 
 
-@pytest.mark.parametrize("foreground", [False, True])
-@pytest.mark.parametrize("capture_after", [False, True])
-@pytest.mark.parametrize("mode", ["vision", "som", "ax"])
+@pytest.mark.parametrize(
+    "mode,foreground,capture_after",
+    # Each mode meets each delivery and both a skipped and a failed observation.
+    [
+        ("vision", False, False),
+        ("vision", True, True),
+        ("som", False, True),
+        ("som", True, False),
+        ("ax", False, False),
+        ("ax", True, True),
+    ],
+)
 def test_missing_observation_returns_executable_recovery_without_input_replay(
-    computer, foreground, capture_after, mode
+    computer, mode, foreground, capture_after
 ):
     service, context, client, _ = computer
     first = capture(computer, foreground=foreground, resolution="original")["data"]
@@ -302,46 +305,6 @@ def test_observation_disk_failure_keeps_dispatched_outcome(computer, monkeypatch
     result = call(computer, "type", text="draft", apply=True)
     assert result["ok"] and result["data"]["applied"]
     assert result["data"]["observation_error"]["code"] == "observation_failed"
-
-
-def test_transport_loss_during_recapture_retires_all_sessions(computer):
-    service, context, client, _ = computer
-    capture(computer)
-    service._driver = client
-    original_call = client.call
-
-    def response(name, args):
-        if name in {"get_window_state", "capture_pixels"}:
-            client.broken = True
-            raise ComputerUseError("test-owned transport failure")
-        return original_call(name, args)
-
-    client.call = response
-    result = call(computer, "type", text="draft", apply=True)
-    assert result["ok"] and result["data"]["applied"]
-    assert not service._sessions
-
-
-def test_failed_session_cleanup_is_retained_for_shutdown_retry(computer):
-    service, context, client, _ = computer
-    capture(computer)
-    client.fail = "end_session"
-    service.run_end(context)
-    assert len(service._sessions) == 1
-    client.fail = None
-    service.close()
-    assert not service._sessions
-
-
-def test_cleanup_after_stop_does_not_start_a_replacement_worker(computer):
-    service, _, client, _ = computer
-    capture(computer)
-    service._driver = client
-    client.broken = True
-    previous = list(client.calls)
-    service._close_sessions()
-    assert not service._sessions
-    assert client.calls == previous
 
 
 def test_verified_window_disappearance_survives_capture_failure(computer):

@@ -1,23 +1,31 @@
-"""Shared fixtures and fakes for computer use behavior tests."""
+"""Computer use test support: a fake desktop Driver, the service fixture and call helpers."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import io
+import json
 import logging
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
+from core.providers.adapter import tool_result_text
 from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
+from core.tools.contracts import ToolContractError
+from core.tools.tools import tool_failure
+from resources.extensions.computer_use import driver
 from resources.extensions.computer_use import extension as computer_use
 from resources.extensions.computer_use.driver import ComputerUseError
 
 
+@functools.cache
 def png(size=(320, 180)):
     image = Image.new("RGB", size, "#abcdef")
     out = io.BytesIO()
@@ -26,6 +34,8 @@ def png(size=(320, 180)):
 
 
 class DesktopClient:
+    """In-memory Driver: records calls, returns one-element captures and counts inputs."""
+
     def __init__(self):
         self.calls = []
         self.fail = None
@@ -49,7 +59,6 @@ class DesktopClient:
                 "list_monitors",
                 "move_cursor",
                 "get_desktop_state",
-                "get_browser_state",
                 "list_apps",
                 "list_windows",
                 "click",
@@ -65,14 +74,6 @@ class DesktopClient:
                 "invoke_menu",
                 "set_window_frame",
                 "verify_state",
-                "browser_prepare",
-                "browser_click",
-                "browser_type",
-                "browser_navigate",
-                "browser_pointer",
-                "browser_dialog",
-                "browser_download",
-                "browser_set_input_files",
             ]
         }
 
@@ -104,8 +105,6 @@ class DesktopClient:
             }
             if arguments.get("include_screenshot", True):
                 result["screenshot_png_b64"] = base64.b64encode(png(self.size)).decode()
-            if name == "get_browser_state":
-                result.update(target_id="b1", tab_id="t1")
             return result
         if name == "list_monitors":
             return {"monitors": [{"id": 1, "x": -1920, "y": 0, "width": 1920, "height": 1080}]}
@@ -129,7 +128,8 @@ class DesktopClient:
 
 @pytest.fixture
 def computer(tmp_path, monkeypatch):
-    # Timing is exercised explicitly below; unrelated integration tests need no real pause.
+    """Yield (service, context, fake Driver, calling Agent) for a registered computer Tool."""
+    # Timing is exercised explicitly where it matters; other tests need no real pause.
     monkeypatch.setattr(computer_use, "_POST_INPUT_OBSERVATION_MS", 0)
     monkeypatch.setattr(computer_use.EmergencyHotkey, "start", lambda self: None)
     declarations = ExtensionDeclarations()
@@ -190,9 +190,6 @@ def call(computer, action, **kwargs):
 
 def dispatch(computer, arguments, context=None):
     """Run one call through production dispatch: dialect repair, validation, handler."""
-    from core.tools.contracts import ToolContractError
-    from core.tools.tools import tool_failure
-
     service, default_context, _, _ = computer
     context = context or default_context
     try:
@@ -203,20 +200,21 @@ def dispatch(computer, arguments, context=None):
 
 def model_text(result):
     """Return the plain text the Model reads for a Tool Result."""
-    import json
-
-    from core.providers.adapter import tool_result_text
-
     return tool_result_text(json.dumps(result))
+
+
+def connect_through(service, monkeypatch, factory):
+    """Let the service create its own Driver connections from ``factory(executable)``."""
+    service.executable = "test-owned-driver"
+    monkeypatch.setattr(computer_use, "CuaDriver", factory)
+    monkeypatch.setattr(
+        service, "_client", computer_use.ComputerUseService._client.__get__(service)
+    )
 
 
 @pytest.fixture
 def lifecycle_connection(computer, monkeypatch):
     """Exercise the real adapter with Cua's named and implicit MCP lifecycles."""
-    from contextlib import asynccontextmanager
-
-    from resources.extensions.computer_use import driver
-
     connections = []
     schemas = {
         "get_config": {},
@@ -306,12 +304,7 @@ def lifecycle_connection(computer, monkeypatch):
         connection.desktop = None
         return connection
 
-    service = computer[0]
-    service.executable = "test-owned-driver"
     monkeypatch.setattr(driver.CuaDriver, "_stdio", stdio)
     monkeypatch.setattr(driver, "ClientSession", Session)
-    monkeypatch.setattr(computer_use, "CuaDriver", client)
-    monkeypatch.setattr(
-        service, "_client", computer_use.ComputerUseService._client.__get__(service)
-    )
+    connect_through(computer[0], monkeypatch, client)
     return connections

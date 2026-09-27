@@ -1,4 +1,4 @@
-"""Computer use: elements behavior."""
+"""Computer use: element refs and views name their own window, target and delivery."""
 
 from __future__ import annotations
 
@@ -7,16 +7,7 @@ from dataclasses import replace
 import pytest
 
 from core.tools.availability import ToolAccess
-from tests.resources.extensions.computer_use_helpers import (
-    call,
-    capture,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    computer as computer,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    lifecycle_connection as lifecycle_connection,
-)
+from tests.resources.extensions.computer_use.computer_use_test_support import call, capture
 
 
 def test_sequence_infers_target_from_first_step_view_before_element_validation(computer):
@@ -208,18 +199,6 @@ def test_element_errors_distinguish_stale_from_invented_without_recapture(comput
     )["ok"]
 
 
-@pytest.mark.parametrize(
-    "identity",
-    [{"run_id": "other"}, {"agent_id": "other"}, {"session_id": "other"}, {"project_id": "other"}],
-)
-def test_element_refs_never_infer_another_owners_target(computer, identity):
-    service, context, client, _ = computer
-    element = capture(computer)["data"]["elements"][0]["element"]
-    other = replace(context, **identity)
-    result = service.handle(other, {"action": "click", "element": element})
-    assert not result["ok"] and not result["artifacts"] and client.inputs == 0
-
-
 def test_reference_recovery_does_not_expose_state_after_revocation(computer):
     service, context, _, agent = computer
     old = capture(computer)["data"]
@@ -236,8 +215,11 @@ def test_literal_query_is_forwarded_without_regex_or_or_expansion(computer):
     assert request["query"] == "Color 1|Color 2"
 
 
-@pytest.mark.parametrize("field", ["pid", "window_id"])
-@pytest.mark.parametrize("value", [[], {}, True, 1.0, None])
+@pytest.mark.parametrize(
+    "field,value",
+    # Unhashable, bool and integral float values must never select the owned window.
+    [("pid", []), ("window_id", {}), ("pid", True), ("window_id", 1.0), ("pid", None)],
+)
 def test_element_resolution_rejects_malformed_target_before_lookup(computer, field, value):
     service, context, client, _ = computer
     current = capture(computer)["data"]

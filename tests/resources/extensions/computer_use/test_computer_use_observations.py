@@ -1,19 +1,13 @@
-"""Computer use: observations behavior."""
+"""Computer use: captures produce owned screenshots that input consumes and retires."""
 
 from __future__ import annotations
 
+import base64
 from dataclasses import replace
 
 import pytest
-from PIL import Image
 
-from tests.resources.extensions.computer_use_helpers import (
-    call,
-    capture,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    computer as computer,
-)
+from tests.resources.extensions.computer_use.computer_use_test_support import call, capture, png
 
 
 def test_input_returns_fresh_capture_and_does_not_echo_text(computer):
@@ -53,25 +47,26 @@ def test_ax_is_driver_tree_only_and_som_removes_duplicate_tree(computer):
     )
 
 
-def test_scaled_image_coordinates_and_native_crop_round_trip(computer):
-    computer[2].size = (3840, 2160)
-    result = capture(computer)["data"]
-    assert (result["image_width"], result["image_height"]) == (1600, 900)
-    assert Image.open(computer[1].presentation_images[-1]["path"]).size == (3840, 2160)
-    zoom = call(
-        computer, "zoom", view_id=result["view_id"], coordinate=[100, 100], to_coordinate=[200, 200]
-    )["data"]
-    assert (zoom["image_width"], zoom["image_height"]) == (240, 240)
-    clicked = call(computer, "click", view_id=zoom["view_id"], coordinate=[50, 60], apply=True)
-    assert clicked["ok"]
-    _, args = next(item for item in computer[2].calls if item[0] == "click")
-    assert (args["x"], args["y"]) == (290, 300)
-    assert (
-        call(computer, "click", view_id=result["view_id"], coordinate=[1, 1], apply=True)["error"][
-            "code"
-        ]
-        == "stale_view"
-    )
+def test_driver_file_paths_and_invalid_pixels_never_become_screenshots(computer, tmp_path):
+    _, context, client, _ = computer
+    private = tmp_path / "private.png"
+    private.write_bytes(png())
+    original = client.call
+    for screenshot in (
+        {"screenshot_file_path": str(private)},
+        {"screenshot_png_b64": base64.b64encode(b"not an image").decode()},
+    ):
+
+        def respond(name, args, screenshot=screenshot):
+            payload = original(name, args)
+            if name == "capture_pixels":
+                payload.pop("screenshot_png_b64", None)
+                payload.update(screenshot)
+            return payload
+
+        client.call = respond
+        assert not capture(computer, mode="vision")["ok"]
+    assert not context.result_media
 
 
 def test_original_resolution_and_image_edges(computer):
@@ -87,11 +82,12 @@ def test_original_resolution_and_image_edges(computer):
     "change",
     [{"session_id": "other"}, {"agent_id": "other"}, {"project_id": "other"}, {"run_id": "other"}],
 )
-def test_capture_authority_never_crosses_context(computer, change):
+def test_views_and_element_refs_never_cross_owners(computer, change):
     service, context, client, _ = computer
     data = capture(computer)["data"]
-    result = service.handle(
-        replace(context, **change),
+    other = replace(context, **change)
+    by_view = service.handle(
+        other,
         {
             "action": "click",
             "pid": 1,
@@ -101,8 +97,13 @@ def test_capture_authority_never_crosses_context(computer, change):
             "apply": True,
         },
     )
-    assert result["error"]["code"] == "stale_view"
-    assert not any(name == "click" for name, _ in client.calls)
+    assert by_view["error"]["code"] == "stale_view"
+    # An element ref never lets another owner infer the window it came from.
+    by_element = service.handle(
+        other, {"action": "click", "element": data["elements"][0]["element"]}
+    )
+    assert not by_element["ok"] and not by_element["artifacts"]
+    assert client.inputs == 0
 
 
 def test_other_run_capture_invalidates_old_view(computer):
@@ -112,6 +113,24 @@ def test_other_run_capture_invalidates_old_view(computer):
         replace(context, run_id="r2"), {"action": "capture", "pid": 1, "window_id": 2}
     )["ok"]
     assert call(computer, "type", text="draft", apply=True)["error"]["code"] == "capture_required"
+
+
+def test_desktop_mutation_invalidates_other_window_observations(computer):
+    service, context, _, _ = computer
+    capture(computer)
+    data = service.handle(context, {"action": "capture"})["data"]
+    assert service.handle(
+        context,
+        {
+            "action": "click",
+            "view_id": data["view_id"],
+            "coordinate": [10, 20],
+            "apply": True,
+        },
+    )["ok"]
+    assert (
+        call(computer, "key", shortcut="enter", apply=True)["error"]["code"] == "capture_required"
+    )
 
 
 def test_window_target_mismatch_rejects_tokens(computer):

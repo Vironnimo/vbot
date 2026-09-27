@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from tests.resources.extensions.computer_use_helpers import (
+from tests.resources.extensions.computer_use.computer_use_test_support import (
     capture,
     dispatch,
     model_text,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    computer as computer,
 )
 
 
