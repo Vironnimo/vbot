@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,109 +14,260 @@ from core.projects.projects import (
     OVERRIDE_FIELDS,
     PROJECT_DEFAULT_ALLOWED_TOOLS,
     InvalidProjectIdError,
-    Project,
     ProjectError,
     build_project,
     project_from_dict,
     seed_default_auto_load,
 )
 
-
-def test_build_project_creates_entity_with_normalized_cwd(tmp_path: Path) -> None:
-    project = build_project("vbot", "vBot", tmp_path, default_agent="orchestrator")
-
-    assert project.project_id == "vbot"
-    assert project.display_name == "vBot"
-    assert project.cwd == str(Path(os.path.realpath(tmp_path)))
-    assert project.default_agent == "orchestrator"
-    assert project.created_at.endswith("Z")
-    assert project.updated_at == project.created_at
+_TIMESTAMP = "2026-06-18T10:00:00Z"
 
 
-def test_build_project_minimal_just_cwd_defaults_optionals(tmp_path: Path) -> None:
-    project = build_project("scratch", "Scratch", tmp_path)
+def test_build_project_fills_every_optional_field_with_its_default(tmp_path: Path) -> None:
+    # A blank display name falls back to the Project id.
+    payload = build_project("scratch", "   ", tmp_path).to_dict()
+    created_at = payload.pop("created_at")
+    updated_at = payload.pop("updated_at")
 
-    assert project.default_agent == ""
-    assert project.default_model == ""
-    assert project.default_temperature is None
-    assert project.default_thinking_effort is None
-    assert project.auto_load == []
-    # An unspecified Tool Whitelist falls back to the base list; skill lists empty.
-    assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
-    assert "apply_patch" in project.allowed_tools
-    assert "edit" not in project.allowed_tools
-    assert project.skills_bundled_enabled == []
-    assert project.skills_project_disabled == []
-    assert project.overrides == {}
-
-
-def test_build_project_keeps_explicit_empty_allowed_tools(tmp_path: Path) -> None:
-    # [] is a real value (every tool off), distinct from None (seed the base list).
-    project = build_project("vbot", "vBot", tmp_path, allowed_tools=[])
-
-    assert project.allowed_tools == []
-
-
-def test_build_project_accepts_whitelist_fields(tmp_path: Path) -> None:
-    project = build_project(
-        "vbot",
-        "vBot",
-        tmp_path,
-        allowed_tools=["read", "grep"],
-        skills_bundled_enabled=["frontend-design"],
-        skills_project_disabled=["debugging"],
-    )
-
-    assert project.allowed_tools == ["read", "grep"]
-    assert project.skills_bundled_enabled == ["frontend-design"]
-    assert project.skills_project_disabled == ["debugging"]
+    assert payload == {
+        "project_id": "scratch",
+        "display_name": "scratch",
+        "cwd": str(Path(os.path.realpath(tmp_path))),
+        "default_agent": "",
+        "default_model": "",
+        "default_temperature": None,
+        "default_thinking_effort": None,
+        "source_format": "opencode",
+        "auto_load": [],
+        "allowed_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
+        "skills_bundled_enabled": [],
+        "skills_global_enabled": [],
+        "skills_project_disabled": [],
+        "overrides": {},
+    }
+    assert created_at.endswith("Z")
+    assert updated_at == created_at
+    # The base Tool Whitelist uses the successor of the retired edit Tool.
+    assert "apply_patch" in PROJECT_DEFAULT_ALLOWED_TOOLS
+    assert "edit" not in PROJECT_DEFAULT_ALLOWED_TOOLS
 
 
-def test_build_project_rejects_non_string_allowed_tool(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, allowed_tools=["read", 7])  # type: ignore[list-item]
+def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path: Path) -> None:
+    fields: dict[str, Any] = {
+        "default_agent": "orchestrator",
+        "default_model": "openai/gpt-5",
+        # 0.0 is the sampling floor and "" the explicit Provider default; neither is unset.
+        "default_temperature": 0.0,
+        "default_thinking_effort": "",
+        "source_format": "claude",
+        "auto_load": ["AGENTS.md"],
+        "allowed_tools": ["read", "grep"],
+        "skills_bundled_enabled": ["frontend-design"],
+        "skills_global_enabled": ["pdf", "deploy"],
+        "skills_project_disabled": ["debugging"],
+        "overrides": {
+            "builder": {"model": "openai/gpt-5", "temperature": 0.4, "thinking_effort": "high"},
+            "planner": {"model": "anthropic/claude-sonnet-4"},
+            "floor": {"temperature": 0.0, "thinking_effort": ""},
+            "reviewer": {
+                "tool_access": {
+                    "mode": "selected",
+                    "allowed": ["read"],
+                    "denied": ["session_read"],
+                }
+            },
+            # An entry holding only fields this vBot does not model loads as ``{}``.
+            "future": {},
+        },
+        "created_at": _TIMESTAMP,
+        "updated_at": "2026-06-18T11:00:00Z",
+    }
+
+    project = build_project("vbot", "vBot", tmp_path, **fields)
+
+    assert project.to_dict() == {
+        "project_id": "vbot",
+        "display_name": "vBot",
+        "cwd": str(Path(os.path.realpath(tmp_path))),
+        **fields,
+    }
+    assert project_from_dict(project.to_dict()) == project
 
 
-def test_build_project_rejects_tool_wildcard(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, allowed_tools=["read", "*"])
+def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
+    # [] turns every Tool off; only an absent field seeds the base list.
+    stored = {
+        "project_id": "vbot",
+        "display_name": "vBot",
+        "cwd": "/srv/repos/vbot",
+        "allowed_tools": [],
+        "created_at": _TIMESTAMP,
+        "updated_at": _TIMESTAMP,
+    }
+
+    assert build_project("vbot", "vBot", tmp_path, allowed_tools=[]).allowed_tools == []
+    assert project_from_dict(stored).allowed_tools == []
 
 
-def test_build_project_rejects_non_list_skills_bundled(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, skills_bundled_enabled="frontend")  # type: ignore[arg-type]
-
-
-def test_build_project_round_trips_skills_global_enabled(tmp_path: Path) -> None:
-    project = build_project("vbot", "vBot", tmp_path, skills_global_enabled=["pdf", "deploy"])
-
-    assert project.skills_global_enabled == ["pdf", "deploy"]
-    assert project.to_dict()["skills_global_enabled"] == ["pdf", "deploy"]
-    assert project_from_dict(project.to_dict()).skills_global_enabled == ["pdf", "deploy"]
-
-
-def test_build_project_rejects_non_list_skills_global(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, skills_global_enabled="pdf")  # type: ignore[arg-type]
-
-
-def test_build_project_defaults_source_format_to_opencode(tmp_path: Path) -> None:
-    project = build_project("vbot", "vBot", tmp_path)
-
-    assert project.source_format == "opencode"
-
-
-def test_build_project_accepts_claude_source_format(tmp_path: Path) -> None:
-    project = build_project("vbot", "vBot", tmp_path, source_format="claude")
-
-    assert project.source_format == "claude"
-    assert project.to_dict()["source_format"] == "claude"
-    assert project_from_dict(project.to_dict()).source_format == "claude"
-
-
-def test_build_project_rejects_unknown_source_format(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, source_format="cursor")
+@pytest.mark.parametrize(
+    ("project_id", "cwd", "fields", "error", "message"),
+    [
+        pytest.param(
+            "bad/slug",
+            None,
+            {},
+            InvalidProjectIdError,
+            "Project id must be 1-64 characters",
+            id="project-id",
+        ),
+        pytest.param("vbot", "   ", {}, ProjectError, "cwd must be a non-empty path", id="cwd"),
+        pytest.param(
+            "vbot",
+            None,
+            {"default_temperature": 3.0},
+            ProjectError,
+            "default_temperature must be between 0 and 2",
+            id="default-temperature",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"default_thinking_effort": "ultra"},
+            ProjectError,
+            "default_thinking_effort must be one of",
+            id="default-thinking-effort",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"source_format": "cursor"},
+            ProjectError,
+            "source_format must be one of: opencode, claude",
+            id="source-format",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"auto_load": ["AGENTS.md", 7]},
+            ProjectError,
+            "auto_load entries must be non-empty strings",
+            id="auto-load-entry",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"allowed_tools": ["read", 7]},
+            ProjectError,
+            "allowed_tools entries must be non-empty strings",
+            id="tool-entry",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"allowed_tools": ["read", "*"]},
+            ProjectError,
+            "allowed_tools cannot contain the all-tools wildcard '*' for a Project",
+            id="tool-wildcard",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"skills_bundled_enabled": "frontend"},
+            ProjectError,
+            "skills_bundled_enabled must be a list of strings",
+            id="bundled-skills",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"skills_global_enabled": "pdf"},
+            ProjectError,
+            "skills_global_enabled must be a list of strings",
+            id="global-skills",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"overrides": ["builder"]},
+            ProjectError,
+            "overrides must be an object",
+            id="overrides",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"overrides": {"  ": {"model": "openai/gpt-5"}}},
+            ProjectError,
+            "overrides keys must be non-empty agent id strings",
+            id="override-key",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"overrides": {"builder": "openai/gpt-5"}},
+            ProjectError,
+            "overrides['builder'] must be an object",
+            id="override-value",
+        ),
+        # Building a Project is strict; raw file validation only warns.
+        pytest.param(
+            "vbot",
+            None,
+            {"overrides": {"builder": {"nope": "x"}}},
+            ProjectError,
+            "overrides['builder'] has unknown fields: nope",
+            id="override-unknown-field",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"overrides": {"builder": {"model": "  "}}},
+            ProjectError,
+            "overrides['builder'].model must be a non-empty model string",
+            id="override-model",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"overrides": {"builder": {"temperature": 3.0}}},
+            ProjectError,
+            "overrides['builder'].temperature must be between 0 and 2",
+            id="override-temperature",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"overrides": {"builder": {"thinking_effort": "ultra"}}},
+            ProjectError,
+            "overrides['builder'].thinking_effort must be one of",
+            id="override-thinking-effort",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {
+                "allowed_tools": ["read"],
+                "overrides": {
+                    "reviewer": {"tool_access": {"mode": "selected", "allowed": ["bash"]}}
+                },
+            },
+            ProjectError,
+            "overrides['reviewer'].tool_access.allowed contains Tools outside the Project "
+            "Tool Whitelist: bash",
+            id="override-tool-outside-ceiling",
+        ),
+    ],
+)
+def test_build_project_rejects_invalid_fields(
+    tmp_path: Path,
+    project_id: str,
+    cwd: str | None,
+    fields: dict[str, Any],
+    error: type[ProjectError],
+    message: str,
+) -> None:
+    with pytest.raises(error, match=re.escape(message)):
+        build_project(project_id, "vBot", tmp_path if cwd is None else cwd, **fields)
 
 
 def test_override_fields_constant_contains_all_overridable_fields() -> None:
@@ -124,346 +277,56 @@ def test_override_fields_constant_contains_all_overridable_fields() -> None:
     )
 
 
-def test_build_project_accepts_overrides(tmp_path: Path) -> None:
-    project = build_project(
-        "vbot",
-        "vBot",
-        tmp_path,
-        overrides={
-            "builder": {
-                "model": "openai/gpt-5",
-                "temperature": 0.4,
-                "thinking_effort": "high",
-            },
-            "planner": {"model": "anthropic/claude-sonnet-4"},
-        },
-    )
-
-    assert project.overrides == {
-        "builder": {
-            "model": "openai/gpt-5",
-            "temperature": 0.4,
-            "thinking_effort": "high",
-        },
-        "planner": {"model": "anthropic/claude-sonnet-4"},
-    }
-
-
-def test_build_project_accepts_project_agent_tool_access_override(tmp_path: Path) -> None:
-    project = build_project(
-        "vbot",
-        "vBot",
-        tmp_path,
-        allowed_tools=["read", "grep"],
-        overrides={
-            "reviewer": {
-                "tool_access": {
-                    "mode": "selected",
-                    "allowed": ["read"],
-                    "denied": ["session_read"],
-                }
-            }
-        },
-    )
-
-    assert project.overrides["reviewer"]["tool_access"] == {
-        "mode": "selected",
-        "allowed": ["read"],
-        "denied": ["session_read"],
-    }
-
-
-def test_build_project_rejects_tool_override_outside_project_ceiling(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError, match="outside the Project Tool Whitelist"):
-        build_project(
-            "vbot",
-            "vBot",
-            tmp_path,
-            allowed_tools=["read"],
-            overrides={
-                "reviewer": {
-                    "tool_access": {
-                        "mode": "selected",
-                        "allowed": ["bash"],
-                    }
-                }
-            },
-        )
-
-
-def test_build_project_overrides_survive_to_dict_round_trip(tmp_path: Path) -> None:
-    project = build_project(
-        "vbot",
-        "vBot",
-        tmp_path,
-        overrides={
-            "builder": {
-                "model": "openai/gpt-5",
-                "temperature": 0.4,
-                "thinking_effort": "high",
-            }
-        },
-    )
-
-    payload = project.to_dict()
-    assert payload["overrides"] == {
-        "builder": {
-            "model": "openai/gpt-5",
-            "temperature": 0.4,
-            "thinking_effort": "high",
-        }
-    }
-    assert project_from_dict(payload).overrides == project.overrides
-
-
-def test_build_project_accepts_override_temperature_zero(tmp_path: Path) -> None:
-    # 0.0 is a real value (the sampling floor), a valid overridden temperature.
-    project = build_project("vbot", "vBot", tmp_path, overrides={"builder": {"temperature": 0.0}})
-
-    assert project.overrides == {"builder": {"temperature": 0.0}}
-
-
-def test_build_project_accepts_override_thinking_effort_empty_string(tmp_path: Path) -> None:
-    # "" = force provider default; a real value, a valid overridden thinking effort.
-    project = build_project(
-        "vbot", "vBot", tmp_path, overrides={"builder": {"thinking_effort": ""}}
-    )
-
-    assert project.overrides == {"builder": {"thinking_effort": ""}}
-
-
-def test_build_project_rejects_non_dict_overrides(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, overrides=["builder"])  # type: ignore[arg-type]
-
-
-def test_build_project_rejects_empty_override_key(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, overrides={"  ": {"model": "openai/gpt-5"}})
-
-
-def test_build_project_rejects_non_dict_override_value(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, overrides={"builder": "openai/gpt-5"})  # type: ignore[dict-item]
-
-
-def test_build_project_keeps_an_empty_override_object(tmp_path: Path) -> None:
-    # An entry holding only fields this vBot does not model loads as ``{}``.
-    project = build_project("vbot", "vBot", tmp_path, overrides={"builder": {}})
-
-    assert project.overrides == {"builder": {}}
-
-
-def test_build_project_rejects_unknown_override_field(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, overrides={"builder": {"nope": "x"}})
-
-
-def test_build_project_rejects_empty_override_model_value(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, overrides={"builder": {"model": "  "}})
-
-
-def test_build_project_rejects_out_of_range_override_temperature(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, overrides={"builder": {"temperature": 3.0}})
-
-
-def test_build_project_rejects_unknown_override_thinking_effort(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, overrides={"builder": {"thinking_effort": "ultra"}})
-
-
-def test_build_project_accepts_default_temperature_and_thinking(tmp_path: Path) -> None:
-    project = build_project(
-        "vbot",
-        "vBot",
-        tmp_path,
-        default_temperature=0.0,
-        default_thinking_effort="medium",
-    )
-
-    # 0.0 is a real value (the chain's floor), not "unset".
-    assert project.default_temperature == 0.0
-    assert project.default_thinking_effort == "medium"
-
-
-def test_build_project_accepts_empty_thinking_effort_as_provider_default(tmp_path: Path) -> None:
-    # "" is the explicit "provider default" value, distinct from None ("no default").
-    project = build_project("vbot", "vBot", tmp_path, default_thinking_effort="")
-
-    assert project.default_thinking_effort == ""
-
-
-def test_build_project_rejects_temperature_out_of_range(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, default_temperature=3.0)
-
-
-def test_build_project_rejects_unknown_thinking_effort(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, default_thinking_effort="ultra")
-
-
-def test_build_project_rejects_invalid_project_id(tmp_path: Path) -> None:
-    with pytest.raises(InvalidProjectIdError):
-        build_project("bad/slug", "Bad", tmp_path)
-
-
-def test_build_project_defaults_empty_display_name_to_project_id(tmp_path: Path) -> None:
-    assert build_project("vbot", "   ", tmp_path).display_name == "vbot"
-
-
-def test_build_project_rejects_empty_cwd() -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", "   ")
-
-
-def test_build_project_rejects_non_string_auto_load_entry(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "vBot", tmp_path, auto_load=["AGENTS.md", 7])  # type: ignore[list-item]
-
-
-def test_seed_default_auto_load_seeds_agents_file_into_empty() -> None:
-    assert seed_default_auto_load(None) == ["AGENTS.md"]
-    assert seed_default_auto_load([]) == ["AGENTS.md"]
-
-
-def test_seed_default_auto_load_prepends_before_user_files() -> None:
-    assert seed_default_auto_load(["CONTEXT.md"]) == ["AGENTS.md", "CONTEXT.md"]
-
-
-def test_seed_default_auto_load_is_idempotent_case_insensitive() -> None:
-    # An already-named AGENTS.md (any case) is not duplicated; the user's spelling
-    # and ordering survive untouched. A path-qualified agents.md is a different file,
-    # so the root convention is still seeded ahead of it.
-    assert seed_default_auto_load(["AGENTS.md", "CONTEXT.md"]) == ["AGENTS.md", "CONTEXT.md"]
-    assert seed_default_auto_load(["agents.md"]) == ["agents.md"]
-    assert seed_default_auto_load(["docs/agents.md"]) == ["AGENTS.md", "docs/agents.md"]
-
-
-def test_build_project_preserves_explicit_timestamps(tmp_path: Path) -> None:
-    project = build_project(
-        "vbot",
-        "vBot",
-        tmp_path,
-        created_at="2026-06-18T10:00:00Z",
-        updated_at="2026-06-18T11:00:00Z",
-    )
-
-    assert project.created_at == "2026-06-18T10:00:00Z"
-    assert project.updated_at == "2026-06-18T11:00:00Z"
-
-
-def test_to_dict_round_trips_through_project_from_dict(tmp_path: Path) -> None:
-    project = build_project(
-        "vbot",
-        "vBot",
-        tmp_path,
-        default_agent="orchestrator",
-        default_model="openai/gpt-5",
-        default_temperature=0.4,
-        default_thinking_effort="high",
-        auto_load=["AGENTS.md"],
-        allowed_tools=["read", "grep"],
-        skills_bundled_enabled=["frontend-design"],
-        skills_project_disabled=["debugging"],
-        overrides={"builder": {"model": "openai/gpt-mini"}},
-    )
-
-    restored = project_from_dict(project.to_dict())
-
-    assert restored == project
-
-
-def test_to_dict_has_stable_field_set(tmp_path: Path) -> None:
-    project = build_project("vbot", "vBot", tmp_path)
-
-    assert set(project.to_dict()) == {
-        "project_id",
-        "display_name",
-        "cwd",
-        "default_agent",
-        "default_model",
-        "default_temperature",
-        "default_thinking_effort",
-        "source_format",
-        "auto_load",
-        "allowed_tools",
-        "skills_bundled_enabled",
-        "skills_global_enabled",
-        "skills_project_disabled",
-        "overrides",
-        "created_at",
-        "updated_at",
-    }
+@pytest.mark.parametrize(
+    ("auto_load", "seeded"),
+    [
+        (None, ["AGENTS.md"]),
+        (["CONTEXT.md"], ["AGENTS.md", "CONTEXT.md"]),
+        # An already-named AGENTS.md (any case) is not duplicated; the user's spelling
+        # and ordering survive untouched.
+        (["AGENTS.md", "CONTEXT.md"], ["AGENTS.md", "CONTEXT.md"]),
+        (["agents.md"], ["agents.md"]),
+        # A path-qualified agents.md is a different file.
+        (["docs/agents.md"], ["AGENTS.md", "docs/agents.md"]),
+    ],
+)
+def test_seed_default_auto_load_prepends_agents_file_once(
+    auto_load: list[str] | None, seeded: list[str]
+) -> None:
+    assert seed_default_auto_load(auto_load) == seeded
 
 
 def test_project_from_dict_defaults_optional_fields() -> None:
-    data = {
+    stored = {
         "project_id": "vbot",
         "display_name": "vBot",
         "cwd": "/srv/repos/vbot",
         "allowed_tools": ["read_file"],
-        "created_at": "2026-06-18T10:00:00Z",
-        "updated_at": "2026-06-18T10:00:00Z",
+        "created_at": _TIMESTAMP,
+        "updated_at": _TIMESTAMP,
     }
 
-    project = project_from_dict(data)
-
-    assert project.default_agent == ""
-    assert project.default_model == ""
-    assert project.default_temperature is None
-    assert project.default_thinking_effort is None
-    # An old project.json without the field loads at the default format.
-    assert project.source_format == "opencode"
-    assert project.auto_load == []
-    assert project.allowed_tools == ["read_file"]
-    assert project.skills_bundled_enabled == []
-    assert project.skills_project_disabled == []
-    # An old project.json without overrides loads at the empty map.
-    assert project.overrides == {}
-
-
-def test_project_from_dict_preserves_explicit_empty_allowed_tools() -> None:
-    # A persisted empty Tool Whitelist (user turned every tool off) must survive a
-    # reload — only an *absent* field falls back to the base list.
-    data = {
-        "project_id": "vbot",
-        "display_name": "vBot",
-        "cwd": "/srv/repos/vbot",
-        "allowed_tools": [],
-        "created_at": "2026-06-18T10:00:00Z",
-        "updated_at": "2026-06-18T10:00:00Z",
+    assert project_from_dict(stored).to_dict() == {
+        **stored,
+        "default_agent": "",
+        "default_model": "",
+        "default_temperature": None,
+        "default_thinking_effort": None,
+        # An old project.json without these fields loads at their defaults.
+        "source_format": "opencode",
+        "auto_load": [],
+        "skills_bundled_enabled": [],
+        "skills_global_enabled": [],
+        "skills_project_disabled": [],
+        "overrides": {},
     }
 
-    project = project_from_dict(data)
 
-    assert project.allowed_tools == []
-
-
-def test_project_is_frozen(tmp_path: Path) -> None:
-    project = build_project("vbot", "vBot", tmp_path)
-
-    with pytest.raises(FrozenInstanceError):
-        project.display_name = "changed"  # type: ignore[misc]
-
-
-def test_auto_load_is_copied_not_aliased(tmp_path: Path) -> None:
+def test_project_is_frozen_and_copies_its_inputs(tmp_path: Path) -> None:
     source = ["AGENTS.md"]
     project = build_project("vbot", "vBot", tmp_path, auto_load=source)
     source.append("PROJECT.md")
 
     assert project.auto_load == ["AGENTS.md"]
-
-
-def test_project_construction_is_a_plain_dataclass() -> None:
-    project = Project(
-        project_id="vbot",
-        display_name="vBot",
-        cwd="/srv/repos/vbot",
-        created_at="2026-06-18T10:00:00Z",
-        updated_at="2026-06-18T10:00:00Z",
-    )
-
-    assert project.auto_load == []
+    with pytest.raises(FrozenInstanceError):
+        project.display_name = "changed"  # type: ignore[misc]

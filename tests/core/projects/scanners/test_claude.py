@@ -12,6 +12,8 @@ from core.projects.scanners.claude import (
     ClaudeDetector,
 )
 
+_BODY_WITH_BRACES = "# Reviewer\n\nUse {include:SOUL.md} and {project_files} literally.\n"
+
 
 def _write_agent(project_root: Path, relative_path: str, content: str) -> Path:
     agents_dir = project_root.joinpath(*CLAUDE_AGENTS_SUBPATH)
@@ -22,23 +24,19 @@ def _write_agent(project_root: Path, relative_path: str, content: str) -> Path:
 
 
 def test_detect_parses_frontmatter_and_body(tmp_path: Path) -> None:
-    # Arrange
     content = (
         "---\n"
         "name: code-reviewer\n"
         "description: Reviews code for defects.\n"
+        "model: sonnet\n"
         "---\n"
         "\n"
-        "# Reviewer\n"
-        "\n"
-        "You review code.\n"
+        f"{_BODY_WITH_BRACES}"
     )
     _write_agent(tmp_path, "reviewer.md", content)
 
-    # Act
     detected = ClaudeDetector().detect(tmp_path)
 
-    # Assert
     assert len(detected) == 1
     agent = detected[0].agent
     assert agent is not None
@@ -48,253 +46,163 @@ def test_detect_parses_frontmatter_and_body(tmp_path: Path) -> None:
     assert agent.description == "Reviews code for defects."
     assert agent.source_format == CLAUDE_FORMAT_KEY
     assert agent.denied_tools == frozenset()
-    assert agent.body == "# Reviewer\n\nYou review code.\n"
+    # Claude Model vocabulary (aliases, Anthropic ids, inherit) is never vBot's
+    # <provider>/<model-id> form, so it is always dropped; Claude Agents carry no
+    # sampling settings either.
+    assert (agent.model, agent.temperature, agent.thinking_effort) == ("", None, None)
+    # The body is opaque text; placeholders are not expanded here.
+    assert agent.body == _BODY_WITH_BRACES
 
 
-def test_detect_falls_back_to_filename_stem_without_name(tmp_path: Path) -> None:
-    _write_agent(tmp_path, "helper.md", "---\ndescription: x\n---\nBody.\n")
+@pytest.mark.parametrize(
+    ("filename", "front_matter", "identity"),
+    [
+        pytest.param("helper.md", "description: x\n", ("helper", "helper"), id="filename-stem"),
+        # The display name preserves the raw frontmatter name.
+        pytest.param(
+            "a.md", "name: Code Reviewer\n", ("code-reviewer", "Code Reviewer"), id="slugified"
+        ),
+        # Broken frontmatter degrades to no fields and never crashes the scan.
+        pytest.param("broken.md", "name: [unclosed\n", ("broken", "broken"), id="malformed-yaml"),
+        # A name that slugifies to nothing becomes a parse failure for the report.
+        pytest.param("a.md", 'name: "___"\n', None, id="unslugifiable"),
+    ],
+)
+def test_detect_derives_the_agent_id(
+    tmp_path: Path, filename: str, front_matter: str, identity: tuple[str, str] | None
+) -> None:
+    _write_agent(tmp_path, filename, f"---\n{front_matter}---\nBody.\n")
 
-    detected = ClaudeDetector().detect(tmp_path)
+    [detected] = ClaudeDetector().detect(tmp_path)
 
-    assert detected[0].agent is not None
-    assert detected[0].agent.agent_id == "helper"
-
-
-def test_detect_slugifies_crooked_name(tmp_path: Path) -> None:
-    _write_agent(tmp_path, "a.md", "---\nname: Code Reviewer\n---\nBody.\n")
-
-    detected = ClaudeDetector().detect(tmp_path)
-
-    assert detected[0].agent is not None
-    assert detected[0].agent.agent_id == "code-reviewer"
-    # Display name preserves the raw frontmatter name.
-    assert detected[0].agent.display_name == "Code Reviewer"
-
-
-def test_detect_unslugifiable_name_is_parse_failure(tmp_path: Path) -> None:
-    _write_agent(tmp_path, "a.md", '---\nname: "___"\n---\nBody.\n')
-
-    detected = ClaudeDetector().detect(tmp_path)
-
-    assert len(detected) == 1
-    assert detected[0].agent is None
-    assert detected[0].error_reason is not None
-
-
-def test_detect_always_drops_model_and_sampling(tmp_path: Path) -> None:
-    # Claude model vocabulary (aliases, Anthropic ids, inherit) is never vBot's
-    # <provider>/<model-id> form — always dropped, no BAD_MODEL noise. Claude
-    # agents carry no temperature/reasoning either.
-    _write_agent(tmp_path, "a.md", "---\nname: a\nmodel: sonnet\n---\nBody.\n")
-
-    detected = ClaudeDetector().detect(tmp_path)
-
-    agent = detected[0].agent
-    assert agent is not None
-    assert agent.model == ""
-    assert agent.temperature is None
-    assert agent.thinking_effort is None
+    if identity is None:
+        assert detected.agent is None
+        assert detected.error_reason is not None
+    else:
+        assert detected.agent is not None
+        assert (detected.agent.agent_id, detected.agent.display_name) == identity
+        assert detected.agent.denied_tools == frozenset()
 
 
-def test_detect_picks_up_nested_subdirectories(tmp_path: Path) -> None:
-    # Claude Code allows agent subfolders — recursive within .claude/agents/ only.
-    _write_agent(tmp_path, "top.md", "---\nname: top\n---\nBody.\n")
-    _write_agent(tmp_path, "review/deep.md", "---\nname: deep\n---\nBody.\n")
+def test_detect_collects_nested_agents_only_inside_the_known_location(tmp_path: Path) -> None:
+    # No .claude/agents/ at all is normal, not an error.
+    assert ClaudeDetector().detect(tmp_path) == []
 
-    detected = ClaudeDetector().detect(tmp_path)
-
-    assert [item.raw_name for item in detected] == ["deep", "top"]
-
-
-def test_detect_sorts_by_relative_posix_path(tmp_path: Path) -> None:
+    # Claude Code allows Agent subfolders; files elsewhere are never Agents.
     _write_agent(tmp_path, "zeta.md", "---\nname: zeta\n---\nBody.\n")
     _write_agent(tmp_path, "sub/alpha.md", "---\nname: alpha\n---\nBody.\n")
     _write_agent(tmp_path, "beta.md", "---\nname: beta\n---\nBody.\n")
-
-    detected = ClaudeDetector().detect(tmp_path)
-
-    relative = [
-        item.source_path.relative_to(tmp_path.joinpath(*CLAUDE_AGENTS_SUBPATH)).as_posix()
-        for item in detected
-    ]
-    assert relative == ["beta.md", "sub/alpha.md", "zeta.md"]
-
-
-def test_detect_missing_location_returns_empty(tmp_path: Path) -> None:
-    # No .claude/agents/ at all — normal, not an error.
-    assert ClaudeDetector().detect(tmp_path) == []
-
-
-def test_detect_does_not_escape_known_location(tmp_path: Path) -> None:
-    # A markdown file elsewhere under .claude/ (or the repo) is never picked up.
-    (tmp_path / ".claude").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".claude" / "notes.md").write_text("not an agent", encoding="utf-8")
     (tmp_path / "README.md").write_text("not an agent", encoding="utf-8")
-    _write_agent(tmp_path, "real.md", "---\nname: real\n---\nBody.\n")
 
     detected = ClaudeDetector().detect(tmp_path)
 
-    assert [item.raw_name for item in detected] == ["real"]
+    agents_dir = tmp_path.joinpath(*CLAUDE_AGENTS_SUBPATH)
+    assert [item.source_path.relative_to(agents_dir).as_posix() for item in detected] == [
+        "beta.md",
+        "sub/alpha.md",
+        "zeta.md",
+    ]
 
 
-def test_detect_keeps_body_verbatim_with_braces(tmp_path: Path) -> None:
-    body_with_braces = "Use {include:SOUL.md} and {project_files} literally.\n"
-    _write_agent(tmp_path, "a.md", f"---\nname: a\n---\n{body_with_braces}")
-
-    detected = ClaudeDetector().detect(tmp_path)
-
-    assert detected[0].agent is not None
-    assert detected[0].agent.body == body_with_braces
-
-
-def test_detect_malformed_yaml_fails_open(tmp_path: Path) -> None:
-    # Broken frontmatter degrades to "no fields" — stem id, empty description,
-    # nothing denied — and never crashes the scan.
-    _write_agent(tmp_path, "broken.md", "---\nname: [unclosed\n---\nBody.\n")
-
-    detected = ClaudeDetector().detect(tmp_path)
-
-    agent = detected[0].agent
-    assert agent is not None
-    assert agent.agent_id == "broken"
-    assert agent.denied_tools == frozenset()
+_MAPPED_TOOLS = frozenset(
+    {
+        "read",
+        "apply_patch",
+        "search_files",
+        "bash",
+        "process",
+        "web_fetch",
+        "web_search",
+        "subagent",
+        "skill",
+    }
+)
 
 
-def _denied_tools_for(tmp_path: Path, front_matter: str) -> frozenset[str]:
-    """Parse one agent file's front matter and return its scanned denied_tools."""
+@pytest.mark.parametrize(
+    ("front_matter", "denied"),
+    [
+        # Omitted tools inherit everything.
+        pytest.param("description: x\n", frozenset(), id="no-tool-fields"),
+        pytest.param(
+            "disallowedTools: Bash, WebFetch\n",
+            frozenset({"bash", "process", "web_fetch"}),
+            id="disallowed-string",
+        ),
+        pytest.param(
+            "disallowedTools:\n  - Write\n  - Edit\n", frozenset({"apply_patch"}), id="yaml-list"
+        ),
+        # Either file-mutation Tool alone blocks apply_patch.
+        pytest.param("disallowedTools: Edit\n", frozenset({"apply_patch"}), id="edit-only"),
+        pytest.param("disallowedTools: Write\n", frozenset({"apply_patch"}), id="write-only"),
+        pytest.param(
+            "disallowedTools: '  BASH , webfetch '\n",
+            frozenset({"bash", "process", "web_fetch"}),
+            id="case-insensitive-trimmed",
+        ),
+        # Unknown Claude Tools (MCP names, future Tools) never deny anything.
+        pytest.param(
+            "disallowedTools: NotebookEdit, mcp__foo\n", frozenset(), id="unknown-disallowed"
+        ),
+        # An allow-list denies every mapped Tool it does not name; vBot Tools without
+        # a Claude counterpart (such as status) are never denied.
+        pytest.param(
+            "tools: Read, Grep, Glob\n",
+            _MAPPED_TOOLS - {"read", "search_files"},
+            id="allow-list",
+        ),
+        pytest.param(
+            "tools: Read, Edit, Write\n",
+            _MAPPED_TOOLS - {"read", "apply_patch"},
+            id="allow-list-with-both-mutation-tools",
+        ),
+        pytest.param("tools: mcp__foo\n", _MAPPED_TOOLS, id="allow-list-of-unknown-names"),
+        # An explicit denial wins over the allow-list entry.
+        pytest.param(
+            "tools: Read, Write, Bash\ndisallowedTools: Write\n",
+            _MAPPED_TOOLS - {"read", "bash", "process"},
+            id="allow-list-and-disallowed",
+        ),
+        # Foreign shapes and an empty tools string are noise, treated as absent.
+        pytest.param(
+            "tools:\n  read: true\ndisallowedTools: 7\n", frozenset(), id="malformed-shapes"
+        ),
+        pytest.param("tools: ''\n", frozenset(), id="empty-tools-string"),
+    ],
+)
+def test_denied_tools_map_claude_tool_fields(
+    tmp_path: Path, front_matter: str, denied: frozenset[str]
+) -> None:
     _write_agent(tmp_path, "a.md", f"---\nname: a\n{front_matter}---\nBody.\n")
-    detected = ClaudeDetector().detect(tmp_path)
-    assert detected[0].agent is not None
-    return detected[0].agent.denied_tools
+
+    [detected] = ClaudeDetector().detect(tmp_path)
+
+    assert detected.agent is not None
+    assert detected.agent.denied_tools == denied
 
 
-def test_denied_tools_empty_without_tools_fields(tmp_path: Path) -> None:
-    # Omitted tools = inherit all; nothing is denied.
-    assert _denied_tools_for(tmp_path, "description: x\n") == frozenset()
-
-
-def test_denied_tools_disallowed_tools_deny_their_mapping(tmp_path: Path) -> None:
-    assert _denied_tools_for(tmp_path, "disallowedTools: Bash, WebFetch\n") == frozenset(
-        {"bash", "process", "web_fetch"}
-    )
-
-
-def test_denied_tools_disallowed_accepts_yaml_list(tmp_path: Path) -> None:
-    front_matter = "disallowedTools:\n  - Write\n  - Edit\n"
-    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"apply_patch"})
-
-
-def test_denied_tools_allow_list_inverts_to_denials(tmp_path: Path) -> None:
-    # tools present → every mappable Claude tool NOT named is denied.
-    denied = _denied_tools_for(tmp_path, "tools: Read, Grep, Glob\n")
-
-    assert denied == frozenset(
-        {"apply_patch", "bash", "process", "web_fetch", "web_search", "subagent", "skill"}
-    )
-
-
-def test_denied_tools_allow_list_never_denies_unmappable_vbot_tools(tmp_path: Path) -> None:
-    # vBot tools with no Claude counterpart (e.g. status) are never denied by the
-    # inversion — only mapped vBot tools can appear.
-    denied = _denied_tools_for(tmp_path, "tools: Read\n")
-
-    assert "status" not in denied
-
-
-def test_denied_tools_names_match_case_insensitive_trimmed(tmp_path: Path) -> None:
-    assert _denied_tools_for(tmp_path, "disallowedTools: '  BASH , webfetch '\n") == frozenset(
-        {"bash", "process", "web_fetch"}
-    )
-
-
-def test_denied_tools_unknown_names_are_ignored(tmp_path: Path) -> None:
-    # Unknown Claude tools (MCP names, future tools) never deny anything.
-    assert _denied_tools_for(tmp_path, "disallowedTools: NotebookEdit, mcp__foo\n") == frozenset()
-
-
-def test_denied_tools_unknown_allow_list_entries_do_not_widen(tmp_path: Path) -> None:
-    # An allow-list of only unknown names still denies every mappable tool.
-    denied = _denied_tools_for(tmp_path, "tools: mcp__foo\n")
-
-    assert denied == frozenset(
-        {
-            "read",
-            "apply_patch",
-            "search_files",
-            "bash",
-            "process",
-            "web_fetch",
-            "web_search",
-            "subagent",
-            "skill",
-        }
-    )
-
-
-def test_denied_tools_unions_allow_list_and_disallowed(tmp_path: Path) -> None:
-    front_matter = "tools: Read, Write, Bash\ndisallowedTools: Write\n"
-    denied = _denied_tools_for(tmp_path, front_matter)
-
-    # Write is denied explicitly even though the allow-list names it; everything
-    # mappable outside the allow-list is denied by inversion.
-    assert "read" not in denied
-    assert "bash" not in denied
-    assert "apply_patch" in denied
-
-
-def test_denied_tools_malformed_shapes_fail_open(tmp_path: Path) -> None:
-    # A mapping/number where a list is expected is foreign — treated as absent.
-    assert _denied_tools_for(tmp_path, "tools:\n  read: true\ndisallowedTools: 7\n") == frozenset()
-
-
-def test_denied_tools_empty_tools_string_fails_open(tmp_path: Path) -> None:
-    # "tools: ''" is more likely noise than an explicit empty allow-list.
-    assert _denied_tools_for(tmp_path, "tools: ''\n") == frozenset()
-
-
-def test_scoped_agent_allowlist_keeps_subagent_and_limits_targets(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("front_matter", "rules"),
+    [
+        pytest.param(
+            "tools: Agent(worker, reviewer), Read\n",
+            [("*", False), ("worker", True), ("reviewer", True)],
+            id="scoped-allow-list",
+        ),
+        pytest.param("disallowedTools: Agent(worker)\n", [("worker", False)], id="scoped-denial"),
+    ],
+)
+def test_scoped_agent_tool_limits_targets_but_keeps_subagent(
+    tmp_path: Path, front_matter: str, rules: list[tuple[str, bool]]
+) -> None:
     _write_agent(
-        tmp_path,
-        "orchestrator.md",
-        "---\nname: orchestrator\ntools: Agent(worker, reviewer), Read\n---\nBody.\n",
+        tmp_path, "orchestrator.md", f"---\nname: orchestrator\n{front_matter}---\nBody.\n"
     )
 
-    detected = ClaudeDetector().detect(tmp_path)
+    [detected] = ClaudeDetector().detect(tmp_path)
 
-    agent = detected[0].agent
+    agent = detected.agent
     assert agent is not None
     assert "subagent" not in agent.denied_tools
-    assert [(rule.pattern, rule.allowed) for rule in agent.agent_target_rules] == [
-        ("*", False),
-        ("worker", True),
-        ("reviewer", True),
-    ]
-
-
-def test_scoped_agent_denial_does_not_disable_other_targets(tmp_path: Path) -> None:
-    _write_agent(
-        tmp_path,
-        "orchestrator.md",
-        "---\nname: orchestrator\ndisallowedTools: Agent(worker)\n---\nBody.\n",
-    )
-
-    detected = ClaudeDetector().detect(tmp_path)
-
-    agent = detected[0].agent
-    assert agent is not None
-    assert "subagent" not in agent.denied_tools
-    assert [(rule.pattern, rule.allowed) for rule in agent.agent_target_rules] == [
-        ("worker", False)
-    ]
-
-
-@pytest.mark.parametrize("denied_tool", ["Edit", "Write"])
-def test_each_file_mutation_denial_blocks_patch(tmp_path: Path, denied_tool: str) -> None:
-    denied = _denied_tools_for(tmp_path, f"disallowedTools: {denied_tool}\n")
-    assert "apply_patch" in denied
-    assert "write" not in denied
-
-
-def test_allowing_both_file_mutation_tools_allows_patch(tmp_path: Path) -> None:
-    denied = _denied_tools_for(tmp_path, "tools: Read, Edit, Write\n")
-    assert not {"read", "apply_patch"} & denied
+    assert [(rule.pattern, rule.allowed) for rule in agent.agent_target_rules] == rules

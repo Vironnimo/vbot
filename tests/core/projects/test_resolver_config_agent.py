@@ -10,7 +10,7 @@ from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, Temporar
 from core.database import DatabaseUnavailableError
 from core.projects.resolver import AgentResolver
 from core.sessions import ChatSessionManager, SessionAddress
-from core.tools.availability import ToolAccess
+from core.tools.availability import ToolAccess, resolve_tool_access
 
 from .resolver_test_support import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
@@ -228,17 +228,46 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
         sessions.close()
 
 
-def test_temporary_selected_empty_policy_stays_empty_inside_a_project(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+@pytest.mark.parametrize(
+    ("tool_access", "allowed_skills", "skills_global_enabled", "resolved_skills"),
+    [
+        # An explicitly empty selection stays empty; Identity-private Skills never
+        # enter a Project.
+        pytest.param(
+            ToolAccess(mode="selected", allowed=()),
+            ["identity-private"],
+            [],
+            [],
+            id="empty-selection",
+        ),
+        # A Skill pattern can narrow the Project Skill ceiling, never widen it.
+        pytest.param(
+            ToolAccess(mode="selected", allowed=()),
+            ["allowed-*", "outside-*"],
+            ["allowed-skill"],
+            ["allowed-skill"],
+            id="skill-patterns",
+        ),
+    ],
+)
+def test_temporary_selection_cannot_widen_the_project_ceiling(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    tool_access: ToolAccess,
+    allowed_skills: list[str],
+    skills_global_enabled: list[str],
+    resolved_skills: list[str],
 ) -> None:
     project = _project(projects, repo)
+    project = projects.update(project.project_id, skills_global_enabled=skills_global_enabled)
     temporary = TemporaryAgent(
         id="temporary",
         name="temporary",
         model="openai/gpt-5.2",
         cwd=repo,
-        tool_access=ToolAccess(mode="selected", allowed=()),
-        allowed_skills=["identity-private"],
+        tool_access=tool_access,
+        allowed_skills=allowed_skills,
         tools={},
         fallback_models=[],
     )
@@ -254,192 +283,140 @@ def test_temporary_selected_empty_policy_stays_empty_inside_a_project(
         SessionAddress(project.project_id, "temporary", "session"), generation_id="generation"
     )
 
-    assert resolved.tool_access == ToolAccess(mode="selected", allowed=())
-    assert resolved.allowed_skills == []
+    assert resolved.tool_access == tool_access
+    assert resolved.allowed_skills == resolved_skills
 
 
-def test_temporary_profile_skill_selection_cannot_widen_a_project_ceiling(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+_BASE_TOOLS = tuple(PROJECT_DEFAULT_ALLOWED_TOOLS)
+
+
+@pytest.mark.parametrize(
+    ("permission", "allowed_tools", "tool_access"),
+    [
+        # permission.edit covers file mutation, so it removes apply_patch.
+        pytest.param(
+            {"edit": "deny", "webfetch": "deny", "websearch": "deny", "task": "deny"},
+            None,
+            ToolAccess(
+                mode="selected",
+                allowed=tuple(
+                    tool
+                    for tool in _BASE_TOOLS
+                    if tool not in {"apply_patch", "web_fetch", "web_search", "subagent"}
+                ),
+                denied=("apply_patch", "subagent", "web_fetch", "web_search"),
+            ),
+            id="explorer-denials",
+        ),
+        pytest.param(
+            {"task": "deny"},
+            None,
+            ToolAccess(
+                mode="selected",
+                allowed=tuple(tool for tool in _BASE_TOOLS if tool != "subagent"),
+                denied=("subagent",),
+            ),
+            id="builder-denial",
+        ),
+        # The ceiling is the hard cap even without an Agent denial.
+        pytest.param(
+            None,
+            ["read", "grep"],
+            ToolAccess(mode="selected", allowed=("read", "grep")),
+            id="narrowed-ceiling",
+        ),
+    ],
+)
+def test_repository_denials_narrow_the_project_tool_ceiling(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    permission: dict[str, str] | None,
+    allowed_tools: list[str] | None,
+    tool_access: ToolAccess,
 ) -> None:
-    project = _project(projects, repo)
-    project = projects.update(project.project_id, skills_global_enabled=["allowed-skill"])
-    temporary = TemporaryAgent(
-        id="temporary",
-        name="temporary",
-        model="openai/gpt-5.2",
-        cwd=repo,
-        tool_access=ToolAccess(mode="selected", allowed=()),
-        allowed_skills=["allowed-*", "outside-*"],
-        tools={},
-        fallback_models=[],
-    )
-    resolver = AgentResolver(
-        agents,
-        projects,
-        _openai_configured(),
-        lambda: {},
-        temporary_agents=SimpleNamespace(resolve=lambda *_args, **_kwargs: temporary),
-    )
-
-    resolved = resolver.resolve_temporary_agent(
-        SessionAddress(project.project_id, "temporary", "session"), generation_id="generation"
-    )
-
-    assert resolved.allowed_skills == ["allowed-skill"]
-
-
-def test_effective_tools_drop_explorer_denials(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # An explorer-shaped agent (edit/webfetch/websearch/task all denied) resolves
-    # without apply_patch (permission.edit covers file mutation), web_fetch, web_search, and
-    # subagent — everything else in the project ceiling stays.
-    _write_agent(
-        repo,
-        "explorer.md",
-        model="openai/gpt-5.2",
-        permission={"edit": "deny", "webfetch": "deny", "websearch": "deny", "task": "deny"},
-    )
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "explorer")
-
-    denied = {"apply_patch", "web_fetch", "web_search", "subagent"}
-    assert set(runtime_agent.tool_access.allowed).isdisjoint(denied)
-    assert runtime_agent.tool_access.allowed == tuple(
-        tool for tool in PROJECT_DEFAULT_ALLOWED_TOOLS if tool not in denied
-    )
-    assert set(runtime_agent.tool_access.denied) == denied
-
-
-def test_effective_tools_drop_only_subagent_for_builder(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # A builder-shaped agent denies only task → only subagent is removed.
-    _write_agent(
-        repo,
-        "builder.md",
-        model="openai/gpt-5.2",
-        permission={"task": "deny"},
-    )
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert "subagent" not in runtime_agent.tool_access.allowed
-    assert runtime_agent.tool_access.allowed == tuple(
-        tool for tool in PROJECT_DEFAULT_ALLOWED_TOOLS if tool != "subagent"
-    )
-    assert runtime_agent.tool_access.denied == ("subagent",)
-
-
-def test_effective_tools_no_denials_equal_project_ceiling(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(repo, "writer.md", model="openai/gpt-5.2")
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
-
-    assert runtime_agent.tool_access == ToolAccess(
-        mode="selected", allowed=tuple(project.allowed_tools)
-    )
-
-
-def test_project_ceiling_omitting_a_tool_wins_over_no_denial(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # The ceiling is the hard cap: a tool the project omits is absent even when the
-    # agent declares no denial for it.
-    _write_agent(repo, "writer.md", model="openai/gpt-5.2")
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", permission=permission)
     _project(projects, repo)
-    project = projects.update("vbot", allowed_tools=["read", "grep"])
+    if allowed_tools is not None:
+        projects.update("vbot", allowed_tools=allowed_tools)
     resolver = _resolver(agents, projects, _openai_configured())
 
-    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
-
-    assert runtime_agent.tool_access == ToolAccess(mode="selected", allowed=("read", "grep"))
+    assert resolver.resolve_agent("vbot", "builder").tool_access == tool_access
 
 
-def test_vbot_tool_override_replaces_repository_denials_and_can_select_one_tool(
+def test_vbot_tool_override_replaces_repository_denials_until_cleared(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    _write_agent(
-        repo,
-        "builder.md",
-        model="openai/gpt-5.2",
-        permission={"task": "deny"},
-    )
-    project = _project(projects, repo)
-    projects.set_override(
-        project.project_id,
-        "builder",
-        "tool_access",
-        {"mode": "selected", "allowed": ["subagent"]},
-    )
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2", permission={"task": "deny"})
+    _project(projects, repo)
+    policy = {"mode": "selected", "allowed": ["subagent"]}
+    projects.set_override("vbot", "builder", "tool_access", policy)
     resolver = _resolver(agents, projects, _openai_configured())
 
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-    effective = resolver.effective_config(project.project_id, "builder")["tool_access"]
+    overridden = resolver.resolve_agent("vbot", "builder")
+    overridden_effective = resolver.effective_config("vbot", "builder")["tool_access"]
+    projects.clear_override("vbot", "builder", "tool_access")
+    restored = resolver.resolve_agent("vbot", "builder")
+    restored_effective = resolver.effective_config("vbot", "builder")["tool_access"]
 
-    assert runtime_agent.tool_access == ToolAccess(mode="selected", allowed=("subagent",))
-    assert runtime_agent.tools == {"subagent": {"allowed_agents": []}}
-    assert effective == {
-        "value": {"mode": "selected", "allowed": ["subagent"]},
-        "source": "override",
-    }
+    # The override may re-enable a repository-denied Tool and select only it.
+    assert overridden.tool_access == ToolAccess(mode="selected", allowed=("subagent",))
+    assert overridden.tools == {"subagent": {"allowed_agents": []}}
+    assert overridden_effective == {"value": policy, "source": "override"}
+    assert restored.tool_access.denied == ("subagent",)
+    assert "subagent" not in restored.tool_access.allowed
+    assert restored_effective["source"] == "agent"
 
 
-def test_image_vision_grant_survives_project_resolution_and_reset(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+@pytest.mark.parametrize(
+    ("mode", "granted_access", "usable"),
+    [
+        pytest.param(
+            "all",
+            ToolAccess(mode="selected", allowed=("analyze_image",), granted=("analyze_image",)),
+            ("analyze_image",),
+            id="all",
+        ),
+        pytest.param(
+            "selected",
+            ToolAccess(mode="selected", allowed=("analyze_image",), granted=("analyze_image",)),
+            ("analyze_image",),
+            id="selected",
+        ),
+        pytest.param("none", ToolAccess(mode="none", granted=("analyze_image",)), (), id="none"),
+    ],
+)
+def test_opt_in_grant_survives_project_resolution_and_reset(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    mode: str,
+    granted_access: ToolAccess,
+    usable: tuple[str, ...],
 ) -> None:
+    # An opt-in Tool such as the image-analysis vision exception needs an explicit
+    # grant on top of the Project Tool Whitelist.
+    tools = [SimpleNamespace(name="analyze_image", requires_opt_in=True)]
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    project = projects.create("vision", "Vision", repo)
-    project = projects.update(project.project_id, allowed_tools=["analyze_image"])
-    policy = {"mode": "all", "granted": ["analyze_image"]}
-    projects.set_override(project.project_id, "builder", "tool_access", policy)
+    _project(projects, repo)
+    projects.update("vbot", allowed_tools=["analyze_image"])
     resolver = _resolver(agents, projects, _openai_configured())
-    assert resolver.resolve_agent(project.project_id, "builder").tool_access == ToolAccess(
-        mode="selected", allowed=("analyze_image",), granted=("analyze_image",)
-    )
-    assert resolver.effective_config(project.project_id, "builder")["tool_access"] == {
-        "value": policy,
-        "source": "override",
-    }
-    projects.clear_override(project.project_id, "builder", "tool_access")
-    assert resolver.resolve_agent(project.project_id, "builder").tool_access == ToolAccess(
-        mode="selected", allowed=("analyze_image",)
-    )
+    policy: dict[str, Any] = {"mode": mode, "granted": ["analyze_image"]}
+    if mode == "selected":
+        policy["allowed"] = ["analyze_image"]
 
+    ungranted = resolver.resolve_agent("vbot", "builder").tool_access
+    projects.set_override("vbot", "builder", "tool_access", policy)
+    granted = resolver.resolve_agent("vbot", "builder").tool_access
+    effective = resolver.effective_config("vbot", "builder")["tool_access"]
+    projects.clear_override("vbot", "builder", "tool_access")
+    reset = resolver.resolve_agent("vbot", "builder").tool_access
 
-def test_clearing_vbot_tool_override_restores_repository_policy(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(
-        repo,
-        "builder.md",
-        model="openai/gpt-5.2",
-        permission={"task": "deny"},
-    )
-    project = _project(projects, repo)
-    projects.set_override(
-        project.project_id,
-        "builder",
-        "tool_access",
-        {"mode": "none"},
-    )
-    projects.clear_override(project.project_id, "builder", "tool_access")
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-    effective = resolver.effective_config(project.project_id, "builder")["tool_access"]
-
-    assert "subagent" not in runtime_agent.tool_access.allowed
-    assert runtime_agent.tool_access.denied == ("subagent",)
-    assert effective["source"] == "agent"
+    assert resolve_tool_access(ungranted, tools, "off").allowed_tools == ()
+    assert granted == granted_access
+    assert resolve_tool_access(granted, tools, "off").allowed_tools == usable
+    assert effective == {"value": policy, "source": "override"}
+    assert reset == ToolAccess(mode="selected", allowed=("analyze_image",))
 
 
 def test_effective_agent_targets_are_materialized_from_current_project_team(
@@ -465,137 +442,63 @@ def test_effective_agent_targets_are_materialized_from_current_project_team(
     assert runtime_agent.tools == {"subagent": {"allowed_agents": ["review-one"]}}
 
 
-def test_effective_skills_default_to_project_skills(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+@pytest.mark.parametrize(
+    ("project_skills", "whitelist", "allowed_skills"),
+    [
+        # With empty rule lists, the Agent gets exactly the Project's own Skills.
+        pytest.param({"debugging", "refactoring"}, {}, ["debugging", "refactoring"], id="default"),
+        # (project skills - disabled) + enabled bundled + enabled global, sorted.
+        pytest.param(
+            {"debugging", "refactoring"},
+            {
+                "skills_project_disabled": ["refactoring"],
+                "skills_bundled_enabled": ["pdf"],
+                "skills_global_enabled": ["deploy"],
+            },
+            ["debugging", "deploy", "pdf"],
+            id="disabled-bundled-global",
+        ),
+        # The Project copy wins a name collision, so an opt-in of the same name cannot
+        # resurrect a disabled Project Skill.
+        pytest.param(
+            {"debugging", "deploy"},
+            {"skills_project_disabled": ["deploy"], "skills_global_enabled": ["deploy"]},
+            ["debugging"],
+            id="disabled-project-skill-beats-opt-in",
+        ),
+        # Disabling applies to Project Skills only; the same-named opt-in stays.
+        pytest.param(
+            {"debugging"},
+            {"skills_project_disabled": ["pdf"], "skills_bundled_enabled": ["pdf"]},
+            ["debugging", "pdf"],
+            id="disabled-non-project-name-is-inert",
+        ),
+        # A Skill literally named "*" must not smuggle the wildcard past the whitelist.
+        pytest.param(
+            {"*", "debugging"},
+            {"skills_global_enabled": ["*"]},
+            ["debugging"],
+            id="literal-wildcard",
+        ),
+    ],
+)
+def test_effective_skills_follow_the_project_skill_whitelist(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    project_skills: set[str],
+    whitelist: dict[str, list[str]],
+    allowed_skills: list[str],
 ) -> None:
-    # With empty whitelist lists, a config agent's skills are exactly the project's
-    # own scanned skills (bundled lie alongside as opt-in, off by default).
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    project = _project(projects, repo)
-    resolver = _resolver(
-        agents,
-        projects,
-        _openai_configured(),
-        project_skill_names={"vbot": frozenset({"debugging", "refactoring"})},
-    )
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.allowed_skills == ["debugging", "refactoring"]
-
-
-def test_effective_skills_apply_disabled_and_bundled_rule(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # (project skills − disabled) ∪ enabled-bundled, sorted.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _project(projects, repo)
-    project = projects.update(
-        "vbot",
-        skills_project_disabled=["refactoring"],
-        skills_bundled_enabled=["pdf"],
-    )
-    resolver = _resolver(
-        agents,
-        projects,
-        _openai_configured(),
-        project_skill_names={"vbot": frozenset({"debugging", "refactoring"})},
-    )
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.allowed_skills == ["debugging", "pdf"]
-
-
-def test_effective_skills_include_enabled_global(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # (project skills − disabled) ∪ enabled-bundled ∪ enabled-global, sorted.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _project(projects, repo)
-    project = projects.update(
-        "vbot",
-        skills_project_disabled=["refactoring"],
-        skills_bundled_enabled=["pdf"],
-        skills_global_enabled=["deploy"],
-    )
-    resolver = _resolver(
-        agents,
-        projects,
-        _openai_configured(),
-        project_skill_names={"vbot": frozenset({"debugging", "refactoring"})},
-    )
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.allowed_skills == ["debugging", "deploy", "pdf"]
-
-
-def test_effective_skills_disabled_project_skill_stays_off_despite_optin(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # A disabled project skill is off entirely: the merged registry resolves a name
-    # collision to the project's own copy (project wins), so a same-named global or
-    # bundled opt-in must not resurrect the disabled project skill.
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
-    project = projects.update(
-        "vbot",
-        skills_project_disabled=["deploy"],
-        skills_global_enabled=["deploy"],
-    )
+    if whitelist:
+        projects.update("vbot", **whitelist)
     resolver = _resolver(
         agents,
         projects,
         _openai_configured(),
-        project_skill_names={"vbot": frozenset({"debugging", "deploy"})},
+        project_skill_names={"vbot": frozenset(project_skills)},
     )
 
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.allowed_skills == ["debugging"]
-
-
-def test_effective_skills_disabled_nonproject_name_leaves_optin_alone(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # ``skills_project_disabled`` turns off project skills only: a disabled name
-    # that is not a project skill stays inert and the opt-in keeps working.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _project(projects, repo)
-    project = projects.update(
-        "vbot",
-        skills_project_disabled=["pdf"],
-        skills_bundled_enabled=["pdf"],
-    )
-    resolver = _resolver(
-        agents,
-        projects,
-        _openai_configured(),
-        project_skill_names={"vbot": frozenset({"debugging"})},
-    )
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.allowed_skills == ["debugging", "pdf"]
-
-
-def test_effective_skills_drop_literal_wildcard_names(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # A repo skill *named* "*" (the lenient loader accepts that with a warning) must
-    # not smuggle the allowed_skills wildcard past the project whitelist and expose
-    # the whole global pool; the literal is dropped from every source list.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _project(projects, repo)
-    project = projects.update("vbot", skills_global_enabled=["*"])
-    resolver = _resolver(
-        agents,
-        projects,
-        _openai_configured(),
-        project_skill_names={"vbot": frozenset({"*", "debugging"})},
-    )
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.allowed_skills == ["debugging"]
+    assert resolver.resolve_agent("vbot", "builder").allowed_skills == allowed_skills

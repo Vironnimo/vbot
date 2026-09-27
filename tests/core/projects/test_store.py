@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -15,12 +17,23 @@ from core.database import write_bootstrap_marker
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
+    Project,
     ProjectAlreadyExistsError,
     ProjectError,
     ProjectNotFoundError,
 )
-from core.projects.store import ProjectStore, _validate_project_id
+from core.projects.store import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
+
+_SEEDED_FIELDS = (
+    "cwd",
+    "source_format",
+    "auto_load",
+    "allowed_tools",
+    "skills_bundled_enabled",
+    "skills_global_enabled",
+    "skills_project_disabled",
+)
 
 
 @pytest.fixture
@@ -38,15 +51,54 @@ def repo(tmp_path: Path) -> Path:
     return repo_dir
 
 
-def test_create_writes_anchor_layout(data_dir: Path, repo: Path) -> None:
+def test_create_writes_the_anchor_with_seeded_defaults(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
 
     project = store.create("vbot", "vBot", repo)
 
     anchor = data_dir / "projects" / "vbot"
-    assert (anchor / "project.json").is_file()
+    payload = json.loads((anchor / "project.json").read_text("utf-8"))
     assert not (anchor / "agents").exists()
-    assert project.cwd == str(Path(os.path.realpath(repo)))
+    assert payload == {"format_version": 1, **project.to_dict()}
+    assert store.get("vbot") == project
+    assert {field: payload[field] for field in _SEEDED_FIELDS} == {
+        "cwd": str(Path(os.path.realpath(repo))),
+        "source_format": "opencode",
+        # AGENTS.md loads with zero config, yet stays a removable entry.
+        "auto_load": ["AGENTS.md"],
+        # The base Tool Whitelist is the ceiling; Skill rule lists start empty.
+        "allowed_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
+        "skills_bundled_enabled": [],
+        "skills_global_enabled": [],
+        "skills_project_disabled": [],
+    }
+
+
+def test_create_persists_explicit_fields(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+
+    project = store.create(
+        "vbot",
+        "vBot",
+        repo,
+        default_agent="orchestrator",
+        default_model="openai/gpt-5",
+        default_temperature=0.4,
+        default_thinking_effort="high",
+        source_format="claude",
+        auto_load=["docs/guide.md", "CONTEXT.md"],
+    )
+
+    assert store.get("vbot") == project
+    assert (
+        project.default_agent,
+        project.default_model,
+        project.default_temperature,
+        project.default_thinking_effort,
+        project.source_format,
+    ) == ("orchestrator", "openai/gpt-5", 0.4, "high", "claude")
+    # The caller's list keeps its order behind the seeded AGENTS.md.
+    assert project.auto_load == ["AGENTS.md", "docs/guide.md", "CONTEXT.md"]
 
 
 def test_failed_create_removes_anchor_so_retry_succeeds(
@@ -123,16 +175,6 @@ def test_concurrent_project_mutations_preserve_config_and_unique_cwd(
         assert persisted.overrides == {"coder": {"model": "other/model"}}
 
 
-def test_create_persists_validatable_config(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo, default_agent="orchestrator", auto_load=["AGENTS.md"])
-
-    payload = json.loads((data_dir / "projects" / "vbot" / "project.json").read_text("utf-8"))
-    assert payload["project_id"] == "vbot"
-    assert payload["default_agent"] == "orchestrator"
-    assert payload["auto_load"] == ["AGENTS.md"]
-
-
 @pytest.mark.parametrize("failed_restore", ["active", "previous"])
 def test_delete_keeps_previous_archive_when_compensation_fails(
     data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, failed_restore: str
@@ -167,113 +209,176 @@ def test_delete_keeps_previous_archive_when_compensation_fails(
         store.close()
 
 
-def test_create_seeds_agents_file_into_empty_auto_load(data_dir: Path, repo: Path) -> None:
-    # A new project starts with AGENTS.md seeded as its first (and only) auto-load
-    # entry — the convention loads with zero config, yet stays a removable entry.
-    store = ProjectStore(data_dir)
-
-    project = store.create("vbot", "vBot", repo)
-
-    assert project.auto_load == ["AGENTS.md"]
-
-
-def test_create_prepends_agents_file_before_user_auto_load(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-
-    project = store.create("vbot", "vBot", repo, auto_load=["docs/guide.md", "CONTEXT.md"])
-
-    assert project.auto_load == ["AGENTS.md", "docs/guide.md", "CONTEXT.md"]
-
-
-def test_create_does_not_duplicate_agents_file(data_dir: Path, repo: Path) -> None:
-    # Idempotent: a caller that already named AGENTS.md (any case) is not seeded a
-    # second copy, so the file never renders twice.
-    store = ProjectStore(data_dir)
-
-    project = store.create("vbot", "vBot", repo, auto_load=["agents.md", "CONTEXT.md"])
-
-    assert project.auto_load == ["agents.md", "CONTEXT.md"]
-
-
-def test_create_seeds_base_tool_whitelist_and_empty_skill_allowlists(
-    data_dir: Path, repo: Path
+def test_update_rebuilds_changed_fields_and_keeps_the_rest(
+    data_dir: Path, repo: Path, tmp_path: Path
 ) -> None:
-    # A new project starts at the base Tool Whitelist ceiling; the Skill Whitelist
-    # rule lists start empty (only the project's own scanned skills are active).
     store = ProjectStore(data_dir)
-
-    project = store.create("vbot", "vBot", repo)
-
-    assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
-    assert project.skills_bundled_enabled == []
-    assert project.skills_project_disabled == []
-
-
-def test_create_persists_whitelist_fields_to_disk(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    payload = json.loads((data_dir / "projects" / "vbot" / "project.json").read_text("utf-8"))
-    assert payload["allowed_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
-    assert payload["skills_bundled_enabled"] == []
-    assert payload["skills_project_disabled"] == []
-
-
-def test_create_defaults_source_format_and_persists_it(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-
-    project = store.create("vbot", "vBot", repo)
-
-    assert project.source_format == "opencode"
-    payload = json.loads((data_dir / "projects" / "vbot" / "project.json").read_text("utf-8"))
-    assert payload["source_format"] == "opencode"
-
-
-def test_create_accepts_claude_source_format(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-
-    project = store.create("vbot", "vBot", repo, source_format="claude")
-
-    assert project.source_format == "claude"
-    assert store.get("vbot").source_format == "claude"
-
-
-def test_update_switches_source_format(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    updated = store.update("vbot", source_format="claude")
-
-    assert updated.source_format == "claude"
-    assert store.get("vbot").source_format == "claude"
-
-
-def test_update_rejects_unknown_source_format(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    with pytest.raises(ProjectError):
-        store.update("vbot", source_format="cursor")
-
-
-def test_update_round_trips_whitelist_fields(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
+    store.create("vbot", "vBot", repo, default_temperature=0.5, default_thinking_effort="high")
+    before = store.set_override("vbot", "builder", "model", "openai/gpt-5")
+    moved = tmp_path / "repos" / "moved"
+    moved.mkdir(parents=True)
 
     updated = store.update(
         "vbot",
+        display_name="vBot Renamed",
+        cwd=str(moved),
+        source_format="claude",
         allowed_tools=["read", "grep"],
         skills_bundled_enabled=["frontend-design"],
         skills_project_disabled=["debugging"],
+        default_temperature=0.1,
+        auto_load=[],
     )
 
-    assert updated.allowed_tools == ["read", "grep"]
-    assert updated.skills_bundled_enabled == ["frontend-design"]
-    assert updated.skills_project_disabled == ["debugging"]
-    reloaded = store.get("vbot")
-    assert reloaded.allowed_tools == ["read", "grep"]
-    assert reloaded.skills_bundled_enabled == ["frontend-design"]
-    assert reloaded.skills_project_disabled == ["debugging"]
+    assert store.get("vbot") == updated
+    # project_id, created_at, the untouched thinking effort, and overrides survive.
+    assert updated.to_dict() == {
+        **before.to_dict(),
+        "display_name": "vBot Renamed",
+        "cwd": str(Path(os.path.realpath(moved))),
+        "source_format": "claude",
+        "allowed_tools": ["read", "grep"],
+        "skills_bundled_enabled": ["frontend-design"],
+        "skills_project_disabled": ["debugging"],
+        "default_temperature": 0.1,
+        # Seeding is creation-only: a removed AGENTS.md is not re-seeded.
+        "auto_load": [],
+        "updated_at": updated.updated_at,
+    }
+
+
+@pytest.mark.parametrize(
+    ("changes", "field", "cleared"),
+    [
+        pytest.param({"display_name": None}, "display_name", "vbot", id="display-name-null"),
+        pytest.param({"display_name": "   "}, "display_name", "vbot", id="display-name-blank"),
+        pytest.param(
+            {"default_thinking_effort": None}, "default_thinking_effort", None, id="thinking"
+        ),
+    ],
+)
+def test_update_clears_a_field_with_its_empty_value(
+    data_dir: Path, repo: Path, changes: dict[str, object], field: str, cleared: object
+) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo, default_thinking_effort="high")
+
+    updated = store.update("vbot", **changes)
+
+    assert getattr(updated, field) == cleared
+    assert getattr(store.get("vbot"), field) == cleared
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error", "message"),
+    [
+        pytest.param(
+            lambda store, repos: store.create("vbot", "Again", repos / "fresh"),
+            ProjectAlreadyExistsError,
+            "Project already exists: vbot",
+            id="duplicate-id",
+        ),
+        pytest.param(
+            lambda store, repos: store.create("vbot-2", "Copy", repos / "vbot"),
+            ProjectAlreadyExistsError,
+            "A project already points at this folder: vbot",
+            id="duplicate-cwd",
+        ),
+        pytest.param(
+            lambda store, repos: store.create("vbot-2", "Copy", f"{repos / 'vbot'}{os.sep}"),
+            ProjectAlreadyExistsError,
+            "A project already points at this folder: vbot",
+            id="duplicate-cwd-trailing-separator",
+        ),
+        pytest.param(
+            lambda store, repos: store.update("other", cwd=str(repos / "vbot")),
+            ProjectAlreadyExistsError,
+            "A project already points at this folder: vbot",
+            id="update-cwd-collision",
+        ),
+        pytest.param(
+            lambda store, repos: store.update("vbot", source_format="cursor"),
+            ProjectError,
+            "source_format must be one of: opencode, claude",
+            id="update-source-format",
+        ),
+        # Overrides have their own set/clear seam.
+        pytest.param(
+            lambda store, repos: store.update(
+                "vbot", overrides={"builder": {"model": "openai/gpt-5"}}
+            ),
+            ProjectError,
+            "Unknown project fields: overrides",
+            id="update-overrides",
+        ),
+        pytest.param(
+            lambda store, repos: store.update("vbot", team=["builder"]),
+            ProjectError,
+            "Unknown project fields: team",
+            id="update-unknown-field",
+        ),
+        pytest.param(
+            lambda store, repos: store.set_override("vbot", "builder", "model", "  "),
+            ProjectError,
+            "overrides['builder'].model must be a non-empty model string",
+            id="empty-override-model",
+        ),
+        # An opt-in grant cannot reach beyond the Project Tool Whitelist.
+        pytest.param(
+            lambda store, repos: store.set_override(
+                "vbot", "writer", "tool_access", {"mode": "all", "granted": ["computer"]}
+            ),
+            ProjectError,
+            "overrides['writer'].tool_access.granted contains Tools outside the Project "
+            "Tool Whitelist: computer",
+            id="grant-outside-ceiling",
+        ),
+        pytest.param(
+            lambda store, repos: store.set_override("missing", "builder", "model", "a/b"),
+            ProjectNotFoundError,
+            "Project not found: missing",
+            id="override-unknown-project",
+        ),
+        pytest.param(
+            lambda store, repos: store.get("missing"),
+            ProjectNotFoundError,
+            "Project not found: missing",
+            id="get-unknown-project",
+        ),
+        pytest.param(
+            lambda store, repos: store.delete("missing"),
+            ProjectNotFoundError,
+            "Project not found: missing",
+            id="delete-unknown-project",
+        ),
+        # A Project id is a storage path segment; traversal is refused.
+        pytest.param(
+            lambda store, repos: store.get("../somewhere"),
+            ProjectError,
+            "Invalid project id: '../somewhere'",
+            id="path-traversal",
+        ),
+    ],
+)
+def test_invalid_requests_are_rejected_without_changes(
+    data_dir: Path,
+    tmp_path: Path,
+    mutate: Callable[[ProjectStore, Path], object],
+    error: type[ProjectError],
+    message: str,
+) -> None:
+    repos = tmp_path / "repos"
+    store = ProjectStore(data_dir)
+    for project_id in ("vbot", "other"):
+        (repos / project_id).mkdir(parents=True)
+        store.create(project_id, project_id.title(), repos / project_id)
+    before = store.list()
+
+    with pytest.raises(error, match=re.escape(message)) as exc_info:
+        mutate(store, repos)
+
+    assert exc_info.type is error
+    assert store.list() == before
 
 
 def test_load_requires_the_tool_whitelist_but_defaults_skill_lists(
@@ -362,170 +467,72 @@ def test_project_written_by_a_newer_vbot_is_never_overwritten(data_dir: Path, re
     assert config_path.read_text(encoding="utf-8") == original
 
 
-def test_set_override_persists_one_entry(data_dir: Path, repo: Path) -> None:
+def test_override_mutations_rewrite_exactly_one_field(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
+    config_path = data_dir / "projects" / "vbot" / "project.json"
+    builder_model = {"model": "openai/gpt-5"}
+    planner = {"planner": {"model": "anthropic/claude-sonnet-4"}}
+    steps: list[tuple[Callable[[], Project], dict[str, object]]] = [
+        (
+            lambda: store.set_override("vbot", "builder", "model", "openai/gpt-5"),
+            {"builder": builder_model},
+        ),
+        # A second field merges into the Agent's entry.
+        (
+            lambda: store.set_override("vbot", "builder", "temperature", 0.4),
+            {"builder": {**builder_model, "temperature": 0.4}},
+        ),
+        (
+            lambda: store.set_override("vbot", "planner", "model", "anthropic/claude-sonnet-4"),
+            {"builder": {**builder_model, "temperature": 0.4}, **planner},
+        ),
+        # Replacing a field leaves the other Agent's override intact.
+        (
+            lambda: store.set_override("vbot", "builder", "model", "openai/gpt-mini"),
+            {"builder": {"model": "openai/gpt-mini", "temperature": 0.4}, **planner},
+        ),
+        # 0.0 (sampling floor) and "" (Provider default) are real values.
+        (
+            lambda: store.set_override("vbot", "planner", "temperature", 0.0),
+            {
+                "builder": {"model": "openai/gpt-mini", "temperature": 0.4},
+                "planner": {"model": "anthropic/claude-sonnet-4", "temperature": 0.0},
+            },
+        ),
+        (
+            lambda: store.set_override("vbot", "builder", "thinking_effort", ""),
+            {
+                "builder": {"model": "openai/gpt-mini", "temperature": 0.4, "thinking_effort": ""},
+                "planner": {"model": "anthropic/claude-sonnet-4", "temperature": 0.0},
+            },
+        ),
+        # Clearing removes only the target field.
+        (
+            lambda: store.clear_override("vbot", "planner", "temperature"),
+            {
+                "builder": {"model": "openai/gpt-mini", "temperature": 0.4, "thinking_effort": ""},
+                **planner,
+            },
+        ),
+        # Clearing the last field removes the Agent's entry.
+        (
+            lambda: store.clear_override("vbot", "planner", "model"),
+            {"builder": {"model": "openai/gpt-mini", "temperature": 0.4, "thinking_effort": ""}},
+        ),
+        # Clearing an absent field is a no-op.
+        (
+            lambda: store.clear_override("vbot", "planner", "model"),
+            {"builder": {"model": "openai/gpt-mini", "temperature": 0.4, "thinking_effort": ""}},
+        ),
+    ]
 
-    updated = store.set_override("vbot", "builder", "model", "openai/gpt-5")
+    for mutate, overrides in steps:
+        project = mutate()
 
-    assert updated.overrides == {"builder": {"model": "openai/gpt-5"}}
-    payload = json.loads((data_dir / "projects" / "vbot" / "project.json").read_text("utf-8"))
-    assert payload["overrides"] == {"builder": {"model": "openai/gpt-5"}}
-
-
-def test_set_override_merges_into_existing_override(data_dir: Path, repo: Path) -> None:
-    # A second field on the same agent merges in — the first field stays.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    store.set_override("vbot", "builder", "model", "openai/gpt-5")
-
-    updated = store.set_override("vbot", "builder", "temperature", 0.4)
-
-    assert updated.overrides == {"builder": {"model": "openai/gpt-5", "temperature": 0.4}}
-
-
-def test_set_override_replaces_existing_leaves_others(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    store.set_override("vbot", "builder", "model", "openai/gpt-5")
-    store.set_override("vbot", "planner", "model", "anthropic/claude-sonnet-4")
-
-    updated = store.set_override("vbot", "builder", "model", "openai/gpt-mini")
-
-    # Exactly the targeted agent's field changed; the other agent's override is intact.
-    assert updated.overrides == {
-        "builder": {"model": "openai/gpt-mini"},
-        "planner": {"model": "anthropic/claude-sonnet-4"},
-    }
-
-
-def test_set_override_accepts_temperature_zero(data_dir: Path, repo: Path) -> None:
-    # 0.0 is a real value (the sampling floor), a valid overridden temperature.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    updated = store.set_override("vbot", "builder", "temperature", 0.0)
-
-    assert updated.overrides == {"builder": {"temperature": 0.0}}
-
-
-def test_set_override_accepts_thinking_effort_empty_string(data_dir: Path, repo: Path) -> None:
-    # "" = force provider default; a real value, a valid overridden thinking effort.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    updated = store.set_override("vbot", "builder", "thinking_effort", "")
-
-    assert updated.overrides == {"builder": {"thinking_effort": ""}}
-
-
-def test_clear_override_removes_only_target_field(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    store.set_override("vbot", "builder", "model", "openai/gpt-5")
-    store.set_override("vbot", "builder", "temperature", 0.4)
-
-    updated = store.clear_override("vbot", "builder", "temperature")
-
-    # Only the cleared field is gone; the agent's other overridden field survives.
-    assert updated.overrides == {"builder": {"model": "openai/gpt-5"}}
-    assert store.get("vbot").overrides == {"builder": {"model": "openai/gpt-5"}}
-
-
-def test_clear_override_last_field_removes_agent_entry(data_dir: Path, repo: Path) -> None:
-    # Clearing an agent's only overridden field drops the whole entry, not an empty override.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    store.set_override("vbot", "builder", "model", "openai/gpt-5")
-    store.set_override("vbot", "planner", "model", "anthropic/claude-sonnet-4")
-
-    updated = store.clear_override("vbot", "builder", "model")
-
-    assert updated.overrides == {"planner": {"model": "anthropic/claude-sonnet-4"}}
-    assert store.get("vbot").overrides == {"planner": {"model": "anthropic/claude-sonnet-4"}}
-
-
-def test_clear_override_absent_field_is_noop(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    store.set_override("vbot", "planner", "model", "anthropic/claude-sonnet-4")
-
-    # Clearing a field the agent has no override for succeeds and changes nothing.
-    updated = store.clear_override("vbot", "builder", "model")
-
-    assert updated.overrides == {"planner": {"model": "anthropic/claude-sonnet-4"}}
-
-
-def test_set_override_rejects_empty_model(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    with pytest.raises(ProjectError):
-        store.set_override("vbot", "builder", "model", "  ")
-
-
-def test_set_override_raises_for_unknown_project(data_dir: Path) -> None:
-    store = ProjectStore(data_dir)
-
-    with pytest.raises(ProjectNotFoundError):
-        store.set_override("missing", "builder", "model", "openai/gpt-5")
-
-
-def test_update_preserves_overrides_across_unrelated_edit(data_dir: Path, repo: Path) -> None:
-    # overrides is carried through an unrelated update, never dropped.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    store.set_override("vbot", "builder", "model", "openai/gpt-5")
-
-    updated = store.update("vbot", display_name="vBot Renamed")
-
-    assert updated.overrides == {"builder": {"model": "openai/gpt-5"}}
-
-
-def test_update_rejects_overrides_as_generic_field(data_dir: Path, repo: Path) -> None:
-    # overrides has its own set/clear seam; it is not a generic update field.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    with pytest.raises(ProjectError):
-        store.update("vbot", overrides={"builder": {"model": "openai/gpt-5"}})
-
-
-def test_update_does_not_reseed_agents_file(data_dir: Path, repo: Path) -> None:
-    # Seeding is creation-only: clearing the list through update keeps it cleared,
-    # so a user who removes AGENTS.md is not fought by a re-seed.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    updated = store.update("vbot", auto_load=[])
-
-    assert updated.auto_load == []
-
-
-def test_create_rejects_duplicate_id(data_dir: Path, repo: Path, tmp_path: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    other_repo = tmp_path / "repos" / "other"
-    other_repo.mkdir(parents=True)
-
-    with pytest.raises(ProjectAlreadyExistsError):
-        store.create("vbot", "vBot Again", other_repo)
-
-
-def test_create_rejects_same_cwd_twice(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    with pytest.raises(ProjectAlreadyExistsError):
-        store.create("vbot-2", "vBot Copy", repo)
-
-
-def test_create_rejects_same_cwd_with_trailing_slash(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    with pytest.raises(ProjectAlreadyExistsError):
-        store.create("vbot-2", "vBot Copy", f"{repo}{os.sep}")
+        assert project.overrides == overrides
+        assert store.get("vbot") == project
+        assert json.loads(config_path.read_text("utf-8"))["overrides"] == overrides
 
 
 def test_create_allows_missing_cwd_folder(data_dir: Path, tmp_path: Path) -> None:
@@ -537,16 +544,6 @@ def test_create_allows_missing_cwd_folder(data_dir: Path, tmp_path: Path) -> Non
 
     assert store.exists("future")
     assert cwd_exists(project.cwd) is False
-
-
-def test_get_returns_persisted_project(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo, default_model="openai/gpt-5")
-
-    loaded = store.get("vbot")
-
-    assert loaded.display_name == "vBot"
-    assert loaded.default_model == "openai/gpt-5"
 
 
 def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: Path) -> None:
@@ -568,69 +565,35 @@ def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: 
     assert store.exists("vbot") is True
 
 
-def test_exists_returns_false_for_invalid_project_config(data_dir: Path) -> None:
-    config_path = data_dir / "projects" / "broken" / "project.json"
+@pytest.mark.parametrize(
+    ("stored", "message"),
+    [
+        pytest.param(
+            {"format_version": 1, "project_id": "vbot"},
+            "error $.cwd: is required; error $.allowed_tools: is required",
+            id="missing-required-fields",
+        ),
+        pytest.param(
+            {"format_version": 1, "project_id": "other", "cwd": "/srv/other", "allowed_tools": []},
+            "expected vbot, got other",
+            id="id-disagrees-with-anchor",
+        ),
+    ],
+)
+def test_invalid_stored_config_is_not_a_usable_project(
+    data_dir: Path, stored: dict[str, object], message: str
+) -> None:
+    config_path = data_dir / "projects" / "vbot" / "project.json"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text(
-        json.dumps({"format_version": 1, "project_id": "broken"}), encoding="utf-8"
-    )
-
-    assert ProjectStore(data_dir).exists("broken") is False
-
-
-def test_create_persists_default_temperature_and_thinking(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create(
-        "vbot",
-        "vBot",
-        repo,
-        default_temperature=0.4,
-        default_thinking_effort="high",
-    )
-
-    loaded = store.get("vbot")
-    assert loaded.default_temperature == 0.4
-    assert loaded.default_thinking_effort == "high"
-
-
-def test_update_sets_default_temperature_and_thinking(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    updated = store.update("vbot", default_temperature=0.2, default_thinking_effort="low")
-
-    assert updated.default_temperature == 0.2
-    assert updated.default_thinking_effort == "low"
-    reloaded = store.get("vbot")
-    assert reloaded.default_temperature == 0.2
-    assert reloaded.default_thinking_effort == "low"
-
-
-def test_update_one_default_leaves_the_other_untouched(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo, default_temperature=0.5, default_thinking_effort="high")
-
-    updated = store.update("vbot", default_temperature=0.1)
-
-    assert updated.default_temperature == 0.1
-    # The thinking effort was not in the change set, so it must survive unchanged.
-    assert updated.default_thinking_effort == "high"
-
-
-def test_update_clears_default_thinking_with_none(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo, default_thinking_effort="high")
-
-    updated = store.update("vbot", default_thinking_effort=None)
-
-    assert updated.default_thinking_effort is None
-
-
-def test_get_raises_for_unknown_project(data_dir: Path) -> None:
+    config_path.write_text(json.dumps(stored), encoding="utf-8")
     store = ProjectStore(data_dir)
 
-    with pytest.raises(ProjectNotFoundError):
-        store.get("missing")
+    with pytest.raises(ProjectError, match=re.escape(message)) as exc_info:
+        store.get("vbot")
+
+    # The Anchor exists, so this is a broken Project, not a missing one.
+    assert exc_info.type is ProjectError
+    assert store.exists("vbot") is False
 
 
 def test_case_variant_of_a_stored_project_id_is_not_found(data_dir: Path, repo: Path) -> None:
@@ -653,169 +616,62 @@ def test_case_variant_of_a_stored_project_id_is_not_found(data_dir: Path, repo: 
     assert [project.project_id for project in store.list()] == ["vbot"]
 
 
-def test_get_reports_a_stored_id_that_disagrees_with_its_anchor(data_dir: Path, repo: Path) -> None:
-    config_path = data_dir / "projects" / "vbot" / "project.json"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text(
-        json.dumps({"project_id": "other", "cwd": str(repo)}),
-        encoding="utf-8",
-    )
-    store = ProjectStore(data_dir)
-
-    with pytest.raises(ProjectError) as exc_info:
-        store.get("vbot")
-
-    assert not isinstance(exc_info.value, ProjectNotFoundError)
-    assert store.exists("vbot") is False
-
-
-def test_list_returns_projects_sorted_by_id(data_dir: Path, tmp_path: Path) -> None:
+def test_list_returns_valid_projects_sorted_by_id(data_dir: Path, tmp_path: Path) -> None:
     store = ProjectStore(data_dir)
     for name in ["zeta", "alpha", "mid"]:
         repo_dir = tmp_path / "repos" / name
         repo_dir.mkdir(parents=True)
         store.create(name, name.title(), repo_dir)
-
-    ids = [project.project_id for project in store.list()]
-    assert ids == ["alpha", "mid", "zeta"]
-
-
-def test_list_skips_corrupt_config(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
     bad_dir = data_dir / "projects" / "broken"
     bad_dir.mkdir(parents=True)
     (bad_dir / "project.json").write_text("{ not json", encoding="utf-8")
 
-    ids = [project.project_id for project in store.list()]
-    assert ids == ["vbot"]
+    assert [project.project_id for project in store.list()] == ["alpha", "mid", "zeta"]
 
 
-def test_find_by_cwd_matches_registered_repo(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    created = store.create("vbot", "vBot", repo)
-
-    found = store.find_by_cwd(repo)
-
-    assert found is not None
-    assert found.project_id == created.project_id
-
-
-def test_find_by_cwd_normalizes_path_before_matching(data_dir: Path, repo: Path) -> None:
-    # A non-normalized path (``.``/``..`` segments) resolves to the same repo via
-    # the cwd-identity key, so it still matches the stored project.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    indirect = repo / "sub" / ".."
-    found = store.find_by_cwd(indirect)
-    assert found is not None
-    assert found.project_id == "vbot"
-
-
-def test_find_by_cwd_returns_none_for_unregistered_path(
-    data_dir: Path, repo: Path, tmp_path: Path
+@pytest.mark.parametrize(
+    ("relative_path", "found"),
+    [
+        pytest.param("repos/vbot", "vbot", id="registered"),
+        # ``.``/``..`` segments resolve to the same cwd identity key.
+        pytest.param("repos/vbot/sub/..", "vbot", id="non-normalized"),
+        pytest.param("somewhere/else", None, id="unregistered"),
+        # An empty path (a config Agent's empty workspace) is a clean no-match.
+        pytest.param(None, None, id="empty"),
+    ],
+)
+def test_find_by_cwd_matches_the_cwd_identity(
+    data_dir: Path, repo: Path, tmp_path: Path, relative_path: str | None, found: str | None
 ) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
 
-    assert store.find_by_cwd(tmp_path / "somewhere" / "else") is None
+    project = store.find_by_cwd("" if relative_path is None else tmp_path / relative_path)
+
+    assert (project.project_id if project else None) == found
 
 
-def test_find_by_cwd_returns_none_for_empty_path(data_dir: Path, repo: Path) -> None:
-    # An empty/unresolvable path (e.g. a config agent's empty workspace) is a clean
-    # "no match", never a raise.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    assert store.find_by_cwd("") is None
-
-
-def test_update_changes_display_name(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    updated = store.update("vbot", display_name="vBot Renamed")
-
-    assert updated.display_name == "vBot Renamed"
-    assert store.get("vbot").display_name == "vBot Renamed"
-
-
-@pytest.mark.parametrize("display_name", [None, "", "   "])
-def test_update_clears_display_name_to_project_id(
-    data_dir: Path, repo: Path, display_name: str | None
+def test_delete_archives_the_anchor_and_replaces_an_older_archive(
+    data_dir: Path, repo: Path
 ) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    updated = store.update("vbot", display_name=display_name)
-
-    assert updated.display_name == "vbot"
-    assert store.get("vbot").display_name == "vbot"
-
-
-def test_rename_keeps_key_stable(data_dir: Path, repo: Path) -> None:
-    # Renaming changes only the display name; the project_id key stays put.
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    store.update("vbot", display_name="vBot Renamed")
-
-    assert store.get("vbot").project_id == "vbot"
-
-
-def test_update_rejects_unknown_field(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    with pytest.raises(ProjectError):
-        store.update("vbot", team=["builder"])
-
-
-def test_update_cwd_renormalizes_and_keeps_key(data_dir: Path, repo: Path, tmp_path: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    new_repo = tmp_path / "repos" / "moved"
-    new_repo.mkdir(parents=True)
-
-    updated = store.update("vbot", cwd=str(new_repo))
-
-    assert updated.cwd == str(Path(os.path.realpath(new_repo)))
-    assert store.exists("vbot")
-
-
-def test_update_cwd_rejects_collision_with_other_project(
-    data_dir: Path, repo: Path, tmp_path: Path
-) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    other_repo = tmp_path / "repos" / "other"
-    other_repo.mkdir(parents=True)
-    store.create("other", "Other", other_repo)
-
-    with pytest.raises(ProjectAlreadyExistsError):
-        store.update("other", cwd=str(repo))
-
-
-def test_delete_archives_anchor_and_removes_active(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    archive_path = store.delete("vbot")
-
-    assert not (data_dir / "projects" / "vbot").exists()
-    assert (archive_path / "project.json").is_file()
-    assert archive_path == data_dir / "archive" / "projects" / "vbot"
-
-
-def test_delete_does_not_touch_repo(data_dir: Path, repo: Path) -> None:
     marker = repo / "keep.txt"
     marker.write_text("repo content", encoding="utf-8")
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
 
-    store.delete("vbot")
+    first_archive = store.delete("vbot")
 
+    assert first_archive == data_dir / "archive" / "projects" / "vbot"
+    assert (first_archive / "project.json").is_file()
+    assert not (data_dir / "projects" / "vbot").exists()
+
+    store.create("vbot", "vBot Again", repo)
+    second_archive = store.delete("vbot")
+
+    assert second_archive == first_archive
+    payload = json.loads((second_archive / "project.json").read_text("utf-8"))
+    assert payload["display_name"] == "vBot Again"
+    # Removal never touches the repository.
     assert marker.read_text(encoding="utf-8") == "repo content"
 
 
@@ -833,18 +689,6 @@ def test_delete_archives_project_sessions_before_the_project_id_is_reused(
     assert sessions.exists(address) is False
     assert store.session_owning_agents("vbot") == []
     sessions.close()
-
-
-def test_delete_replaces_existing_archive(data_dir: Path, repo: Path) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-    store.delete("vbot")
-    store.create("vbot", "vBot Again", repo)
-
-    archive_path = store.delete("vbot")
-
-    payload = json.loads((archive_path / "project.json").read_text("utf-8"))
-    assert payload["display_name"] == "vBot Again"
 
 
 def test_delete_restores_active_project_and_previous_archive_on_session_failure(
@@ -871,34 +715,6 @@ def test_delete_restores_active_project_and_previous_archive_on_session_failure(
     sessions.close()
 
 
-def test_delete_raises_for_unknown_project(data_dir: Path) -> None:
-    store = ProjectStore(data_dir)
-
-    with pytest.raises(ProjectNotFoundError):
-        store.delete("missing")
-
-
-@pytest.mark.parametrize(
-    "bad_id",
-    ["../agents", "..", "foo/bar", "a\\b", "/etc", ".", "vbot/../x", "vbot/", "", "-vbot", "vb ot"],
-)
-def test_validate_project_id_rejects_path_components(bad_id: str) -> None:
-    # A project id is a storage path segment; separators and traversal must be refused.
-    with pytest.raises(ProjectError):
-        _validate_project_id(bad_id)
-
-
-def test_validate_project_id_accepts_valid_slug() -> None:
-    assert _validate_project_id("vbot-2") == "vbot-2"
-
-
-def test_get_rejects_path_traversal_id(data_dir: Path) -> None:
-    store = ProjectStore(data_dir)
-
-    with pytest.raises(ProjectError):
-        store.get("../somewhere")
-
-
 def test_delete_rejects_path_traversal_id_leaves_sibling_untouched(
     data_dir: Path, repo: Path
 ) -> None:
@@ -917,17 +733,15 @@ def test_delete_rejects_path_traversal_id_leaves_sibling_untouched(
     assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"
 
 
-def _write_anchor_session(manager: ChatSessionManager, project_id: str, agent_id: str) -> None:
-    """Create one project-scoped Session through the canonical Session service."""
-    manager.create(agent_id, project_id=project_id)
-
-
 def test_session_owning_agents_lists_only_agents_with_sessions(data_dir: Path, repo: Path) -> None:
     sessions = ChatSessionManager(data_dir)
     store = ProjectStore(data_dir, sessions=sessions)
     store.create("vbot", "vBot", repo)
-    _write_anchor_session(sessions, "vbot", "builder")
-    _write_anchor_session(sessions, "vbot", "orchestrator")
+    assert store.session_owning_agents("vbot") == []
+    assert store.session_owning_agents("missing") == []
+
+    sessions.create("builder", project_id="vbot")
+    sessions.create("orchestrator", project_id="vbot")
     # An Extension participant's synthetic Agent is neither a Team member nor an
     # orphan; its owner reports the Session separately.
     sessions.create_bound_temporary_session(
@@ -937,21 +751,6 @@ def test_session_owning_agents_lists_only_agents_with_sessions(data_dir: Path, r
         participant_id="prt_peer",
         config={},
     )
-    owners = store.session_owning_agents("vbot")
 
-    assert owners == ["builder", "orchestrator"]
-
-
-def test_session_owning_agents_empty_for_project_without_sessions(
-    data_dir: Path, repo: Path
-) -> None:
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    assert store.session_owning_agents("vbot") == []
-
-
-def test_session_owning_agents_empty_for_unknown_project(data_dir: Path) -> None:
-    store = ProjectStore(data_dir)
-
-    assert store.session_owning_agents("missing") == []
+    assert store.session_owning_agents("vbot") == ["builder", "orchestrator"]
+    sessions.close()

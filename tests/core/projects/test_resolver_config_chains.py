@@ -1,4 +1,6 @@
-"""Config-Agent Model, temperature, and thinking resolution-chain tests."""
+"""Model, temperature, and thinking resolution chains and their effective provenance."""
+
+from typing import Any
 
 from .resolver_test_support import (
     AgentResolutionError,
@@ -19,279 +21,357 @@ from .resolver_test_support import projects as projects
 from .resolver_test_support import repo as repo
 from .resolver_test_support import template_dir as template_dir
 
+_GPT = "openai/gpt-5.2"
+_MINI = "openai/gpt-mini"
+_GHOST = "openai/ghost-model"
 
-def test_model_chain_falls_back_to_project_default(
+
+# Each row: field, the Agent file, Project defaults, vBot overrides, global defaults,
+# and the expected value with its provenance.
+@pytest.mark.parametrize(
+    ("field", "agent", "project", "overrides", "global_defaults", "value", "source"),
+    [
+        pytest.param(
+            "model",
+            {"model": _GPT},
+            {},
+            {"model": _MINI},
+            {},
+            _MINI,
+            "override",
+            id="model-override",
+        ),
+        pytest.param("model", {"model": _GPT}, {}, {}, {}, _GPT, "agent", id="model-agent"),
+        pytest.param(
+            "model",
+            {"model": ""},
+            {"default_model": _MINI},
+            {},
+            {},
+            _MINI,
+            "project_default",
+            id="model-project-default",
+        ),
+        pytest.param(
+            "model",
+            {"model": ""},
+            {},
+            {},
+            {"global_default": _GPT},
+            _GPT,
+            "global_default",
+            id="model-global-default",
+        ),
+        # An unconfigured Model is skipped by the usable-Model gate at every tier.
+        pytest.param(
+            "model",
+            {"model": _GHOST},
+            {"default_model": _GPT},
+            {},
+            {},
+            _GPT,
+            "project_default",
+            id="unconfigured-agent-model",
+        ),
+        pytest.param(
+            "model",
+            {"model": _GPT},
+            {},
+            {"model": _GHOST},
+            {},
+            _GPT,
+            "agent",
+            id="unconfigured-override",
+        ),
+        # 0.0 is the sampling floor, a real value at every tier.
+        pytest.param(
+            "temperature",
+            {"model": _GPT, "temperature": 0.7},
+            {"default_temperature": 0.2},
+            {"temperature": 0.0},
+            {"global_temperature": 0.9},
+            0.0,
+            "override",
+            id="temperature-override-zero",
+        ),
+        pytest.param(
+            "temperature",
+            {"model": _GPT, "temperature": 0.7},
+            {"default_temperature": 0.2},
+            {},
+            {"global_temperature": 0.9},
+            0.7,
+            "agent",
+            id="temperature-agent",
+        ),
+        pytest.param(
+            "temperature",
+            {"model": _GPT, "temperature": None},
+            {"default_temperature": 0.2},
+            {},
+            {"global_temperature": 0.9},
+            0.2,
+            "project_default",
+            id="temperature-project-default",
+        ),
+        pytest.param(
+            "temperature",
+            {"model": _GPT, "temperature": None},
+            {"default_temperature": 0.0},
+            {},
+            {"global_temperature": 0.9},
+            0.0,
+            "project_default",
+            id="temperature-project-zero-stops-chain",
+        ),
+        pytest.param(
+            "temperature",
+            {"model": _GPT, "temperature": None},
+            {},
+            {},
+            {"global_temperature": 0.9},
+            0.9,
+            "global_default",
+            id="temperature-global-default",
+        ),
+        pytest.param(
+            "temperature",
+            {"model": _GPT, "temperature": None},
+            {},
+            {},
+            {},
+            None,
+            None,
+            id="temperature-unset",
+        ),
+        # "" means Provider default, a real value that stops the chain.
+        pytest.param(
+            "thinking_effort",
+            {"model": _GPT, "reasoning_effort": "high"},
+            {"default_thinking_effort": "low"},
+            {"thinking_effort": ""},
+            {"global_thinking_effort": "medium"},
+            "",
+            "override",
+            id="thinking-override-empty",
+        ),
+        pytest.param(
+            "thinking_effort",
+            {"model": _GPT, "reasoning_effort": "high"},
+            {"default_thinking_effort": "low"},
+            {},
+            {"global_thinking_effort": "medium"},
+            "high",
+            "agent",
+            id="thinking-agent",
+        ),
+        pytest.param(
+            "thinking_effort",
+            {"model": _GPT},
+            {"default_thinking_effort": "low"},
+            {},
+            {"global_thinking_effort": "medium"},
+            "low",
+            "project_default",
+            id="thinking-project-default",
+        ),
+        pytest.param(
+            "thinking_effort",
+            {"model": _GPT},
+            {"default_thinking_effort": ""},
+            {},
+            {"global_thinking_effort": "medium"},
+            "",
+            "project_default",
+            id="thinking-project-empty-stops-chain",
+        ),
+        pytest.param(
+            "thinking_effort",
+            {"model": _GPT},
+            {},
+            {},
+            {"global_thinking_effort": "medium"},
+            "medium",
+            "global_default",
+            id="thinking-global-default",
+        ),
+        pytest.param(
+            "thinking_effort", {"model": _GPT}, {}, {}, {}, None, None, id="thinking-unset"
+        ),
+    ],
+)
+def test_config_chain_resolves_the_first_usable_tier(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    field: str,
+    agent: dict[str, Any],
+    project: dict[str, Any],
+    overrides: dict[str, Any],
+    global_defaults: dict[str, Any],
+    value: object,
+    source: str | None,
+) -> None:
+    _write_agent(repo, "builder.md", **agent)
+    _project(projects, repo, **project)
+    for override_field, override in overrides.items():
+        projects.set_override("vbot", "builder", override_field, override)
+    resolver = _resolver(agents, projects, _openai_configured(), **global_defaults)
+
+    # The runtime view and the reported provenance use the same chain.
+    assert getattr(resolver.resolve_agent("vbot", "builder"), field) == value
+    assert resolver.effective_config("vbot", "builder")[field] == {
+        "value": value,
+        "source": source,
+    }
+
+
+def test_model_chain_without_a_usable_model_reports_none_but_cannot_run(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # Arrange: agent declares no model; project default is configured.
     _write_agent(repo, "writer.md", model="")
-    project = _project(projects, repo, default_model="openai/gpt-mini")
+    _project(projects, repo)
     resolver = _resolver(agents, projects, _openai_configured())
 
-    # Act
-    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
-
-    # Assert
-    assert runtime_agent.model == "openai/gpt-mini"
-
-
-def test_model_chain_falls_back_to_global_default(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # Arrange: no agent model, no project default; global default configured.
-    _write_agent(repo, "writer.md", model="")
-    project = _project(projects, repo, default_model="")
-    resolver = _resolver(agents, projects, _openai_configured(), global_default="openai/gpt-5.2")
-
-    # Act
-    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
-
-    # Assert
-    assert runtime_agent.model == "openai/gpt-5.2"
-
-
-def test_model_chain_falls_all_the_way_through_raises(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # Arrange: no usable model anywhere.
-    _write_agent(repo, "writer.md", model="")
-    project = _project(projects, repo, default_model="")
-    resolver = _resolver(agents, projects, _openai_configured(), global_default="")
-
-    # Act / Assert: an existing Agent without a usable Model is not a missing resource.
+    assert resolver.effective_config("vbot", "writer")["model"] == {"value": None, "source": None}
+    # An existing Agent without a usable Model is not a missing resource.
     with pytest.raises(AgentResolutionError) as error:
-        resolver.resolve_agent(project.project_id, "writer")
+        resolver.resolve_agent("vbot", "writer")
     assert not isinstance(
         error.value, (ResolutionAgentNotFoundError, ResolutionProjectNotFoundError)
     )
 
 
-def test_unconfigured_agent_model_falls_through_to_default(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # Arrange: agent declares an unconfigured model; project default is usable.
-    _write_agent(repo, "builder.md", model="openai/ghost-model")
-    project = _project(projects, repo, default_model="openai/gpt-5.2")
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    # Act
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    # Assert: chain fell through the unconfigured declared model.
-    assert runtime_agent.model == "openai/gpt-5.2"
-
-
-def test_model_override_wins_over_repo_model(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # The repo declares gpt-5.2; a vBot-owned override sets gpt-mini → the override wins.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _project(projects, repo)
-    projects.set_override("vbot", "builder", "model", "openai/gpt-mini")
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    runtime_agent = resolver.resolve_agent("vbot", "builder")
-
-    assert runtime_agent.model == "openai/gpt-mini"
-
-
 def test_model_override_applies_only_to_its_agent(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # An override keyed on builder must not bleed onto another agent.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _write_agent(repo, "planner.md", model="openai/gpt-5.2")
+    _write_agent(repo, "builder.md", model=_GPT)
+    _write_agent(repo, "planner.md", model=_GPT)
     _project(projects, repo)
-    projects.set_override("vbot", "builder", "model", "openai/gpt-mini")
+    projects.set_override("vbot", "builder", "model", _MINI)
     resolver = _resolver(agents, projects, _openai_configured())
 
-    assert resolver.resolve_agent("vbot", "builder").model == "openai/gpt-mini"
-    assert resolver.resolve_agent("vbot", "planner").model == "openai/gpt-5.2"
+    assert resolver.resolve_agent("vbot", "builder").model == _MINI
+    assert resolver.resolve_agent("vbot", "planner").model == _GPT
 
 
-def test_unconfigured_model_override_degrades_to_repo_model(
+def test_effective_config_for_member_matches_effective_config(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # An override that is not configured in this instance (e.g. credential removed)
-    # falls through the same is_configured gate to the repo-declared model.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    # The scanned-member seam runs the same per-tier chain as effective_config,
+    # so a team listing never re-scans yet reports the identical result.
+    _write_agent(repo, "builder.md", model=_GPT, temperature=0.7)
+    project = _project(projects, repo)
+    projects.set_override("vbot", "builder", "model", _MINI)
+    resolver = _resolver(agents, projects, _openai_configured())
+    result = resolver.scan_project_report(project)
+    member = next(m for m in result.team if m.agent_id == "builder")
+
+    from_member = resolver.effective_config_for_member(projects.get("vbot"), member)
+
+    assert from_member == resolver.effective_config("vbot", "builder")
+    assert from_member["model"] == {"value": _MINI, "source": "override"}
+
+
+def _provenance(value: object, source: str | None) -> dict[str, object]:
+    return {"value": value, "source": source}
+
+
+@pytest.mark.parametrize(
+    ("own", "global_defaults", "expected"),
+    [
+        pytest.param(
+            {
+                "model": _GPT,
+                "fallback_models": [_MINI],
+                "temperature": 0.3,
+                "thinking_effort": "high",
+            },
+            {"global_default": "openai/ghost"},
+            {
+                "model": _provenance(_GPT, "agent"),
+                "fallback_models": _provenance([_MINI], "agent"),
+                "temperature": _provenance(0.3, "agent"),
+                "thinking_effort": _provenance("high", "agent"),
+            },
+            id="own-values",
+        ),
+        # 0.0 and "" are present own values that stop the chain.
+        pytest.param(
+            {"temperature": 0.0, "thinking_effort": ""},
+            {"global_temperature": 0.9, "global_thinking_effort": "medium"},
+            {
+                "model": _provenance(None, None),
+                "fallback_models": _provenance(None, None),
+                "temperature": _provenance(0.0, "agent"),
+                "thinking_effort": _provenance("", "agent"),
+            },
+            id="own-zero-and-empty",
+        ),
+        pytest.param(
+            {},
+            {
+                "global_default": _GPT,
+                "global_temperature": 0.9,
+                "global_thinking_effort": "medium",
+            },
+            {
+                "model": _provenance(_GPT, "global_default"),
+                "fallback_models": _provenance(None, None),
+                "temperature": _provenance(0.9, "global_default"),
+                "thinking_effort": _provenance("medium", "global_default"),
+            },
+            id="global-defaults",
+        ),
+        pytest.param(
+            {},
+            {},
+            {
+                "model": _provenance(None, None),
+                "fallback_models": _provenance(None, None),
+                "temperature": _provenance(None, None),
+                "thinking_effort": _provenance(None, None),
+            },
+            id="unset",
+        ),
+    ],
+)
+def test_identity_effective_config_reports_own_values_before_global_defaults(
+    agents: AgentStore,
+    projects: ProjectStore,
+    own: dict[str, Any],
+    global_defaults: dict[str, Any],
+    expected: dict[str, object],
+) -> None:
+    agents.create("orchestrator", "Orchestrator", **own)
+    resolver = _resolver(agents, projects, _openai_configured(), **global_defaults)
+
+    result = resolver.effective_config(None, "orchestrator")
+
+    assert {field: result[field] for field in expected} == expected
+
+
+@pytest.mark.parametrize(
+    ("project_id", "agent_id", "error"),
+    [
+        pytest.param("missing", "builder", ResolutionProjectNotFoundError, id="unknown-project"),
+        pytest.param("vbot", "ghost", ResolutionAgentNotFoundError, id="unknown-project-agent"),
+        pytest.param(None, "missing-agent", ResolutionAgentNotFoundError, id="unknown-identity"),
+    ],
+)
+def test_unknown_agents_are_not_found_by_every_resolution_seam(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    project_id: str | None,
+    agent_id: str,
+    error: type[Exception],
+) -> None:
+    _write_agent(repo, "builder.md", model=_GPT)
     _project(projects, repo)
-    projects.set_override("vbot", "builder", "model", "openai/ghost-model")
     resolver = _resolver(agents, projects, _openai_configured())
 
-    runtime_agent = resolver.resolve_agent("vbot", "builder")
-
-    assert runtime_agent.model == "openai/gpt-5.2"
-
-
-def test_is_model_configured_matches_checker(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # The public seam the /model command reuses delegates to the same rule as the
-    # scan's BAD_MODEL check, so accepted models and clean-scan models cannot drift.
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    assert resolver.is_model_configured("openai/gpt-5.2") is True
-    assert resolver.is_model_configured("openai/ghost-model") is False
-    assert resolver.is_model_configured("") is False
-
-
-def test_temperature_chain_agent_value_wins(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=0.7)
-    project = _project(projects, repo, default_temperature=0.2)
-    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.temperature == 0.7
-
-
-def test_temperature_chain_falls_back_to_project_default(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # Agent declares no temperature; the project default delivers.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
-    project = _project(projects, repo, default_temperature=0.2)
-    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.temperature == 0.2
-
-
-def test_temperature_chain_falls_back_to_global_default(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.temperature == 0.9
-
-
-def test_temperature_chain_all_empty_yields_none(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.temperature is None
-
-
-def test_temperature_project_zero_stops_chain(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # 0.0 is a real value (the sampling floor), not "unset" — it must stop the
-    # chain before the global default, not fall through.
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2", temperature=None)
-    project = _project(projects, repo, default_temperature=0.0)
-    resolver = _resolver(agents, projects, _openai_configured(), global_temperature=0.9)
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.temperature == 0.0
-
-
-def test_thinking_chain_agent_value_wins(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # The agent tier is the scanned reasoningEffort (Phase 1b).
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2", reasoning_effort="high")
-    project = _project(projects, repo, default_thinking_effort="low")
-    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.thinking_effort == "high"
-
-
-def test_thinking_chain_falls_back_to_project_default(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    project = _project(projects, repo, default_thinking_effort="low")
-    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.thinking_effort == "low"
-
-
-def test_thinking_chain_falls_back_to_global_default(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.thinking_effort == "medium"
-
-
-def test_thinking_project_empty_string_blocks_global(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    # "" is a real value meaning "provider default" — it stops the chain, so the
-    # global default never applies. The resolved value is "" (not the global one).
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    project = _project(projects, repo, default_thinking_effort="")
-    resolver = _resolver(agents, projects, _openai_configured(), global_thinking_effort="medium")
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.thinking_effort == ""
-
-
-def test_thinking_chain_all_empty_yields_none(
-    agents: AgentStore, projects: ProjectStore, repo: Path
-) -> None:
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    project = _project(projects, repo)
-    resolver = _resolver(agents, projects, _openai_configured())
-
-    runtime_agent = resolver.resolve_agent(project.project_id, "builder")
-
-    assert runtime_agent.thinking_effort is None
-
-
-@pytest.mark.parametrize("mode", ["all", "selected", "none"])
-def test_project_opt_in_requires_grant_beyond_whitelist(agents, projects, repo, mode):
-    from types import SimpleNamespace
-
-    from core.tools.availability import resolve_tool_access
-
-    _write_agent(repo, "writer.md", model="openai/gpt-mini")
-    project = _project(projects, repo)
-    project = projects.update(project.project_id, allowed_tools=["computer"])
-    resolver = _resolver(agents, projects, _openai_configured())
-    tools = [SimpleNamespace(name="computer", requires_opt_in=True)]
-    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
-    assert resolve_tool_access(runtime_agent.tool_access, tools, "off").allowed_tools == ()
-    policy = {"mode": mode, "granted": ["computer"]}
-    if mode == "selected":
-        policy["allowed"] = ["computer"]
-    projects.set_override(project.project_id, "writer", "tool_access", policy)
-    runtime_agent = resolver.resolve_agent(project.project_id, "writer")
-    assert runtime_agent.tool_access.granted == ("computer",)
-    assert resolve_tool_access(runtime_agent.tool_access, tools, "off").allowed_tools == (
-        () if mode == "none" else ("computer",)
-    )
-
-
-def test_project_cannot_grant_opt_in_outside_whitelist(agents, projects, repo):
-    from core.projects.projects import ProjectError
-
-    project = _project(projects, repo)
-    project = projects.update(project.project_id, allowed_tools=["read"])
-    with pytest.raises(ProjectError):
-        projects.set_override(
-            project.project_id, "writer", "tool_access", {"mode": "all", "granted": ["computer"]}
-        )
+    with pytest.raises(error):
+        resolver.resolve_agent(project_id, agent_id)
+    with pytest.raises(error):
+        resolver.effective_config(project_id, agent_id)
