@@ -6,7 +6,10 @@
     "dev": "vite",
     "build": "vite build && node scripts/build-extension-pages.mjs",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "format": "prettier --ignore-unknown --config prettier.config.js --plugin prettier-plugin-svelte --write src scripts \"../resources/extensions/*/ui/**/*\" \"../tests/fixtures/extension-pages/*/ui/**/*\"",
+    "format:check": "prettier --ignore-unknown --config prettier.config.js --plugin prettier-plugin-svelte --check src scripts \"../resources/extensions/*/ui/**/*\" \"../tests/fixtures/extension-pages/*/ui/**/*\"",
+    "lint": "cd .. && eslint --config webui/eslint.config.js webui/src webui/scripts \"resources/extensions/*/ui/**/*.{js,mjs,cjs,svelte}\" \"tests/fixtures/extension-pages/*/ui/**/*.{js,mjs,cjs,svelte}\""
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
