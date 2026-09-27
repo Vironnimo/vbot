@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from core.model_tasks.artifacts import TaskArtifactStore, validate_task_artifact_metadata_file
+from core.model_tasks.artifacts import (
+    StoredArtifact,
+    TaskArtifactStore,
+    validate_task_artifact_metadata_file,
+)
 from core.utils.errors import TaskError
 
 
@@ -55,103 +60,73 @@ def test_read_ignores_unknown_fields_and_refuses_a_newer_version(tmp_path: Path)
     assert not validate_task_artifact_metadata_file(sidecar_path).ok
 
 
-def test_read_round_trips_written_artifact(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    written = store.write(b"audio-bytes", extension="wav", media_type="audio/wav")
+def _rewrite(**changes: object) -> Callable[[Path, StoredArtifact], None]:
+    def rewrite(sidecar: Path, _artifact: StoredArtifact) -> None:
+        metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+        sidecar.write_text(json.dumps({**metadata, **changes}), encoding="utf-8")
 
-    loaded = store.read(written.id)
-
-    assert loaded.id == written.id
-    assert loaded.filename == written.filename
-    assert loaded.media_type == "audio/wav"
-    assert loaded.size_bytes == len(b"audio-bytes")
-    assert loaded.file_path == written.file_path
+    return rewrite
 
 
-def test_read_rejects_invalid_artifact_id(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-
-    with pytest.raises(_StubConfigurationError):
-        store.read("../escape")
-
-
-def test_read_rejects_missing_artifact(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-
-    with pytest.raises(_StubConfigurationError):
-        store.read("a" * 32)
-
-
-@pytest.mark.parametrize("metadata", [[], None, 42, "not an object"])
-def test_read_maps_non_object_metadata_to_task_error(tmp_path: Path, metadata) -> None:
+@pytest.mark.parametrize(
+    ("read_id", "corrupt", "message"),
+    [
+        pytest.param("../escape", None, "Invalid speech artifact id", id="unsafe-id"),
+        pytest.param("a" * 32, None, "Speech artifact not found", id="missing"),
+        pytest.param(
+            None,
+            lambda sidecar, _: sidecar.write_text("[]", encoding="utf-8"),
+            "metadata is unreadable",
+            id="non-object-metadata",
+        ),
+        pytest.param(
+            None,
+            lambda sidecar, _: sidecar.write_text("{not json", encoding="utf-8"),
+            "metadata is unreadable",
+            id="broken-json",
+        ),
+        pytest.param(
+            None,
+            lambda sidecar, _: sidecar.write_bytes(b"\xff\xfeinvalid"),
+            "metadata is unreadable",
+            id="invalid-utf8",
+        ),
+        pytest.param(
+            None, _rewrite(size_bytes="not-an-int"), "metadata is unreadable", id="invalid-size"
+        ),
+        pytest.param(
+            None, _rewrite(id="different-artifact"), "metadata is invalid", id="mismatched-id"
+        ),
+        # The sidecar cannot redirect a read to any other existing file.
+        pytest.param(
+            None, _rewrite(filename="../outside.mp3"), "metadata is invalid", id="traversal"
+        ),
+        pytest.param(
+            None, _rewrite(filename="other-artifact.mp3"), "metadata is invalid", id="other-file"
+        ),
+        pytest.param(
+            None,
+            lambda _, artifact: artifact.file_path.unlink(),
+            "artifact file not found",
+            id="missing-blob",
+        ),
+    ],
+)
+def test_read_rejects_every_unusable_artifact(
+    tmp_path: Path,
+    read_id: str | None,
+    corrupt: Callable[[Path, StoredArtifact], None] | None,
+    message: str,
+) -> None:
     store = _store(tmp_path)
     written = store.write(b"audio", extension="mp3", media_type="audio/mpeg")
-    sidecar = tmp_path / "speech" / f"{written.id}.json"
-    sidecar.write_text(json.dumps(metadata), encoding="utf-8")
-    with pytest.raises(_StubConfigurationError):
-        store.read(written.id)
-
-
-@pytest.mark.parametrize("replacement", ["../outside.mp3", "absolute", "other-artifact.mp3"])
-def test_read_refuses_sidecar_redirects_to_other_files(tmp_path: Path, replacement: str) -> None:
-    store = _store(tmp_path)
-    written = store.write(b"audio", extension="mp3", media_type="audio/mpeg")
-    outside = tmp_path / "outside.mp3"
-    outside.write_bytes(b"not this artifact")
+    (tmp_path / "outside.mp3").write_bytes(b"not this artifact")
     (tmp_path / "speech" / "other-artifact.mp3").write_bytes(b"another artifact")
-    sidecar = tmp_path / "speech" / f"{written.id}.json"
-    metadata = json.loads(sidecar.read_text(encoding="utf-8"))
-    metadata["filename"] = str(outside) if replacement == "absolute" else replacement
-    sidecar.write_text(json.dumps(metadata), encoding="utf-8")
-    with pytest.raises(_StubConfigurationError):
-        store.read(written.id)
+    if corrupt is not None:
+        corrupt(tmp_path / "speech" / f"{written.id}.json", written)
 
-
-def test_read_rejects_mismatched_sidecar_id_and_invalid_utf8(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    written = store.write(b"audio", extension="mp3", media_type="audio/mpeg")
-    sidecar = tmp_path / "speech" / f"{written.id}.json"
-    metadata = json.loads(sidecar.read_text(encoding="utf-8"))
-    metadata["id"] = "different-artifact"
-    sidecar.write_text(json.dumps(metadata), encoding="utf-8")
-    with pytest.raises(_StubConfigurationError):
-        store.read(written.id)
-    sidecar.write_bytes(b"\xff\xfeinvalid")
-    with pytest.raises(_StubConfigurationError):
-        store.read(written.id)
-
-
-def test_read_rejects_unreadable_and_invalid_metadata(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    artifact_dir = tmp_path / "speech"
-    artifact_dir.mkdir(parents=True)
-    broken_id = "b" * 32
-    (artifact_dir / f"{broken_id}.json").write_text("{not json", encoding="utf-8")
-    invalid_id = "c" * 32
-    (artifact_dir / f"{invalid_id}.json").write_text(json.dumps({"filename": 7}), encoding="utf-8")
-
-    with pytest.raises(_StubConfigurationError):
-        store.read(broken_id)
-    with pytest.raises(_StubConfigurationError):
-        store.read(invalid_id)
-
-
-def test_read_rejects_invalid_size_and_missing_blob(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    written = store.write(b"abc", extension="mp3", media_type="audio/mpeg")
-
-    sidecar_path = tmp_path / "speech" / f"{written.id}.json"
-    original = sidecar_path.read_text(encoding="utf-8")
-    metadata = json.loads(original)
-    metadata["size_bytes"] = "not-an-int"
-    sidecar_path.write_text(json.dumps(metadata), encoding="utf-8")
-    with pytest.raises(_StubConfigurationError):
-        store.read(written.id)
-
-    sidecar_path.write_text(original, encoding="utf-8")
-    written.file_path.unlink()
-    with pytest.raises(_StubConfigurationError):
-        store.read(written.id)
+    with pytest.raises(_StubConfigurationError, match=message):
+        store.read(read_id or written.id)
 
 
 def test_short_artifact_ids_reserve_sidecars_across_extensions(tmp_path, monkeypatch):
