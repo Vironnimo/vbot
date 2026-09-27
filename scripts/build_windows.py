@@ -11,7 +11,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import zipfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -29,17 +28,12 @@ from cli.application.payload import (
 )
 from cli.application.runtime_sqlite import RuntimeSQLiteError, provision_runtime_sqlite
 from core.utils.processes import subprocess_creation_flags
+from scripts.windows.native_hosts import HOSTS, compile_host, compile_hosts, run_tool
 
-__all__ = ["APP_FILES", "BuildError", "app_paths", "copy_application"]
+# Updaters of earlier versions compile a new source's hosts through
+# ``from scripts.build_windows import HOSTS, compile_host``.
+__all__ = ["APP_FILES", "HOSTS", "BuildError", "app_paths", "compile_host", "copy_application"]
 
-HOSTS = {
-    "vBot.Server.exe": "server",
-    "vBot.Desktop.exe": "desktop",
-    "vBot.Update.exe": "update",
-    "vBot.Python.exe": "python",
-    "vBot.exe": "host",
-    "vBot.GUI.exe": "gui",
-}
 INVENTORY_NAME = "vbot-runtime-inventory.json"
 RUNTIME_DLL = "python313.dll"
 
@@ -139,7 +133,7 @@ def copy_runtime(
             "-r",
             str(lock),
         ]
-        _run(command)
+        run_tool(command)
         for package in ("core", "server", "cli", "desktop"):
             shutil.rmtree(site / package, ignore_errors=True)
         for metadata in site.glob("vbot-*.dist-info"):
@@ -254,96 +248,6 @@ def verify_release_source(source: Path, revision: str) -> None:
         raise BuildError("release mode requires clean tracked application sources")
 
 
-def _tool(name: str) -> str:
-    path = shutil.which(name)
-    if path is None:
-        raise BuildError(f"required Windows build tool is unavailable: {name}")
-    return path
-
-
-def _run(command: Sequence[str]) -> None:
-    environment = os.environ.copy()
-    environment.update(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1")
-    result = subprocess.run(
-        command,
-        check=False,
-        text=True,
-        capture_output=True,
-        env=environment,
-        creationflags=subprocess_creation_flags(),
-    )
-    if result.returncode:
-        detail = (result.stderr or result.stdout).strip()
-        raise BuildError(f"command failed ({command[0]}): {detail}")
-
-
-def _version_resource_values(version: str) -> tuple[str, str]:
-    parts = [int(value) for value in re.findall(r"\d+", version)[:4]]
-    parts.extend([0] * (4 - len(parts)))
-    return ",".join(map(str, parts)), ".".join(map(str, parts))
-
-
-def compile_host(
-    source: Path, output: Path, *, role: str, version: str, stable: bool = False
-) -> None:
-    # The GUI companion always resolves the installation pointer, including
-    # when an older source updater invokes this compiler without the new flag.
-    stable = stable or role == "gui"
-    windows = source / "scripts" / "windows"
-    icon = (source / "desktop" / "icon.ico").resolve()
-    manifest = (
-        windows / ("desktop.manifest" if role == "desktop" else "launcher.manifest")
-    ).resolve()
-    numeric, display = _version_resource_values(version)
-    # CREATE_NO_WINDOW only gives console applications an invisible console.
-    # A GUI server makes pywinpty allocate and then hide a visible one on start.
-    subsystem = "CONSOLE" if role in {"python", "host", "server"} else "WINDOWS"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="vbot-native-") as temporary:
-        resource = Path(temporary) / "launcher.res"
-        resource_command = [
-            _tool("llvm-rc"),
-            "/nologo",
-            f'/dVBOT_ICON_PATH="{icon}"',
-            f'/dVBOT_MANIFEST_PATH="{manifest}"',
-            f"/dVBOT_FILE_VERSION={numeric}",
-            f'/dVBOT_FILE_VERSION_STRING="{display}"',
-            f'/dVBOT_PRODUCT_NAME="{output.stem}"',
-            f"/fo{resource}",
-            str(windows / "launcher.rc"),
-        ]
-        _run(resource_command)
-        object_path = Path(temporary) / "launcher.obj"
-        compile_command = [
-            _tool("clang-cl"),
-            "/nologo",
-            "/c",
-            "/std:c11",
-            "/O2",
-            "/DUNICODE",
-            "/D_UNICODE",
-            f'/DVBOT_ROLE=L"{role}"',
-            str(windows / "launcher.c"),
-            f"/Fo:{object_path}",
-        ]
-        if stable:
-            compile_command.insert(8, "/DVBOT_STABLE_BOOTSTRAP")
-        _run(compile_command)
-        link_command = [
-            _tool("clang-cl"),
-            "/nologo",
-            str(object_path),
-            str(resource),
-            f"/Fe:{output}",
-            "/link",
-            f"/SUBSYSTEM:{subsystem}",
-            "shell32.lib",
-            "kernel32.lib",
-            "user32.lib",
-        ]
-        _run(link_command)
-
-
 def _hashes(version_root: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     seen: set[str] = set()
@@ -384,14 +288,7 @@ def build(args: argparse.Namespace) -> Path:
         shape=args.shape,
     )
     _remove_runtime_caches(version_root / "runtime")
-    for filename, role in HOSTS.items():
-        compile_host(
-            source,
-            version_root / "runtime" / filename,
-            role=role,
-            version=args.version,
-            stable=role in {"host", "gui"},
-        )
+    compile_hosts(source, version_root / "runtime", version=args.version)
     for filename in ("vBot.exe", "vBot.GUI.exe"):
         shutil.copy2(version_root / "runtime" / filename, package / filename)
     manifest = {
@@ -410,7 +307,9 @@ def build(args: argparse.Namespace) -> Path:
     )
     if args.authenticode_command:
         for executable in [*package.glob("*.exe"), *version_root.glob("runtime/*.exe")]:
-            _run([part.replace("{file}", str(executable)) for part in args.authenticode_command])
+            run_tool(
+                [part.replace("{file}", str(executable)) for part in args.authenticode_command]
+            )
         manifest["files"] = _hashes(version_root)
         (version_root / "release.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"

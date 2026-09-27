@@ -18,7 +18,8 @@ NATIVE_SOURCE_FILES = (
     "scripts/windows/launcher.manifest",
     "scripts/windows/desktop.manifest",
     "desktop/icon.ico",
-    "scripts/build_windows.py",
+    # The complete compile recipe; the rest of the release builder is not an input.
+    "scripts/windows/native_hosts.py",
 )
 
 
