@@ -1,34 +1,297 @@
-"""Openrouter: routing behavior."""
+"""OpenRouter request shaping: reasoning render, routing policy, cache affinity and markers,
+and the stateless Responses route for GPT-5.6."""
 
 from __future__ import annotations
 
-import json
+from typing import Any
 
 import httpx
 import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers.openrouter import (
-    OpenRouterAdapter,
-)
-from core.providers.providers import ProviderConfig
-from tests.core.providers.openrouter_helpers import (
-    API_KEY,
-    OPENROUTER_RESPONSES_URL,
-    OPENROUTER_URL,
-    SAMPLE_MESSAGES,
-    SUCCESS_RESPONSE,
-)
-from tests.core.providers.openrouter_helpers import (
-    openrouter_adapter as openrouter_adapter,
-)
-from tests.core.providers.openrouter_helpers import (
-    openrouter_config as openrouter_config,
+from tests.core.providers.openrouter_test_support import (
+    CHAT_SUCCESS,
+    CHAT_URL,
+    HELLO,
+    RESPONSES_MODEL,
+    RESPONSES_URL,
+    catalog_lookup,
+    catalog_model,
+    openrouter_adapter,
+    responses_sse,
+    sent_body,
 )
 
+EPHEMERAL = {"type": "ephemeral"}
 
-def _gpt_5_6_model(model_id: str) -> Model:
+_REASONING_CATALOG = catalog_lookup(
+    catalog_model("deepseek/deepseek-v4-pro", control="levels", levels=("high", "xhigh")),
+    catalog_model("some/model-without-ladder", control="levels"),
+    catalog_model("some/toggle-model", control="on_off"),
+    catalog_model("anthropic/claude-opus-4-1", control="budget"),
+    catalog_model("openai/gpt-4o", reasoning=False),
+)
+
+_ALLOWED_ROUTING = {
+    "mode": "allowed",
+    "providers": ["anthropic", "amazon-bedrock"],
+    "blocked": ["google-vertex"],
+    "allow_fallbacks": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("model_id", "request_kwargs", "reasoning", "include_reasoning"),
+    [
+        pytest.param("openai/gpt-5.2", {"thinking_effort": "xhigh"}, {"effort": "xhigh"}, True),
+        pytest.param(
+            "openai/gpt-5.2",
+            {"reasoning_effort": "xhigh"},
+            {"effort": "xhigh"},
+            True,
+            id="generic-reasoning-effort-kwarg",
+        ),
+        pytest.param(
+            "openai/gpt-5.2", {"thinking_effort": "max"}, {"effort": "xhigh"}, True, id="max"
+        ),
+        pytest.param(
+            "openai/gpt-5.2", {"thinking_effort": "none"}, {"effort": "none"}, None, id="off"
+        ),
+        pytest.param("openai/gpt-5.2", {}, None, None, id="default-omits-reasoning"),
+        pytest.param(
+            "deepseek/deepseek-v4-pro",
+            {"thinking_effort": "medium"},
+            {"effort": "high"},
+            True,
+            id="snaps-within-model-ladder",
+        ),
+        pytest.param(
+            "some/model-without-ladder",
+            {"thinking_effort": "low"},
+            {"effort": "low"},
+            True,
+            id="empty-ladder-uses-provider-floor",
+        ),
+        pytest.param(
+            "some/toggle-model",
+            {"thinking_effort": "high"},
+            {"enabled": True},
+            True,
+            id="on-off-on",
+        ),
+        pytest.param(
+            "some/toggle-model",
+            {"thinking_effort": "none"},
+            {"enabled": False},
+            None,
+            id="on-off-off",
+        ),
+        pytest.param(
+            "anthropic/claude-opus-4-1",
+            {"thinking_effort": "high"},
+            {"effort": "high"},
+            True,
+            id="budget-renders-effort",
+        ),
+        pytest.param(
+            "openai/gpt-4o",
+            {"thinking_effort": "high", "reasoning": {"effort": "high"}, "include_reasoning": True},
+            None,
+            None,
+            id="catalog-without-reasoning-strips-controls",
+        ),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_reasoning_renders_openrouter_controls(
+    model_id: str,
+    request_kwargs: dict[str, Any],
+    reasoning: dict[str, Any] | None,
+    include_reasoning: bool | None,
+) -> None:
+    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
+
+    await openrouter_adapter(_REASONING_CATALOG).send(HELLO, model_id=model_id, **request_kwargs)
+
+    body = sent_body(route)
+    assert body.get("reasoning") == reasoning
+    # An off request must never ask an upstream to return Reasoning.
+    assert body.get("include_reasoning") is include_reasoning
+    assert "reasoning_effort" not in body
+    # OpenRouter maps effort to a budget itself; vBot never sends a token budget.
+    assert "budget_tokens" not in body
+
+
+@pytest.mark.parametrize(
+    ("routing", "expected_provider"),
+    [
+        pytest.param(
+            {"default": _ALLOWED_ROUTING, "models": {}},
+            {
+                "only": ["anthropic", "amazon-bedrock"],
+                "ignore": ["google-vertex"],
+                "allow_fallbacks": False,
+            },
+            id="global-allowed-and-blocked",
+        ),
+        pytest.param(
+            {
+                "default": {**_ALLOWED_ROUTING, "blocked": ["deepinfra"], "allow_fallbacks": True},
+                "models": {
+                    "anthropic/claude-sonnet-4": {
+                        "mode": "ordered",
+                        "providers": ["google-vertex/europe", "anthropic"],
+                        "blocked": ["chutes"],
+                        "allow_fallbacks": False,
+                    }
+                },
+            },
+            {
+                "order": ["google-vertex/europe", "anthropic"],
+                "ignore": ["deepinfra", "chutes"],
+                "allow_fallbacks": False,
+            },
+            id="model-override-replaces-selection-and-adds-blocks",
+        ),
+        pytest.param(
+            {
+                "default": {
+                    "mode": "ordered",
+                    "providers": ["anthropic"],
+                    "blocked": ["deepinfra"],
+                    "allow_fallbacks": True,
+                },
+                "models": {
+                    "anthropic/claude-sonnet-4": {
+                        "mode": "automatic",
+                        "providers": [],
+                        "blocked": [],
+                        "allow_fallbacks": True,
+                    }
+                },
+            },
+            {"ignore": ["deepinfra"]},
+            id="automatic-override-clears-global-selection",
+        ),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_routing_policy_renders_the_provider_preferences(
+    routing: dict[str, Any], expected_provider: dict[str, Any]
+) -> None:
+    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
+
+    await openrouter_adapter(routing=routing).send(HELLO, model_id="anthropic/claude-sonnet-4")
+
+    assert sent_body(route)["provider"] == expected_provider
+
+
+def test_session_id_is_stable_per_cache_lineage_scoped_and_opaque() -> None:
+    adapter = openrouter_adapter()
+
+    def session_id(session: str, lineage: str) -> str:
+        kwargs = adapter.request_context_kwargs(
+            project_id="vbot",
+            agent_id="builder",
+            session_id=session,
+            prompt_cache_affinity_id=lineage,
+        )
+        return str(kwargs["session_id"])
+
+    first = session_id("main", "shared-lineage")
+
+    assert session_id("reflection-fork", "shared-lineage") == first
+    assert session_id("main", "other-lineage") != first
+    assert first.startswith("vbot-")
+    for local_value in ("builder", "main", "shared-lineage"):
+        assert local_value not in first
+    assert len(first) < 256
+
+
+def _marked(message: dict[str, Any]) -> bool:
+    content = message.get("content")
+    return isinstance(content, list) and any(
+        isinstance(part, dict) and "cache_control" in part for part in content
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "marked"),
+    [
+        ("anthropic/claude-sonnet-4.6", True),
+        pytest.param("~anthropic/CLAUDE-haiku-latest", True, id="auto-router-any-case"),
+        ("openai/gpt-5.2", False),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_only_claude_family_system_prompts_carry_an_envelope_cache_marker(
+    model_id: str, marked: bool
+) -> None:
+    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
+
+    await openrouter_adapter().send(
+        [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Hi"}],
+        model_id=model_id,
+    )
+
+    messages = sent_body(route)["messages"]
+    if marked:
+        assert messages[0]["content"] == [
+            {"type": "text", "text": "You are helpful.", "cache_control": EPHEMERAL}
+        ]
+    else:
+        # Other families cache implicitly; a stray marker risks a strict-upstream 400.
+        assert messages[0]["content"] == "You are helpful."
+        assert not any(_marked(message) for message in messages)
+
+
+def _alternating(count: int) -> list[dict[str, Any]]:
+    return [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": f"m{index}"}
+        for index in range(count)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("history", "expected_marks"),
+    [
+        pytest.param(
+            [{"role": "system", "content": "Sys"}, *_alternating(6)],
+            [True, False, False, False, True, True, True],
+            id="system-plus-three-most-recent-within-four-breakpoints",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "run the tool"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": "call_1", "name": "do_it", "arguments": {"x": 1}}],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+            ],
+            [True, False, True],
+            id="pure-tool-call-turn-cannot-carry-a-marker",
+        ),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_claude_history_markers_roll_over_the_most_recent_markable_messages(
+    history: list[dict[str, Any]], expected_marks: list[bool]
+) -> None:
+    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
+
+    await openrouter_adapter().send(history, model_id="anthropic/claude-sonnet-4.6")
+
+    assert [_marked(message) for message in sent_body(route)["messages"]] == expected_marks
+
+
+def _gpt_5_6_lookup(model_id: str) -> Model:
     return Model(
         model_id=model_id,
         name=model_id,
@@ -37,68 +300,19 @@ def _gpt_5_6_model(model_id: str) -> Model:
             tools=True,
             json_mode=True,
             reasoning=ReasoningCapabilities(
-                supported=True,
-                control="levels",
-                levels=("low", "medium", "high", "xhigh"),
+                supported=True, control="levels", levels=("low", "medium", "high", "xhigh")
             ),
-            supported_parameters=(
-                "tools",
-                "parallel_tool_calls",
-                "response_format",
-                "reasoning",
-            ),
+            supported_parameters=("tools", "parallel_tool_calls", "response_format", "reasoning"),
         ),
-        context_window=400000,
-        max_output_tokens=128000,
+        context_window=400_000,
+        max_output_tokens=128_000,
     )
-
-
-def _ladder_lookup(levels: tuple[str, ...]):
-    def model_lookup(model_id: str) -> Model:
-        return Model(
-            model_id=model_id,
-            name=model_id,
-            capabilities=Capabilities(
-                vision=False,
-                tools=True,
-                json_mode=True,
-                reasoning=ReasoningCapabilities(
-                    supported=True,
-                    control="levels",
-                    levels=levels,
-                ),
-            ),
-            context_window=128000,
-            max_output_tokens=4096,
-        )
-
-    return model_lookup
-
-
-def _control_lookup(control: str):
-    def model_lookup(model_id: str) -> Model:
-        return Model(
-            model_id=model_id,
-            name=model_id,
-            capabilities=Capabilities(
-                vision=False,
-                tools=True,
-                json_mode=True,
-                reasoning=ReasoningCapabilities(supported=True, control=control),
-            ),
-            context_window=128000,
-            max_output_tokens=4096,
-        )
-
-    return model_lookup
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_gpt_5_6_uses_responses_and_replays_exact_output(
-    openrouter_config: ProviderConfig,
-) -> None:
-    route = respx.post(OPENROUTER_RESPONSES_URL).mock(
+async def test_gpt_5_6_sends_stateless_responses_and_replays_exact_output() -> None:
+    route = respx.post(RESPONSES_URL).mock(
         return_value=httpx.Response(
             200,
             json={
@@ -117,10 +331,8 @@ async def test_gpt_5_6_uses_responses_and_replays_exact_output(
             },
         )
     )
-    adapter = OpenRouterAdapter(
-        openrouter_config,
-        API_KEY,
-        model_lookup=lambda model_id: _gpt_5_6_model(model_id),
+    adapter = openrouter_adapter(
+        _gpt_5_6_lookup, routing={"default": _ALLOWED_ROUTING, "models": {}}
     )
     prior_output = [
         {"type": "reasoning", "id": "rs_old", "encrypted_content": "cipher-old"},
@@ -144,7 +356,7 @@ async def test_gpt_5_6_uses_responses_and_replays_exact_output(
             },
             {"role": "user", "content": "Continue"},
         ],
-        model_id="openai/gpt-5.6-sol",
+        model_id=RESPONSES_MODEL,
         thinking_effort="high",
         session_id="vbot-session",
         tools=[
@@ -160,17 +372,17 @@ async def test_gpt_5_6_uses_responses_and_replays_exact_output(
         ],
     )
 
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["input"][1:3] == prior_output
-    assert request_body["reasoning"] == {"effort": "high", "summary": "auto"}
-    assert request_body["include"] == ["reasoning.encrypted_content"]
-    assert request_body["store"] is False
-    assert request_body["session_id"] == "vbot-session"
-    assert request_body["tools"][0]["strict"] is False
-    assert request_body["tools"][0]["parameters"]["required"] == []
-    assert "temperature" not in request_body
-    assert adapter.reasoning_replay_policy("openai/gpt-5.6-sol") == "full_history"
-
+    body = sent_body(route)
+    assert body["input"][1:3] == prior_output
+    assert body["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert body["include"] == ["reasoning.encrypted_content"]
+    assert body["store"] is False
+    assert body["session_id"] == "vbot-session"
+    assert body["provider"]["only"] == ["anthropic", "amazon-bedrock"]
+    # Explicit opt-out of Responses-style automatic strict Tool normalization.
+    assert body["tools"][0]["strict"] is False
+    assert body["tools"][0]["parameters"]["required"] == []
+    assert "temperature" not in body
     normalized = adapter.normalize_response(response)
     assert normalized["content"] == "Done"
     assert normalized["phase"] == "final_answer"
@@ -179,9 +391,7 @@ async def test_gpt_5_6_uses_responses_and_replays_exact_output(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_gpt_5_6_responses_stream_uses_same_replay_policy(
-    openrouter_config: ProviderConfig,
-) -> None:
+async def test_gpt_5_6_streams_through_responses() -> None:
     completed = {
         "id": "resp_stream",
         "output": [
@@ -195,34 +405,23 @@ async def test_gpt_5_6_responses_stream_uses_same_replay_policy(
         ],
         "usage": {"input_tokens": 2, "output_tokens": 1},
     }
-    route = respx.post(OPENROUTER_RESPONSES_URL).mock(
-        return_value=httpx.Response(
-            200,
-            text=(
-                'event: response.output_text.delta\ndata: {"delta":"Hi"}\n\n'
-                f"event: response.completed\ndata: {json.dumps({'response': completed})}\n\n"
-            ),
-            headers={"content-type": "text/event-stream"},
+    route = respx.post(RESPONSES_URL).mock(
+        return_value=responses_sse(
+            ("response.output_text.delta", {"delta": "Hi"}),
+            ("response.completed", {"response": completed}),
         )
-    )
-    adapter = OpenRouterAdapter(
-        openrouter_config,
-        API_KEY,
-        model_lookup=lambda model_id: _gpt_5_6_model(model_id),
     )
 
     deltas = [
         delta
-        async for delta in adapter.stream(
-            SAMPLE_MESSAGES,
-            model_id="openai/gpt-5.6-terra",
-            thinking_effort="medium",
+        async for delta in openrouter_adapter(_gpt_5_6_lookup).stream(
+            HELLO, model_id="openai/gpt-5.6-terra", thinking_effort="medium"
         )
     ]
 
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["stream"] is True
-    assert request_body["reasoning"] == {"effort": "medium", "summary": "auto"}
+    body = sent_body(route)
+    assert body["stream"] is True
+    assert body["reasoning"] == {"effort": "medium", "summary": "auto"}
     assert [delta["type"] for delta in deltas] == [
         "content_delta",
         "reasoning_meta",
@@ -233,373 +432,8 @@ async def test_gpt_5_6_responses_stream_uses_same_replay_policy(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_openrouter_reasoning_uses_openrouter_wire_format(
-    openrouter_adapter: OpenRouterAdapter,
-) -> None:
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await openrouter_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="openai/gpt-5.2",
-        thinking_effort="xhigh",
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["reasoning"] == {"effort": "xhigh"}
-    assert request_body["include_reasoning"] is True
-    assert "reasoning_effort" not in request_body
-
-
-@pytest.mark.parametrize(
-    ("thinking_effort", "expected_effort", "includes_reasoning"),
-    [("none", "none", False), ("max", "xhigh", True)],
-)
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_reasoning_maps_to_nearest_supported_effort(
-    openrouter_adapter: OpenRouterAdapter,
-    thinking_effort: str,
-    expected_effort: str,
-    includes_reasoning: bool,
-) -> None:
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await openrouter_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="openai/gpt-5.2",
-        thinking_effort=thinking_effort,
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["reasoning"] == {"effort": expected_effort}
-    assert ("include_reasoning" in request_body) is includes_reasoning
-    if includes_reasoning:
-        assert request_body["include_reasoning"] is True
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_normalizes_explicit_reasoning_effort_kwarg(
-    openrouter_adapter: OpenRouterAdapter,
-) -> None:
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await openrouter_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="openai/gpt-5.2",
-        reasoning_effort="xhigh",
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["reasoning"] == {"effort": "xhigh"}
-    assert request_body["include_reasoning"] is True
-    assert "reasoning_effort" not in request_body
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_suppresses_reasoning_when_catalog_disables_it(
-    openrouter_config: ProviderConfig,
-) -> None:
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-    adapter = OpenRouterAdapter(
-        openrouter_config,
-        API_KEY,
-        model_lookup=lambda model_id: Model(
-            model_id=model_id,
-            name=model_id,
-            capabilities=Capabilities(
-                vision=False,
-                tools=True,
-                json_mode=True,
-                reasoning=ReasoningCapabilities(supported=False),
-            ),
-            context_window=128000,
-            max_output_tokens=4096,
-        ),
-    )
-
-    await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="openai/gpt-4o",
-        thinking_effort="high",
-        reasoning={"effort": "high"},
-        include_reasoning=True,
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert "reasoning" not in request_body
-    assert "include_reasoning" not in request_body
-    assert "reasoning_effort" not in request_body
-
-
-@pytest.mark.parametrize(
-    ("thinking_effort", "expected_effort"),
-    [("max", "xhigh"), ("medium", "high"), ("high", "high")],
-)
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_snaps_against_effective_model_ladder(
-    openrouter_config: ProviderConfig,
-    thinking_effort: str,
-    expected_effort: str,
-) -> None:
-    """A model with a feed ladder snaps within that ladder, not the provider constant.
-
-    ``deepseek/deepseek-v4-pro`` at OpenRouter publishes ``[high, xhigh]``; every
-    selection must land inside it (``max`` -> ``xhigh``, ``medium`` -> ``high``).
-    The provider constant (which includes ``low``/``medium``) is bypassed.
-    """
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-    adapter = OpenRouterAdapter(
-        openrouter_config,
-        API_KEY,
-        model_lookup=_ladder_lookup(("high", "xhigh")),
-    )
-
-    await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="deepseek/deepseek-v4-pro",
-        thinking_effort=thinking_effort,
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["reasoning"] == {"effort": expected_effort}
-    assert request_body["include_reasoning"] is True
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_falls_back_to_constant_without_ladder(
-    openrouter_config: ProviderConfig,
-) -> None:
-    """A model with an empty feed ladder snaps against the provider constant (floor).
-
-    The constant carries ``low`` (the ladder above does not), so a ``low``
-    selection surviving as ``low`` proves the floor path is taken when the
-    looked-up model has no ladder.
-    """
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-    adapter = OpenRouterAdapter(
-        openrouter_config,
-        API_KEY,
-        model_lookup=_ladder_lookup(()),
-    )
-
-    await adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="some/model-without-ladder",
-        thinking_effort="low",
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["reasoning"] == {"effort": "low"}
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_on_off_model_toggles_enabled(
-    openrouter_config: ProviderConfig,
-) -> None:
-    """An ``on_off`` model toggles ``reasoning.enabled`` rather than sending an effort."""
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-    adapter = OpenRouterAdapter(openrouter_config, API_KEY, model_lookup=_control_lookup("on_off"))
-
-    await adapter.send(SAMPLE_MESSAGES, model_id="some/toggle-model", thinking_effort="high")
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["reasoning"] == {"enabled": True}
-    assert request_body["include_reasoning"] is True
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_on_off_model_disables_on_none(
-    openrouter_config: ProviderConfig,
-) -> None:
-    """An ``on_off`` model sends the native off-shape for a ``none`` selection."""
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-    adapter = OpenRouterAdapter(openrouter_config, API_KEY, model_lookup=_control_lookup("on_off"))
-
-    await adapter.send(SAMPLE_MESSAGES, model_id="some/toggle-model", thinking_effort="none")
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["reasoning"] == {"enabled": False}
-    assert "include_reasoning" not in request_body
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_budget_model_renders_as_effort(
-    openrouter_config: ProviderConfig,
-) -> None:
-    """A ``budget`` model renders as an effort — OpenRouter maps effort→budget itself."""
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-    adapter = OpenRouterAdapter(openrouter_config, API_KEY, model_lookup=_control_lookup("budget"))
-
-    await adapter.send(
-        SAMPLE_MESSAGES, model_id="anthropic/claude-opus-4-1", thinking_effort="high"
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["reasoning"] == {"effort": "high"}
-    assert request_body["include_reasoning"] is True
-    assert "budget_tokens" not in request_body
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_stream_requests_usage(openrouter_adapter: OpenRouterAdapter) -> None:
-    sse_body = 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
-    route = respx.post(OPENROUTER_URL).mock(
-        return_value=httpx.Response(
-            200, text=sse_body, headers={"content-type": "text/event-stream"}
-        )
-    )
-
-    async for _ in openrouter_adapter.stream(SAMPLE_MESSAGES, model_id="openai/gpt-5.2"):
-        pass
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert request_body["stream"] is True
-    assert request_body["stream_options"] == {"include_usage": True}
-
-
-def test_openrouter_session_id_is_stable_scoped_and_opaque(
-    openrouter_adapter: OpenRouterAdapter,
-) -> None:
-    first = openrouter_adapter.request_context_kwargs(
-        project_id="vbot",
-        agent_id="builder",
-        session_id="main",
-        prompt_cache_affinity_id="shared-lineage",
-    )
-    fork = openrouter_adapter.request_context_kwargs(
-        project_id="vbot",
-        agent_id="builder",
-        session_id="reflection-fork",
-        prompt_cache_affinity_id="shared-lineage",
-    )
-    other_lineage = openrouter_adapter.request_context_kwargs(
-        project_id="vbot",
-        agent_id="builder",
-        session_id="main",
-        prompt_cache_affinity_id="other-lineage",
-    )
-
-    assert first == fork
-    assert first != other_lineage
-    assert first["session_id"].startswith("vbot-")
-    assert "builder" not in first["session_id"]
-    assert "main" not in first["session_id"]
-    assert "shared-lineage" not in first["session_id"]
-    assert len(first["session_id"]) < 256
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_applies_global_allowed_and_blocked_providers(
-    openrouter_config: ProviderConfig,
-) -> None:
-    adapter = OpenRouterAdapter(
-        openrouter_config,
-        API_KEY,
-        routing={
-            "default": {
-                "mode": "allowed",
-                "providers": ["anthropic", "amazon-bedrock"],
-                "blocked": ["google-vertex"],
-                "allow_fallbacks": False,
-            },
-            "models": {},
-        },
-    )
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await adapter.send(SAMPLE_MESSAGES, model_id="anthropic/claude-sonnet-4")
-
-    body = json.loads(route.calls.last.request.content)
-    assert body["provider"] == {
-        "only": ["anthropic", "amazon-bedrock"],
-        "ignore": ["google-vertex"],
-        "allow_fallbacks": False,
-    }
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_model_override_replaces_selection_and_adds_blocks(
-    openrouter_config: ProviderConfig,
-) -> None:
-    adapter = OpenRouterAdapter(
-        openrouter_config,
-        API_KEY,
-        routing={
-            "default": {
-                "mode": "allowed",
-                "providers": ["anthropic", "amazon-bedrock"],
-                "blocked": ["deepinfra"],
-                "allow_fallbacks": True,
-            },
-            "models": {
-                "anthropic/claude-sonnet-4": {
-                    "mode": "ordered",
-                    "providers": ["google-vertex/europe", "anthropic"],
-                    "blocked": ["chutes"],
-                    "allow_fallbacks": False,
-                }
-            },
-        },
-    )
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await adapter.send(SAMPLE_MESSAGES, model_id="anthropic/claude-sonnet-4")
-
-    assert json.loads(route.calls.last.request.content)["provider"] == {
-        "order": ["google-vertex/europe", "anthropic"],
-        "ignore": ["deepinfra", "chutes"],
-        "allow_fallbacks": False,
-    }
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_automatic_model_override_clears_global_selection(
-    openrouter_config: ProviderConfig,
-) -> None:
-    adapter = OpenRouterAdapter(
-        openrouter_config,
-        API_KEY,
-        routing={
-            "default": {
-                "mode": "ordered",
-                "providers": ["anthropic"],
-                "blocked": ["deepinfra"],
-                "allow_fallbacks": True,
-            },
-            "models": {
-                "openai/gpt-5.2": {
-                    "mode": "automatic",
-                    "providers": [],
-                    "blocked": [],
-                    "allow_fallbacks": True,
-                }
-            },
-        },
-    )
-    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await adapter.send(SAMPLE_MESSAGES, model_id="openai/gpt-5.2")
-
-    assert json.loads(route.calls.last.request.content)["provider"] == {"ignore": ["deepinfra"]}
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_openrouter_routing_options_normalize_global_and_model_catalogs(
-    openrouter_config: ProviderConfig,
-) -> None:
-    adapter = OpenRouterAdapter(openrouter_config, API_KEY)
+async def test_routing_options_normalize_global_and_model_catalogs() -> None:
+    adapter = openrouter_adapter()
     respx.get("https://openrouter.ai/api/v1/providers").mock(
         return_value=httpx.Response(
             200,
@@ -625,14 +459,11 @@ async def test_openrouter_routing_options_normalize_global_and_model_catalogs(
         )
     )
 
-    global_options = await adapter.routing_provider_options()
-    model_options = await adapter.routing_provider_options("anthropic/claude-sonnet-4")
-
-    assert global_options == [
+    assert await adapter.routing_provider_options() == [
         {"slug": "anthropic", "name": "Anthropic"},
         {"slug": "google-vertex", "name": "Google"},
     ]
-    assert model_options == [
+    assert await adapter.routing_provider_options("anthropic/claude-sonnet-4") == [
         {"slug": "anthropic", "name": "Anthropic"},
         {"slug": "google-vertex/europe", "name": "Google"},
     ]
@@ -640,22 +471,18 @@ async def test_openrouter_routing_options_normalize_global_and_model_catalogs(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_openrouter_routing_options_retry_http_500(
-    openrouter_config: ProviderConfig,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_routing_options_retry_http_500(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _no_sleep(_delay: float) -> None:
         return None
 
     monkeypatch.setattr("core.utils.retry._sleep", _no_sleep)
-    adapter = OpenRouterAdapter(openrouter_config, API_KEY)
     route = respx.get("https://openrouter.ai/api/v1/providers")
     route.side_effect = [
         httpx.Response(500, text="Internal Server Error"),
         httpx.Response(200, json={"data": [{"name": "Anthropic", "slug": "anthropic"}]}),
     ]
 
-    options = await adapter.routing_provider_options()
+    options = await openrouter_adapter().routing_provider_options()
 
     assert options == [{"slug": "anthropic", "name": "Anthropic"}]
     assert route.call_count == 2

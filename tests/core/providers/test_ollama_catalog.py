@@ -1,4 +1,5 @@
-"""Ollama: catalog behavior."""
+"""Ollama catalog discovery: ``/api/tags`` normalization, Connection scope, and
+``/api/show`` enrichment."""
 
 from __future__ import annotations
 
@@ -6,21 +7,10 @@ from typing import Any
 
 import pytest
 
-from core.models.models import (
-    REASONING_CONTROL_LEVELS,
-    REASONING_CONTROL_ON_OFF,
-)
+from core.models.models import REASONING_CONTROL_LEVELS, REASONING_CONTROL_ON_OFF
 from core.providers.errors import ProviderError
-from core.providers.ollama import (
-    OllamaAdapter,
-)
-from tests.core.providers.ollama_helpers import (
-    OLLAMA_CLOUD_CONFIG,
-    OLLAMA_CONFIG,
-)
-from tests.core.providers.ollama_helpers import (
-    adapter as adapter,
-)
+from core.providers.ollama import OllamaAdapter
+from tests.core.providers.ollama_test_support import CLOUD_CONFIG, LOCAL_CONFIG
 
 # Real /api/show shape (trimmed to the consumed fields).
 SHOW_RESPONSE: dict[str, Any] = {
@@ -39,11 +29,23 @@ SHOW_RESPONSE: dict[str, Any] = {
 }
 
 
-# Catalog normalization and enrichment
-class TestCatalogNormalization:
-    def test_local_entry_is_stamped_local(self) -> None:
-        # Arrange — real /api/tags local entry (trimmed).
-        raw = {
+def _show(response: dict[str, Any] | Exception, posted: list | None = None):
+    """A /api/show POST double answering every Model with ``response``."""
+
+    async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
+        if posted is not None:
+            posted.append((endpoint, payload))
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    return post_json
+
+
+def test_local_tags_entry_is_stamped_local_with_conservative_facts() -> None:
+    # Real /api/tags local entry (trimmed).
+    model = OllamaAdapter.normalize_catalog_entry(
+        {
             "name": "ministral-3:8b",
             "model": "ministral-3:8b",
             "size": 6022236616,
@@ -54,200 +56,147 @@ class TestCatalogNormalization:
                 "quantization_level": "Q4_K_M",
             },
         }
+    )
 
-        # Act
-        model = OllamaAdapter.normalize_catalog_entry(raw)
+    assert model.model_id == "ministral-3:8b"
+    assert model.family == "mistral3"
+    assert model.metadata["ollama"] == {"local": True}
+    assert model.capabilities.tools is False
+    assert model.context_window is None
 
-        # Assert
-        assert model.model_id == "ministral-3:8b"
-        assert model.family == "mistral3"
-        assert model.metadata["ollama"] == {"local": True}
-        assert model.capabilities.tools is False
-        assert model.context_window is None
 
-    def test_proxied_cloud_entry_is_stamped_remote(self) -> None:
-        # Arrange — real /api/tags proxied cloud entry (trimmed). ``remote_host``
-        # is the fact; the ``:cloud`` name suffix is convention.
-        raw = {
+def test_proxied_cloud_tags_entry_is_stamped_remote_by_remote_host() -> None:
+    # ``remote_host`` is the fact; the ``:cloud`` name suffix is convention.
+    model = OllamaAdapter.normalize_catalog_entry(
+        {
             "name": "kimi-k2.6:cloud",
             "model": "kimi-k2.6:cloud",
             "remote_model": "kimi-k2.6",
             "remote_host": "https://ollama.com:443",
             "details": {"family": "kimi"},
         }
+    )
 
-        # Act
-        model = OllamaAdapter.normalize_catalog_entry(raw)
+    assert model.metadata["ollama"] == {"remote": True}
+    assert model.family == "kimi"
 
-        # Assert
-        assert model.metadata["ollama"] == {"remote": True}
-        assert model.family == "kimi"
 
-    def test_direct_cloud_connection_overrides_missing_remote_host_marker(self) -> None:
-        raw = {
-            "name": "glm-5.1",
-            "model": "glm-5.1",
-            "details": {"family": "glm5.1"},
-        }
-        baseline = OllamaAdapter.normalize_catalog_entry(raw)
+def test_direct_cloud_connection_is_authoritative_remote_scope() -> None:
+    baseline = OllamaAdapter.normalize_catalog_entry(
+        {"name": "glm-5.1", "model": "glm-5.1", "details": {"family": "glm5.1"}}
+    )
 
-        model = OllamaAdapter.finalize_discovered_model(
-            baseline,
-            OLLAMA_CLOUD_CONFIG.get_connection("api-key"),
-        )
+    model = OllamaAdapter.finalize_discovered_model(
+        baseline, CLOUD_CONFIG.get_connection("api-key")
+    )
 
-        assert baseline.metadata["ollama"] == {"local": True}
-        assert model.metadata["ollama"] == {"remote": True}
+    assert baseline.metadata["ollama"] == {"local": True}
+    assert model.metadata["ollama"] == {"remote": True}
 
-    def test_current_tags_facts_are_used_before_show_enrichment(self) -> None:
-        raw = {
+
+def test_current_tags_facts_are_used_before_show_enrichment() -> None:
+    model = OllamaAdapter.normalize_catalog_entry(
+        {
             "model": "ministral-3:8b",
             "details": {"family": "mistral3", "context_length": 262144},
             "capabilities": ["vision", "completion", "tools"],
         }
+    )
 
-        model = OllamaAdapter.normalize_catalog_entry(raw)
-
-        assert model.context_window == 262144
-        assert model.capabilities.vision is True
-        assert model.capabilities.tools is True
-        assert model.capabilities.input_modalities == ("text", "image")
-
-    def test_entry_without_model_id_raises(self) -> None:
-        with pytest.raises(ProviderError):
-            OllamaAdapter.normalize_catalog_entry({"details": {}})
+    assert model.context_window == 262144
+    assert model.capabilities.vision is True
+    assert model.capabilities.tools is True
+    assert model.capabilities.input_modalities == ("text", "image")
 
 
-class TestEnrichment:
-    @pytest.mark.asyncio
-    async def test_show_response_fills_capabilities_and_window(self) -> None:
-        # Arrange
-        base = OllamaAdapter.normalize_catalog_entry(
-            {"model": "ministral-3:8b", "details": {"family": "mistral3"}}
-        )
-        posted: list[tuple[str, dict[str, Any]]] = []
+def test_tags_entry_without_model_id_raises() -> None:
+    with pytest.raises(ProviderError):
+        OllamaAdapter.normalize_catalog_entry({"details": {}})
 
-        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
-            posted.append((endpoint, payload))
-            return SHOW_RESPONSE
 
-        # Act
-        enriched = await OllamaAdapter.enrich_discovered_models({"ministral-3:8b": base}, post_json)
+@pytest.mark.asyncio
+async def test_show_fills_capabilities_and_the_exact_architecture_window() -> None:
+    base = OllamaAdapter.normalize_catalog_entry(
+        {"model": "ministral-3:8b", "details": {"family": "mistral3"}}
+    )
+    posted: list[tuple[str, dict[str, Any]]] = []
 
-        # Assert
-        model = enriched["ministral-3:8b"]
-        assert posted == [("/api/show", {"model": "ministral-3:8b"})]
-        assert model.capabilities.tools is True
-        assert model.capabilities.vision is True
-        assert model.capabilities.reasoning.supported is False
-        # The exact "<arch>.context_length" key is read — never the rope
-        # scaling original_context_length (16384 in the fixture).
-        assert model.context_window == 262144
-        assert model.metadata["ollama"] == {"local": True}
-        assert model.family == "mistral3"
+    enriched = await OllamaAdapter.enrich_discovered_models(
+        {"ministral-3:8b": base}, _show(SHOW_RESPONSE, posted)
+    )
 
-    @pytest.mark.asyncio
-    async def test_thinking_capability_maps_to_on_off_control(self) -> None:
-        # Arrange
-        base = OllamaAdapter.normalize_catalog_entry({"model": "kimi-k2.6:cloud"})
-        show = {"capabilities": ["completion", "tools", "thinking"], "model_info": {}}
+    model = enriched["ministral-3:8b"]
+    assert posted == [("/api/show", {"model": "ministral-3:8b"})]
+    assert model.capabilities.tools is True
+    assert model.capabilities.vision is True
+    assert model.capabilities.reasoning.supported is False
+    # Only "<arch>.context_length" counts, never the rope-scaling original length.
+    assert model.context_window == 262144
+    assert model.metadata["ollama"] == {"local": True}
+    assert model.family == "mistral3"
 
-        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
-            return show
 
-        # Act
-        enriched = await OllamaAdapter.enrich_discovered_models(
-            {"kimi-k2.6:cloud": base}, post_json
-        )
+@pytest.mark.parametrize(
+    ("model_id", "control", "levels"),
+    [
+        ("kimi-k2.6:cloud", REASONING_CONTROL_ON_OFF, ()),
+        pytest.param(
+            "gpt-oss:20b", REASONING_CONTROL_LEVELS, ("low", "medium", "high"), id="gpt-oss-levels"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_thinking_capability_maps_to_the_model_reasoning_control(
+    model_id: str, control: str, levels: tuple[str, ...]
+) -> None:
+    base = OllamaAdapter.normalize_catalog_entry({"model": model_id})
+    show = {"capabilities": ["completion", "tools", "thinking"], "model_info": {}}
 
-        # Assert
-        reasoning = enriched["kimi-k2.6:cloud"].capabilities.reasoning
-        assert reasoning.supported is True
-        assert reasoning.control == REASONING_CONTROL_ON_OFF
+    enriched = await OllamaAdapter.enrich_discovered_models({model_id: base}, _show(show))
 
-    @pytest.mark.asyncio
-    async def test_gpt_oss_thinking_capability_maps_to_level_control(self) -> None:
-        base = OllamaAdapter.normalize_catalog_entry({"model": "gpt-oss:20b"})
-        show = {"capabilities": ["completion", "tools", "thinking"], "model_info": {}}
+    reasoning = enriched[model_id].capabilities.reasoning
+    assert reasoning.supported is True
+    assert reasoning.control == control
+    assert reasoning.levels == levels
 
-        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
-            return show
 
-        enriched = await OllamaAdapter.enrich_discovered_models(
-            {"gpt-oss:20b": base},
-            post_json,
-        )
+@pytest.mark.asyncio
+async def test_discovery_stamps_no_replay_scope_so_thinking_models_inherit_full_history() -> None:
+    model_ids = ("glm-4.7:latest", "glm-5.2")
+    show = {"capabilities": ["completion", "thinking"], "model_info": {}}
 
-        reasoning = enriched["gpt-oss:20b"].capabilities.reasoning
-        assert reasoning.control == REASONING_CONTROL_LEVELS
-        assert reasoning.levels == ("low", "medium", "high")
+    enriched = await OllamaAdapter.enrich_discovered_models(
+        {
+            model_id: OllamaAdapter.normalize_catalog_entry({"model": model_id})
+            for model_id in model_ids
+        },
+        _show(show),
+    )
+    adapter = OllamaAdapter(LOCAL_CONFIG, "", model_lookup=enriched.get)
 
-    @pytest.mark.asyncio
-    async def test_glm_4_7_discovery_inherits_full_history_thinking_replay(self) -> None:
-        base = OllamaAdapter.normalize_catalog_entry({"model": "glm-4.7:latest"})
-        show = {"capabilities": ["completion", "thinking"], "model_info": {}}
+    for model_id in model_ids:
+        assert enriched[model_id].metadata["ollama"] == {"local": True}
+        assert adapter.reasoning_replay_policy(model_id) == "full_history"
+    await adapter.aclose()
 
-        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
-            return show
 
-        enriched = await OllamaAdapter.enrich_discovered_models(
-            {"glm-4.7:latest": base},
-            post_json,
-        )
-        model = enriched["glm-4.7:latest"]
-        lookup = {"glm-4.7:latest": model}.get
-        adapter = OllamaAdapter(OLLAMA_CONFIG, "", model_lookup=lookup)
+@pytest.mark.asyncio
+async def test_failed_show_keeps_the_conservative_baseline() -> None:
+    base = OllamaAdapter.normalize_catalog_entry({"model": "broken-model"})
 
-        assert model.metadata["ollama"] == {"local": True}
-        assert adapter.reasoning_replay_policy("glm-4.7:latest") == "full_history"
-        await adapter.aclose()
+    enriched = await OllamaAdapter.enrich_discovered_models(
+        {"broken-model": base}, _show(ProviderError("boom", retryable=False))
+    )
 
-    @pytest.mark.asyncio
-    async def test_glm_5_2_discovery_inherits_full_history_thinking_replay(self) -> None:
-        base = OllamaAdapter.normalize_catalog_entry({"model": "glm-5.2"})
-        show = {"capabilities": ["completion", "thinking"], "model_info": {}}
+    # No enriched entry; discovery keeps the baseline Model.
+    assert enriched == {}
 
-        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
-            return show
 
-        enriched = await OllamaAdapter.enrich_discovered_models(
-            {"glm-5.2": base},
-            post_json,
-        )
-        model = enriched["glm-5.2"]
-        lookup = {"glm-5.2": model}.get
-        adapter = OllamaAdapter(OLLAMA_CONFIG, "", model_lookup=lookup)
+@pytest.mark.asyncio
+async def test_missing_architecture_leaves_the_window_honestly_unknown() -> None:
+    base = OllamaAdapter.normalize_catalog_entry({"model": "odd-model"})
+    show = {"capabilities": ["completion"], "model_info": {"other.context_length": 4096}}
 
-        assert model.metadata["ollama"] == {"local": True}
-        assert adapter.reasoning_replay_policy("glm-5.2") == "full_history"
-        await adapter.aclose()
+    enriched = await OllamaAdapter.enrich_discovered_models({"odd-model": base}, _show(show))
 
-    @pytest.mark.asyncio
-    async def test_failed_show_keeps_conservative_baseline(self) -> None:
-        """A failed per-model /api/show leaves that model at its baseline."""
-        # Arrange
-        base = OllamaAdapter.normalize_catalog_entry({"model": "broken-model"})
-
-        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
-            raise ProviderError("boom", retryable=False)
-
-        # Act
-        enriched = await OllamaAdapter.enrich_discovered_models({"broken-model": base}, post_json)
-
-        # Assert — no enriched entry; discovery keeps the baseline model.
-        assert enriched == {}
-
-    @pytest.mark.asyncio
-    async def test_missing_architecture_leaves_window_unknown(self) -> None:
-        # Arrange
-        base = OllamaAdapter.normalize_catalog_entry({"model": "odd-model"})
-        show = {"capabilities": ["completion"], "model_info": {"other.context_length": 4096}}
-
-        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
-            return show
-
-        # Act
-        enriched = await OllamaAdapter.enrich_discovered_models({"odd-model": base}, post_json)
-
-        # Assert — honest unknown, never a guessed window.
-        assert enriched["odd-model"].context_window is None
+    assert enriched["odd-model"].context_window is None
