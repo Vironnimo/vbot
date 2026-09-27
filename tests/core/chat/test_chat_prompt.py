@@ -31,6 +31,8 @@ from tests.core.chat.chat_loop_support import (
     StubProject,
     StubProjects,
     StubRuntime,
+    StubSkill,
+    StubSkills,
     build_chat_loop,
     session_address,
 )
@@ -184,9 +186,13 @@ async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
+async def test_soul_memory_and_skill_catalog_are_pinned_per_session(tmp_path: Path) -> None:
+    # A Session's first Run renders SOUL, memory and the Skill catalog once and pins them;
+    # its later Runs reuse the pins even after a Skill is added, while a Session that
+    # starts afterwards pins the then-current catalog.
     from core.prompts.pinned_context import (
         PINNED_MEMORY_FILES_SLOT,
+        PINNED_SKILL_CATALOG_SLOT,
         PINNED_SOUL_CONTEXT_SLOT,
     )
 
@@ -197,22 +203,26 @@ async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
         workspace=tmp_path / "workspace",
     )
     adapter = StubAdapter(
-        [{"content": "One", "tool_calls": None}, {"content": "Two", "tool_calls": None}]
+        [{"content": content, "tool_calls": None} for content in ("One", "Two", "Three")]
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.skills = StubSkills([StubSkill("one", "One.", Path("a"))])
     runtime.chat_sessions.create("coder", session_id="s1")
+    runtime.chat_sessions.create("coder", session_id="s2")
     loop = build_chat_loop(runtime)
+    prompts = runtime.system_prompts
 
     await loop.send("coder", "First", session_id="s1")
+    runtime.skills = StubSkills(
+        [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
+    )
     await loop.send("coder", "Second", session_id="s1")
 
-    # The first Run of the epoch rendered SOUL and pinned memory once; the second
-    # Run reused those exact texts instead of re-rendering from the workspace.
-    assert runtime.system_prompts.render_soul_calls == 1
-    assert runtime.system_prompts.render_memory_files_calls == 1
-    # The first Run snapshots and uses the pin itself; the second Run reuses it.
-    assert runtime.system_prompts.render_soul_calls == 1
-    assert runtime.system_prompts.render_memory_files_calls == 1
+    assert (
+        prompts.render_soul_calls,
+        prompts.render_memory_files_calls,
+        prompts.render_skill_catalog_calls,
+    ) == (1, 1, 1)
     address = session_address("coder", "s1")
     assert runtime.chat_sessions.prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) == {
         "text": "Soul of coder"
@@ -221,11 +231,18 @@ async def test_soul_and_memory_pin_across_runs(tmp_path: Path) -> None:
         "text": "Memory of coder",
         "mode": "agent_user",
     }
-    first_pins, second_pins = runtime.system_prompts.build_pin_calls
-    assert first_pins["soul_context"] == "Soul of coder"
-    assert first_pins["memory_files_context"] == "Memory of coder"
-    assert second_pins["soul_context"] == "Soul of coder"
-    assert second_pins["memory_files_context"] == "Memory of coder"
+    catalog = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
+    assert catalog is not None and catalog["catalog_text"] == "catalog:1"
+    assert [
+        (pins["soul_context"], pins["memory_files_context"]) for pins in prompts.build_pin_calls
+    ] == [("Soul of coder", "Memory of coder")] * 2
+
+    await loop.send("coder", "Third", session_id="s2")
+
+    later_catalog = runtime.chat_sessions.prompt_pin(
+        session_address("coder", "s2"), PINNED_SKILL_CATALOG_SLOT
+    )
+    assert later_catalog is not None and later_catalog["catalog_text"] == "catalog:2"
 
 
 @pytest.mark.asyncio

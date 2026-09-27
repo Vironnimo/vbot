@@ -15,6 +15,7 @@ from core.automation import TriggerService
 from core.chat import (
     INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
     ChatMessage,
+    ChatSessionError,
     MessageSender,
     ReplySurface,
 )
@@ -33,6 +34,7 @@ from tests.core.chat.chat_loop_support import (
     persisted_roles,
     session_address,
 )
+from tests.core.sessions.history_fixtures import history_revision
 
 JsonObject = dict[str, Any]
 
@@ -77,6 +79,13 @@ def _quoted_run_errors(request_text: str) -> list[str]:
 
 def _reminder(text: str) -> JsonObject:
     return {"role": "user", "content": f"<system-reminder>\n{text}\n</system-reminder>"}
+
+
+class _ContextAdapter(StubAdapter):
+    """Carry each request's Session context into its kwargs as ``_test_context``."""
+
+    def request_context_kwargs(self, **context: Any) -> JsonObject:
+        return {"_test_context": context}
 
 
 @pytest.mark.asyncio
@@ -599,3 +608,89 @@ async def test_background_completion_joins_next_request_in_same_run(tmp_path: Pa
     assert reminder.startswith("<system-reminder>\n")
     assert reminder.endswith("\n</system-reminder>")
     assert "Build finished successfully." in reminder
+
+
+@pytest.mark.asyncio
+async def test_edit_run_sends_the_edited_lineage_under_a_new_cache_affinity(
+    tmp_path: Path,
+) -> None:
+    adapter = _ContextAdapter([{"content": "new answer"}])
+    runtime = _runtime(tmp_path, [], adapter=adapter)
+    session = runtime.chat_sessions.get(SESSION)
+    affinity_before_edit = runtime.chat_sessions.prompt_cache_affinity_id(SESSION)
+    original = ChatMessage.user("old request")
+    old_answer = ChatMessage.assistant(
+        model="openai/gpt-5.2",
+        content="old answer",
+        usage={"input_tokens": 100, "output_tokens": 20},
+    )
+    session.append_many([original, old_answer, ChatMessage.user("later request")])
+    revision_before_edit = history_revision(runtime.chat_sessions, SESSION)
+
+    run = await build_chat_loop(runtime).edit_run(
+        "coder", "edited request", session_id="session-one", message_id=original.id
+    )
+    result = await run.wait()
+
+    raw = session.load()
+    assert result.content == "new answer"
+    assert history_revision(runtime.chat_sessions, SESSION) > revision_before_edit
+    # The superseded turns stay on disk behind the edit marker.
+    assert [message.role for message in raw[:4]] == ["user", "assistant", "user", "history_edit"]
+    assert raw[3].target_message_id == original.id
+    assert [
+        message.content
+        for message in session.load_active()
+        if message.role in {"user", "assistant"}
+    ] == ["edited request", "new answer"]
+    request = adapter.requests[0]
+    assert [m.get("content") for m in request["messages"] if m.get("role") == "user"] == [
+        "edited request"
+    ]
+    # The superseded answer's usage still counts toward the Session.
+    assert run.terminal_payload_extras["session_usage"]["input_tokens"] >= 100
+    # The edit starts a new prompt-cache lineage, and the edited Run already uses it.
+    affinity_after_edit = runtime.chat_sessions.prompt_cache_affinity_id(SESSION)
+    assert affinity_after_edit != affinity_before_edit
+    assert request["kwargs"]["_test_context"]["prompt_cache_affinity_id"] == affinity_after_edit
+
+
+@pytest.mark.asyncio
+async def test_edit_run_rejects_a_channel_message_target_without_appending(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path, _answers(1))
+    session = runtime.chat_sessions.get(SESSION)
+    channel_message = ChatMessage.user(
+        "from channel", sender=MessageSender(id="member-one", display_name="Member One")
+    )
+    session.append(channel_message)
+    before = session.load()
+    revision_before_edit = history_revision(runtime.chat_sessions, SESSION)
+
+    with pytest.raises(ChatSessionError, match="plain-text"):
+        await build_chat_loop(runtime).edit_run(
+            "coder", "edited request", session_id="session-one", message_id=channel_message.id
+        )
+
+    assert session.load() == before
+    assert history_revision(runtime.chat_sessions, SESSION) == revision_before_edit
+
+
+@pytest.mark.asyncio
+async def test_same_scope_fork_reuses_cache_affinity_but_not_session_context(
+    tmp_path: Path,
+) -> None:
+    adapter = _ContextAdapter(_answers(2))
+    runtime = _runtime(tmp_path, [], adapter=adapter, allowed_tools=[])
+    loop = build_chat_loop(runtime)
+
+    await (await loop.start_run("coder", "Build it", session_id="session-one")).wait()
+    fork = await runtime.chat_sessions.fork(SESSION)
+    await (await loop.start_run("coder", "Review it", session_id=fork.id)).wait()
+
+    source_context, fork_context = [
+        request["kwargs"]["_test_context"] for request in adapter.requests
+    ]
+    assert (source_context["session_id"], fork_context["session_id"]) == ("session-one", fork.id)
+    assert source_context["prompt_cache_affinity_id"] == fork_context["prompt_cache_affinity_id"]

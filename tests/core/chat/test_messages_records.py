@@ -283,8 +283,30 @@ def test_factories_persist_only_their_role_fields_and_round_trip(
             "role": "agent_takeover",
             "content": '{"from":"planner@acme","to":"assistant"}',
         },
+        {
+            "id": "reasoning-only",
+            "timestamp": "2026-05-03T14:30:05+00:00",
+            "role": "assistant",
+            "model": "openai/gpt-4.1",
+            "reasoning": "Thinking only.",
+        },
+        {
+            "id": "reasoning-meta-only",
+            "timestamp": "2026-05-03T14:30:05+00:00",
+            "role": "assistant",
+            "model": "openai/gpt-4.1",
+            "reasoning_meta": {"provider": "opaque"},
+        },
     ],
-    ids=["assistant-usage", "run-summary", "unknown-error-kind", "z-timestamp", "takeover"],
+    ids=[
+        "assistant-usage",
+        "run-summary",
+        "unknown-error-kind",
+        "z-timestamp",
+        "takeover",
+        "assistant-reasoning-only",
+        "assistant-reasoning-meta-only",
+    ],
 )
 def test_persisted_payloads_round_trip_exactly(data: dict[str, Any]) -> None:
     assert ChatMessage.from_dict(data).to_dict() == data
@@ -495,6 +517,7 @@ _CHECKPOINT = {
         (_payload("agent_takeover", content=""), None),
         (_payload("history_edit"), "target_message_id"),
         (_payload("history_edit", target_message_id="user-one", content="hidden"), "content"),
+        (_payload("assistant", model="openai/gpt-4.1"), "require content, reasoning"),
     ],
     ids=[
         "unknown-role",
@@ -536,6 +559,7 @@ _CHECKPOINT = {
         "takeover-empty-content",
         "edit-without-target",
         "edit-with-content",
+        "assistant-without-output",
     ],
 )
 def test_invalid_persisted_payloads_are_rejected(data: dict[str, Any], match: str | None) -> None:

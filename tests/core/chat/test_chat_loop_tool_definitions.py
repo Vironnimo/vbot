@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.chat import ChatMessage
 from core.extensions.operations import ExtensionOperations
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.tools import (
@@ -21,6 +23,7 @@ from core.tools import (
     ToolRegistry,
     model_names,
     model_tool_name,
+    register_history_tool,
     tool_success,
 )
 from tests.core.chat.chat_loop_support import (
@@ -95,23 +98,30 @@ async def test_provider_requests_use_model_tool_names_while_the_session_keeps_re
 async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_name(
     tmp_path: Path,
 ) -> None:
-    tools, dispatched = _name_recording_tools("web_fetch")
+    # "fetch" is registered but not offered: it keeps its own name and is refused rather
+    # than remapped to the offered web_fetch.
+    tools, dispatched = _name_recording_tools("web_fetch", "fetch")
     runtime = tool_runtime(
         tmp_path,
         tools,
-        [tool_turn(("first", "functions.WebFetch"), ("second", "TodoWrite")), final("done")],
+        [
+            tool_turn(("first", "functions.WebFetch"), ("second", "TodoWrite"), ("third", "fetch")),
+            final("done"),
+        ],
+        allowed_tools=["web_fetch"],
     )
 
     await build_chat_loop(runtime).send("coder", "fetch", session_id="session-one")
 
     messages = history(runtime)
     assert dispatched == ["web_fetch"]
-    assert _call_names(messages) == ["web_fetch", "TodoWrite"]
+    assert _call_names(messages) == ["web_fetch", "TodoWrite", "fetch"]
     unknown = next(m for m in messages if m.role == "tool" and m.name == "TodoWrite")
     assert "Unknown Tool: TodoWrite. Call one of the available Tools instead: web_fetch." in str(
         unknown.content
     )
-    assert _wire_call_names(runtime.adapter.requests[1]) == ["web_fetch", "TodoWrite"]
+    assert tool_results(messages)[2]["error"]["code"] == "tool_not_allowed"
+    assert _wire_call_names(runtime.adapter.requests[1]) == ["web_fetch", "TodoWrite", "fetch"]
 
 
 @pytest.mark.asyncio
@@ -330,3 +340,71 @@ async def test_analyze_image_vision_grant_is_stable_and_respects_availability(
         ) is visible
 
     assert [request["kwargs"]["tools"] for request in runtime.adapter.requests] == [preview] * 2
+
+
+@pytest.mark.asyncio
+async def test_tool_restriction_denies_dispatch_without_changing_offered_definitions(
+    tmp_path: Path,
+) -> None:
+    # A restricted Run dispatches only the listed Tools and fails every other call as
+    # tool_not_allowed. The wire definitions, the System Prompt and the Tool names the
+    # prompt is built from stay identical to an unrestricted Run, so the prompt cache holds.
+    requests: dict[str, JsonObject] = {}
+    dispatched: dict[str, list[str]] = {}
+    results: dict[str, list[JsonObject]] = {}
+    prompt_tool_names: dict[str, list[tuple[str, ...]]] = {}
+    for label, restriction in (("restricted", ("memory",)), ("unrestricted", None)):
+        tools, dispatched[label] = _name_recording_tools("memory", "weather")
+        data_dir = tmp_path / label
+        data_dir.mkdir()
+        runtime = tool_runtime(
+            data_dir,
+            tools,
+            [tool_turn(("call_memory", "memory"), ("call_weather", "weather")), final("done")],
+        )
+        runtime.chat_sessions.create("coder", session_id="session-one")
+        run = await build_chat_loop(runtime).start_run(
+            "coder", "Go", session_id="session-one", tool_restriction=restriction
+        )
+        await run.wait()
+        requests[label] = runtime.adapter.requests[0]
+        results[label] = tool_results(history(runtime))
+        prompt_tool_names[label] = runtime.system_prompts.effective_tool_name_calls
+
+    assert dispatched == {"restricted": ["memory"], "unrestricted": ["memory", "weather"]}
+    memory_result, weather_result = results["restricted"]
+    assert (memory_result["ok"], weather_result["ok"]) == (True, False)
+    assert weather_result["error"]["code"] == "tool_not_allowed"
+    restricted, unrestricted = requests["restricted"], requests["unrestricted"]
+    assert json.dumps(restricted["kwargs"]["tools"]) == json.dumps(unrestricted["kwargs"]["tools"])
+    assert restricted["messages"][0]["content"] == unrestricted["messages"][0]["content"]
+    assert prompt_tool_names["restricted"] == prompt_tool_names["unrestricted"]
+    assert [set(names) for names in prompt_tool_names["restricted"]] == [_offered(unrestricted)]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_granted_history_stays_offered_when_the_run_restricts_dispatch(
+    tmp_path: Path,
+) -> None:
+    runtime = tool_runtime(
+        tmp_path,
+        None,
+        [tool_turn(("history-call", "history", {"action": "overview"})), final("done")],
+        allowed_tools=[],
+    )
+    register_history_tool(runtime.tools, runtime.chat_sessions)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Earlier request"))
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Earlier context", projection=[], compacted_token_count=10
+        )
+    )
+
+    run = await build_chat_loop(runtime).start_run(
+        "coder", "Continue", session_id="session-one", tool_restriction=("memory",)
+    )
+    await run.wait()
+
+    assert [_offered(request) for request in runtime.adapter.requests] == [{"history"}] * 2
+    assert tool_results(history(runtime))[0]["error"]["code"] == "tool_not_allowed"
