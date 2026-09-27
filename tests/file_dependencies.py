@@ -1,14 +1,16 @@
-"""Record and query the files each test depends on, for commit-time test selection.
+"""Record the files each test depends on, for commit-time test selection.
 
 pytest-testmon records the Python code each test executes (``TESTMON_DATA``) and
 selects the tests affected by a Python change. Tests also read repository files
 that are not Python (prompts, Skill resources, manifests, fixtures), which testmon
 does not track. While testmon collects data (``--testmon``), this plugin records
 per test every such file the test opens and every repository directory it lists,
-in ``DATA_FILE`` next to ``TESTMON_DATA``. ``scripts/commit_check.py`` uses both
-records to run the tests a commit affects and to attribute their failures.
+in ``DATA_FILE`` next to ``TESTMON_DATA``. ``scripts/_test_impact.py`` queries both
+records for ``scripts/commit_check.py``.
 
-The module is a pytest plugin; ``tests/conftest.py`` registers it.
+The module is a pytest plugin; ``tests/conftest.py`` registers it. Its code runs
+during every test, so every test depends on this file: keep code that runs outside
+pytest elsewhere, or each change to it selects the complete suite.
 
 Files opened outside a test, while test modules are imported during collection,
 are recorded under ``COLLECTION``: their readers cannot be attributed to single
@@ -166,88 +168,3 @@ def _store(root: Path, records: dict[str, set[str]]) -> None:
             )
     finally:
         connection.close()
-
-
-def _query(data_file: Path, sql: str, values: list[str]) -> list[tuple[str, str]]:
-    if not values or not data_file.is_file():
-        return []
-    placeholders = ", ".join("?" for _ in values)
-    connection = sqlite3.connect(f"file:{data_file.as_posix()}?mode=ro", uri=True, timeout=60)
-    try:
-        return connection.execute(sql.format(placeholders=placeholders), values).fetchall()
-    except sqlite3.Error:
-        return []
-    finally:
-        connection.close()
-
-
-def readers(root: Path, paths: set[str]) -> set[str]:
-    """Return the tests that read one of *paths* or listed a directory containing one.
-
-    The result contains ``COLLECTION`` when a path was read outside any test.
-    """
-    candidates = set(paths)
-    for path in paths:
-        parent = path.rpartition("/")[0]
-        if parent:
-            candidates.add(parent)
-    rows = _query(
-        root / DATA_FILE,
-        "SELECT DISTINCT test, path FROM reads WHERE path IN ({placeholders})",
-        sorted(candidates),
-    )
-    return {test for test, _path in rows}
-
-
-def dependencies(root: Path, tests: set[str]) -> dict[str, set[str]]:
-    """Return the repository files each test depends on, as far as recorded.
-
-    That is every Python file whose code the test executed (testmon) and every data
-    file it read or directory it listed. Each test also depends on its own module.
-    A test module id without ``::``, as a collection error reports it, depends on
-    the files of all recorded tests of that module.
-    """
-    result = {test: {test.partition("::")[0]} for test in tests}
-    modules = sorted({test.partition("::")[0] for test in tests})
-    module_of = "substr({column}, 1, instr({column} || '::', '::') - 1) IN ({{placeholders}})"
-    executed = _query(
-        root / TESTMON_DATA,
-        "SELECT execution.test_name, fingerprint.filename FROM test_execution execution "
-        "JOIN test_execution_file_fp link ON link.test_execution_id = execution.id "
-        "JOIN file_fp fingerprint ON fingerprint.id = link.fingerprint_id "
-        "WHERE " + module_of.format(column="execution.test_name"),
-        modules,
-    )
-    read = _query(
-        root / DATA_FILE,
-        "SELECT test, path FROM reads WHERE " + module_of.format(column="test"),
-        modules,
-    )
-    for recorded, path in [*executed, *read]:
-        module = recorded.partition("::")[0]
-        for test in (recorded, module):
-            if test in result:
-                result[test].add(path.replace("\\", "/"))
-    return result
-
-
-def copy_data(source_root: Path, target_root: Path) -> bool:
-    """Copy one checkout's test-impact data into another; return whether any existed.
-
-    A copy stays valid in the target: testmon compares each test's recorded code
-    with the target's files, so data from an older state only selects more tests.
-    """
-    copied = False
-    for name in (TESTMON_DATA, DATA_FILE):
-        source = source_root / name
-        if not source.is_file():
-            continue
-        reader = sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True, timeout=60)
-        writer = sqlite3.connect(target_root / name)
-        try:
-            reader.backup(writer)
-        finally:
-            writer.close()
-            reader.close()
-        copied = True
-    return copied
