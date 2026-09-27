@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from core.tools.calendar import CALENDAR_TOOL_DESCRIPTION, CALENDAR_TOOL_PARAMETERS
-from tests.core.tools.calendar_tool_support import calendar_tool
+from core.tools.calendar import (
+    CALENDAR_TOOL_DESCRIPTION,
+    CALENDAR_TOOL_NAME,
+    CALENDAR_TOOL_PARAMETERS,
+)
+from tests.core.tools.scheduling_tool_support import WEEKLY_MONDAY, calendar_tool
 
 BERLIN = ZoneInfo("Europe/Berlin")
-WEEKLY_MONDAY = {"freq": "weekly", "by_weekday": ["mo"]}
 
 
 def test_definition_names_actions_time_zone_and_the_cron_alternative() -> None:
@@ -485,10 +488,7 @@ class TestActions:
 
     def test_action_on_a_past_event_says_it_will_not_run(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
-        past = (datetime.now(UTC) - timedelta(days=90)).astimezone(BERLIN)
-        event = tool.service.create_event(
-            title="Old", start=past.replace(tzinfo=None, microsecond=0).isoformat()
-        )
+        event = tool.service.create_event(title="Old", start="2020-01-10T12:00")
 
         _, text = tool.call(
             {"action": "add_action", "id": event.id, "when": "start", "prompt": "p"}
@@ -513,11 +513,9 @@ class TestActions:
 
 def test_display_labels_the_meant_action_of_a_dialect_call(tmp_path: Path) -> None:
     tool = calendar_tool(tmp_path)
-    [registered] = tool.registry.list_tools()
-    assert registered.display is not None
-    parts_builder = registered.display.parts_builder
-    assert parts_builder is not None
 
-    parts = parts_builder({"summary": "Dentist", "start": "2030-01-10T15:00"})
+    display = tool.registry.display_for_call(
+        CALENDAR_TOOL_NAME, {"summary": "Dentist", "start": "2030-01-10T15:00"}
+    )
 
-    assert [part.value for part in parts] == ["create", "Dentist"]
+    assert [part["value"] for part in display["primary"]] == ["create", "Dentist"]
