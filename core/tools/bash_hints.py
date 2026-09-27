@@ -24,9 +24,12 @@ Design rules (keep these when adding patterns):
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
+# The shell Tool runs commands in PowerShell on Windows and in bash elsewhere.
+_POWERSHELL = sys.platform == "win32"
 # Bounded scan window: error headers appear early; deep output is noise.
 _SCAN_CHARS = 4000
 
@@ -182,22 +185,45 @@ def _hint_select_string_recurse(command: str, output: str, workdir: Path | None)
     )
 
 
-def _hint_powershell_parser_error(command: str, output: str, workdir: Path | None) -> str | None:
-    if "ParserError" not in output:
+_ESCAPED_QUOTE_HINT = (
+    'In PowerShell, \\" does not escape a quote. Put the argument in single quotes '
+    "(double quotes inside stay literal), or pass longer code through a here-string "
+    "piped to the program, such as `@'...'@ | python -`."
+)
+# A PowerShell here-string: @" or @' ends its line, and "@ or '@ starts a line.
+_HERE_STRING = re.compile(r"@(['\"])[ \t]*\r?\n(.*?)\r?\n\1@", re.S)
+# '' before a word is a quote doubled as in a single-quoted string; an empty
+# string literal such as ''.join is followed by a sign instead.
+_DOUBLED_QUOTE = re.compile(r"''\w")
+
+
+def _hint_powershell_syntax(command: str, output: str, workdir: Path | None) -> str | None:
+    """Explain bash heredocs and quote escapes that break code passed in PowerShell.
+
+    PowerShell itself reports a ParserError. Escapes that PowerShell passes on
+    unchanged break the code the called program reads, so a Python or Node
+    SyntaxError follows; only the Windows shell is PowerShell.
+    """
+    here_strings = list(_HERE_STRING.finditer(command))
+    outside = _HERE_STRING.sub("", command)
+    if "ParserError" in output:
+        if re.search(r"<<-?\s*['\"]?[A-Za-z_]\w*['\"]?", command):
+            return (
+                "PowerShell has no heredoc (<<). Pipe a here-string instead: @' on its own "
+                "line, the text, then '@ at the start of a line, followed by `| python -` or "
+                "`| Set-Content file`."
+            )
+        return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
+    if not _POWERSHELL or "SyntaxError" not in output:
         return None
-    if re.search(r"<<-?\s*['\"]?[A-Za-z_]\w*['\"]?", command):
+    if any(match[1] == '"' and '\\"' in match[2] for match in here_strings):
         return (
-            "PowerShell has no heredoc (<<). Pipe a here-string instead: @' on its own line, "
-            "the text, then '@ at the start of a line, followed by `| python -` or "
-            "`| Set-Content file`."
+            'Inside a @"..."@ here-string, \\" stays a backslash and a quote. Write the '
+            "quotes there without backslashes, or use @'...'@, which also keeps $ literal."
         )
-    if '\\"' in command:
-        return (
-            'In PowerShell, \\" does not escape a quote. Put the argument in single quotes '
-            "(double quotes inside stay literal), or pass longer code through a here-string "
-            "piped to the program, such as `@'...'@ | python -`."
-        )
-    return None
+    if any(match[1] == "'" and _DOUBLED_QUOTE.search(match[2]) for match in here_strings):
+        return "Inside a @'...'@ here-string, '' stays two quotes. Write each quote once there."
+    return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
 
 
 def _hint_dev_null(command: str, output: str, workdir: Path | None) -> str | None:
@@ -370,7 +396,7 @@ _OUTPUT_HINTS: list[Callable[[str, str, Path | None], str | None]] = [
     _hint_merge_conflict,
     _hint_command_not_found,
     _hint_powershell_command_not_found,
-    _hint_powershell_parser_error,
+    _hint_powershell_syntax,
     _hint_powershell_alias_flags,
     _hint_select_string_recurse,
     _hint_dev_null,
