@@ -1,15 +1,13 @@
-"""Tests for canonical Tool contract compilation and enforcement."""
+"""Tools: canonical contract compilation, argument errors and argument repair."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.tools import (
-    InvalidToolResultError,
     ToolContext,
     ToolContractError,
     ToolRegistry,
@@ -17,22 +15,7 @@ from core.tools import (
     tool_success,
 )
 from core.tools._argument_repair import normalize_call_arguments
-
-JsonObject = dict[str, Any]
-
-
-def _context(name: str) -> ToolContext:
-    return ToolContext(
-        agent_id="agent",
-        session_id="session",
-        run_id="run",
-        tool_call_id="call",
-        tool_name=name,
-        tool_call_index=0,
-        workspace=Path("workspace"),
-        vbot_root=Path("app"),
-        data_root=Path("data"),
-    )
+from tests.core.tools.tools_test_support import JsonObject, make_context
 
 
 def _input_schema() -> JsonObject:
@@ -47,12 +30,52 @@ def _input_schema() -> JsonObject:
     }
 
 
-def test_model_facing_object_compiles_open_but_its_properties_are_the_parameter_list() -> None:
-    contract = compile_tool_contract(
+def _open_contract(properties: JsonObject, **schema: Any) -> Any:
+    """A model-facing contract: root ``properties`` without ``additionalProperties``."""
+    return compile_tool_contract(
         name="sample",
-        input_schema={"type": "object", "properties": {"value": {"type": "string"}}},
+        input_schema={"type": "object", "properties": properties, **schema},
         require_closed_input=False,
     )
+
+
+# --- Compilation ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "input_schema", "message"),
+    [
+        pytest.param(
+            "sample",
+            {"type": "object", "properties": {"value": {"type": "string"}}},
+            "must set additionalProperties to false",
+            id="open-object",
+        ),
+        pytest.param(
+            "sample",
+            {
+                "type": "object",
+                "properties": {"value": {"$ref": "https://example.test/schema.json"}},
+                "additionalProperties": False,
+            },
+            r"external \$ref",
+            id="external-reference",
+        ),
+        *(
+            pytest.param(name, _input_schema(), "Tool name must start with a letter", id=name)
+            for name in ("1tool", "tool-name", "tool name", "a" * 65)
+        ),
+    ],
+)
+def test_compile_rejects_an_unportable_contract(
+    name: str, input_schema: JsonObject, message: str
+) -> None:
+    with pytest.raises(ToolContractError, match=message):
+        compile_tool_contract(name=name, input_schema=input_schema)
+
+
+def test_model_facing_object_compiles_open_but_its_properties_are_the_parameter_list() -> None:
+    contract = _open_contract({"value": {"type": "string"}})
 
     contract.validate_arguments({"value": "ok"})
     with pytest.raises(ToolContractError) as exc_info:
@@ -70,15 +93,7 @@ def test_model_facing_object_compiles_open_but_its_properties_are_the_parameter_
 def test_explicitly_open_root_accepts_and_keeps_unknown_arguments(
     open_keywords: JsonObject,
 ) -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {"value": {"type": "string"}},
-            **open_keywords,
-        },
-        require_closed_input=False,
-    )
+    contract = _open_contract({"value": {"type": "string"}}, **open_keywords)
     arguments = {"value": "ok", "x_extra": "kept", "x_empty": ""}
 
     normalized = contract.normalize_arguments(arguments)
@@ -87,30 +102,73 @@ def test_explicitly_open_root_accepts_and_keeps_unknown_arguments(
     contract.validate_arguments(normalized)
 
 
-def test_compile_rejects_open_object_by_default() -> None:
-    with pytest.raises(ToolContractError, match="additionalProperties"):
-        compile_tool_contract(
-            name="sample",
-            input_schema={"type": "object", "properties": {"value": {"type": "string"}}},
-        )
-
-
-def test_compile_rejects_external_reference() -> None:
-    with pytest.raises(ToolContractError, match=r"external \$ref"):
-        compile_tool_contract(
-            name="sample",
-            input_schema={
-                "type": "object",
-                "properties": {"value": {"$ref": "https://example.test/schema.json"}},
-                "additionalProperties": False,
+def test_fingerprint_is_deterministic_and_covers_result_and_scheduling_contracts() -> None:
+    base = compile_tool_contract(
+        name="sample",
+        input_schema=_input_schema(),
+        result_schema={"type": "object", "required": ["value"]},
+    )
+    reordered = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "additionalProperties": False,
+            "required": ["count"],
+            "properties": {
+                "label": {"minLength": 1, "type": "string"},
+                "count": {"minimum": 1, "type": "integer"},
             },
+            "type": "object",
+        },
+        result_schema={"required": ["value"], "type": "object"},
+    )
+    changed_result = compile_tool_contract(
+        name="sample",
+        input_schema=_input_schema(),
+        result_schema={"type": "object", "required": ["other"]},
+    )
+    serial = compile_tool_contract(
+        name="sample",
+        input_schema=_input_schema(),
+        result_schema={"type": "object", "required": ["value"]},
+        parallel_safe=False,
+    )
+
+    assert base.schema_fingerprint == reordered.schema_fingerprint
+    assert changed_result.schema_fingerprint != base.schema_fingerprint
+    assert serial.schema_fingerprint != base.schema_fingerprint
+
+
+def test_identical_inputs_reuse_one_contract_until_their_content_changes() -> None:
+    schema = _input_schema()
+    first = compile_tool_contract(name="sample", input_schema=schema)
+
+    again = compile_tool_contract(name="sample", input_schema=_input_schema())
+    open_variant = compile_tool_contract(
+        name="sample", input_schema=_input_schema(), require_closed_input=False
+    )
+    schema["properties"]["count"]["minimum"] = 5
+    changed = compile_tool_contract(name="sample", input_schema=schema)
+
+    # Equal content shares one contract; any input change compiles afresh.
+    assert again is first
+    assert open_variant is not first
+    assert changed is not first
+    assert first.input_schema["properties"]["count"]["minimum"] == 1
+    first.validate_arguments({"count": 1})
+    with pytest.raises(ToolContractError, match='"count" must be at least 5; received 1'):
+        changed.validate_arguments({"count": 1})
+
+
+def test_a_tuple_schema_stays_rejected_after_its_json_twin_compiled() -> None:
+    compile_tool_contract(name="sample", input_schema=_input_schema())
+
+    with pytest.raises(ToolContractError, match="is not of type 'array'"):
+        compile_tool_contract(
+            name="sample", input_schema={**_input_schema(), "required": ("count",)}
         )
 
 
-@pytest.mark.parametrize("name", ("1tool", "tool-name", "tool name", "a" * 65))
-def test_compile_rejects_nonportable_tool_names(name: str) -> None:
-    with pytest.raises(ToolContractError):
-        compile_tool_contract(name=name, input_schema=_input_schema())
+# --- Argument errors --------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -122,12 +180,15 @@ def test_compile_rejects_nonportable_tool_names(name: str) -> None:
             'sample was not run:\n- "count" is required.\n'
             "sample parameters: count (required), label.",
         ),
+        ({"count": "1.5"}, 'sample was not run: "count" must be an integer; received "1.5".'),
+        ({"count": "abc"}, 'sample was not run: "count" must be an integer; received "abc".'),
         (
-            {"count": "1.5"},
-            'sample was not run: "count" must be an integer; received "1.5".',
+            {"count": "1e1000"},
+            'sample was not run: "count" must be an integer; received "1e1000".',
         ),
+        ({"count": "0"}, 'sample was not run: "count" must be at least 1; received 0.'),
         (
-            {"count": 1, "extra": True},
+            {"count": "2", "extra": True},
             'sample was not run:\n- "extra" is not a parameter.\n'
             "sample parameters: count (required), label.",
         ),
@@ -148,7 +209,7 @@ async def test_dispatch_rejects_invalid_arguments_before_handler(
     registry.register("sample", "Sample.", _input_schema(), handler)
 
     with pytest.raises(ToolContractError) as exc_info:
-        await registry.dispatch(_context("sample"), arguments, ["sample"])
+        await registry.dispatch(make_context("sample"), arguments, ["sample"])
 
     assert str(exc_info.value) == message
     assert calls == 0
@@ -172,9 +233,9 @@ async def test_unadvertised_parameters_are_accepted_and_validated_but_never_offe
         unadvertised_parameters={"legacy": {"type": "string", "enum": ["raw"]}},
     )
 
-    await registry.dispatch(_context("sample"), {"count": 1, "legacy": "raw"})
+    await registry.dispatch(make_context("sample"), {"count": 1, "legacy": "raw"})
     with pytest.raises(ToolContractError) as exc_info:
-        await registry.dispatch(_context("sample"), {"legacy": "other"})
+        await registry.dispatch(make_context("sample"), {"legacy": "other"})
 
     assert received == [{"count": 1, "legacy": "raw"}]
     assert "legacy" not in registry.provider_definitions()[0]["parameters"]["properties"]
@@ -228,14 +289,7 @@ def test_argument_error_names_every_problem_with_a_suggestion_and_the_parameters
     ],
 )
 def test_unknown_parameter_hint_suggests_only_a_likely_misspelling(unknown: str, hint: str) -> None:
-    contract = compile_tool_contract(
-        name="web_search",
-        input_schema={
-            "type": "object",
-            "properties": {"query": {"type": "string"}, "count": {}, "limit": {}},
-        },
-        require_closed_input=False,
-    )
+    contract = _open_contract({"query": {"type": "string"}, "count": {}, "limit": {}})
 
     with pytest.raises(ToolContractError) as exc_info:
         contract.validate_arguments({"query": "news", unknown: "x"})
@@ -274,29 +328,44 @@ def test_nested_argument_problems_name_the_field_by_its_path() -> None:
     )
 
 
-def test_normalization_drops_empty_unknown_arguments_but_keeps_meaningful_ones() -> None:
-    contract = compile_tool_contract(name="sample", input_schema=_input_schema())
-
-    normalized = contract.normalize_arguments(
-        {
-            "count": 1,
-            "label": "",
-            "none": None,
-            "blank": "",
-            "items": [],
-            "mapping": {},
-            "zero": 0,
-            "flag": False,
-        }
+@pytest.mark.parametrize(
+    ("required", "value", "message"),
+    [
+        pytest.param(
+            [],
+            "false",
+            'sample was not run: "enabled" must be a boolean; received "false"; '
+            "omit this optional field to use its default true.",
+            id="optional-default",
+        ),
+        pytest.param(
+            ["enabled"],
+            "true",
+            'sample was not run: "enabled" must be a boolean; received "true".',
+            id="required-default",
+        ),
+    ],
+)
+def test_type_error_recommends_omitting_only_an_optional_default(
+    required: list[str], value: str, message: str
+) -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {"enabled": {"type": "boolean", "default": True}},
+            "required": required,
+            "additionalProperties": False,
+        },
     )
 
-    assert normalized == {"count": 1, "label": "", "zero": 0, "flag": False}
     with pytest.raises(ToolContractError) as exc_info:
-        contract.validate_arguments(normalized)
-    message = str(exc_info.value)
-    assert '"zero" is not a parameter' in message
-    assert '"flag" is not a parameter' in message
-    assert '"label" must not be empty' in message
+        contract.validate_arguments({"enabled": value})
+
+    assert str(exc_info.value) == message
+
+
+# --- Shared argument repair -------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -336,8 +405,9 @@ async def test_dispatch_normalizes_unambiguous_model_encodings_without_mutating_
         "config": '{"retries":"3"}',
         "optional": "null",
     }
+    call = {**original}
 
-    result = await registry.dispatch(_context("sample"), original, ["sample"])
+    result = await registry.dispatch(make_context("sample"), call, ["sample"])
 
     assert result == tool_success({"value": "ok"})
     assert received == {
@@ -348,55 +418,7 @@ async def test_dispatch_normalizes_unambiguous_model_encodings_without_mutating_
         "config": {"retries": 3},
         "optional": None,
     }
-    assert original == {
-        "count": "72",
-        "ratio": "0.7",
-        "enabled": " TRUE ",
-        "items": '["1", "2"]',
-        "config": '{"retries":"3"}',
-        "optional": "null",
-    }
-
-
-def test_normalization_omits_exact_empty_optional_string_properties() -> None:
-    schema: JsonObject = {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string"},
-            "optional": {"type": "string", "minLength": 1},
-            "items": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        },
-        "required": ["action"],
-        "additionalProperties": False,
-    }
-    contract = compile_tool_contract(name="sample", input_schema=schema)
-
-    normalized = normalize_call_arguments(
-        contract, {"action": "input", "optional": "", "items": [""]}, empty_as_omitted=("optional",)
-    )
-
-    assert normalized == {"action": "input", "items": [""]}
-    with pytest.raises(ToolContractError, match=r'"items\[0\]" must not be empty'):
-        contract.validate_arguments(normalized)
-
-
-def test_normalization_keeps_exact_empty_required_string_properties() -> None:
-    schema: JsonObject = {
-        "type": "object",
-        "properties": {
-            "value": {"type": "string", "minLength": 1},
-            "optional": {"type": "string", "minLength": 1},
-        },
-        "required": ["value"],
-        "additionalProperties": False,
-    }
-    contract = compile_tool_contract(name="sample", input_schema=schema)
-
-    normalized = contract.normalize_arguments({"value": "", "optional": ""})
-
-    assert normalized == {"value": "", "optional": ""}
-    with pytest.raises(ToolContractError, match='"value" must not be empty'):
-        contract.validate_arguments(normalized)
+    assert call == original
 
 
 @pytest.mark.asyncio
@@ -429,75 +451,162 @@ async def test_dispatch_wraps_one_array_item_and_uses_active_input_contract() ->
             "additionalProperties": False,
         },
     )
-    context = replace(_context("sample"), input_contract=active_contract)
+    context = replace(make_context("sample"), input_contract=active_contract)
 
     await registry.dispatch(context, {"items": "one"}, ["sample"])
 
     assert received == {"items": ["one"]}
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "message"),
+    ("value_schema", "value", "expected", "valid"),
     [
-        ({"count": "0"}, '"count" must be at least 1; received 0.'),
-        ({"count": "3.5"}, '"count" must be an integer; received "3.5".'),
-        ({"count": "abc"}, '"count" must be an integer; received "abc".'),
-        ({"count": "1e1000"}, '"count" must be an integer; received "1e1000".'),
-        ({"count": "2", "extra": True}, '"extra" is not a parameter.'),
+        *(
+            pytest.param({"type": "boolean"}, value, expected, True, id=f"boolean-{value!r}")
+            for value, expected in (
+                ("YES", True),
+                (1, True),
+                ("1", True),
+                ("off", False),
+                (0, False),
+                ("No", False),
+            )
+        ),
+        *(
+            pytest.param({"type": "boolean"}, value, value, False, id=f"ambiguous-{value!r}")
+            for value in ("maybe", "2", "")
+        ),
+        pytest.param({"type": "integer"}, 3.0, 3, True, id="integral-float"),
+        pytest.param({"type": "string"}, 10**309, str(10**309), True, id="huge-integer-text"),
+        pytest.param({"type": ["integer", "string"]}, "72", "72", True, id="accepted-string"),
     ],
 )
-async def test_dispatch_keeps_semantic_and_shape_validation_after_normalization(
-    arguments: JsonObject,
-    message: str,
+def test_scalar_encodings_convert_only_when_unambiguous(
+    value_schema: JsonObject, value: Any, expected: Any, valid: bool
 ) -> None:
-    calls = 0
+    contract = _open_contract({"value": value_schema})
 
-    def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
-        nonlocal calls
-        calls += 1
-        return tool_success({"value": "ok"})
+    normalized = contract.normalize_arguments({"value": value})
 
-    registry = ToolRegistry()
-    registry.register("sample", "Sample.", _input_schema(), handler)
+    assert normalized == {"value": expected}
+    assert type(normalized["value"]) is type(expected)
+    if valid:
+        contract.validate_arguments(normalized)
+    else:
+        with pytest.raises(ToolContractError):
+            contract.validate_arguments(normalized)
 
+
+@pytest.mark.parametrize(
+    ("properties", "arguments", "valid"),
+    [
+        pytest.param(
+            {"payload": {"type": "object"}, "text": {"type": "string"}},
+            {"payload": {"request": {"operation": "DELETE"}, "CamelCase": " YES "}, "text": "  "},
+            True,
+            id="arbitrary-payload-and-whitespace",
+        ),
+        *(
+            pytest.param(
+                {
+                    "payload": {
+                        "type": "object",
+                        "properties": {"color": {"type": "string"}},
+                        "additionalProperties": additional,
+                    },
+                    "request": {"type": "object"},
+                },
+                {
+                    "payload": {
+                        "color": "red",
+                        "colors": "blue",
+                        "COLOR": "green",
+                        "operation": "replace",
+                    },
+                    "request": {"action": "delete"},
+                },
+                True,
+                id=f"open-application-fields-{label}",
+            )
+            for label, additional in (("any", True), ("typed", {"type": "string"}))
+        ),
+        pytest.param(
+            {
+                "target": {"type": "string", "minLength": 1},
+                "limit": {"type": "integer"},
+                "enabled": {"type": "boolean"},
+            },
+            {"target": None, "limit": "", "enabled": None},
+            False,
+            id="explicit-empty-values",
+        ),
+        *(
+            pytest.param(
+                {"target": {"type": "string", "enum": ["tg-team-a"]}},
+                {"target": identifier},
+                False,
+                id=f"similar-enum-identifier-{identifier.strip()}",
+            )
+            for identifier in ("tg-team-b", "TG-TEAM-A", "tg_team_a", " tg-team-a ")
+        ),
+    ],
+)
+def test_generic_repair_leaves_application_values_to_the_owner(
+    properties: JsonObject, arguments: JsonObject, valid: bool
+) -> None:
+    contract = _open_contract(properties)
+
+    assert contract.normalize_arguments(arguments) == arguments
+    if valid:
+        contract.validate_arguments(arguments)
+    else:
+        with pytest.raises(ToolContractError):
+            contract.validate_arguments(arguments)
+
+
+def test_normalization_drops_empty_unknown_arguments_but_keeps_meaningful_ones() -> None:
+    contract = compile_tool_contract(name="sample", input_schema=_input_schema())
+
+    normalized = contract.normalize_arguments(
+        {
+            "count": 1,
+            "label": "",
+            "none": None,
+            "blank": "",
+            "items": [],
+            "mapping": {},
+            "zero": 0,
+            "flag": False,
+        }
+    )
+
+    assert normalized == {"count": 1, "label": "", "zero": 0, "flag": False}
     with pytest.raises(ToolContractError) as exc_info:
-        await registry.dispatch(_context("sample"), arguments, ["sample"])
+        contract.validate_arguments(normalized)
+    message = str(exc_info.value)
+    assert '"zero" is not a parameter' in message
+    assert '"flag" is not a parameter' in message
+    assert '"label" must not be empty' in message
 
-    assert message in str(exc_info.value)
-    assert calls == 0
 
-
-def test_normalization_preserves_a_string_when_the_schema_accepts_it() -> None:
+def test_normalization_keeps_exact_empty_declared_string_properties() -> None:
     contract = compile_tool_contract(
         name="sample",
         input_schema={
             "type": "object",
-            "properties": {"value": {"type": ["integer", "string"]}},
+            "properties": {
+                "value": {"type": "string", "minLength": 1},
+                "optional": {"type": "string", "minLength": 1},
+            },
             "required": ["value"],
             "additionalProperties": False,
         },
     )
 
-    assert contract.normalize_arguments({"value": "72"}) == {"value": "72"}
+    normalized = contract.normalize_arguments({"value": "", "optional": ""})
 
-
-@pytest.mark.parametrize("value", ("maybe", "2", ""))
-def test_normalization_rejects_ambiguous_boolean_values(value: str) -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {"enabled": {"type": "boolean"}},
-            "required": ["enabled"],
-            "additionalProperties": False,
-        },
-    )
-
-    normalized = contract.normalize_arguments({"enabled": value})
-
-    assert normalized == {"enabled": value}
-    with pytest.raises(ToolContractError):
+    assert normalized == {"value": "", "optional": ""}
+    with pytest.raises(ToolContractError, match='"value" must not be empty'):
         contract.validate_arguments(normalized)
 
 
@@ -536,344 +645,137 @@ def test_normalization_selects_the_matching_discriminated_union_branch() -> None
     contract.validate_arguments(normalized)
 
 
-def test_type_error_explains_optional_default_without_coercion() -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "include_links": {"type": "boolean", "default": True},
-            },
-            "additionalProperties": False,
-        },
-    )
-
-    with pytest.raises(ToolContractError) as exc_info:
-        contract.validate_arguments({"include_links": "false"})
-
-    assert str(exc_info.value) == (
-        'sample was not run: "include_links" must be a boolean; received "false"; '
-        "omit this optional field to use its default true."
-    )
-
-
-def test_type_error_does_not_recommend_omitting_a_required_default() -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "enabled": {"type": "boolean", "default": True},
-            },
-            "required": ["enabled"],
-            "additionalProperties": False,
-        },
-    )
-
-    with pytest.raises(ToolContractError) as exc_info:
-        contract.validate_arguments({"enabled": "true"})
-
-    message = str(exc_info.value)
-    assert message == 'sample was not run: "enabled" must be a boolean; received "true".'
-    assert "omit" not in message
-
-
-@pytest.mark.asyncio
-async def test_dispatch_validates_success_data_after_handler() -> None:
-    registry = ToolRegistry()
-    registry.register(
-        "sample",
-        "Sample.",
-        _input_schema(),
-        lambda _context, _arguments: tool_success({"wrong": True}),
-        result_schema={
-            "type": "object",
-            "properties": {"value": {"type": "string"}},
-            "required": ["value"],
-            "additionalProperties": False,
-        },
-    )
-
-    with pytest.raises(InvalidToolResultError):
-        await registry.dispatch(_context("sample"), {"count": 1}, ["sample"])
-
-
-def test_fingerprint_is_deterministic_and_covers_result_and_scheduling_contracts() -> None:
-    base = compile_tool_contract(
-        name="sample",
-        input_schema=_input_schema(),
-        result_schema={"type": "object", "required": ["value"]},
-    )
-    reordered = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "additionalProperties": False,
-            "required": ["count"],
-            "properties": {
-                "label": {"minLength": 1, "type": "string"},
-                "count": {"minimum": 1, "type": "integer"},
-            },
-            "type": "object",
-        },
-        result_schema={"required": ["value"], "type": "object"},
-    )
-    changed_result = compile_tool_contract(
-        name="sample",
-        input_schema=_input_schema(),
-        result_schema={"type": "object", "required": ["other"]},
-    )
-    serial = compile_tool_contract(
-        name="sample",
-        input_schema=_input_schema(),
-        result_schema={"type": "object", "required": ["value"]},
-        parallel_safe=False,
-    )
-
-    assert base.schema_fingerprint == reordered.schema_fingerprint
-    assert changed_result.schema_fingerprint != base.schema_fingerprint
-    assert serial.schema_fingerprint != base.schema_fingerprint
-
-
-def test_identical_inputs_reuse_one_contract_until_their_content_changes() -> None:
-    # Arrange
-    schema = _input_schema()
-    first = compile_tool_contract(name="sample", input_schema=schema)
-
-    # Act
-    again = compile_tool_contract(name="sample", input_schema=_input_schema())
-    open_variant = compile_tool_contract(
-        name="sample", input_schema=_input_schema(), require_closed_input=False
-    )
-    schema["properties"]["count"]["minimum"] = 5
-    changed = compile_tool_contract(name="sample", input_schema=schema)
-
-    # Assert: equal content shares one contract; any input change compiles afresh.
-    assert again is first
-    assert open_variant is not first
-    assert changed is not first
-    assert first.input_schema["properties"]["count"]["minimum"] == 1
-    first.validate_arguments({"count": 1})
-    with pytest.raises(ToolContractError, match='"count" must be at least 5; received 1'):
-        changed.validate_arguments({"count": 1})
-
-
-def test_a_tuple_schema_stays_rejected_after_its_json_twin_compiled() -> None:
-    compile_tool_contract(name="sample", input_schema=_input_schema())
-
-    with pytest.raises(ToolContractError, match="is not of type 'array'"):
-        compile_tool_contract(
-            name="sample", input_schema={**_input_schema(), "required": ("count",)}
-        )
-
-
 @pytest.mark.parametrize(
-    ("value", "expected"),
-    [("YES", True), (1, True), ("1", True), ("off", False), (0, False), ("No", False)],
-)
-def test_boolean_aliases_preserve_intent(value: object, expected: bool) -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {"enabled": {"type": "boolean"}},
-            "required": ["enabled"],
-            "additionalProperties": False,
-        },
-    )
-    normalized = contract.normalize_arguments({"enabled": value})
-    contract.validate_arguments(normalized)
-    assert normalized["enabled"] is expected
-
-
-@pytest.mark.parametrize(
-    "arguments",
+    ("value_schema", "arguments"),
     [
-        {"request": {"operation": " WRITE-FILE ", "filePath": "notes.txt", "content": ""}},
-        {"write_file": {"file_pth": "notes.txt", "content": ""}},
-        {"action": "WRITE-FILE", "file_path": "notes.txt", "content": ""},
+        pytest.param(
+            {"oneOf": [{"type": "boolean"}, {"type": "integer"}]},
+            {"value": "1"},
+            id="union-boolean-first",
+        ),
+        pytest.param(
+            {"oneOf": [{"type": "integer"}, {"type": "boolean"}]},
+            {"value": "1"},
+            id="union-integer-first",
+        ),
+        pytest.param({"type": "string"}, '{"value":"one","value":"two"}', id="duplicate-json-key"),
     ],
 )
-def test_open_contract_repairs_spelling_and_wrappers_preserving_empty_payload(
-    arguments: dict[str, Any],
+def test_ambiguous_encoding_fails_instead_of_choosing_a_value(
+    value_schema: JsonObject, arguments: Any
 ) -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["write_file", "delete"]},
-                "file_path": {"type": "string"},
-                "content": {"type": "string"},
-            },
-            "required": ["action"],
-        },
-        require_closed_input=False,
-    )
-    assert normalize_call_arguments(
-        contract, arguments, enum_fields=("action",), field_aliases={"file_pth": "file_path"}
-    ) == {
-        "action": "write_file",
-        "file_path": "notes.txt",
-        "content": "",
-    }
+    contract = _open_contract({"value": value_schema})
 
-
-def test_repairs_optional_typo_even_when_open_schema_already_valid() -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={"type": "object", "properties": {"include_links": {"type": "boolean"}}},
-        require_closed_input=False,
-    )
-    assert normalize_call_arguments(contract, {"includeLinkS": "false"}) == {"include_links": False}
-
-
-def test_duplicate_conflicting_target_is_not_silently_overwritten() -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={"type": "object", "properties": {"file_path": {"type": "string"}}},
-        require_closed_input=False,
-    )
     with pytest.raises(ToolContractError):
-        normalize_call_arguments(contract, {"file_path": "one.txt", "filePath": "two.txt"})
-    assert normalize_call_arguments(contract, {"file_path": "one.txt", "filePath": "one.txt"}) == {
-        "file_path": "one.txt"
-    }
+        contract.normalize_arguments(arguments)
 
 
-def test_arbitrary_payload_keys_and_whitespace_are_preserved() -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {"payload": {"type": "object"}, "text": {"type": "string"}},
-        },
-        require_closed_input=False,
-    )
-    arguments = {
-        "payload": {"request": {"operation": "DELETE"}, "CamelCase": " YES "},
-        "text": "  ",
-    }
-    assert contract.normalize_arguments(arguments) == arguments
-
-
-def test_integral_json_float_reaches_integer_handler_as_int() -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={"type": "object", "properties": {"count": {"type": "integer"}}},
-        require_closed_input=False,
-    )
-    assert type(contract.normalize_arguments({"count": 3.0})["count"]) is int
-
-
-def test_large_integer_text_representation_does_not_overflow_float() -> None:
-    contract = compile_tool_contract(
-        name="write",
-        input_schema={
-            "type": "object",
-            "properties": {"content": {"type": "string"}},
-            "required": ["content"],
-        },
-        require_closed_input=False,
-    )
-    assert contract.normalize_arguments({"content": 10**309}) == {"content": str(10**309)}
-
-
-@pytest.mark.parametrize("identifier", ["tg-team-b", "TG-TEAM-A", "tg_team_a", " tg-team-a "])
-def test_generic_repair_never_selects_a_similar_enum_identifier(identifier: str) -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {"target": {"type": "string", "enum": ["tg-team-a"]}},
-        },
-        require_closed_input=False,
-    )
-    original = {"target": identifier}
-    assert contract.normalize_arguments(original) == original
-    with pytest.raises(ToolContractError):
-        contract.validate_arguments(original)
-
-
-@pytest.mark.parametrize("additional", [True, {"type": "string"}])
-def test_valid_open_application_fields_and_wrappers_remain_literal(additional: Any) -> None:
-    payload = {"color": "red", "colors": "blue", "COLOR": "green", "operation": "replace"}
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "payload": {
-                    "type": "object",
-                    "properties": {"color": {"type": "string"}},
-                    "additionalProperties": additional,
-                },
-                "request": {"type": "object"},
-            },
-        },
-        require_closed_input=False,
-    )
-    original = {"payload": payload, "request": {"action": "delete"}}
-    contract.validate_arguments(original)
-    assert contract.normalize_arguments(original) == original
-    assert normalize_call_arguments(contract, original) == original
-
-
-def test_generic_repair_keeps_explicit_empty_values_for_the_owner() -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "target": {"type": "string", "minLength": 1},
-                "limit": {"type": "integer"},
-                "enabled": {"type": "boolean"},
-            },
-        },
-        require_closed_input=False,
-    )
-    original = {"target": None, "limit": "", "enabled": None}
-    assert contract.normalize_arguments(original) == original
-    with pytest.raises(ToolContractError):
-        contract.validate_arguments(original)
-
-
-def test_owner_alias_conflicts_are_checked_before_omission() -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={"type": "object", "properties": {"file_path": {"type": "string"}}},
-        require_closed_input=False,
-    )
-    with pytest.raises(ToolContractError):
-        normalize_call_arguments(
-            contract, {"file_path": "one", "filePath": None}, empty_as_omitted=("file_path",)
-        )
+# --- Owner-selected call repair ---------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "branches",
+    ("properties", "arguments", "options", "expected"),
     [
-        [{"type": "boolean"}, {"type": "integer"}],
-        [{"type": "integer"}, {"type": "boolean"}],
+        *(
+            pytest.param(
+                {
+                    "action": {"type": "string", "enum": ["write_file", "delete"]},
+                    "file_path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                arguments,
+                {"enum_fields": ("action",), "field_aliases": {"file_pth": "file_path"}},
+                {"action": "write_file", "file_path": "notes.txt", "content": ""},
+                id=label,
+            )
+            for label, arguments in (
+                (
+                    "request-wrapper",
+                    {
+                        "request": {
+                            "operation": " WRITE-FILE ",
+                            "filePath": "notes.txt",
+                            "content": "",
+                        }
+                    },
+                ),
+                (
+                    "action-wrapper-with-alias",
+                    {"write_file": {"file_pth": "notes.txt", "content": ""}},
+                ),
+                (
+                    "enum-and-field-spelling",
+                    {"action": "WRITE-FILE", "file_path": "notes.txt", "content": ""},
+                ),
+            )
+        ),
+        pytest.param(
+            {"include_links": {"type": "boolean"}},
+            {"includeLinkS": "false"},
+            {},
+            {"include_links": False},
+            id="optional-field-spelling",
+        ),
+        pytest.param(
+            {"file_path": {"type": "string"}},
+            {"file_path": "one.txt", "filePath": "one.txt"},
+            {},
+            {"file_path": "one.txt"},
+            id="agreeing-duplicate-spellings",
+        ),
+        pytest.param(
+            {
+                "action": {"type": "string"},
+                "optional": {"type": "string", "minLength": 1},
+                "items": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            },
+            {"action": "input", "optional": "", "items": [""]},
+            {"empty_as_omitted": ("optional",)},
+            {"action": "input", "items": [""]},
+            id="selected-empty-field-omitted",
+        ),
+        pytest.param(
+            {"payload": {"type": "object", "additionalProperties": True}},
+            {"payload": {"color": "red", "COLOR": "green", "operation": "replace"}},
+            {},
+            {"payload": {"color": "red", "COLOR": "green", "operation": "replace"}},
+            id="application-payload-literal",
+        ),
     ],
 )
-def test_ambiguous_union_repair_does_not_depend_on_branch_order(branches: list[Any]) -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={"type": "object", "properties": {"value": {"oneOf": branches}}},
-        require_closed_input=False,
-    )
-    with pytest.raises(ToolContractError):
-        contract.normalize_arguments({"value": "1"})
+def test_owner_repair_reads_the_call_the_owner_selected(
+    properties: JsonObject, arguments: JsonObject, options: JsonObject, expected: JsonObject
+) -> None:
+    contract = _open_contract(properties)
+
+    assert normalize_call_arguments(contract, arguments, **options) == expected
 
 
-def test_encoded_duplicate_fields_cannot_silently_choose_a_target() -> None:
-    contract = compile_tool_contract(
-        name="sample",
-        input_schema={"type": "object", "properties": {"target": {"type": "string"}}},
-        require_closed_input=False,
-    )
-    original = '{"target":"one","target":"two"}'
+@pytest.mark.parametrize(
+    ("properties", "arguments", "options"),
+    [
+        pytest.param(
+            {"file_path": {"type": "string"}},
+            {"file_path": "one.txt", "filePath": "two.txt"},
+            {},
+            id="conflicting-spellings",
+        ),
+        pytest.param(
+            {"file_path": {"type": "string"}},
+            {"file_path": "one", "filePath": None},
+            {"empty_as_omitted": ("file_path",)},
+            id="conflict-checked-before-omission",
+        ),
+        pytest.param(
+            {"target": {"type": "string"}},
+            {"request": '{"target":"one","target":"two"}'},
+            {},
+            id="duplicate-key-in-encoded-wrapper",
+        ),
+    ],
+)
+def test_owner_repair_never_resolves_conflicting_values(
+    properties: JsonObject, arguments: JsonObject, options: JsonObject
+) -> None:
     with pytest.raises(ToolContractError):
-        contract.normalize_arguments(original)
-    with pytest.raises(ToolContractError):
-        normalize_call_arguments(contract, {"request": original})
+        normalize_call_arguments(_open_contract(properties), arguments, **options)

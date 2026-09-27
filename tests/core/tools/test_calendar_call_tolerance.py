@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from tests.core.tools.calendar_tool_support import CalendarTool, calendar_tool
-from tests.core.tools.tools_helpers import clock_at
+from tests.core.tools.tools_test_support import clock_at
 
 DENTIST_START = "2030-01-10T15:00"
 WEEKLY_MONDAY = {"freq": "weekly", "by_weekday": ["mo"]}

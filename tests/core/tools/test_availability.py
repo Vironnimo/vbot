@@ -1,14 +1,14 @@
-"""Tests for Agent-derived Tool visibility and dispatch allowlists."""
+"""Tools: Agent Tool Access Policy, its resolution over the catalog, and Tool settings."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import copy
+from typing import Any
 
 import pytest
 
+from core.tools import Tool, ToolRegistry
 from core.tools.availability import (
-    PROJECT_TOOL_NAME,
-    TOOL_ACCESS_MODE_NONE,
     ToolAccess,
     apply_agent_target_tool_visibility,
     bash_allowed_env_keys,
@@ -17,139 +17,94 @@ from core.tools.availability import (
     subagent_allowed_agents,
 )
 from core.tools.subagent import SUBAGENT_TOOL_PARAMETERS
+from tests.core.tools.tools_test_support import read_file_handler
+
+_IDENTITY = {"constraints": ("identity_agent",)}
 
 
-def _definitions() -> list[dict[str, object]]:
-    target_parameters = {
-        "type": "object",
-        "properties": {"agent_id": {"type": "string"}},
-    }
-    return [
-        {"name": "read", "description": "Read", "parameters": {"type": "object"}},
-        {
-            "name": "subagent",
-            "description": "Start a Sub-Agent.",
-            "parameters": target_parameters,
-        },
-    ]
+def _catalog(*tools: tuple[str, dict[str, Any]]) -> list[Tool]:
+    """Register each ``(name, declaration)`` and list the catalog as Chat resolves it."""
+    registry = ToolRegistry()
+    for name, declaration in tools:
+        registry.register(
+            name, f"The {name} Tool.", {"type": "object"}, read_file_handler, **declaration
+        )
+    return registry.list_tools()
 
 
-def test_empty_additional_targets_keep_self_delegation_in_subagent_schema() -> None:
-    definitions = apply_agent_target_tool_visibility(
-        _definitions(), agent_id="orchestrator", allowed_agents=[]
-    )
-
-    assert [definition["name"] for definition in definitions] == ["read", "subagent"]
-    for definition in definitions[1:]:
-        parameters = definition["parameters"]
-        assert isinstance(parameters, dict)
-        properties = parameters["properties"]
-        assert isinstance(properties, dict)
-        assert properties["agent_id"]["enum"] == ["orchestrator"]
-        assert "required" not in parameters
+# --- Policy normalization ---------------------------------------------------------
 
 
-def test_explicit_agent_targets_narrow_subagent_schema_without_mutating_source() -> None:
-    source = _definitions()
-
-    definitions = apply_agent_target_tool_visibility(
-        source,
-        agent_id="orchestrator",
-        allowed_agents=["worker", "reviewer@vbot", "worker"],
-    )
-
-    for definition in definitions[1:]:
-        parameters = definition["parameters"]
-        assert isinstance(parameters, dict)
-        properties = parameters["properties"]
-        assert isinstance(properties, dict)
-        agent_id = properties["agent_id"]
-        assert isinstance(agent_id, dict)
-        assert agent_id["enum"] == ["orchestrator", "worker", "reviewer@vbot"]
-        assert "required" not in parameters
-    source_parameters = source[1]["parameters"]
-    assert isinstance(source_parameters, dict)
-    source_properties = source_parameters["properties"]
-    assert isinstance(source_properties, dict)
-    assert "enum" not in source_properties["agent_id"]
-
-
-def test_wildcard_agent_targets_leave_tool_definitions_unchanged() -> None:
-    source = _definitions()
-
-    assert (
-        apply_agent_target_tool_visibility(source, agent_id="orchestrator", allowed_agents=["*"])
-        is source
-    )
-
-
-def test_explicit_agent_targets_narrow_flat_subagent_run_target() -> None:
-    source = [
-        {
-            "name": "subagent",
-            "description": "Start a Sub-Agent.",
-            "parameters": SUBAGENT_TOOL_PARAMETERS,
-        }
-    ]
-
-    definitions = apply_agent_target_tool_visibility(
-        source,
-        agent_id="orchestrator",
-        allowed_agents=["worker"],
-    )
-
-    parameters = definitions[0]["parameters"]
-    properties = parameters["properties"]
-    assert properties["agent_id"]["enum"] == [
-        "orchestrator",
-        "worker",
-    ]
-    assert "enum" not in SUBAGENT_TOOL_PARAMETERS["properties"]["agent_id"]
-
-
-def _tool(
-    name: str,
-    *,
-    activation: str = "configurable",
-    activation_source: str | None = None,
-    constraints: tuple[str, ...] = (),
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        name=name,
-        activation=activation,
-        activation_source=activation_source,
-        constraints=constraints,
-        internal=False,
-    )
-
-
-def test_normalize_tool_access_replaces_wildcard_with_explicit_modes() -> None:
-    assert normalize_tool_access(None) == ToolAccess(mode="all")
-    assert normalize_tool_access({"mode": "selected", "allowed": []}) == ToolAccess(mode="selected")
-    assert normalize_tool_access({"mode": "none", "denied": ["memory"]}) == ToolAccess(
-        mode="none", denied=("memory",)
-    )
+@pytest.mark.parametrize(
+    ("value", "policy", "stored"),
+    [
+        pytest.param(None, ToolAccess(mode="all"), {"mode": "all"}, id="missing-means-all"),
+        pytest.param(
+            {"mode": "selected", "allowed": []},
+            ToolAccess(mode="selected"),
+            {"mode": "selected", "allowed": []},
+            id="selected-nothing",
+        ),
+        pytest.param(
+            {"mode": "none", "denied": ["memory"]},
+            ToolAccess(mode="none", denied=("memory",)),
+            {"mode": "none", "denied": ["memory"]},
+            id="denials-kept-in-none",
+        ),
+        *(
+            pytest.param(
+                {"mode": mode, **allowed, "granted": ["offline_extension"]},
+                ToolAccess(
+                    mode=mode,
+                    allowed=tuple(allowed.get("allowed", ())),
+                    granted=("offline_extension",),
+                ),
+                {"mode": mode, **allowed, "granted": ["offline_extension"]},
+                id=f"grant-of-an-unavailable-tool-in-{mode}",
+            )
+            for mode, allowed in (
+                ("all", {}),
+                ("selected", {"allowed": ["offline_extension"]}),
+                ("none", {}),
+            )
+        ),
+    ],
+)
+def test_policy_normalizes_to_explicit_modes_and_round_trips(
+    value: dict[str, Any] | None, policy: ToolAccess, stored: dict[str, Any]
+) -> None:
+    assert normalize_tool_access(value) == policy
+    assert policy.to_dict() == stored
+    assert normalize_tool_access(policy) == policy
 
 
 @pytest.mark.parametrize(
     ("value", "message"),
     [
+        (["read"], "tool_access must be an object"),
+        ({"mode": "all", "extra": 1}, "unsupported tool_access fields: extra"),
+        ({"mode": "some"}, "tool_access.mode must be one of: all, selected, none"),
         ({"mode": "selected"}, "allowed is required"),
         ({"mode": "all", "allowed": []}, "only valid when mode is selected"),
         ({"mode": "selected", "allowed": ["read"], "denied": ["read"]}, "overlap"),
         ({"mode": "all", "denied": ["*"]}, "retired wildcard"),
         ({"mode": "selected", "allowed": ["   "]}, "empty names"),
+        ({"mode": "all", "granted": "computer"}, "granted must be a list of strings"),
+        ({"mode": "all", "granted": [False]}, "granted must be a list of strings"),
+        ({"mode": "all", "granted": ["*"]}, "retired wildcard"),
+        ({"mode": "all", "granted": ["computer", "computer"]}, "duplicate names"),
     ],
 )
-def test_normalize_tool_access_rejects_ambiguous_policies(
-    value: dict[str, object], message: str
-) -> None:
+def test_ambiguous_policies_are_rejected(value: Any, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         normalize_tool_access(value)
 
 
+# --- Resolution -------------------------------------------------------------------
+
+
 def test_all_selected_and_none_resolve_direct_tools_explicitly() -> None:
-    tools = [_tool("read"), _tool("write")]
+    tools = _catalog(("read", {}), ("write", {}))
 
     assert resolve_tool_access(ToolAccess(mode="all"), tools, "off").allowed_tools == (
         "read",
@@ -158,90 +113,46 @@ def test_all_selected_and_none_resolve_direct_tools_explicitly() -> None:
     assert resolve_tool_access(
         ToolAccess(mode="selected", allowed=("write",)), tools, "off"
     ).allowed_tools == ("write",)
-    assert (
-        resolve_tool_access(
-            ToolAccess(mode=TOOL_ACCESS_MODE_NONE), tools, "agent_user"
-        ).allowed_tools
-        == ()
-    )
-
-
-def test_missing_subagent_tool_settings_defaults_to_wildcard() -> None:
-    assert subagent_allowed_agents({}) == ["*"]
-
-
-def test_bash_env_settings_return_ordered_unique_grants() -> None:
-    assert bash_allowed_env_keys(
-        {"bash": {"allowed_env": ["OPENAI_API_KEY", "OPENAI_API_KEY", "HA_TOKEN"]}}
-    ) == ["OPENAI_API_KEY", "HA_TOKEN"]
-
-
-def test_invalid_bash_env_settings_fail_closed() -> None:
-    assert bash_allowed_env_keys({"bash": {"allowed_env": ["bad-key"]}}) == []
+    assert resolve_tool_access(ToolAccess(mode="none"), tools, "agent_user").allowed_tools == ()
 
 
 def test_identity_constraint_is_enforced_for_all_and_selected_modes() -> None:
-    tools = [
-        _tool("read"),
-        _tool(PROJECT_TOOL_NAME, constraints=("identity_agent",)),
-    ]
+    tools = _catalog(("read", {}), ("project", _IDENTITY))
 
     identity = resolve_tool_access(ToolAccess(), tools, "off", workspace="workspace")
     project_all = resolve_tool_access(ToolAccess(), tools, "off", workspace="")
     project_selected = resolve_tool_access(
-        ToolAccess(mode="selected", allowed=(PROJECT_TOOL_NAME,)),
-        tools,
-        "off",
-        workspace="",
+        ToolAccess(mode="selected", allowed=("project",)), tools, "off", workspace=""
     )
 
-    assert identity.allowed_tools == ("read", "project")
+    assert identity.allowed_tools == ("project", "read")
     assert project_all.allowed_tools == ("read",)
     assert project_selected.allowed_tools == ()
 
 
 def test_followed_tool_requires_its_source_and_can_be_denied_independently() -> None:
-    tools = [
-        _tool("session_search"),
-        _tool("session_read", activation="follows", activation_source="session_search"),
-    ]
-
-    active = resolve_tool_access(
-        ToolAccess(mode="selected", allowed=("session_search",)), tools, "off"
-    )
-    denied_follower = resolve_tool_access(
-        ToolAccess(
-            mode="selected",
-            allowed=("session_search",),
-            denied=("session_read",),
-        ),
-        tools,
-        "off",
-    )
-    denied_source = resolve_tool_access(
-        ToolAccess(
-            mode="selected",
-            allowed=("session_search",),
-            denied=("session_search",),
-        ),
-        tools,
-        "off",
+    tools = _catalog(
+        ("session_search", {}),
+        ("session_read", {"activation": "follows", "activation_source": "session_search"}),
     )
 
-    assert active.allowed_tools == ("session_search", "session_read")
-    assert denied_follower.allowed_tools == ("session_search",)
-    assert denied_source.allowed_tools == ()
+    def resolve(*denied: str) -> tuple[str, ...]:
+        policy = ToolAccess(mode="selected", allowed=("session_search",), denied=denied)
+        return resolve_tool_access(policy, tools, "off").allowed_tools
+
+    assert resolve() == ("session_read", "session_search")
+    assert resolve("session_read") == ("session_search",)
+    assert resolve("session_search") == ()
 
 
 def test_denials_win_over_memory_activation_and_session_grants() -> None:
-    tools = [
-        _tool("memory", activation="memory_mode", constraints=("identity_agent",)),
-        _tool("history", activation="session_grant"),
-    ]
-    policy = ToolAccess(mode="selected", denied=("memory", "history"))
+    tools = _catalog(
+        ("memory", {"activation": "memory_mode", **_IDENTITY}),
+        ("history", {"activation": "session_grant"}),
+    )
 
     resolution = resolve_tool_access(
-        policy,
+        ToolAccess(mode="selected", allowed=(), denied=("memory", "history")),
         tools,
         "agent_user",
         workspace="workspace",
@@ -253,56 +164,117 @@ def test_denials_win_over_memory_activation_and_session_grants() -> None:
 
 
 def test_memory_activation_is_independent_of_selected_direct_tools() -> None:
-    tools = [
-        _tool("read"),
-        _tool("memory", activation="memory_mode", constraints=("identity_agent",)),
-    ]
+    tools = _catalog(("read", {}), ("memory", {"activation": "memory_mode", **_IDENTITY}))
+    policy = ToolAccess(mode="selected")
 
-    active = resolve_tool_access(
-        ToolAccess(mode="selected"), tools, "agent_user", workspace="workspace"
-    )
-    off = resolve_tool_access(ToolAccess(mode="selected"), tools, "off", workspace="workspace")
+    active = resolve_tool_access(policy, tools, "agent_user", workspace="workspace")
+    off = resolve_tool_access(policy, tools, "off", workspace="workspace")
 
     assert active.allowed_tools == ("memory",)
     assert off.allowed_tools == ()
 
 
-def test_nested_subagent_tool_settings_expose_explicit_targets() -> None:
-    assert subagent_allowed_agents(
-        {"subagent": {"allowed_agents": ["worker", "builder@vbot"]}}
-    ) == ["worker", "builder@vbot"]
-
-
-@pytest.mark.parametrize("mode", ["all", "selected", "none"])
-@pytest.mark.parametrize("granted", [False, True])
-@pytest.mark.parametrize("denied", [False, True])
-def test_explicit_opt_in_never_comes_from_mode_or_whitelist(mode, granted, denied):
-    computer = _tool("computer")
-    computer.requires_opt_in = True
-    follower = _tool("computer_read", activation="follows", activation_source="computer")
+@pytest.mark.parametrize(
+    ("mode", "granted", "denied", "active"),
+    [
+        pytest.param("all", True, False, True, id="granted-in-all"),
+        pytest.param("selected", True, False, True, id="granted-and-selected"),
+        pytest.param("all", False, False, False, id="all-mode-is-no-grant"),
+        pytest.param("selected", False, False, False, id="selection-is-no-grant"),
+        pytest.param("all", True, True, False, id="denial-wins"),
+        pytest.param("none", True, False, False, id="none-wins"),
+    ],
+)
+def test_opt_in_tool_needs_an_explicit_grant(
+    mode: str, granted: bool, denied: bool, active: bool
+) -> None:
+    tools = _catalog(
+        ("computer", {"requires_opt_in": True}),
+        ("computer_read", {"activation": "follows", "activation_source": "computer"}),
+    )
     policy = ToolAccess(
         mode=mode,
-        allowed=("computer",),
+        allowed=("computer",) if mode == "selected" else (),
         granted=("computer",) if granted else (),
         denied=("computer",) if denied else (),
     )
-    result = resolve_tool_access(policy, [computer, follower], "off")
-    assert ("computer" in result.allowed_tools) == (mode != "none" and granted and not denied)
-    assert ("computer_read" in result.allowed_tools) == ("computer" in result.allowed_tools)
+
+    allowed = resolve_tool_access(policy, tools, "off").allowed_tools
+
+    assert allowed == (("computer", "computer_read") if active else ())
 
 
-@pytest.mark.parametrize("mode", ["all", "selected", "none"])
-def test_explicit_grants_round_trip_and_preserve_unavailable_tools(mode):
-    value = {"mode": mode, "granted": ["offline_extension"]}
-    if mode == "selected":
-        value["allowed"] = ["offline_extension"]
-    policy = normalize_tool_access(value)
-    assert policy.to_dict() == value
-    assert normalize_tool_access(policy) == policy
-    assert resolve_tool_access(policy, [], "off").allowed_tools == ()
+# --- Tool settings ----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("granted", ["computer", ["*"], ["computer", "computer"], [False]])
-def test_invalid_explicit_grants_are_rejected(granted):
-    with pytest.raises(ValueError):
-        normalize_tool_access({"mode": "all", "granted": granted})
+@pytest.mark.parametrize(
+    ("settings", "targets"),
+    [
+        ({}, ["*"]),
+        ({"subagent": {"allowed_agents": ["worker", "builder@vbot"]}}, ["worker", "builder@vbot"]),
+    ],
+)
+def test_subagent_settings_name_the_allowed_targets(
+    settings: dict[str, Any], targets: list[str]
+) -> None:
+    assert subagent_allowed_agents(settings) == targets
+
+
+@pytest.mark.parametrize(
+    ("allowed_env", "keys"),
+    [
+        (["OPENAI_API_KEY", "OPENAI_API_KEY", "HA_TOKEN"], ["OPENAI_API_KEY", "HA_TOKEN"]),
+        (["bad-key"], []),
+    ],
+)
+def test_bash_env_settings_return_ordered_unique_grants_or_fail_closed(
+    allowed_env: list[str], keys: list[str]
+) -> None:
+    assert bash_allowed_env_keys({"bash": {"allowed_env": allowed_env}}) == keys
+
+
+def _subagent_definitions() -> list[dict[str, Any]]:
+    return [
+        {"name": "read", "description": "Read", "parameters": {"type": "object"}},
+        {
+            "name": "subagent",
+            "description": "Start a Sub-Agent.",
+            "parameters": copy.deepcopy(SUBAGENT_TOOL_PARAMETERS),
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("allowed_agents", "targets"),
+    [
+        pytest.param([], ["orchestrator"], id="self-delegation-only"),
+        pytest.param(
+            ["worker", "reviewer@vbot", "worker"],
+            ["orchestrator", "worker", "reviewer@vbot"],
+            id="explicit-targets",
+        ),
+    ],
+)
+def test_agent_targets_narrow_the_subagent_schema_without_mutating_the_source(
+    allowed_agents: list[str], targets: list[str]
+) -> None:
+    source = _subagent_definitions()
+
+    definitions = apply_agent_target_tool_visibility(
+        source, agent_id="orchestrator", allowed_agents=allowed_agents
+    )
+
+    assert definitions[0] == source[0]
+    parameters = definitions[1]["parameters"]
+    assert parameters["properties"]["agent_id"]["enum"] == targets
+    assert parameters["required"] == SUBAGENT_TOOL_PARAMETERS["required"]
+    assert source == _subagent_definitions()
+
+
+def test_wildcard_agent_targets_leave_tool_definitions_unchanged() -> None:
+    source = _subagent_definitions()
+
+    assert (
+        apply_agent_target_tool_visibility(source, agent_id="orchestrator", allowed_agents=["*"])
+        is source
+    )

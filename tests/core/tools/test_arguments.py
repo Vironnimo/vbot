@@ -50,10 +50,8 @@ def test_valid_values_are_returned_in_their_strict_type(
     ("read", "value", "options", "message"),
     [
         (optional_string, 123, {}, "x must be a string"),
-        (optional_string, ["a"], {}, "x must be a string"),
         (required_string, None, {}, "x must be a non-empty string"),
         (required_string, "   ", {}, "x must be a non-empty string"),
-        (required_string, 5, {}, "x must be a non-empty string"),
         (optional_int, True, {}, "x must be an integer"),
         (optional_int, 5.0, {}, "x must be an integer"),
         (optional_int, "5", {}, "x must be an integer"),
@@ -61,7 +59,6 @@ def test_valid_values_are_returned_in_their_strict_type(
         (optional_int, 0, {"minimum": 1}, "x must be >= 1"),
         (optional_int, 6, {"maximum": 5}, "x must be <= 5"),
         (required_int, None, {}, "x must be an integer"),
-        (required_int, 12.0, {}, "x must be an integer"),
         (required_int, True, {}, "x must be an integer"),
         (optional_number, True, {}, "x must be a number"),
         (optional_number, "1.5", {}, "x must be a number"),

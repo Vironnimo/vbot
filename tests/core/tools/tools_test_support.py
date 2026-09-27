@@ -1,7 +1,8 @@
-"""Shared fixtures and fakes for tools behavior tests."""
+"""Shared Tool fakes for the Tools framework tests; `clock_at` also serves the scheduling Tools."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any, cast
@@ -24,8 +25,10 @@ READ_FILE_SCHEMA = {
 }
 
 
-def make_context(tool_name: str = "read_file", tool_call_id: str = "call_1") -> ToolContext:
-    return ToolContext(
+def make_context(
+    tool_name: str = "read_file", tool_call_id: str = "call_1", **fields: Any
+) -> ToolContext:
+    context = ToolContext(
         agent_id="agent-1",
         session_id="session-1",
         run_id="run-1",
@@ -36,22 +39,22 @@ def make_context(tool_name: str = "read_file", tool_call_id: str = "call_1") -> 
         vbot_root=Path("app"),
         data_root=Path("data"),
     )
+    return replace(context, **fields)
 
 
 def make_execution_config(
-    *,
-    allowed_tools: list[str] | None = None,
-    workspace: Path = Path("workspace"),
+    *, allowed_tools: list[str] | None = None, **fields: Any
 ) -> ToolExecutionConfig:
-    return ToolExecutionConfig(
+    config = ToolExecutionConfig(
         agent_id="agent-1",
         session_id="session-1",
         run_id="run-1",
-        workspace=workspace,
+        workspace=Path("workspace"),
         vbot_root=Path("app"),
         data_root=Path("data"),
         allowed_tools=allowed_tools,
     )
+    return replace(config, **fields)
 
 
 def read_file_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
