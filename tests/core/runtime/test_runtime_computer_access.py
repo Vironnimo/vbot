@@ -11,7 +11,7 @@ from core.runs import RunExecutionOwner
 from core.runtime.runtime import Runtime
 from core.tools.availability import ToolAccess
 from core.utils.config import Config
-from tests.resources.extensions.computer_use_helpers import computer as computer
+from tests.resources.extensions.computer_use.computer_use_test_support import computer as computer
 
 
 @pytest.mark.asyncio

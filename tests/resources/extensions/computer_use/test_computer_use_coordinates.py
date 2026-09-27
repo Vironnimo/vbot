@@ -1,4 +1,4 @@
-"""Computer use: coordinates behavior."""
+"""Computer use: views keep one coordinate space, delivery and resolution per target."""
 
 from __future__ import annotations
 
@@ -6,14 +6,9 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
-from tests.resources.extensions.computer_use_helpers import (
-    call,
-    capture,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    computer as computer,
-)
+from tests.resources.extensions.computer_use.computer_use_test_support import call, capture
 
 
 def test_short_view_ids_keep_previous_images_and_stale_view_rejection(computer, monkeypatch):
@@ -130,6 +125,7 @@ def test_window_defaults_execute_once_in_background_with_a_compact_image(compute
 
     client.call = shallow_capture
     first = service.handle(context, {"action": "capture", "pid": 1, "window_id": 2})
+    assert client.calls[-1][0] == "capture_pixels"  # vision requests no element tree
     assert first["data"]["foreground"] is False
     assert "mode" not in first["data"]  # vision is the default and is not echoed
     assert "elements" not in first["data"]
@@ -159,8 +155,7 @@ def test_launch_without_apply_is_not_a_silent_preview(computer):
     assert client.inputs == 1
 
 
-@pytest.mark.parametrize("duration", [None, 1800])
-@pytest.mark.parametrize("sequence", [False, True])
+@pytest.mark.parametrize("duration,sequence", [(None, False), (1800, True)])
 def test_background_drawing_preserves_the_requested_duration(computer, duration, sequence):
     data = capture(computer)["data"]
     step = {"action": "drag", "coordinate": [10, 20], "to_coordinate": [50, 60]}
@@ -175,10 +170,12 @@ def test_background_drawing_preserves_the_requested_duration(computer, duration,
     assert inputs[0]["duration_ms"] == (250 if duration is None else duration)
 
 
-def test_zoom_infers_window_keeps_parent_view_and_maps_nested_crops(computer):
+def test_zoom_maps_scaled_and_nested_crops_to_native_pixels(computer):
     service, context, client, _ = computer
     client.size = (3840, 2160)
     initial = capture(computer)["data"]
+    assert (initial["image_width"], initial["image_height"]) == (1600, 900)
+    assert Image.open(context.presentation_images[-1]["path"]).size == (3840, 2160)
     first = service.handle(
         context,
         {
@@ -188,7 +185,7 @@ def test_zoom_infers_window_keeps_parent_view_and_maps_nested_crops(computer):
             "to_coordinate": [200, 200],
         },
     )
-    assert first["ok"]
+    assert (first["data"]["image_width"], first["data"]["image_height"]) == (240, 240)
     assert first["data"]["parent_view_id"] == initial["view_id"]
     second = service.handle(
         context,
@@ -235,7 +232,7 @@ def test_zoom_infers_window_keeps_parent_view_and_maps_nested_crops(computer):
     )
 
 
-def test_original_resolution_survives_input_zoom_and_explicit_target(computer):
+def test_resolution_preference_persists_for_the_target_until_changed(computer):
     service, context, client, _ = computer
     client.size = (2578, 1398)
     original = capture(computer, resolution="original")["data"]
@@ -259,7 +256,11 @@ def test_original_resolution_survives_input_zoom_and_explicit_target(computer):
     ) == client.size
     result = call(computer, "key", shortcut="enter")["data"]
     assert result["observation"]["image_width"] == 2578
-    assert capture(computer, resolution="auto")["data"]["image_width"] == 1600
+    # A skipped observation keeps the preference; input can change it for the next capture.
+    assert call(computer, "key", shortcut="enter", capture_after=False)["ok"]
+    assert capture(computer)["data"]["image_width"] == 2578
+    assert call(computer, "key", shortcut="enter", capture_after=False, resolution="auto")["ok"]
+    assert capture(computer)["data"]["image_width"] == 1600
 
 
 def test_zoom_keeps_the_view_delivery_whatever_foreground_says(computer):
@@ -271,15 +272,6 @@ def test_zoom_keeps_the_view_delivery_whatever_foreground_says(computer):
     assert call(computer, "click", view_id=crop["data"]["view_id"], coordinate=[5, 5])["ok"]
     sent = next(args for name, args in computer[2].calls if name == "click")
     assert sent["delivery_mode"] == "foreground" and computer[2].inputs == 1
-
-
-def test_resolution_preference_outlives_views_after_skipped_observation(computer):
-    computer[2].size = (2578, 1398)
-    capture(computer, resolution="original")
-    assert call(computer, "key", shortcut="enter", capture_after=False)["ok"]
-    assert capture(computer)["data"]["image_width"] == 2578
-    assert call(computer, "key", shortcut="enter", capture_after=False, resolution="auto")["ok"]
-    assert capture(computer)["data"]["image_width"] == 1600
 
 
 def test_unexpected_observation_failure_preserves_applied_input(computer):

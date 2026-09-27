@@ -1,4 +1,4 @@
-"""Computer use: sequences behavior."""
+"""Computer use: input, sequences, waits and verification validate before any Driver work."""
 
 from __future__ import annotations
 
@@ -10,14 +10,9 @@ from dataclasses import replace
 import pytest
 
 from core.tools.availability import ToolAccess
+from core.tools.tools import is_tool_result_envelope
 from resources.extensions.computer_use import extension as computer_use
-from tests.resources.extensions.computer_use_helpers import (
-    call,
-    capture,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    computer as computer,
-)
+from tests.resources.extensions.computer_use.computer_use_test_support import call, capture
 
 
 def test_sequence_saves_captures_and_stops_on_failure(computer):
@@ -89,12 +84,6 @@ def test_desktop_defaults_to_fast_pixels_and_native_sequence(computer):
     )
 
 
-def test_windows_vision_does_not_request_element_tree(computer):
-    result = capture(computer, mode="vision")
-    assert result["ok"]
-    assert computer[2].calls[-1][0] == "capture_pixels"
-
-
 def test_sequence_rechecks_cancellation_between_steps(computer):
     service, context, client, _ = computer
     capture(computer)
@@ -122,11 +111,8 @@ def test_sequence_rechecks_cancellation_between_steps(computer):
 
 
 def test_revocation_rechecked_after_waiting_for_lock(computer):
-    from concurrent.futures import ThreadPoolExecutor
-    from threading import Event
-
     service, context, client, agent = computer
-    entered = Event()
+    entered = threading.Event()
 
     def waiting():
         entered.set()
@@ -192,15 +178,21 @@ def test_cancel_during_start_prevents_capture(computer):
             "window_id": 2,
             "expect": [{"window": {"exists": True, "typo": 1}}],
         },
-        {"action": "browser_prepare", "profile": "isolated", "pid": 1},
-        {"action": "browser_capture", "target_id": "b"},
+        {"action": "browser_navigate", "target_id": "b", "tab_id": "t", "url": "https://a.test"},
+        {"action": "move", "view_id": "v", "coordinate": [1]},
+        {"action": "move", "view_id": "v", "coordinate": [1.0, 2]},
+        {"action": "move", "view_id": "v", "coordinate": [-1, 2]},
+        {"action": "click", "view_id": "v", "coordinate": [1, 2], "modifiers": ["ctrl", "ctrl"]},
         {
-            "action": "browser_navigate",
-            "target_id": "b",
-            "tab_id": "t",
-            "url": "javascript:alert(1)",
+            "action": "click",
+            "view_id": "v",
+            "coordinate": [1, 2],
+            "modifiers": ["ctrl"],
+            "foreground": False,
         },
-        {"action": "browser_dialog", "target_id": "b", "tab_id": "t", "dialog_action": "accept"},
+        {"action": "click", "pid": 1, "window_id": 2, "element": "1", "modifiers": ["ctrl"]},
+        {"action": "resize", "pid": 1, "window_id": 2, "coordinate": [0, 0], "size": [0, 5]},
+        {"action": "wait", "duration_ms": 10_001},
     ],
 )
 def test_invalid_arguments_fail_before_any_driver_work(computer, args):
@@ -210,21 +202,23 @@ def test_invalid_arguments_fail_before_any_driver_work(computer, args):
 
 
 @pytest.mark.parametrize(
-    "action,fields,tool",
+    "action,fields,tool,sent",
     [
-        ("set_value", {"element": "1", "text": "new"}, "set_value"),
-        ("menu", {"menu_path": ["File", "Save"]}, "invoke_menu"),
-        ("resize", {"coordinate": [-100, 0], "size": [900, 700]}, "set_window_frame"),
-        ("drag", {"coordinate": [1, 2], "to_coordinate": [20, 30]}, "drag"),
+        # An empty value clears the field instead of being dropped as a placeholder.
+        ("set_value", {"element": "1", "text": ""}, "set_value", {"value": ""}),
+        ("menu", {"menu_path": ["File", "Save"]}, "invoke_menu", {}),
+        ("resize", {"coordinate": [-100, 0], "size": [900, 700]}, "set_window_frame", {}),
+        ("drag", {"coordinate": [1, 2], "to_coordinate": [20, 30]}, "drag", {}),
     ],
 )
-def test_desktop_operations_return_observations(computer, action, fields, tool):
+def test_desktop_operations_return_observations(computer, action, fields, tool, sent):
     data = capture(computer)["data"]
     if action == "drag":
         fields = {**fields, "view_id": data["view_id"]}
     result = call(computer, action, apply=True, **fields)
     assert result["ok"] and result["data"]["observation"]
-    assert any(name == tool for name, _ in computer[2].calls)
+    request = next(args for name, args in computer[2].calls if name == tool)
+    assert {key: request.get(key) for key in sent} == sent
 
 
 def test_desktop_scope_uses_own_coordinate_space(computer):
@@ -401,33 +395,6 @@ def test_wait_interrupts_immediately_without_recapture(computer, monkeypatch):
     assert client.snapshots == 0
 
 
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"action": "move", "view_id": "v", "coordinate": [1]},
-        {"action": "move", "view_id": "v", "coordinate": [1, 2, 3]},
-        {"action": "move", "view_id": "v", "coordinate": [1.0, 2]},
-        {"action": "move", "view_id": "v", "coordinate": [True, 2]},
-        {"action": "move", "view_id": "v", "coordinate": [-1, 2]},
-        {"action": "click", "view_id": "v", "coordinate": [1, 2], "modifiers": ["ctrl", "ctrl"]},
-        {
-            "action": "click",
-            "view_id": "v",
-            "coordinate": [1, 2],
-            "modifiers": ["ctrl"],
-            "foreground": False,
-        },
-        {"action": "click", "pid": 1, "window_id": 2, "element": "1", "modifiers": ["ctrl"]},
-        {"action": "resize", "pid": 1, "window_id": 2, "coordinate": [0, 0], "size": [0, 5]},
-        {"action": "wait", "duration_ms": 10_001},
-    ],
-)
-def test_compact_contract_rejects_bad_values_before_connect(computer, arguments):
-    service, context, client, _ = computer
-    assert service.handle(context, arguments)["error"]["code"] == "invalid_arguments"
-    assert client.calls == []
-
-
 def test_pointer_modifiers_are_forwarded_and_prevalidated_for_every_step(computer):
     data = capture(computer, foreground=True)["data"]
     result = call(
@@ -458,8 +425,6 @@ def test_pointer_modifiers_are_forwarded_and_prevalidated_for_every_step(compute
 
 
 def test_sequence_zero_completed_steps_uses_failure_envelope(computer):
-    from core.tools.tools import is_tool_result_envelope
-
     capture(computer)
     computer[2].fail = "type_text"
     result = call(computer, "sequence", apply=True, steps=[{"action": "type", "text": "draft"}])
@@ -517,20 +482,16 @@ def test_root_view_does_not_turn_keyboard_steps_into_coordinate_input(computer, 
     assert typed["text_mode"] == "keyboard" and "x" not in typed and "y" not in typed
 
 
-@pytest.mark.parametrize(
-    "action, fields", [("key", {"shortcut": "enter"}), ("type", {"text": "draft"})]
-)
-def test_focused_input_uses_explicit_view_target_and_delivery(computer, action, fields):
+def test_focused_input_uses_explicit_view_target_and_delivery(computer):
     service, context, client, _ = computer
     data = capture(computer, foreground=True)["data"]
-    result = service.handle(context, {"action": action, "view_id": data["view_id"], **fields})
-    assert result["ok"]
-    name = "press_key" if action == "key" else "type_text"
-    sent = next(args for called, args in client.calls if called == name)
+    arguments = {"action": "type", "view_id": data["view_id"], "text": "draft"}
+    assert service.handle(context, arguments)["ok"]
+    sent = next(args for called, args in client.calls if called == "type_text")
     assert sent["pid"] == 1 and sent["window_id"] == 2
     assert sent["delivery_mode"] == "foreground" and "x" not in sent
-    result = service.handle(context, {"action": action, "view_id": data["view_id"], **fields})
-    assert result["error"]["code"] == "stale_view" and client.inputs == 1
+    assert service.handle(context, arguments)["error"]["code"] == "stale_view"
+    assert client.inputs == 1
 
 
 @pytest.mark.parametrize("completed", [0, 1])

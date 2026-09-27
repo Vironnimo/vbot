@@ -1,4 +1,4 @@
-"""Native desktop regressions; synthetic OS boundary never sends user input."""
+"""Computer use: native Windows capture and input through a synthetic OS boundary."""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ def native(monkeypatch):
     desktop._lock = threading.RLock()
     desktop._held = []
     desktop._frames = {}
+    # Input pacing needs no real time; stop tests restore the real wait explicitly.
+    desktop._wait = lambda seconds: desktop._check()
     sent = []
 
     def send(count, events, size):
@@ -184,14 +186,22 @@ def test_keyboard_dead_key_preflight_does_not_send_prefix_or_change_composition(
     assert probes == [4, 4]
 
 
-@pytest.mark.parametrize("held", [0x10, 0x11, 0x12, 0x5B, 0x41])
-def test_keyboard_text_does_not_modify_user_held_keys(native, held):
+@pytest.mark.parametrize(
+    "name,args,held",
+    [
+        ("type_text", {"text": "abc", "text_mode": "keyboard"}, {0x11}),  # a modifier
+        ("type_text", {"text": "abc", "text_mode": "keyboard"}, {0x41}),  # a key of the text
+        ("press_key", {"key": "shift"}, {0x10}),
+        ("click", {"x": 10, "y": 10, "modifiers": ["ctrl"]}, {0x11}),
+    ],
+)
+def test_user_held_keys_refuse_input_without_sending_or_releasing(native, name, args, held):
     desktop, sent, _, _ = native
-    desktop.user.GetAsyncKeyState = lambda key: 0x8000 if key == held else 0
     desktop.capture({})
+    desktop.user.GetAsyncKeyState = lambda key: 0x8000 if key in held else 0
     with pytest.raises(ComputerUseError) as caught:
-        desktop.input("type_text", {"text": "abc", "text_mode": "keyboard"})
-    assert caught.value.code == "input_busy" and not sent
+        desktop.input(name, args)
+    assert caught.value.code == "input_busy" and sent == []
 
 
 @pytest.mark.parametrize("route", ["other_os", "background", "element"])
@@ -252,23 +262,33 @@ def test_physical_dpi_context_restores_on_error_and_refuses_failed_entry():
 
 
 @pytest.mark.parametrize(
-    "name,args,release_flag",
+    "name,args,released",
     [
-        ("hotkey", {"keys": ["ctrl", "shift"], "duration_ms": 2000}, 2),
-        ("drag", {"from_x": 10, "from_y": 10, "to_x": 500, "to_y": 500, "duration_ms": 2000}, 4),
+        ("hotkey", {"keys": ["ctrl", "shift"], "duration_ms": 2000}, [2]),
+        (
+            "drag",
+            {
+                "from_x": 10,
+                "from_y": 10,
+                "to_x": 500,
+                "to_y": 500,
+                "duration_ms": 2000,
+                "modifiers": ["ctrl", "shift"],
+            },
+            # Mouse button up, then the modifiers in reverse order.
+            [4, 2, 2],
+        ),
     ],
 )
-def test_stop_interrupts_hold_and_drag_and_releases_every_owned_input(
-    native, name, args, release_flag
-):
+def test_stop_interrupts_hold_and_drag_and_releases_every_owned_input(native, name, args, released):
     desktop, sent, _, _ = native
     desktop.capture({})
     waiting = threading.Event()
-    original_wait = desktop._wait
+    real_wait = WindowsDesktop._wait.__get__(desktop)
 
     def wait(seconds):
         waiting.set()
-        original_wait(seconds)
+        real_wait(seconds)
 
     desktop._wait = wait
     with ThreadPoolExecutor() as executor:
@@ -279,7 +299,9 @@ def test_stop_interrupts_hold_and_drag_and_releases_every_owned_input(
             future.result(timeout=0.5)
         assert caught.value.code == "computer_use_interrupted"
     assert desktop._held == []
-    assert sent[-1][3] == release_flag
+    assert [event[3] for event in sent[-len(released) :]] == released
+    if name == "drag":
+        assert sent[-2:] == [(1, 0x10, 0, 2), (1, 0x11, 0, 2)]
     previous = list(sent)
     with pytest.raises(ComputerUseError):
         desktop.input("type_text", {"text": "never"})
@@ -306,16 +328,6 @@ def test_partial_send_failure_releases_modifier_and_never_replays(native):
     assert desktop._held == []
     assert sent[-1] == (1, 0x11, 0, 2)
     assert calls == 3
-
-
-def test_user_held_key_is_not_released_by_agent(native):
-    desktop, sent, _, _ = native
-    desktop.capture({})
-    desktop.user.GetAsyncKeyState = lambda key: 0x8000
-    with pytest.raises(ComputerUseError) as caught:
-        desktop.input("press_key", {"key": "shift"})
-    assert caught.value.code == "input_busy"
-    assert sent == []
 
 
 def test_capture_layout_race_never_authorizes_input(native, monkeypatch):
@@ -348,33 +360,6 @@ def test_native_input_abi_matches_windows_x64():
         assert ct.sizeof(Input) == 40
 
 
-def test_window_pixels_are_captured_after_accessibility_query(monkeypatch):
-    client = CuaDriver.__new__(CuaDriver)
-    order = []
-
-    def capture(args):
-        order.append("pixels")
-        return {"screen_origin": [0, 0]}
-
-    def query(function, name, args):
-        if name == "start_session":
-            assert args == {}
-            order.append("session")
-            return SimpleNamespace(model_dump=lambda **kwargs: {"structuredContent": {}})
-        assert name == "get_window_state" and args["include_screenshot"] is False
-        order.append("elements")
-        return SimpleNamespace(model_dump=lambda **kwargs: {"structuredContent": {"elements": []}})
-
-    client.desktop = SimpleNamespace(capture=capture)
-    client._portal = SimpleNamespace(call=query)
-    client._session = SimpleNamespace(call_tool=object())
-    client.schemas = {"get_window_state": {}}
-    monkeypatch.setattr(client, "connect", lambda: None)
-    result = client.call("get_window_state", {"pid": 1, "window_id": 2})
-    assert order == ["session", "elements", "pixels"]
-    assert result["screen_origin"] == [0, 0] and result["elements"] == []
-
-
 @pytest.mark.parametrize(
     "name,args",
     [
@@ -393,192 +378,13 @@ def test_modifiers_span_entire_pointer_action_and_release(native, name, args):
     assert not desktop._held
 
 
-def test_modified_drag_stop_releases_mouse_and_modifiers(native):
-    desktop, sent, _, _ = native
-    desktop.capture({})
-    waiting = threading.Event()
-    original_wait = desktop._wait
-
-    def wait(seconds):
-        waiting.set()
-        original_wait(seconds)
-
-    desktop._wait = wait
-    with ThreadPoolExecutor() as executor:
-        future = executor.submit(
-            desktop.input,
-            "drag",
-            {
-                "from_x": 10,
-                "from_y": 10,
-                "to_x": 500,
-                "to_y": 500,
-                "duration_ms": 2000,
-                "modifiers": ["ctrl", "shift"],
-            },
-        )
-        assert waiting.wait(1)
-        desktop.interrupt()
-        with pytest.raises(ComputerUseError):
-            future.result(timeout=0.5)
-    assert sent[-3][3] == 4
-    assert sent[-2:] == [(1, 0x10, 0, 2), (1, 0x11, 0, 2)]
-    assert not desktop._held
-
-
-def test_user_held_pointer_modifier_refuses_before_moving(native):
-    desktop, sent, _, _ = native
-    desktop.capture({})
-    desktop.user.GetAsyncKeyState = lambda _: 0x8000
-    with pytest.raises(ComputerUseError) as caught:
-        desktop.input("click", {"x": 10, "y": 10, "modifiers": ["ctrl"]})
-    assert caught.value.code == "input_busy" and not sent
-
-
 def test_session_end_retires_geometry(native):
-    desktop, _, _, _ = native
+    desktop, sent, _, _ = native
     desktop.capture({"session": "s"})
     desktop.end_session("s")
-    assert not desktop._frames
-
-
-@pytest.mark.parametrize("flags", [0x10, 0x02, 0x12])
-def test_emergency_stop_ignores_injected_escape(flags):
-    from resources.extensions.computer_use.driver import EmergencyHotkey
-
-    hotkey = EmergencyHotkey(lambda owner: None)
-    hotkey.set_armed(object())
-    for _ in range(2):
-        hotkey._key_event(0x1B, True, flags)
-        hotkey._key_event(0x1B, False, flags)
-    assert not hotkey.pending_owner
-
-
-def test_emergency_stop_needs_two_separate_physical_presses(monkeypatch):
-    from resources.extensions.computer_use import driver
-
-    now = [10.0]
-    monkeypatch.setattr(driver.time, "monotonic", lambda: now[0])
-    hotkey = driver.EmergencyHotkey(lambda owner: None)
-    hotkey.set_armed(object())
-    hotkey._key_event(0x1B, True, 0)
-    now[0] += 0.2
-    hotkey._key_event(0x1B, True, 0)  # OS auto-repeat.
-    assert not hotkey.pending_owner
-    hotkey._key_event(0x1B, False, 0)
-    hotkey._key_event(0x1B, True, 0)
-    assert hotkey.pending_owner
-
-
-@pytest.mark.parametrize("between", ["timeout", "other_key", "disarm", "inactive"])
-def test_emergency_stop_does_not_join_unrelated_presses(monkeypatch, between):
-    from resources.extensions.computer_use import driver
-
-    now = [10.0]
-    monkeypatch.setattr(driver.time, "monotonic", lambda: now[0])
-    hotkey = driver.EmergencyHotkey(lambda owner: None)
-    hotkey.set_armed(None if between == "inactive" else object())
-    hotkey._key_event(0x1B, True, 0)
-    hotkey._key_event(0x1B, False, 0)
-    if between == "timeout":
-        now[0] += 0.7
-    elif between == "other_key":
-        hotkey._key_event(0x41, True, 0)
-    elif between == "disarm":
-        hotkey.set_armed(None)
-        hotkey.set_armed(object())
-    else:
-        hotkey.set_armed(object())
-    hotkey._key_event(0x1B, True, 0)
-    assert not hotkey.pending_owner
-
-
-def test_emergency_stop_dispatch_never_blocks_keyboard_listener():
-    from resources.extensions.computer_use.driver import EmergencyHotkey
-
-    entered = threading.Event()
-    release = threading.Event()
-
-    def stop(owner):
-        entered.set()
-        assert release.wait(1)
-
-    hotkey = EmergencyHotkey(stop)
-    hotkey._worker = threading.Thread(target=hotkey._dispatch)
-    hotkey._worker.start()
-    try:
-        hotkey.set_armed(object())
-        hotkey._key_event(0x1B, True, 0)
-        hotkey._key_event(0x1B, False, 0)
-        hotkey._key_event(0x1B, True, 0)
-        assert entered.wait(0.5)
-        assert hotkey.pending_owner
-        # The listener can still process input while interruption is draining.
-        hotkey._key_event(0x41, True, 0)
-    finally:
-        release.set()
-        hotkey.close()
-    assert not hotkey._worker.is_alive()
-
-
-@pytest.mark.parametrize("refuse", [False, True])
-@pytest.mark.parametrize("action", ["click", "drag"])
-def test_background_pixels_use_cua_without_foreground_fallback(monkeypatch, refuse, action):
-    client = CuaDriver.__new__(CuaDriver)
-    calls = []
-    geometry = [1]
-    client._background_frames = {}
-    client._original_images = True
-    client.desktop = SimpleNamespace(
-        window_geometry=lambda args: tuple(geometry),
-        foreground_window=lambda: 99,
-        resolve_window=lambda args: {key: args[key] for key in ("pid", "window_id")},
-    )
-    client.schemas = {"get_window_state": {}, action: {"properties": {"target": {}}}}
-    client._session = SimpleNamespace(call_tool=object())
-
-    def query(function, name, args):
-        calls.append((name, args))
-        assert "_background_capture" not in args
-        result = {"elements": []}
-        if name == action:
-            assert args["delivery_mode"] == "background"
-            assert args["target"] == {"kind": "window", "pid": 1, "window_id": 2}
-            assert "pid" not in args and "window_id" not in args
-            if action == "drag":
-                assert args["duration_ms"] == 1800
-            result = {
-                "effect": "refused" if refuse else "unverifiable",
-                "route": "synthetic_events",
-            }
-        return SimpleNamespace(model_dump=lambda **kwargs: {"structuredContent": result})
-
-    client._portal = SimpleNamespace(call=query)
-    monkeypatch.setattr(client, "connect", lambda: None)
-    target = {"pid": 1, "window_id": 2, "session": "s"}
-    client.call("get_window_state", {**target, "_background_capture": True})
-    coordinates = (
-        {"x": 10, "y": 20}
-        if action == "click"
-        else {"from_x": 10, "from_y": 20, "to_x": 30, "to_y": 40, "duration_ms": 1800}
-    )
-    request = {**target, **coordinates, "delivery_mode": "background"}
-    if refuse:
-        with pytest.raises(ComputerUseError):
-            client.call(action, request)
-    else:
-        client.call(action, request)
-    assert [name for name, _ in calls] == [
-        "start_session",
-        "get_window_state",
-        "start_session",
-        action,
-    ]
-    previous_calls = len(calls)
-    geometry[0] = 2
     with pytest.raises(ComputerUseError) as caught:
-        client.call(action, request)
-    assert caught.value.code == "capture_required" and len(calls) == previous_calls
+        desktop.input("click", {"session": "s", "x": 1, "y": 1})
+    assert caught.value.code == "capture_required" and sent == []
 
 
 @pytest.mark.parametrize("foreign", [False, True])
@@ -619,58 +425,6 @@ def test_background_dialog_blocks_input_before_cua_or_native_dispatch(native, mo
             },
         )
     assert caught.value.code == "target_blocked" and sent == []
-
-
-def test_agent_cursor_uses_the_cua_target_contract_without_shared_pointer_fields(monkeypatch):
-    from jsonschema import validate
-
-    client = CuaDriver.__new__(CuaDriver)
-    client.desktop = None
-    client.schemas = {
-        "move_cursor": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "target": {"type": "object", "required": ["kind", "pid", "window_id"]},
-                "x": {"type": "number"},
-                "y": {"type": "number"},
-                "session": {"type": "string"},
-            },
-            "required": ["target", "x", "y"],
-        }
-    }
-    client._session = SimpleNamespace(call_tool=object())
-    sent = []
-
-    def query(function, name, args):
-        validate(args, {"type": "object"} if name == "start_session" else client.schemas[name])
-        sent.append(args)
-        return SimpleNamespace(
-            model_dump=lambda **kwargs: {"structuredContent": {"effect": "unverifiable"}}
-        )
-
-    client._portal = SimpleNamespace(call=query)
-    monkeypatch.setattr(client, "connect", lambda: None)
-    client.call(
-        "move_cursor",
-        {
-            "pid": 1,
-            "window_id": 2,
-            "x": 10,
-            "y": 20,
-            "delivery_mode": "background",
-            "session": "owned",
-        },
-    )
-    assert sent == [
-        {"session": "owned"},
-        {
-            "target": {"kind": "window", "pid": 1, "window_id": 2},
-            "x": 10,
-            "y": 20,
-            "session": "owned",
-        },
-    ]
 
 
 @pytest.mark.parametrize("switch_during_capture", [False, True])

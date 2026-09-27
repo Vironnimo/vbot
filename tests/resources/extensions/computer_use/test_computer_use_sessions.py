@@ -1,4 +1,4 @@
-"""Computer use: sessions behavior."""
+"""Computer use: Driver sessions and connections follow the Runs that own them."""
 
 from __future__ import annotations
 
@@ -8,16 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from resources.extensions.computer_use.driver import ComputerUseError, unpack
-from tests.resources.extensions.computer_use_helpers import (
-    call,
-    capture,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    computer as computer,
-)
-from tests.resources.extensions.computer_use_helpers import (
-    lifecycle_connection as lifecycle_connection,
-)
+from tests.resources.extensions.computer_use.computer_use_test_support import call, capture
 
 
 def test_owned_session_cleanup_and_retirement(computer):
@@ -193,3 +184,43 @@ def test_failed_named_renewal_never_dispatches_input(computer, lifecycle_connect
             "click", {"session": name, "pid": 1, "window_id": 2, "delivery_mode": "background"}
         )
     assert connection.calls[before:] == [("start_session", {"session": name})]
+
+
+def test_transport_loss_during_recapture_retires_all_sessions(computer):
+    service, context, client, _ = computer
+    capture(computer)
+    service._driver = client
+    original_call = client.call
+
+    def response(name, args):
+        if name in {"get_window_state", "capture_pixels"}:
+            client.broken = True
+            raise ComputerUseError("test-owned transport failure")
+        return original_call(name, args)
+
+    client.call = response
+    result = call(computer, "type", text="draft", apply=True)
+    assert result["ok"] and result["data"]["applied"]
+    assert not service._sessions
+
+
+def test_failed_session_cleanup_is_retained_for_shutdown_retry(computer):
+    service, context, client, _ = computer
+    capture(computer)
+    client.fail = "end_session"
+    service.run_end(context)
+    assert len(service._sessions) == 1
+    client.fail = None
+    service.close()
+    assert not service._sessions
+
+
+def test_cleanup_after_stop_does_not_start_a_replacement_worker(computer):
+    service, _, client, _ = computer
+    capture(computer)
+    service._driver = client
+    client.broken = True
+    previous = list(client.calls)
+    service._close_sessions()
+    assert not service._sessions
+    assert client.calls == previous

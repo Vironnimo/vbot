@@ -1,21 +1,24 @@
-"""Computer use: contract behavior."""
+"""Computer use: the Provider probe matrix and the bundled Skill match the Tool."""
 
 from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
 
+from core.skills import SkillRegistry
 from resources.extensions.computer_use import extension as computer_use
-from tests.resources.extensions.computer_use_helpers import (
-    computer as computer,
-)
-from tests.resources.extensions.computer_use_helpers import dispatch
+from scripts.provider_probe.computer_cases import COMPUTER_CASE_ARGUMENTS
+from tests.resources.extensions.computer_use.computer_use_test_support import dispatch
 
 
-def test_complete_provider_matrix_runs_through_real_handler(computer):
-    from scripts.probe_provider_tool_call import COMPUTER_CASE_ARGUMENTS
-
+def test_complete_provider_matrix_runs_through_real_handler(computer, monkeypatch):
     service, run_context, client, _ = computer
+    # Waits and held keys in the matrix advance a controlled clock instead of real time.
+    clock = [0.0]
+    monkeypatch.setattr(computer_use.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        service._wake, "wait", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
     for case, arguments in COMPUTER_CASE_ARGUMENTS.items():
         # Each case runs in its own Run, so earlier captures never make a target ambiguous.
         context = replace(run_context, run_id=f"run-{case}")
@@ -61,8 +64,6 @@ def test_complete_provider_matrix_runs_through_real_handler(computer):
 
 
 def test_computer_skill_is_discoverable_from_the_loaded_extension():
-    from core.skills import SkillRegistry
-
     root = Path(computer_use.__file__).parent / "skills"
     registry = SkillRegistry.load(root)
     skill = registry.get("computer-use")
