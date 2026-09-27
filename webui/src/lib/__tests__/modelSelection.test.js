@@ -1,60 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { t } from '../i18n.js';
 import {
-  SUITABLE_MIN_CONTEXT,
   buildModelSelectOptions,
   createModelCatalogLoader,
   filterModelSelectOptions,
   modelFilterFooterLabel,
   modelSelectionValue,
   modelShortName,
-  modelSuitability,
   parseModelSelectionValue,
   selectModelValue,
 } from '../modelSelection.js';
-
-describe('createModelCatalogLoader', () => {
-  it('applies only the newest overlapping catalog response', async () => {
-    const firstModels = deferred();
-    const firstConnections = deferred();
-    const listModels = vi
-      .fn()
-      .mockReturnValueOnce(firstModels.promise)
-      .mockResolvedValueOnce({ models: [{ id: 'new/model' }] });
-    const listConnections = vi
-      .fn()
-      .mockReturnValueOnce(firstConnections.promise)
-      .mockResolvedValueOnce({ connections: [{ id: 'new:connection' }] });
-    const loader = createModelCatalogLoader({ listModels, listConnections });
-
-    const older = loader.load();
-    const newer = loader.load();
-
-    await expect(newer).resolves.toEqual({
-      models: [{ id: 'new/model' }],
-      connections: [{ id: 'new:connection' }],
-    });
-    firstModels.resolve({ models: [{ id: 'stale/model' }] });
-    firstConnections.resolve({ connections: [{ id: 'stale:connection' }] });
-    await expect(older).resolves.toBeNull();
-  });
-
-  it('suppresses stale failures after a newer load starts', async () => {
-    const firstModels = deferred();
-    const listModels = vi
-      .fn()
-      .mockReturnValueOnce(firstModels.promise)
-      .mockResolvedValueOnce({ models: [] });
-    const listConnections = vi.fn().mockResolvedValue({ connections: [] });
-    const loader = createModelCatalogLoader({ listModels, listConnections });
-
-    const older = loader.load();
-    await loader.load();
-    firstModels.reject(new Error('stale failure'));
-
-    await expect(older).resolves.toBeNull();
-  });
-});
 
 function deferred() {
   let resolve;
@@ -64,12 +20,6 @@ function deferred() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
-}
-
-function translateWithValues(_key, fallback, values = {}) {
-  return fallback.replace(/\{(\w+)\}/g, (match, name) =>
-    name in values ? values[name] : match,
-  );
 }
 
 function catalogModel(id, providerId, connections) {
@@ -99,6 +49,45 @@ function account(id, usable = true) {
   return { id, usable, source: 'data_dir' };
 }
 
+const defaultAccount = () =>
+  t('settings.providers.accounts.defaultLabel', 'Default');
+
+function valuesAndLabels(options) {
+  return options.slice(1).map(({ value, label }) => [value, label]);
+}
+
+describe('createModelCatalogLoader', () => {
+  it('applies only the newest overlapping catalog response and drops stale results and failures', async () => {
+    const staleModels = deferred();
+    const staleConnections = deferred();
+    const failingModels = deferred();
+    const listModels = vi
+      .fn()
+      .mockReturnValueOnce(staleModels.promise)
+      .mockReturnValueOnce(failingModels.promise)
+      .mockResolvedValueOnce({ models: [{ id: 'new/model' }] });
+    const listConnections = vi
+      .fn()
+      .mockReturnValueOnce(staleConnections.promise)
+      .mockResolvedValue({ connections: [{ id: 'new:connection' }] });
+    const loader = createModelCatalogLoader({ listModels, listConnections });
+
+    const stale = loader.load();
+    const failing = loader.load();
+    const newest = loader.load();
+
+    await expect(newest).resolves.toEqual({
+      models: [{ id: 'new/model' }],
+      connections: [{ id: 'new:connection' }],
+    });
+    staleModels.resolve({ models: [{ id: 'stale/model' }] });
+    staleConnections.resolve({ connections: [{ id: 'stale:connection' }] });
+    failingModels.reject(new Error('stale failure'));
+    await expect(stale).resolves.toBeNull();
+    await expect(failing).resolves.toBeNull();
+  });
+});
+
 describe('buildModelSelectOptions', () => {
   it('keeps one unpinned option per connection without account data', () => {
     const options = buildModelSelectOptions({
@@ -120,459 +109,226 @@ describe('buildModelSelectOptions', () => {
     ]);
   });
 
-  it('keeps one unpinned option when only one account is usable', () => {
-    const options = buildModelSelectOptions({
-      models: [catalogModel('openai/gpt-5.2', 'openai')],
-      connections: [
+  it.each([
+    [
+      'only one usable account',
+      [
         usableConnection('openai:api-key', 'openai', 'API Key', [
           account('default'),
           account('work', false),
         ]),
       ],
-    });
-
-    expect(options.slice(1)).toEqual([
-      {
-        value: 'openai/gpt-5.2::api-key',
-        label: 'openai/gpt-5.2',
-        code: true,
-        isUnavailable: false,
-        suitable: true,
-        suitabilityReasons: [],
-      },
-    ]);
-  });
-
-  it('expands one option per usable account on a multi-account connection', () => {
-    const options = buildModelSelectOptions({
-      models: [catalogModel('openai/gpt-5.2', 'openai')],
-      connections: [
-        usableConnection('openai:api-key', 'openai', 'API Key', [
-          account('default'),
-          account('work'),
-        ]),
-      ],
-    });
-
-    expect(options.slice(1)).toEqual([
-      {
-        value: 'openai/gpt-5.2::api-key',
-        label: 'openai/gpt-5.2 (Default)',
-        code: true,
-        isUnavailable: false,
-        suitable: true,
-        suitabilityReasons: [],
-      },
-      {
-        value: 'openai/gpt-5.2::api-key:work',
-        label: 'openai/gpt-5.2 (work)',
-        code: true,
-        isUnavailable: false,
-        suitable: true,
-        suitabilityReasons: [],
-      },
-    ]);
-  });
-
-  it('labels accounts with the connection when the provider has several connections', () => {
-    const options = buildModelSelectOptions({
-      models: [catalogModel('openai/gpt-5.2', 'openai')],
-      connections: [
-        usableConnection('openai:api-key', 'openai', 'API Key', [
-          account('default'),
-          account('work'),
-        ]),
-        usableConnection('openai:subscription', 'openai', 'Subscription'),
-      ],
-    });
-
-    expect(options.slice(1)).toEqual([
-      {
-        value: 'openai/gpt-5.2::api-key',
-        label: 'openai/gpt-5.2 (API Key – Default)',
-        code: true,
-        isUnavailable: false,
-        suitable: true,
-        suitabilityReasons: [],
-      },
-      {
-        value: 'openai/gpt-5.2::api-key:work',
-        label: 'openai/gpt-5.2 (API Key – work)',
-        code: true,
-        isUnavailable: false,
-        suitable: true,
-        suitabilityReasons: [],
-      },
-      {
-        value: 'openai/gpt-5.2::subscription',
-        label: 'openai/gpt-5.2 (Subscription)',
-        code: true,
-        isUnavailable: false,
-        suitable: true,
-        suitabilityReasons: [],
-      },
-    ]);
-  });
-
-  it('treats an account-pinned selection matching a catalog option as available', () => {
-    const options = buildModelSelectOptions({
-      models: [catalogModel('openai/gpt-5.2', 'openai')],
-      connections: [
-        usableConnection('openai:api-key', 'openai', 'API Key', [
-          account('default'),
-          account('work'),
-        ]),
-      ],
-      selectedModelValue: 'openai/gpt-5.2::api-key:work',
-    });
-
-    expect(options.some((option) => option.isUnavailable)).toBe(false);
-  });
-
-  it('treats an explicit default-account pin as the unpinned option', () => {
-    const options = buildModelSelectOptions({
-      models: [catalogModel('openai/gpt-5.2', 'openai')],
-      connections: [usableConnection('openai:api-key', 'openai', 'API Key')],
-      selectedModelValue: 'openai/gpt-5.2::api-key:default',
-    });
-
-    expect(options.some((option) => option.isUnavailable)).toBe(false);
-  });
-
-  it('only offers a connection-restricted model on its allowed connection', () => {
-    const options = buildModelSelectOptions({
-      models: [catalogModel('openai/gpt-5.4', 'openai', ['subscription'])],
-      connections: [
-        usableConnection('openai:api-key', 'openai', 'API Key'),
-        usableConnection('openai:subscription', 'openai', 'Subscription'),
-      ],
-    });
-
-    expect(options.slice(1)).toEqual([
-      {
-        value: 'openai/gpt-5.4::subscription',
-        label: 'openai/gpt-5.4',
-        code: true,
-        isUnavailable: false,
-        suitable: true,
-        suitabilityReasons: [],
-      },
-    ]);
-  });
-
-  it('drops a restricted model entirely when no allowed connection is usable', () => {
-    const options = buildModelSelectOptions({
-      models: [catalogModel('openai/gpt-5.2', 'openai', ['api-key'])],
-      connections: [
-        usableConnection('openai:subscription', 'openai', 'Subscription'),
-      ],
-      emptyLabel: 'None',
-    });
-
-    expect(options).toEqual([
-      { value: '', label: 'None', isUnavailable: false },
-    ]);
-  });
-
-  it('marks a saved selection on a now-forbidden connection as unavailable', () => {
-    const options = buildModelSelectOptions({
-      models: [catalogModel('openai/gpt-5.4', 'openai', ['subscription'])],
-      connections: [
-        usableConnection('openai:api-key', 'openai', 'API Key'),
-        usableConnection('openai:subscription', 'openai', 'Subscription'),
-      ],
-      selectedModelValue: 'openai/gpt-5.4::api-key',
-      translate: translateWithValues,
-    });
-
-    expect(options[1]).toEqual({
-      value: 'openai/gpt-5.4::api-key',
-      label: 'Unavailable / custom: openai/gpt-5.4 (API Key)',
-      isUnavailable: true,
-    });
-    expect(
-      options.some((option) => option.value === 'openai/gpt-5.4::subscription'),
-    ).toBe(true);
-  });
-
-  it('marks a selection pinned to an unknown account as unavailable with the account in the label', () => {
-    const options = buildModelSelectOptions({
-      models: [catalogModel('openai/gpt-5.2', 'openai')],
-      connections: [
-        usableConnection('openai:api-key', 'openai', 'API Key', [
-          account('default'),
-          account('work'),
-        ]),
-      ],
-      selectedModelValue: 'openai/gpt-5.2::api-key:old',
-      translate: translateWithValues,
-    });
-
-    expect(options[1]).toEqual({
-      value: 'openai/gpt-5.2::api-key:old',
-      label: 'Unavailable / custom: openai/gpt-5.2 (API Key – old)',
-      isUnavailable: true,
-    });
-  });
-});
-
-describe('selectModelValue', () => {
-  const options = buildModelSelectOptions({
-    models: [catalogModel('openai/gpt-5.2', 'openai')],
-    connections: [
-      usableConnection('openai:api-key', 'openai', 'API Key', [
-        account('default'),
-        account('work'),
-      ]),
+      () => [['openai/gpt-5.2::api-key', 'openai/gpt-5.2']],
     ],
+    [
+      'several usable accounts',
+      [
+        usableConnection('openai:api-key', 'openai', 'API Key', [
+          account('default'),
+          account('work'),
+        ]),
+      ],
+      () => [
+        ['openai/gpt-5.2::api-key', `openai/gpt-5.2 (${defaultAccount()})`],
+        ['openai/gpt-5.2::api-key:work', 'openai/gpt-5.2 (work)'],
+      ],
+    ],
+    [
+      'several connections of one provider',
+      [
+        usableConnection('openai:api-key', 'openai', 'API Key', [
+          account('default'),
+          account('work'),
+        ]),
+        usableConnection('openai:subscription', 'openai', 'Subscription'),
+      ],
+      () => [
+        [
+          'openai/gpt-5.2::api-key',
+          `openai/gpt-5.2 (API Key – ${defaultAccount()})`,
+        ],
+        ['openai/gpt-5.2::api-key:work', 'openai/gpt-5.2 (API Key – work)'],
+        ['openai/gpt-5.2::subscription', 'openai/gpt-5.2 (Subscription)'],
+      ],
+    ],
+  ])('labels account options for %s', (_label, connections, expected) => {
+    const options = buildModelSelectOptions({
+      models: [catalogModel('openai/gpt-5.2', 'openai')],
+      connections,
+      translate: t,
+    });
+
+    expect(valuesAndLabels(options)).toEqual(expected());
   });
 
-  it('returns the exact value for an account-pinned option', () => {
-    expect(selectModelValue('openai/gpt-5.2::api-key:work', options)).toBe(
+  it('offers a connection-restricted model only on its allowed usable connections', () => {
+    const apiKey = usableConnection('openai:api-key', 'openai', 'API Key');
+    const subscription = usableConnection(
+      'openai:subscription',
+      'openai',
+      'Subscription',
+    );
+
+    expect(
+      valuesAndLabels(
+        buildModelSelectOptions({
+          models: [catalogModel('openai/gpt-5.4', 'openai', ['subscription'])],
+          connections: [apiKey, subscription],
+        }),
+      ),
+    ).toEqual([['openai/gpt-5.4::subscription', 'openai/gpt-5.4']]);
+    expect(
+      buildModelSelectOptions({
+        models: [catalogModel('openai/gpt-5.2', 'openai', ['api-key'])],
+        connections: [subscription],
+      }),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      'an account pin',
       'openai/gpt-5.2::api-key:work',
-    );
-  });
-
-  it('normalizes an explicit default-account pin to the unpinned option', () => {
-    expect(selectModelValue('openai/gpt-5.2::api-key:default', options)).toBe(
+      null,
+      'openai/gpt-5.2::api-key:work',
+    ],
+    [
+      'an explicit default-account pin',
+      'openai/gpt-5.2::api-key:default',
+      null,
       'openai/gpt-5.2::api-key',
-    );
-  });
-
-  it('keeps an unknown account pin verbatim so the unavailable option matches', () => {
-    expect(selectModelValue('openai/gpt-5.2::api-key:old', options)).toBe(
+    ],
+    [
+      'an unknown account pin',
       'openai/gpt-5.2::api-key:old',
-    );
-  });
-});
+      { model: 'openai/gpt-5.2', connection: 'API Key – old' },
+      'openai/gpt-5.2::api-key:old',
+    ],
+    [
+      'a now-forbidden connection',
+      'openai/gpt-5.4::api-key',
+      { model: 'openai/gpt-5.4', connection: 'API Key' },
+      'openai/gpt-5.4::api-key',
+    ],
+  ])(
+    'resolves a saved selection with %s',
+    (_label, selected, unavailable, value) => {
+      const catalog = {
+        models: [
+          catalogModel('openai/gpt-5.2', 'openai'),
+          catalogModel('openai/gpt-5.4', 'openai', ['subscription']),
+        ],
+        connections: [
+          usableConnection('openai:api-key', 'openai', 'API Key', [
+            account('default'),
+            account('work'),
+          ]),
+          usableConnection('openai:subscription', 'openai', 'Subscription'),
+        ],
+        translate: t,
+      };
 
-describe('model selection value round-trip', () => {
-  it('keeps the account part inside the connection suffix', () => {
-    const selection = parseModelSelectionValue('openai/gpt-5.2::api-key:work');
+      const options = buildModelSelectOptions({
+        ...catalog,
+        selectedModelValue: selected,
+      });
 
-    expect(selection).toEqual({
-      model: 'openai/gpt-5.2',
-      connectionLocalId: 'api-key:work',
+      expect(options.filter((option) => option.isUnavailable)).toEqual(
+        unavailable
+          ? [
+              {
+                value: selected,
+                label: t(
+                  'agents.form.modelUnavailableConnectionOption',
+                  'Unavailable / custom: {model} ({connection})',
+                  unavailable,
+                ),
+                isUnavailable: true,
+              },
+            ]
+          : [],
+      );
+      expect(selectModelValue(selected, buildModelSelectOptions(catalog))).toBe(
+        value,
+      );
+    },
+  );
+
+  it('classifies suitability by tool calling and effective window and badges unreachable models', () => {
+    const model = (id, fields) => ({
+      id,
+      capabilities: { tools: true },
+      ...fields,
     });
-    expect(
-      modelSelectionValue(selection.model, selection.connectionLocalId),
-    ).toBe('openai/gpt-5.2::api-key:work');
-  });
+    const noTools = t('models.filter.noTools', 'no tool calling');
+    const belowMinContext = t(
+      'models.filter.belowMinContext',
+      'below 32k context',
+    );
+    const unreachable = t('models.filter.unreachable', 'service not running');
 
-  it('reduces a stored model address to its final model segment', () => {
-    expect(modelShortName('openai/gpt-5.5::subscription')).toBe('gpt-5.5');
-    expect(
-      modelShortName('openrouter/poolside/laguna-xs.2:free::api-key:work'),
-    ).toBe('laguna-xs.2:free');
-    expect(modelShortName('custom-model')).toBe('custom-model');
-    expect(modelShortName('')).toBe('');
-  });
-});
-
-describe('model suitability filter', () => {
-  it('marks a tools + big-context model suitable', () => {
-    expect(
-      modelSuitability({
-        capabilities: { tools: true },
-        context_window: 200000,
-        effective_context_window: 200000,
-      }),
-    ).toEqual({ suitable: true, reasons: [] });
-  });
-
-  it('flags missing tool calling', () => {
-    expect(
-      modelSuitability({
-        capabilities: { tools: false },
-        effective_context_window: 200000,
-      }),
-    ).toEqual({ suitable: false, reasons: ['noTools'] });
-  });
-
-  it('flags an effective window below the threshold', () => {
-    expect(
-      modelSuitability({
-        capabilities: { tools: true },
-        context_window: 262144,
-        effective_context_window: 16384,
-      }),
-    ).toEqual({ suitable: false, reasons: ['belowMinContext'] });
-  });
-
-  it('treats exactly 32k as suitable', () => {
-    expect(
-      modelSuitability({
-        capabilities: { tools: true },
-        effective_context_window: SUITABLE_MIN_CONTEXT,
-      }),
-    ).toEqual({ suitable: true, reasons: [] });
-  });
-
-  it('flags an unknown context honestly as unknown, not below-32k', () => {
-    expect(
-      modelSuitability({
-        capabilities: { tools: true },
-        context_window: null,
-        effective_context_window: null,
-      }),
-    ).toEqual({ suitable: false, reasons: ['contextUnknown'] });
-  });
-
-  it('falls back to the raw window when no effective window is present', () => {
-    expect(
-      modelSuitability({ capabilities: { tools: true }, context_window: 8192 }),
-    ).toEqual({ suitable: false, reasons: ['belowMinContext'] });
-  });
-
-  it('annotates unsuitable catalog options with a badge', () => {
     const options = buildModelSelectOptions({
+      modelOnly: true,
+      translate: t,
       models: [
-        {
-          id: 'ollama/tiny',
-          provider_id: 'ollama',
-          name: 'ollama/tiny',
+        model('big', {
+          context_window: 200000,
+          effective_context_window: 200000,
+        }),
+        model('no-tools', {
           capabilities: { tools: false },
-          context_window: 8192,
-          effective_context_window: 8192,
-        },
-      ],
-      connections: [usableConnection('ollama:local', 'ollama', 'Local')],
-      emptyLabel: 'None',
-      translate: translateWithValues,
-    });
-
-    expect(options[1].suitable).toBe(false);
-    expect(options[1].suitabilityReasons).toEqual([
-      'noTools',
-      'belowMinContext',
-    ]);
-    expect(options[1].secondaryLabel).toBe(
-      'no tool calling · below 32k context',
-    );
-  });
-
-  it('badges an unreachable local model but keeps it suitable and selectable', () => {
-    const options = buildModelSelectOptions({
-      models: [
-        {
-          id: 'ollama/big',
-          provider_id: 'ollama',
-          name: 'ollama/big',
-          capabilities: { tools: true },
+          effective_context_window: 200000,
+        }),
+        model('small-effective', {
           context_window: 262144,
-          effective_context_window: 32768,
-          reachable: false,
-        },
-      ],
-      connections: [usableConnection('ollama:local', 'ollama', 'Local')],
-      emptyLabel: 'None',
-      translate: translateWithValues,
-    });
-
-    expect(options[1].suitable).toBe(true);
-    expect(options[1].secondaryLabel).toBe('service not running');
-  });
-
-  it('appends the unreachable badge after suitability reasons', () => {
-    const options = buildModelSelectOptions({
-      models: [
-        {
-          id: 'ollama/tiny',
-          provider_id: 'ollama',
-          name: 'ollama/tiny',
+          effective_context_window: 16384,
+        }),
+        model('exactly-32k', { effective_context_window: 32768 }),
+        model('unknown', {
+          context_window: null,
+          effective_context_window: null,
+        }),
+        model('small-raw', { context_window: 8192 }),
+        model('down', { effective_context_window: 32768, reachable: false }),
+        model('tiny-down', {
           capabilities: { tools: false },
-          context_window: 8192,
           effective_context_window: 8192,
           reachable: false,
-        },
+        }),
       ],
-      connections: [usableConnection('ollama:local', 'ollama', 'Local')],
-      emptyLabel: 'None',
-      translate: translateWithValues,
     });
 
-    expect(options[1].suitable).toBe(false);
-    expect(options[1].secondaryLabel).toBe(
-      'no tool calling · below 32k context · service not running',
-    );
-  });
-});
-
-describe('filterModelSelectOptions', () => {
-  const suitableOption = {
-    value: 'openai/gpt-5.2::api-key',
-    label: 'openai/gpt-5.2',
-    suitable: true,
-    suitabilityReasons: [],
-  };
-  const unsuitableOption = {
-    value: 'ollama/tiny::local',
-    label: 'ollama/tiny',
-    suitable: false,
-    suitabilityReasons: ['belowMinContext'],
-  };
-  const emptyOption = { value: '', label: 'None', isUnavailable: false };
-  const options = [emptyOption, suitableOption, unsuitableOption];
-
-  it('hides unsuitable options by default', () => {
-    expect(filterModelSelectOptions(options)).toEqual([
-      emptyOption,
-      suitableOption,
+    expect(
+      options
+        .slice(1)
+        .map((option) => [
+          option.value,
+          option.suitable,
+          option.suitabilityReasons,
+          option.secondaryLabel,
+        ]),
+    ).toEqual([
+      ['big', true, [], undefined],
+      ['no-tools', false, ['noTools'], noTools],
+      ['small-effective', false, ['belowMinContext'], belowMinContext],
+      ['exactly-32k', true, [], undefined],
+      [
+        'unknown',
+        false,
+        ['contextUnknown'],
+        t('models.filter.contextUnknown', 'context unknown'),
+      ],
+      ['small-raw', false, ['belowMinContext'], belowMinContext],
+      ['down', true, [], unreachable],
+      [
+        'tiny-down',
+        false,
+        ['noTools', 'belowMinContext'],
+        `${noTools} · ${belowMinContext} · ${unreachable}`,
+      ],
     ]);
   });
 
-  it('reveals everything with showAll', () => {
-    expect(filterModelSelectOptions(options, { showAll: true })).toEqual(
-      options,
-    );
-  });
-
-  it('keeps the currently selected unsuitable option visible', () => {
-    expect(
-      filterModelSelectOptions(options, {
-        selectedModelValue: 'ollama/tiny::local',
-      }),
-    ).toEqual(options);
-  });
-
-  it('keeps a default-account pinned selection visible via its canonical value', () => {
-    expect(
-      filterModelSelectOptions(options, {
-        selectedModelValue: 'ollama/tiny::local:default',
-      }),
-    ).toEqual(options);
-  });
-});
-
-describe('modelFilterFooterLabel', () => {
-  it('offers to reveal with the hidden count', () => {
-    expect(
-      modelFilterFooterLabel({
-        showAll: false,
-        hiddenCount: 3,
-        translate: translateWithValues,
-      }),
-    ).toBe('Show all models (3 hidden)');
-  });
-
-  it('offers to restore the filter when everything is shown', () => {
-    expect(
-      modelFilterFooterLabel({ showAll: true, translate: translateWithValues }),
-    ).toBe('Show only suitable models');
-  });
-
-  it('shows nothing when the filter hides nothing', () => {
-    expect(
-      modelFilterFooterLabel({
-        showAll: false,
-        hiddenCount: 0,
-        translate: translateWithValues,
-      }),
-    ).toBe('');
-  });
-});
-
-describe('model-only selection', () => {
   it('reuses suitability and keeps one exact selected value without connection pins', () => {
     const options = buildModelSelectOptions({
       models: [catalogModel('demo/model', 'demo'), { id: 'demo/no-tools' }],
@@ -596,5 +352,77 @@ describe('model-only selection', () => {
       value: 'demo/removed',
       isUnavailable: true,
     });
+  });
+});
+
+describe('model suitability filter', () => {
+  it('hides unsuitable options unless everything is shown or one is the current selection', () => {
+    const suitableOption = {
+      value: 'openai/gpt-5.2::api-key',
+      suitable: true,
+      suitabilityReasons: [],
+    };
+    const unsuitableOption = {
+      value: 'ollama/tiny::local',
+      suitable: false,
+      suitabilityReasons: ['belowMinContext'],
+    };
+    const emptyOption = { value: '', label: 'None', isUnavailable: false };
+    const options = [emptyOption, suitableOption, unsuitableOption];
+
+    expect(filterModelSelectOptions(options)).toEqual([
+      emptyOption,
+      suitableOption,
+    ]);
+    expect(filterModelSelectOptions(options, { showAll: true })).toEqual(
+      options,
+    );
+    for (const selectedModelValue of [
+      'ollama/tiny::local',
+      'ollama/tiny::local:default',
+    ]) {
+      expect(filterModelSelectOptions(options, { selectedModelValue })).toEqual(
+        options,
+      );
+    }
+  });
+
+  it('labels the footer toggle with the hidden count or the way back', () => {
+    expect(
+      modelFilterFooterLabel({ showAll: false, hiddenCount: 3, translate: t }),
+    ).toBe(
+      t('models.filter.showAll', 'Show all models ({count} hidden)', {
+        count: 3,
+      }),
+    );
+    expect(modelFilterFooterLabel({ showAll: true, translate: t })).toBe(
+      t('models.filter.showSuitable', 'Show only suitable models'),
+    );
+    expect(
+      modelFilterFooterLabel({ showAll: false, hiddenCount: 0, translate: t }),
+    ).toBe('');
+  });
+});
+
+describe('model selection value', () => {
+  it('keeps the account part inside the connection suffix', () => {
+    const selection = parseModelSelectionValue('openai/gpt-5.2::api-key:work');
+
+    expect(selection).toEqual({
+      model: 'openai/gpt-5.2',
+      connectionLocalId: 'api-key:work',
+    });
+    expect(
+      modelSelectionValue(selection.model, selection.connectionLocalId),
+    ).toBe('openai/gpt-5.2::api-key:work');
+  });
+
+  it('reduces a stored model address to its final model segment', () => {
+    expect(modelShortName('openai/gpt-5.5::subscription')).toBe('gpt-5.5');
+    expect(
+      modelShortName('openrouter/poolside/laguna-xs.2:free::api-key:work'),
+    ).toBe('laguna-xs.2:free');
+    expect(modelShortName('custom-model')).toBe('custom-model');
+    expect(modelShortName('')).toBe('');
   });
 });

@@ -6,23 +6,20 @@ import {
   buildAgentTargetDropdownOptions,
   buildAgentTargetOptions,
   createAgentTargetCatalogLoader,
-  projectIdsFromList,
-  projectTeamEntry,
 } from '../agentTargetOptions.js';
 
-describe('buildAgentTargetOptions', () => {
-  const identityAgents = [{ id: 'researcher', name: 'Researcher' }];
-  const projectTeams = [
-    {
-      projectId: 'vbot',
-      displayName: 'vBot',
-      team: [{ agent_id: 'builder', display_name: 'Builder' }],
-    },
-  ];
+const identityAgents = [{ id: 'researcher', name: 'Researcher' }];
+const projectTeams = [
+  {
+    projectId: 'vbot',
+    displayName: 'vBot',
+    team: [{ agent_id: 'builder', display_name: 'Builder' }],
+  },
+];
 
-  it('lists identity agents as bare-id options', () => {
-    const options = buildAgentTargetOptions(identityAgents, []);
-    expect(options).toEqual([
+describe('buildAgentTargetOptions', () => {
+  it('lists Identity Agents by bare id before Project Agents by address', () => {
+    expect(buildAgentTargetOptions(identityAgents, projectTeams)).toEqual([
       {
         value: 'researcher',
         label: 'Researcher',
@@ -30,28 +27,14 @@ describe('buildAgentTargetOptions', () => {
         group: AGENT_TARGET_GROUP_IDENTITY,
         projectId: null,
       },
+      {
+        value: 'builder@vbot',
+        label: 'builder@vbot',
+        secondaryLabel: 'Builder',
+        group: AGENT_TARGET_GROUP_PROJECT,
+        projectId: 'vbot',
+      },
     ]);
-  });
-
-  it('lists project agents with the address as the option value', () => {
-    const [, projectOption] = buildAgentTargetOptions(
-      identityAgents,
-      projectTeams,
-    );
-    expect(projectOption.value).toBe('builder@vbot');
-    expect(projectOption.group).toBe(AGENT_TARGET_GROUP_PROJECT);
-    expect(projectOption.projectId).toBe('vbot');
-  });
-
-  it('orders identity agents before project agents', () => {
-    const options = buildAgentTargetOptions(identityAgents, projectTeams);
-    expect(options.map((option) => option.value)).toEqual([
-      'researcher',
-      'builder@vbot',
-    ]);
-  });
-
-  it('tolerates missing/empty inputs', () => {
     expect(buildAgentTargetOptions(null, null)).toEqual([]);
     expect(buildAgentTargetOptions([{ id: '' }], [{ projectId: '' }])).toEqual(
       [],
@@ -60,20 +43,13 @@ describe('buildAgentTargetOptions', () => {
 });
 
 describe('buildAgentTargetDropdownOptions', () => {
-  const identityAgents = [{ id: 'researcher', name: 'Researcher' }];
-  const projectTeams = [
-    {
-      projectId: 'vbot',
-      displayName: 'vBot',
-      team: [{ agent_id: 'builder', display_name: 'Builder' }],
-    },
-  ];
+  const labels = {
+    identityGroupLabel: 'Identity agents',
+    projectGroupLabel: 'Project agents',
+  };
 
-  it('inserts no group headers when only identity agents exist', () => {
-    const options = buildAgentTargetDropdownOptions(identityAgents, [], {
-      identityGroupLabel: 'Identity agents',
-      projectGroupLabel: 'Project agents',
-    });
+  it('inserts no group headers when only Identity Agents exist', () => {
+    const options = buildAgentTargetDropdownOptions(identityAgents, [], labels);
     expect(options.some((option) => option.isGroupHeader)).toBe(false);
     expect(options.map((option) => option.value)).toEqual(['researcher']);
   });
@@ -82,10 +58,7 @@ describe('buildAgentTargetDropdownOptions', () => {
     const options = buildAgentTargetDropdownOptions(
       identityAgents,
       projectTeams,
-      {
-        identityGroupLabel: 'Identity agents',
-        projectGroupLabel: 'Project agents',
-      },
+      labels,
     );
     expect(options.map((option) => option.label)).toEqual([
       'Identity agents',
@@ -98,61 +71,61 @@ describe('buildAgentTargetDropdownOptions', () => {
   });
 });
 
-describe('project team gathering helpers', () => {
-  it('extracts non-empty project ids from a project.list response', () => {
-    expect(
-      projectIdsFromList({
-        projects: [{ project_id: 'vbot' }, { project_id: '' }, {}],
-      }),
-    ).toEqual(['vbot']);
-    expect(projectIdsFromList(null)).toEqual([]);
-  });
-
-  it('projects a project.show response into a team entry', () => {
-    const entry = projectTeamEntry('vbot', {
-      project: { display_name: 'vBot' },
-      scan: {
-        team: [
-          { agent_id: 'builder', display_name: 'Builder' },
-          { agent_id: '' },
-        ],
-      },
-    });
-    expect(entry).toEqual({
-      projectId: 'vbot',
-      displayName: 'vBot',
-      team: [{ agent_id: 'builder', display_name: 'Builder' }],
-    });
-  });
-
-  it('yields an empty team for a bare/empty project', () => {
-    expect(projectTeamEntry('empty', { project: {}, scan: {} })).toEqual({
-      projectId: 'empty',
-      displayName: 'empty',
-      team: [],
-    });
-  });
-});
-
 describe('Agent target catalog loading', () => {
-  it('retains Identity Agents and healthy Teams when one Project cannot load', async () => {
+  it('reads each listed Project team once and retains healthy Teams when one Project cannot load', async () => {
     const error = new Error('unavailable-project');
+    const showProject = vi.fn(async (id) => {
+      if (id === 'bad') throw error;
+      if (id === 'empty') return { project: {}, scan: {} };
+      return {
+        project: { display_name: 'vBot' },
+        scan: {
+          team: [
+            { agent_id: 'builder', display_name: 'Builder' },
+            { agent_id: 'coder' },
+            { agent_id: '' },
+          ],
+        },
+      };
+    });
     const loader = createAgentTargetCatalogLoader({
       listAgents: async () => ({ agents: [{ id: 'main' }] }),
       listProjects: async () => ({
-        projects: [{ project_id: 'bad' }, { project_id: 'good' }],
+        projects: [
+          { project_id: 'bad' },
+          { project_id: 'vbot' },
+          { project_id: 'vbot' },
+          { project_id: 'empty' },
+          { project_id: '' },
+          {},
+        ],
       }),
-      showProject: async (id) => {
-        if (id === 'bad') throw error;
-        return { scan: { team: [{ agent_id: 'coder' }] } };
-      },
+      showProject,
     });
+
     const catalog = await loader.load();
+
+    expect(showProject.mock.calls.map(([id]) => id)).toEqual([
+      'bad',
+      'vbot',
+      'empty',
+    ]);
+    expect(catalog.projectTeams).toEqual([
+      {
+        projectId: 'vbot',
+        displayName: 'vBot',
+        team: [
+          { agent_id: 'builder', display_name: 'Builder' },
+          { agent_id: 'coder', display_name: 'coder' },
+        ],
+      },
+      { projectId: 'empty', displayName: 'empty', team: [] },
+    ]);
     expect(
       buildAgentTargetOptions(catalog.agents, catalog.projectTeams).map(
         (item) => item.value,
       ),
-    ).toEqual(['main', 'coder@good']);
+    ).toEqual(['main', 'builder@vbot', 'coder@vbot']);
     expect(catalog.failedProjects).toEqual([{ projectId: 'bad', error }]);
   });
 
