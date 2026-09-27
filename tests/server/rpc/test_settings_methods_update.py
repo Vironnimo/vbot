@@ -423,17 +423,6 @@ async def test_settings_update_accepts_a_registered_recall_backend(
 # ---------------------------------------------------------------------------
 
 
-def _subagents(**overrides: Any) -> JsonObject:
-    return {
-        "subagents": {
-            "max_subagent_depth": 4,
-            "max_subagents_per_turn": 8,
-            "subagent_timeout_minutes": 60,
-            **overrides,
-        }
-    }
-
-
 def _extension_config(config: JsonObject) -> JsonObject:
     return {"extensions": {"disabled": [], "config": {"homeassistant": config}}}
 
@@ -445,37 +434,8 @@ _TTS_BINDING = {"target": "openai/gpt-4o-mini-tts::api-key", "options": {"voice"
 @pytest.mark.parametrize(
     ("method", "params", "named"),
     [
-        # Section shapes the parser rejects.
-        ("settings.update", {"appearance": {}}, None),
-        ("settings.update", {"appearance": {"show_token_counts": False}}, None),
-        ("settings.update", {"appearance": {"language": ""}}, None),
-        ("settings.update", {"skills": []}, None),
-        ("settings.update", {"skills": {}}, None),
-        ("settings.update", {"skills": {"extra": []}}, None),
-        ("settings.update", {"skills": {"directories": "~/skills"}}, None),
-        ("settings.update", {"subagents": []}, None),
-        ("settings.update", {"subagents": {}}, None),
-        ("settings.update", {"subagents": {"extra": 1}}, None),
-        ("settings.update", _subagents(max_subagent_depth=0), None),
-        ("settings.update", _subagents(max_subagent_depth=True), None),
-        ("settings.update", _subagents(max_subagents_per_turn="8"), None),
-        ("settings.update", {"recall": {"extra": True}}, None),
-        (
-            "settings.update",
-            {
-                "compaction": {
-                    "enabled": True,
-                    "trigger": {"type": "context_ratio", "threshold": 1.5},
-                    "strategy": {
-                        "type": "summary_tail",
-                        "tail_tokens": 15000,
-                        "summary_model": None,
-                    },
-                }
-            },
-            "params.compaction.trigger.threshold",
-        ),
-        ("settings.update", {"defaults": {"agent": {"unknown_field": True}}}, "unknown_field"),
+        # A section the parser rejects (the parser's rows: tests/core/settings).
+        ("settings.update", {"skills": []}, "params.skills must be an object"),
         # Values that parse but that the running Runtime does not accept.
         (
             "settings.update",

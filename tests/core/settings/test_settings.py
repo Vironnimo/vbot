@@ -253,6 +253,8 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
         ({}, "settings.update requires a section"),
         ({"general": {}}, "unsupported settings sections: general"),
         ({"appearance": []}, "params.appearance must be an object"),
+        # A partial section never resets the language.
+        ({"appearance": {}}, "params.appearance.language must be a non-empty string"),
         (
             {"appearance": {"language": "en", "chat_width": "huge"}},
             "params.appearance.chat_width must be one of: comfortable, full, wide",
@@ -276,7 +278,21 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
             {"session_titles": {"enabled": True, "model": 5}},
             "params.session_titles.model must be a string",
         ),
+        ({"skills": []}, "params.skills must be an object"),
+        ({"skills": {"extra": []}}, "unsupported skills settings: extra"),
         ({"skills": {"directories": [1]}}, "params.skills.directories must be a list of strings"),
+        ({"subagents": []}, "params.subagents must be an object"),
+        ({"subagents": {"extra": 1}}, "unsupported sub-agent settings: extra"),
+        (
+            {
+                "subagents": {
+                    "max_subagent_depth": 0,
+                    "max_subagents_per_turn": 8,
+                    "subagent_timeout_minutes": 60,
+                }
+            },
+            "params.subagents.max_subagent_depth must be a positive integer",
+        ),
         (
             {"subagents": {"max_subagent_depth": 4, "max_subagents_per_turn": 8}},
             "missing sub-agent settings: subagent_timeout_minutes",
@@ -297,6 +313,7 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
             "params.defaults.agent.temperature must be between 0 and 2",
         ),
         ({"recall": []}, "params.recall must be an object"),
+        ({"recall": {"extra": True}}, "unsupported recall settings: extra"),
         ({"recall": {"backend": "Bad Backend"}}, "params.recall.backend must use lowercase"),
         ({"recall": {"backend": ""}}, "params.recall.backend must be a non-empty string"),
         ({"web_search": []}, "params.web_search must be an object"),
