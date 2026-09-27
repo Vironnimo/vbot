@@ -1,39 +1,31 @@
-"""Tests for the ``statistics.report`` RPC handler.
+"""Tests for the ``statistics.*`` RPC handlers.
 
-Coverage:
-- returns the full report shape for a seeded data dir,
-- rejects unknown params and malformed / inverted time windows,
-- empty-data returns a zeroed report without error,
-- the handler is registered in the method table.
+The report computations are owned by ``core.statistics``; these tests cover the
+RPC edge: parameter validation, the payload form, and the runtime wiring of the
+service (Sessions, Agents, Projects, the Skill inventory and the index).
 """
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from core.chat.messages import ChatMessage
 from core.database import write_bootstrap_marker
 from core.projects import ProjectStore
-from core.sessions import ChatSessionManager, SeenSkillsUpdate, SessionAddress
-from core.sessions._types import SKILL_CONTEXT_NOTE_PREFIX
-from core.statistics import StatisticsIndex, StatisticsUnavailableError
-from server.rpc.error_mapping import _map_expected_error
-from server.rpc.errors import RpcError
-from server.rpc.methods import build_method_handlers
-from server.rpc.statistics_methods import (
-    _RuntimeSkillInventory,
-    _statistics_report,
-    _statistics_run_activity,
-)
+from core.sessions import ChatSession, ChatSessionManager
+from core.statistics import StatisticsIndex
+from server.rpc.methods import dispatch_rpc
+from server.rpc.statistics_methods import _RuntimeSkillInventory
 from tests.core.sessions.history_fixtures import complete_run
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+JsonObject = dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -52,22 +44,15 @@ class _FakeAgents:
 class _FakeSkillRegistry:
     """Stand-in for the runtime's global skill registry (``skills_for`` result)."""
 
-    def __init__(self, skills: list) -> None:
+    def __init__(self, skills: list[Any]) -> None:
         self._skills = skills
 
-    def list_all(self) -> list:
+    def list_all(self) -> list[Any]:
         return list(self._skills)
 
 
 class _RuntimeStub:
-    """A runtime with the skill-inventory surface the RPC adapter reads.
-
-    The default ``StatisticsService`` wiring in ``_statistics_service`` now builds
-    a ``_RuntimeSkillInventory`` over the runtime, so the fake runtime must answer
-    ``skills_for`` / ``agent_skills_dir`` / ``project_own_skills``. Empty by
-    default (no skills), so pre-existing assertions on the other sections stay
-    valid while the skills section builds cleanly.
-    """
+    """A runtime with the surface the statistics service wiring reads."""
 
     def __init__(self, data_dir: Path, manager: ChatSessionManager, agent_ids: list[str]) -> None:
         self._data_dir = data_dir
@@ -76,20 +61,20 @@ class _RuntimeStub:
         self.usage_recorder = None
         self.agents = _FakeAgents(agent_ids)
         self.projects = ProjectStore(data_dir, sessions=manager)
-        self.global_skills: list = []
+        self.global_skills: list[Any] = []
         self.models = SimpleNamespace(pricing_for=lambda _: None)
 
-    def skills_for(self, project_id, agent_id=None) -> _FakeSkillRegistry:
+    def skills_for(self, project_id: str | None, agent_id: str | None = None) -> Any:
         return _FakeSkillRegistry(self.global_skills)
 
     def agent_skills_dir(self, agent_id: str) -> Path:
         return self._data_dir / "agents" / agent_id / "skills"
 
-    def project_own_skills(self, project_id: str) -> list:
+    def project_own_skills(self, project_id: str) -> list[Any]:
         return []
 
 
-def _timing(start: datetime, duration_ms: int) -> dict:
+def _timing(start: datetime, duration_ms: int) -> dict[str, Any]:
     return {
         "started_at": start.isoformat(),
         "completed_at": (start + timedelta(milliseconds=duration_ms)).isoformat(),
@@ -104,10 +89,25 @@ def _state(tmp_path: Path, agent_ids: list[str]) -> tuple[SimpleNamespace, ChatS
     return SimpleNamespace(runtime=runtime), manager
 
 
+def _complete(session: ChatSession, run_id: str, assistant: ChatMessage, duration_ms: int) -> None:
+    session = session.start_run(run_id)
+    session.append(assistant)
+    complete_run(
+        session,
+        ChatMessage.run_summary(
+            run_id=run_id,
+            status="completed",
+            iteration_count=1,
+            timing=_timing(BASE + timedelta(seconds=1), duration_ms),
+            timestamp=BASE + timedelta(seconds=2),
+        ),
+    )
+
+
 def _seed_session(manager: ChatSessionManager, agent_id: str) -> None:
-    session = manager.create(agent_id)
-    session = session.start_run("r1")
-    session.append(
+    _complete(
+        manager.create(agent_id),
+        "r1",
         ChatMessage.assistant(
             model="openrouter/anthropic/claude-sonnet-4",
             content="hi",
@@ -118,25 +118,46 @@ def _seed_session(manager: ChatSessionManager, agent_id: str) -> None:
                 "reasoning_tokens": 3,
             },
             timestamp=BASE,
-        )
-    )
-    complete_run(
-        session,
-        ChatMessage.run_summary(
-            run_id="r1",
-            status="completed",
-            iteration_count=1,
-            timing=_timing(BASE + timedelta(seconds=1), 1200),
-            timestamp=BASE + timedelta(seconds=2),
         ),
+        1200,
     )
 
 
-def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
-    state, manager = _state(tmp_path, ["main"])
-    _seed_session(manager, "main")
+def _skill(name: str, origin: str | None = None) -> SimpleNamespace:
+    return SimpleNamespace(name=name, origin=origin)
 
-    result = asyncio.run(_statistics_report(state, {}))
+
+async def _result(state: Any, method: str, params: JsonObject) -> JsonObject:
+    response = await dispatch_rpc(state, {"method": method, "params": params})
+    assert response["ok"] is True, response
+    result: JsonObject = response["result"]
+    return result
+
+
+@pytest.mark.asyncio
+async def test_report_returns_the_service_report_for_the_requested_window(
+    tmp_path: Path,
+) -> None:
+    state, manager = _state(tmp_path, ["main"])
+    state.runtime.global_skills = [_skill("deploy", "bundled")]
+    _seed_session(manager, "main")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state.runtime.projects.create("vbot", "vBot", repo)
+    _complete(
+        manager.create("builder", project_id="vbot"),
+        "p1",
+        ChatMessage.assistant(model="openai/gpt-5", content="hi", timestamp=BASE),
+        1200,
+    )
+
+    result = await _result(state, "statistics.report", {})
+    service = state.statistics_service
+    windowed = await _result(
+        state,
+        "statistics.report",
+        {"since": "2026-07-01T00:00:00Z", "until": "2026-07-31T00:00:00Z"},
+    )
 
     assert set(result) == {
         "generated_at",
@@ -151,9 +172,15 @@ def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
         "skills",
         "extensions",
     }
+    assert result["window"] == {"since": None, "until": None}
     assert result["extensions"] == {"extensions": []}
-    assert result["overview"]["total_agents"] == 1
-    assert result["overview"]["total_runs"] == 1
+    # Project Sessions count under their ``agent@project`` address.
+    assert result["overview"]["total_agents"] == 2
+    assert {agent["agent_id"] for agent in result["overview"]["agents"]} == {
+        "main",
+        "builder@vbot",
+    }
+    assert result["overview"]["total_runs"] == 2
     assert result["usage"]["totals"]["measured_input_tokens"] == 30
     assert result["usage"]["totals"]["cache_write_tokens"] == 4
     assert result["usage"]["totals"]["reasoning_tokens"] == 3
@@ -163,37 +190,24 @@ def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
     assert result["usage"]["daily"][0]["reasoning_tokens"] == 3
     assert result["runs"]["duration"]["p95_ms"] == 1200.0
     assert result["compactions"]["total_compactions"] == 0
-    assert result["window"] == {"since": None, "until": None}
+    # The runtime Skill inventory is joined into the skills section.
+    assert [row["name"] for row in result["skills"]["skills"]] == ["deploy"]
+    # The window is normalized to UTC and applied; the service is built once.
+    assert windowed["window"]["since"] == "2026-07-01T00:00:00+00:00"
+    assert windowed["overview"]["total_runs"] == 0
+    assert state.statistics_service is service
+    assert service._index is state.runtime.statistics_index
 
 
-def test_report_applies_time_window(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_run_activity_returns_correlated_run_details(tmp_path: Path) -> None:
     state, manager = _state(tmp_path, ["main"])
     _seed_session(manager, "main")
 
-    result = asyncio.run(
-        _statistics_report(
-            state,
-            {"since": "2026-07-01T00:00:00Z", "until": "2026-07-31T00:00:00Z"},
-        )
-    )
-
-    assert result["overview"]["total_runs"] == 0
-    assert result["compactions"]["total_compactions"] == 0
-    assert result["window"]["since"] == "2026-07-01T00:00:00+00:00"
-
-
-def test_run_activity_returns_correlated_run_details(tmp_path: Path) -> None:
-    state, manager = _state(tmp_path, ["main"])
-    _seed_session(manager, "main")
-
-    result = asyncio.run(
-        _statistics_run_activity(
-            state,
-            {
-                "since": "2026-06-01T12:00:00Z",
-                "until": "2026-06-01T12:01:00Z",
-            },
-        )
+    result = await _result(
+        state,
+        "statistics.run_activity",
+        {"since": "2026-06-01T12:00:00Z", "until": "2026-06-01T12:01:00Z"},
     )
 
     assert result["total_runs"] == 1
@@ -202,105 +216,36 @@ def test_run_activity_returns_correlated_run_details(tmp_path: Path) -> None:
     assert result["runs"][0]["measured_input_tokens"] == 30
 
 
-def test_run_activity_requires_complete_window(tmp_path: Path) -> None:
-    state, _manager = _state(tmp_path, ["main"])
-
-    with pytest.raises(RpcError) as exc_info:
-        asyncio.run(_statistics_run_activity(state, {"since": "2026-06-01T12:00:00Z"}))
-    assert exc_info.value.code == "invalid_request"
+_INVERTED = {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"}
 
 
-def test_report_lazily_caches_service_on_state(tmp_path: Path) -> None:
-    state, manager = _state(tmp_path, ["main"])
-    _seed_session(manager, "main")
-
-    asyncio.run(_statistics_report(state, {}))
-    cached = state.statistics_service
-    asyncio.run(_statistics_report(state, {}))
-
-    assert state.statistics_service is cached
-    assert cached._index is state.runtime.statistics_index
-
-
-def test_busy_statistics_index_maps_to_retryable_domain_error() -> None:
-    error = _map_expected_error(StatisticsUnavailableError("Statistics are busy; retry shortly"))
-
-    assert error.code == "domain_error"
-    assert "retry" in error.message
-
-
-def test_report_rejects_unknown_params(tmp_path: Path) -> None:
-    state, _manager = _state(tmp_path, ["main"])
-
-    with pytest.raises(RpcError) as exc_info:
-        asyncio.run(_statistics_report(state, {"bogus": 1}))
-    assert exc_info.value.code == "invalid_request"
-    assert "bogus" in exc_info.value.message
-
-
-def test_report_rejects_malformed_timestamp(tmp_path: Path) -> None:
-    state, _manager = _state(tmp_path, ["main"])
-
-    with pytest.raises(RpcError) as exc_info:
-        asyncio.run(_statistics_report(state, {"since": "not-a-date"}))
-    assert exc_info.value.code == "invalid_request"
-
-
-def test_report_rejects_inverted_window(tmp_path: Path) -> None:
-    state, _manager = _state(tmp_path, ["main"])
-
-    with pytest.raises(RpcError) as exc_info:
-        asyncio.run(
-            _statistics_report(
-                state,
-                {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"},
-            )
-        )
-    assert exc_info.value.code == "invalid_request"
-
-
-def test_report_empty_data_returns_zeroed_report(tmp_path: Path) -> None:
-    state, _manager = _state(tmp_path, [])
-
-    result = asyncio.run(_statistics_report(state, {}))
-
-    assert result["overview"]["total_agents"] == 0
-    assert result["overview"]["total_runs"] == 0
-    assert result["errors"]["total_errors"] == 0
-    assert result["tools"]["tools"] == []
-
-
-def test_report_includes_project_sessions_under_address_form(tmp_path: Path) -> None:
-    state, manager = _state(tmp_path, ["main"])
-    _seed_session(manager, "main")
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    state.runtime.projects.create("vbot", "vBot", repo)
-    project_session = manager.create("builder", project_id="vbot")
-    project_session = project_session.start_run("p1")
-    project_session.append(
-        ChatMessage.assistant(model="openai/gpt-5", content="hi", timestamp=BASE)
-    )
-    complete_run(
-        project_session,
-        ChatMessage.run_summary(
-            run_id="p1",
-            status="completed",
-            iteration_count=1,
-            timing=_timing(BASE + timedelta(seconds=1), 800),
-            timestamp=BASE + timedelta(seconds=2),
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params", "fragment"),
+    [
+        pytest.param("statistics.report", {"bogus": 1}, "bogus", id="unknown-field"),
+        pytest.param("statistics.report", {"since": "not-a-date"}, "since", id="malformed"),
+        pytest.param("statistics.report", _INVERTED, "since", id="inverted"),
+        # Run activity is bounded: both ends of the window are required.
+        pytest.param(
+            "statistics.run_activity",
+            {"since": "2026-06-01T12:00:00Z"},
+            "until",
+            id="activity-open-window",
         ),
-    )
+        pytest.param("statistics.run_activity", _INVERTED, "since", id="activity-inverted"),
+    ],
+)
+async def test_invalid_statistics_requests_are_rejected(
+    tmp_path: Path, method: str, params: JsonObject, fragment: str
+) -> None:
+    state, _manager = _state(tmp_path, ["main"])
 
-    result = asyncio.run(_statistics_report(state, {}))
+    response = await dispatch_rpc(state, {"method": method, "params": params})
 
-    agent_ids = {agent["agent_id"] for agent in result["overview"]["agents"]}
-    assert agent_ids == {"main", "builder@vbot"}
-    assert result["overview"]["total_runs"] == 2
-
-
-def _skill(name: str, origin: str | None = None) -> SimpleNamespace:
-    return SimpleNamespace(name=name, origin=origin)
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert fragment in response["error"]["message"]
 
 
 def test_runtime_skill_inventory_reads_global_agent_and_project_scopes(tmp_path: Path) -> None:
@@ -319,63 +264,13 @@ def test_runtime_skill_inventory_reads_global_agent_and_project_scopes(tmp_path:
     repo = tmp_path / "repo"
     repo.mkdir()
     runtime.projects.create("vbot", "vBot", repo)
-    runtime.project_own_skills = lambda project_id: [_skill("proj")]  # type: ignore[assignment]
+    runtime.project_own_skills = lambda project_id: [_skill("proj")]  # type: ignore[method-assign]
 
     inventory = _RuntimeSkillInventory(runtime)
 
     assert inventory.global_skills() == [("deploy", "bundled"), ("teach", "global")]
     assert inventory.agent_skill_names("assistant") == frozenset({"private"})
-    # Missing agent home → empty set (no crash).
+    # Missing agent home: an empty set, no crash.
     assert inventory.agent_skill_names("nobody") == frozenset()
-    # Project skills tagged with the project display name.
+    # Project skills are tagged with the project display name.
     assert inventory.project_skills("vbot") == [("proj", "project:vBot")]
-
-
-def test_report_skills_section_joins_usage_against_inventory(tmp_path: Path) -> None:
-    state, manager = _state(tmp_path, ["main"])
-    state.runtime.global_skills = [_skill("deploy", "bundled"), _skill("teach", "global")]
-    session = manager.create("main")
-    session.append(ChatMessage.user("hi", timestamp=BASE))
-    session.append(
-        ChatMessage.note(
-            SKILL_CONTEXT_NOTE_PREFIX + '{"name":"deploy","content":"body"}',
-            timestamp=BASE + timedelta(seconds=1),
-        )
-    )
-    manager.record_seen_skills(
-        SessionAddress(project_id=None, agent_id="main", session_id=session.id),
-        SeenSkillsUpdate(baseline=("deploy", "teach")),
-    )
-
-    result = asyncio.run(_statistics_report(state, {}))
-    skills = result["skills"]
-    by_name = {row["name"]: row for row in skills["skills"]}
-
-    assert skills["total_skills"] == 2
-    assert skills["used_skills"] == 1
-    assert skills["never_used_skills"] == 1
-    assert skills["offered_unactivated_skills"] == 1
-    assert skills["skills_without_offer_data"] == 0
-    assert by_name["deploy"]["offered_sessions"] == 1
-    assert by_name["deploy"]["activated_sessions"] == 1
-    assert by_name["deploy"]["activated_offered_sessions"] == 1
-    assert by_name["deploy"]["usage_rate"] == 1.0
-    assert by_name["deploy"]["by_agent"] == [{"key": "main", "count": 1}]
-    assert by_name["teach"]["activated_sessions"] == 0
-
-
-def test_report_skills_section_empty_when_no_inventory_skills(tmp_path: Path) -> None:
-    state, manager = _state(tmp_path, ["main"])
-    _seed_session(manager, "main")
-
-    result = asyncio.run(_statistics_report(state, {}))
-
-    assert result["skills"]["skills"] == []
-    assert result["skills"]["total_skills"] == 0
-
-
-def test_statistics_report_is_registered() -> None:
-    handlers = build_method_handlers()
-
-    assert "statistics.report" in handlers
-    assert "statistics.run_activity" in handlers

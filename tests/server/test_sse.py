@@ -19,7 +19,7 @@ from core.tools import FileReadState, register_read_tool
 from server._streams import _sse_run_events
 from server.app import create_app
 from server.file_delivery import FileDelivery
-from tests.server.test_rpc import StubAdapter, StubRuntime
+from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 EXPECTED_SSE_EVENT_NAMES = [
     "run_started",

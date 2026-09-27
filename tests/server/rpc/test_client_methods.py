@@ -1,11 +1,4 @@
-"""Tests for the ``client.list`` presence RPC handler.
-
-Coverage:
-- returns the registry roster as row dicts,
-- empty when no registry is wired (CLI-only runtime stub),
-- rejects unexpected params,
-- the handler is registered in the method table.
-"""
+"""Tests for the ``client.list`` presence RPC handler."""
 
 from __future__ import annotations
 
@@ -16,10 +9,11 @@ import pytest
 from server.clients import ClientRegistry
 from server.rpc.client_methods import _list_clients
 from server.rpc.errors import RpcError
-from server.rpc.methods import build_method_handlers
+from server.rpc.methods import dispatch_rpc
 
 
-def test_list_clients_returns_registry_roster() -> None:
+@pytest.mark.asyncio
+async def test_list_clients_returns_registry_roster() -> None:
     registry = ClientRegistry()
     registry.register(
         connection_id="tab-a",
@@ -28,8 +22,9 @@ def test_list_clients_returns_registry_roster() -> None:
     )
     state = SimpleNamespace(client_registry=registry)
 
-    result = _list_clients(state, {})
+    response = await dispatch_rpc(state, {"method": "client.list", "params": {}})
 
+    result = response["result"]
     assert len(result["clients"]) == 1
     entry = result["clients"][0]
     assert entry["connection_id"] == "tab-a"
@@ -53,9 +48,3 @@ def test_list_clients_rejects_params() -> None:
     with pytest.raises(RpcError) as exc_info:
         _list_clients(state, {"unexpected": True})
     assert exc_info.value.code == "invalid_request"
-
-
-def test_client_list_is_registered() -> None:
-    handlers = build_method_handlers()
-
-    assert "client.list" in handlers

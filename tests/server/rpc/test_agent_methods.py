@@ -78,6 +78,9 @@ async def test_agent_crud_round_trip(tmp_path: Path) -> None:
     assert created["tools"] == {}
     assert updated["name"] == "Updated Writer"
     assert deleted["agent_id"] == "writer"
+    # The remaining Agents ride on the response; each change is a bare reload signal.
+    assert [agent["id"] for agent in deleted["remaining_agents"]] == ["coder"]
+    assert resource_changes(state) == [{"kind": "agents"}] * 3
 
 
 @pytest.mark.asyncio

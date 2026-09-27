@@ -188,87 +188,38 @@ def test_update_request_with_an_unclaimable_token_starts_nothing(
 
 
 @pytest.mark.asyncio
-async def test_private_maintenance_derives_origin_from_acknowledged_ticket(tmp_path: Path) -> None:
-    state, ticket, _bootstrap = make_state(tmp_path)
-    result = await dispatch_method(
-        state,
-        "application.maintenance_begin",
-        {
-            "control_token": "secret",
-            "operation_id": "operation-one",
-            "handoff_ticket_id": ticket.ticket_id,
-        },
-        method_handlers(),
-    )
-    assert result == {"safe_to_stop": True}
-    origin = state.chat_runs.maintenance_begin.await_args.kwargs["origin"]
-    assert origin[0].session_id == "session-one"
-    assert origin[1] == "run-one"
-
-
-@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("active_run_id", "acknowledged", "cancelled"),
+    [
+        pytest.param("run-one", True, True, id="exact-origin"),
+        pytest.param("run-later", True, False, id="different-run"),
+        # Nothing is cancelled before the handoff is durably acknowledged.
+        pytest.param("run-one", False, False, id="unacknowledged"),
+    ],
+)
 async def test_private_maintenance_cancels_only_the_exact_acknowledged_origin(
-    tmp_path: Path,
+    tmp_path: Path, active_run_id: str, acknowledged: bool, cancelled: bool
 ) -> None:
-    state, ticket, _bootstrap = make_state(tmp_path)
-    exact = SimpleNamespace(id="run-one")
-    state.chat_runs.active_run = lambda **_kwargs: exact
+    state, ticket, _bootstrap = make_state(tmp_path, acknowledged=acknowledged)
+    state.chat_runs.active_run = lambda **_kwargs: SimpleNamespace(id=active_run_id)
+    params = {
+        "control_token": "secret",
+        "operation_id": "operation-one",
+        "handoff_ticket_id": ticket.ticket_id,
+    }
 
-    await dispatch_method(
-        state,
-        "application.maintenance_begin",
-        {
-            "control_token": "secret",
-            "operation_id": "operation-one",
-            "handoff_ticket_id": ticket.ticket_id,
-        },
-        method_handlers(),
-    )
+    if not acknowledged:
+        with pytest.raises(RpcError, match="durably acknowledged"):
+            await dispatch_method(state, "application.maintenance_begin", params, method_handlers())
+        state.chat_runs.maintenance_begin.assert_not_awaited()
+    else:
+        await dispatch_method(state, "application.maintenance_begin", params, method_handlers())
 
-    state.chat_runs.cancel.assert_awaited_once_with("run-one", reason="application_update")
-    state.chat_runs.maintenance_status.assert_awaited_once_with("operation-one")
-
-
-@pytest.mark.asyncio
-async def test_private_maintenance_never_cancels_a_different_active_run(tmp_path: Path) -> None:
-    state, ticket, _bootstrap = make_state(tmp_path)
-    state.chat_runs.active_run = lambda **_kwargs: SimpleNamespace(id="run-later")
-
-    await dispatch_method(
-        state,
-        "application.maintenance_begin",
-        {
-            "control_token": "secret",
-            "operation_id": "operation-one",
-            "handoff_ticket_id": ticket.ticket_id,
-        },
-        method_handlers(),
-    )
-
-    state.chat_runs.cancel.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_private_maintenance_requires_durable_acknowledgement_before_cancel(
-    tmp_path: Path,
-) -> None:
-    state, ticket, _bootstrap = make_state(tmp_path, acknowledged=False)
-    state.chat_runs.active_run = lambda **_kwargs: SimpleNamespace(id="run-one")
-
-    with pytest.raises(RpcError, match="durably acknowledged"):
-        await dispatch_method(
-            state,
-            "application.maintenance_begin",
-            {
-                "control_token": "secret",
-                "operation_id": "operation-one",
-                "handoff_ticket_id": ticket.ticket_id,
-            },
-            method_handlers(),
-        )
-
-    state.chat_runs.maintenance_begin.assert_not_awaited()
-    state.chat_runs.cancel.assert_not_awaited()
+    if cancelled:
+        state.chat_runs.cancel.assert_awaited_once_with("run-one", reason="application_update")
+        state.chat_runs.maintenance_status.assert_awaited_once_with("operation-one")
+    else:
+        state.chat_runs.cancel.assert_not_awaited()
 
 
 @pytest.mark.asyncio

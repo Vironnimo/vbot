@@ -1,17 +1,15 @@
-"""Tests for the block-model prompt RPC handlers (the ``prompt.*`` surface).
+"""Tests for the operations RPC handlers: logs, the prompt block editor and preview.
 
-These exercise the thin RPC edge in ``server/rpc/operations_methods.py`` directly:
-each handler is called with a fake ``state`` whose ``runtime.system_prompts`` is a
-real :class:`SystemPromptManager` wired with an in-memory block store + agent store.
-The edge's job is validation + error mapping; the block logic lives in the manager,
-so the assertions here check the RPC shapes, the field-allowlist guards, and the
-``PromptError`` → ``invalid_request`` split, plus that the preview builds through the
-full block path (extension blocks included).
+The prompt handlers run against a real :class:`SystemPromptManager` wired with an
+in-memory block store and Agent store. The RPC edge validates, maps errors and keeps
+prompt work off the Event Loop; the block logic itself lives in the manager.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +18,8 @@ from typing import Any, cast
 
 import pytest
 
+from core.projects import ResolutionAgentNotFoundError
+from core.projects.resolver import ConfigAgent
 from core.prompts import (
     BlockDefinition,
     LayoutEntry,
@@ -29,6 +29,7 @@ from core.prompts import (
 from core.tools import ToolAccess, ToolRegistry
 from core.utils.paths import model_path
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.methods import dispatch_rpc
 from server.rpc.operations_methods import (
     _create_prompt_block,
     _list_prompts,
@@ -228,7 +229,98 @@ def _state(manager: SystemPromptManager, *, runtime_extra: JsonObject | None = N
     return SimpleNamespace(runtime=runtime)
 
 
-# --- prompt.list -------------------------------------------------------------
+def _preview_state(
+    manager: SystemPromptManager,
+    agent: Any,
+    *,
+    projects: Any = None,
+    skills_for: Any = None,
+) -> Any:
+    """State whose resolver serves one Agent and fails like the real one otherwise."""
+
+    def resolve_agent(_project_id: str | None, agent_id: str) -> Any:
+        if agent_id != agent.id:
+            raise ResolutionAgentNotFoundError(f"agent not found: {agent_id}")
+        return agent
+
+    return _state(
+        manager,
+        runtime_extra={
+            "agent_resolver": SimpleNamespace(resolve_agent=resolve_agent),
+            "projects": projects if projects is not None else SimpleNamespace(),
+            "skills_for": skills_for or (lambda _project, _agent=None: StubSkills()),
+        },
+    )
+
+
+# --- log.list / log.read -----------------------------------------------------
+
+
+def _log_state(tmp_path: Path) -> Any:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    for name in ("2026-05-09", "2026-05-11", "2026-05-10"):
+        (logs_dir / name).write_text("", encoding="utf-8")
+    (logs_dir / "2026-05-11").write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\ntrace line", encoding="utf-8"
+    )
+    return SimpleNamespace(runtime=SimpleNamespace(storage=SimpleNamespace(data_dir=tmp_path)))
+
+
+@pytest.mark.asyncio
+async def test_log_list_and_read_return_the_log_viewer_results(tmp_path: Path) -> None:
+    state = _log_state(tmp_path)
+
+    listed = await dispatch_rpc(state, {"method": "log.list", "params": {}})
+    read = await dispatch_rpc(state, {"method": "log.read", "params": {"file": "2026-05-11"}})
+
+    assert listed == {
+        "ok": True,
+        "result": {
+            "files": ["2026-05-11", "2026-05-10", "2026-05-09"],
+            "default_file": "2026-05-11",
+        },
+    }
+    assert read["ok"] is True
+    assert read["result"]["file"] == "2026-05-11"
+    assert read["result"]["entries"] == [
+        {
+            "timestamp": "2026-05-11 09:00:00",
+            "level": "info",
+            "logger_name": "vbot.server.app",
+            "message": "Ready",
+            "continuation": "trace line",
+            "raw": "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\ntrace line",
+        }
+    ]
+    # The cursor lets the log stream continue after this read.
+    assert isinstance(read["result"]["cursor"], str)
+    assert read["result"]["cursor"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params", "code"),
+    [
+        pytest.param("log.list", {"extra": True}, "invalid_request", id="list-with-params"),
+        pytest.param("log.read", {}, "invalid_request", id="read-without-file"),
+        pytest.param("log.read", {"file": "../2026-05-11"}, "invalid_request", id="path-escape"),
+        pytest.param(
+            "log.read", {"file": "2026-05-11", "extra": True}, "invalid_request", id="extra-field"
+        ),
+        pytest.param("log.read", {"file": "2026-05-12"}, "domain_error", id="missing-file"),
+    ],
+)
+async def test_invalid_log_requests_are_rejected(
+    tmp_path: Path, method: str, params: JsonObject, code: str
+) -> None:
+    response = await dispatch_rpc(_log_state(tmp_path), {"method": method, "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == code
+
+
+# --- prompt.* block editor ---------------------------------------------------
 
 
 def test_list_returns_blocks_in_layout_order_with_scopes(tmp_path: Path) -> None:
@@ -283,71 +375,27 @@ def test_list_agent_scope_includes_inheritance_flags(tmp_path: Path) -> None:
     assert skills["inheritance"] == "owner_default"
 
 
-def test_list_rejects_unsupported_field(tmp_path: Path) -> None:
-    state = _state(_manager(tmp_path))
-
-    with pytest.raises(RpcError) as exc:
-        _list_prompts(state, {"bogus": 1})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-
-
-def test_list_rejects_disabled_agent_scope(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", name="Coder", custom_system_prompt_enabled=False)
-    state = _state(_manager(tmp_path, agents=[agent]))
-
-    with pytest.raises(RpcError) as exc:
-        _list_prompts(state, {"scope": {"type": "agent", "agent_id": "coder"}})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-
-
-# --- prompt.update / prompt.reset --------------------------------------------
-
-
-def test_update_edits_block_by_id(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_update_edits_block_and_logs_only_a_real_change(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     store = StubBlockStore()
     state = _state(_manager(tmp_path, store=store))
 
     with caplog.at_level(logging.INFO, logger="vbot.server.rpc.prompts"):
         result = _update_prompt(state, {"id": "core:tools", "content": "## Custom"})
+        _update_prompt(state, {"id": "core:tools", "content": "## Custom"})
 
     assert result["id"] == "core:tools"
     assert result["text"] == "## Custom"
     assert result["is_modified"] is True
     assert store.read_block_override("default", "core:tools") == "## Custom"
+    # The unchanged second update does not log; the log never carries the content.
     prompt_logs = [
         record.getMessage() for record in caplog.records if record.name == "vbot.server.rpc.prompts"
     ]
     assert len(prompt_logs) == 1
     assert "core:tools" in prompt_logs[0]
     assert "## Custom" not in caplog.text
-
-
-def test_update_same_prompt_content_does_not_log(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    store = StubBlockStore(overrides={("default", "core:tools"): "same"})
-    state = _state(_manager(tmp_path, store=store))
-
-    with caplog.at_level(logging.INFO, logger="vbot.server.rpc.prompts"):
-        _update_prompt(state, {"id": "core:tools", "content": "same"})
-
-    assert not [record for record in caplog.records if record.name == "vbot.server.rpc.prompts"]
-
-
-def test_update_rejects_non_string_content(tmp_path: Path) -> None:
-    state = _state(_manager(tmp_path))
-
-    with pytest.raises(RpcError) as exc:
-        _update_prompt(state, {"id": "core:tools", "content": 5})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-
-
-def test_update_rejects_data_block(tmp_path: Path) -> None:
-    state = _state(_manager(tmp_path))
-
-    with pytest.raises(RpcError) as exc:
-        _update_prompt(state, {"id": "core:soul", "content": "nope"})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
 
 
 def test_reset_removes_override(tmp_path: Path) -> None:
@@ -358,21 +406,6 @@ def test_reset_removes_override(tmp_path: Path) -> None:
 
     assert result["is_modified"] is False
     assert store.read_block_override("default", "core:tools") is None
-
-
-def test_reset_rejects_user_block(tmp_path: Path) -> None:
-    store = StubBlockStore(
-        layouts={"default": [LayoutEntry(id="user:note", source="user")]},
-        overrides={("default", "user:note"): "note"},
-    )
-    state = _state(_manager(tmp_path, store=store))
-
-    with pytest.raises(RpcError) as exc:
-        _reset_prompt(state, {"id": "user:note"})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-
-
-# --- prompt.set_layout -------------------------------------------------------
 
 
 def test_set_layout_persists_and_prunes_inert_id(tmp_path: Path) -> None:
@@ -395,34 +428,6 @@ def test_set_layout_persists_and_prunes_inert_id(tmp_path: Path) -> None:
     assert [entry["id"] for entry in result["layout"]] == ["core:skills", "core:tools"]
 
 
-def test_set_layout_rejects_non_list(tmp_path: Path) -> None:
-    state = _state(_manager(tmp_path))
-
-    with pytest.raises(RpcError) as exc:
-        _set_prompt_layout(state, {"layout": {"id": "core:tools"}})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-
-
-# --- prompt.create_block / prompt.remove_block -------------------------------
-
-
-def test_create_block_rejects_bad_slug(tmp_path: Path) -> None:
-    state = _state(_manager(tmp_path))
-
-    with pytest.raises(RpcError) as exc:
-        _create_prompt_block(state, {"slug": "../etc/passwd"})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-
-
-def test_create_block_rejects_collision(tmp_path: Path) -> None:
-    store = StubBlockStore(layouts={"default": [LayoutEntry(id="user:note", source="user")]})
-    state = _state(_manager(tmp_path, store=store))
-
-    with pytest.raises(RpcError) as exc:
-        _create_prompt_block(state, {"slug": "note"})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-
-
 def test_create_block_creates_valid_block(tmp_path: Path) -> None:
     store = StubBlockStore()
     state = _state(_manager(tmp_path, store=store))
@@ -434,22 +439,6 @@ def test_create_block_creates_valid_block(tmp_path: Path) -> None:
     assert result["kind"] == "text"
     assert store.read_block_override("default", "user:greeting") == "Hello."
     assert any(entry.id == "user:greeting" for entry in store.read_layout("default"))
-
-
-def test_create_block_rejects_negative_position(tmp_path: Path) -> None:
-    state = _state(_manager(tmp_path))
-
-    with pytest.raises(RpcError) as exc:
-        _create_prompt_block(state, {"slug": "greeting", "position": -1})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-
-
-def test_remove_block_rejects_non_user_id(tmp_path: Path) -> None:
-    state = _state(_manager(tmp_path))
-
-    with pytest.raises(RpcError) as exc:
-        _remove_prompt_block(state, {"id": "core:tools"})
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
 
 
 def test_remove_block_deletes_custom_block(tmp_path: Path) -> None:
@@ -465,9 +454,6 @@ def test_remove_block_deletes_custom_block(tmp_path: Path) -> None:
     assert all(entry["id"] != "user:note" for entry in result["layout"])
 
 
-# --- prompt.reset_layout -----------------------------------------------------
-
-
 def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
     store = StubBlockStore(layouts={"default": [LayoutEntry(id="core:tools", enabled=False)]})
     state = _state(_manager(tmp_path, store=store))
@@ -480,237 +466,44 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
     assert [entry["id"] for entry in result["layout"]] == persisted
 
 
-# --- prompt.preview (extension block visible) --------------------------------
-
-
-@pytest.mark.asyncio
-async def test_preview_includes_extension_block(tmp_path: Path) -> None:
-    # An extension-contributed block now flows through the same build path the
-    # preview uses, so it appears in the preview (the old append bug is gone).
-    extension_block = BlockDefinition(
-        id="extension:greeter",
-        owner="extension:greeter",
-        default_text="EXTENSION-BLOCK-MARKER",
-    )
-    agent = StubAgent(id="coder", name="Coder", workspace=str(tmp_path / "ws"))
-    manager = _manager(
-        tmp_path,
-        agents=[agent],
-        block_definitions=[extension_block],
-        loaded_extensions=["greeter"],
-    )
-    runtime_extra = {
-        "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
-        "projects": SimpleNamespace(find_by_cwd=lambda _cwd: None),
-        "skills_for": lambda _project, _agent=None: StubSkills(),
-    }
-    state = _state(manager, runtime_extra=runtime_extra)
-
-    result = await _preview_prompt(state, {"agent_id": "coder"})
-
-    assert "EXTENSION-BLOCK-MARKER" in result["text"]
-    assert isinstance(result["tokens"], int)
-    # The provider tool-definition array is reported beside the prompt text.
-    assert result["tool_count"] == 1
-    assert result["tool_tokens"] > 0
-    assert result["estimated"] is True
-
-
-@pytest.mark.asyncio
-async def test_preview_validates_an_agent_scope_off_the_event_loop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("handler", "params"),
+    [
+        pytest.param(_list_prompts, {"bogus": 1}, id="list-unsupported-field"),
+        pytest.param(
+            _list_prompts,
+            {"scope": {"type": "agent", "agent_id": "coder"}},
+            id="list-disabled-agent-scope",
+        ),
+        pytest.param(_update_prompt, {"id": "core:tools", "content": 5}, id="update-non-string"),
+        pytest.param(
+            _update_prompt, {"id": "core:soul", "content": "nope"}, id="update-data-block"
+        ),
+        pytest.param(_reset_prompt, {"id": "user:note"}, id="reset-user-block"),
+        pytest.param(_set_prompt_layout, {"layout": {"id": "core:tools"}}, id="layout-not-a-list"),
+        pytest.param(_create_prompt_block, {"slug": "../etc/passwd"}, id="create-bad-slug"),
+        pytest.param(_create_prompt_block, {"slug": "note"}, id="create-collision"),
+        pytest.param(
+            _create_prompt_block,
+            {"slug": "greeting", "position": -1},
+            id="create-negative-position",
+        ),
+        pytest.param(_remove_prompt_block, {"id": "core:tools"}, id="remove-non-user-block"),
+    ],
+)
+def test_prompt_editor_rejects_invalid_requests(
+    tmp_path: Path, handler: Any, params: JsonObject
 ) -> None:
-    import threading
-
-    agent = StubAgent(
-        id="coder", name="Coder", workspace=str(tmp_path / "ws"), custom_system_prompt_enabled=True
+    store = StubBlockStore(
+        layouts={"default": [LayoutEntry(id="user:note", source="user")]},
+        overrides={("default", "user:note"): "note"},
     )
-    manager = _manager(tmp_path, agents=[agent])
-    runtime_extra = {
-        "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
-        "projects": SimpleNamespace(find_by_cwd=lambda _cwd: None),
-        "skills_for": lambda _project, _agent=None: StubSkills(),
-    }
-    state = _state(manager, runtime_extra=runtime_extra)
-    validate_scope = manager.validate_scope
-    threads: list[int] = []
-
-    def recording_validate_scope(scope: Any = None) -> Any:
-        threads.append(threading.get_ident())
-        return validate_scope(scope)
-
-    monkeypatch.setattr(manager, "validate_scope", recording_validate_scope)
-
-    result = await _preview_prompt(state, {"scope": {"type": "agent", "agent_id": "coder"}})
-
-    assert isinstance(result["text"], str)
-    assert threads and threading.get_ident() not in threads
-
-
-@pytest.mark.asyncio
-async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> None:
-    # A Rooted Identity Agent previews against its explicitly selected Project's
-    # skill pool, matching live Run scope rather than the bare global registry.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    identity_workspace = tmp_path / "identity"
-    identity_workspace.mkdir()
-    agent = StubAgent(
-        id="coder",
-        name="Coder",
-        workspace=str(identity_workspace),
-        root_project_id="vbot",
-    )
-    manager = _manager(tmp_path, agents=[agent])
-    home_project = SimpleNamespace(
-        project_id="vbot",
-        display_name="vBot",
-        cwd=str(repo),
-        auto_load=(),
-    )
-    skills_for_calls: list[tuple[str | None, str | None]] = []
-
-    def skills_for(project_id: str | None, agent_id: str | None = None) -> StubSkills:
-        skills_for_calls.append((project_id, agent_id))
-        return StubSkills()
-
-    runtime_extra = {
-        "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
-        "projects": SimpleNamespace(get=lambda _project_id: home_project),
-        "skills_for": skills_for,
-    }
-    state = _state(manager, runtime_extra=runtime_extra)
-
-    result = await _preview_prompt(state, {"agent_id": "coder"})
-
-    assert skills_for_calls == [("vbot", "coder")]
-    assert "## Identity Environment" in result["text"]
-    assert f"Identity Workspace {model_path(identity_workspace)}" in result["text"]
-    assert "## Working Project" in result["text"]
-    assert f"Project Workspace {model_path(repo)}" in result["text"]
-
-
-@pytest.mark.asyncio
-async def test_preview_project_config_agent_gets_only_working_project_runtime(
-    tmp_path: Path,
-) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    agent = StubAgent(id="reviewer", name="Reviewer", workspace="")
-    project = SimpleNamespace(
-        project_id="vbot",
-        display_name="vBot",
-        cwd=str(repo),
-        auto_load=(),
-    )
-    state = _state(
-        _manager(tmp_path, agents=[agent]),
-        runtime_extra={
-            "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
-            "projects": SimpleNamespace(get=lambda _project_id: project),
-            "skills_for": lambda _project, _agent=None: StubSkills(),
-        },
-    )
-
-    result = await _preview_prompt(state, {"agent_id": "reviewer@vbot"})
-
-    assert "## Runtime" in result["text"]
-    assert "## Working Project" in result["text"]
-    assert "Project vBot" in result["text"]
-    assert "Project ID vbot" in result["text"]
-    assert f"Project Workspace {model_path(repo)}" in result["text"]
-    assert "## Identity Environment" not in result["text"]
-    assert "Host test-host" not in result["text"]
-    assert "Identity Workspace" not in result["text"]
-    assert f"Root {tmp_path / 'app'}" not in result["text"]
-    assert f"Data {tmp_path / 'data'}" not in result["text"]
-
-
-@pytest.mark.asyncio
-async def test_preview_missing_rooted_project_cwd_maps_error_without_fallback(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(
-        id="coder",
-        name="Coder",
-        workspace=str(tmp_path / "workspace"),
-        root_project_id="vbot",
-    )
-    manager = _manager(tmp_path, agents=[agent])
-    missing_project = SimpleNamespace(
-        project_id="vbot",
-        cwd=str(tmp_path / "missing-repo"),
-        auto_load=(),
-    )
-    state = _state(
-        manager,
-        runtime_extra={
-            "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
-            "projects": SimpleNamespace(get=lambda _project_id: missing_project),
-            "skills_for": lambda _project, _agent=None: StubSkills(),
-        },
-    )
-
-    with pytest.raises(RpcError) as exc_info:
-        await _preview_prompt(state, {"agent_id": "coder"})
-    assert exc_info.value.code == "domain_error"
-
-
-@pytest.mark.asyncio
-async def test_preview_rejects_unsupported_field(tmp_path: Path) -> None:
-    state = _state(_manager(tmp_path))
+    agent = StubAgent(id="coder", name="Coder", custom_system_prompt_enabled=False)
+    state = _state(_manager(tmp_path, store=store, agents=[agent]))
 
     with pytest.raises(RpcError) as exc:
-        await _preview_prompt(state, {"agent_id": "coder", "bogus": 1})
+        handler(state, params)
     assert exc.value.code == RPC_ERROR_INVALID_REQUEST
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode, expected", [("all", ["mcp_example"]), ("none", [])])
-async def test_preview_inspects_only_effective_provider_definitions(
-    tmp_path: Path, mode: str, expected: list[str]
-) -> None:
-    agent = StubAgent(
-        id="coder", name="Coder", tool_access=ToolAccess(mode=mode, denied=("blocked",))
-    )
-    registry = ToolRegistry()
-    schema = {
-        "type": "object",
-        "properties": {"action": {"type": "string", "enum": ["search", "read"]}},
-        "additionalProperties": False,
-    }
-    for name in ("mcp_example", "blocked", "remote_detail"):
-        registry.register(
-            name, "TEST-DEFINITION", schema, lambda *_: {}, deferred=name == "remote_detail"
-        )
-    manager = _manager(tmp_path, agents=[agent], tools=registry)
-    state = _state(
-        manager,
-        runtime_extra={
-            "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
-            "projects": SimpleNamespace(),
-            "skills_for": lambda *_: StubSkills(),
-        },
-    )
-
-    ordinary = await _preview_prompt(state, {"agent_id": "coder"})
-    inspected = await _preview_prompt(state, {"agent_id": "coder", "include_tools": True})
-
-    assert "tools" not in ordinary
-    assert {key: value for key, value in inspected.items() if key != "tools"} == ordinary
-    assert [entry["definition"]["name"] for entry in inspected["tools"]] == expected
-    assert [
-        entry["definition"] for entry in inspected["tools"]
-    ] == manager.provider_tool_definitions(cast(Any, agent))
-    assert all(entry["tokens"] > 0 for entry in inspected["tools"])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("value", [None, "true", 1, [], {}])
-async def test_preview_rejects_non_boolean_tool_inspection(value: Any) -> None:
-    with pytest.raises(RpcError) as raised:
-        await _preview_prompt(SimpleNamespace(), {"agent_id": "coder", "include_tools": value})
-    assert raised.value.code == RPC_ERROR_INVALID_REQUEST
 
 
 @pytest.mark.asyncio
@@ -729,11 +522,7 @@ async def test_preview_rejects_non_boolean_tool_inspection(value: Any) -> None:
 async def test_prompt_editor_rpc_keeps_event_loop_responsive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, params: JsonObject
 ) -> None:
-    import asyncio
-    import threading
-
     import server.rpc.operations_methods as methods
-    from server.rpc.methods import dispatch_rpc
 
     manager = _manager(tmp_path)
     manager.create_block("existing", "test-owned text")
@@ -758,3 +547,266 @@ async def test_prompt_editor_rpc_keeps_event_loop_responsive(
         release.set()
     result = await task
     assert result["ok"] is True, result
+
+
+# --- prompt.preview ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_preview_includes_extension_block_and_token_estimates(tmp_path: Path) -> None:
+    # An extension-contributed block flows through the same build path as a Run.
+    extension_block = BlockDefinition(
+        id="extension:greeter",
+        owner="extension:greeter",
+        default_text="EXTENSION-BLOCK-MARKER",
+    )
+    agent = StubAgent(id="coder", name="Coder", workspace=str(tmp_path / "ws"))
+    manager = _manager(
+        tmp_path,
+        agents=[agent],
+        block_definitions=[extension_block],
+        loaded_extensions=["greeter"],
+    )
+    state = _preview_state(manager, agent, projects=SimpleNamespace(find_by_cwd=lambda _cwd: None))
+
+    result = await _preview_prompt(state, {"agent_id": "coder"})
+
+    assert "EXTENSION-BLOCK-MARKER" in result["text"]
+    assert result["tokens"] > 0
+    # The provider tool-definition array is reported beside the prompt text.
+    assert result["tool_count"] == 1
+    assert result["tool_tokens"] > 0
+    assert result["estimated"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "rendered", "hidden"),
+    [
+        # Without a scope the preview shows the Agent's effective prompt.
+        pytest.param({"agent_id": "coder"}, "AGENT-TOOLS", "DEFAULT-TOOLS", id="effective"),
+        pytest.param(
+            {"agent_id": "coder", "scope": {"type": "default"}},
+            "DEFAULT-TOOLS",
+            "AGENT-TOOLS",
+            id="default-scope",
+        ),
+        # An Agent scope names its own identity Agent; no agent_id is needed.
+        pytest.param(
+            {"scope": {"type": "agent", "agent_id": "coder"}},
+            "AGENT-TOOLS",
+            "DEFAULT-TOOLS",
+            id="agent-scope",
+        ),
+    ],
+)
+async def test_preview_renders_the_requested_scope_and_validates_it_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, params: JsonObject, rendered: str, hidden: str
+) -> None:
+    agent = StubAgent(
+        id="coder", name="Coder", workspace=str(tmp_path / "ws"), custom_system_prompt_enabled=True
+    )
+    store = StubBlockStore(
+        overrides={
+            ("default", "core:tools"): "DEFAULT-TOOLS",
+            ("agent:coder", "core:tools"): "AGENT-TOOLS",
+        }
+    )
+    manager = _manager(tmp_path, store=store, agents=[agent])
+    state = _preview_state(manager, agent, projects=SimpleNamespace(find_by_cwd=lambda _cwd: None))
+    validate_scope = manager.validate_scope
+    threads: list[int] = []
+
+    def recording_validate_scope(scope: Any = None) -> Any:
+        threads.append(threading.get_ident())
+        return validate_scope(scope)
+
+    monkeypatch.setattr(manager, "validate_scope", recording_validate_scope)
+
+    result = await _preview_prompt(state, params)
+
+    assert rendered in result["text"]
+    assert hidden not in result["text"]
+    # An explicit scope reads its Agent, so validation runs off the Event Loop.
+    assert len(threads) == ("scope" in params)
+    assert threading.get_ident() not in threads
+
+
+@pytest.mark.asyncio
+async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> None:
+    # A Rooted Identity Agent previews against its explicitly selected Project's
+    # skill pool, matching live Run scope rather than the bare global registry.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    identity_workspace = tmp_path / "identity"
+    identity_workspace.mkdir()
+    agent = StubAgent(
+        id="coder",
+        name="Coder",
+        workspace=str(identity_workspace),
+        root_project_id="vbot",
+    )
+    home_project = SimpleNamespace(
+        project_id="vbot",
+        display_name="vBot",
+        cwd=str(repo),
+        auto_load=(),
+    )
+    skills_for_calls: list[tuple[str | None, str | None]] = []
+
+    def skills_for(project_id: str | None, agent_id: str | None = None) -> StubSkills:
+        skills_for_calls.append((project_id, agent_id))
+        return StubSkills()
+
+    state = _preview_state(
+        _manager(tmp_path, agents=[agent]),
+        agent,
+        projects=SimpleNamespace(get=lambda _project_id: home_project),
+        skills_for=skills_for,
+    )
+
+    result = await _preview_prompt(state, {"agent_id": "coder"})
+
+    assert skills_for_calls == [("vbot", "coder")]
+    assert "## Identity Environment" in result["text"]
+    assert f"Identity Workspace {model_path(identity_workspace)}" in result["text"]
+    assert "## Working Project" in result["text"]
+    assert f"Project Workspace {model_path(repo)}" in result["text"]
+
+
+@pytest.mark.asyncio
+async def test_preview_project_config_agent_renders_its_body_in_the_working_project(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agent = ConfigAgent(
+        id="reviewer",
+        name="Reviewer",
+        model="openai/gpt-5",
+        temperature=None,
+        tool_access=ToolAccess(mode="all"),
+        allowed_skills=["*"],
+        tools={},
+        body="Imported reviewer body",
+        source_path=repo / ".opencode" / "agents" / "reviewer.md",
+        source_format="opencode",
+    )
+    project = SimpleNamespace(
+        project_id="vbot",
+        display_name="vBot",
+        cwd=str(repo),
+        auto_load=(),
+    )
+    state = _preview_state(
+        _manager(tmp_path, agents=[]),
+        agent,
+        projects=SimpleNamespace(get=lambda _project_id: project),
+    )
+
+    result = await _preview_prompt(state, {"agent_id": "reviewer@vbot"})
+
+    # The preview matches a project-born Run: the imported body and only the
+    # Working Project runtime, without the identity environment.
+    assert "Imported reviewer body" in result["text"]
+    assert "## Runtime" in result["text"]
+    assert "## Working Project" in result["text"]
+    assert "Project vBot" in result["text"]
+    assert "Project ID vbot" in result["text"]
+    assert f"Project Workspace {model_path(repo)}" in result["text"]
+    assert "## Identity Environment" not in result["text"]
+    assert "Host test-host" not in result["text"]
+    assert "Identity Workspace" not in result["text"]
+    assert f"Root {tmp_path / 'app'}" not in result["text"]
+    assert f"Data {tmp_path / 'data'}" not in result["text"]
+
+
+@pytest.mark.asyncio
+async def test_preview_missing_rooted_project_cwd_maps_error_without_fallback(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        name="Coder",
+        workspace=str(tmp_path / "workspace"),
+        root_project_id="vbot",
+    )
+    missing_project = SimpleNamespace(
+        project_id="vbot",
+        cwd=str(tmp_path / "missing-repo"),
+        auto_load=(),
+    )
+    state = _preview_state(
+        _manager(tmp_path, agents=[agent]),
+        agent,
+        projects=SimpleNamespace(get=lambda _project_id: missing_project),
+    )
+
+    with pytest.raises(RpcError) as exc_info:
+        await _preview_prompt(state, {"agent_id": "coder"})
+    assert exc_info.value.code == "domain_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "code"),
+    [
+        pytest.param({"agent_id": "coder", "bogus": 1}, "invalid_request", id="unsupported-field"),
+        pytest.param({}, "invalid_request", id="missing-agent-id"),
+        pytest.param({"agent_id": "nobody"}, "agent_not_found", id="unknown-agent"),
+        pytest.param(
+            {"agent_id": "coder", "include_tools": None}, "invalid_request", id="null-inspection"
+        ),
+        pytest.param(
+            {"agent_id": "coder", "include_tools": "true"},
+            "invalid_request",
+            id="string-inspection",
+        ),
+        pytest.param(
+            {"agent_id": "coder", "include_tools": 1}, "invalid_request", id="number-inspection"
+        ),
+    ],
+)
+async def test_preview_rejects_invalid_requests(
+    tmp_path: Path, params: JsonObject, code: str
+) -> None:
+    agent = StubAgent(id="coder", name="Coder")
+    state = _preview_state(_manager(tmp_path, agents=[agent]), agent)
+
+    response = await dispatch_rpc(state, {"method": "prompt.preview", "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode, expected", [("all", ["mcp_example"]), ("none", [])])
+async def test_preview_inspects_only_effective_provider_definitions(
+    tmp_path: Path, mode: str, expected: list[str]
+) -> None:
+    agent = StubAgent(
+        id="coder", name="Coder", tool_access=ToolAccess(mode=mode, denied=("blocked",))
+    )
+    registry = ToolRegistry()
+    schema = {
+        "type": "object",
+        "properties": {"action": {"type": "string", "enum": ["search", "read"]}},
+        "additionalProperties": False,
+    }
+    for name in ("mcp_example", "blocked", "remote_detail"):
+        registry.register(
+            name, "TEST-DEFINITION", schema, lambda *_: {}, deferred=name == "remote_detail"
+        )
+    manager = _manager(tmp_path, agents=[agent], tools=registry)
+    state = _preview_state(manager, agent)
+
+    ordinary = await _preview_prompt(state, {"agent_id": "coder"})
+    inspected = await _preview_prompt(state, {"agent_id": "coder", "include_tools": True})
+
+    assert "tools" not in ordinary
+    assert {key: value for key, value in inspected.items() if key != "tools"} == ordinary
+    assert [entry["definition"]["name"] for entry in inspected["tools"]] == expected
+    assert [
+        entry["definition"] for entry in inspected["tools"]
+    ] == manager.provider_tool_definitions(cast(Any, agent))
+    assert all(entry["tokens"] > 0 for entry in inspected["tools"])

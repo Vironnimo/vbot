@@ -281,7 +281,7 @@ def test_rpc_unexpected_failure_preserves_json_envelope(
 ) -> None:
     import server.app as server_app
     from server.rpc.dispatcher import dispatch_rpc
-    from tests.server.test_rpc import StubAdapter, StubRuntime
+    from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
     def fail(_state: Any, _params: Any) -> Any:
         raise error_type("test-owned-private-detail")

@@ -30,7 +30,7 @@ from server.live import (
     LiveRegistryClosedError,
 )
 from server.rpc.errors import RpcError
-from tests.server.test_rpc import StubAdapter, StubRuntime
+from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 JsonObject = dict[str, Any]
 
