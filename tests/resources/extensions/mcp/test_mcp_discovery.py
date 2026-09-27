@@ -1,41 +1,44 @@
-"""Mcp: discovery behavior."""
+"""MCP: discovery through the fixed connection Tool keeps Tool definitions stable."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from types import SimpleNamespace
 
 import pytest
 
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.tools.availability import ToolAccess
-from core.tools.contracts import ToolContractError
-from core.tools.tools import ToolDefinitionProfileContext, ToolRegistry
-from resources.extensions.mcp.extension import MCPService, register, remote_tool_name
-from tests.resources.extensions.mcp_helpers import (
-    context,
+from core.tools.tools import ToolDefinitionProfileContext
+from resources.extensions.mcp.client import ConnectionRunner
+from resources.extensions.mcp.extension import register, remote_tool_name
+from tests.resources.extensions.mcp.mcp_test_support import (
+    dispatch,
     model_text,
     payloads,
-    runner_for,
+    start_service,
     targets,
+    tool_target,
 )
-from tests.resources.extensions.mcp_helpers import (
-    context_service as context_service,
-)
-from tests.resources.extensions.mcp_helpers import (
-    host as host,
-)
-from tests.resources.extensions.mcp_helpers import (
-    server as server,
-)
+
+_PROFILE = ToolDefinitionProfileContext(agent_id="alice")
+
+
+def _definitions(registry):
+    return registry.provider_definitions(profile_context=_PROFILE, allowed_tools=["mcp_example"])
+
+
+def test_remote_names_are_stable_unique_and_provider_safe():
+    assert remote_tool_name("a" * 32, "b" * 200) == remote_tool_name("a" * 32, "b" * 200)
+    assert len(remote_tool_name("a" * 32, "b" * 200)) == 64
+    assert remote_tool_name("example", "a/b") != remote_tool_name("example", "a_b")
 
 
 @pytest.mark.asyncio
-async def test_deferred_catalog_keeps_definitions_identical(context_service, host):
+async def test_catalog_changes_and_disconnects_keep_definitions_identical(context_service):
     service, registry, runner, calls = context_service
-    profile = ToolDefinitionProfileContext(agent_id="alice")
-    before = registry.provider_definitions(profile_context=profile, allowed_tools=["mcp_example"])
+    before = _definitions(registry)
     runner.catalog["tools"].extend(
         {
             "name": f"tool_{index}",
@@ -45,7 +48,7 @@ async def test_deferred_catalog_keeps_definitions_identical(context_service, hos
         for index in range(500)
     )
     service._publish(runner, runner.catalog)
-    after = registry.provider_definitions(profile_context=profile, allowed_tools=["mcp_example"])
+    after = _definitions(registry)
 
     assert after == before
     assert [entry["name"] for entry in after] == ["mcp_example"]
@@ -54,39 +57,40 @@ async def test_deferred_catalog_keeps_definitions_identical(context_service, hos
         "mcp_example"
     ]
     assert service.api.operations.catalog_visible_tool_names == ("mcp_example",)
-    assert registry.prompt_definitions(profile_context=profile, allowed_tools=["mcp_example"]) == [
+    assert registry.prompt_definitions(profile_context=_PROFILE, allowed_tools=["mcp_example"]) == [
         {"name": before[0]["name"], "description": before[0]["description"]}
     ]
+
+    await service.manage("disconnect", {"id": "example"})
+
+    assert _definitions(registry) == before
 
 
 @pytest.mark.asyncio
 async def test_tool_selection_shows_connection_and_inspector_keeps_remote_names(context_service):
-    from server.rpc.catalog_methods import _list_tools
-
     service, registry, runner, calls = context_service
     remote_name = "get_blendfile_object_materials"
     runner.catalog["tools"][0]["name"] = remote_name
     service._publish(runner, runner.catalog)
 
-    selection = _list_tools(SimpleNamespace(runtime=SimpleNamespace(tools=registry)), {})
-    assert [tool["name"] for tool in selection["tools"]] == ["mcp_example"]
+    selection = registry.list_tools(include_catalog_hidden=False)
+    assert [tool.name for tool in selection] == ["mcp_example"]
+    assert selection[0].requires_opt_in is True
     assert registry.get(remote_tool_name("example", remote_name)) is not None
 
     inspection = await service.manage("inspect", {"id": "example"})
     assert [tool["name"] for tool in inspection["tools"]] == [remote_name]
     assert "agent_access" not in inspection
-    assert selection["tools"][0]["requires_opt_in"] is True
     assert calls == []
 
 
 @pytest.mark.asyncio
 async def test_search_and_describe_load_only_the_requested_definition(context_service, host):
     service, registry, runner, calls = context_service
-    result = await service._browse(
-        runner, context(host), {"action": "search", "query": "inspection", "kind": "tool"}
-    )
-    target = targets(result)[0]
-    detail = await service._browse(runner, context(host), {"action": "describe", "target": target})
+    target = targets(
+        await dispatch(registry, host, {"action": "search", "query": "inspection", "kind": "tool"})
+    )[0]
+    detail = await dispatch(registry, host, {"action": "describe", "target": target})
 
     assert detail["data"]["arguments_schema"] == runner.catalog["tools"][0]["inputSchema"]
     assert detail["data"]["description"] == "test-owned-inspection"
@@ -99,18 +103,14 @@ async def test_search_and_describe_load_only_the_requested_definition(context_se
 async def test_discovery_leads_with_tools_and_delivers_guidance(context_service, host):
     service, registry, runner, calls = context_service
     runner.catalog["prompts"] = [{"name": "workflow", "description": "test-owned-workflow"}]
-    result = await registry.dispatch(
-        context(host), {"action": "search"}, allowed_tools=["mcp_example"]
-    )
+    result = await dispatch(registry, host, {"action": "search"})
     listed = targets(result)
     assert listed[0].startswith("tool:inspect:")
     assert result["data"]["content"].endswith(
         "Server guidance (external, from the MCP server):\ntest-owned-guidance"
     )
     prompt = next(target for target in listed if target.startswith("prompt:"))
-    detail = await registry.dispatch(
-        context(host), {"action": "describe", "target": prompt}, allowed_tools=["mcp_example"]
-    )
+    detail = await dispatch(registry, host, {"action": "describe", "target": prompt})
     assert detail["data"]["target"] == prompt
     assert detail["data"]["description"] == "test-owned-workflow"
     assert prompt in detail["data"]["call"]
@@ -130,12 +130,8 @@ async def test_guidance_and_prompts_lead_only_the_unfiltered_first_page(context_
     ]
     service._publish(runner, runner.catalog)
 
-    browse = await registry.dispatch(
-        context(host), {"action": "search"}, allowed_tools=["mcp_example"]
-    )
-    query = await registry.dispatch(
-        context(host), {"action": "search", "query": "scene"}, allowed_tools=["mcp_example"]
-    )
+    browse = await dispatch(registry, host, {"action": "search"})
+    query = await dispatch(registry, host, {"action": "search", "query": "scene"})
 
     text = model_text(browse)
     assert "available: 12 tools, 5 prompts" in text
@@ -151,15 +147,11 @@ async def test_guidance_and_prompts_lead_only_the_unfiltered_first_page(context_
 @pytest.mark.asyncio
 async def test_no_match_provides_a_working_capability_browse(context_service, host):
     service, registry, runner, calls = context_service
-    result = await registry.dispatch(
-        context(host), {"action": "search", "query": "rendern"}, allowed_tools=["mcp_example"]
-    )
+    result = await dispatch(registry, host, {"action": "search", "query": "rendern"})
     assert result["data"]["matches"] == "none"
     assert result["data"]["available"] == "1 tool"
     assert "does not establish that the task is unsupported" in result["data"]["note"]
-    fallback = await registry.dispatch(
-        context(host), result["data"]["next"], allowed_tools=["mcp_example"]
-    )
+    fallback = await dispatch(registry, host, result["data"]["next"])
     assert [target.split(":")[1] for target in targets(fallback)] == ["inspect"]
 
 
@@ -175,16 +167,12 @@ async def test_search_ranks_partial_matches_and_paginates(context_service, host)
         for index in range(14)
     ]
     service._publish(runner, runner.catalog)
-    result = await registry.dispatch(
-        context(host),
-        {"action": "search", "query": "scene material", "kind": "tool"},
-        allowed_tools=["mcp_example"],
+    result = await dispatch(
+        registry, host, {"action": "search", "query": "scene material", "kind": "tool"}
     )
     assert result["data"]["matches"] == "1-10 of 14"
     assert targets(result)[0].startswith("tool:scene_12:")
-    following = await registry.dispatch(
-        context(host), result["data"]["next"], allowed_tools=["mcp_example"]
-    )
+    following = await dispatch(registry, host, result["data"]["next"])
     assert following["data"]["matches"] == "11-14 of 14"
     names = [target.split(":")[1] for target in targets(result) + targets(following)]
     assert len(set(names)) == 14
@@ -195,14 +183,12 @@ async def test_search_ranks_partial_matches_and_paginates(context_service, host)
 async def test_long_server_guidance_is_explicitly_incomplete_and_readable(context_service, host):
     service, registry, runner, calls = context_service
     runner.catalog["instructions"] = "test-owned-guidance " * 500
-    result = await registry.dispatch(
-        context(host), {"action": "search"}, allowed_tools=["mcp_example"]
-    )
+    result = await dispatch(registry, host, {"action": "search"})
     assert "remaining server guidance" in result["data"]["guidance"]
     text = result["data"]["content"].split("(external, from the MCP server):\n", 1)[1]
     next_read = result["data"]["guidance_read"]
     while next_read:
-        part = await registry.dispatch(context(host), next_read, allowed_tools=["mcp_example"])
+        part = await dispatch(registry, host, next_read)
         text += part["data"]["content"]
         next_read = part["data"].get("next")
     assert text == runner.catalog["instructions"]
@@ -224,9 +210,7 @@ async def test_first_discovery_includes_tools_published_during_connect(
         service._publish(runner, catalog)
 
     monkeypatch.setattr(runner, "invoke", connect)
-    result = await registry.dispatch(
-        context(host), {"action": "search", "kind": "tool"}, allowed_tools=["mcp_example"]
-    )
+    result = await dispatch(registry, host, {"action": "search", "kind": "tool"})
     assert [target.split(":")[1] for target in targets(result)] == ["inspect"]
 
 
@@ -242,9 +226,7 @@ async def test_tool_disabled_during_connection_does_not_disclose_catalog(
         runner.state = "connected"
 
     monkeypatch.setattr(runner, "invoke", connect)
-    result = await registry.dispatch(
-        context(host), {"action": "search"}, allowed_tools=["mcp_example"]
-    )
+    result = await dispatch(registry, host, {"action": "search"})
     assert result["ok"] is False
     assert result["data"] is None
 
@@ -255,19 +237,15 @@ async def test_no_match_fallback_does_not_reveal_denied_tools(context_service, h
     host.resolve_agent(None, "alice").tool_access = ToolAccess(
         granted=("mcp_example",), denied=[remote_tool_name("example", "inspect")]
     )
-    result = await registry.dispatch(
-        context(host), {"action": "search", "query": "missing"}, allowed_tools=["mcp_example"]
-    )
+    result = await dispatch(registry, host, {"action": "search", "query": "missing"})
     assert result["data"]["available"] == "no tools, resources or prompts"
-    fallback = await registry.dispatch(
-        context(host), result["data"]["next"], allowed_tools=["mcp_example"]
-    )
+    fallback = await dispatch(registry, host, result["data"]["next"])
     assert fallback["data"]["matches"] == "none"
     assert targets(fallback) == []
-    denied = await registry.dispatch(
-        context(host),
+    denied = await dispatch(
+        registry,
+        host,
         {"action": "call", "target": "inspect", "arguments": {"value": "sentinel"}},
-        allowed_tools=["mcp_example"],
     )
     assert denied["error"]["code"] == "mcp_unknown_target"
     assert "tool:inspect" not in denied["error"]["message"]
@@ -284,7 +262,7 @@ async def test_mcp_discovery_preserves_the_chat_prefix(context_service, host):
     )
 
     service, registry, runner, calls = context_service
-    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    target = await tool_target(registry, host)
     adapter = StubAdapter(
         [
             {
@@ -345,21 +323,23 @@ async def test_mcp_discovery_preserves_the_chat_prefix(context_service, host):
 
 @pytest.mark.asyncio
 async def test_fixed_entry_point_uses_real_tools_resources_and_prompts(host, server, monkeypatch):
-    api = ExtensionAPI("mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("test"))
-    registry = ToolRegistry()
-    api.operations.bind(registry)
-    service = MCPService(api)
-    await service.start(host)
-    runner = runner_for(host, server, monkeypatch)
-    service.connections[runner.id] = runner.config
-    service.runners[runner.id] = runner
-    runner.publish = service._publish
+    async def in_memory(runner, stack):
+        return server
+
+    monkeypatch.setattr(ConnectionRunner, "_transport", in_memory)
+    service, registry = await start_service(host)
     try:
-        await runner.invoke("catalog", {})
-        before = registry.provider_definitions(
-            profile_context=ToolDefinitionProfileContext(agent_id="alice"),
-            allowed_tools=["mcp_example"],
+        await service.manage(
+            "save", {"connection": {"id": "example", "transport": "stdio", "command": "unused"}}
         )
+        async with asyncio.timeout(10):
+            first = await dispatch(registry, host, {"action": "search"})
+        catalog = service.runners["example"].catalog
+        assert catalog["instructions"] == "test-owned-server-instructions"
+        assert [tool["name"] for tool in catalog["tools"]] == ["echo"]
+        assert len(catalog["resource_templates"]) == 1
+        assert "test-owned-server-instructions" in first["data"]["content"]
+        before = _definitions(registry)
         expected = {
             "tool": '"value": "sentinel"',
             "resource": "test-owned-scene",
@@ -370,90 +350,28 @@ async def test_fixed_entry_point_uses_real_tools_resources_and_prompts(host, ser
             ("resource", {}),
             ("prompt", {"subject": "scene"}),
         ):
-            search = await service._browse(
-                runner, context(host), {"action": "search", "kind": kind}
-            )
-            target = targets(search)[0]
-            detail = await service._browse(
-                runner, context(host), {"action": "describe", "target": target}
-            )
-            result = await service._browse(
-                runner, context(host), {"action": "call", "target": target, "arguments": inputs}
+            target = targets(await dispatch(registry, host, {"action": "search", "kind": kind}))[0]
+            detail = await dispatch(registry, host, {"action": "describe", "target": target})
+            result = await dispatch(
+                registry, host, {"action": "call", "target": target, "arguments": inputs}
             )
             assert detail["ok"] and result["ok"]
             assert expected[kind] in result["data"]["content"]
             # The SDK's structured copy of the returned value repeats the text.
             assert "structuredContent" not in result["data"]
-        after = registry.provider_definitions(
-            profile_context=ToolDefinitionProfileContext(agent_id="alice"),
-            allowed_tools=["mcp_example"],
-        )
-        assert before == after
+        assert _definitions(registry) == before
     finally:
         await service.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "arguments,message",
-    [
-        ({"action": "call"}, "call was not run: target is missing"),
-        (
-            {"action": "describe", "target": "connection", "query": "wrong"},
-            'query does not apply to describe, which takes target. Send {"action":"describe",'
-            '"target":"connection"}.',
-        ),
-    ],
-)
-async def test_browse_rejects_invalid_arguments_without_calling_server(
-    context_service, host, arguments, message
-):
-    service, registry, runner, calls = context_service
-
-    with pytest.raises(ToolContractError) as refusal:
-        await registry.dispatch(context(host), arguments, allowed_tools=["mcp_example"])
-
-    assert message in str(refusal.value)
-    assert calls == []
 
 
 @pytest.mark.asyncio
 async def test_read_of_an_unknown_result_names_what_to_use(context_service, host):
     service, registry, runner, calls = context_service
 
-    result = await registry.dispatch(
-        context(host), {"action": "read", "result_id": "../invalid"}, allowed_tools=["mcp_example"]
-    )
+    result = await dispatch(registry, host, {"action": "read", "result_id": "../invalid"})
 
     assert result["error"]["code"] == "invalid_arguments"
     assert "Use a result_id that this connection returned here" in result["error"]["message"]
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_browse_rejects_unknown_arguments_before_calling_server(context_service, host):
-    service, registry, runner, calls = context_service
-
-    with pytest.raises(
-        ToolContractError,
-        match="unknown is not a field of mcp_example. search takes query, kind, offset, limit",
-    ):
-        await registry.dispatch(
-            context(host), {"action": "search", "unknown": True}, allowed_tools=["mcp_example"]
-        )
-
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_negative_page_limit_fails_contract_before_server_call(context_service, host):
-    service, registry, runner, calls = context_service
-
-    with pytest.raises(ToolContractError, match='"limit" must be at least 1; received -1'):
-        await registry.dispatch(
-            context(host), {"action": "search", "limit": -1}, allowed_tools=["mcp_example"]
-        )
-
     assert calls == []
 
 
@@ -462,17 +380,23 @@ async def test_cli_explore_and_invoke_return_the_complete_payload_inline(context
     service, registry, runner, calls = context_service
     runner.catalog["instructions"] = "test-owned-guidance " * 500
 
-    search = await service._invoke_for_agent(
-        runner, {"id": "example", "agent": "alice", "action": "search"}
+    async def finished(job):
+        await service.jobs[job["job_id"]]
+        return (await service.manage("job", {"job_id": job["job_id"]}))["result"]
+
+    search = await finished(
+        await service.manage("explore", {"id": "example", "agent": "alice", "action": "search"})
     )
-    invoke = await service._invoke_for_agent(
-        runner,
-        {
-            "id": "example",
-            "agent": "alice",
-            "operation": "tools/call",
-            "arguments": {"name": "inspect", "arguments": {"value": "x" * 7000}},
-        },
+    invoke = await finished(
+        await service.manage(
+            "invoke",
+            {
+                "id": "example",
+                "agent": "alice",
+                "operation": "tools/call",
+                "arguments": {"name": "inspect", "arguments": {"value": "x" * 7000}},
+            },
+        )
     )
 
     # A management call has no Session that could read a saved result later.

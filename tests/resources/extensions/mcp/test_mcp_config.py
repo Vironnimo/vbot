@@ -1,20 +1,16 @@
 """Persisted MCP faults must not disable unrelated connections or erase data."""
 
 import json
-import logging
 
 import pytest
 
-from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
-from core.tools.tools import ToolRegistry
 from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.config import (
     ConnectionStore,
     validate_connection,
     validate_connections_file,
 )
-from resources.extensions.mcp.extension import MCPService
-from tests.resources.extensions.mcp_helpers import host as host
+from tests.resources.extensions.mcp.mcp_test_support import start_service
 
 
 def connection(identifier="example", **fields):
@@ -27,6 +23,20 @@ def document(*connections, **fields):
 
 def saved_connections(store):
     return json.loads(store.path.read_text())["connections"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"id": "../bad", "transport": "stdio", "command": "python"},
+        {"id": "example", "transport": "http", "url": "https://user:secret@example.com"},
+        {"id": "example", "transport": "stdio"},
+        {"id": "example", "transport": "stdio", "command": "python", "cwd": "relative"},
+    ],
+)
+def test_invalid_configuration_is_rejected(value):
+    with pytest.raises(ValueError):
+        validate_connection(value)
 
 
 @pytest.mark.parametrize("extra", [{"agents": []}, {"future_option": {"value": "secret-sentinel"}}])
@@ -172,14 +182,8 @@ async def test_start_publishes_healthy_tools_and_reports_individual_issues(
     )
     started = []
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: started.append(runner.id))
-    api = ExtensionAPI(
-        "mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("test.mcp.config")
-    )
-    registry = ToolRegistry()
-    api.operations.bind(registry)
-    service = MCPService(api)
+    service, registry = await start_service(host)
     try:
-        await service.start(host)
         assert set(started) == {"godot", "blender"}
         assert {tool.name for tool in registry.list_tools()} == {"mcp_godot", "mcp_blender"}
         result = await service.manage("list", {})

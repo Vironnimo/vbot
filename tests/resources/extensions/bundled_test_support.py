@@ -14,21 +14,20 @@ BUNDLED_EXTENSIONS_DIR = _REPO_ROOT / "resources" / "extensions"
 
 
 def load_bundled(
-    name: str,
-    *,
+    *names: str,
     config_provider: Callable[[str], dict[str, Any]] | None = None,
     credential_resolver: Callable[[str], str] | None = None,
 ) -> ExtensionRegistry:
-    """Load the bundled Extension *name* with every other bundled Extension disabled.
+    """Load the bundled Extensions *names* with every other bundled Extension disabled.
 
     The load goes through the real bundled root, so it also proves that the root ships
     a loadable Extension. Disabled Extensions are never imported, which keeps one load
-    to the cost of the Extension under test.
+    to the cost of the Extensions under test.
     """
     others = {
         entry.name
         for entry in BUNDLED_EXTENSIONS_DIR.iterdir()
-        if entry.name != name and (entry / "extension.json").is_file()
+        if entry.name not in names and (entry / "extension.json").is_file()
     }
     return ExtensionRegistry.load(
         _REPO_ROOT / "does-not-exist-data-extensions",
