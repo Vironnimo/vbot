@@ -77,8 +77,10 @@ async def test_foreground_hands_off_after_its_delay_and_delivers_the_result_late
     assert (data["status"], data["delivery"]) == ("running", "automatic")
     assert "mode" not in data
     assert "handed off to vBot after 0.01 seconds" in data["handoff_note"]
-    # A foreground command was expected to finish: no advice to wait for a ready line.
-    assert 'action "wait"' not in data["handoff_note"]
+    # A foreground command was expected to finish: its result arrives on its own,
+    # so the note ends the turn instead of pointing to a wait.
+    assert '"wait"' not in data["handoff_note"]
+    assert "end your turn" in data["handoff_note"]
     assert "yield-marker" in await trigger.body()
 
 
@@ -165,9 +167,10 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
     result = await asyncio.wait_for(task, 5)
 
     assert result["ok"] and result["data"]["delivery"] == "automatic"
-    assert result["data"]["handoff_note"].startswith(
-        "The user moved this command to the background after "
-    )
+    handoff_note = result["data"]["handoff_note"]
+    assert handoff_note.startswith("The user moved this command to the background after ")
+    assert '"wait"' not in handoff_note
+    assert "end your turn" in handoff_note
     process_id = result["data"]["process_id"]
     assert manager.get_process(process_id, AGENT_ID).status == "running"
     (tmp_path / "release").write_text("continue", encoding="utf-8")
@@ -260,7 +263,9 @@ async def test_background_mode_returns_a_running_process_at_once(
         assert "mode" not in data
         assert isinstance(data["process_id"], str)
         assert limit in data["handoff_note"]
+        # A background start is typically a server whose ready line the Agent waits for.
         assert 'action "wait"' in data["handoff_note"]
+        assert "pattern" in data["handoff_note"]
         assert Path(data["log_file"]).exists()
         # Without a trigger service nothing watches for the completion.
         await asyncio.sleep(0)
