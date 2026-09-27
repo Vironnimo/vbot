@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
+import subprocess
 import sys
 import zlib
 from collections.abc import Iterator
@@ -12,6 +14,24 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+
+from tests import file_dependencies
+
+# pytest-testmon attributes executed lines to single tests through coverage contexts.
+# The sys.monitoring core (the default on Python 3.12+) reports a line only the
+# first time it runs, which leaves later tests without their dependencies.
+os.environ.setdefault("COVERAGE_CORE", "ctrace")
+
+# Tests run git in temporary repositories. Started from a git hook, pytest inherits
+# variables such as GIT_DIR and GIT_INDEX_FILE that would point those git calls at
+# the committing repository.
+if any(name.startswith("GIT_") for name in os.environ):
+    with contextlib.suppress(OSError):
+        local_git_variables = subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True, check=False
+        ).stdout.split()
+        for name in local_git_variables:
+            os.environ.pop(name, None)
 
 
 @pytest.fixture(autouse=True)
@@ -141,6 +161,11 @@ def _selected_shard() -> tuple[int, int] | None:
 def in_shard(nodeid: str, index: int, count: int) -> bool:
     """Return whether *nodeid* belongs to shard *index* of *count* (stable across runs)."""
     return zlib.crc32(nodeid.encode("utf-8")) % count == index - 1
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # Records the data files each test reads while pytest-testmon collects data.
+    config.pluginmanager.register(file_dependencies, "vbot-file-dependencies")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

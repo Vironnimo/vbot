@@ -1,7 +1,8 @@
 name: CI
 
-# Complete verification, called for every push to main (main.yml) and as the
-# release gate (release.yml). Local work runs targeted tests; this runs everything.
+# Complete verification: the release gate (release.yml), also startable by hand.
+# Every commit already runs the tests it affects (scripts/commit_check.py); this
+# runs everything on every supported platform and Python version.
 on:
   workflow_call:
   workflow_dispatch:
