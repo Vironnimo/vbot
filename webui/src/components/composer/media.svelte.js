@@ -4,7 +4,11 @@ import {
   getPendingAttachments,
   setPendingAttachments,
 } from '$lib/composerMemory.js';
-import { uploadAttachment, transcribeSpeech } from '$lib/api.js';
+import {
+  prepareSpeechTranscription,
+  uploadAttachment,
+  transcribeSpeech,
+} from '$lib/api.js';
 import { createAudioRecorder } from '$lib/audioRecorder.js';
 
 export function createComposerMedia(context) {
@@ -294,6 +298,9 @@ export function createComposerMedia(context) {
       activeRecorder = recorder;
       activeRecorder.start();
       recordingState = 'recording';
+      // A local speech model loads while the user speaks. Only a hint: the
+      // transcription reports its own failures.
+      prepareSpeechTranscription().catch(() => {});
     } catch (error) {
       if (destroyed || requestGeneration !== recorderRequestGeneration) {
         return;

@@ -5,6 +5,7 @@ import {
   flushSync,
   mount,
   unmount,
+  prepareSpeechTranscription,
   transcribeSpeech,
   uploadAttachment,
   createAudioRecorder,
@@ -91,6 +92,8 @@ describe('ChatComposer', () => {
     );
     microphoneButton.click();
     await flushComposerAsyncWork();
+    // The server may load its speech model while the user speaks.
+    expect(prepareSpeechTranscription).toHaveBeenCalledOnce();
 
     document.body.querySelector('button[aria-label="Stop recording"]').click();
     await flushComposerAsyncWork();

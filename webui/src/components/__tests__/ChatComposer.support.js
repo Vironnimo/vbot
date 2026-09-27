@@ -9,6 +9,7 @@ vi.mock('svelte', async () => {
 });
 
 vi.mock('$lib/api.js', () => ({
+  prepareSpeechTranscription: vi.fn(),
   transcribeSpeech: vi.fn(),
   uploadAttachment: vi.fn(),
 }));
@@ -17,7 +18,8 @@ vi.mock('$lib/audioRecorder.js', () => ({
   createAudioRecorder: vi.fn(),
 }));
 
-const { transcribeSpeech, uploadAttachment } = await import('$lib/api.js');
+const { prepareSpeechTranscription, transcribeSpeech, uploadAttachment } =
+  await import('$lib/api.js');
 
 const { createAudioRecorder } = await import('$lib/audioRecorder.js');
 
@@ -175,6 +177,8 @@ function setupChatComposerSuite() {
     document.body.innerHTML = '';
     init('en');
     mountedComponent = null;
+    prepareSpeechTranscription.mockReset();
+    prepareSpeechTranscription.mockResolvedValue({ state: 'loading' });
     transcribeSpeech.mockReset();
     uploadAttachment.mockReset();
     createAudioRecorder.mockReset();
@@ -200,6 +204,7 @@ function setupChatComposerSuite() {
 }
 
 export {
+  prepareSpeechTranscription,
   transcribeSpeech,
   uploadAttachment,
   createAudioRecorder,

@@ -184,6 +184,14 @@ export function updateTaskModelSettings(modelTasks, options = {}) {
   return rpc('task_model.update', { model_tasks: modelTasks }, options);
 }
 
+/**
+ * Ask the server to start loading its local speech-to-text model before a
+ * recording is uploaded. Resolves to `{ state }` without waiting for the load.
+ */
+export function prepareSpeechTranscription(options = {}) {
+  return rpc('speech.prepare_transcription', {}, options);
+}
+
 export function getLocalSpeechMemory(options = {}) {
   return rpc('speech.local_memory_status', {}, options);
 }
