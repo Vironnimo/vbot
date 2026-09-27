@@ -152,6 +152,8 @@ def normalize_patch_arguments(arguments: Any) -> Any:
         field_aliases=_FIELD_ALIASES,
         empty_as_omitted=("path", "replace_all", "expected_replacements", "insert_line"),
         placeholder_as_omitted=("patch",),
+        # Patch text is never an object, so one under a patch spelling holds call fields.
+        wrapping_fields=("patch",),
     )
     if not isinstance(normalized, dict):
         return normalized

@@ -729,7 +729,7 @@
     "ok": false,
     "error_code": "no_changes",
     "contains": [
-     "The unchanged lines match src/app.py line 12."
+     "The unchanged lines match src/app.py line 12:"
     ]
    }
   },

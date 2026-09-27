@@ -124,6 +124,8 @@ class TrackedProcess:
     terminal_notified: bool = False
     # The command as the Agent wrote it, for listings; None for other launches.
     command: str | None = None
+    # The directory the process started in; None when it inherited vBot's own.
+    cwd: Path | None = None
 
 
 class ProcessManager:
@@ -353,6 +355,7 @@ class ProcessManager:
             last_poll_at=None,
             execution_owner=execution_owner,
             command=command,
+            cwd=Path(cwd) if cwd is not None else None,
         )
         try:
             await self._open_log_file(tracked)

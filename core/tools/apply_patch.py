@@ -24,8 +24,8 @@ from core.tools._patch_entries import (
     _Snapshot,
     _snapshot,
 )
-from core.tools._patch_hunks import _apply_hunk, _clean_additions, _ending
-from core.tools._patch_report import _FileReport, file_report, patch_result
+from core.tools._patch_hunks import _apply_hunk, _clean_additions, _ending, _excerpt
+from core.tools._patch_report import _excerpts, _FileReport, file_report, patch_result
 from core.tools._patch_requests import (
     APPLY_PATCH_TOOL_NAME,
     PATCH_HIDDEN_PARAMETERS,
@@ -73,11 +73,13 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
                 "-    count = 1\n+    count = 2\n     run(count)\n"
                 "*** Add File: notes.txt\n+first line of a new file\n"
                 "*** Delete File: old.txt\n*** Move File: a.txt -> b.txt\n*** End Patch\n"
-                "Under Update File, - lines are removed, + lines are added, and lines "
-                "starting with a space are unchanged lines that locate the change. Each is "
-                "a whole line; copy - and unchanged lines exactly from the file. Every @@ "
-                "block needs a - or + line. Text after "
-                "@@ is optional and names an earlier line, such as the enclosing function. "
+                "Under Update File, the lines of an @@ block follow the file from top to "
+                "bottom: lines starting with a space stay unchanged, - lines are removed, and "
+                "+ lines are added at their position. Each is a whole line; copy - and "
+                "unchanged lines exactly from the file. To replace a line, write it as a - "
+                "line; to insert above a line, write the + lines before it. Every @@ block "
+                "needs a - or + line. Text after @@ is optional and names an earlier line, "
+                "such as the enclosing function. "
                 "Start another @@ block for another place in the same file. A block of only "
                 "+ lines goes after the @@ line, or at the end of the file after a bare @@. "
                 "Add File creates a file or replaces all of its content. Paths are relative "
@@ -118,6 +120,8 @@ _MISMATCH_CODES = frozenset(
 _GUARD_CONTENT_MAX_BYTES = 16 * 1024
 _GUARD_CONTENT_MAX_LINES = 400
 _CONTEXT_SEARCH_MAX_BYTES = 2 * 1024 * 1024
+# A context-only patch shows this many file lines above and below where its lines are.
+_CONTEXT_EXCERPT_LINES = 2
 
 
 def _decode(payload: bytes, path: object) -> str:
@@ -610,15 +614,15 @@ def _call_cwd(context: ToolContext) -> Path:
         return context.effective_cwd
 
 
-def _locate_context(context: ToolContext, batch: _Batch, name: str, lines: list[str]) -> str:
-    """Say where the lines of a context-only hunk are in the file, if they are there."""
+def _locate_context(context: ToolContext, batch: _Batch, name: str, lines: list[str]) -> list[str]:
+    """Show where the lines of a context-only hunk are in the file, if they are there."""
     try:
         path = _resolve(context, name)
         if path.stat().st_size > _CONTEXT_SEARCH_MAX_BYTES:
-            return ""
+            return []
         content = _decode(path.read_bytes(), path)
     except (OSError, _PatchError):
-        return ""
+        return []
     text = "\n".join(lines)
     found = replace_fuzzy(
         content,
@@ -629,23 +633,35 @@ def _locate_context(context: ToolContext, batch: _Batch, name: str, lines: list[
         typographic=True,
     )
     if not isinstance(found, FuzzyReplacement):
-        return ""
-    ranges = []
-    for start, end in found.before_spans[:3]:
-        first = content.count("\n", 0, start) + 1
-        last = content.count("\n", 0, max(start, end - 1)) + 1
-        ranges.append(f"{first}" if first == last else f"{first}-{last}")
-    where = ("line " if ranges == [str(ranges[0])] and "-" not in ranges[0] else "lines ") + (
-        ", ".join(ranges)
-    )
-    return f" The unchanged lines match {batch.shown(path)} {where}."
+        return []
+    file_lines = split_text_lines(content)
+    spans = [
+        (content.count("\n", 0, start) + 1, content.count("\n", 0, max(start, end - 1)) + 1)
+        for start, end in found.before_spans
+    ]
+    around = _CONTEXT_EXCERPT_LINES
+    excerpts = [
+        _excerpt(file_lines, max(1, first - around), min(len(file_lines), last + around))
+        for first, last in spans[:3]
+    ]
+    label = batch.shown(path)
+    if len(spans) == 1:
+        first, last = spans[0]
+        where = f"line {first}" if first == last else f"lines {first}-{last}"
+        return [f"The unchanged lines match {label} {where}:", *_excerpts(excerpts, label)]
+    shown = "" if len(spans) <= 3 else ", the first 3 of them"
+    return [
+        f"The unchanged lines occur {len(spans)} times in {label}{shown}:",
+        *_excerpts(excerpts, label),
+        "Add unchanged lines until they occur only at the place you mean.",
+    ]
 
 
 def _request_failure(context: ToolContext, batch: _Batch, error: _PatchError) -> JsonObject:
-    message = error.text(batch.shown)
+    message = [error.text(batch.shown)]
     for name, lines in error.details.get("context_only", [])[:3]:
-        message += _locate_context(context, batch, name, lines)
-    return tool_failure(error.code, message + "\nNo file was changed.")
+        message.extend(_locate_context(context, batch, name, lines))
+    return tool_failure(error.code, "\n".join(message) + "\nNo file was changed.")
 
 
 def _label_hunks(operations: list[_Operation]) -> None:

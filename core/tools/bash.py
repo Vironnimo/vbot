@@ -630,7 +630,7 @@ async def _watch_background_process(
             "Output:\n"
             f"{output}"
         )
-        hint = annotate_failure(command, tracked.exit_code, output)
+        hint = annotate_failure(command, tracked.exit_code, output, workdir=tracked.cwd)
         if hint:
             body += f"\n\nHint: {hint}"
 

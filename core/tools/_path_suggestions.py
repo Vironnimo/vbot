@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from difflib import SequenceMatcher
 from itertools import islice
 from pathlib import Path
 from typing import Literal
 
+from core.tools.model_names import model_tool_name
 from core.tools.search import display_search_path
 
 _SCAN_LIMIT = 200
@@ -119,5 +121,6 @@ def missing_file_message(missing: Path, cwd: Path) -> str:
     parent = missing.parent
     shown = display_search_path(parent, cwd=cwd)
     if parent.is_dir():
-        return f"File not found: {label}. Read {shown} to list that directory."
+        call = f"{model_tool_name('read')}(path={json.dumps(shown, ensure_ascii=False)})"
+        return f"File not found: {label}. {call} lists its directory."
     return f"File not found: {label}. Its directory {shown} does not exist."

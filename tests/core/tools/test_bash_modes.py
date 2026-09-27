@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -110,7 +111,7 @@ async def test_automatic_handoff_includes_capped_output_and_usable_process(
         assert isinstance(process_id, str) and process_id
         # Handoff can beat child startup or stdout collection. Its snapshot is
         # bounded even when the command has not produced its output yet.
-        assert isinstance(data["truncated"], bool)
+        assert data.get("truncated") in {None, True}
         assert len(data["output"]) <= 4000
         if "HANDOFF-END" in data["output"]:
             assert data["truncated"] is True
@@ -474,6 +475,34 @@ async def test_foreground_failure_includes_hint_field(
     assert result["data"]["hint"] == (
         "This system has no bare `python` — use `python3`, or the project "
         "venv's interpreter (e.g. .venv/bin/python)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreground_import_hint_checks_the_working_directory(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A script run by path cannot import a package that sits in the working directory."""
+    monkeypatch.setattr(
+        bash_module, "_shell_argv", lambda command: [sys.executable, *command.split()[1:]]
+    )
+    project = tmp_path / "project"
+    (project / "shop").mkdir(parents=True)
+    (project / "shop" / "__init__.py").write_text("")
+    (project / "tests").mkdir()
+    (project / "tests" / "test_cart.py").write_text("import shop\n")
+
+    result = await bash_handler(
+        make_context(tmp_path),
+        {"command": "python tests/test_cart.py", "workdir": str(project)},
+        manager,
+    )
+
+    assert result["data"]["exit_code"] == 1
+    assert result["data"]["hint"].endswith(
+        "Run it as a module from the working directory instead: `python -m tests.test_cart`."
     )
 
 

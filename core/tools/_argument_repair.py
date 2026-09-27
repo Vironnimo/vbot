@@ -21,6 +21,7 @@ def normalize_call_arguments(
     field_normalizers: Mapping[str, Callable[[Any], Any]] | None = None,
     empty_as_omitted: Sequence[str] = (),
     placeholder_as_omitted: Sequence[str] = (),
+    wrapping_fields: Sequence[str] = (),
 ) -> Any:
     """Repair one owner-declared argument object, preserving every supplied instruction.
 
@@ -28,8 +29,11 @@ def normalize_call_arguments(
     Field normalizers run on canonical field names before schema conversion and
     alias conflict checks. Enum formatting and empty-as-omission need explicit
     field selection, and so does ignoring a placeholder under one spelling of a
-    field that another spelling gives a real value. Nested objects remain
-    payloads; batch owners call this separately for each item.
+    field that another spelling gives a real value. A field in
+    ``wrapping_fields`` whose value is an object of this call's own fields, or
+    JSON text of one, wraps those fields; the owner selects only fields whose
+    real values can never be such an object. Nested objects remain payloads;
+    batch owners call this separately for each item.
     No edit-distance matching, identifier correction, or schema-score guessing.
     """
     value = copy.deepcopy(arguments)
@@ -68,7 +72,13 @@ def normalize_call_arguments(
                         if action is not None:
                             result.append(("action", key, action))
                         continue
-            result.append((canonical_field(key), key, item))
+            field = canonical_field(key)
+            if field in wrapping_fields:
+                wrapped = _argument_object(item)
+                if wrapped and all(canonical_field(name) in properties for name in wrapped):
+                    result.extend(entries(wrapped, depth + 1))
+                    continue
+            result.append((field, key, item))
         return result
 
     supplied = entries(value)
@@ -108,6 +118,16 @@ def normalize_call_arguments(
         if field in normalized and normalized[field] in (None, ""):
             del normalized[field]
     return normalized
+
+
+def _argument_object(value: Any) -> dict[str, Any] | None:
+    """Return ``value`` as an object when it is one or is JSON text of one."""
+    if isinstance(value, str) and value.lstrip().startswith("{"):
+        try:
+            value = _load_json_value(value)
+        except (ValueError, ToolContractError):
+            return None
+    return value if isinstance(value, dict) else None
 
 
 def _shown(value: Any) -> str:

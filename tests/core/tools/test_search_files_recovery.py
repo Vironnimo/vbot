@@ -100,6 +100,26 @@ async def test_unbalanced_regex_characters_match_literally_with_a_note(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["--no-filename", "-N", "--no-line-number"])
+async def test_display_flags_run_the_search_with_a_note(tmp_path, flag):
+    (tmp_path / "cases").mkdir()
+    (tmp_path / "cases/a.sql").write_text('-- naming="first"\nSELECT 1;\n')
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+
+    result = await registry.dispatch(
+        context(tmp_path),
+        {"args": ["-o", flag], "path": "cases", "pattern": 'naming="([^"]+)"', "limit": 45},
+    )
+
+    assert result["ok"], result
+    assert 'naming="first"' in result["data"]["content"]
+    assert result["data"]["note"] == (
+        f"{flag} was ignored: results always name each match's file and line."
+    )
+
+
+@pytest.mark.asyncio
 async def test_look_around_runs_with_pcre2_and_says_so(tmp_path):
     (tmp_path / "code.py").write_text("price = 1\nprice_total = 2\n")
     registry = ToolRegistry()

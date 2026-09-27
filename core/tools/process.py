@@ -545,8 +545,7 @@ def _status_snapshot_data(snapshot: JsonObject) -> JsonObject:
         "exit_code": snapshot["exit_code"],
         "started_at": _format_timestamp(snapshot.get("started_at")),
         "finished_at": _format_timestamp(snapshot.get("finished_at")),
-        "output": fields["output"],
-        "truncated": fields["truncated"],
+        **fields,
         "log_file": log_file,
     }
 
@@ -571,9 +570,12 @@ def shape_process_output(
             marker = _truncation_marker(None)
         budget = max_chars - len(marker)
         output = marker + (output[-budget:] if budget > 0 else "")
-    fields: JsonObject = {"output": output, "truncated": truncated}
-    if truncated and log_file is not None:
-        fields["log_file"] = log_file
+    fields: JsonObject = {"output": output}
+    # Complete output needs no flag; the Model reads every result field.
+    if truncated:
+        fields["truncated"] = True
+        if log_file is not None:
+            fields["log_file"] = log_file
     return fields
 
 

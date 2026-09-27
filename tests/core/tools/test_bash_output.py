@@ -52,7 +52,7 @@ def test_handoff_snapshot_character_budget_and_upstream_truncation(output, alrea
     tracked = types.SimpleNamespace(log_file=None, truncated=already_truncated)
     fields = bash_results._shape_output_fields(tracked, output, handoff=True)
     truncated = already_truncated or len(output) > 4000
-    assert fields["truncated"] is truncated
+    assert fields.get("truncated", False) is truncated
     assert len(fields["output"]) <= 4000
     if not truncated:
         assert fields["output"] == output
@@ -185,7 +185,7 @@ async def test_small_output_is_not_truncated_and_names_no_log_file(
 
         assert result["ok"] is True
         data = result["data"]
-        assert data["truncated"] is False
+        assert "truncated" not in data
         assert "log_file" not in data
         assert "[earlier output truncated" not in data["output"]
     finally:

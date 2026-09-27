@@ -227,7 +227,7 @@ async def _completion_result(
         "exit_code": tracked.exit_code,
         **_shape_output_fields(tracked, output),
     }
-    hint = annotate_failure(command, tracked.exit_code, output)
+    hint = annotate_failure(command, tracked.exit_code, output, workdir=tracked.cwd)
     if hint:
         result["hint"] = hint
     return tool_success(result)
@@ -306,7 +306,7 @@ async def _failure_output_suffix(
     parts: list[str] = []
     if output:
         fields = _shape_output_fields(tracked, output)
-        label = "Output tail" if fields["truncated"] else "Output"
+        label = "Output tail" if fields.get("truncated") else "Output"
         parts.append(f"\n{label}:\n{fields['output']}")
     if tracked.log_file is not None:
         parts.append(f"\nComplete output: {model_path(tracked.log_file)}")

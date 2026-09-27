@@ -204,6 +204,24 @@ def _line_list(numbers: list[int]) -> str:
     return ("line " if len(numbers) == 1 else "lines ") + ", ".join(shown)
 
 
+def _excerpt(lines: list[str], first: int, last: int) -> JsonObject:
+    """Return file lines ``first``-``last`` (1-based) as a report candidate.
+
+    Each line is cut at 240 characters; a cut line names where ``read`` continues it.
+    """
+    shown = lines[first - 1 : last]
+    return {
+        "line": first,
+        "text": "\n".join(line[:240] for line in shown),
+        "truncated": any(len(line) > 240 for line in shown),
+        "continuations": [
+            {"offset": f"{number}:241", "limit": 1}
+            for number, line in enumerate(shown, first)
+            if len(line) > 240
+        ],
+    }
+
+
 def _ambiguity(
     content: str, match: AmbiguousFuzzyMatch, offset: int = 0
 ) -> tuple[JsonObject, JsonObject]:
@@ -211,21 +229,9 @@ def _ambiguity(
     shift = len(_BREAK.findall(content[:offset]))
     numbers = [number + shift for number in dict.fromkeys(match.line_numbers)]
     lines = split_text_lines(content)
-    candidates = []
-    for number in numbers[:3]:
-        start, end = max(0, number - 2), min(len(lines), number + 1)
-        candidates.append(
-            {
-                "line": start + 1,
-                "text": "\n".join(line[:240] for line in lines[start:end]),
-                "truncated": any(len(line) > 240 for line in lines[start:end]),
-                "continuations": [
-                    {"offset": f"{index}:241", "limit": 1}
-                    for index, line in enumerate(lines[start:end], start + 1)
-                    if len(line) > 240
-                ],
-            }
-        )
+    candidates = [
+        _excerpt(lines, max(1, number - 1), min(len(lines), number + 1)) for number in numbers[:3]
+    ]
     details: JsonObject = {"occurrences": match.occurrences, "candidates": candidates}
     return details, {"occurrences": match.occurrences, "lines": _line_list(numbers)}
 
