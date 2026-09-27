@@ -1,37 +1,37 @@
-"""Tests for cli main."""
+"""Tests for the ``vbot`` entry point: local commands, server lifecycle and update output."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
-from unittest.mock import Mock
 
 import pytest
 
+from cli import _commands
 from cli import main as cli_main
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, WebUIProbeResult
 from cli.uninstall_management import UninstallMode, UninstallResult
 from core.utils.config import VBOT_ROOT
-from tests.cli.cli_main_test_support import (
-    make_instance,
-)
+from tests.cli.cli_test_support import make_instance
+
+TARGET_FLAGS = ("--host", "localhost", "--port", "8765", "--data-dir", "data")
+FLAGGED_TARGET = {"host": "localhost", "port": 8765, "data_dir": "data"}
+DEFAULT_TARGET = {"host": "127.0.0.1", "port": None, "data_dir": None}
+CONFLICT = "port occupied by non-vBot process"
+VBOT_HEALTH = HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
+FOREIGN_HEALTH = HealthProbeResult(reachable=True, is_vbot=False, status_code=200)
 
 
-def test_run_home_prints_app_and_resolved_data_directories_without_server(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+def test_home_prints_app_and_data_directories_without_a_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
     def fail_resolve(**kwargs: object) -> ServerInstance:
         raise AssertionError(f"home must not resolve a server: {kwargs}")
 
-    exit_code = cli_main.run(
-        ["home", "--data-dir", "runtime-data"],
-        resolve=fail_resolve,
-    )
+    exit_code = cli_main.run(["home", "--data-dir", "runtime-data"], resolve=fail_resolve)
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
@@ -40,7 +40,7 @@ def test_run_home_prints_app_and_resolved_data_directories_without_server(
     ]
 
 
-def test_run_uninstall_dispatches_selection_and_target(
+def test_uninstall_receives_the_selection_target_and_lifecycle_services(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     captured: dict[str, object] = {}
@@ -51,74 +51,57 @@ def test_run_uninstall_dispatches_selection_and_target(
 
     exit_code = cli_main.run(
         [
-            "uninstall",
-            "--all",
-            "--yes",
-            "--host",
-            "localhost",
-            "--port",
-            "9000",
-            "--data-dir",
-            "custom-data",
-            "--task-name",
-            "My Task",
-            "--service-name",
-            "my-service",
+            "uninstall", "--all", "--yes",
+            "--host", "localhost", "--port", "9000", "--data-dir", "custom-data",
+            "--task-name", "My Task", "--service-name", "my-service",
         ],
         uninstall_fn=uninstall_fn,
-    )
+    )  # fmt: skip
 
     assert exit_code == 0
-    assert captured["mode"] is UninstallMode.ALL
-    assert captured["assume_yes"] is True
-    assert captured["host"] == "localhost"
-    assert captured["port"] == 9000
-    assert captured["data_dir"] == "custom-data"
-    assert captured["task_name"] == "My Task"
-    assert captured["service_name"] == "my-service"
-    assert captured["resolve"] is cli_main.resolve_instance
-    assert captured["stop"] is cli_main.stop_server
-    assert captured["start"] is cli_main.start_server
+    expected = {
+        "mode": UninstallMode.ALL,
+        "assume_yes": True,
+        "host": "localhost",
+        "port": 9000,
+        "data_dir": "custom-data",
+        "task_name": "My Task",
+        "service_name": "my-service",
+        "resolve": cli_main.resolve_instance,
+        "stop": cli_main.stop_server,
+        "start": cli_main.start_server,
+    }
+    assert {key: captured.get(key) for key in expected} == expected
     assert capsys.readouterr().out.splitlines() == ["uninstall launched"]
 
 
-def test_run_desktop_forwards_supplied_target_flags_to_injected_launcher(
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(
+    "flags",
+    [
+        pytest.param(("--host", "192.168.1.50", "--port", "8500"), id="explicit-target"),
+        pytest.param((), id="recorded-target"),
+    ],
+)
+def test_desktop_forwards_only_the_supplied_target_flags(
+    capsys: pytest.CaptureFixture[str], flags: tuple[str, ...]
 ) -> None:
-    calls: list[Sequence[str]] = []
+    launches: list[list[str]] = []
 
-    def fake_launch(launch_argv: Sequence[str]) -> None:
-        calls.append(list(launch_argv))
+    def launch(launch_argv: Sequence[str]) -> None:
+        launches.append(list(launch_argv))
 
-    exit_code = cli_main.run(
-        ["desktop", "--host", "192.168.1.50", "--port", "8500"],
-        launch_desktop_fn=fake_launch,
-    )
+    exit_code = cli_main.run(["desktop", *flags], launch_desktop_fn=launch)
 
     assert exit_code == 0
-    assert calls == [["--host", "192.168.1.50", "--port", "8500"]]
+    assert launches == [list(flags)]
     assert capsys.readouterr().out.strip()
 
 
-def test_run_desktop_without_flags_passes_empty_argv_to_launcher() -> None:
-    calls: list[Sequence[str]] = []
-
-    def fake_launch(launch_argv: Sequence[str]) -> None:
-        calls.append(list(launch_argv))
-
-    exit_code = cli_main.run(["desktop"], launch_desktop_fn=fake_launch)
-
-    assert exit_code == 0
-    assert calls == [[]]
-
-
-def test_run_desktop_reports_failure_when_launcher_raises_runtime_error(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    def fake_launch(launch_argv: Sequence[str]) -> None:
+def test_desktop_reports_a_launcher_failure(capsys: pytest.CaptureFixture[str]) -> None:
+    def launch(launch_argv: Sequence[str]) -> None:
         raise RuntimeError("pywebview is required to run vBot Desktop")
 
-    exit_code = cli_main.run(["desktop"], launch_desktop_fn=fake_launch)
+    exit_code = cli_main.run(["desktop"], launch_desktop_fn=launch)
 
     assert exit_code == 1
     output = capsys.readouterr().out
@@ -126,356 +109,293 @@ def test_run_desktop_reports_failure_when_launcher_raises_runtime_error(
     assert "pywebview is required to run vBot Desktop" in output
 
 
+URL = "http://127.0.0.1:8420"
+
+
 @pytest.mark.parametrize(
-    ("command", "called_service"),
-    [("start", "start"), ("stop", "stop"), ("status", "status")],
+    ("command", "flags", "target", "result", "code", "shown", "completion"),
+    [
+        pytest.param(
+            "start",
+            TARGET_FLAGS,
+            FLAGGED_TARGET,
+            {
+                "message": "started",
+                "health": VBOT_HEALTH,
+                "webui": WebUIProbeResult(available=False, status_code=404),
+            },
+            0,
+            ("result: started", "running: yes", "webui: unavailable"),
+            f"[WARN] The vBot server started successfully and is healthy at {URL}.",
+            id="started-without-webui",
+        ),
+        pytest.param(
+            "start",
+            (),
+            DEFAULT_TARGET,
+            {
+                "ok": False,
+                "message": "server readiness timed out",
+                "health": HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+            },
+            1,
+            ("result: server readiness timed out", "running: no"),
+            f"[ERROR] Could not start the vBot server at {URL}: server readiness timed out.",
+            id="start-timed-out",
+        ),
+        pytest.param(
+            "start",
+            (),
+            DEFAULT_TARGET,
+            {"ok": False, "message": CONFLICT, "health": FOREIGN_HEALTH},
+            1,
+            (f"conflict: {CONFLICT}",),
+            f"[ERROR] Could not start the vBot server at {URL}: {CONFLICT}.",
+            id="start-conflict",
+        ),
+        pytest.param(
+            "stop",
+            TARGET_FLAGS,
+            FLAGGED_TARGET,
+            {"message": "stopped"},
+            0,
+            ("result: stopped",),
+            f"[OK] The vBot server stopped successfully at {URL}.",
+            id="stopped",
+        ),
+        pytest.param(
+            "stop",
+            (),
+            DEFAULT_TARGET,
+            {
+                "ok": False,
+                "message": CONFLICT,
+                "health": FOREIGN_HEALTH,
+                "process_id": 123,
+                "forced": True,
+            },
+            1,
+            ("process_id: 123", "forced: true", f"conflict: {CONFLICT}"),
+            f"[ERROR] Could not stop the vBot server at {URL}: {CONFLICT}.",
+            id="stop-conflict",
+        ),
+        pytest.param(
+            "status",
+            TARGET_FLAGS,
+            FLAGGED_TARGET,
+            {
+                "message": "running",
+                "health": VBOT_HEALTH,
+                "webui": WebUIProbeResult(available=True, status_code=200),
+            },
+            0,
+            ("running: yes", "webui: available"),
+            f"[OK] The vBot server is running and healthy at {URL}.",
+            id="status-running",
+        ),
+        pytest.param(
+            "status",
+            (),
+            DEFAULT_TARGET,
+            {"message": "not running"},
+            0,
+            ("result: not running", "running: no", "webui: unknown"),
+            f"[WARN] The vBot server is not running at {URL}.",
+            id="status-not-running",
+        ),
+        pytest.param(
+            "status",
+            (),
+            DEFAULT_TARGET,
+            {
+                "ok": False,
+                "message": CONFLICT,
+                "health": FOREIGN_HEALTH,
+                "webui": WebUIProbeResult(available=False),
+            },
+            0,
+            ("running: no", "webui: unavailable", f"conflict: {CONFLICT}"),
+            f"[ERROR] The vBot server is not running at {URL}; "
+            "the port is occupied by a non-vBot process.",
+            id="status-conflict-is-an-answer",
+        ),
+    ],
 )
-def test_run_dispatches_command_to_service_layer(
+def test_server_commands_resolve_the_target_and_print_the_status_frame(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     command: str,
-    called_service: str,
+    flags: tuple[str, ...],
+    target: dict[str, Any],
+    result: dict[str, Any],
+    code: int,
+    shown: tuple[str, ...],
+    completion: str,
 ) -> None:
-    calls: list[tuple[str, Any]] = []
-    instance = make_instance(tmp_path, port=8765)
-    result = CommandResult(
-        ok=True,
-        message="running",
-        instance=instance,
-        health=HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
-        webui=WebUIProbeResult(available=True, status_code=200),
-        log_path=instance.log_path,
+    instance = make_instance(tmp_path)
+    outcome = CommandResult(
+        **({"ok": True} | result), instance=instance, log_path=instance.log_path
     )
+    calls: list[tuple[str, Any]] = []
 
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
+    def resolve(**requested: Any) -> ServerInstance:
+        calls.append(("resolve", requested))
         return instance
 
-    def service(name: str):
-        def fake_service(resolved_instance: ServerInstance) -> CommandResult:
-            calls.append((name, resolved_instance))
-            return result
+    def service(name: str) -> Any:
+        def run(resolved: ServerInstance) -> CommandResult:
+            calls.append((name, resolved))
+            return outcome
 
-        return fake_service
+        return run
 
     exit_code = cli_main.run(
-        ["server", command, "--host", "localhost", "--port", "8765", "--data-dir", "data"],
-        resolve=fake_resolve,
+        ["server", command, *flags],
+        resolve=resolve,
         start=service("start"),
         stop=service("stop"),
         status=service("status"),
     )
 
-    assert exit_code == 0
-    assert calls == [
-        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
-        (called_service, instance),
-    ]
-    assert f"command: server {command}" in capsys.readouterr().out
+    assert exit_code == code
+    assert calls == [("resolve", target), (command, instance)]
+    lines = capsys.readouterr().out.splitlines()
+    for line in (f"command: server {command}", f"url: {URL}", f"data_dir: {tmp_path / 'data'}"):
+        assert line in lines
+    for line in shown:
+        assert line in lines
+    # Stop reports neither log nor WebUI; start omits an unknown WebUI state, status never.
+    assert (f"log_path: {instance.log_path}" in lines) is (command != "stop")
+    webui_shown = any(line.startswith("webui:") for line in lines)
+    assert webui_shown is (command == "status" or "webui" in result)
+    assert lines[-1] == completion
 
 
-def test_run_provider_list_dispatches_and_prints_plain_output(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    calls: list[tuple[str, Any]] = []
-    instance = make_instance(tmp_path, port=8765)
-    result = CommandResult(
-        ok=True,
-        message=(
-            "connections:\n"
-            "- id: openai:default  provider_id: openai"
-            "  type: api_key  label: OpenAI  usable: yes"
-        ),
-        instance=instance,
-    )
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
-        return instance
-
-    def fake_list_providers(resolved_instance: ServerInstance) -> CommandResult:
-        calls.append(("provider.list", resolved_instance))
-        return result
-
-    exit_code = cli_main.run(
-        ["provider", "list", "--host", "localhost", "--port", "8765", "--data-dir", "data"],
-        resolve=fake_resolve,
-        list_providers=fake_list_providers,
-    )
-
-    assert exit_code == 0
-    assert calls == [
-        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
-        ("provider.list", instance),
-    ]
-    assert capsys.readouterr().out.splitlines() == [
-        "connections:",
-        "- id: openai:default  provider_id: openai  type: api_key  label: OpenAI  usable: yes",
-    ]
-
-
-def test_run_agent_update_dispatches_changes_and_prints_plain_output(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    calls: list[tuple[str, Any]] = []
-    instance = make_instance(tmp_path, port=8765)
-    result = CommandResult(ok=True, message="updated coder", instance=instance)
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
-        return instance
-
-    def fake_update_agent(
-        resolved_instance: ServerInstance,
-        agent_id: str,
-        changes: dict[str, Any],
-    ) -> CommandResult:
-        calls.append(("agent.update", (resolved_instance, agent_id, changes)))
-        return result
-
-    exit_code = cli_main.run(
-        [
-            "agent",
-            "update",
-            "coder",
-            "--name",
-            "Coder Two",
-            "--clear-temperature",
-            "--tool-access-mode",
-            "selected",
-            "--tool-allow",
-            "read_file",
-            "--tool-deny",
-            "memory",
-            "--allowed-skills",
-            "debugging",
-            "--default-workspace",
-            "--copy-workspace-files",
-            "--clear-project",
-            "--host",
-            "localhost",
-            "--port",
-            "8765",
-            "--data-dir",
-            "data",
-        ],
-        resolve=fake_resolve,
-        update_agent=fake_update_agent,
-    )
-
-    assert exit_code == 0
-    assert calls == [
-        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
-        (
-            "agent.update",
-            (
-                instance,
-                "coder",
-                {
-                    "name": "Coder Two",
-                    "temperature": None,
-                    "tool_access": {
-                        "mode": "selected",
-                        "allowed": ["read_file"],
-                        "denied": ["memory"],
-                    },
-                    "allowed_skills": ["debugging"],
-                    "workspace": None,
-                    "copy_workspace_identity_files": True,
-                    "root_project_id": None,
-                },
-            ),
-        ),
-    ]
-
-
-def test_run_agent_update_builds_an_explicit_empty_selected_policy(
-    tmp_path: Path,
+def test_server_command_announces_the_action_before_dispatch(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     instance = make_instance(tmp_path)
-    update_agent = Mock(return_value=CommandResult(ok=True, message="updated", instance=instance))
+
+    def start(resolved: ServerInstance) -> CommandResult:
+        assert URL in capsys.readouterr().out
+        return CommandResult(ok=True, message="started", instance=resolved)
+
+    exit_code = cli_main.run(["server", "start"], resolve=lambda **_target: instance, start=start)
+
+    assert exit_code == 0
+    assert URL in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stopped", ["stopped", "not running"])
+def test_restart_stops_then_resolves_again_and_starts(tmp_path: Path, stopped: str) -> None:
+    calls: list[str] = []
+    instances = iter([make_instance(tmp_path, port=8001), make_instance(tmp_path, port=8002)])
+
+    def resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        calls.append(f"resolve:{host}:{port}:{data_dir}")
+        return next(instances)
+
+    def stop(instance: ServerInstance) -> CommandResult:
+        calls.append(f"stop:{instance.port}")
+        return CommandResult(ok=True, message=stopped, instance=instance)
+
+    def start(instance: ServerInstance) -> CommandResult:
+        calls.append(f"start:{instance.port}")
+        return CommandResult(ok=True, message="started", instance=instance)
 
     exit_code = cli_main.run(
-        ["agent", "update", "coder", "--tool-access-mode", "selected"],
-        resolve=lambda **_kwargs: instance,
-        update_agent=update_agent,
+        ["server", "restart", "--port", "8765", "--data-dir", "data"],
+        resolve=resolve,
+        start=start,
+        stop=stop,
     )
 
     assert exit_code == 0
-    assert update_agent.call_args.args[2] == {"tool_access": {"mode": "selected", "allowed": []}}
+    assert calls == [
+        "resolve:127.0.0.1:8765:data",
+        "stop:8001",
+        "resolve:127.0.0.1:8765:data",
+        "start:8002",
+    ]
 
 
-def test_run_agent_update_rejects_tool_names_without_an_explicit_mode(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_restart_does_not_start_when_stop_fails(tmp_path: Path) -> None:
     instance = make_instance(tmp_path)
-    update_agent = Mock()
+
+    def start(unused: ServerInstance) -> CommandResult:
+        raise AssertionError("restart must not start after a failed stop")
+
+    def stop(resolved: ServerInstance) -> CommandResult:
+        return CommandResult(ok=False, message=CONFLICT, instance=resolved, health=FOREIGN_HEALTH)
 
     exit_code = cli_main.run(
-        ["agent", "update", "coder", "--tool-deny", "memory"],
-        resolve=lambda **_kwargs: instance,
-        update_agent=update_agent,
+        ["server", "restart"], resolve=lambda **_target: instance, start=start, stop=stop
     )
 
     assert exit_code == 1
-    assert "require --tool-access-mode" in capsys.readouterr().out
-    update_agent.assert_not_called()
 
 
-def test_run_agent_rename_dispatches_ids_and_prints_plain_output(
+@pytest.mark.parametrize(
+    ("ok", "before", "after"),
+    [
+        pytest.param(True, "0.1.22", "0.1.23", id="updated"),
+        pytest.param(True, "0.1.23", "0.1.23", id="already-current"),
+        pytest.param(False, "0.1.22", "0.1.22", id="failed"),
+    ],
+)
+def test_update_announces_the_version_before_work_and_ends_with_a_version_summary(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    ok: bool,
+    before: str,
+    after: str,
 ) -> None:
-    calls: list[tuple[str, Any]] = []
-    instance = make_instance(tmp_path)
-    result = CommandResult(ok=True, message="renamed coder -> researcher", instance=instance)
+    versions = iter([before, after])
+    monkeypatch.setattr(_commands, "read_checkout_version", lambda: next(versions))
 
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
-        return instance
-
-    def fake_rename_agent(
-        resolved_instance: ServerInstance,
-        agent_id: str,
-        new_agent_id: str,
+    def dispatch(
+        _args: object, *, resolve: object, stop: object, start: object, progress: object
     ) -> CommandResult:
-        calls.append(("agent.rename", (resolved_instance, agent_id, new_agent_id)))
-        return result
+        assert (resolve, stop, start) == (
+            cli_main.resolve_instance,
+            cli_main.stop_server,
+            cli_main.start_server,
+        )
+        assert before in capsys.readouterr().out
+        return CommandResult(ok=ok, message="update details", instance=make_instance(tmp_path))
 
-    exit_code = cli_main.run(
-        ["agent", "rename", "coder", "researcher"],
-        resolve=fake_resolve,
-        rename_agent=fake_rename_agent,
-    )
+    monkeypatch.setattr(_commands, "dispatch_update_command", dispatch)
 
-    assert exit_code == 0
-    assert calls == [
-        ("resolve", {"host": "127.0.0.1", "port": None, "data_dir": None}),
-        ("agent.rename", (instance, "coder", "researcher")),
-    ]
+    exit_code = cli_main.run(["update"])
+
+    assert exit_code == (0 if ok else 1)
+    output = capsys.readouterr().out
+    for text in ("update details", before, after):
+        assert text in output
 
 
-def test_run_model_list_dispatches_and_prints_plain_output(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(("ok", "prefix"), [(True, "success:"), (False, "error:")])
+def test_management_output_is_never_silent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], ok: bool, prefix: str
 ) -> None:
-    calls: list[tuple[str, Any]] = []
-    instance = make_instance(tmp_path, port=8765)
-    result = CommandResult(
-        ok=True,
-        message="models:\n- id: openai/gpt-4o  name: GPT-4o  context_window: 128000",
-        instance=instance,
+    cli_main.print_management_command_result(
+        CommandResult(ok=ok, message="", instance=make_instance(tmp_path))
     )
 
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
-        return instance
-
-    def fake_list_models(
-        resolved_instance: ServerInstance, filters: dict[str, Any]
-    ) -> CommandResult:
-        calls.append(("model.list", (resolved_instance, filters)))
-        return result
-
-    exit_code = cli_main.run(
-        ["model", "list", "--host", "localhost", "--port", "8765", "--data-dir", "data"],
-        resolve=fake_resolve,
-        list_models_fn=fake_list_models,
-    )
-
-    assert exit_code == 0
-    assert calls == [
-        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
-        ("model.list", (instance, {})),
-    ]
-    assert capsys.readouterr().out.splitlines() == [
-        "models:",
-        "- id: openai/gpt-4o  name: GPT-4o  context_window: 128000",
-    ]
+    assert capsys.readouterr().out.startswith(prefix)
 
 
-def test_run_model_refresh_dispatches_provider_and_prints_plain_output(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    calls: list[tuple[str, Any]] = []
-    instance = make_instance(tmp_path, port=8765)
-    result = CommandResult(ok=True, message="refreshed openai", instance=instance)
+def test_main_exits_with_the_run_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_commands, "run", lambda argv: 7)
 
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
-        return instance
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main.main(["server", "status"])
 
-    def fake_refresh_models(
-        resolved_instance: ServerInstance, provider_id: str | None
-    ) -> CommandResult:
-        calls.append(("model.refresh_db", (resolved_instance, provider_id)))
-        return result
-
-    exit_code = cli_main.run(
-        [
-            "model",
-            "refresh",
-            "openai",
-            "--host",
-            "localhost",
-            "--port",
-            "8765",
-            "--data-dir",
-            "data",
-        ],
-        resolve=fake_resolve,
-        refresh_models_fn=fake_refresh_models,
-    )
-
-    assert exit_code == 0
-    assert calls == [
-        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
-        ("model.refresh_db", (instance, "openai")),
-    ]
+    assert exc_info.value.code == 7
 
 
-def test_run_skill_catalog_dispatches_and_prints_plain_output(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    calls: list[tuple[str, Any]] = []
-    instance = make_instance(tmp_path, port=8765)
-    result = CommandResult(
-        ok=True,
-        message="skills:\n- summarize  Summarize long text",
-        instance=instance,
-    )
-
-    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
-        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
-        return instance
-
-    def fake_list_skills(resolved_instance: ServerInstance) -> CommandResult:
-        calls.append(("skill.list", resolved_instance))
-        return result
-
-    exit_code = cli_main.run(
-        ["skill", "list", "--host", "localhost", "--port", "8765", "--data-dir", "data"],
-        resolve=fake_resolve,
-        list_skills_fn=fake_list_skills,
-    )
-
-    assert exit_code == 0
-    assert calls == [
-        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
-        ("skill.list", instance),
-    ]
-    assert capsys.readouterr().out.splitlines() == [
-        "skills:",
-        "- summarize  Summarize long text",
-    ]
-
-
-def test_configure_console_output_replaces_legacy_windows_encoding(
+def test_console_output_replaces_a_legacy_windows_encoding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class LegacyStream:
@@ -496,57 +416,3 @@ def test_configure_console_output_replaces_legacy_windows_encoding(
 
     assert (stdout.encoding, stdout.errors) == ("utf-8", "backslashreplace")
     assert (stderr.encoding, stderr.errors) == ("utf-8", "backslashreplace")
-
-
-@pytest.mark.parametrize(
-    "tokens,method,param",
-    [
-        (["provider", "set-key", "openai", "--stdin"], "provider.set_key", "value"),
-        (["config", "set", "skills.directories", "--stdin"], "settings.patch", "operations"),
-    ],
-)
-def test_stdin_reaches_rpc_without_shell_quoting(
-    tmp_path, monkeypatch, capsys, tokens, method, param
-):
-    import io
-
-    import httpx
-
-    from cli import rpc_client
-
-    content = "credential-sentinel" if param == "value" else '["C:/skills with spaces/ä"]'
-    calls = []
-    monkeypatch.setattr(cli_main.sys, "stdin", io.StringIO(content))
-
-    def post(url, **kwargs):
-        calls.append(kwargs["json"])
-        return httpx.Response(200, json={"ok": True, "result": {}})
-
-    monkeypatch.setattr(rpc_client.httpx, "post", post)
-    cli_main.run(tokens, resolve=lambda **kw: make_instance(tmp_path))
-    assert calls[0]["method"] == method
-    if param == "value":
-        assert calls[0]["params"][param] == content
-        assert content not in capsys.readouterr().out
-    else:
-        assert calls[0]["params"][param] == [
-            {"op": "set", "path": "skills.directories", "value": ["C:/skills with spaces/ä"]}
-        ]
-
-
-def test_invalid_stdin_json_never_posts(tmp_path, monkeypatch):
-    import io
-
-    from cli import rpc_client
-
-    calls = []
-    monkeypatch.setattr(cli_main.sys, "stdin", io.StringIO("{broken"))
-    monkeypatch.setattr(rpc_client.httpx, "post", lambda *a, **kw: calls.append(kw))
-    assert (
-        cli_main.run(
-            ["config", "set", "skills.directories", "--stdin"],
-            resolve=lambda **kw: make_instance(tmp_path),
-        )
-        == 1
-    )
-    assert calls == []

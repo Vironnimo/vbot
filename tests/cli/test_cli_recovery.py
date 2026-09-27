@@ -74,14 +74,20 @@ def test_every_published_leaf_example_has_valid_read_or_help_recovery(
         (["channel", "add", "demo", "--platfrom", "telegram"], "--platform"),
         (["provider", "key", "set", "openai", "--stdni"], "--stdin"),
         (["project", "override", "set", "demo", "a", "model", "p/m", "--hots", "remote"], "--host"),
+        # Options are never abbreviated; a prefix is an unknown option.
+        (["server", "restart", "--po", "9000"], "--port"),
+        (["provder", "list"], "provider"),
+        (["server", "restat"], "restart"),
+        (["--server", "192.0.2.10", "--restart"], "vbot server restart"),
     ],
 )
-def test_bad_flags_suggest_existing_options_without_dispatch(tokens, expected, capsys):
+def test_syntax_errors_suggest_public_tokens_without_dispatch(tokens, expected, capsys):
     with pytest.raises(SystemExit) as done:
         main.run(tokens, resolve=lambda **kw: pytest.fail("syntax errors must not dispatch"))
     assert done.value.code == 2
     error = capsys.readouterr().err
-    assert expected in error  # Public option token, not editable prose.
+    assert expected in error  # Public token, not editable prose.
+    assert "--help" in error
 
 
 def test_unknown_flag_does_not_echo_its_value_or_other_positional_secrets(capsys):

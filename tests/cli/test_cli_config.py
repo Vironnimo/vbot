@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import sys
 from typing import Any
 
 import pytest
@@ -162,6 +164,37 @@ def test_config_set_sends_one_atomic_patch_and_prints_the_applied_change(
         assert text in out
 
 
+@pytest.mark.parametrize(
+    ("stdin", "operations"),
+    [
+        pytest.param(
+            '["C:/skills with spaces/ä"]',
+            [{"op": "set", "path": "skills.directories", "value": ["C:/skills with spaces/ä"]}],
+            id="json-value-without-shell-quoting",
+        ),
+        pytest.param("{broken", None, id="invalid-json-never-posts"),
+    ],
+)
+def test_config_set_reads_the_json_value_from_stdin(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    monkeypatch: pytest.MonkeyPatch,
+    stdin: str,
+    operations: list[dict[str, Any]] | None,
+) -> None:
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    rpc.reply("settings.patch", {"changed": [], "changes": [], "restart_required": False})
+
+    code, _out, _err = run_cli("config", "set", "skills.directories", "--stdin")
+
+    if operations is None:
+        assert code == 1
+        assert rpc.calls == []
+    else:
+        assert code == 0
+        assert rpc.calls == [("settings.patch", {"operations": operations})]
+
+
 def test_config_patch_coerces_json_values_and_reports_a_pending_restart(
     rpc: FakeRpc, run_cli: RunCli
 ) -> None:
@@ -226,10 +259,39 @@ def test_config_patch_without_operations_sends_nothing(rpc: FakeRpc, run_cli: Ru
     assert rpc.calls == []
 
 
-def test_config_reports_a_server_error(rpc: FakeRpc, run_cli: RunCli) -> None:
-    rpc.fail("settings.get_raw", "internal_error", "boom", status=500)
+@pytest.mark.parametrize(
+    ("argv", "method", "failure", "shown"),
+    [
+        pytest.param(
+            ("config", "raw"),
+            "settings.get_raw",
+            ("internal_error", "boom"),
+            "internal_error: boom",
+            id="server-error",
+        ),
+        pytest.param(
+            ("config", "set", "debug.enabled", "true"),
+            "settings.patch",
+            None,
+            "RPC result missing settings patch result",
+            id="malformed-patch-result",
+        ),
+    ],
+)
+def test_config_reports_a_failed_request(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    argv: tuple[str, ...],
+    method: str,
+    failure: tuple[str, str] | None,
+    shown: str,
+) -> None:
+    if failure is None:
+        rpc.reply(method, {})
+    else:
+        rpc.fail(method, *failure, status=500)
 
-    code, out, _err = run_cli("config", "raw")
+    code, out, _err = run_cli(*argv)
 
     assert code == 1
-    assert "internal_error: boom" in out
+    assert shown in out
