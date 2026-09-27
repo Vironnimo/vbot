@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,7 +15,7 @@ from core.channels.adapter import RunButtonBinding
 from core.channels.state import ChannelStateStore
 from core.database import APPLICATION_IDS, DatabaseUnavailableError, write_bootstrap_marker
 from core.runtime.databases import canonical_database_specs
-from core.utils.timestamps import utc_now_timestamp
+from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
 
 _STATE_TABLES = (
     "channel_admins",
@@ -509,3 +509,35 @@ def test_polling_watermark_applies_only_to_the_bot_it_names(store: ChannelStateS
     assert store.load_update_offset("tg", _OTHER_BOT) == 0
     store.save_update_offset("tg", _OTHER_BOT, 3)
     assert store.load_update_offset("tg", _OTHER_BOT) == 3
+
+
+@pytest.mark.parametrize(("age_hours", "fresh"), [(47, True), (48, False)])
+def test_polling_watermark_expires_before_telegram_randomizes_ids(
+    store: ChannelStateStore, age_hours: int, fresh: bool
+) -> None:
+    # Telegram may restart update ids after a week without updates; the stored
+    # watermark stops applying once its 48-hour lifetime has passed.
+    store.save_update_offset("tg", _BOT, 100)
+    written_at = format_canonical_timestamp(datetime.now(UTC) - timedelta(hours=age_hours))
+    store.database.write(
+        lambda connection: connection.execute(
+            "UPDATE channel_polling SET updated_at = ? WHERE channel_id = 'tg'", (written_at,)
+        )
+    )
+
+    assert store.load_update_offset("tg", _BOT) == (100 if fresh else 0)
+    store.save_update_offset("tg", _BOT, 5)
+    assert store.load_update_offset("tg", _BOT) == (100 if fresh else 5)
+
+
+def test_polling_watermark_survives_reopening_the_store(tmp_path: Path) -> None:
+    state = _open(tmp_path)
+    state.reset("tg", "telegram")
+    state.save_update_offset("tg", _BOT, 42)
+    state.close()
+
+    reopened = _open(tmp_path)
+    try:
+        assert reopened.load_update_offset("tg", _BOT) == 42
+    finally:
+        reopened.close()
