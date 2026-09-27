@@ -293,9 +293,13 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   for that next hunk, including multiline context. Missing or ambiguous anchors
   fail without falling back to a different location; duplicate matches after
   the anchor remain ambiguous. Anchors do not leak into subsequent edits or files.
-  An entirely context-only patch fails with `no_changes`, explains that
-  space-prefixed lines are unchanged lines, and says which file lines those lines
-  match when they are found precisely (`The unchanged lines match X line(s) N-M.`).
+  An entirely context-only patch fails with `no_changes`, says that without a
+  `-` or `+` line every line stays unchanged, and repeats the description's
+  replace/insert-above rule. For each context-only block (at most 3) whose lines
+  are found, it shows where: `The unchanged lines match X line(s) N-M:` with the
+  matched lines and 2 lines around them numbered like `read`, or, for several
+  occurrences, `occur K times` with the first 3 excerpts and asks for more
+  unchanged lines.
   It never invents omitted replacement content or reports success. Identical old/new line sequences are no-ops only when located. A unique
   precise post-state with at least four shared non-whitespace context characters
   permits an already-applied retry before approximate matching. A single-line
@@ -347,8 +351,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 | `Edit, create, delete or move files with a patch.` | Names all four effects, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). |
 | `One call can change several places in several files; the changes apply in order, and changes that succeed stay applied if another one fails.` | Invites batching instead of one call per place (F6), and states the partial semantics, so an Agent resends only failed changes instead of replaying applied ones (F3, F5). |
 | `patch`: the example (Update with `@@` hint, Add, Delete, Move File) | The V4A format is not universal; one example shows every header form once (F2). `test_the_example_in_the_patch_description_applies` keeps it valid. |
-| `patch`: `Under Update File, - lines are removed, + lines are added, and lines starting with a space are unchanged lines that locate the change.` | Defines the three prefixes; context-only patches (`no_changes`) come from reading space lines as the new text (F2). |
+| `patch`: `Under Update File, the lines of an @@ block follow the file from top to bottom: lines starting with a space stay unchanged, - lines are removed, and + lines are added at their position.` | Defines the three prefixes and that a line's position in the block is its place in the file (F2, F3). |
 | `patch`: `Each is a whole line; copy - and unchanged lines exactly from the file.` | Models sent a fragment of a long line as a `-` line (Sessions, 2026-09) (F2). Exact copies avoid relying on `copy_match`. |
+| `patch`: `To replace a line, write it as a - line; to insert above a line, write the + lines before it.` | Context-only patches (`no_changes`, about 3% of one Model's patches in Sessions since 2026-09-10) mostly end after one or two unchanged lines that the follow-up patch replaced, inserted above or rewrote: the Model opened the block with the target line as unchanged, which rules out those edits (F2). |
 | `patch`: `Every @@ block needs a - or + line.` | A block without changes fails with `no_changes` (F2). |
 | `patch`: `Text after @@ is optional and names an earlier line, such as the enclosing function.` | Optional, so an Agent does not invent a hint; the example shows what a hint names. |
 | `patch`: `Start another @@ block for another place in the same file.` | Avoids repeated Update headers and long context spanning distant places (F6). |

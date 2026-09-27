@@ -191,6 +191,16 @@ async def test_context_only_patch_fails_without_inventing_an_insertion(tmp_path,
     )
     assert result["error"]["code"] == "no_changes"
     assert path.read_bytes() == b"start();\nsummary();\n"
+    if locator != "@@ summary();":
+        assert text(result) == (
+            "The patch changes nothing: it has no - or + line, so every line under @@ stays "
+            "unchanged. To replace a line, write it as a - line; to insert above a line, "
+            "write the + lines before it.\n"
+            "The unchanged lines match file.txt line 2:\n"
+            "1| start();\n"
+            "2| summary();\n"
+            "No file was changed."
+        )
     result = await registry.dispatch(
         context(tmp_path),
         {"patch": "*** Update File: file.txt\n@@\n+check();\n summary();\n*** End Patch"},
@@ -198,6 +208,31 @@ async def test_context_only_patch_fails_without_inventing_an_insertion(tmp_path,
     )
     assert result["ok"]
     assert path.read_bytes() == b"start();\ncheck();\nsummary();\n"
+
+
+@pytest.mark.asyncio
+async def test_context_only_patch_shows_the_lines_around_each_occurrence(tmp_path):
+    lines = [f"line {number}" for number in range(1, 13)]
+    lines[2] = lines[9] = "    return total"
+    (tmp_path / "file.txt").write_text("\n".join(lines) + "\n")
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+
+    result = await registry.dispatch(
+        context(tmp_path),
+        {"patch": "*** Update File: file.txt\n@@\n     return total\n*** End Patch"},
+        ["apply_patch"],
+    )
+
+    assert result["error"]["code"] == "no_changes"
+    assert text(result).endswith(
+        "The unchanged lines occur 2 times in file.txt:\n"
+        "1| line 1\n2| line 2\n3|     return total\n4| line 4\n5| line 5\n"
+        "--\n"
+        "8| line 8\n9| line 9\n10|     return total\n11| line 11\n12| line 12\n"
+        "Add unchanged lines until they occur only at the place you mean.\n"
+        "No file was changed."
+    )
 
 
 def sharing_error(code: int = 5) -> OSError:

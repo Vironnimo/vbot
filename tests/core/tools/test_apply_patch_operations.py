@@ -187,7 +187,7 @@ def test_add_retry_and_context_only_patch(tmp_path):
     }
     context_only = apply(tmp_path, update("@@\n content"))
     assert context_only["error"]["code"] == "no_changes"
-    assert "The unchanged lines match file.txt line 1." in text(context_only)
+    assert "The unchanged lines match file.txt line 1:\n1| content\n" in text(context_only)
 
 
 @pytest.mark.parametrize("payload", [b"a\x00b", b"\xff\xfeabc"])

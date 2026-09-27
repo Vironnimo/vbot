@@ -363,16 +363,17 @@ def _check_operations(operations: list[_Operation], line_count: int) -> None:
         for op in operations
     ):
         context = [
-            (op.path, [text for h in op.hunks for _, text in h.lines])
+            (op.path, [text for _, text in hunk.lines])
             for op in operations
-            if op.hunks
+            for hunk in op.hunks
+            if hunk.lines
         ]
         raise _PatchError(
             "no_changes",
             message=(
-                "The patch changes nothing: every line under @@ starts with a space, which "
-                "marks an unchanged line. Mark lines to remove with - and lines to add with +, "
-                "keeping unchanged lines around them to locate the change."
+                "The patch changes nothing: it has no - or + line, so every line under @@ "
+                "stays unchanged. To replace a line, write it as a - line; to insert above a "
+                "line, write the + lines before it."
             ),
             details={"context_only": context},
         )
