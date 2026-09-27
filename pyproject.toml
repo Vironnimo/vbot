@@ -57,7 +57,8 @@ exclude = ["**/node_modules/**"]
 ripgrep = "resources/ripgrep.lock.json"
 
 [tool.pytest.ini_options]
-addopts = "-n auto --dist=worksteal --timeout=30 --import-mode=importlib"
+addopts = "-n auto --dist=worksteal --timeout=30 --import-mode=importlib -m \"not stress\""
+markers = ["stress: load test outside the normal suite; run with `python -m pytest -m stress`"]
 testpaths = ["tests"]
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"

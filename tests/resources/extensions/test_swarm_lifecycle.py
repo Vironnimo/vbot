@@ -363,17 +363,21 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
-async def test_forty_participants_become_idle_without_closing_the_swarm(lifecycle, tmp_path: Path):
+@pytest.mark.parametrize(
+    "participants",
+    # Forty real Runs are a load case; their durable Session writes need a longer timeout.
+    [3, pytest.param(40, marks=[pytest.mark.stress, pytest.mark.timeout(120)])],
+)
+async def test_participants_become_idle_without_closing_the_swarm(
+    lifecycle, tmp_path: Path, participants: int
+):
     """Ordinary final replies leave all Sessions reachable without closing the group."""
-    # Forty real Runs include durable Session writes on slower Windows CI disks.
-
     profile = await lifecycle.service.store.save_profile(
         {
             "schema_version": 1,
-            "slug": "forty",
-            "name": "Forty participants",
-            "participants": [{"model": "fixture/model", "count": 40}],
+            "slug": "many",
+            "name": "Many participants",
+            "participants": [{"model": "fixture/model", "count": participants}],
             "working_directory": {"kind": "directory", "path": str(tmp_path)},
             "tool_access": {"mode": "selected", "allowed": []},
         },
@@ -385,7 +389,7 @@ async def test_forty_participants_become_idle_without_closing_the_swarm(lifecycl
         {"profile_id": profile["id"], "prompt": "shared goal", "request_id": "initial"},
     )
     run_ids = [entry["run_id"] for entry in started["runs"]]
-    assert len(run_ids) == 40
+    assert len(run_ids) == participants
     await asyncio.gather(
         *(lifecycle.runtime.chat_run_manager.get(run_id).wait() for run_id in run_ids)
     )
