@@ -1,7 +1,8 @@
-"""Shared fixtures and fakes for discord behavior tests."""
+"""Discord SDK fakes and an adapter harness on the real Channel engine."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -9,13 +10,40 @@ from unittest.mock import AsyncMock, Mock
 
 from core.attachments import AttachmentStore
 from core.channels import ChannelConfig
-from core.channels.discord import (
-    DiscordChannelAdapter,
-)
-from core.runs import WaitingWorkAdmission
-from core.sessions import ChatSessionManager
+from core.channels.discord import DiscordChannelAdapter
+from core.chat import ReplySurface
+from core.runs import ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run
+from core.sessions import ChatSessionManager, SessionAddress
 
-from .engine_test_support import MemoryChannelAccessRegistry, channel_state
+from .engine_test_support import (
+    MemoryChannelAccessRegistry,
+    channel_state,
+    drain,
+    make_command_dispatcher,
+    make_trigger_service,
+)
+
+CHANNEL_ID = "dc-assistant"
+BOT_MENTION = SimpleNamespace(id=999)
+GROUP_REPLY_SURFACE = ReplySurface.channel(
+    platform="discord",
+    platform_display_name="Discord",
+    channel_id=CHANNEL_ID,
+    conversation_kind="group",
+)
+
+
+def session_address(chat_id: int) -> SessionAddress:
+    return SessionAddress(
+        project_id=None, agent_id="assistant", session_id=f"ch-{CHANNEL_ID}-{chat_id}"
+    )
+
+
+def make_completed_run(session_id: str, output_text: str = "ok") -> Run:
+    run = Run(run_id=f"run-{session_id}", agent_id="assistant", session_id=session_id)
+    run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": output_text}})
+    run.mark_completed(output_text)
+    return run
 
 
 class FakePartialMessage:
@@ -121,7 +149,7 @@ def make_config(
     observe_unaddressed: bool = False,
 ) -> ChannelConfig:
     config = ChannelConfig(
-        id="dc-assistant",
+        id=CHANNEL_ID,
         platform="discord",
         agent_id="assistant",
         dm_scope="per_conversation",
@@ -133,14 +161,6 @@ def make_config(
     )
     config.validate()
     return config
-
-
-def make_command_dispatcher() -> SimpleNamespace:
-    return SimpleNamespace(
-        prepare=Mock(return_value=None),
-        unavailability=Mock(return_value=None),
-        execute=AsyncMock(),
-    )
 
 
 def make_message(
@@ -174,6 +194,36 @@ def make_message(
     )
 
 
+@dataclass
+class DiscordHarness:
+    """A Discord adapter wired to a fake Gateway client and a recording trigger service."""
+
+    adapter: DiscordChannelAdapter
+    sessions: ChatSessionManager
+    trigger: AsyncMock
+    reserve_waiting_work: Mock
+    access: MemoryChannelAccessRegistry
+    client: FakeClient
+    channel: FakeChannel
+
+    async def receive(self, message: Any) -> None:
+        """Deliver one Gateway message the way the client's on_message callback does."""
+        await self.adapter._handle_inbound_message(message)
+
+    async def drain(self) -> None:
+        """Wait until the channel's admitted work was processed."""
+        await drain(self.adapter._engine, self.channel.id)
+
+    def notes(self) -> list[str]:
+        """Return the observed-context notes stored in the channel's Session."""
+        session = self.sessions.get(session_address(self.channel.id))
+        return [
+            message.content
+            for message in session.load()
+            if message.role == "note" and isinstance(message.content, str)
+        ]
+
+
 def make_adapter(
     tmp_path: Path,
     *,
@@ -185,22 +235,18 @@ def make_adapter(
     trigger_run: AsyncMock | None = None,
     attachment_store: AttachmentStore | None = None,
     command_dispatcher: Any | None = None,
-) -> tuple[DiscordChannelAdapter, ChatSessionManager, AsyncMock, FakeClient]:
+    waiting_work_manager: ChatRunManager | None = None,
+) -> DiscordHarness:
+    """Build a connected Discord adapter whose client knows only ``target``.
+
+    Without ``trigger_run``, every triggered Run completes with the reply "ok".
+    """
     chat_sessions = ChatSessionManager(tmp_path)
-    trigger_mock = trigger_run or AsyncMock()
-
-    async def trigger_with_admission(*args: Any, **kwargs: Any) -> Any:
-        kwargs.pop("waiting_work_admission", None)
-        return await trigger_mock(*args, **kwargs)
-
-    trigger_service = SimpleNamespace(
-        trigger_run=trigger_with_admission,
-        compact_session=AsyncMock(return_value="Context compacted."),
-        reserve_waiting_work=Mock(
-            return_value=WaitingWorkAdmission(id="test-admission", scope="test:chat")
-        ),
-        release_waiting_work=Mock(return_value=True),
+    trigger = trigger_run or AsyncMock(
+        side_effect=lambda _agent, _content, session_id, **_kwargs: make_completed_run(session_id)
     )
+    trigger_service = make_trigger_service(trigger, waiting_work_manager=waiting_work_manager)
+    access = MemoryChannelAccessRegistry([str(user_id) for user_id in admin_user_ids or []])
     adapter = DiscordChannelAdapter(
         make_config(
             allowed_chat_ids=allowed_chat_ids,
@@ -212,12 +258,19 @@ def make_adapter(
         lambda _key: "test-token",
         attachment_store=attachment_store,
         command_dispatcher=cast(Any, command_dispatcher or make_command_dispatcher()),
-        conversation_pointers=channel_state(tmp_path, "dc-assistant"),
-        access_registry=MemoryChannelAccessRegistry(
-            [str(user_id) for user_id in admin_user_ids or []]
-        ),
+        conversation_pointers=channel_state(tmp_path, CHANNEL_ID),
+        access_registry=access,
     )
     client = FakeClient([target])
+    # Connected state that start() establishes once the Gateway reports ready.
     adapter._client = client
     adapter._bot_id = "999"
-    return adapter, chat_sessions, trigger_mock, client
+    return DiscordHarness(
+        adapter=adapter,
+        sessions=chat_sessions,
+        trigger=trigger,
+        reserve_waiting_work=trigger_service.reserve_waiting_work,
+        access=access,
+        client=client,
+        channel=target,
+    )

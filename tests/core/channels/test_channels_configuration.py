@@ -91,6 +91,16 @@ def test_channel_config_defaults_and_round_trips_gating_fields() -> None:
         ({"observe_unaddressed": "true"}, "$.observe_unaddressed", "must be a boolean"),
         ({"platform": "unknown"}, "$.platform", None),
         ({"response_mode": "sometimes"}, "$.response_mode", "must be one of: all, mention"),
+        (
+            {"platform": "whatsapp", "token_env_var": "", "allowed_chat_ids": ["someone"]},
+            "$.allowed_chat_ids",
+            "WhatsApp supports only the self chat: use ['self'] or []",
+        ),
+        (
+            {"platform": "whatsapp"},
+            "$",
+            "WhatsApp uses linked-device pairing, not tokens or a server URL",
+        ),
     ],
 )
 def test_channel_config_validation_agrees_across_all_entry_points(
