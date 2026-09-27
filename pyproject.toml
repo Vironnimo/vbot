@@ -82,6 +82,7 @@ quote-style = "double"
 # use `type` statements and cannot be parsed under 3.11. Floor syntax stays
 # guarded by ruff's py311 target and the real 3.11 test runs in CI.
 python_version = "3.12"
+files = ["core", "server", "cli", "desktop", "tests"]
 mypy_path = "scripts"
 warn_return_any = true
 warn_unused_configs = true
