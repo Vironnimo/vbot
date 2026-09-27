@@ -114,8 +114,12 @@
             <span
               class="debug-trace__model"
               class:debug-trace__model--id={Boolean(trace.model_id)}
-              use:tooltip={trace.model_id || trace.type}
-              >{trace.model_id || t('debug.modelProbe', 'Model Probe')}</span
+              use:tooltip={{
+                text: trace.model_id || trace.type,
+                mono: true,
+                placement: 'right',
+                whenTruncated: Boolean(trace.model_id),
+              }}>{trace.model_id || t('debug.modelProbe', 'Model Probe')}</span
             >
             <span
               class="trace-status"
@@ -124,8 +128,14 @@
             >
           </span>
           <span class="trace-middle">
-            <span class="debug-trace__provider" use:tooltip={trace.provider_id}
-              >{trace.provider_id || '—'}</span
+            <span
+              class="debug-trace__provider"
+              use:tooltip={{
+                text: trace.provider_id,
+                mono: true,
+                placement: 'right',
+                whenTruncated: true,
+              }}>{trace.provider_id || '—'}</span
             >
             <span>{trace.method || '—'}</span>
           </span>

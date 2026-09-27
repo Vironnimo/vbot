@@ -276,13 +276,19 @@ export const changeStatsParts = (stats) => {
   ];
 };
 
-// Multi-line tooltip text listing every changed file of the run, one per line.
-// Empty when the stats carry no paths (or are null), which disables the hint.
-export const changeStatsTooltip = (stats) => {
+// Quick-tooltip content listing every changed file, one per line, in the mono
+// face and selectable so a path can be copied. Empty when the stats carry no
+// paths (or are null), which disables the hint.
+export const changeStatsTooltip = (stats, { placement = 'top' } = {}) => {
   if (!stats || !Array.isArray(stats.paths) || stats.paths.length === 0) {
     return '';
   }
-  return stats.paths.join('\n');
+  return {
+    text: stats.paths.join('\n'),
+    mono: true,
+    selectable: true,
+    placement,
+  };
 };
 
 function collectRunChanges(assistantRun) {

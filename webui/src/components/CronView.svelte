@@ -380,14 +380,28 @@
                 >
                   <span class="cron-item-inner">
                     <span class="cron-item-head">
-                      <span class="cron-item-name" use:tooltip={job.name}>
+                      <span
+                        class="cron-item-name"
+                        use:tooltip={{
+                          text: job.name,
+                          placement: 'right',
+                          whenTruncated: true,
+                        }}
+                      >
                         {job.name}
                       </span>
                       <StatusChip variant={statusChipVariant(job)}>
                         {statusLabel(job.status)}
                       </StatusChip>
                     </span>
-                    <span class="cron-item-next" use:tooltip={listNextRun(job)}>
+                    <span
+                      class="cron-item-next"
+                      use:tooltip={{
+                        text: listNextRun(job),
+                        placement: 'right',
+                        whenTruncated: true,
+                      }}
+                    >
                       {listNextRun(job)}
                     </span>
                   </span>

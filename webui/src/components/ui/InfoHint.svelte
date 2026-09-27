@@ -10,10 +10,11 @@
 <script>
   // The "?" info dot - the explanatory tier of the shared floating layers
   // (quick label tooltips and hover cards are in lib/tooltip.js). Hover
-  // previews the popover after the shared hover intent, keyboard focus
-  // previews it at once, and click/tap pins it until a second click, an
-  // outside press, or Escape. Scrolling repositions it. Callers pass
-  // already-translated `text`; blank lines separate paragraphs.
+  // previews the popover after the shared hover intent and keeps it while the
+  // pointer travels onto it, keyboard focus previews it at once, and
+  // click/tap pins it until a second click, an outside press, or Escape.
+  // Scrolling repositions it. Callers pass already-translated `text`; blank
+  // lines separate paragraphs.
   import { onDestroy } from 'svelte';
 
   import { portal } from '../../lib/dropdownPanel.js';
@@ -22,6 +23,7 @@
     FLOATING_HOVER_CLOSE_DELAY_MS,
     HOVER_CARD_SHOW_DELAY_MS,
     createFloatingLayer,
+    createHoverExit,
     isKeyboardModality,
     trackInputModality,
   } from '../../lib/tooltip.js';
@@ -52,6 +54,17 @@
     },
   });
 
+  // Pointer exit of a hover preview; a pinned popover ignores it.
+  const pointerExit = createHoverExit({
+    anchor: () => dotElement,
+    element: () => popoverElement,
+    onClose: () => {
+      if (!pinned) {
+        open = false;
+      }
+    },
+  });
+
   let label = $derived(ariaLabel || t('common.moreInfo', 'More information'));
   let paragraphs = $derived(
     String(text)
@@ -73,6 +86,7 @@
       clearTimeout(closeTimer);
       closeTimer = null;
     }
+    pointerExit.cancel();
   }
 
   function close() {
@@ -97,7 +111,7 @@
   }
 
   function onDotPointerEnter(event) {
-    if (event.pointerType === 'touch') {
+    if (event.pointerType === 'touch' || event.buttons) {
       return;
     }
     cancelClose();
@@ -111,11 +125,22 @@
     }, HOVER_CARD_SHOW_DELAY_MS);
   }
 
-  function onPointerLeave(event) {
-    if (event.pointerType !== 'touch') {
-      scheduleClose();
-    }
+  function leaveTowards(towards) {
+    return (event) => {
+      if (event.pointerType === 'touch') {
+        return;
+      }
+      cancelShow();
+      if (pinned || !open) {
+        return;
+      }
+      cancelClose();
+      pointerExit.leave(event, towards);
+    };
   }
+
+  const onDotPointerLeave = leaveTowards('layer');
+  const onPopoverPointerLeave = leaveTowards('anchor');
 
   function onDotFocus() {
     if (isKeyboardModality()) {
@@ -160,7 +185,7 @@
   aria-expanded={open}
   aria-describedby={visible ? popoverId : undefined}
   onpointerenter={onDotPointerEnter}
-  onpointerleave={onPointerLeave}
+  onpointerleave={onDotPointerLeave}
   onfocus={onDotFocus}
   onblur={scheduleClose}
   onclick={onDotClick}>?</button
@@ -175,7 +200,7 @@
     role="tooltip"
     data-floating-open="true"
     onpointerenter={cancelClose}
-    onpointerleave={onPointerLeave}
+    onpointerleave={onPopoverPointerLeave}
   >
     {#each paragraphs as paragraph (paragraph)}
       <p>{paragraph}</p>

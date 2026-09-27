@@ -26,6 +26,7 @@
   import ChatComposer from './ChatComposer.svelte';
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
+  import { agentActivityTooltip } from './chat/agentActivityTooltip.js';
   import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
   import { onMount, tick, untrack } from 'svelte';
   import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
@@ -707,7 +708,7 @@
                   : t('chat.agentActivity.idle', '{name}: Idle', {
                       name: memberName,
                     })}
-            {@const memberActivityTooltip = target.agentActivityTooltip(
+            {@const memberActivityTooltip = agentActivityTooltip(
               memberActivityLabel,
               member.effective?.model?.value,
             )}

@@ -459,13 +459,14 @@ describe('LogsView', () => {
     expect(errorRow).toBeTruthy();
     expect(errorRow?.textContent).toContain('Failed Traceback line');
     vi.useFakeTimers();
-    errorRow.dispatchEvent(new Event('pointerenter'));
+    const errorMessage = errorRow.querySelector('.logs-entry__message');
+    errorMessage.dispatchEvent(new Event('pointerenter'));
     await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
     flushSync();
     expect(document.getElementById('app-tooltip')?.textContent).toBe(
       'Failed\nTraceback line',
     );
-    errorRow.dispatchEvent(new Event('pointerleave'));
+    errorMessage.dispatchEvent(new Event('pointerleave'));
     expect(document.body.querySelector('select')).toBeNull();
     expect(document.body.textContent).toContain('Live');
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);

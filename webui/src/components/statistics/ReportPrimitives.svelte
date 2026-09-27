@@ -87,7 +87,9 @@
   <ul class="stats-bars">
     {#each entries as entry (entry.label)}
       <li class="stats-bars__row">
-        <span class="stats-bars__label" use:tooltip={entry.label}
+        <span
+          class="stats-bars__label"
+          use:tooltip={{ text: entry.label, whenTruncated: true }}
           >{entry.label}</span
         >
         <span class="stats-bars__track">

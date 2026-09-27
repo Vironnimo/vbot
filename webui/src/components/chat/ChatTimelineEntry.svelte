@@ -350,7 +350,9 @@
           stroke-width="1.2"
         />
       </svg>
-      <span class="inline-file-name" use:tooltip={block.path}
+      <span
+        class="inline-file-name"
+        use:tooltip={{ text: block.path, mono: true, whenTruncated: true }}
         >@{block.path}</span
       >
       {#if statusLabel}

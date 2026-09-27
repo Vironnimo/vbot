@@ -1,10 +1,10 @@
 <script>
   import { t } from '$lib/i18n.js';
-  import { parseModelSelectionValue } from '$lib/modelSelection.js';
   import { tooltip } from '$lib/tooltip.js';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import AgentActivityChips from './AgentActivityChips.svelte';
+  import { agentActivityTooltip } from './agentActivityTooltip.js';
 
   // Rosters larger than this get a filter field in the Agent picker.
   const AGENT_FILTER_THRESHOLD = 6;
@@ -174,13 +174,6 @@
       return t('chat.agentActivity.unread', '{name}: Unread result', { name });
     }
     return t('chat.agentActivity.idle', '{name}: Idle', { name });
-  }
-
-  function agentActivityTooltip(activityLabel, modelValue) {
-    const { model } = parseModelSelectionValue(
-      typeof modelValue === 'string' ? modelValue.trim() : '',
-    );
-    return model ? `${activityLabel}\n${model}` : activityLabel;
   }
 </script>
 

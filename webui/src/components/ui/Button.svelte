@@ -6,7 +6,8 @@
   // calls `t(...)` itself.
   //
   // `tooltip` renders through the shared quick tooltip (lib/tooltip.js), not
-  // the native `title`. Browsers do not fire pointer events on a disabled
+  // the native `title`: a string label or the action's content object (e.g.
+  // with a `placement`). Browsers do not fire pointer events on a disabled
   // button, so a tooltip that must show while disabled belongs on a wrapping
   // <span class="tooltip-anchor" use:tooltip> at the call site.
   import { tooltip as tooltipAction } from '../../lib/tooltip.js';

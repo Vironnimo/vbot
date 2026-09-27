@@ -88,7 +88,9 @@
         link.dataset.filePath = path;
         link.setAttribute('aria-haspopup', 'menu');
         link.removeAttribute('title');
-        const pathHint = path ? tooltip(link, path) : null;
+        const pathHint = path
+          ? tooltip(link, { text: path, mono: true, selectable: true })
+          : null;
         fileActions.push(() => {
           pathHint?.destroy();
           delete link.dataset.deliveredFile;

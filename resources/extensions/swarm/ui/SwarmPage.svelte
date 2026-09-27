@@ -190,7 +190,11 @@
                 class="secondary-list__item"
                 class:active={!model.editor &&
                   model.selectedSwarm?.id === swarm.id}
-                use:tooltip={swarm.title || swarm.id}
+                use:tooltip={{
+                  text: swarm.title || swarm.id,
+                  placement: 'right',
+                  whenTruncated: true,
+                }}
                 onclick={() =>
                   model.navigate(() => model.selectSwarm(swarm.id))}
               >
@@ -394,8 +398,11 @@
                 {#if model.selectedSwarm.effective_configuration?.cwd}
                   <div
                     class="board-directory"
-                    use:tooltip={model.selectedSwarm.effective_configuration
-                      .cwd}
+                    use:tooltip={{
+                      text: model.selectedSwarm.effective_configuration.cwd,
+                      mono: true,
+                      selectable: true,
+                    }}
                   >
                     {@render actionIcon('folder')}
                     <span

@@ -208,15 +208,15 @@ describe('ChatView', () => {
     expect(
       await hoveredTooltipText(
         agentPickerTrigger(),
-        'Alpha: Idle\nopenrouter/anthropic/claude-sonnet-4',
+        'Alpha: Idle\nModel: openrouter/anthropic/claude-sonnet-4',
       ),
-    ).toBe('Alpha: Idle\nopenrouter/anthropic/claude-sonnet-4');
+    ).toBe('Alpha: Idle\nModel: openrouter/anthropic/claude-sonnet-4');
     expect(
       await hoveredTooltipText(
         document.querySelector('.chat-view__project-team .agent-tab'),
-        'Builder: Idle\nopenai/gpt-5.2',
+        'Builder: Idle\nModel: openai/gpt-5.2',
       ),
-    ).toBe('Builder: Idle\nopenai/gpt-5.2');
+    ).toBe('Builder: Idle\nModel: openai/gpt-5.2');
   });
 
   it('renders the project dropdown with no project selected and identity chat unchanged', async () => {

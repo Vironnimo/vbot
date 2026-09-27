@@ -26,30 +26,44 @@ export const formatTimestamp = (value) => {
   );
 };
 
+// Details card beside a Session row: to its right, so sweeping the list
+// never puts the card over the neighbouring rows.
 export const sessionHoverDetails = (session) => {
-  const lines = [session.display_name || sessionDisplayName(session)];
+  const rows = [];
 
   if (session.agent_name) {
-    lines.push(`${t('sessions.agent', 'Agent')}: ${session.agent_name}`);
+    rows.push({
+      label: t('sessions.agent', 'Agent'),
+      value: session.agent_name,
+    });
   }
 
-  lines.push(
-    `${t('sessions.last_active', 'Last active')}: ${formatTimestamp(session.last_active_at ?? session.created_at)}`,
-  );
+  rows.push({
+    label: t('sessions.last_active', 'Last active'),
+    value: formatTimestamp(session.last_active_at ?? session.created_at),
+  });
 
   if (session.source_channel_id) {
-    lines.push(
-      `${t('sessions.source_channel', 'Source channel')}: ${session.source_channel_id}`,
-    );
+    rows.push({
+      label: t('sessions.source_channel', 'Source channel'),
+      value: session.source_channel_id,
+      mono: true,
+    });
   }
 
   if (session.subagent_parent) {
-    lines.push(
-      `${t('sessions.subagent_parent', 'Parent')}: ${session.subagent_parent.agent_id}/${session.subagent_parent.session_id}`,
-    );
+    rows.push({
+      label: t('sessions.subagent_parent', 'Parent'),
+      value: `${session.subagent_parent.agent_id}/${session.subagent_parent.session_id}`,
+      mono: true,
+    });
   }
 
-  return lines.join('\n');
+  return {
+    title: session.display_name || sessionDisplayName(session),
+    rows,
+    placement: 'right',
+  };
 };
 
 export const resolvePlatformLabel = (platform) => {

@@ -25,7 +25,10 @@
       <span
         class="te-arg-value te-primary-value te-primary-value--{part.truncate}"
         tabindex={part.tooltipText ? 0 : undefined}
-        use:tooltip={part.copyable ? '' : part.tooltipText}
+        use:tooltip={{
+          text: part.copyable ? '' : part.tooltipText,
+          mono: true,
+        }}
       >
         {part.text}{#if part.copyable && part.tooltipText}
           <span

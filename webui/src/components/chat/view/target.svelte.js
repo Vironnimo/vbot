@@ -8,7 +8,6 @@ import {
   pickProjectAgentSessionId,
 } from '../../../lib/chatState.js';
 import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
-import { parseModelSelectionValue } from '$lib/modelSelection.js';
 import { t } from '$lib/i18n.js';
 import {
   projectTeam as normalizeProjectTeam,
@@ -142,13 +141,6 @@ export function createChatViewTarget(context) {
         (member) => member.agent_id === selectedProjectAgentId,
       ) ?? null
     );
-  }
-
-  function agentActivityTooltip(activityLabel, modelValue) {
-    const { model } = parseModelSelectionValue(
-      typeof modelValue === 'string' ? modelValue.trim() : '',
-    );
-    return model ? `${activityLabel}\n${model}` : activityLabel;
   }
 
   // The outside address of the agent that owns the non-override ("current")
@@ -691,7 +683,6 @@ export function createChatViewTarget(context) {
     get displayedProjectAgentId() {
       return displayedProjectAgentId;
     },
-    agentActivityTooltip,
     activeOwnAgentAddress,
     activeAddressing,
     agentById,

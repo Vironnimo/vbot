@@ -400,8 +400,13 @@
               aria-current={scope === item.key ? 'page' : undefined}
               onclick={() => changeScope(item.key)}
             >
-              <span class="skills-collection-name" use:tooltip={item.label}
-                >{item.label}</span
+              <span
+                class="skills-collection-name"
+                use:tooltip={{
+                  text: item.label,
+                  placement: 'right',
+                  whenTruncated: true,
+                }}>{item.label}</span
               >
               <span class="skills-count">{item.count}</span>
             </button>

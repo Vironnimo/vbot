@@ -855,11 +855,23 @@ describe('SessionListDrawer', () => {
     await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
     flushSync();
 
-    const tooltipText = document.getElementById('app-tooltip')?.textContent;
-    expect(tooltipText).toContain('Child session title');
-    expect(tooltipText).toContain('Last active:');
-    expect(tooltipText).toContain('Source channel: telegram-main');
-    expect(tooltipText).toContain('Parent: orchestrator/parent-session');
+    const tooltipElement = document.getElementById('app-tooltip');
+    expect(
+      tooltipElement.querySelector('.app-tooltip__title')?.textContent,
+    ).toBe('Child session title');
+    const details = Object.fromEntries(
+      [...tooltipElement.querySelectorAll('dt')].map((term) => [
+        term.textContent,
+        term.nextElementSibling?.textContent,
+      ]),
+    );
+    expect(details).toMatchObject({
+      'Source channel': 'telegram-main',
+      Parent: 'orchestrator/parent-session',
+    });
+    expect(details['Last active']).toBeTruthy();
+    // Beside the row, so the card never covers the neighbouring Sessions.
+    expect(tooltipElement.dataset.floatingSide).toBe('right');
   });
 
   it('shows important sessions by default and reveals labelled execution sessions through the filters', async () => {
