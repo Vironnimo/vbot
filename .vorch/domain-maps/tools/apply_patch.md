@@ -202,6 +202,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   character coordinates and explicit truncation. Truncated candidate excerpts
   name a callable `read(path=..., offset="line:character", limit=...)` continuation;
   positions count Unicode characters and preserve LF/CRLF/CR line semantics.
+  Overlapping excerpts merge before continuations are named: a continuation
+  starts after the text any excerpt shows, and overlapping ones join into one
+  call. Separately named continuations of adjacent candidates mostly repeated
+  shown lines (26 of 34 merged reports, Sessions, 2026-09).
   Diagnostics also note when the new
   text already occurs (a change made earlier; not when `old_string` contains
   `new_string`, as after a deletion); without candidates the text names
