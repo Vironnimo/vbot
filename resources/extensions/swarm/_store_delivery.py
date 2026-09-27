@@ -14,6 +14,7 @@ from core.utils.timestamps import utc_now_timestamp
 
 from ._store_database import (
     ALIASED_POST_COLUMNS,
+    POST_CONTEXT_COLUMNS,
     SwarmDatabase,
 )
 from ._store_lifecycle import (
@@ -69,7 +70,7 @@ def _prepare_delivery(
                 return {"entries": [], "receipt_id": None, "pending_remaining": 0}
             placeholders = ",".join("?" for _ in post_ids)
             rows = connection.execute(
-                f"SELECT {ALIASED_POST_COLUMNS},r.route_class,d.title AS discussion_title "
+                f"SELECT {ALIASED_POST_COLUMNS},r.route_class,{POST_CONTEXT_COLUMNS} "
                 "FROM recipients r JOIN posts p ON p.id=r.post_id "
                 "JOIN discussions d ON d.id=p.discussion_id "
                 f"WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL AND p.id IN ({placeholders}) ORDER BY p.sequence",
@@ -156,7 +157,7 @@ def _prepare_automatic_delivery(
                 ).fetchone()[0]
             )
             rows = connection.execute(
-                f"SELECT {ALIASED_POST_COLUMNS},r.route_class,d.title AS discussion_title FROM delivery_batch_entries e JOIN posts p ON p.id=e.post_id "
+                f"SELECT {ALIASED_POST_COLUMNS},r.route_class,{POST_CONTEXT_COLUMNS} FROM delivery_batch_entries e JOIN posts p ON p.id=e.post_id "
                 "JOIN recipients r ON r.post_id=p.id AND r.participant_id=e.participant_id "
                 "JOIN discussions d ON d.id=p.discussion_id "
                 "WHERE e.receipt_id=? ORDER BY p.sequence",
@@ -194,7 +195,7 @@ def _prepare_automatic_delivery(
             }
         # Ordered delivery scans must start from outstanding recipients, not posts.
         pending = connection.execute(
-            f"SELECT {ALIASED_POST_COLUMNS},r.route_class,d.title AS discussion_title FROM recipients r INDEXED BY recipients_pending_participant JOIN posts p ON p.id=r.post_id JOIN discussions d ON d.id=p.discussion_id "
+            f"SELECT {ALIASED_POST_COLUMNS},r.route_class,{POST_CONTEXT_COLUMNS} FROM recipients r INDEXED BY recipients_pending_participant JOIN posts p ON p.id=r.post_id JOIN discussions d ON d.id=p.discussion_id "
             "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL ORDER BY p.sequence",
             (swarm_id, participant_id),
         ).fetchall()

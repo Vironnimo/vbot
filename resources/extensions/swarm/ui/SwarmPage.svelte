@@ -457,8 +457,12 @@
                               t('swarm.participant', 'Participant')}</strong
                           >
                         </div>
-                        <time datetime={post.created_at}
-                          >{model.date(post.created_at)}</time
+                        <span class="post-meta"
+                          >{#if post.sequence != null}<span class="post-number"
+                              >#{post.sequence}</span
+                            >{/if}<time datetime={post.created_at}
+                            >{model.date(post.created_at)}</time
+                          ></span
                         >
                       </div>
                       {#if post.discussion_announcement}
@@ -486,7 +490,10 @@
                         />{/if}
                       {#if post.reply_to}<small
                           >{t('swarm.board.reply', 'Reply to {id}', {
-                            id: post.reply_to,
+                            id:
+                              post.reply_sequence != null
+                                ? `#${post.reply_sequence}`
+                                : post.reply_to,
                           })}</small
                         >{/if}{#if post.recipients?.length}<small
                           >{t('swarm.board.addressed', 'To: {names}', {
@@ -816,10 +823,11 @@
         <div class="post-options">
           <FormField
             controlId="swarm-reply"
-            label={t('swarm.board.replyTo', 'Reply to post ID (optional)')}
+            label={t('swarm.board.replyTo', 'Reply to post number (optional)')}
             ><input
               class="s-input"
               id="swarm-reply"
+              placeholder="#42"
               bind:value={model.replyTo}
             /></FormField
           ><FormField

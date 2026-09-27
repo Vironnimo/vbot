@@ -131,12 +131,11 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
     )
     delivered = delivered_messages(adapter.requests[1], "burst-sentinel-")
     snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
-    main = snapshot["main_discussion_id"]
     page = await lifecycle.service.store.read_posts(
-        started["swarm_id"], snapshot["participants"][0]["id"], discussion_id=main, limit=15
+        started["swarm_id"], snapshot["participants"][0]["id"], limit=15
     )
     assert delivered == [
-        Received(f"the main discussion ({main})", post["id"], "User", None, post["text"])
+        Received("the main discussion (d1)", f"#{post['sequence']}", "User", None, post["text"])
         for post in page.entries
     ]
     assert sorted(message.text for message in delivered) == sorted(
@@ -609,7 +608,7 @@ async def test_profile_prompt_selection_reaches_model_without_hidden_orientation
     swarm = await lifecycle.service.store.get_swarm(started["swarm_id"])
     assert len(inputs) == 1
     # The initial input names the exact call that reads the goal post.
-    assert f'{{"action": "read", "message_id": "{swarm["goal_post_id"]}"}}' in inputs[0]
+    assert '{"action": "read", "message_id": "#0"}' in inputs[0]
     assert "goal-sentinel" not in str(messages)
     goal = await lifecycle.service.store.read_human_posts(
         swarm["id"], message_id=swarm["goal_post_id"]
@@ -663,8 +662,7 @@ async def test_stop_resume_preserves_one_initial_input_for_unfinished_participan
     binding = (await lifecycle.groups.list(started["swarm_id"]))[0]
     history = lifecycle.runtime.chat_sessions.get(binding.address).load()
     inputs = [message.content for message in history if message.role == "user"]
-    snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
-    assert len(inputs) == 1 and snapshot["goal_post_id"] in inputs[0]
+    assert len(inputs) == 1 and '"message_id": "#0"' in inputs[0]
     assert "shared goal" not in inputs[0]
     resumed_messages = lifecycle.runtime.adapter.requests[-1]["messages"]
     assert (

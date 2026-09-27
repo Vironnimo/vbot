@@ -15,10 +15,11 @@ from core.chat.messages import ToolCall
 from core.providers.tool_schema import render_tool_definitions
 from core.tools import tool_failure
 from core.tools.contracts import ToolContractError
+from resources.extensions.swarm._store_values import post_ref
 from scripts.provider_probe.common import PROJECT_ROOT
 from scripts.provider_probe.transport import _expected_profile
 
-_POST_HEADER = re.compile(r"^\[(pst_[A-Za-z0-9]+)\]", re.MULTILINE)
+_POST_HEADER = re.compile(r"^\[(#\d+)\]", re.MULTILINE)
 
 
 def _continuation(line: str) -> dict[str, Any]:
@@ -28,7 +29,7 @@ def _continuation(line: str) -> dict[str, Any]:
 
 
 def _received_post_ids(data: dict[str, Any]) -> set[str]:
-    """Return the post IDs a successful Swarm result showed the Agent."""
+    """Return the post numbers, such as "#3", a successful Swarm result showed the Agent."""
 
     content = data.get("content")
     return set(_POST_HEADER.findall(content)) if isinstance(content, str) else set()
@@ -347,8 +348,9 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                     ("recovered_action_synonym", {"action": "send", "message": "hello"}, True),
                     ("recovered_name_ping", {**post, "recipients": [peer_name]}, True),
                     ("recovered_all_ping", {**post, "recipients": ["all"]}, True),
-                    ("recovered_post_number", {"action": "read", "message_id": "pst_1"}, True),
-                    ("reply_post_number", {**post, "reply_to": "pst_1"}, False),
+                    ("read_post_number", {"action": "read", "message_id": "#1"}, True),
+                    ("reply_post_number", {**post, "reply_to": "#1"}, True),
+                    ("read_discussion_number", {"action": "read", "discussion_id": "d2"}, True),
                     ("foreign_action", {"action": "status"}, False),
                 ]
             )
@@ -664,7 +666,7 @@ async def _probe_swarm_workflow(
         {
             "role": "user",
             "content": INITIAL_MESSAGE.format(
-                goal_post_id=(await store.get_swarm(sid))["goal_post_id"]
+                goal_post=post_ref((await store.get_swarm(sid))["goal_post_sequence"])
             )
             if unassisted
             else "Prepare a three-step checklist for reviewing a short text report with "
@@ -810,7 +812,7 @@ async def _probe_swarm_workflow(
                     "I agree to conclude once those checks appear in the final checklist.",
                     request_id=f"unassisted-feedback-{index}",
                 )
-                feedback_ids.add(feedback["post_id"])
+                feedback_ids.add(post_ref(feedback["sequence"]))
     required = {
         ("swarm_state", ""),
         ("swarm_board", "post"),
@@ -820,7 +822,7 @@ async def _probe_swarm_workflow(
     }
     if unassisted:
         required = set()
-    goal_read = (await store.get_swarm(sid))["goal_post_id"] in received_ids
+    goal_read = post_ref((await store.get_swarm(sid))["goal_post_sequence"]) in received_ids
     coordinated = (
         (goal_read and feedback_received and published_after_feedback) if unassisted else resumed
     )
