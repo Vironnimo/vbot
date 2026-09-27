@@ -39,5 +39,5 @@ The WebUI token badge consumes only `context_usage` for its numerator; history s
 ## Source and tests
 
 - Aggregation: `core/chat/usage.py`; `tests/core/chat/test_usage.py`.
-- Message persistence/estimation: `core/chat/messages.py`; `tests/core/chat/test_chat_loop_usage.py` and `test_messages_primitives.py`.
+- Message persistence/estimation: `core/chat/messages.py`; `tests/core/chat/test_chat_loop_usage.py` and `test_messages_records.py`.
 - Streaming accumulation: `core/chat/streaming.py`; `tests/core/chat/test_streaming.py`.

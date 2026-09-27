@@ -29,55 +29,36 @@ from core.tools.file_state import FileReadState
 # ---------------------------------------------------------------------------
 
 
-class TestListMentionFiles:
-    def test_lists_files_relative_with_forward_slashes(self, tmp_path: Path) -> None:
-        file_root = tmp_path / "files"
-        (file_root / "src").mkdir(parents=True)
-        (file_root / "src" / "app.py").write_text("print()", encoding="utf-8")
-        (file_root / "README.md").write_text("hi", encoding="utf-8")
+def test_lists_relative_forward_slash_paths_and_honors_gitignore(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".gitignore").write_text("ignored/\n*.log\n", encoding="utf-8")
+    (tmp_path / "ignored").mkdir()
+    (tmp_path / "ignored" / "secret.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "debug.log").write_text("x", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("print()", encoding="utf-8")
+    (tmp_path / "README.md").write_text("hi", encoding="utf-8")
 
-        files, truncated = list_mention_files(file_root)
+    files, truncated = list_mention_files(tmp_path)
 
-        assert truncated is False
-        assert set(files) == {"README.md", "src/app.py"}
+    assert truncated is False
+    assert set(files) == {".gitignore", "README.md", "src/app.py"}
+    assert list_mention_files(tmp_path / "does-not-exist") == ([], False)
 
-    def test_honors_gitignore(self, tmp_path: Path) -> None:
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".gitignore").write_text("ignored/\n*.log\n", encoding="utf-8")
-        (tmp_path / "ignored").mkdir()
-        (tmp_path / "ignored" / "secret.txt").write_text("x", encoding="utf-8")
-        (tmp_path / "debug.log").write_text("x", encoding="utf-8")
-        (tmp_path / "kept.txt").write_text("x", encoding="utf-8")
 
-        files, _ = list_mention_files(tmp_path)
+def test_listing_marks_truncation_at_the_file_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The real cap must hold real repositories; the test lowers it to observe truncation.
+    assert MENTION_FILE_LIST_LIMIT >= 1000
+    monkeypatch.setattr("core.chat.file_mentions.MENTION_FILE_LIST_LIMIT", 3)
+    for index in range(5):
+        (tmp_path / f"file-{index}.txt").write_text("x", encoding="utf-8")
 
-        assert "kept.txt" in files
-        assert ".gitignore" in files
-        assert "debug.log" not in files
-        assert not any(entry.startswith("ignored/") for entry in files)
-        assert not any(entry.startswith(".git/") for entry in files)
+    files, truncated = list_mention_files(tmp_path)
 
-    def test_missing_root_lists_empty(self, tmp_path: Path) -> None:
-        files, truncated = list_mention_files(tmp_path / "does-not-exist")
-
-        assert files == []
-        assert truncated is False
-
-    def test_marks_truncation_at_file_cap(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr("core.chat.file_mentions.MENTION_FILE_LIST_LIMIT", 3)
-        for index in range(5):
-            (tmp_path / f"file-{index}.txt").write_text("x", encoding="utf-8")
-
-        files, truncated = list_mention_files(tmp_path)
-
-        assert len(files) == 3
-        assert truncated is True
-
-    def test_default_cap_is_generous(self) -> None:
-        # Guard against an accidental tiny cap: the picker must hold real repos.
-        assert MENTION_FILE_LIST_LIMIT >= 1000
+    assert len(files) == 3
+    assert truncated is True
 
 
 # ---------------------------------------------------------------------------
@@ -85,121 +66,90 @@ class TestListMentionFiles:
 # ---------------------------------------------------------------------------
 
 
-class TestExpandFileMentions:
-    def test_no_mentions_returns_content_unchanged(self, tmp_path: Path) -> None:
-        state = FileReadState()
+def _expand(content: Any, mentions: list[str], root: Path, state: FileReadState) -> Any:
+    return expand_file_mentions(content, mentions, root=root, session_id="s1", file_state=state)
 
-        result = expand_file_mentions("hello", [], root=tmp_path, session_id="s1", file_state=state)
 
-        assert result == "hello"
+def test_no_mentions_returns_content_unchanged(tmp_path: Path) -> None:
+    assert _expand("hello", [], tmp_path, FileReadState()) == "hello"
 
-    def test_inlines_text_file_and_stamps_read(self, tmp_path: Path) -> None:
-        target = tmp_path / "notes.md"
-        target.write_text("line one\nline two\n", encoding="utf-8", newline="\n")
-        state = FileReadState()
 
-        result = expand_file_mentions(
-            "check @notes.md", ["notes.md"], root=tmp_path, session_id="s1", file_state=state
-        )
+def test_inlines_text_file_and_stamps_a_session_scoped_read(tmp_path: Path) -> None:
+    target = tmp_path / "notes.md"
+    target.write_text("line one\nline two\n", encoding="utf-8", newline="\n")
+    state = FileReadState()
 
-        assert isinstance(result, list)
-        assert result[0] == TextBlock(type="text", text="check @notes.md")
-        mention = result[1]
-        assert isinstance(mention, FileMentionBlock)
-        assert mention.status == "inlined"
-        assert mention.text == "line one\nline two\n"
-        assert mention.path == "notes.md"
-        # The snapshot counts as a read: an edit without a prior read tool call
-        # must pass the read-before-write guard.
-        assert state.check_stale("s1", target.resolve()) is None
+    result = _expand("check @notes.md", ["notes.md"], tmp_path, state)
 
-    def test_stamp_is_session_scoped(self, tmp_path: Path) -> None:
-        target = tmp_path / "notes.md"
-        target.write_text("content", encoding="utf-8")
-        state = FileReadState()
+    assert isinstance(result, list)
+    assert result[0] == TextBlock(type="text", text="check @notes.md")
+    mention = result[1]
+    assert isinstance(mention, FileMentionBlock)
+    assert (mention.status, mention.path, mention.text) == (
+        "inlined",
+        "notes.md",
+        "line one\nline two\n",
+    )
+    # The snapshot counts as a read: an edit without a prior read tool call
+    # must pass the read-before-write guard, but only in this Session.
+    assert state.check_stale("s1", target.resolve()) is None
+    assert state.check_stale("other-session", target.resolve()) is not None
 
-        expand_file_mentions(
-            "@notes.md", ["notes.md"], root=tmp_path, session_id="s1", file_state=state
-        )
 
-        assert state.check_stale("other-session", target.resolve()) is not None
-
-    def test_missing_file_degrades_without_stamp(self, tmp_path: Path) -> None:
-        state = FileReadState()
-
-        result = expand_file_mentions(
-            "@gone.txt", ["gone.txt"], root=tmp_path, session_id="s1", file_state=state
-        )
-
-        mention = result[1]
-        assert isinstance(mention, FileMentionBlock)
-        assert mention.status == "missing"
-        assert mention.text is None
-
-    def test_oversized_file_degrades_with_size(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+@pytest.mark.parametrize(
+    ("name", "payload", "status", "size_bytes"),
+    [
+        ("gone.txt", None, "missing", None),
+        ("big.txt", b"x" * 50, "too_large", 50),
+        ("image.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32, "not_text", None),
+    ],
+    ids=["missing", "too-large", "not-text"],
+)
+def test_unreadable_mentions_degrade_without_a_read_stamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    payload: bytes | None,
+    status: str,
+    size_bytes: int | None,
+) -> None:
+    # Source files must comfortably inline; the cap exists for logs and dumps.
+    assert MENTION_INLINE_MAX_BYTES >= 64 * 1024
+    if status == "too_large":
         monkeypatch.setattr("core.chat.file_mentions.MENTION_INLINE_MAX_BYTES", 10)
-        target = tmp_path / "big.txt"
-        target.write_text("x" * 50, encoding="utf-8")
-        state = FileReadState()
+    target = tmp_path / name
+    if payload is not None:
+        target.write_bytes(payload)
+    state = FileReadState()
 
-        result = expand_file_mentions(
-            "@big.txt", ["big.txt"], root=tmp_path, session_id="s1", file_state=state
-        )
+    result = _expand(f"@{name}", [name], tmp_path, state)
 
-        mention = result[1]
-        assert isinstance(mention, FileMentionBlock)
-        assert mention.status == "too_large"
-        assert mention.text is None
-        assert mention.size_bytes == 50
-        # Not stamped: the agent has not seen this content.
-        assert state.check_stale("s1", target.resolve()) is not None
+    mention = result[1]
+    assert isinstance(mention, FileMentionBlock)
+    assert (mention.status, mention.text) == (status, None)
+    if size_bytes is not None:
+        assert mention.size_bytes == size_bytes
+    # Not stamped: the Agent has not seen this content.
+    assert state.check_stale("s1", target.resolve()) is not None
 
-    def test_binary_file_degrades_as_not_text(self, tmp_path: Path) -> None:
-        target = tmp_path / "image.png"
-        target.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
-        state = FileReadState()
 
-        result = expand_file_mentions(
-            "@image.png", ["image.png"], root=tmp_path, session_id="s1", file_state=state
-        )
+def test_duplicate_and_blank_mentions_collapse(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
 
-        mention = result[1]
-        assert isinstance(mention, FileMentionBlock)
-        assert mention.status == "not_text"
-        assert mention.text is None
+    result = _expand("@a.txt twice @a.txt", ["a.txt", "a.txt", "  "], tmp_path, FileReadState())
 
-    def test_duplicate_and_blank_mentions_collapse(self, tmp_path: Path) -> None:
-        (tmp_path / "a.txt").write_text("a", encoding="utf-8")
-        state = FileReadState()
+    assert isinstance(result, list)
+    assert len(result) == 2
 
-        result = expand_file_mentions(
-            "@a.txt twice @a.txt",
-            ["a.txt", "a.txt", "  "],
-            root=tmp_path,
-            session_id="s1",
-            file_state=state,
-        )
 
-        assert isinstance(result, list)
-        assert len(result) == 2
+def test_block_content_keeps_existing_blocks(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    existing: list[ContentBlock] = [TextBlock(type="text", text="see @a.txt")]
 
-    def test_block_content_keeps_existing_blocks(self, tmp_path: Path) -> None:
-        (tmp_path / "a.txt").write_text("a", encoding="utf-8")
-        state = FileReadState()
-        existing: list[ContentBlock] = [TextBlock(type="text", text="see @a.txt")]
+    result = _expand(existing, ["a.txt"], tmp_path, FileReadState())
 
-        result = expand_file_mentions(
-            existing, ["a.txt"], root=tmp_path, session_id="s1", file_state=state
-        )
-
-        assert result[0] is existing[0]
-        assert isinstance(result[1], FileMentionBlock)
-
-    def test_default_inline_cap_is_generous(self) -> None:
-        # Source files must comfortably inline; the cap exists for logs and dumps.
-        assert MENTION_INLINE_MAX_BYTES >= 64 * 1024
+    assert result[0] is existing[0]
+    assert isinstance(result[1], FileMentionBlock)
 
 
 # ---------------------------------------------------------------------------
@@ -207,47 +157,41 @@ class TestExpandFileMentions:
 # ---------------------------------------------------------------------------
 
 
-class TestFileMentionRequestText:
-    def test_inlined_carries_origin_framing_and_content(self, tmp_path: Path) -> None:
-        (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8", newline="\n")
-        state = FileReadState()
-        blocks = expand_file_mentions(
-            "@app.py", ["app.py"], root=tmp_path, session_id="s1", file_state=state
-        )
-        mention = blocks[1]
-        assert isinstance(mention, FileMentionBlock)
+def test_inlined_request_text_carries_origin_framing_and_content(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8", newline="\n")
+    mention = _expand("@app.py", ["app.py"], tmp_path, FileReadState())[1]
+    assert isinstance(mention, FileMentionBlock)
 
-        text = file_mention_request_text(content_block_to_dict(mention))
+    text = file_mention_request_text(content_block_to_dict(mention))
 
-        assert "@app.py" in text
-        assert "attached automatically" in text
-        assert "snapshot" in text
-        assert text.endswith("value = 1\n")
+    assert "@app.py" in text
+    assert "attached automatically" in text
+    assert "snapshot" in text
+    assert text.endswith("value = 1\n")
 
-    def test_too_large_points_to_read_tool(self) -> None:
-        text = file_mention_request_text(
-            {"type": "file_mention", "path": "big.log", "status": "too_large", "size_bytes": 999}
-        )
 
-        assert "big.log" in text
-        assert "999" in text
-        assert "read" in text
+@pytest.mark.parametrize(
+    ("block", "expected_parts"),
+    [
+        (
+            {"type": "file_mention", "path": "big.log", "status": "too_large", "size_bytes": 999},
+            ("big.log", "999", "read"),
+        ),
+        ({"type": "file_mention", "path": "img.png", "status": "not_text"}, ("img.png", "read")),
+        (
+            {"type": "file_mention", "path": "gone.txt", "status": "missing"},
+            ("gone.txt", "did not exist"),
+        ),
+    ],
+    ids=["too-large", "not-text", "missing"],
+)
+def test_degraded_request_text_names_the_file_and_the_next_step(
+    block: dict[str, Any], expected_parts: tuple[str, ...]
+) -> None:
+    text = file_mention_request_text(block)
 
-    def test_not_text_points_to_read_tool(self) -> None:
-        text = file_mention_request_text(
-            {"type": "file_mention", "path": "img.png", "status": "not_text"}
-        )
-
-        assert "img.png" in text
-        assert "read" in text
-
-    def test_missing_states_absence_at_send_time(self) -> None:
-        text = file_mention_request_text(
-            {"type": "file_mention", "path": "gone.txt", "status": "missing"}
-        )
-
-        assert "gone.txt" in text
-        assert "did not exist" in text
+    for part in expected_parts:
+        assert part in text
 
 
 # ---------------------------------------------------------------------------
@@ -296,74 +240,58 @@ class _FakeRuntime:
         self.storage = _FakeStorage(data_dir)
 
 
-class TestResolveMentionRoot:
-    def test_project_address_uses_project_cwd(self, tmp_path: Path) -> None:
-        (tmp_path / "repo").mkdir()
-        runtime = _FakeRuntime(
+def _runtime(tmp_path: Path, *, workspace: str, root_project_id: str | None) -> Any:
+    (tmp_path / "repo").mkdir()
+    return cast(
+        Any,
+        _FakeRuntime(
             projects=_FakeProjects(str(tmp_path / "repo")),
-            agent=_FakeAgent(str(tmp_path / "workspace")),
+            agent=_FakeAgent(workspace, root_project_id),
             data_dir=tmp_path,
-        )
+        ),
+    )
 
-        root = resolve_mention_root(cast(Any, runtime), "builder", "vbot")
 
-        assert root == Path(tmp_path / "repo")
+@pytest.mark.parametrize(
+    ("agent_id", "project_id", "workspace", "root_project_id", "expected"),
+    [
+        ("builder", "vbot", "workspace", None, "repo"),
+        ("main", None, "workspace", None, "workspace"),
+        ("main", None, "workspace", "vbot", "repo"),
+        ("main", None, "", None, "agents/main/workspace"),
+    ],
+    ids=["project-cwd", "identity-workspace", "rooted-identity", "no-workspace-data-dir"],
+)
+def test_mention_root_follows_the_address(
+    tmp_path: Path,
+    agent_id: str,
+    project_id: str | None,
+    workspace: str,
+    root_project_id: str | None,
+    expected: str,
+) -> None:
+    runtime = _runtime(
+        tmp_path,
+        workspace=str(tmp_path / workspace) if workspace else "",
+        root_project_id=root_project_id,
+    )
 
-    def test_identity_address_uses_agent_workspace(self, tmp_path: Path) -> None:
-        runtime = _FakeRuntime(
-            projects=_FakeProjects(str(tmp_path / "repo")),
-            agent=_FakeAgent(str(tmp_path / "workspace")),
-            data_dir=tmp_path,
-        )
+    assert resolve_mention_root(runtime, agent_id, project_id) == tmp_path / expected
 
-        root = resolve_mention_root(cast(Any, runtime), "main", None)
 
-        assert root == Path(tmp_path / "workspace")
+@pytest.mark.parametrize(
+    ("root_project_id", "remove_repo", "error"),
+    [("missing", False, KeyError), ("vbot", True, ChatError)],
+    ids=["missing-project", "missing-cwd"],
+)
+def test_rooted_identity_never_falls_back_to_the_workspace(
+    tmp_path: Path, root_project_id: str, remove_repo: bool, error: type[Exception]
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = _runtime(tmp_path, workspace=str(workspace), root_project_id=root_project_id)
+    if remove_repo:
+        (tmp_path / "repo").rmdir()
 
-    def test_rooted_identity_address_uses_selected_project_cwd(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        runtime = _FakeRuntime(
-            projects=_FakeProjects(str(repo)),
-            agent=_FakeAgent(str(tmp_path / "workspace"), root_project_id="vbot"),
-            data_dir=tmp_path,
-        )
-
-        root = resolve_mention_root(cast(Any, runtime), "main", None)
-
-        assert root == repo
-
-    def test_rooted_identity_missing_project_does_not_fall_back(self, tmp_path: Path) -> None:
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        runtime = _FakeRuntime(
-            projects=_FakeProjects(str(tmp_path / "repo")),
-            agent=_FakeAgent(str(workspace), root_project_id="missing"),
-            data_dir=tmp_path,
-        )
-
-        with pytest.raises(KeyError, match="missing"):
-            resolve_mention_root(cast(Any, runtime), "main", None)
-
-    def test_rooted_identity_missing_cwd_does_not_fall_back(self, tmp_path: Path) -> None:
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        runtime = _FakeRuntime(
-            projects=_FakeProjects(str(tmp_path / "missing-repo")),
-            agent=_FakeAgent(str(workspace), root_project_id="vbot"),
-            data_dir=tmp_path,
-        )
-
-        with pytest.raises(ChatError):
-            resolve_mention_root(cast(Any, runtime), "main", None)
-
-    def test_identity_without_workspace_falls_back_to_data_dir(self, tmp_path: Path) -> None:
-        runtime = _FakeRuntime(
-            projects=_FakeProjects(str(tmp_path / "repo")),
-            agent=_FakeAgent(""),
-            data_dir=tmp_path,
-        )
-
-        root = resolve_mention_root(cast(Any, runtime), "main", None)
-
-        assert root == tmp_path / "agents" / "main" / "workspace"
+    with pytest.raises(error):
+        resolve_mention_root(runtime, "main", None)
