@@ -17,29 +17,25 @@ describe('appearancePrefs', () => {
     expect(appearancePrefs.chatWidth).toBe('comfortable');
   });
 
-  it('stores each supported chat width', () => {
+  it.each([
+    ['wide', 'wide'],
+    ['full', 'full'],
+    ['huge', 'comfortable'],
+    [undefined, 'comfortable'],
+  ])('stores the chat width %j as %j', (value, stored) => {
     setChatWidth('wide');
-    expect(appearancePrefs.chatWidth).toBe('wide');
+    setChatWidth(value);
 
-    setChatWidth('full');
-    expect(appearancePrefs.chatWidth).toBe('full');
+    expect(appearancePrefs.chatWidth).toBe(stored);
   });
 
-  it('coerces missing or unsupported values to the comfortable default', () => {
-    setChatWidth('wide');
-    setChatWidth('huge');
-    expect(appearancePrefs.chatWidth).toBe('comfortable');
-
-    setChatWidth('wide');
-    setChatWidth(undefined);
-    expect(appearancePrefs.chatWidth).toBe('comfortable');
-  });
-
-  it('stores compact working mode and defaults unsupported values to normal', () => {
+  it.each([
+    ['compact', 'compact'],
+    ['dense', 'normal'],
+  ])('stores the chat working mode %j as %j', (value, stored) => {
     setChatWorkingMode('compact');
-    expect(appearancePrefs.chatWorkingMode).toBe('compact');
+    setChatWorkingMode(value);
 
-    setChatWorkingMode('dense');
-    expect(appearancePrefs.chatWorkingMode).toBe('normal');
+    expect(appearancePrefs.chatWorkingMode).toBe(stored);
   });
 });

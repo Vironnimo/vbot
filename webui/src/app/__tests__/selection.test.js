@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSelectionHarness } from './selectionHarness.svelte.js';
+import { createSelectionHarness } from './selection.support.svelte.js';
 
-const { listAgents } = vi.hoisted(() => ({ listAgents: vi.fn() }));
-vi.mock('$lib/api.js', () => ({ listAgents, listProjects: vi.fn() }));
+const { listAgents, listProjects } = vi.hoisted(() => ({
+  listAgents: vi.fn(),
+  listProjects: vi.fn(),
+}));
+vi.mock('$lib/api.js', () => ({ listAgents, listProjects }));
 
 function deferred() {
   let resolve;
@@ -14,12 +17,13 @@ function deferred() {
   return { promise, resolve };
 }
 
-describe('App Agent selection', () => {
+describe('App selection', () => {
   let selection;
   let dispose;
   beforeEach(() => {
     localStorage.clear();
     listAgents.mockReset();
+    listProjects.mockReset();
     ({ selection, dispose } = createSelectionHarness());
   });
   afterEach(() => {
@@ -71,5 +75,26 @@ describe('App Agent selection', () => {
     expect(selection.agents).toEqual([]);
     expect(selection.selectedAgentId).toBe('');
     expect(selection.agentsRefreshToken).toBe(0);
+  });
+
+  it('keeps the newest valid Project catalog across stale responses and transient errors', async () => {
+    const stale = deferred();
+    listProjects
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce({ projects: [{ project_id: 'newest-project' }] })
+      .mockRejectedValueOnce(new Error('temporary project failure'));
+    const projectIds = () =>
+      selection.projects.map((project) => project.project_id);
+
+    const initial = selection.loadProjects();
+    await expect(selection.loadProjects()).resolves.toBe(true);
+    expect(projectIds()).toEqual(['newest-project']);
+
+    stale.resolve({ projects: [{ project_id: 'stale-project' }] });
+    await expect(initial).resolves.toBe(false);
+    expect(projectIds()).toEqual(['newest-project']);
+
+    await expect(selection.loadProjects()).resolves.toBe(false);
+    expect(projectIds()).toEqual(['newest-project']);
   });
 });

@@ -3,22 +3,13 @@
 import { vi } from 'vitest';
 import { flushSync, unmount } from 'svelte';
 
-import { init } from '../lib/i18n.js';
+import { init, t } from '../lib/i18n.js';
 import { rpcBackedApiMock } from '../components/__tests__/apiMock.support.js';
 
 export const rpcMock = vi.fn();
-export const listClientsMock = vi.fn(() => Promise.resolve({ clients: [] }));
-export const listQueueMock = vi.fn(() => Promise.resolve({ items: [] }));
-export const listSessionsMock = vi.fn(() => Promise.resolve({ sessions: [] }));
 export const listSessionActivityMock = vi.fn(() =>
   Promise.resolve({ agents: [] }),
 );
-export const listLogsMock = vi.fn();
-export const readLogFileMock = vi.fn();
-export const subscribeLogEventsMock = vi.fn(() => ({
-  close: vi.fn(),
-  socket: null,
-}));
 export const subscribeRunEventsMock = vi.fn(() => ({
   close: vi.fn(),
   source: null,
@@ -28,6 +19,12 @@ export const subscribeServerEventsMock = vi.fn(() => ({
   socket: null,
 }));
 export const debugStatusMock = vi.fn().mockResolvedValue({ enabled: false });
+const listClientsMock = vi.fn();
+const listQueueMock = vi.fn();
+const listSessionsMock = vi.fn();
+const listLogsMock = vi.fn();
+const readLogFileMock = vi.fn();
+const subscribeLogEventsMock = vi.fn(() => ({ close: vi.fn(), socket: null }));
 
 vi.mock('svelte', async () => {
   return import('../../node_modules/svelte/src/index-client.js');
@@ -57,7 +54,7 @@ vi.mock('$lib/api.js', () =>
   }),
 );
 
-export const { default: App } = await import('../App.svelte');
+export const { default: App, NAVIGATION_ITEMS } = await import('../App.svelte');
 
 export function resetAppHarness() {
   vi.stubGlobal(
@@ -75,7 +72,6 @@ export function resetAppHarness() {
   window.history.replaceState(null, '', window.location.pathname);
   delete window.pywebview;
   init('en');
-  listLogsMock.mockReset();
   listClientsMock.mockReset();
   listClientsMock.mockResolvedValue({ clients: [] });
   listQueueMock.mockReset();
@@ -84,22 +80,23 @@ export function resetAppHarness() {
   listSessionsMock.mockResolvedValue({ sessions: [] });
   listSessionActivityMock.mockReset();
   listSessionActivityMock.mockResolvedValue({ agents: [] });
-  readLogFileMock.mockReset();
-  subscribeLogEventsMock.mockClear();
-  subscribeRunEventsMock.mockClear();
-  subscribeServerEventsMock.mockClear();
-  debugStatusMock.mockReset();
-  debugStatusMock.mockResolvedValue({ enabled: false });
-  rpcMock.mockImplementation(createEmptyChatRpcMock());
+  listLogsMock.mockReset();
   listLogsMock.mockResolvedValue({
     files: ['2026-05-11.log'],
     default_file: '2026-05-11.log',
   });
+  readLogFileMock.mockReset();
   readLogFileMock.mockResolvedValue({
     file: '2026-05-11.log',
     entries: [],
     cursor: 'app-log-cursor',
   });
+  subscribeLogEventsMock.mockClear();
+  subscribeRunEventsMock.mockClear();
+  subscribeServerEventsMock.mockClear();
+  debugStatusMock.mockReset();
+  debugStatusMock.mockResolvedValue({ enabled: false });
+  rpcMock.mockImplementation(createAppRpcMock());
 }
 
 export async function cleanupAppHarness(mountedComponent) {
@@ -115,107 +112,109 @@ export async function cleanupAppHarness(mountedComponent) {
   return null;
 }
 
-export async function waitForAssertion(assertion) {
-  let lastError = null;
+const QUICK_POLLS = 10;
+const SLOW_POLLS = 60;
+const SLOW_POLL_MS = 50;
 
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+// Retries an assertion until it passes: first after every pending task, then
+// every 50 ms for about three seconds.
+export async function waitForCondition(assertion) {
+  for (let attempt = 0; ; attempt += 1) {
     try {
       assertion();
       return;
     } catch (error) {
-      lastError = error;
-      await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (attempt >= QUICK_POLLS + SLOW_POLLS) {
+        throw error;
+      }
+      const delay = attempt < QUICK_POLLS ? 0 : SLOW_POLL_MS;
+      await new Promise((resolve) => setTimeout(resolve, delay));
       flushSync();
     }
   }
-
-  throw lastError;
 }
 
-export function createEmptyChatRpcMock() {
-  return async (method) => {
-    if (method === 'agent.list') {
-      return { agents: [] };
+/**
+ * RPC fake for a mounted App. It answers the Chat startup reads for `agents`
+ * (`history(params)` adds fields to each `chat.history` reply) and any method
+ * in `methods`; every other method fails like an unknown RPC.
+ */
+export function createAppRpcMock({
+  agents = [],
+  history = () => ({}),
+  methods = {},
+} = {}) {
+  return async (method, params = {}) => {
+    if (Object.hasOwn(methods, method)) {
+      return methods[method](params);
     }
-
-    if (method === 'chat.commands') {
-      return { items: [] };
+    switch (method) {
+      case 'agent.list':
+        return { agents };
+      case 'chat.commands':
+      case 'chat.queue_list':
+        return { items: [] };
+      case 'skill.list':
+        return { skills: [], invalid_skills: [] };
+      case 'chat.history':
+        return {
+          agent_id: params.agent_id ?? '',
+          session_id: params.session_id ?? '',
+          messages: [],
+          ...history(params),
+        };
+      default:
+        throw new Error(`Unexpected RPC method: ${method}`);
     }
-
-    if (method === 'skill.list') {
-      return { skills: [], invalid_skills: [] };
-    }
-
-    throw new Error(`Unexpected RPC method: ${method}`);
   };
 }
 
-export function createChatRpcMock(agents) {
-  return async (method, params) => {
-    if (method === 'agent.list') {
-      return { agents };
-    }
-
-    if (method === 'chat.commands') {
-      return { items: [] };
-    }
-
-    if (method === 'chat.history') {
-      return {
-        agent_id: params?.agent_id ?? '',
-        session_id: params?.session_id ?? '',
-        messages: [],
-      };
-    }
-
-    if (method === 'skill.list') {
-      return { skills: [], invalid_skills: [] };
-    }
-
-    throw new Error(`Unexpected RPC method: ${method}`);
-  };
+function subAgentCall(callId, sessionId, runId, status, content) {
+  return [
+    {
+      id: 'parent-assistant-tool',
+      role: 'assistant',
+      content: null,
+      tool_calls: [
+        {
+          id: callId,
+          name: 'subagent',
+          arguments: { agent_id: 'alpha', background: true, content },
+        },
+      ],
+    },
+    {
+      id: 'parent-tool-result',
+      role: 'tool',
+      tool_call_id: callId,
+      name: 'subagent',
+      content: JSON.stringify({
+        ok: true,
+        data: {
+          agent_id: 'alpha',
+          session_id: sessionId,
+          run_id: runId,
+          status,
+        },
+      }),
+    },
+  ];
 }
 
+// `session-parent` holds a completed background sub-agent call ('Inspect
+// again') whose child Session `sub-session-repeat` answered 'Sub-agent
+// response'.
 export function createSubAgentNavigationRpcMock(agents) {
   const messagesBySession = {
     'session-parent': [
-      {
-        id: 'parent-user',
-        role: 'user',
-        content: 'Start sub-agent',
-      },
-      {
-        id: 'parent-assistant-tool',
-        role: 'assistant',
-        content: null,
-        tool_calls: [
-          {
-            id: 'call-subagent-repeat',
-            name: 'subagent',
-            arguments: {
-              agent_id: 'alpha',
-              background: true,
-              content: 'Inspect again',
-            },
-          },
-        ],
-      },
-      {
-        id: 'parent-tool-result',
-        role: 'tool',
-        tool_call_id: 'call-subagent-repeat',
-        name: 'subagent',
-        content: JSON.stringify({
-          ok: true,
-          data: {
-            agent_id: 'alpha',
-            session_id: 'sub-session-repeat',
-            run_id: 'sub-run-repeat',
-            status: 'completed',
-          },
-        }),
-      },
+      { id: 'parent-user', role: 'user', content: 'Start sub-agent' },
+      ...subAgentCall(
+        'call-subagent-repeat',
+        'sub-session-repeat',
+        'sub-run-repeat',
+        'completed',
+        'Inspect again',
+      ),
     ],
     'sub-session-repeat': [
       {
@@ -225,116 +224,43 @@ export function createSubAgentNavigationRpcMock(agents) {
       },
     ],
   };
-
-  return async (method, params) => {
-    if (method === 'agent.list') {
-      return { agents };
-    }
-
-    if (method === 'chat.commands') {
-      return { items: [] };
-    }
-
-    if (method === 'chat.history') {
-      return {
-        agent_id: params?.agent_id ?? '',
-        session_id: params?.session_id ?? '',
-        messages: messagesBySession[params?.session_id] ?? [],
-      };
-    }
-
-    if (method === 'chat.queue_list') {
-      return { items: [] };
-    }
-
-    if (method === 'skill.list') {
-      return { skills: [], invalid_skills: [] };
-    }
-
-    throw new Error(`Unexpected RPC method: ${method}`);
-  };
+  return createAppRpcMock({
+    agents,
+    history: (params) => ({
+      messages: messagesBySession[params.session_id] ?? [],
+    }),
+  });
 }
 
+// `session-parent` holds a background sub-agent call whose child Run
+// `sub-run-running` still runs; every other Session reports an active Run.
 export function createRunningSubAgentRpcMock(agents) {
-  return async (method, params) => {
-    if (method === 'agent.list') {
-      return { agents };
-    }
-
-    if (method === 'chat.commands') {
-      return { items: [] };
-    }
-
-    if (method === 'chat.history') {
-      if (params?.session_id !== 'session-parent') {
-        return {
-          agent_id: params?.agent_id ?? '',
-          session_id: params?.session_id ?? '',
-          messages: [],
-          active_run: {
-            run_id:
-              params?.session_id === 'sub-session-running'
-                ? 'sub-run-running'
-                : `run-${params?.session_id ?? 'other'}`,
-            agent_id: params?.agent_id ?? '',
-            session_id: params?.session_id ?? '',
-            status: 'running',
-            events: [],
+  return createAppRpcMock({
+    agents,
+    history: (params) =>
+      params.session_id === 'session-parent'
+        ? {
+            messages: subAgentCall(
+              'call-subagent-running',
+              'sub-session-running',
+              'sub-run-running',
+              'running',
+              'Inspect in the background',
+            ),
+          }
+        : {
+            active_run: {
+              run_id:
+                params.session_id === 'sub-session-running'
+                  ? 'sub-run-running'
+                  : `run-${params.session_id ?? 'other'}`,
+              agent_id: params.agent_id ?? '',
+              session_id: params.session_id ?? '',
+              status: 'running',
+              events: [],
+            },
           },
-        };
-      }
-      return {
-        agent_id: params?.agent_id ?? '',
-        session_id: params?.session_id ?? '',
-        messages:
-          params?.session_id === 'session-parent'
-            ? [
-                {
-                  id: 'parent-assistant-tool',
-                  role: 'assistant',
-                  content: null,
-                  tool_calls: [
-                    {
-                      id: 'call-subagent-running',
-                      name: 'subagent',
-                      arguments: {
-                        agent_id: 'alpha',
-                        background: true,
-                        content: 'Inspect in the background',
-                      },
-                    },
-                  ],
-                },
-                {
-                  id: 'parent-tool-result',
-                  role: 'tool',
-                  tool_call_id: 'call-subagent-running',
-                  name: 'subagent',
-                  content: JSON.stringify({
-                    ok: true,
-                    data: {
-                      agent_id: 'alpha',
-                      session_id: 'sub-session-running',
-                      run_id: 'sub-run-running',
-                      status: 'running',
-                    },
-                  }),
-                },
-              ]
-            : [],
-      };
-    }
-
-    if (method === 'chat.queue_list') {
-      return { items: [] };
-    }
-
-    if (method === 'skill.list') {
-      return { skills: [], invalid_skills: [] };
-    }
-
-    throw new Error(`Unexpected RPC method: ${method}`);
-  };
+  });
 }
 
 export function runServerEvent(type, runId, sequence, payload = {}) {
@@ -353,7 +279,7 @@ export function runServerEvent(type, runId, sequence, payload = {}) {
 }
 
 // Trigger of the Chat header's personal Agent picker.
-export function agentPickerTrigger() {
+function agentPickerTrigger() {
   return document.querySelector(
     '.chat-header__agent-picker button[aria-haspopup="listbox"]',
   );
@@ -395,52 +321,47 @@ export async function selectPersonalAgent(name) {
 }
 
 export function viewSessionButton() {
-  return document.querySelector('button[aria-label="Open Sub-Agent Session"]');
-}
-
-export function returnToCurrentSessionButton() {
-  return Array.from(document.querySelectorAll('button')).find(
-    (button) => button.textContent?.trim() === 'Return to current session',
+  return document.querySelector(
+    `button[aria-label="${t('chat.subagent.openSession')}"]`,
   );
 }
 
-export function sidebarNavButton(text) {
-  return Array.from(
-    document.querySelectorAll('nav.app-shell__navigation .app-shell__nav-item'),
-  ).find((button) => button.textContent?.trim() === text);
+export function returnToCurrentSessionButton() {
+  return buttonWithText('button', t('chat.returnToCurrentSession'));
 }
 
-export function settingsPanelButton(text) {
-  return Array.from(
-    document.querySelectorAll('nav.settings-nav .snav-item'),
-  ).find((button) => button.textContent?.trim() === text);
+// First element matching `selector` whose trimmed text is `text`.
+export function buttonWithText(selector, text) {
+  return Array.from(document.querySelectorAll(selector)).find(
+    (button) => button.textContent?.trim() === text,
+  );
+}
+
+// Sidebar button of a NAVIGATION_ITEMS view id, or of an Extension page by
+// its title.
+export function sidebarNavButton(viewIdOrTitle) {
+  const item = NAVIGATION_ITEMS.find(({ id }) => id === viewIdOrTitle);
+  return buttonWithText(
+    'nav.app-shell__navigation .app-shell__nav-item',
+    item ? t(item.labelKey, item.labelFallback) : viewIdOrTitle,
+  );
+}
+
+// Settings navigation button of a page id (general, tools, system, ...).
+export function settingsPanelButton(pageId) {
+  return buttonWithText(
+    'nav.settings-nav .snav-item',
+    t(`settings.pages.${pageId}`),
+  );
 }
 
 export function debugEnabledToggle() {
   return document.querySelector(
-    'button.toggle[role="switch"][aria-label="Enable debug mode"]',
+    `button.toggle[role="switch"][aria-label="${t('debug.enabled')}"]`,
   );
 }
 
-export async function waitForCondition(assertion, options = {}) {
-  const attempts = options.attempts ?? 60;
-  const intervalMs = options.intervalMs ?? 50;
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      if (attempt === attempts - 1) {
-        throw error;
-      }
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
-      flushSync();
-    }
-  }
-}
-
-export function onboardingSettings(connected) {
+function onboardingSettings(connected) {
   return {
     general: {
       server: { listen_host: '127.0.0.1', listen_port: 8420 },
@@ -490,63 +411,44 @@ export function onboardingSettings(connected) {
   };
 }
 
+// A single `main` Agent that has a Model only when a Provider is connected.
 export function createOnboardingRpcMock({ connected = false } = {}) {
-  return async (method) => {
-    if (method === 'agent.list') {
-      return {
-        agents: [
-          {
-            id: 'main',
-            name: 'Main',
-            model: connected ? 'openrouter/anthropic/claude-sonnet-4' : '',
-            fallback_models: [],
-            workspace: '/data/workspace-main',
-            temperature: null,
-            thinking_effort: '',
-            memory_prompt_mode: 'agent_user',
-            tool_access: { mode: 'all' },
-            allowed_skills: ['*'],
-            custom_system_prompt_enabled: false,
-            current_session_id: '',
-          },
-        ],
-      };
-    }
-    if (method === 'chat.commands') {
-      return { items: [] };
-    }
-    if (method === 'chat.history') {
-      return { messages: [] };
-    }
-    if (method === 'chat.queue_list') {
-      return { items: [] };
-    }
-    if (method === 'skill.list') {
-      return { skills: [], invalid_skills: [] };
-    }
-    if (method === 'settings.get') {
-      return onboardingSettings(connected);
-    }
-    if (method === 'model.list') {
-      return { models: [] };
-    }
-    if (method === 'connection.list') {
-      return { connections: [] };
-    }
-    throw new Error(`Unexpected RPC method: ${method}`);
-  };
+  return createAppRpcMock({
+    agents: [
+      {
+        id: 'main',
+        name: 'Main',
+        model: connected ? 'openrouter/anthropic/claude-sonnet-4' : '',
+        fallback_models: [],
+        workspace: '/data/workspace-main',
+        temperature: null,
+        thinking_effort: '',
+        memory_prompt_mode: 'agent_user',
+        tool_access: { mode: 'all' },
+        allowed_skills: ['*'],
+        custom_system_prompt_enabled: false,
+        current_session_id: '',
+      },
+    ],
+    methods: {
+      'settings.get': () => onboardingSettings(connected),
+      'model.list': () => ({ models: [] }),
+      'connection.list': () => ({ connections: [] }),
+    },
+  });
 }
 
-export function createSettingsRpcMock(options = {}) {
-  let debugEnabled = options.initialDebugEnabled ?? false;
-  let traceLimit = options.initialTraceLimit ?? 50;
+// Settings that keep what `settings.update` saved for sub-agent limits and
+// Debug Mode.
+export function createSettingsRpcMock({ initialDebugEnabled = false } = {}) {
+  let debug = { enabled: initialDebugEnabled, trace_limit: 50 };
   let subagents = {
     max_subagent_depth: 4,
     max_subagents_per_turn: 8,
     subagent_timeout_minutes: 60,
   };
 
-  const baseSettings = () => ({
+  const settings = () => ({
     general: {
       server: { listen_host: '127.0.0.1', listen_port: 8420 },
       data_directory: 'C:/data',
@@ -574,51 +476,17 @@ export function createSettingsRpcMock(options = {}) {
       custom_endpoints: { supported: true, items: [] },
     },
     defaults: { agent: {} },
-    debug: { enabled: debugEnabled, trace_limit: traceLimit },
+    debug: { ...debug },
   });
 
-  return async (method, params = {}) => {
-    if (method === 'agent.list') {
-      return { agents: [] };
-    }
-
-    if (method === 'chat.commands') {
-      return { items: [] };
-    }
-
-    if (method === 'chat.history') {
-      return {
-        agent_id: params?.agent_id ?? '',
-        session_id: params?.session_id ?? '',
-        messages: [],
-      };
-    }
-
-    if (method === 'chat.queue_list') {
-      return { items: [] };
-    }
-
-    if (method === 'skill.list') {
-      return { skills: [], invalid_skills: [] };
-    }
-
-    if (method === 'settings.get') {
-      return baseSettings();
-    }
-
-    if (method === 'settings.update') {
-      if (params?.subagents) subagents = { ...subagents, ...params.subagents };
-      if (params?.debug && typeof params.debug === 'object') {
-        if (typeof params.debug.enabled === 'boolean') {
-          debugEnabled = params.debug.enabled;
-        }
-        if (Number.isInteger(params.debug.trace_limit)) {
-          traceLimit = params.debug.trace_limit;
-        }
-      }
-      return baseSettings();
-    }
-
-    throw new Error(`Unexpected RPC method: ${method}`);
-  };
+  return createAppRpcMock({
+    methods: {
+      'settings.get': settings,
+      'settings.update': (params) => {
+        if (params.subagents) subagents = { ...subagents, ...params.subagents };
+        if (params.debug) debug = { ...debug, ...params.debug };
+        return settings();
+      },
+    },
+  });
 }
