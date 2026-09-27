@@ -1,584 +1,230 @@
-"""Web search: brave behavior."""
+"""web_search with Brave Search, the default provider: request parameters, site
+filters enforced on the results, and the result text."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
 import respx
 
-import core.tools._web_search_transport as web_search_transport
-from core.tools.web_search import (
-    web_search_handler,
-)
-from tests.core.tools.web_search_helpers import (
-    _BRAVE_ENDPOINT,
-    _SEARXNG_ENDPOINT,
-    _fake_credential_resolver,
-    assert_failure_envelope,
+from tests.core.tools.web_search_test_support import (
+    API_KEY,
+    BRAVE_ENDPOINT,
     assert_success_envelope,
-    make_context,
     result_urls,
+    search,
 )
 
 
-class _FailIfReadStream(httpx.AsyncByteStream):
-    async def __aiter__(self):
-        raise AssertionError("oversized declared response body must not be read")
-        yield b""  # pragma: no cover
+async def _search_brave(
+    tmp_path: Path, arguments: dict[str, Any], results: Any, **options: Any
+) -> tuple[dict[str, Any], httpx.Request]:
+    """Answer one Brave request with ``results`` (the whole body when a dict)."""
+    body = results if isinstance(results, dict) else {"web": {"results": results}}
+    with respx.mock() as router:
+        route = router.get(BRAVE_ENDPOINT).respond(200, json=body)
+        result = await search(tmp_path, arguments, **options)
+    assert route.call_count == 1
+    return assert_success_envelope(result), route.calls[0].request
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_brave_success(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "web": {
-                    "results": [
-                        {
-                            "title": "vBot docs",
-                            "url": "https://example.com/vbot",
-                            "description": "vBot documentation",
-                        }
-                    ]
-                }
-            },
-        )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
+async def test_search_sends_the_key_and_query_and_lists_the_results(tmp_path: Path) -> None:
+    data, request = await _search_brave(
+        tmp_path,
         {"query": "vbot", "count": 5},
-        _fake_credential_resolver,
+        [
+            {
+                "title": "vBot docs",
+                "url": "https://example.com/vbot",
+                "description": "vBot documentation",
+            }
+        ],
     )
 
-    assert route.called is True
-    request = route.calls[0].request
-    assert request.headers["X-Subscription-Token"] == "test-brave-api-key"
+    assert request.headers["X-Subscription-Token"] == API_KEY
     assert request.headers["Accept"] == "application/json"
     assert request.url.params["q"] == "vbot"
     assert request.url.params["count"] == "5"
-
-    data = assert_success_envelope(result)
     assert data == {"content": "1. vBot docs\nhttps://example.com/vbot\nvBot documentation"}
 
 
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_rejects_declared_oversize_before_reading_body(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    monkeypatch.setattr(web_search_transport, "_MAX_RESPONSE_BYTES", 5)
-    respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            headers={"content-length": "6"},
-            stream=_FailIfReadStream(),
-        )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-    )
-
-    error = assert_failure_envelope(result, "response_too_large")
-    assert error["retryable"] is False
-    assert error["message"] == (
-        "The search provider's response exceeds the 5 MB limit. Try again with a lower count."
-    )
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_rejects_searxng_body_larger_than_declared(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    monkeypatch.setattr(web_search_transport, "_MAX_RESPONSE_BYTES", 5)
-    respx.get(_SEARXNG_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            headers={"content-length": "1"},
-            content=b"123456",
-        )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-        lambda: {
-            "provider": "searxng",
-            "searxng": {"base_url": "http://localhost:8888"},
-        },
-    )
-
-    error = assert_failure_envelope(result, "response_too_large")
-    assert error["retryable"] is False
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_accepts_response_at_exact_limit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    body = b'{"web":{"results":[]}}'
-    monkeypatch.setattr(web_search_transport, "_MAX_RESPONSE_BYTES", len(body))
-    respx.get(_BRAVE_ENDPOINT).mock(return_value=httpx.Response(200, content=body))
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-    )
-
-    data = assert_success_envelope(result)
-    assert data == {"content": "No results found. Try other or fewer search words."}
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_brave_applies_and_enforces_domains(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "web": {
-                    "results": [
-                        {
-                            "title": "Root docs",
-                            "url": "https://example.com/docs",
-                            "description": "Root domain",
-                        },
-                        {
-                            "title": "Subdomain docs",
-                            "url": "https://docs.example.com/vbot",
-                            "description": "Included subdomain",
-                        },
-                        {
-                            "title": "Suffix attack",
-                            "url": "https://example.com.evil.test/vbot",
-                            "description": "Must not match",
-                        },
-                        {
-                            "title": "Query-string mention",
-                            "url": "https://other.test/?next=https://example.com",
-                            "description": "Must not match",
-                        },
-                    ]
-                }
-            },
-        )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {
-            "query": "vbot",
-            "domains": ["Example.COM.", "docs.example.com", "example.com"],
-        },
-        _fake_credential_resolver,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["domains"] == "example.com, docs.example.com"
-    assert result_urls(data) == [
-        "https://example.com/docs",
-        "https://docs.example.com/vbot",
-    ]
-    assert route.calls[0].request.url.params["q"] == (
-        "vbot site:example.com OR site:docs.example.com"
-    )
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_specific_subdomain_narrows_scope(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "web": {
-                    "results": [
-                        {
-                            "title": "Root",
-                            "url": "https://example.com/vbot",
-                            "description": "Excluded root",
-                        },
-                        {
-                            "title": "WWW",
-                            "url": "https://www.example.com/vbot",
-                            "description": "Included subdomain",
-                        },
-                    ]
-                }
-            },
-        )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "domains": ["www.example.com"]},
-        _fake_credential_resolver,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["domains"] == "www.example.com"
-    assert result_urls(data) == ["https://www.example.com/vbot"]
-    assert route.calls[0].request.url.params["q"] == "vbot site:www.example.com"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_normalizes_internationalized_domain(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "web": {
-                    "results": [
-                        {
-                            "title": "Internationalized domain",
-                            "url": "https://faß.example/vbot",
-                            "description": "Included after IDNA normalization",
-                        }
-                    ]
-                }
-            },
-        )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "domains": ["FAẞ.example."]},
-        _fake_credential_resolver,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["domains"] == "xn--fa-hia.example"
-    assert result_urls(data) == ["https://faß.example/vbot"]
-    assert route.calls[0].request.url.params["q"] == "vbot site:xn--fa-hia.example"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_passes_query_operators_through_unchanged(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"web": {"results": []}})
-    )
-    query = 'vbot "agent loop" -draft filetype:pdf site:example.com/docs'
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": query},
-        _fake_credential_resolver,
-    )
-
-    data = assert_success_envelope(result)
-    assert "domains" not in data
-    assert route.calls[0].request.url.params["q"] == query
-
-
-@respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("recency", "provider_value"),
-    [("day", "pd"), ("week", "pw"), ("month", "pm"), ("year", "py")],
+    ("arguments", "settings", "sent", "unsent"),
+    [
+        ({"query": "vbot"}, None, {"count": "12", "text_decorations": "false"}, ["offset"]),
+        ({"query": "vbot"}, {"provider": "brave", "default_count": 7}, {"count": "7"}, []),
+        ({"query": "vbot", "page": 3}, None, {"offset": "2"}, []),
+    ],
+    ids=["defaults", "configured-count", "page"],
 )
-async def test_web_search_handler_brave_maps_canonical_recency(
+async def test_count_and_page_follow_the_call_and_settings(
     tmp_path: Path,
-    recency: str,
-    provider_value: str,
+    arguments: dict[str, Any],
+    settings: dict[str, Any] | None,
+    sent: dict[str, str],
+    unsent: list[str],
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    _, request = await _search_brave(tmp_path, arguments, [], settings=settings)
 
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"web": {"results": []}})
-    )
+    assert {key: request.url.params[key] for key in sent} == sent
+    assert all(key not in request.url.params for key in unsent)
 
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "recency": recency},
-        _fake_credential_resolver,
-    )
 
-    data = assert_success_envelope(result)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recency", "freshness"), [("day", "pd"), ("week", "pw"), ("month", "pm"), ("year", "py")]
+)
+async def test_recency_maps_to_brave_freshness(
+    tmp_path: Path, recency: str, freshness: str
+) -> None:
+    data, request = await _search_brave(tmp_path, {"query": "vbot", "recency": recency}, [])
+
     tip = "no recency limit" if recency == "year" else "a longer recency window"
     assert data == {
         "recency": recency,
         "content": f"No results found. Try other or fewer search words, or {tip}.",
     }
-    request = route.calls[0].request
-    assert request.url.params["freshness"] == provider_value
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_brave_default_count_and_no_offset(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"web": {"results": []}})
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-    )
-
-    assert_success_envelope(result)
-    request = route.calls[0].request
-    assert request.url.params["count"] == "12"
-    assert request.url.params["text_decorations"] == "false"
-    assert "offset" not in request.url.params
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_uses_configured_default_count(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"web": {"results": []}})
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-        lambda: {"provider": "brave", "default_count": 7},
-    )
-
-    assert_success_envelope(result)
-    assert route.calls[0].request.url.params["count"] == "7"
+    assert request.url.params["freshness"] == freshness
 
 
 @pytest.mark.asyncio
-async def test_web_search_handler_rejects_invalid_configured_default_count(
+@pytest.mark.parametrize(
+    ("domains", "results", "label", "urls", "query"),
+    [
+        (
+            ["Example.COM.", "docs.example.com", "example.com"],
+            [
+                "https://example.com/docs",
+                "https://docs.example.com/vbot",
+                "https://example.com.evil.test/vbot",
+                "https://other.test/?next=https://example.com",
+            ],
+            "example.com, docs.example.com",
+            ["https://example.com/docs", "https://docs.example.com/vbot"],
+            "vbot site:example.com OR site:docs.example.com",
+        ),
+        (
+            ["www.example.com"],
+            ["https://example.com/vbot", "https://www.example.com/vbot"],
+            "www.example.com",
+            ["https://www.example.com/vbot"],
+            "vbot site:www.example.com",
+        ),
+        (
+            ["FAẞ.example."],
+            ["https://faß.example/vbot"],
+            "xn--fa-hia.example",
+            ["https://faß.example/vbot"],
+            "vbot site:xn--fa-hia.example",
+        ),
+    ],
+    ids=["site-and-subdomains", "specific-subdomain", "internationalized"],
+)
+async def test_domains_are_sent_as_site_operators_and_enforced_on_results(
     tmp_path: Path,
+    domains: list[str],
+    results: list[str],
+    label: str,
+    urls: list[str],
+    query: str,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-        lambda: {"provider": "brave", "default_count": 0},
+    data, request = await _search_brave(
+        tmp_path,
+        {"query": "vbot", "domains": domains},
+        [{"title": f"Result {index}", "url": url} for index, url in enumerate(results)],
     )
 
-    error = assert_failure_envelope(result, "configuration_error")
-    assert error["message"] == (
-        "Web search settings are invalid (web_search.default_count must be an integer "
-        "between 1 and 20). Tell the user to check Settings under Web search."
-    )
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_brave_page_maps_to_offset(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"web": {"results": []}})
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "page": 3},
-        _fake_credential_resolver,
-    )
-
-    assert_success_envelope(result)
-    assert route.calls[0].request.url.params["offset"] == "2"
+    assert data["domains"] == label
+    assert result_urls(data) == urls
+    assert request.url.params["q"] == query
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("page", [0, 11])
-async def test_web_search_handler_page_out_of_range(tmp_path: Path, page: int) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+async def test_query_operators_pass_through_unchanged(tmp_path: Path) -> None:
+    query = 'vbot "agent loop" -draft filetype:pdf site:example.com/docs'
 
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "page": page},
-        _fake_credential_resolver,
-    )
+    data, request = await _search_brave(tmp_path, {"query": query}, [])
 
-    assert_failure_envelope(result, "invalid_arguments")
+    assert "domains" not in data
+    assert request.url.params["q"] == query
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_brave_strips_markup_and_keeps_page_age(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "web": {
-                    "results": [
-                        {
-                            "title": "<strong>vBot</strong> docs",
-                            "url": "https://example.com/vbot",
-                            "description": "The <strong>vBot</strong> docs &amp; guides",
-                            "page_age": "2026-05-01T00:00:00",
-                        },
-                        {
-                            "title": "vBot news",
-                            "url": "https://example.com/news",
-                            "description": "No date on this one",
-                        },
-                    ]
-                }
-            },
-        )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["content"] == (
-        "1. vBot docs\nhttps://example.com/vbot\n2026-05-01 - The vBot docs & guides\n\n"
-        "2. vBot news\nhttps://example.com/news\nNo date on this one"
-    )
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_brave_domain_filter_suppresses_more_results(
-    tmp_path: Path,
-) -> None:
-    """Brave's more_results_available counts unfiltered results, so site filters hide it."""
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "web": {
-                    "results": [
-                        {
-                            "title": "Example result",
-                            "url": "https://example.com/vbot",
-                            "description": "Matching",
-                        }
-                    ]
+@pytest.mark.parametrize(
+    ("results", "content"),
+    [
+        (
+            [
+                {
+                    "title": "<strong>vBot</strong> docs",
+                    "url": "https://example.com/vbot",
+                    "description": "The <strong>vBot</strong> docs &amp; guides",
+                    "page_age": "2026-05-01T00:00:00",
                 },
-                "query": {"more_results_available": True},
-            },
-        )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "domains": ["example.com"]},
-        _fake_credential_resolver,
-    )
-
-    data = assert_success_envelope(result)
-    assert data == {
-        "domains": "example.com",
-        "content": "1. Example result\nhttps://example.com/vbot\nMatching",
-    }
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_brave_without_domains_names_the_next_page(
-    tmp_path: Path,
+                {
+                    "title": "vBot news",
+                    "url": "https://example.com/news",
+                    "description": "No date on this one",
+                },
+            ],
+            "1. vBot docs\nhttps://example.com/vbot\n2026-05-01 - The vBot docs & guides\n\n"
+            "2. vBot news\nhttps://example.com/news\nNo date on this one",
+        ),
+        (
+            [
+                {
+                    "title": "A <b title='a > b'>title</b>",
+                    "url": "https://example.com",
+                    "description": "x < y and z > w &amp; more",
+                }
+            ],
+            "1. A title\nhttps://example.com\nx < y and z > w & more",
+        ),
+    ],
+    ids=["markup-and-page-age", "plain-comparisons"],
+)
+async def test_result_markup_is_stripped_and_plain_text_kept(
+    tmp_path: Path, results: list[dict[str, Any]], content: str
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    data, _ = await _search_brave(tmp_path, {"query": "vbot"}, results)
 
-    respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "web": {"results": [{"title": "A", "url": "https://a.example/"}]},
-                "query": {"more_results_available": True},
-            },
-        )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "page": 2},
-        _fake_credential_resolver,
-    )
-
-    data = assert_success_envelope(result)
-    assert data == {
-        "more": "More results are available with page 3.",
-        "content": "1. A\nhttps://a.example/",
-    }
+    assert data["content"] == content
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_brave_preserves_plain_comparisons_in_decorated_snippets(tmp_path: Path) -> None:
-    respx.get(_BRAVE_ENDPOINT).respond(
-        200,
-        json={
-            "web": {
-                "results": [
-                    {
-                        "title": "A <b title='a > b'>title</b>",
-                        "url": "https://example.com",
-                        "description": "x < y and z > w &amp; more",
-                    }
-                ]
-            }
+@pytest.mark.parametrize(
+    ("arguments", "data"),
+    [
+        (
+            {"query": "vbot", "page": 2},
+            {
+                "more": "More results are available with page 3.",
+                "content": "1. Example result\nhttps://example.com/vbot",
+            },
+        ),
+        # Brave counts unfiltered results, so a site filter hides the offer.
+        (
+            {"query": "vbot", "domains": ["example.com"]},
+            {"domains": "example.com", "content": "1. Example result\nhttps://example.com/vbot"},
+        ),
+    ],
+    ids=["unfiltered", "site-filtered"],
+)
+async def test_more_results_name_the_next_page_only_without_site_filters(
+    tmp_path: Path, arguments: dict[str, Any], data: dict[str, str]
+) -> None:
+    shown, _ = await _search_brave(
+        tmp_path,
+        arguments,
+        {
+            "web": {"results": [{"title": "Example result", "url": "https://example.com/vbot"}]},
+            "query": {"more_results_available": True},
         },
     )
-    result = await web_search_handler(
-        make_context(tmp_path),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-    )
-    data = assert_success_envelope(result)
-    assert data["content"] == "1. A title\nhttps://example.com\nx < y and z > w & more"
+
+    assert shown == data

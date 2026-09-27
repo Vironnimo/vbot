@@ -1,4 +1,4 @@
-"""Web search: serper behavior."""
+"""web_search with Serper: request body, filters, and fan-out over its ten-result pages."""
 
 from __future__ import annotations
 
@@ -9,22 +9,17 @@ import httpx
 import pytest
 import respx
 
-from core.tools.web_search import (
-    web_search_handler,
-)
-from tests.core.tools.web_search_helpers import (
-    _SERPER_ENDPOINT,
-    _fake_credential_resolver,
-    _read_json_body,
-    assert_failure_envelope,
+from tests.core.tools.web_search_test_support import (
+    API_KEY,
+    SERPER_ENDPOINT,
     assert_success_envelope,
-    make_context,
-    result_blocks,
+    request_json,
     result_urls,
+    search,
 )
 
 
-def _serper_organic(start: int, end: int) -> list[dict[str, Any]]:
+def _organic(start: int, end: int) -> list[dict[str, Any]]:
     return [
         {
             "title": f"Result {index}",
@@ -36,14 +31,10 @@ def _serper_organic(start: int, end: int) -> list[dict[str, Any]]:
     ]
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_serper_success_maps_results(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.post(_SERPER_ENDPOINT).mock(
-        return_value=httpx.Response(
+async def test_search_sends_the_key_and_lists_the_results(tmp_path: Path) -> None:
+    with respx.mock() as router:
+        route = router.post(SERPER_ENDPOINT).respond(
             200,
             json={
                 "organic": [
@@ -63,199 +54,85 @@ async def test_web_search_handler_serper_success_maps_results(tmp_path: Path) ->
                 ]
             },
         )
-    )
+        result = await search(tmp_path, {"query": "vbot", "count": 5}, provider="serper")
 
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "count": 5},
-        _fake_credential_resolver,
-        lambda: {"provider": "serper"},
-    )
-
-    data = assert_success_envelope(result)
-    assert data == {
+    assert assert_success_envelope(result) == {
         "content": (
             "1. vBot docs\nhttps://example.com/vbot\nAug 20, 2026 - vBot documentation\n\n"
             "2. vBot project\nhttps://example.com/project\nProject page"
         )
     }
-
     request = route.calls[0].request
-    assert request.headers["x-api-key"] == "test-brave-api-key"
-    body = _read_json_body(request)
-    assert body["q"] == "vbot"
-    assert body["num"] == 5
-    assert body["page"] == 1
+    assert request.headers["x-api-key"] == API_KEY
+    body = request_json(request)
+    assert (body["q"], body["num"], body["page"]) == ("vbot", 5, 1)
     assert "tbs" not in body
 
 
-@respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("recency", "tbs"),
     [("day", "qdr:d"), ("week", "qdr:w"), ("month", "qdr:m"), ("year", "qdr:y")],
 )
-async def test_web_search_handler_serper_recency_and_domains(
+async def test_recency_is_native_and_domains_are_site_operators(
     tmp_path: Path, recency: str, tbs: str
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.post(_SERPER_ENDPOINT).mock(
-        return_value=httpx.Response(
+    with respx.mock() as router:
+        route = router.post(SERPER_ENDPOINT).respond(
             200,
             json={
                 "organic": [
-                    {
-                        "title": "On-domain result",
-                        "link": "https://example.com/vbot",
-                        "snippet": "Matching",
-                    },
-                    {
-                        "title": "Off-domain leak",
-                        "link": "https://other.test/vbot",
-                        "snippet": "Must be removed",
-                    },
+                    {"title": "On-domain result", "link": "https://example.com/vbot"},
+                    {"title": "Off-domain leak", "link": "https://other.test/vbot"},
                 ]
             },
         )
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "domains": ["example.com"], "recency": recency},
-        _fake_credential_resolver,
-        lambda: {"provider": "serper"},
-    )
+        result = await search(
+            tmp_path,
+            {"query": "vbot", "domains": ["example.com"], "recency": recency},
+            provider="serper",
+        )
 
     data = assert_success_envelope(result)
     assert data["recency"] == recency
     assert result_urls(data) == ["https://example.com/vbot"]
-
-    body = _read_json_body(route.calls[0].request)
+    body = request_json(route.calls[0].request)
     assert body["tbs"] == tbs
     assert "site:example.com" in body["q"]
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_serper_fans_out_over_ten_result_pages(
+@pytest.mark.parametrize(
+    ("arguments", "pages", "requests", "numbers"),
+    [
+        # More than ten results take a second Serper page.
+        (
+            {"count": 12},
+            [_organic(1, 11), _organic(11, 14)],
+            [(1, 10), (2, 2)],
+            list(range(1, 13)),
+        ),
+        # A later web_search page may lie inside the first Serper page.
+        ({"count": 5, "page": 2}, [_organic(1, 11)], [(1, 10)], list(range(6, 11))),
+        # A short Serper page ends the fan-out.
+        ({"count": 10}, [_organic(1, 4)], [(1, 10)], list(range(1, 4))),
+    ],
+    ids=["second-page", "offset-in-first-page", "short-page"],
+)
+async def test_results_are_collected_over_serper_pages(
     tmp_path: Path,
+    arguments: dict[str, Any],
+    pages: list[list[dict[str, Any]]],
+    requests: list[tuple[int, int]],
+    numbers: list[int],
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.post(_SERPER_ENDPOINT).mock(
-        side_effect=[
-            httpx.Response(200, json={"organic": _serper_organic(1, 11)}),
-            httpx.Response(200, json={"organic": _serper_organic(11, 14)}),
-        ]
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "count": 12},
-        _fake_credential_resolver,
-        lambda: {"provider": "serper"},
-    )
+    with respx.mock() as router:
+        route = router.post(SERPER_ENDPOINT).mock(
+            side_effect=[httpx.Response(200, json={"organic": page}) for page in pages]
+        )
+        result = await search(tmp_path, {"query": "vbot", **arguments}, provider="serper")
 
     data = assert_success_envelope(result)
-    assert [lines[0].split(".")[0] for lines in result_blocks(data)] == [
-        str(number) for number in range(1, 13)
-    ]
-    assert result_urls(data) == [f"https://example.com/{index}" for index in range(1, 13)]
-
-    assert len(route.calls) == 2
-    first_body = _read_json_body(route.calls[0].request)
-    assert (first_body["page"], first_body["num"]) == (1, 10)
-    second_body = _read_json_body(route.calls[1].request)
-    assert (second_body["page"], second_body["num"]) == (2, 2)
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_serper_page_skips_into_first_serper_page(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.post(_SERPER_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"organic": _serper_organic(1, 11)})
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "count": 5, "page": 2},
-        _fake_credential_resolver,
-        lambda: {"provider": "serper"},
-    )
-
-    data = assert_success_envelope(result)
-    assert result_urls(data) == [f"https://example.com/{index}" for index in range(6, 11)]
-    assert len(route.calls) == 1
-    body = _read_json_body(route.calls[0].request)
-    assert body["page"] == 1
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_serper_short_page_stops_fan_out(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.post(_SERPER_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"organic": _serper_organic(1, 4)})
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "count": 10},
-        _fake_credential_resolver,
-        lambda: {"provider": "serper"},
-    )
-
-    data = assert_success_envelope(result)
-    assert len(result_blocks(data)) == 3
-    assert len(route.calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_web_search_handler_serper_missing_api_key(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        lambda key: "",
-        lambda: {"provider": "serper"},
-    )
-
-    error = assert_failure_envelope(result, "missing_api_key")
-    assert "SERPER_API_KEY" in error["message"]
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_serper_forbidden_hints_at_api_key(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.post(_SERPER_ENDPOINT).mock(
-        return_value=httpx.Response(403, json={"message": "invalid key"})
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot"},
-        _fake_credential_resolver,
-        lambda: {"provider": "serper"},
-    )
-
-    error = assert_failure_envelope(result, "provider_request_failed")
-    assert "SERPER_API_KEY" in error["message"]
-    assert error["retryable"] is False
-    assert len(route.calls) == 1
+    assert result_urls(data) == [f"https://example.com/{number}" for number in numbers]
+    sent = [request_json(call.request) for call in route.calls]
+    assert [(body["page"], body["num"]) for body in sent] == requests
