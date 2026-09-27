@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 
 const rpcMock = vi.fn();
@@ -14,6 +14,10 @@ vi.mock(
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 const { default: Panel } =
   await import('../settings/SettingsWebFetchPanel.svelte');
+
+const TAVILY = () => t('settings.webSearch.providers.tavily', 'tavily');
+const PARALLEL = () => t('settings.webSearch.providers.parallel', 'Parallel');
+const PREFER = () => t('settings.webFetch.prefer', 'Prefer this service');
 
 const settings = {
   web_fetch: {
@@ -62,10 +66,17 @@ describe('Web Fetch settings', () => {
   it('starts with direct fetching and exposes cost, credential and pricing information on opt-in', async () => {
     component = mount(Panel, { target: document.body, props: { settings } });
     flushSync();
-    expect(document.body.textContent).toContain('Direct (no service)');
+    expect(document.body.textContent).toContain(
+      t('settings.webFetch.direct', 'Direct (no service)'),
+    );
     expect(document.getElementById('settings-web-fetch-mode')).toBeNull();
-    await choose('settings-web-fetch-provider', 'Tavily');
-    expect(document.body.textContent).toContain('may charge per page');
+    await choose('settings-web-fetch-provider', TAVILY());
+    expect(document.body.textContent).toContain(
+      t(
+        'settings.webFetch.cost',
+        'The selected service receives requested URLs and may charge per page. Free allowances and prices vary. Reading or searching an already saved page makes no additional service request.',
+      ),
+    );
     expect(document.body.textContent).toContain('TAVILY_API_KEY');
     expect(document.body.textContent).toContain('/vbot-data');
     expect(document.querySelector('a').href).toBe(
@@ -84,12 +95,12 @@ describe('Web Fetch settings', () => {
     );
     component = mount(Panel, { target: document.body, props: { settings } });
     flushSync();
-    await choose('settings-web-fetch-provider', 'Tavily');
+    await choose('settings-web-fetch-provider', TAVILY());
     await vi.advanceTimersByTimeAsync(850);
     expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       web_fetch: { provider: 'tavily', mode: 'fallback' },
     });
-    await choose('settings-web-fetch-provider', 'Parallel');
+    await choose('settings-web-fetch-provider', PARALLEL());
     resolveSave({
       ...settings,
       web_fetch: { ...settings.web_fetch, provider: 'tavily' },
@@ -99,7 +110,7 @@ describe('Web Fetch settings', () => {
     flushSync();
     expect(
       document.getElementById('settings-web-fetch-provider').textContent,
-    ).toContain('Parallel');
+    ).toContain(PARALLEL());
   });
 
   it('retains the selection and exposes save failure for retry', async () => {
@@ -110,13 +121,13 @@ describe('Web Fetch settings', () => {
       props: { settings, onError: (message) => errors.push(message) },
     });
     flushSync();
-    await choose('settings-web-fetch-provider', 'Tavily');
-    await choose('settings-web-fetch-mode', 'Prefer this service');
+    await choose('settings-web-fetch-provider', TAVILY());
+    await choose('settings-web-fetch-mode', PREFER());
     await vi.advanceTimersByTimeAsync(850);
     flushSync();
     expect(errors.some((message) => message.includes('Offline'))).toBe(true);
     expect(
       document.getElementById('settings-web-fetch-mode').textContent,
-    ).toContain('Prefer this service');
+    ).toContain(PREFER());
   });
 });

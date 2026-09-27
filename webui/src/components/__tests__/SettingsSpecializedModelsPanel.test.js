@@ -1,85 +1,49 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { flushSync } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { t } from '../../lib/i18n.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
-
-const listTaskModelTargetsMock = vi.fn();
-const getTaskModelOptionsMock = vi.fn();
-const updateTaskModelSettingsMock = vi.fn();
-const getLocalSpeechSetupMock = vi.fn();
-const getLocalSpeechMemoryMock = vi.fn();
-const unloadLocalSpeechMock = vi.fn();
-const installLocalSpeechSupportMock = vi.fn();
-const restartAfterLocalSpeechSetupMock = vi.fn();
+import {
+  api,
+  button,
+  cleanupSpecializedModelsHarness,
+  deferred,
+  mountPanel,
+  optionLabels,
+  resetSpecializedModelsHarness,
+  selectTarget,
+  targetsFor,
+  waitForCondition,
+} from './SettingsSpecializedModelsPanel.support.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
-  listTaskModelTargets: (...args) => listTaskModelTargetsMock(...args),
-  getTaskModelOptions: (...args) => getTaskModelOptionsMock(...args),
-  updateTaskModelSettings: (...args) => updateTaskModelSettingsMock(...args),
-  getLocalSpeechSetup: (...args) => getLocalSpeechSetupMock(...args),
-  getLocalSpeechMemory: (...args) => getLocalSpeechMemoryMock(...args),
-  unloadLocalSpeech: (...args) => unloadLocalSpeechMock(...args),
-  installLocalSpeechSupport: (...args) =>
-    installLocalSpeechSupportMock(...args),
-  restartAfterLocalSpeechSetup: (...args) =>
-    restartAfterLocalSpeechSetupMock(...args),
-}));
+// Settings props whose onCommit feeds the saved response back, as the host does.
+function committingProps(initial) {
+  const props = reactiveProps(initial);
+  props.onCommit = (settings) => {
+    props.settings = settings;
+  };
+  return props;
+}
 
-const { default: SettingsSpecializedModelsPanel } =
-  await import('../settings/SettingsSpecializedModelsPanel.svelte');
+function echoSavedModelTasks() {
+  api.updateTaskModelSettings.mockImplementation(async (model_tasks) => ({
+    model_tasks,
+  }));
+}
 
 describe('SettingsSpecializedModelsPanel', () => {
-  let mountedComponent;
-
   beforeEach(() => {
-    document.body.innerHTML = '';
-    init('en');
-    listTaskModelTargetsMock.mockReset();
-    getTaskModelOptionsMock.mockReset();
-    updateTaskModelSettingsMock.mockReset();
-    getLocalSpeechMemoryMock.mockReset().mockResolvedValue({ models: [] });
-    unloadLocalSpeechMock.mockReset().mockResolvedValue({
-      models: [
-        {
-          target: 'local/chatterbox',
-          label: 'Test loaded voice',
-          loaded: false,
-          busy: false,
-        },
-      ],
-      released: true,
-    });
-    getLocalSpeechSetupMock
-      .mockReset()
-      .mockResolvedValue({ state: 'ready', restart_available: true });
-    installLocalSpeechSupportMock.mockReset().mockResolvedValue({
-      state: 'installing',
-      phase: 'downloading',
-      restart_available: true,
-    });
-    restartAfterLocalSpeechSetupMock
-      .mockReset()
-      .mockResolvedValue({ state: 'restarting' });
-    listTaskModelTargetsMock.mockResolvedValue({ targets: [] });
-    getTaskModelOptionsMock.mockResolvedValue({ fields: [] });
-    updateTaskModelSettingsMock.mockResolvedValue({ model_tasks: {} });
-    mountedComponent = null;
+    resetSpecializedModelsHarness();
   });
 
   afterEach(async () => {
-    if (mountedComponent) {
-      await unmount(mountedComponent);
-      mountedComponent = null;
-    }
-    document.body.innerHTML = '';
-    vi.useRealTimers();
+    await cleanupSpecializedModelsHarness();
   });
 
   it.each([
@@ -95,30 +59,24 @@ describe('SettingsSpecializedModelsPanel', () => {
         options: { stale_option: 'remove-me' },
       };
       const otherBinding = { target: 'test/other-before', options: {} };
-      const props = reactiveProps({
+      const props = committingProps({
         taskTypes: [taskType],
         settings: {
           model_tasks: { [taskType]: binding, [otherTask]: otherBinding },
         },
-        onCommit: (settings) => {
-          props.settings = settings;
-        },
       });
-      mountedComponent = mount(SettingsSpecializedModelsPanel, {
-        target: document.body,
-        props,
-      });
+      mountPanel(props);
       await waitForCondition(
         () => button('Reset options') && !button('Reset options').disabled,
       );
-      expect(listTaskModelTargetsMock.mock.calls.map(([task]) => task)).toEqual(
+      expect(api.listTaskModelTargets.mock.calls.map(([task]) => task)).toEqual(
         [taskType],
       );
       expect(
         document.getElementById('settings-specialized-' + otherTask),
       ).toBeNull();
       if (taskType !== 'speech_to_text')
-        expect(getLocalSpeechMemoryMock).not.toHaveBeenCalled();
+        expect(api.getLocalSpeechMemory).not.toHaveBeenCalled();
 
       button('Reset options').click();
       flushSync();
@@ -133,7 +91,7 @@ describe('SettingsSpecializedModelsPanel', () => {
           [otherTask]: changedOtherBinding,
         },
       };
-      updateTaskModelSettingsMock.mockResolvedValue({
+      api.updateTaskModelSettings.mockResolvedValue({
         model_tasks: {
           [taskType]: { ...binding, options: {} },
           [otherTask]: changedOtherBinding,
@@ -142,9 +100,9 @@ describe('SettingsSpecializedModelsPanel', () => {
       flushSync();
       button('Save').click();
       await waitForCondition(
-        () => updateTaskModelSettingsMock.mock.calls.length === 1,
+        () => api.updateTaskModelSettings.mock.calls.length === 1,
       );
-      expect(updateTaskModelSettingsMock.mock.calls[0][0]).toEqual({
+      expect(api.updateTaskModelSettings.mock.calls[0][0]).toEqual({
         [taskType]: { target: binding.target, options: {} },
       });
       expect(props.settings.model_tasks[otherTask]).toEqual(
@@ -154,530 +112,42 @@ describe('SettingsSpecializedModelsPanel', () => {
     },
   );
 
-  it('unloads a specific model and ignores an older in-flight status poll', async () => {
-    vi.useFakeTimers();
-    const loaded = {
-      target: 'local/chatterbox',
-      label: 'Test loaded voice',
-      loaded: true,
-      busy: false,
-    };
-    const stale = deferred();
-    getLocalSpeechMemoryMock
-      .mockResolvedValueOnce({ models: [loaded] })
-      .mockReturnValueOnce(stale.promise);
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: {},
-    });
-    await settle();
-    const panel = () => document.querySelector('[data-local-speech-memory]');
-    expect(panel().textContent).toContain(loaded.label);
-    expect(button('Unload from memory').disabled).toBe(false);
-    await vi.advanceTimersByTimeAsync(2000);
-    button('Unload from memory').click();
-    await settle();
-    expect(unloadLocalSpeechMock).toHaveBeenCalledOnce();
-    expect(panel()).toBeNull();
-    stale.resolve({ models: [loaded] });
-    await settle();
-    expect(panel()).toBeNull();
-    await unmount(mountedComponent);
-    mountedComponent = null;
-    const calls = getLocalSpeechMemoryMock.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(6000);
-    expect(getLocalSpeechMemoryMock).toHaveBeenCalledTimes(calls);
-  });
-
-  it.each([
-    {
-      target: 'local/qwen3-asr',
-      label: 'Busy model',
-      loaded: true,
-      busy: true,
-    },
-    {
-      target: 'local/qwen3-asr',
-      label: 'Empty model',
-      loaded: false,
-      busy: false,
-    },
-  ])('disables unload for busy or empty speech memory: %j', async (status) => {
-    getLocalSpeechMemoryMock.mockResolvedValue({ models: [status] });
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: {
-        settings: {
-          model_tasks: {
-            speech_to_text: { target: 'local/qwen3-asr', options: {} },
-          },
-        },
-      },
-    });
-    await waitForCondition(() => button('Unload from memory'));
-    expect(button('Unload from memory').disabled).toBe(true);
-    button('Unload from memory').click();
-    expect(unloadLocalSpeechMock).not.toHaveBeenCalled();
-  });
-
-  it('recovers from an unload failure and respects a busy response to a race', async () => {
-    const loaded = {
-      target: 'local/qwen3-tts',
-      label: 'Voice',
-      loaded: true,
-      busy: false,
-    };
-    getLocalSpeechMemoryMock.mockResolvedValue({ models: [loaded] });
-    unloadLocalSpeechMock
-      .mockRejectedValueOnce(new Error('network'))
-      .mockResolvedValueOnce({
-        models: [{ ...loaded, busy: true }],
-        released: false,
-      });
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: {},
-    });
-    await waitForCondition(() => button('Unload from memory'));
-    button('Unload from memory').click();
-    await waitForCondition(() => document.querySelector('[role="alert"]'));
-    expect(button('Unload from memory').disabled).toBe(false);
-    button('Unload from memory').click();
-    await waitForCondition(
-      () =>
-        button('Unload from memory').disabled &&
-        !document.querySelector('[role="alert"]'),
+  it('loads every task type including image understanding, reports a failed load, and reloads on modelsRefreshToken', async () => {
+    const onError = vi.fn();
+    api.listTaskModelTargets.mockRejectedValueOnce(
+      new Error('targets offline'),
     );
-    expect(unloadLocalSpeechMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('unloads STT while TTS is busy and keeps the TTS row intact', async () => {
-    const stt = {
-      target: 'local/qwen3-asr',
-      label: 'STT',
-      loaded: true,
-      busy: false,
-    };
-    const tts = {
-      target: 'local/qwen3-tts',
-      label: 'TTS',
-      loaded: true,
-      busy: true,
-    };
-    getLocalSpeechMemoryMock.mockResolvedValue({ models: [stt, tts] });
-    unloadLocalSpeechMock.mockResolvedValue({
-      models: [{ ...stt, loaded: false }, tts],
-      released: true,
+    const props = reactiveProps({
+      settings: {},
+      modelsRefreshToken: 0,
+      onError,
     });
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: {},
-    });
-    const row = (target) =>
-      document.querySelector(`[data-speech-memory-target="${target}"]`);
-    await waitForCondition(() => row(stt.target));
-    expect(row(tts.target).querySelector('button').disabled).toBe(true);
-    expect(row(stt.target).querySelector('button').disabled).toBe(false);
-    row(stt.target).querySelector('button').click();
-    await waitForCondition(() => !row(stt.target));
-    expect(unloadLocalSpeechMock).toHaveBeenCalledWith(stt.target);
-    expect(row(tts.target).textContent).toContain(tts.label);
-    expect(row(tts.target).querySelector('button').disabled).toBe(true);
-  });
-
-  it('reloads task-model targets when modelsRefreshToken changes', async () => {
-    const props = reactiveProps({ settings: {}, modelsRefreshToken: 0 });
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props,
-    });
-    flushSync();
-    await waitForCondition(
-      () => listTaskModelTargetsMock.mock.calls.length >= 1,
+    mountPanel(props);
+    await waitForCondition(() =>
+      api.listTaskModelTargets.mock.calls.some(
+        ([taskType]) => taskType === 'image_understanding',
+      ),
     );
-
-    const before = listTaskModelTargetsMock.mock.calls.length;
+    expect(
+      document.querySelector('#settings-specialized-image_understanding'),
+    ).toBeTruthy();
+    await waitForCondition(() => onError.mock.calls.length > 1);
+    expect(onError).toHaveBeenLastCalledWith(
+      `${t('settings.specializedModels.loadError', 'Specialized model targets could not be loaded.')} targets offline`,
+    );
+    const before = api.listTaskModelTargets.mock.calls.length;
 
     // The form is idle, so the queued reload runs immediately.
     props.modelsRefreshToken = 1;
     flushSync();
     await waitForCondition(
-      () => listTaskModelTargetsMock.mock.calls.length > before,
+      () => api.listTaskModelTargets.mock.calls.length > before,
     );
-
-    expect(listTaskModelTargetsMock.mock.calls.length).toBeGreaterThan(before);
-  });
-
-  it('offers installation for local engines while preserving their separate options', async () => {
-    getLocalSpeechSetupMock.mockResolvedValue({
-      state: 'missing',
-      restart_available: true,
-    });
-    listTaskModelTargetsMock.mockImplementation((taskType) =>
-      Promise.resolve({
-        targets:
-          taskType === 'speech_to_text'
-            ? [
-                {
-                  id: 'local/qwen3-asr',
-                  label: 'Qwen3 ASR',
-                  kind: 'local',
-                  usable: false,
-                },
-                {
-                  id: 'local/parakeet',
-                  label: 'Parakeet TDT v3',
-                  kind: 'local',
-                  usable: true,
-                },
-              ]
-            : [],
-      }),
-    );
-    getTaskModelOptionsMock.mockImplementation((_task, target) =>
-      Promise.resolve({
-        fields:
-          target === 'local/qwen3-asr'
-            ? [
-                {
-                  name: 'language',
-                  label: 'Language',
-                  type: 'text',
-                  default: 'de',
-                },
-              ]
-            : [
-                {
-                  name: 'device',
-                  label: 'Device',
-                  type: 'select',
-                  default: 'auto',
-                  options: [{ value: 'auto', label: 'Automatic' }],
-                },
-              ],
-      }),
-    );
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: { settings: {}, modelsRefreshToken: 0 },
-    });
-    flushSync();
-    await waitForCondition(
-      () =>
-        !document.getElementById('settings-specialized-speech_to_text')
-          ?.disabled,
-    );
-    selectTarget('speech_to_text', 'Qwen3 ASR');
-    await waitForCondition(() => button('Install'));
-    expect(document.body.textContent).not.toContain('.[local-speech]');
-    await waitForCondition(() =>
-      document.querySelector('#task-model-speech_to_text-language'),
-    );
-    selectTarget('speech_to_text', 'Parakeet TDT v3');
-    await waitForCondition(() =>
-      document.querySelector('#task-model-speech_to_text-device'),
-    );
-    expect(
-      document.querySelector('#task-model-speech_to_text-language'),
-    ).toBeNull();
-    expect(button('Install')).toBeTruthy();
-    const trigger = document.getElementById(
-      'settings-specialized-speech_to_text',
-    );
-    expect(trigger.textContent).toContain('Parakeet TDT v3 (local)');
-    trigger.click();
-    flushSync();
-    const search = document.querySelector('.searchable-dropdown__search input');
-    search.value = 'local';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    const matches = [
-      ...document.querySelectorAll('.searchable-dropdown__option'),
-    ];
-    expect(matches).toHaveLength(2);
-    expect(
-      matches.every((option) => option.textContent.includes('(local)')),
-    ).toBe(true);
-  });
-
-  async function mountLocalPanel() {
-    listTaskModelTargetsMock.mockImplementation((taskType) =>
-      Promise.resolve({
-        targets:
-          taskType === 'speech_to_text'
-            ? [
-                {
-                  id: 'local/qwen3-asr',
-                  label: 'Qwen3 ASR',
-                  kind: 'local',
-                  usable: false,
-                },
-              ]
-            : [],
-      }),
-    );
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: {
-        settings: {
-          model_tasks: {
-            speech_to_text: { target: 'local/qwen3-asr', options: {} },
-          },
-        },
-      },
-    });
-    flushSync();
-    await waitForCondition(() => document.querySelector('[role="status"]'));
-  }
-
-  it('keeps setup running across navigation and enables one explicit restart after verification', async () => {
-    getLocalSpeechSetupMock.mockResolvedValue({
-      state: 'missing',
-      restart_available: true,
-    });
-    await mountLocalPanel();
-    await waitForCondition(() => button('Install'));
-    button('Install').click();
-    button('Install')?.click();
-    await waitForCondition(() => button('Installing…'));
-    expect(installLocalSpeechSupportMock).toHaveBeenCalledTimes(1);
-    expect(button('Installing…').disabled).toBe(true);
-    expect(button('Restart server')).toBeUndefined();
-    await unmount(mountedComponent);
-    mountedComponent = null;
-    document.body.innerHTML = '';
-    getLocalSpeechSetupMock.mockResolvedValue({
-      state: 'restart_required',
-      restart_available: true,
-    });
-    await mountLocalPanel();
-    await waitForCondition(
-      () => button('Restart server') && !button('Restart server').disabled,
-    );
-    expect(installLocalSpeechSupportMock).toHaveBeenCalledTimes(1);
-    button('Restart server').click();
-    await waitForCondition(() => button('Restarting…'));
-    expect(restartAfterLocalSpeechSetupMock).toHaveBeenCalledTimes(1);
-    getLocalSpeechSetupMock.mockResolvedValue({
-      state: 'ready',
-      restart_available: true,
-    });
-    await waitForCondition(() => !button('Restarting…'), 30, 100);
-    expect(restartAfterLocalSpeechSetupMock).toHaveBeenCalledTimes(1);
-    expect(button('Install')).toBeUndefined();
-  });
-
-  it('offers retry after a failed installation and respects unsupported restarts', async () => {
-    getLocalSpeechSetupMock.mockResolvedValue({
-      state: 'failed',
-      error: 'install_failed',
-      restart_available: false,
-    });
-    await mountLocalPanel();
-    await waitForCondition(() => button('Try again'));
-    installLocalSpeechSupportMock.mockResolvedValue({
-      state: 'restart_required',
-      restart_available: false,
-    });
-    button('Try again').click();
-    await waitForCondition(() => button('Restart server'));
-    expect(button('Restart server').disabled).toBe(true);
-    expect(restartAfterLocalSpeechSetupMock).not.toHaveBeenCalled();
-    expect(installLocalSpeechSupportMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('checks status after a lost restart response without replaying the restart', async () => {
-    getLocalSpeechSetupMock.mockResolvedValue({
-      state: 'restart_required',
-      restart_available: true,
-    });
-    await mountLocalPanel();
-    await waitForCondition(
-      () => button('Restart server') && !button('Restart server').disabled,
-    );
-    restartAfterLocalSpeechSetupMock.mockRejectedValue(
-      new Error('disconnected'),
-    );
-    button('Restart server').click();
-    await waitForCondition(() => button('Restarting…'));
-    getLocalSpeechSetupMock.mockResolvedValue({
-      state: 'ready',
-      restart_available: true,
-    });
-    await waitForCondition(() => !button('Restarting…'), 30, 100);
-    expect(restartAfterLocalSpeechSetupMock).toHaveBeenCalledTimes(1);
-    expect(button('Check again')).toBeUndefined();
-  });
-
-  it('loads image-understanding targets with the other specialized models', async () => {
-    const props = reactiveProps({ settings: {}, modelsRefreshToken: 0 });
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props,
-    });
-    flushSync();
-    await waitForCondition(() =>
-      listTaskModelTargetsMock.mock.calls.some(
-        ([taskType]) => taskType === 'image_understanding',
-      ),
-    );
-
-    expect(listTaskModelTargetsMock).toHaveBeenCalledWith(
-      'image_understanding',
-    );
-    expect(
-      document.querySelector('#settings-specialized-image_understanding'),
-    ).toBeTruthy();
-  });
-
-  it.each([
-    {
-      target: 'local/qwen3-tts',
-      name: 'instructions',
-      type: 'textarea',
-      value: 'test-owned style',
-    },
-    {
-      target: 'local/chatterbox',
-      name: 'exaggeration',
-      type: 'number',
-      value: 0.7,
-    },
-  ])(
-    'shows $target options before the preview and saves edits without a disclosure',
-    async (scenario) => {
-      listTaskModelTargetsMock.mockImplementation((taskType) =>
-        Promise.resolve({
-          targets:
-            taskType === 'text_to_speech'
-              ? [
-                  {
-                    id: scenario.target,
-                    label: 'Test voice',
-                    kind: 'local',
-                    usable: true,
-                  },
-                ]
-              : [],
-        }),
-      );
-      getTaskModelOptionsMock.mockResolvedValue({
-        fields: [
-          {
-            name: scenario.name,
-            type: scenario.type,
-            label: 'Test option',
-            default: scenario.type === 'number' ? 0.5 : '',
-          },
-        ],
-      });
-      updateTaskModelSettingsMock.mockImplementation(async (model_tasks) => ({
-        model_tasks,
-      }));
-      const props = reactiveProps({
-        settings: {
-          model_tasks: {
-            text_to_speech: { target: scenario.target, options: {} },
-          },
-        },
-      });
-      props.onCommit = (settings) => {
-        props.settings = settings;
-      };
-      mountedComponent = mount(SettingsSpecializedModelsPanel, {
-        target: document.body,
-        props,
-      });
-      await waitForCondition(() =>
-        document.querySelector('.speech-preview textarea'),
-      );
-      const input = document.getElementById(
-        `task-model-text_to_speech-${scenario.name}`,
-      );
-      const preview = document.querySelector('.speech-preview textarea');
-      expect(input).toBeTruthy();
-      expect(input.closest('[hidden]')).toBeNull();
-      expect(
-        input.compareDocumentPosition(preview) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy();
-      expect(document.querySelector('.s-disclosure-btn')).toBeNull();
-      expect(updateTaskModelSettingsMock).not.toHaveBeenCalled();
-      input.value = String(scenario.value);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      flushSync();
-      await waitForCondition(
-        () => updateTaskModelSettingsMock.mock.calls.length > 0,
-        20,
-        100,
-      );
-      expect(
-        updateTaskModelSettingsMock.mock.calls[0][0].text_to_speech,
-      ).toEqual({
-        target: scenario.target,
-        options: { [scenario.name]: scenario.value },
-      });
-    },
-  );
-
-  it('shows the new model options immediately when switching local TTS engines', async () => {
-    const targets = [
-      { id: 'local/qwen3-tts', label: 'Qwen3-TTS', kind: 'local' },
-      { id: 'local/chatterbox', label: 'Chatterbox', kind: 'local' },
-    ];
-    listTaskModelTargetsMock.mockImplementation(async (taskType) => ({
-      targets: taskType === 'text_to_speech' ? targets : [],
-    }));
-    getTaskModelOptionsMock.mockImplementation(async (_taskType, target) => ({
-      fields: [
-        target === targets[0].id
-          ? {
-              name: 'instructions',
-              type: 'textarea',
-              label: 'Style',
-              default: '',
-            }
-          : {
-              name: 'exaggeration',
-              type: 'number',
-              label: 'Expression',
-              default: 0.5,
-            },
-      ],
-    }));
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: {
-        settings: {
-          model_tasks: {
-            text_to_speech: { target: targets[0].id, options: {} },
-          },
-        },
-      },
-    });
-    await waitForCondition(() =>
-      document.getElementById('task-model-text_to_speech-instructions'),
-    );
-    selectTarget('text_to_speech', 'Chatterbox');
-    await waitForCondition(() =>
-      document.getElementById('task-model-text_to_speech-exaggeration'),
-    );
-    expect(
-      document.getElementById('task-model-text_to_speech-instructions'),
-    ).toBeNull();
-    const field = document.getElementById(
-      'task-model-text_to_speech-exaggeration',
-    );
-    expect(field.closest('[hidden]')).toBeNull();
-    expect(field.value).toBe('0.5');
-    expect(
-      field.compareDocumentPosition(document.querySelector('.speech-preview')) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(onError).toHaveBeenLastCalledWith('');
   });
 
   it('renders every task-model target picker as searchable and filters by target id', async () => {
-    listTaskModelTargetsMock.mockResolvedValue({
+    api.listTaskModelTargets.mockResolvedValue({
       targets: [
         {
           id: 'openrouter/google/gemini-specialized::api-key',
@@ -691,12 +161,7 @@ describe('SettingsSpecializedModelsPanel', () => {
         },
       ],
     });
-
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: { settings: {}, modelsRefreshToken: 0 },
-    });
-    flushSync();
+    mountPanel({ settings: {}, modelsRefreshToken: 0 });
 
     const taskTypes = [
       'speech_to_text',
@@ -715,7 +180,6 @@ describe('SettingsSpecializedModelsPanel', () => {
         return trigger && !trigger.disabled;
       }),
     );
-
     for (const taskType of taskTypes) {
       const trigger = document.getElementById(
         `settings-specialized-${taskType}`,
@@ -728,12 +192,9 @@ describe('SettingsSpecializedModelsPanel', () => {
       .getElementById('settings-specialized-speech_to_text')
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
-    await waitForCondition(
-      () =>
-        document.body.querySelector('.searchable-dropdown__search input') !==
-        null,
+    await waitForCondition(() =>
+      document.body.querySelector('.searchable-dropdown__search input'),
     );
-
     const searchInput = document.body.querySelector(
       '.searchable-dropdown__search input',
     );
@@ -750,18 +211,11 @@ describe('SettingsSpecializedModelsPanel', () => {
 
   it('ignores a late option schema response for a previously selected model', async () => {
     const staleSchema = deferred();
-    listTaskModelTargetsMock.mockImplementation((taskType) =>
-      Promise.resolve({
-        targets:
-          taskType === 'speech_to_text'
-            ? [
-                { id: 'provider/first', label: 'First model' },
-                { id: 'provider/second', label: 'Second model' },
-              ]
-            : [],
-      }),
-    );
-    getTaskModelOptionsMock.mockImplementation((_taskType, target) => {
+    targetsFor('speech_to_text', [
+      { id: 'provider/first', label: 'First model' },
+      { id: 'provider/second', label: 'Second model' },
+    ]);
+    api.getTaskModelOptions.mockImplementation((_taskType, target) => {
       if (target === 'provider/first') {
         return staleSchema.promise;
       }
@@ -776,11 +230,7 @@ describe('SettingsSpecializedModelsPanel', () => {
         ],
       });
     });
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: { settings: {}, modelsRefreshToken: 0 },
-    });
-    flushSync();
+    mountPanel({ settings: {}, modelsRefreshToken: 0 });
     await waitForCondition(
       () =>
         !document.getElementById('settings-specialized-speech_to_text')
@@ -789,7 +239,7 @@ describe('SettingsSpecializedModelsPanel', () => {
 
     selectTarget('speech_to_text', 'First model');
     await waitForCondition(() =>
-      getTaskModelOptionsMock.mock.calls.some(
+      api.getTaskModelOptions.mock.calls.some(
         ([, target]) => target === 'provider/first',
       ),
     );
@@ -811,208 +261,418 @@ describe('SettingsSpecializedModelsPanel', () => {
     await Promise.resolve();
     await Promise.resolve();
     flushSync();
-
     expect(document.body.textContent).toContain('Newest option');
     expect(document.body.textContent).not.toContain('Stale option');
   });
 
-  it('saves an edited task without replaying stale siblings or displayed defaults', async () => {
-    const model_tasks = {
-      speech_to_text: { target: 'openrouter/transcribe::api-key', options: {} },
-      text_to_speech: {
-        target: 'openrouter/voice::api-key',
-        options: { retired: true },
+  describe('options', () => {
+    it.each([
+      {
+        target: 'local/qwen3-tts',
+        name: 'instructions',
+        type: 'textarea',
+        value: 'test-owned style',
       },
-    };
-    getTaskModelOptionsMock.mockImplementation((taskType) =>
-      Promise.resolve({
-        fields: [
+      {
+        target: 'local/chatterbox',
+        name: 'exaggeration',
+        type: 'number',
+        value: 0.7,
+      },
+    ])(
+      'shows $target options before the preview and autosaves edits without a disclosure',
+      async (scenario) => {
+        targetsFor('text_to_speech', [
           {
-            name: 'temperature',
-            type: 'number',
-            label: 'Temperature',
-            default: 0,
+            id: scenario.target,
+            label: 'Test voice',
+            kind: 'local',
+            usable: true,
           },
-          ...(taskType === 'speech_to_text'
-            ? [
-                {
-                  name: 'translate',
-                  type: 'boolean',
-                  label: 'Translate',
-                  default: false,
-                },
-              ]
-            : []),
-        ],
-      }),
-    );
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: { settings: { model_tasks } },
-    });
-    await waitForCondition(() =>
-      document.querySelector('button[role="switch"]'),
-    );
-    expect(updateTaskModelSettingsMock).not.toHaveBeenCalled();
-    document.querySelector('button[role="switch"]').click();
-    flushSync();
-    button('Save').click();
-    await waitForCondition(() => updateTaskModelSettingsMock.mock.calls.length);
-    expect(updateTaskModelSettingsMock.mock.calls[0][0]).toEqual({
-      speech_to_text: {
-        target: model_tasks.speech_to_text.target,
-        options: { translate: true },
-      },
-    });
-  });
+        ]);
+        api.getTaskModelOptions.mockResolvedValue({
+          fields: [
+            {
+              name: scenario.name,
+              type: scenario.type,
+              label: 'Test option',
+              default: scenario.type === 'number' ? 0.5 : '',
+            },
+          ],
+        });
+        echoSavedModelTasks();
+        mountPanel(
+          committingProps({
+            settings: {
+              model_tasks: {
+                text_to_speech: { target: scenario.target, options: {} },
+              },
+            },
+          }),
+        );
+        await waitForCondition(() =>
+          document.querySelector('.speech-preview textarea'),
+        );
+        const input = document.getElementById(
+          `task-model-text_to_speech-${scenario.name}`,
+        );
+        const preview = document.querySelector('.speech-preview textarea');
+        expect(input.closest('[hidden]')).toBeNull();
+        expect(
+          input.compareDocumentPosition(preview) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        expect(document.querySelector('.s-disclosure-btn')).toBeNull();
+        expect(api.updateTaskModelSettings).not.toHaveBeenCalled();
 
-  it.each([{ retired: true }, { voice: 'removed' }])(
-    'resets stale options without changing the target: %j',
-    async (options) => {
-      const target = 'openrouter/voice::api-key';
-      getTaskModelOptionsMock.mockResolvedValue({
+        input.value = String(scenario.value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        flushSync();
+        // Real autosave debounce (800 ms).
+        await waitForCondition(
+          () => api.updateTaskModelSettings.mock.calls.length > 0,
+          20,
+          100,
+        );
+        expect(
+          api.updateTaskModelSettings.mock.calls[0][0].text_to_speech,
+        ).toEqual({
+          target: scenario.target,
+          options: { [scenario.name]: scenario.value },
+        });
+      },
+    );
+
+    it('shows the new model options immediately when switching local TTS engines', async () => {
+      const targets = [
+        { id: 'local/qwen3-tts', label: 'Qwen3-TTS', kind: 'local' },
+        { id: 'local/chatterbox', label: 'Chatterbox', kind: 'local' },
+      ];
+      targetsFor('text_to_speech', targets);
+      api.getTaskModelOptions.mockImplementation(async (_taskType, target) => ({
         fields: [
-          {
-            name: 'voice',
-            type: 'select',
-            label: 'Voice',
-            default: '',
-            required: true,
-            options: [{ value: 'available', label: 'Available' }],
-          },
+          target === targets[0].id
+            ? {
+                name: 'instructions',
+                type: 'textarea',
+                label: 'Style',
+                default: '',
+              }
+            : {
+                name: 'exaggeration',
+                type: 'number',
+                label: 'Expression',
+                default: 0.5,
+              },
         ],
-      });
-      mountedComponent = mount(SettingsSpecializedModelsPanel, {
-        target: document.body,
-        props: {
-          settings: { model_tasks: { text_to_speech: { target, options } } },
+      }));
+      mountPanel({
+        settings: {
+          model_tasks: {
+            text_to_speech: { target: targets[0].id, options: {} },
+          },
         },
       });
-      await waitForCondition(
-        () => button('Reset options') && !button('Reset options').disabled,
+      await waitForCondition(() =>
+        document.getElementById('task-model-text_to_speech-instructions'),
       );
-      button('Reset options').click();
+
+      selectTarget('text_to_speech', 'Chatterbox');
+      await waitForCondition(() =>
+        document.getElementById('task-model-text_to_speech-exaggeration'),
+      );
+      expect(
+        document.getElementById('task-model-text_to_speech-instructions'),
+      ).toBeNull();
+      const field = document.getElementById(
+        'task-model-text_to_speech-exaggeration',
+      );
+      expect(field.closest('[hidden]')).toBeNull();
+      expect(field.value).toBe('0.5');
+      expect(
+        field.compareDocumentPosition(
+          document.querySelector('.speech-preview'),
+        ) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it('autosaves a boolean toggle without replaying stale siblings or displayed defaults', async () => {
+      // The boolean option is the shared Toggle (role="switch"); flipping it
+      // arms the same autosave as the other option controls.
+      const model_tasks = {
+        speech_to_text: {
+          target: 'openrouter/transcribe::api-key',
+          options: {},
+        },
+        text_to_speech: {
+          target: 'openrouter/voice::api-key',
+          options: { retired: true },
+        },
+      };
+      api.getTaskModelOptions.mockImplementation((taskType) =>
+        Promise.resolve({
+          fields: [
+            {
+              name: 'temperature',
+              type: 'number',
+              label: 'Temperature',
+              default: 0,
+            },
+            ...(taskType === 'speech_to_text'
+              ? [
+                  {
+                    name: 'translate',
+                    type: 'boolean',
+                    label: 'Translate',
+                    default: false,
+                  },
+                ]
+              : []),
+          ],
+        }),
+      );
+      mountPanel({ settings: { model_tasks } });
+      await waitForCondition(() =>
+        document.querySelector('button[role="switch"]'),
+      );
+      expect(api.updateTaskModelSettings).not.toHaveBeenCalled();
+
+      document.querySelector('button[role="switch"]').click();
       flushSync();
-      document.getElementById('task-model-text_to_speech-voice').click();
-      flushSync();
-      document.querySelector('[role="option"]').click();
-      flushSync();
+      // Real autosave debounce (800 ms).
+      await waitForCondition(
+        () => api.updateTaskModelSettings.mock.calls.length > 0,
+        20,
+        100,
+      );
+      expect(api.updateTaskModelSettings.mock.calls[0][0]).toEqual({
+        speech_to_text: {
+          target: model_tasks.speech_to_text.target,
+          options: { translate: true },
+        },
+      });
+    });
+
+    it('edits a JSON option as a parsed structure and never saves invalid text', async () => {
+      const target = 'openrouter/recraft/recraft-v3::api-key';
+      targetsFor('image_generation', [
+        { id: target, kind: 'provider', label: 'Recraft v3', usable: true },
+      ]);
+      api.getTaskModelOptions.mockResolvedValue({
+        fields: [
+          {
+            name: 'text_layout',
+            type: 'json',
+            label: 'Text layout',
+            default: [],
+          },
+        ],
+      });
+      echoSavedModelTasks();
+      mountPanel(
+        committingProps({ taskTypes: ['image_generation'], settings: {} }),
+      );
+      await waitForCondition(
+        () =>
+          !document.getElementById('settings-specialized-image_generation')
+            ?.disabled,
+      );
+      selectTarget('image_generation', 'Recraft v3');
+      await waitForCondition(() => document.querySelector('.text-area--code'));
+
+      const textarea = document.querySelector('.text-area--code');
+      // JSON options live behind the closed advanced disclosure.
+      const advanced = textarea.closest('details');
+      expect(advanced.open).toBe(false);
+      advanced.querySelector('summary').click();
+      expect(advanced.open).toBe(true);
+      // The structured default serializes to JSON text.
+      expect(textarea.value).toBe('[]');
+      expect(textarea.getAttribute('aria-invalid')).toBe('false');
+
+      const setText = (value) => {
+        textarea.value = value;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        flushSync();
+      };
+      const lastSavedLayout = () =>
+        api.updateTaskModelSettings.mock.calls.at(-1)[0].image_generation;
+
+      setText('[{"text": "hi"');
+      expect(textarea.getAttribute('aria-invalid')).toBe('true');
+      expect(document.querySelector('.form-field__error')).toBeTruthy();
       button('Save').click();
       await waitForCondition(
-        () => updateTaskModelSettingsMock.mock.calls.length,
+        () => api.updateTaskModelSettings.mock.calls.length === 1,
       );
-      expect(updateTaskModelSettingsMock.mock.calls[0][0]).toEqual({
-        text_to_speech: { target, options: { voice: 'available' } },
-      });
-    },
-  );
+      // The malformed text never reaches the binding.
+      expect(lastSavedLayout().target).toBe(target);
+      expect(lastSavedLayout().options?.text_layout ?? []).toEqual(
+        expect.any(Array),
+      );
 
-  it('narrows dependent choices and never keeps a hidden value', async () => {
-    const target = 'openai/gpt-live-1::api-key';
-    getTaskModelOptionsMock.mockResolvedValue({
-      fields: [
+      const layout = [
         {
-          name: 'backend_model',
-          type: 'select',
-          label: 'Backend model',
-          default: 'terra',
-          required: true,
-          options: [
-            { value: 'terra', label: 'Terra' },
-            { value: 'astra', label: 'Astra' },
+          text: 'hi',
+          bbox: [
+            [0, 0],
+            [1, 1],
           ],
         },
-        {
-          name: 'backend_thinking_effort',
-          type: 'select',
-          label: 'Backend reasoning',
-          default: 'low',
-          options: ['', 'none', 'low', 'medium', 'high'].map((value) => ({
-            value,
-            label: value || 'Model default',
-          })),
-          options_by: {
-            field: 'backend_model',
-            values: {
-              terra: ['', 'none', 'low', 'high'],
-              astra: ['', 'none', 'medium'],
+      ];
+      setText(JSON.stringify(layout));
+      expect(textarea.getAttribute('aria-invalid')).toBe('false');
+      expect(document.querySelector('.form-field__error')).toBeNull();
+      button('Save').click();
+      await waitForCondition(
+        () => api.updateTaskModelSettings.mock.calls.length === 2,
+      );
+      expect(lastSavedLayout()).toEqual({
+        target,
+        options: { text_layout: layout },
+      });
+    });
+
+    it.each([{ retired: true }, { voice: 'removed' }])(
+      'resets stale options without changing the target: %j',
+      async (options) => {
+        const target = 'openrouter/voice::api-key';
+        api.getTaskModelOptions.mockResolvedValue({
+          fields: [
+            {
+              name: 'voice',
+              type: 'select',
+              label: 'Voice',
+              default: '',
+              required: true,
+              options: [{ value: 'available', label: 'Available' }],
+            },
+          ],
+        });
+        mountPanel({
+          settings: { model_tasks: { text_to_speech: { target, options } } },
+        });
+        await waitForCondition(
+          () => button('Reset options') && !button('Reset options').disabled,
+        );
+        button('Reset options').click();
+        flushSync();
+        document.getElementById('task-model-text_to_speech-voice').click();
+        flushSync();
+        document.querySelector('[role="option"]').click();
+        flushSync();
+        button('Save').click();
+        await waitForCondition(
+          () => api.updateTaskModelSettings.mock.calls.length,
+        );
+        expect(api.updateTaskModelSettings.mock.calls[0][0]).toEqual({
+          text_to_speech: { target, options: { voice: 'available' } },
+        });
+      },
+    );
+
+    it('narrows dependent choices and never keeps a hidden value', async () => {
+      const target = 'openai/gpt-live-1::api-key';
+      api.getTaskModelOptions.mockResolvedValue({
+        fields: [
+          {
+            name: 'backend_model',
+            type: 'select',
+            label: 'Backend model',
+            default: 'terra',
+            required: true,
+            options: [
+              { value: 'terra', label: 'Terra' },
+              { value: 'astra', label: 'Astra' },
+            ],
+          },
+          {
+            name: 'backend_thinking_effort',
+            type: 'select',
+            label: 'Backend reasoning',
+            default: 'low',
+            options: ['', 'none', 'low', 'medium', 'high'].map((value) => ({
+              value,
+              label: value || 'Model default',
+            })),
+            options_by: {
+              field: 'backend_model',
+              values: {
+                terra: ['', 'none', 'low', 'high'],
+                astra: ['', 'none', 'medium'],
+              },
             },
           },
-        },
-      ],
-    });
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: {
+        ],
+      });
+      mountPanel({
         taskTypes: ['live_voice'],
         settings: { model_tasks: { live_voice: { target, options: {} } } },
-      },
-    });
-    const effortId = 'task-model-live_voice-backend_thinking_effort';
-    await waitForCondition(() => document.getElementById(effortId));
+      });
+      const effortId = 'task-model-live_voice-backend_thinking_effort';
+      const toggleEffort = () => {
+        document.getElementById(effortId).click();
+        flushSync();
+      };
+      await waitForCondition(() => document.getElementById(effortId));
 
-    document.getElementById(effortId).click();
-    flushSync();
-    expect(optionLabels()).toEqual(['Model default', 'none', 'low', 'high']);
-    document.getElementById(effortId).click();
-    flushSync();
+      toggleEffort();
+      expect(optionLabels()).toEqual(['Model default', 'none', 'low', 'high']);
+      toggleEffort();
 
-    document.getElementById('task-model-live_voice-backend_model').click();
-    flushSync();
-    [...document.querySelectorAll('[role="option"]')]
-      .find((option) => option.textContent.trim() === 'Astra')
-      .click();
-    flushSync();
+      document.getElementById('task-model-live_voice-backend_model').click();
+      flushSync();
+      [...document.querySelectorAll('[role="option"]')]
+        .find((option) => option.textContent.trim() === 'Astra')
+        .click();
+      flushSync();
+      expect(document.getElementById(effortId).textContent.trim()).toBe(
+        'Model default',
+      );
+      toggleEffort();
+      expect(optionLabels()).toEqual(['Model default', 'none', 'medium']);
+      toggleEffort();
 
-    expect(document.getElementById(effortId).textContent.trim()).toBe(
-      'Model default',
-    );
-    document.getElementById(effortId).click();
-    flushSync();
-    expect(optionLabels()).toEqual(['Model default', 'none', 'medium']);
-    document.getElementById(effortId).click();
-    flushSync();
-
-    button('Save').click();
-    await waitForCondition(() => updateTaskModelSettingsMock.mock.calls.length);
-    expect(updateTaskModelSettingsMock.mock.calls[0][0]).toEqual({
-      live_voice: {
-        target,
-        options: { backend_model: 'astra', backend_thinking_effort: '' },
-      },
-    });
-  });
-
-  it('hides a dependent field that the current value makes irrelevant', async () => {
-    const target = 'xai/grok-voice-think-fast-2.0::subscription';
-    getTaskModelOptionsMock.mockResolvedValue({
-      fields: [
-        {
-          name: 'backend_model',
-          type: 'select',
-          label: 'Backend model',
-          default: '',
-          options: [
-            { value: '', label: 'None (the voice model uses vBot directly)' },
-            { value: 'terra', label: 'Terra' },
-          ],
+      button('Save').click();
+      await waitForCondition(
+        () => api.updateTaskModelSettings.mock.calls.length,
+      );
+      expect(api.updateTaskModelSettings.mock.calls[0][0]).toEqual({
+        live_voice: {
+          target,
+          options: { backend_model: 'astra', backend_thinking_effort: '' },
         },
-        {
-          name: 'backend_thinking_effort',
-          type: 'select',
-          label: 'Backend reasoning',
-          default: 'low',
-          options: ['', 'low', 'high'].map((value) => ({
-            value,
-            label: value || 'Model default',
-          })),
-          options_by: { field: 'backend_model', values: { '': [] } },
-        },
-      ],
+      });
     });
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props: {
+
+    it('hides a dependent field that the current value makes irrelevant', async () => {
+      const target = 'xai/grok-voice-think-fast-2.0::subscription';
+      api.getTaskModelOptions.mockResolvedValue({
+        fields: [
+          {
+            name: 'backend_model',
+            type: 'select',
+            label: 'Backend model',
+            default: '',
+            options: [
+              { value: '', label: 'None (the voice model uses vBot directly)' },
+              { value: 'terra', label: 'Terra' },
+            ],
+          },
+          {
+            name: 'backend_thinking_effort',
+            type: 'select',
+            label: 'Backend reasoning',
+            default: 'low',
+            options: ['', 'low', 'high'].map((value) => ({
+              value,
+              label: value || 'Model default',
+            })),
+            options_by: { field: 'backend_model', values: { '': [] } },
+          },
+        ],
+      });
+      mountPanel({
         taskTypes: ['live_voice'],
         settings: {
           model_tasks: {
@@ -1022,138 +682,19 @@ describe('SettingsSpecializedModelsPanel', () => {
             },
           },
         },
-      },
+      });
+      const backendId = 'task-model-live_voice-backend_model';
+      const effortId = 'task-model-live_voice-backend_thinking_effort';
+      await waitForCondition(() => document.getElementById(backendId));
+
+      expect(document.getElementById(effortId)).toBeNull();
+      document.getElementById(backendId).click();
+      flushSync();
+      [...document.querySelectorAll('[role="option"]')]
+        .find((option) => option.textContent.trim() === 'Terra')
+        .click();
+      flushSync();
+      expect(document.getElementById(effortId).textContent.trim()).toBe('high');
     });
-    const backendId = 'task-model-live_voice-backend_model';
-    const effortId = 'task-model-live_voice-backend_thinking_effort';
-    await waitForCondition(() => document.getElementById(backendId));
-
-    expect(document.getElementById(effortId)).toBeNull();
-    document.getElementById(backendId).click();
-    flushSync();
-    [...document.querySelectorAll('[role="option"]')]
-      .find((option) => option.textContent.trim() === 'Terra')
-      .click();
-    flushSync();
-
-    expect(document.getElementById(effortId).textContent.trim()).toBe('high');
-  });
-
-  it('auto-saves after a boolean option toggle is flipped', async () => {
-    // The boolean option field is the shared Toggle (role="switch"); flipping it
-    // must arm the same autosave flow as the other option controls.
-    listTaskModelTargetsMock.mockImplementation((taskType) =>
-      Promise.resolve({
-        targets:
-          taskType === 'speech_to_text'
-            ? [
-                {
-                  id: 'openai:api-key/whisper-1',
-                  label: 'Whisper',
-                  kind: 'model',
-                },
-              ]
-            : [],
-      }),
-    );
-    getTaskModelOptionsMock.mockImplementation((taskType) =>
-      Promise.resolve({
-        fields:
-          taskType === 'speech_to_text'
-            ? [
-                {
-                  name: 'translate',
-                  type: 'boolean',
-                  label: 'Translate',
-                  default: false,
-                },
-              ]
-            : [],
-      }),
-    );
-
-    const props = reactiveProps({
-      settings: {
-        model_tasks: {
-          speech_to_text: { target: 'openai:api-key/whisper-1', options: {} },
-        },
-      },
-      modelsRefreshToken: 0,
-    });
-    mountedComponent = mount(SettingsSpecializedModelsPanel, {
-      target: document.body,
-      props,
-    });
-    flushSync();
-    await waitForCondition(
-      () => document.body.querySelector('button[role="switch"]') !== null,
-    );
-
-    const toggle = document.body.querySelector('button[role="switch"]');
-    toggle.click();
-    flushSync();
-
-    // The autosave debounce is 800 ms of real time, so poll with a delay that
-    // spans it (20 × 100 ms) rather than the default near-instant cadence.
-    await waitForCondition(
-      () => updateTaskModelSettingsMock.mock.calls.length >= 1,
-      20,
-      100,
-    );
-
-    const payload = updateTaskModelSettingsMock.mock.calls[0][0];
-    expect(payload.speech_to_text.options.translate).toBe(true);
   });
 });
-
-async function waitForCondition(check, attempts = 20, delayMs = 0) {
-  for (let index = 0; index < attempts; index += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-    flushSync();
-    if (check()) {
-      return;
-    }
-  }
-  throw new Error('Timed out waiting for condition.');
-}
-
-function selectTarget(taskType, label) {
-  document
-    .getElementById(`settings-specialized-${taskType}`)
-    .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  flushSync();
-  const option = Array.from(
-    document.body.querySelectorAll('.searchable-dropdown__option'),
-  ).find((candidate) => candidate.textContent.includes(label));
-  expect(option).toBeTruthy();
-  option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  flushSync();
-}
-
-function optionLabels() {
-  return [...document.querySelectorAll('[role="option"]')].map((option) =>
-    option.textContent.trim(),
-  );
-}
-
-function button(label) {
-  return [...document.querySelectorAll('button')].find(
-    (element) => element.textContent.trim() === label,
-  );
-}
-
-function deferred() {
-  let resolve;
-  const promise = new Promise((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
-async function settle() {
-  for (let index = 0; index < 20; index += 1) {
-    await Promise.resolve();
-    flushSync();
-  }
-}

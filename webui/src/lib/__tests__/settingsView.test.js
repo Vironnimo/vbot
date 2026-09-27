@@ -665,6 +665,12 @@ describe('channels', () => {
       enabled: false,
       running: true,
     });
+
+    // A response without a channel list empties it and drops the selection.
+    expect(applyChannelPanelList(next, {})).toMatchObject({
+      channels: [],
+      selectedChannelId: null,
+    });
   });
 
   it('builds create payloads with defaults, parsed chat ids and coerced booleans', () => {

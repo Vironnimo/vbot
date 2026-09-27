@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const listClientsMock = vi.fn();
@@ -164,11 +164,17 @@ describe('SettingsGeneralPanel', () => {
     flushSync();
     await flushAsync();
 
-    expect(document.body.textContent).toContain('Setup guide');
+    expect(document.body.textContent).toContain(
+      t('settings.general.setupGuide', 'Setup guide'),
+    );
 
     const setupButton = Array.from(
       document.body.querySelectorAll('button'),
-    ).find((button) => button.textContent.includes('Open setup guide'));
+    ).find((button) =>
+      button.textContent.includes(
+        t('settings.general.setupGuideAction', 'Open setup guide'),
+      ),
+    );
     expect(setupButton).toBeTruthy();
 
     setupButton.click();
@@ -177,37 +183,10 @@ describe('SettingsGeneralPanel', () => {
     expect(onOpenSetupGuide).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the keep-awake toggle from the settings state', async () => {
-    listClientsMock.mockResolvedValue({ clients: [] });
-    const props = reactiveProps({
-      settings: { general: { keep_awake: true } },
-      clientsRefreshToken: 0,
-    });
-
-    mountedComponent = mount(SettingsGeneralPanel, {
-      target: document.body,
-      props,
-    });
-    flushSync();
-    await flushAsync();
-
-    const toggle = document.body.querySelector('[role="switch"]');
-    expect(toggle.getAttribute('aria-checked')).toBe('true');
-    expect(toggle.getAttribute('aria-label')).toBe('Keep computer awake');
-
-    props.settings = { general: { keep_awake: false } };
-    flushSync();
-    expect(
-      document.body
-        .querySelector('[role="switch"]')
-        .getAttribute('aria-checked'),
-    ).toBe('false');
-  });
-
-  it('saves the keep-awake setting when the toggle changes', async () => {
+  it('renders the keep-awake toggle from settings and saves a change', async () => {
     listClientsMock.mockResolvedValue({ clients: [] });
     updateSettingsMock.mockResolvedValue({
-      general: { keep_awake: true },
+      general: { keep_awake: false },
     });
     const onCommit = vi.fn();
     const onToast = vi.fn();
@@ -215,7 +194,7 @@ describe('SettingsGeneralPanel', () => {
     mountedComponent = mount(SettingsGeneralPanel, {
       target: document.body,
       props: {
-        settings: { general: { keep_awake: false } },
+        settings: { general: { keep_awake: true } },
         clientsRefreshToken: 0,
         onCommit,
         onToast,
@@ -224,11 +203,15 @@ describe('SettingsGeneralPanel', () => {
     flushSync();
     await flushAsync();
 
-    document.body.querySelector('[role="switch"]').click();
+    const toggle = document.body.querySelector('[role="switch"]');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(toggle.getAttribute('aria-label')).toBe('Keep computer awake');
+
+    toggle.click();
     await flushAsync();
 
     expect(updateSettingsMock).toHaveBeenCalledWith({
-      server: { keep_awake: true },
+      server: { keep_awake: false },
     });
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onToast).not.toHaveBeenCalled();
