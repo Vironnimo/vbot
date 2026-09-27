@@ -1,204 +1,126 @@
-"""Channel send: contract behavior."""
+"""channel_send's definition: the per-Agent profile, the fields each platform offers,
+exact Channel ids, and how a call is labeled."""
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import replace
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from typing import Any
 
 import pytest
 
-from core.tools.channel import (
-    CHANNEL_SEND_TOOL_DESCRIPTION,
-    CHANNEL_SEND_TOOL_NAME,
-    CHANNEL_SEND_TOOL_PARAMETERS,
-    register_channel_send_tool,
-)
-from core.tools.contracts import ToolContractError
-from core.tools.tools import (
-    ToolDefinitionProfileContext,
-    ToolRegistry,
-)
-from tests.core.tools.channel_send_helpers import (
-    _TEST_MAX_ATTACHMENT_SIZE_BYTES,
+from core.tools.channel import CHANNEL_SEND_TOOL_DESCRIPTION, CHANNEL_SEND_TOOL_NAME
+from core.tools.tools import ToolDefinitionProfileContext
+from tests.core.tools.channel_send_test_support import (
+    channel_send,
+    delivered,
     make_channel_config,
-    make_chat_sessions,
-    make_context,
+    options,
+    refused,
 )
 
-
-def test_channel_send_agent_guidance_requires_tool_for_channel_files() -> None:
-    assert "final reply already reaches the chat you are answering" in CHANNEL_SEND_TOOL_DESCRIPTION
-    # One Channel is enough to know where to send; the handler asks when there are several.
-    assert "required" not in CHANNEL_SEND_TOOL_PARAMETERS
-    assert "request" not in CHANNEL_SEND_TOOL_PARAMETERS["properties"]
-    assert "action" not in CHANNEL_SEND_TOOL_PARAMETERS["properties"]
-    properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
-    assert isinstance(properties, dict)
-    assert all(
-        isinstance(property_schema.get("description"), str) and property_schema["description"]
-        for property_schema in properties.values()
-    )
-    file_paths = properties["file_paths"]
-    assert isinstance(file_paths, dict)
-    buttons = properties["buttons"]
-    assert isinstance(buttons, dict)
-    button_properties = buttons["items"]["items"]["properties"]
-    assert all(
-        isinstance(property_schema.get("description"), str) and property_schema["description"]
-        for property_schema in button_properties.values()
-    )
+ALL_FIELDS = {"channel_id", "message", "platform_target", "thread_id", "file_paths", "buttons"}
 
 
-def test_channel_send_profile_uses_enabled_agent_channels_and_platform_capabilities(
-    tmp_path: Path,
-) -> None:
-    channel_service = Mock()
-    channel_service.list_channels.return_value = [
-        make_channel_config(channel_id="tg-primary"),
-        make_channel_config(channel_id="discord-primary", platform="discord"),
+def test_profile_offers_the_agents_enabled_channels(tmp_path: Path) -> None:
+    tool = channel_send(
+        tmp_path,
+        make_channel_config(channel_id="tg-main"),
+        make_channel_config(channel_id="dc-team", platform="discord"),
         make_channel_config(channel_id="tg-disabled", enabled=False),
         make_channel_config(channel_id="tg-other", agent_id="agent-2"),
-    ]
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        make_chat_sessions(),
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
-    )
-    profile_context = ToolDefinitionProfileContext(agent_id="agent-1")
-
-    first = registry.provider_definitions(
-        [CHANNEL_SEND_TOOL_NAME],
-        profile_context=profile_context,
-    )
-    second = registry.provider_definitions(
-        [CHANNEL_SEND_TOOL_NAME],
-        profile_context=profile_context,
     )
 
-    assert first == second
-    parameters = first[0]["parameters"]
-    assert "oneOf" not in parameters
-    assert "anyOf" not in parameters
-    assert "not" not in parameters
+    definition = tool.definition()
+
+    assert definition is not None
+    assert definition == tool.definition()
+    assert definition["description"] == (
+        f"{CHANNEL_SEND_TOOL_DESCRIPTION} Channels: dc-team (Discord), tg-main (Telegram)."
+    )
+    assert "final reply already reaches the chat you are answering" in definition["description"]
+    parameters = definition["parameters"]
+    # One Channel is enough to know where to send; the Tool asks when there are several.
+    assert set(parameters) == {"type", "properties"}
     assert "additionalProperties" not in str(parameters)
-    assert parameters["properties"]["channel_id"]["enum"] == [
-        "discord-primary",
-        "tg-primary",
-    ]
-    assert set(parameters["properties"]) == {
-        "channel_id",
-        "message",
-        "platform_target",
-        "thread_id",
-        "file_paths",
-        "buttons",
-    }
-    assert all(value in first[0]["description"] for value in ("discord-primary", "tg-primary"))
-
-    contract = registry.contracts_for_provider_definitions(first)[CHANNEL_SEND_TOOL_NAME]
-    result = asyncio.run(
-        registry.dispatch(
-            replace(make_context(tmp_path), input_contract=contract),
-            {
-                "channel_id": "discord-primary",
-                "message": "Hello",
-                "buttons": [[{"label": "Go", "data": "run:go"}]],
-            },
-            [CHANNEL_SEND_TOOL_NAME],
-        )
-    )
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
+    properties = parameters["properties"]
+    assert set(properties) == ALL_FIELDS
+    assert properties["channel_id"]["enum"] == ["dc-team", "tg-main"]
+    button_fields = properties["buttons"]["items"]["items"]["properties"]
+    assert all(field["description"] for field in [*properties.values(), *button_fields.values()])
 
 
-def test_channel_send_discord_profile_omits_telegram_only_fields() -> None:
-    channel_service = Mock()
-    channel_service.list_channels.return_value = [
-        make_channel_config(channel_id="discord-primary", platform="discord")
-    ]
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        make_chat_sessions(),
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+@pytest.mark.parametrize(
+    ("platform", "fields"),
+    [
+        ("discord", {"channel_id", "message", "platform_target", "file_paths"}),
+        ("slack", {"channel_id", "message", "platform_target", "thread_id", "file_paths"}),
+        ("mattermost", {"channel_id", "message", "platform_target", "thread_id", "file_paths"}),
+        ("whatsapp", {"channel_id", "message", "platform_target", "file_paths"}),
+    ],
+)
+def test_each_platform_offers_the_fields_it_delivers(
+    tmp_path: Path, platform: str, fields: set[str]
+) -> None:
+    tool = channel_send(
+        tmp_path,
+        make_channel_config(channel_id="work", platform=platform, allowed_chat_ids=["C1"]),
     )
 
-    definition = registry.provider_definitions(
-        [CHANNEL_SEND_TOOL_NAME],
-        profile_context=ToolDefinitionProfileContext(agent_id="agent-1"),
-    )[0]
+    definition = tool.definition()
+    envelope = tool.call({"message": "Done"})
 
-    assert set(definition["parameters"]["properties"]) == {
-        "channel_id",
-        "message",
-        "platform_target",
-        "file_paths",
-    }
-    assert "discord-primary" in definition["description"]
+    assert definition is not None
+    assert set(definition["parameters"]["properties"]) == fields
+    assert delivered(envelope) == {"channel_id": "work", "platform_target": "C1"}
+    assert tool.sent() == [("work", "Done", "C1", options())]
 
 
-def test_channel_send_profile_hides_tool_without_enabled_owned_channel() -> None:
-    channel_service = Mock()
-    channel_service.list_channels.return_value = [
+def test_profile_hides_the_tool_without_an_enabled_owned_channel(tmp_path: Path) -> None:
+    tool = channel_send(
+        tmp_path,
         make_channel_config(channel_id="tg-disabled", enabled=False),
         make_channel_config(channel_id="tg-other", agent_id="agent-2"),
-    ]
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        channel_service,
-        make_chat_sessions(),
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
     )
     profile_context = ToolDefinitionProfileContext(agent_id="agent-1")
 
     assert (
-        registry.provider_definitions(
-            [CHANNEL_SEND_TOOL_NAME],
-            profile_context=profile_context,
+        tool.registry.provider_definitions(
+            [CHANNEL_SEND_TOOL_NAME], profile_context=profile_context
         )
         == []
     )
     assert (
-        registry.prompt_definitions(
-            [CHANNEL_SEND_TOOL_NAME],
-            profile_context=profile_context,
-        )
+        tool.registry.prompt_definitions([CHANNEL_SEND_TOOL_NAME], profile_context=profile_context)
         == []
     )
 
 
-@pytest.mark.parametrize("requested", ["tg-team-b", "TG-TEAM-A", "tg_team_a"])
-def test_profile_does_not_redirect_a_different_channel_id(tmp_path: Path, requested: str) -> None:
-    service = Mock()
-    service.send = AsyncMock()
-    service.list_channels.return_value = [make_channel_config(channel_id="tg-team-a")]
-    registry = ToolRegistry()
-    register_channel_send_tool(
-        registry,
-        service,
-        make_chat_sessions(),
-        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+@pytest.mark.parametrize("requested", ["TG-TEAM-A", "tg_team_a", "telegrm"])
+def test_channel_ids_are_never_matched_loosely(tmp_path: Path, requested: str) -> None:
+    tool = channel_send(tmp_path, make_channel_config(channel_id="tg-team-a"))
+
+    envelope = tool.call({"channel_id": requested, "message": "Hi", "platform_target": "123"})
+
+    assert refused(envelope) == (
+        f'channel_send was not run: "channel_id" must be one of "tg-team-a"; '
+        f'received "{requested}".'
     )
-    definitions = registry.provider_definitions(
-        [CHANNEL_SEND_TOOL_NAME], profile_context=ToolDefinitionProfileContext(agent_id="agent-1")
-    )
-    contract = registry.contracts_for_provider_definitions(definitions)[CHANNEL_SEND_TOOL_NAME]
-    with pytest.raises(ToolContractError):
-        asyncio.run(
-            registry.dispatch(
-                replace(make_context(tmp_path), input_contract=contract),
-                {
-                    "channel_id": requested,
-                    "message": "fixture",
-                    "platform_target": "123",
-                },
-                [CHANNEL_SEND_TOOL_NAME],
-            )
-        )
-    service.send.assert_not_awaited()
+    assert tool.sent() == []
+
+
+@pytest.mark.parametrize(
+    ("arguments", "labels"),
+    [
+        ({"channel": "telegram", "text": "Hello there"}, ["telegram", "Hello there"]),
+        # A call the Tool refuses is labeled as the Model wrote it.
+        ({"action": "delete", "message": "Hi"}, ["Hi"]),
+    ],
+    ids=["other-spellings", "refused-call"],
+)
+def test_display_labels_what_the_call_meant(
+    tmp_path: Path, arguments: dict[str, Any], labels: list[str]
+) -> None:
+    builder = channel_send(tmp_path).registry.get(CHANNEL_SEND_TOOL_NAME).display.parts_builder
+    assert builder is not None
+
+    assert [part.value for part in builder(arguments)] == labels
