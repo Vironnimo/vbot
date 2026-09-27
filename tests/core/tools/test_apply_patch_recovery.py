@@ -142,9 +142,9 @@ async def test_add_repairs_only_missing_syntax_preserving_content(tmp_path, body
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "body", ["-old\n+new", "@@ section\n+new", "+first\n@@\n+last", "*** Unknown File: other.txt"]
+    "body", ["@@ section\n+new", "+first\n@@\n+last", "*** Unknown File: other.txt"]
 )
-async def test_add_does_not_reinterpret_removals_or_unknown_constraints(tmp_path, body):
+async def test_add_does_not_reinterpret_hunks_or_unknown_headers(tmp_path, body):
     registry = ToolRegistry()
     register_apply_patch_tool(registry, file_state=FileReadState())
     result = await registry.dispatch(
@@ -154,6 +154,47 @@ async def test_add_does_not_reinterpret_removals_or_unknown_constraints(tmp_path
     )
     assert result["error"]["code"] == "invalid_patch"
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing", [None, b""])
+async def test_add_writes_lines_starting_with_minus_into_a_new_file(tmp_path, existing):
+    # Sessions: underlines, SQL comments and list items written without their +.
+    path = tmp_path / "new.txt"
+    if existing is not None:
+        path.write_bytes(existing)
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    result = await registry.dispatch(
+        context(tmp_path),
+        {"patch": "*** Add File: new.txt\n+Title\n-----\n+text\n-- a comment\n- item"},
+        ["apply_patch"],
+    )
+    assert result["ok"], result
+    assert path.read_bytes() == b"Title\n-----\ntext\n-- a comment\n- item\n"
+
+
+@pytest.mark.asyncio
+async def test_add_refuses_minus_lines_where_it_replaces_a_file(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_bytes(b"keep\nold\n")
+    state = FileReadState()
+    state.record_read("session-test", path)
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=state)
+    result = await registry.dispatch(
+        context(tmp_path),
+        {"patch": "*** Add File: notes.txt\n+keep\n-old\n+new\n-- a comment"},
+        ["apply_patch"],
+    )
+    assert result["error"]["code"] == "invalid_patch"
+    assert result["error"]["message"] == (
+        "notes.txt: patch line 3 in the *** Add File body starts with - instead of +: -old\n"
+        "The file exists, and Add File replaces all of its content. To change part of the "
+        "file, use *** Update File. To replace the whole file, start every line of the new "
+        "content with +.\nNo file was changed."
+    )
+    assert path.read_bytes() == b"keep\nold\n"
 
 
 @pytest.mark.asyncio

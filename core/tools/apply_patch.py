@@ -169,6 +169,12 @@ def _plan(
         if operation.action == "add":
             if operation.only_if_empty and source.exists and not _is_empty(payload):
                 raise _PatchError("file_exists", path=path)
+            if operation.minus_line and source.exists and not _is_empty(payload):
+                # Replacing content, a - line may be a removal meant for Update File.
+                line, text = operation.minus_line
+                raise _PatchError(
+                    "invalid_patch", template="add_minus_line", path=path, line=line, text=text
+                )
             for index, hunk in enumerate(operation.hunks):
                 operation.hunks[index], notes = _clean_additions(hunk, path)
                 warnings.setdefault(path, []).extend(notes)

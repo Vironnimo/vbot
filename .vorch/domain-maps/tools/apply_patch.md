@@ -139,9 +139,15 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   REPLACE`, Roo `:start_line:`; an empty SEARCH creates a file only if absent or
   empty); otherwise a headerless body updates the `path` field's file.
 - Add bodies tolerate missing `+` prefixes, including blank lines, preserving the
-  entire unprefixed line and its indentation. A bare opening `@@` is tolerated.
-  Unprefixed removals, context hints and later hunk delimiters remain invalid;
-  explicit `+` content remains literal, including leading patch syntax.
+  entire unprefixed line and its indentation. Lines starting with `-` are content
+  too while the Add creates a file or fills an empty one. Where it would replace
+  content, the first such line fails that operation in `_plan` (`add_minus_line`),
+  because it can be a removal meant for Update File. Evidence: all 4 Add refusals
+  on `-` lines in Sessions up to 2026-09 were content of new files (underlines,
+  SQL comments, list items), and the retries rewrote or dropped those lines. A
+  bare opening `@@` is tolerated; context hints and later hunk delimiters remain
+  invalid (`invalid_add_line`). Explicit `+` content remains literal, including
+  leading patch syntax.
 - `Move to` is operation metadata and may precede, separate, or follow Update
   hunks. Repeated identical destinations are harmless, including after Move File;
   conflicting destinations fail before any writes. Prefixed content remains literal.

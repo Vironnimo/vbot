@@ -319,8 +319,14 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
             "expected": {"new.txt": "first\nlast\n"},
         },
         {
-            "id": "add_removal_is_ambiguous",
+            "id": "add_minus_content",
             "before": {},
+            "arguments": patch("*** Add File: new.txt\n+Title\n-----\n+text"),
+            "expected": {"new.txt": "Title\n-----\ntext\n"},
+        },
+        {
+            "id": "add_removal_is_ambiguous",
+            "before": {"new.txt": "old\n"},
             "arguments": patch("*** Add File: new.txt\n-old\n+new"),
             "error": "invalid_patch",
         },

@@ -54,9 +54,16 @@ _MESSAGES = {
         "followed by the lines to change."
     ),
     "invalid_add_line": (
-        "Patch line {line} is in an *** Add File body but is not file content: {text}\n"
-        "Add supplies the whole new file as + lines. Prefix a literal leading -, @@ or "
-        "*** with +; use *** Update File to change part of an existing file."
+        "Patch line {line} in an *** Add File body starts with @@: {text}\n"
+        "Add File takes the whole new file as + lines, without @@ blocks. To change part of "
+        "an existing file, use *** Update File. To add a line that starts with @@, write it "
+        "with a leading +."
+    ),
+    "add_minus_line": (
+        "{where}: patch line {line} in the *** Add File body starts with - instead of +: "
+        "{text}\nThe file exists, and Add File replaces all of its content. To change part of "
+        "the file, use *** Update File. To replace the whole file, start every line of the "
+        "new content with +."
     ),
     "unified_add_line": (
         "Patch line {line} changes a file the diff creates from /dev/null: {text}\n"
@@ -240,6 +247,9 @@ class _Operation:
     only_if_empty: bool = False
     # Line ending for a file this Add creates; existing files keep their own.
     newline: str = "\n"
+    # The first Add body line written with a leading - (patch line, text): content
+    # of a new file, but a removal the Add cannot apply where it replaces a file.
+    minus_line: tuple[int, str] | None = None
 
 
 _ACTIONS = {
@@ -552,10 +562,12 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
         if hunk.eof or hunk.no_newline:
             raise _PatchError("invalid_patch", template="after_eof", line=number, text=_clip(line))
         if current.action == "add":
-            if line.startswith(("-", "@@")):
+            if line.startswith("@@"):
                 raise _PatchError(
                     "invalid_patch", template="invalid_add_line", line=number, text=_clip(line)
                 )
+            if line.startswith("-") and current.minus_line is None:
+                current.minus_line = (number, _clip(line))
             # Add has no context lines: a missing + means literal file content.
             # Keep all whitespace; interpreting one space as a diff prefix would
             # silently change indentation in otherwise recognizable creations.
