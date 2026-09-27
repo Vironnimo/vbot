@@ -253,6 +253,20 @@ def test_tests_run_by_the_hook_cannot_reach_the_committing_repository(
     assert _git(impact_project, "config", "core.bare").strip() == "false"
 
 
+def test_merge_commit_reuses_the_test_runs_of_the_merged_worktree(
+    impact_project: Path, tmp_path: Path
+) -> None:
+    worktree = tmp_path / "worktree"
+    _git(impact_project, "worktree", "add", "-q", "-b", "task", str(worktree))
+    _write(worktree, "calc.py", HARMLESS_CALC)
+    _git(worktree, "add", "calc.py")
+    assert _check_tests(worktree) == {"PASS": (False, "")}
+    _git(worktree, "commit", "-q", "-m", "task", "--no-verify")
+    _git(impact_project, "merge", "-q", "--no-ff", "--no-commit", "task")
+
+    assert _check_tests(impact_project) == {"PASS (no test affected)": (False, "")}
+
+
 def test_first_commit_in_a_worktree_adopts_the_primary_checkout_data(
     impact_project: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -264,8 +278,8 @@ def test_first_commit_in_a_worktree_adopts_the_primary_checkout_data(
     results = _check_tests(worktree)
 
     output = capsys.readouterr().out
-    assert "copied the test-impact data of the primary checkout" in output
-    assert "no test-impact data" not in output
+    assert f"using the test-impact data of {impact_project}" in output
+    assert "no usable test-impact data" not in output
     assert "test_calc.py::test_double" in results["FAIL: tests affected by this commit"][1]
 
 

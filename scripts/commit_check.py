@@ -19,7 +19,8 @@ work in progress are reported without blocking.
 
 pytest runs the tests affected by the working tree through pytest-testmon, which
 compares the code each test executed last time with the current code, plus the
-tests that read a staged data file (``tests/file_dependencies.py``). A change to
+tests that read a staged data file (``tests/file_dependencies.py``,
+``scripts/_test_impact.py``). A change to
 ``pyproject.toml`` or to a file read during collection runs the complete suite.
 A failing test blocks the commit when it depends on a staged file or only on
 committed code; failures that depend on another session's unstaged work are
@@ -47,6 +48,7 @@ from typing import NamedTuple
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts import _test_impact  # noqa: E402
 from tests import file_dependencies  # noqa: E402
 
 PYTHON_SUFFIXES = {".py", ".pyi"}
@@ -62,6 +64,7 @@ PYTEST_SUMMARY_PATTERN = re.compile(r"^(?:FAILED|ERROR) (?P<test>.+?)(?: - .*)?$
 # Changes that can affect any test: pytest and plugin configuration.
 FULL_SUITE_TRIGGERS = frozenset({"pyproject.toml"})
 TESTS_LOCK_NAME = "vbot-commit-tests.lock"
+TESTS_ARGUMENTS_NAME = "vbot-commit-tests.args"
 # Recorded test seconds per xdist worker; starting a worker costs about a second.
 SECONDS_PER_WORKER = 4.0
 TEST_MODULE_PATTERN = re.compile(r"^tests/(?:.+/)?(?:test_[^/]*|[^/]*_test)\.py$")
@@ -386,7 +389,7 @@ def classify_failures(
     work in progress when it depends on a file with unstaged or untracked changes
     and on no staged file, and otherwise to committed code.
     """
-    dependencies = file_dependencies.dependencies(root, set(failed))
+    dependencies = _test_impact.dependencies(root, set(failed))
     commit: list[str] = []
     committed: list[str] = []
     in_progress: list[str] = []
@@ -411,20 +414,53 @@ def _summary_lines(output: str, tests: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _adopt_primary_data(root: Path) -> None:
-    """Copy the primary checkout's test-impact data into a worktree that has none."""
-    if (root / file_dependencies.TESTMON_DATA).is_file():
+def _merged_branch_checkout(root: Path) -> Path | None:
+    """Return the other checkout whose HEAD this merge commit merges, if any."""
+    merge_head = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    if not merge_head:
+        return None
+    for block in _git(root, "worktree", "list", "--porcelain").split("\n\n"):
+        fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+        if fields.get("HEAD") == merge_head and "worktree" in fields:
+            checkout = Path(fields["worktree"])
+            if checkout.resolve() != root.resolve():
+                return checkout
+    return None
+
+
+def _primary_checkout(root: Path) -> Path | None:
+    common = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    if common.name != ".git" or common.parent.resolve() == root.resolve():
+        return None
+    return common.parent
+
+
+def _adopt_test_impact_data(root: Path, lock_path: Path) -> None:
+    """Give this checkout the best available test-impact data before selecting tests.
+
+    A merge commit adopts the records of the worktree that holds the merged branch:
+    its commits ran their tests on the branch's code, so the merge reruns only what
+    main's own changes since the fork affect. A worktree without records copies the
+    primary checkout's.
+    """
+    source = _merged_branch_checkout(root)
+    if source is None and not (root / file_dependencies.TESTMON_DATA).is_file():
+        source = _primary_checkout(root)
+    if source is None:
         return
-    common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
-    primary = Path(common).parent
-    if Path(common).name != ".git" or primary.resolve() == root.resolve():
-        return
-    try:
-        copied = file_dependencies.copy_data(primary, root)
-    except (OSError, sqlite3.Error):
-        return
+    with _exclusive(lock_path):
+        try:
+            copied = _test_impact.copy_data(source, root)
+        except (OSError, sqlite3.Error):
+            return
     if copied:
-        print("Commit check: copied the test-impact data of the primary checkout.", flush=True)
+        print(f"Commit check: using the test-impact data of {source}.", flush=True)
 
 
 def _workers(seconds: float) -> list[str]:
@@ -436,54 +472,65 @@ def _workers(seconds: float) -> list[str]:
 
 
 def _test_runs(
-    root: Path, changed: list[str], python_changed: bool, complete: bool, readers: set[str]
+    root: Path,
+    changed: list[str],
+    python_changed: bool,
+    complete: bool,
+    readers: set[str],
+    arguments_file: Path,
 ) -> list[tuple[str, list[str]]]:
-    pytest = [sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header"]
+    # testmon only records here (--testmon-noselect): this hook selects the tests,
+    # because testmon selecting inside each xdist worker races with the records
+    # the other workers write.
+    pytest = [sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header", "--testmon-noselect"]
     if complete:
-        return [("complete suite", [*pytest, "-n", "auto", "--testmon-noselect"])]
+        return [("complete suite", [*pytest, "-n", "auto"])]
     runs: list[tuple[str, list[str]]] = []
     if python_changed:
-        selection = file_dependencies.select(root)
+        selection = _test_impact.select(root)
         if selection.complete:
             print(
                 "Commit check: no usable test-impact data in this checkout; this commit runs "
                 "the complete suite once to record it (about 10 minutes).",
                 flush=True,
             )
-            return [("complete suite", [*pytest, "-n", "auto", "--testmon"])]
+            return [("complete suite", [*pytest, "-n", "auto"])]
         # Staged test modules may hold tests testmon has not recorded yet. Other
         # sessions' new test modules are left to their own commits.
         staged_tests = [path for path in changed if TEST_MODULE_PATTERN.match(path)]
-        modules = sorted({*selection.modules, *staged_tests})
-        modules = [module for module in modules if (root / module).is_file()]
-        if modules:
+        arguments = selection.pytest_arguments(root, staged_tests)
+        if arguments:
+            arguments_file.write_text("\n".join(arguments) + "\n", encoding="utf-8")
             workers = _workers(selection.seconds)
-            runs.append(("affected by code", [*pytest, *workers, "--testmon", *modules]))
+            runs.append(("affected by code", [*pytest, *workers, f"@{arguments_file}"]))
     # testmon selects by Python code only; run the modules of data-file readers
     # without its selection. Deleted tests leave stale records behind.
     modules = sorted({test.partition("::")[0] for test in readers})
     modules = [module for module in modules if (root / module).is_file()]
     if modules:
-        runs.append(("reading staged data files", [*pytest, "--testmon-noselect", *modules]))
+        runs.append(("reading staged data files", [*pytest, *modules]))
     return runs
 
 
 def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepResult]:
     """Run the pytest tests affected by *changed*, the staged and deleted paths."""
-    _adopt_primary_data(root)
+    git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir").strip())
+    lock_path = git_dir / TESTS_LOCK_NAME
+    _adopt_test_impact_data(root, lock_path)
     python_changed = any(Path(path).suffix in PYTHON_SUFFIXES for path in changed)
     data_files = {path for path in changed if Path(path).suffix not in PYTHON_SUFFIXES}
-    readers = file_dependencies.readers(root, data_files)
+    readers = _test_impact.readers(root, data_files)
     complete = bool(FULL_SUITE_TRIGGERS & data_files) or file_dependencies.COLLECTION in readers
     readers.discard(file_dependencies.COLLECTION)
     if not (python_changed or complete or readers):
         return []
 
-    lock_path = Path(_git(root, "rev-parse", "--absolute-git-dir").strip()) / TESTS_LOCK_NAME
     env = _test_environment(root)
     outputs: list[str] = []
     with _exclusive(lock_path):
-        runs = _test_runs(root, changed, python_changed, complete, readers)
+        runs = _test_runs(
+            root, changed, python_changed, complete, readers, git_dir / TESTS_ARGUMENTS_NAME
+        )
         if not runs:
             return [StepResult("pytest", "PASS (no test affected)", False)]
         for label, command in runs:

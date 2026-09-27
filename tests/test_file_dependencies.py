@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import _test_impact
 from tests import file_dependencies
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -68,23 +69,23 @@ def recorded_project(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_readers_are_the_tests_that_read_a_file_or_listed_its_directory(
     recorded_project: Path,
 ) -> None:
-    assert file_dependencies.readers(recorded_project, {"data/prompt.txt"}) == {
+    assert _test_impact.readers(recorded_project, {"data/prompt.txt"}) == {
         "test_reads.py::test_reads_file"
     }
     # A file added to a listed directory changes what the listing test sees.
-    assert file_dependencies.readers(recorded_project, {"listed/new.txt"}) == {
+    assert _test_impact.readers(recorded_project, {"listed/new.txt"}) == {
         "test_reads.py::test_lists_directory"
     }
-    assert file_dependencies.readers(recorded_project, {"data/imported.txt"}) == {
+    assert _test_impact.readers(recorded_project, {"data/imported.txt"}) == {
         file_dependencies.COLLECTION
     }
-    assert file_dependencies.readers(recorded_project, {"helper.py", "unknown.txt"}) == set()
+    assert _test_impact.readers(recorded_project, {"helper.py", "unknown.txt"}) == set()
 
 
 def test_dependencies_combine_executed_code_and_read_files(recorded_project: Path) -> None:
     tests = {"test_reads.py::test_reads_file", "test_reads.py::test_reads_nothing", "test_reads.py"}
 
-    dependencies = file_dependencies.dependencies(recorded_project, tests)
+    dependencies = _test_impact.dependencies(recorded_project, tests)
 
     assert {"test_reads.py", "helper.py", "data/prompt.txt"} <= dependencies[
         "test_reads.py::test_reads_file"
@@ -95,9 +96,7 @@ def test_dependencies_combine_executed_code_and_read_files(recorded_project: Pat
 
 
 def test_copied_data_answers_like_the_original(recorded_project: Path, tmp_path: Path) -> None:
-    assert file_dependencies.copy_data(recorded_project, tmp_path) is True
+    assert _test_impact.copy_data(recorded_project, tmp_path) is True
 
-    assert file_dependencies.readers(tmp_path, {"data/prompt.txt"}) == {
-        "test_reads.py::test_reads_file"
-    }
-    assert file_dependencies.copy_data(tmp_path / "missing", tmp_path) is False
+    assert _test_impact.readers(tmp_path, {"data/prompt.txt"}) == {"test_reads.py::test_reads_file"}
+    assert _test_impact.copy_data(tmp_path / "missing", tmp_path) is False
