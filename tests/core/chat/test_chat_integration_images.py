@@ -521,9 +521,7 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
         runtime.stop()
 
 
-# Sixteen durable iterations repeatedly encode and inspect multi-megabyte images.
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "budget_kind,streaming",
     [("none", False), ("harness", False), ("provider", False), ("provider", True)],
@@ -543,12 +541,14 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     catalog["models"]["fake-model-vision"]["context_window"] = 1_000_000
     model_file.write_text(json.dumps(catalog), encoding="utf-8")
     rejected_sizes: list[int] = []
-    frames = [_PNG_BYTES + bytes([index]) * 1_400_000 for index in range(14)]
+    frames = [_PNG_BYTES + bytes([index]) * 140_000 for index in range(14)]
+    encoded = len(base64.b64encode(frames[0]))
+    # Image pressure retains the newest two frames, as the 4 MiB target does for
+    # multi-megabyte captures; scaled down, sixteen iterations stay fast.
+    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_BYTES_TARGET", encoded * 5 // 2)
     if tight_budget:
         # Exercise repeated eviction/reopening without a 150 MiB fixture per request.
-        monkeypatch.setattr(
-            wire_shaping, "REQUEST_IMAGE_BYTES_LIMIT", len(base64.b64encode(frames[0])) * 4
-        )
+        monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_BYTES_LIMIT", encoded * 4)
     responses: list[JsonObject] = [
         {
             "content": f"inspection-{index}",
@@ -646,7 +646,8 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
         "test-key",
         model_lookup=lambda model_id: runtime.models.get("fake-provider", model_id),
     )
-    monkeypatch.setattr(wire, "request_body_limit", lambda model_id: 10 * 1024 * 1024)
+    # Five encoded frames fit beside the request's ~40 KB of text and Tools; six do not.
+    monkeypatch.setattr(wire, "request_body_limit", lambda model_id: 1024 * 1024)
     monkeypatch.setattr(runtime.storage, "load_reflection_settings", lambda: {"enabled": False})
     try:
         # Exercise the exact shared artifact contract used by MCP binary results,
