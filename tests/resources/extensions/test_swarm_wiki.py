@@ -689,30 +689,43 @@ async def test_wiki_conflicts_show_what_changed_and_the_retry(board):
 
 @pytest.mark.asyncio
 async def test_wiki_page_references_resolve_only_for_reading(board):
-    page_id = await create(board, "Body", "Release plan")
-    typo = page_id[:-1] + ("x" if page_id[-1] != "x" else "y")
+    # Pages are numbered in creation order; a number names its page exactly.
+    assert (await create(board, "Body", "Release plan"), await create(board, "x", "B")) == (
+        "w1",
+        "w2",
+    )
+    stored_id = next(page["page_id"] for page in await pages(board) if page["number"] == 1)
+    for reference in ("w1", "1", "W1", stored_id, "[Release plan](#wiki/w1)", f"#wiki/{stored_id}"):
+        exact = await invoke(board, {"action": "read", "page_id": reference})
+        assert (exact["data"]["page_id"], exact["data"]["content"]) == ("w1", "Body")
+        assert "note" not in exact["data"]
+    assert exact["data"]["link"] == "[Release plan](#wiki/w1)"
     by_title = await invoke(board, {"action": "read", "page_id": "release plan"})
     assert by_title["data"]["content"] == "Body"
-    assert by_title["data"]["note"] == f"page_id release plan is a page title; used {page_id}."
-    by_close_id = await invoke(board, {"action": "read", "page_id": f"[link](#wiki/{typo})"})
+    assert by_title["data"]["note"] == "page_id release plan is a page title; used w1."
+    typo = stored_id[:-1] + ("x" if stored_id[-1] != "x" else "y")
+    by_close_id = await invoke(board, {"action": "read", "page_id": typo})
     assert by_close_id["data"]["note"] == (
-        f'page_id {typo} matched no page; used {page_id} ("Release plan").'
+        f'page_id {typo} matched no page; used w1 ("Release plan").'
     )
-    pasted = await invoke(board, {"action": "read", "page_id": f"[Release plan](#wiki/{page_id})"})
-    assert pasted["data"]["content"] == "Body" and "note" not in pasted["data"]
     # A change never lands on a guessed page.
     guessed = await invoke(board, {"action": "delete", "page_id": "Release plan"})
     assert visible(guessed) == (
         "Error (wiki_page_not_found): No page Release plan exists in your group's Wiki. The "
-        f'closest page is "Release plan" ({page_id}). Repeat the call with page_id "{page_id}" '
-        "if you meant it. Nothing changed."
+        'closest page is "Release plan" (w1). Repeat the call with page_id "w1" if you meant '
+        "it. Nothing changed."
     )
-    unknown = await invoke(board, {"action": "read", "page_id": "wpg_unrelated"})
-    assert visible(unknown) == (
-        "Error (wiki_page_not_found): No page wpg_unrelated exists in your group's Wiki. Find "
-        'pages with {"action": "list"}.'
-    )
-    assert not (await stored(board, page_id))["deleted"]
+    for unknown in ("w9", "wpg_unrelated"):
+        missing = await invoke(board, {"action": "read", "page_id": unknown})
+        assert visible(missing) == (
+            f"Error (wiki_page_not_found): No page {unknown} exists in your group's Wiki. Find "
+            'pages with {"action": "list"}.'
+        )
+    assert not (await stored(board, "w1"))["deleted"]
+    # A deleted page keeps its number, and a new page gets the next one.
+    assert (await invoke(board, {"action": "delete", "page_id": "w2"}))["ok"]
+    assert await create(board, "y", "C") == "w3"
+    assert (await stored(board, "w2"))["deleted"]
 
 
 @pytest.mark.asyncio

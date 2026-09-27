@@ -22,7 +22,7 @@ WIKI_PARAMETERS: dict[str, Any] = {
         },
         "page_id": {
             "type": "string",
-            "description": "Page ID, such as wpg_abc123. Required except for list and create.",
+            "description": 'Page ID, such as "w3". Required except for list and create.',
         },
         "title": {
             "type": "string",

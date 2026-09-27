@@ -18,6 +18,7 @@ from core.utils.timestamps import parse_timestamp
 from . import wiki_text as text
 from ._board_view import call_text, spoken_list
 from ._extension_values import AgentCallError, Json, _call_request_id
+from ._store_values import wiki_number, wiki_ref
 from ._store_wiki import _FIELDS, MUTATIONS
 from .agent_text import FIELD_IGNORED, LIMIT_CLAMPED, REPLAYED
 from .store import SwarmStore, SwarmStoreError
@@ -26,6 +27,8 @@ _READ_ONLY = frozenset({"list", "read", "history"})
 _MAX_LIMIT = {"read": 20000, "list": 100, "history": 100}
 # Preconditions request nothing an action that changes nothing could check.
 _PRECONDITIONS = ("expected_revision",)
+# A page link ends in "#wiki/w3"; a quoted stored page ID starts with "wpg_".
+_LINKED_PAGE = re.compile(r"#wiki/([A-Za-z0-9_]+)")
 _PAGE_ID = re.compile(r"wpg_[A-Za-z0-9]+")
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _CLOSE_MATCH = 0.85
@@ -67,6 +70,8 @@ class WikiCall:
         action = self._prepare(arguments)
         if action == "create" and "page_id" in arguments:
             await self._drop_create_page_id(arguments)
+        elif "page_id" in arguments:
+            await self._name_by_number(arguments)
         if action == "update" and "content" in arguments and "expected_revision" not in arguments:
             current = (await self._read_current(arguments["page_id"], action))["current_revision"]
             raise AgentCallError(
@@ -111,7 +116,7 @@ class WikiCall:
         page_id = arguments.get("page_id")
         if isinstance(page_id, str):
             # A pasted link or quoted ID still names exactly one page.
-            found = set(_PAGE_ID.findall(page_id))
+            found = set(_LINKED_PAGE.findall(page_id)) or set(_PAGE_ID.findall(page_id))
             arguments["page_id"] = (
                 found.pop() if len(found) == 1 else page_id.strip().strip("\"'`[]<>").strip()
             )
@@ -197,17 +202,23 @@ class WikiCall:
 
     async def _drop_create_page_id(self, arguments: Json) -> None:
         value = arguments.pop("page_id")
-        existing = next(
-            (page for page in await self.store.wiki_pages(self.sid) if page["page_id"] == value),
-            None,
-        )
+        existing = _named_page(value, await self.store.wiki_pages(self.sid))
         if existing is not None:
             raise AgentCallError(
                 "invalid_arguments",
-                text.WIKI_CREATE_EXISTING.format(title=existing["title"], page_id=value)
+                text.WIKI_CREATE_EXISTING.format(
+                    title=existing["title"], page_id=wiki_ref(existing["number"])
+                )
                 + f" {text.NOTHING_CHANGED}",
             )
         self.notes.append(text.WIKI_CREATE_IGNORED_ID.format(value=value))
+
+    async def _name_by_number(self, arguments: Json) -> None:
+        """Refer to a page the call names exactly by its number, as results show it."""
+
+        page = _named_page(arguments["page_id"], await self.store.wiki_pages(self.sid))
+        if page is not None:
+            arguments["page_id"] = wiki_ref(page["number"])
 
     async def _execute(self, action: str, arguments: Json) -> Json | None:
         # One correction replaces the page reference; a second failure is explained.
@@ -237,14 +248,13 @@ class WikiCall:
         if match is None:
             return False
         page, by_title = match
+        reference = wiki_ref(page["number"])
         self.notes.append(
-            text.WIKI_PAGE_TITLE.format(value=value, page_id=page["page_id"])
+            text.WIKI_PAGE_TITLE.format(value=value, page_id=reference)
             if by_title
-            else text.WIKI_PAGE_CLOSE.format(
-                value=value, page_id=page["page_id"], title=page["title"]
-            )
+            else text.WIKI_PAGE_CLOSE.format(value=value, page_id=reference, title=page["title"])
         )
-        arguments["page_id"] = page["page_id"]
+        arguments["page_id"] = reference
         return True
 
     async def _explain(self, error: SwarmStoreError, action: str, arguments: Json) -> Exception:
@@ -264,10 +274,11 @@ class WikiCall:
             parts = [text.WIKI_PAGE_NOT_FOUND.format(value=page_id)]
             if match is not None:
                 page = match[0]
+                reference = wiki_ref(page["number"])
                 parts.append(
-                    text.WIKI_PAGE_SUGGESTION.format(title=page["title"], page_id=page["page_id"])
+                    text.WIKI_PAGE_SUGGESTION.format(title=page["title"], page_id=reference)
                 )
-                parts.append(text.WIKI_PAGE_RETRY.format(page_id=page["page_id"]))
+                parts.append(text.WIKI_PAGE_RETRY.format(page_id=reference))
             else:
                 parts.append(text.WIKI_PAGE_FIND)
             return AgentCallError("wiki_page_not_found", closing(" ".join(parts)))
@@ -384,8 +395,9 @@ class WikiCall:
                 revision=data["revision"], current=data["current_revision"], author=author
             )
         )
+        reference = wiki_ref(data["number"])
         rendered: Json = {
-            "page_id": data["page_id"],
+            "page_id": reference,
             "title": data["title"],
             "revision": revision,
             "link": data["link"],
@@ -393,7 +405,7 @@ class WikiCall:
         if data["deleted"]:
             rendered["deleted"] = text.WIKI_READ_DELETED.format(
                 call=call_text(
-                    {"action": "restore", "page_id": data["page_id"], "revision": data["revision"]}
+                    {"action": "restore", "page_id": reference, "revision": data["revision"]}
                 )
             )
         start, content, total = data["offset"], data["content"], data["total_chars"]
@@ -428,7 +440,7 @@ class WikiCall:
         for entry in entries:
             block = text.WIKI_LIST_ENTRY.format(
                 title=entry["title"],
-                page_id=entry["page_id"],
+                page_id=wiki_ref(entry["number"]),
                 revision=entry["revision"],
                 author=entry["author"]["name"],
                 deleted=text.WIKI_ENTRY_DELETED if entry["deleted"] else "",
@@ -466,8 +478,9 @@ class WikiCall:
         return rendered
 
     def _mutation(self, action: str, data: Json, arguments: Json) -> Json:
+        reference = wiki_ref(data["number"])
         rendered: Json = {
-            "page_id": data["page_id"],
+            "page_id": reference,
             "title": data["title"],
             "revision": data["revision"],
         }
@@ -481,7 +494,7 @@ class WikiCall:
         elif action == "delete":
             rendered["status"] = status["deleted"].format(
                 call=call_text(
-                    {"action": "restore", "page_id": data["page_id"], "revision": data["revision"]}
+                    {"action": "restore", "page_id": reference, "revision": data["revision"]}
                 )
             )
         elif action == "restore":
@@ -512,13 +525,22 @@ class WikiCall:
                     call=call_text(
                         {
                             "action": "read",
-                            "page_id": data["page_id"],
+                            "page_id": reference,
                             "revision": data["revision"],
                             "offset": end,
                         }
                     )
                 )
         return rendered
+
+
+def _named_page(value: str, pages: list[Json]) -> Json | None:
+    """Return the page ``value`` names exactly, by its number or its stored ID."""
+
+    number = wiki_number(value)
+    return next(
+        (page for page in pages if page["page_id"] == value or page["number"] == number), None
+    )
 
 
 def _page_match(value: str, pages: list[Json]) -> tuple[Json, bool] | None:

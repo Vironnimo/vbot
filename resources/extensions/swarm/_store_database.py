@@ -137,8 +137,9 @@ DATABASE_NAME = "swarm"
 #
 # Every index names its reader:
 # - ``wiki_revision_page``: one page's revision history, the latest revision of
-#   each page for the page list, and the revision high-water mark
-#   (``_store_wiki.wiki``).
+#   each page for the page list, the revision high-water mark
+#   (``_store_wiki.wiki``), and each page's first revision, which orders the
+#   page numbers (``_store_wiki._page_numbers``).
 # - ``recipients_pending_participant``: a participant's undelivered Posts
 #   (``_store_records._pending_rows`` and ``_pending_count``, and
 #   ``_store_delivery._prepare_automatic_delivery``, which names it with

@@ -27,10 +27,12 @@ from core.utils.ids import new_id
 
 Json = dict[str, Any]
 
-# Participants refer to a post by its Board number ("#42") and to a discussion by
-# its number ("d2"); both are exact within one Swarm. Stored IDs stay valid too.
+# Participants refer to a post by its Board number ("#42"), to a discussion by its
+# number ("d2") and to a Wiki page by its number ("w3"); each is exact within one
+# Swarm. Stored IDs stay valid too.
 _POST_NUMBER = re.compile(r"#?(\d+)")
 _DISCUSSION_NUMBER = re.compile(r"[dD]?(\d+)")
+_WIKI_NUMBER = re.compile(r"[wW]?(\d+)")
 
 
 def post_ref(sequence: int) -> str:
@@ -39,6 +41,10 @@ def post_ref(sequence: int) -> str:
 
 def discussion_ref(sequence: int) -> str:
     return f"d{sequence}"
+
+
+def wiki_ref(number: int) -> str:
+    return f"w{number}"
 
 
 def post_number(value: str) -> int | None:
@@ -50,6 +56,12 @@ def post_number(value: str) -> int | None:
 def discussion_number(value: str) -> int | None:
     """Return the discussion number ``value`` names ("d2" or "2"), or None."""
     match = _DISCUSSION_NUMBER.fullmatch(value.strip())
+    return int(match.group(1)) if match else None
+
+
+def wiki_number(value: str) -> int | None:
+    """Return the Wiki page number ``value`` names ("w3" or "3"), or None."""
+    match = _WIKI_NUMBER.fullmatch(value.strip())
     return int(match.group(1)) if match else None
 
 
