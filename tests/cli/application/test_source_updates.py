@@ -135,14 +135,27 @@ def test_prepare_fast_forwards_recorded_branch_and_builds_exact_revision(
     _git(publisher, "push", "origin", "main")
     expected_revision = _git(publisher, "rev-parse", "HEAD")
     captured: dict[str, object] = {}
+    steps: list[str] = []
     monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *_: None)
-    monkeypatch.setattr("cli.application.customize._build_web_assets", lambda *_: None)
+    monkeypatch.setattr(
+        "cli.application.customize._build_web_assets", lambda *_: steps.append("web")
+    )
     monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
 
+    def build_native_hosts(_install, source, output, *, version):
+        steps.append("native")
+        assert source == checkout.resolve()
+        assert version == "1.2.3"
+        (output / "vBot.Server.exe").write_bytes(b"compiled")
+
     def candidate(*args, **kwargs):
+        steps.append("candidate")
         captured["args"] = args
         captured["kwargs"] = kwargs
+        captured["hosts"] = sorted(path.name for path in kwargs["native_hosts"].iterdir())
         return "local_candidate"
+
+    monkeypatch.setattr("cli.application.customize._build_native_hosts", build_native_hosts)
 
     monkeypatch.setattr("cli.application.customize._candidate", candidate)
 
@@ -152,7 +165,9 @@ def test_prepare_fast_forwards_recorded_branch_and_builds_exact_revision(
     assert captured["args"][3] == expected_revision  # type: ignore[index]
     options = captured["kwargs"]
     assert isinstance(options, dict)
-    assert options["rebuild_native_hosts"] is True
+    assert steps == ["native", "web", "candidate"]
+    assert captured["hosts"] == ["vBot.Server.exe"]
+    assert not options["native_hosts"].exists()
     assert options["source_version"] == "1.2.3"
     assert options["native_source_digest"] == "d" * 64
     assert options["build_inputs"] == source_updates.build_inputs(checkout, "server")
@@ -169,6 +184,7 @@ def test_candidate_failure_keeps_active_payload_and_clean_tracking_state(
     source_updates.bind_checkout(install, checkout)
     original_branch = _git(checkout, "symbolic-ref", "--short", "HEAD")
     monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *_: None)
+    monkeypatch.setattr("cli.application.customize._build_native_hosts", lambda *_a, **_k: None)
     monkeypatch.setattr("cli.application.customize._build_web_assets", lambda *_: None)
     monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
     monkeypatch.setattr(
@@ -198,6 +214,7 @@ def test_clean_local_commits_are_preserved_and_built(
     local_revision = _git(checkout, "rev-parse", "HEAD")
     captured: dict[str, object] = {}
     monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *_: None)
+    monkeypatch.setattr("cli.application.customize._build_native_hosts", lambda *_a, **_k: None)
     monkeypatch.setattr("cli.application.customize._build_web_assets", lambda *_: None)
     monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
 
@@ -302,6 +319,34 @@ def test_git_runs_windowless_and_retains_captured_failure(
     assert result.stderr == "captured error"
 
 
+def test_launcher_build_failure_stops_before_webui_and_dependency_work(
+    tmp_path: Path,
+    tracked_checkout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    checkout, _publisher = tracked_checkout
+    install = _install(tmp_path / "install")
+    source_updates.bind_checkout(install, checkout)
+    monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *_: None)
+    monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
+
+    def missing_compiler(*_args, **_kwargs):
+        raise ApplicationError("launchers need LLVM")
+
+    monkeypatch.setattr("cli.application.customize._build_native_hosts", missing_compiler)
+    for name in ("_build_web_assets", "_candidate"):
+        monkeypatch.setattr(
+            f"cli.application.customize.{name}",
+            lambda *_a, **_k: pytest.fail("the launcher build must fail first"),
+        )
+
+    with pytest.raises(ApplicationError, match="launchers need LLVM"):
+        source_updates.prepare_update(install, "upd_launchers")
+
+    assert install.version().name == "rel_old"
+    assert _git(checkout, "status", "--porcelain") == ""
+
+
 def test_desktop_client_source_update_skips_webui_build(
     tmp_path: Path,
     tracked_checkout: tuple[Path, Path],
@@ -315,6 +360,7 @@ def test_desktop_client_source_update_skips_webui_build(
         "cli.application.customize._build_web_assets",
         lambda *_: pytest.fail("Desktop Client must not build WebUI assets"),
     )
+    monkeypatch.setattr("cli.application.customize._build_native_hosts", lambda *_a, **_k: None)
     monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _source: "d" * 64)
     monkeypatch.setattr(
         "cli.application.customize._candidate", lambda *_args, **_kwargs: "local_candidate"
@@ -341,7 +387,12 @@ def test_same_verified_revision_is_a_noop_without_build_tools(
     monkeypatch.setattr(
         "cli.application.packages.validate_release", lambda *a, **kw: validated.append(a[0])
     )
-    for name in ("_candidate", "_ensure_candidate_environment", "_build_web_assets"):
+    for name in (
+        "_candidate",
+        "_ensure_candidate_environment",
+        "_build_native_hosts",
+        "_build_web_assets",
+    ):
         monkeypatch.setattr(
             f"cli.application.customize.{name}", lambda *a, **kw: pytest.fail("no build needed")
         )
@@ -392,9 +443,14 @@ def test_backend_update_reuses_web_assets_and_announces_target_before_build(
     manifest = {
         "build_inputs": source_updates.build_inputs(checkout, "server"),
         "revision": "a" * 40,
+        "native_source_digest": "d" * 64,
     }
     (install.version() / "release.json").write_text(json.dumps(manifest), encoding="utf-8")
     monkeypatch.setattr("cli.application.payload.native_source_digest", lambda _: "d" * 64)
+    monkeypatch.setattr(
+        "cli.application.customize._build_native_hosts",
+        lambda *_a, **_k: pytest.fail("unchanged launchers need no compiler"),
+    )
     monkeypatch.setattr("cli.application.customize._ensure_candidate_environment", lambda *a: None)
     monkeypatch.setattr(
         "cli.application.customize._build_web_assets",
@@ -405,6 +461,7 @@ def test_backend_update_reuses_web_assets_and_announces_target_before_build(
     def candidate(*args, **kwargs):
         assert any(target and "1.2.3" in target for target in targets)
         assert kwargs["build_inputs"] == manifest["build_inputs"]
+        assert kwargs["native_hosts"] is None
         return "local_new"
 
     monkeypatch.setattr("cli.application.customize._candidate", candidate)

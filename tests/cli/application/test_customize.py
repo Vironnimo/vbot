@@ -126,6 +126,10 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
     (base_site / "base_dependency.txt").write_text("base", encoding="utf-8")
     (base / "runtime" / "DLLs").mkdir()
     (base / "runtime" / "DLLs" / "sqlite3.dll").write_bytes(b"cpython sqlite")
+    (base / "runtime" / "vBot.Server.exe").write_bytes(b"base host")
+    compiled_hosts = tmp_path / "compiled-hosts"
+    compiled_hosts.mkdir()
+    (compiled_hosts / "vBot.Server.exe").write_bytes(b"compiled host")
     source = tmp_path / "source"
     source.mkdir()
     (source / "custom_source.txt").write_text("custom", encoding="utf-8")
@@ -193,7 +197,9 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
         if mode == "custom"
         else {"dependencies": "old" if mode == "locked_unchanged" else "new", "web": "web"}
     )
-    candidate_id = customize._candidate(install, source, "rel_base", "c" * 40, build_inputs=inputs)
+    candidate_id = customize._candidate(
+        install, source, "rel_base", "c" * 40, native_hosts=compiled_hosts, build_inputs=inputs
+    )
     candidate = install.version(candidate_id)
 
     # The installed base may carry stray bytecode; the fresh candidate must be exact.
@@ -218,6 +224,36 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
             assert Path(commands[0][-1]).name == "requirements-server.lock"
     manifest = json.loads((candidate / "release.json").read_text(encoding="utf-8"))
     assert manifest.get("build_inputs") == inputs
+    assert (candidate / "runtime" / "vBot.Server.exe").read_bytes() == b"compiled host"
+    assert (base / "runtime" / "vBot.Server.exe").read_bytes() == b"base host"
+    assert (
+        manifest["files"]["runtime/vBot.Server.exe"] == hashlib.sha256(b"compiled host").hexdigest()
+    )
+
+
+def test_launcher_build_failure_names_the_toolchain_and_keeps_the_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _server_install(tmp_path / "install")
+    source, output = tmp_path / "source", tmp_path / "hosts"
+    commands: list[list[str]] = []
+
+    def checked(working: Path, arguments: list[str], log: Path) -> None:
+        assert working == source
+        commands.append(arguments)
+        raise ApplicationError(f"Application preparation failed. Details: {log}")
+
+    monkeypatch.setattr(customize, "_checked_command", checked)
+
+    with pytest.raises(ApplicationError) as failure:
+        customize._build_native_hosts(install, source, output, version="1.2.3")
+
+    message = str(failure.value)
+    assert "LLVM (clang-cl and llvm-rc on PATH)" in message
+    assert "The running version is unchanged" in message
+    assert str(install.root / "development" / "source-update.log") in message
+    assert commands[0][-3:] == [str(source), str(output), "1.2.3"]
+    assert "compile_hosts" in commands[0][2]
 
 
 def test_web_build_runs_the_installed_npm_and_reads_the_node_version(
