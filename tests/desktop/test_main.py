@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import re
 import subprocess
 import sys
 import threading
@@ -413,7 +414,7 @@ def test_desktop_stays_a_thin_client_of_the_server() -> None:
         assert not _imported_packages(module) & {"server", "core", "cli"}, module
         source = module.read_text(encoding="utf-8").lower()
         for verb in ("start", "stop", "restart"):
-            assert f"server {verb}" not in source, module
+            assert not re.search(rf"\bserver {verb}\b", source), module
 
 
 def test_disabled_voice_builds_its_bridge_without_loading_the_audio_stack(
