@@ -107,27 +107,59 @@ async def test_absolute_file_access_does_not_auto_load_project_context(tmp_path:
     )
 
 
+def _project_skill_resolver(
+    tmp_path: Path,
+) -> tuple[Any, list[tuple[str | None, str | None]]]:
+    """Resolve the Project "vbot" to a pool with an always-allowed "deploy" Skill."""
+    _write_skill(tmp_path / "project-skills", "deploy")
+    global_skills = SkillRegistry.load(tmp_path / "global-skills", environment={})
+    project_skills = SkillRegistry.load(
+        tmp_path / "project-skills", environment={}, always_allowed=frozenset({"deploy"})
+    )
+    resolutions: list[tuple[str | None, str | None]] = []
+
+    def resolve_skills(project_id: str | None, agent_id: str | None) -> SkillRegistry:
+        resolutions.append((project_id, agent_id))
+        return project_skills if project_id == "vbot" else global_skills
+
+    return resolve_skills, resolutions
+
+
+def _call(call_id: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    return {"content": None, "tool_calls": [{"id": call_id, "name": name, "arguments": arguments}]}
+
+
+def _skill_runtime(
+    tmp_path: Path,
+    tools: ToolRegistry,
+    responses: list[dict[str, Any]],
+    resolve_skills: Any,
+    allowed_tools: list[str],
+) -> tuple[Any, StubAdapter]:
+    adapter = StubAdapter(responses)
+    agent = StubAgent(
+        id="coder", model="openai/gpt-5.2", allowed_tools=allowed_tools, allowed_skills=[]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.skills_for = resolve_skills
+    return runtime, adapter
+
+
+def _loaded_skills(runtime: Any, session_id: str) -> list[tuple[str, str]]:
+    return [
+        (activation[0], activation[1])
+        for message in runtime.chat_sessions.get(session_address("coder", session_id)).load()
+        if (activation := skill_tool_activation(message)) is not None
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("nesting_depth", [0, 1])
 async def test_project_tool_grants_project_skill_in_current_run_without_prompt_change(
     tmp_path: Path,
     nesting_depth: int,
 ) -> None:
-    global_skill_root = tmp_path / "global-skills"
-    project_skill_root = tmp_path / "project-skills"
-    _write_skill(project_skill_root, "deploy")
-    global_skills = SkillRegistry.load(global_skill_root, environment={})
-    project_skills = SkillRegistry.load(
-        project_skill_root,
-        environment={},
-        always_allowed=frozenset({"deploy"}),
-    )
-    skill_resolutions: list[tuple[str | None, str | None]] = []
-
-    def resolve_skills(project_id: str | None, agent_id: str | None) -> SkillRegistry:
-        skill_resolutions.append((project_id, agent_id))
-        return project_skills if project_id == "vbot" else global_skills
-
+    resolve_skills, resolutions = _project_skill_resolver(tmp_path)
     tools = ToolRegistry()
     tools.register(
         "project",
@@ -147,44 +179,17 @@ async def test_project_tool_grants_project_skill_in_current_run_without_prompt_c
         ),
     )
     register_skill_tool(tools, resolve_skills, lambda: None)
-    adapter = StubAdapter(
+    runtime, adapter = _skill_runtime(
+        tmp_path,
+        tools,
         [
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-project",
-                        "name": "project",
-                        "arguments": {"project_id": "vbot"},
-                    }
-                ],
-            },
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-skill",
-                        "name": "skill",
-                        "arguments": {"name": "deploy"},
-                    }
-                ],
-            },
+            _call("call-project", "project", {"project_id": "vbot"}),
+            _call("call-skill", "skill", {"name": "deploy"}),
             {"content": "Done", "tool_calls": None},
-        ]
+        ],
+        resolve_skills,
+        ["project", "skill"],
     )
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["project", "skill"],
-        allowed_skills=[],
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=tools,
-    )
-    runtime.skills_for = resolve_skills
     runtime.chat_sessions.create("coder", session_id="s1")
 
     loop = build_chat_loop(runtime)
@@ -192,134 +197,55 @@ async def test_project_tool_grants_project_skill_in_current_run_without_prompt_c
         loop = loop.child_loop(nesting_depth=nesting_depth)
     await loop.send("coder", "Deploy the Project", session_id="s1")
 
-    messages = runtime.chat_sessions.get(session_address("coder", "s1")).load()
-    loaded = [
-        activation
-        for message in messages
-        if (activation := skill_tool_activation(message)) is not None
-    ]
-    assert len(loaded) == 1
-    assert loaded[0][0] == "deploy"
-    assert "Use the Project workflow." in loaded[0][1]
-    assert ("vbot", "coder") in skill_resolutions
+    [(name, body)] = _loaded_skills(runtime, "s1")
+    assert name == "deploy"
+    assert "Use the Project workflow." in body
+    assert ("vbot", "coder") in resolutions
     system_prompts = [str(request["messages"][0]["content"]) for request in adapter.requests]
     assert system_prompts[0] == system_prompts[1] == system_prompts[2]
 
 
 @pytest.mark.asyncio
-async def test_loaded_project_skill_grant_is_recovered_in_later_run(tmp_path: Path) -> None:
-    global_skills = SkillRegistry.load(tmp_path / "global-skills", environment={})
-    project_skill_root = tmp_path / "project-skills"
-    _write_skill(project_skill_root, "deploy")
-    project_skills = SkillRegistry.load(
-        project_skill_root,
-        environment={},
-        always_allowed=frozenset({"deploy"}),
-    )
-
-    def resolve_skills(project_id: str | None, _agent_id: str | None) -> SkillRegistry:
-        return project_skills if project_id == "vbot" else global_skills
-
+async def test_persisted_project_load_restores_the_skill_scope_of_its_session_only(
+    tmp_path: Path,
+) -> None:
+    resolve_skills, resolutions = _project_skill_resolver(tmp_path)
     tools = ToolRegistry()
     register_skill_tool(tools, resolve_skills, lambda: None)
-    adapter = StubAdapter(
+    runtime, _adapter = _skill_runtime(
+        tmp_path,
+        tools,
         [
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-skill",
-                        "name": "skill",
-                        "arguments": {"name": "deploy"},
-                    }
-                ],
-            },
+            _call("call-skill", "skill", {"name": "deploy"}),
             {"content": "Done", "tool_calls": None},
-        ]
+            {"content": "Clean", "tool_calls": None},
+        ],
+        resolve_skills,
+        ["skill"],
     )
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        allowed_tools=["skill"],
-        allowed_skills=[],
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        tools=tools,
-    )
-    runtime.skills_for = resolve_skills
-    session = runtime.chat_sessions.create("coder", session_id="s1")
-    session.append(
+    loaded = runtime.chat_sessions.create("coder", session_id="loaded")
+    runtime.chat_sessions.create("coder", session_id="clean")
+    loaded.append(
         ChatMessage.assistant(
             model="test",
             content=None,
             tool_calls=[ToolCall(id="call-project", name="project", arguments={})],
         )
     )
-    session.append(
+    loaded.append(
         ChatMessage.tool(
             tool_call_id="call-project",
             name="project",
             content=json.dumps(tool_success({"status": "loaded", "project_id": "vbot"})),
         )
     )
+    loop = build_chat_loop(runtime).child_loop(nesting_depth=1)
 
-    await (
-        build_chat_loop(runtime)
-        .child_loop(nesting_depth=1)
-        .send("coder", "Continue Project work", session_id="s1")
-    )
-
-    activations = [
-        activation
-        for message in session.load()
-        if (activation := skill_tool_activation(message)) is not None
-    ]
-    assert [activation[0] for activation in activations] == ["deploy"]
-
-
-@pytest.mark.asyncio
-async def test_loaded_project_skill_scope_is_recovered_per_session(tmp_path: Path) -> None:
-    skills = SkillRegistry.load(tmp_path / "skills", environment={})
-    resolutions: list[tuple[str | None, str | None]] = []
-
-    def resolve_skills(project_id: str | None, agent_id: str | None) -> SkillRegistry:
-        resolutions.append((project_id, agent_id))
-        return skills
-
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
-    adapter = StubAdapter(
-        [
-            {"content": "First", "tool_calls": None},
-            {"content": "Second", "tool_calls": None},
-        ]
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.skills_for = resolve_skills
-    loaded_session = runtime.chat_sessions.create("coder", session_id="loaded")
-    clean_session = runtime.chat_sessions.create("coder", session_id="clean")
-    loaded_session.append(
-        ChatMessage.assistant(
-            model="test",
-            content=None,
-            tool_calls=[ToolCall(id="call-project", name="project", arguments={})],
-        )
-    )
-    loaded_session.append(
-        ChatMessage.tool(
-            tool_call_id="call-project",
-            name="project",
-            content=json.dumps(tool_success({"status": "loaded", "project_id": "vbot"})),
-        )
-    )
-    loop = build_chat_loop(runtime)
-
-    await loop.send("coder", "Continue", session_id=loaded_session.id)
+    await loop.send("coder", "Continue Project work", session_id="loaded")
     loaded_resolutions = list(resolutions)
     resolutions.clear()
-    await loop.send("coder", "Continue", session_id=clean_session.id)
+    await loop.send("coder", "Continue", session_id="clean")
 
+    assert [name for name, _body in _loaded_skills(runtime, "loaded")] == ["deploy"]
     assert ("vbot", "coder") in loaded_resolutions
     assert ("vbot", "coder") not in resolutions

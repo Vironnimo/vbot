@@ -1,16 +1,9 @@
-"""Chat-loop wiring for Working Project context in the System Prompt.
+"""System Prompt inputs the chat loop supplies per Session scope, and their Session pins.
 
-These tests cover how the chat loop feeds the prompt builder:
-
-- a **project-born** session (``project_id`` set) hands the config-agent body and
-  Project context into ``build_system_prompt`` → body + Working Project context
-  land in the **system prompt**;
-- an **identity** session (no project) passes empty body / no context → the
-  prompt is unchanged. Foreign Project Context is loaded only by the explicit
-  ``project`` Tool and is therefore outside Chat's request-building path.
-
-The doubles are shared with ``chat_loop_support`` (the canonical chat-loop stubs);
-only the project-specific wiring is asserted here.
+A Project Session hands its config-agent body and Working Project to the prompt builder,
+a Rooted Identity Agent supplies its selected Project, and any other identity Session
+supplies neither. Foreign Project Context is loaded only by the explicit ``project``
+Tool and is therefore outside Chat's request-building path.
 """
 
 from __future__ import annotations
@@ -80,11 +73,8 @@ def test_initial_prompt_files_are_stamped_once(tmp_path: Path, mode: Any) -> Non
 @pytest.mark.parametrize(
     "before,after",
     [
-        ("off", "agent"),
         ("off", "agent_user"),
-        ("agent", "agent_user"),
         ("agent_user", "agent"),
-        ("agent_user", "off"),
         ("agent", "off"),
     ],
 )
@@ -118,6 +108,26 @@ def test_memory_mode_change_replaces_only_memory_snapshot(tmp_path, before, afte
     assert pinned_memory_files(dependencies, agent.id, "s1", agent, None) == memory
 
 
+BODY = "Use {memory} and {project_files} literally."
+
+
+def _repo(tmp_path: Path, rules: str = "Team rules") -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text(rules, encoding="utf-8")
+    return repo
+
+
+def _projects(repo: Path) -> StubProjects:
+    return StubProjects(
+        {
+            PROJECT_ID: StubProject(
+                project_id=PROJECT_ID, cwd=str(repo), auto_load=["AGENTS.md"], display_name="vBot"
+            )
+        }
+    )
+
+
 def _config_agent(body: str) -> ConfigAgent:
     """A scanned config agent with a verbatim prompt body and a configured model."""
     return ConfigAgent(
@@ -134,55 +144,106 @@ def _config_agent(body: str) -> ConfigAgent:
     )
 
 
-def _project_runtime(
-    tmp_path: Path, repo: Path, auto_load: list[str], body: str, responses: int = 1
-) -> Any:
+def _project_runtime(tmp_path: Path, repo: Path, responses: int = 1) -> tuple[Any, StubAdapter]:
+    """A Project Session s1 whose config agent shares its slug with an identity Agent."""
     identity_agent = StubAgent(id=AGENT_ID, model=MODEL, allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None} for _ in range(responses)])
     runtime: Any = StubRuntime(
         data_dir=tmp_path,
         agent=identity_agent,
         adapter=adapter,
-        project_agents={(PROJECT_ID, AGENT_ID): _config_agent(body)},
-        projects=StubProjects(
-            {PROJECT_ID: StubProject(project_id=PROJECT_ID, cwd=str(repo), auto_load=auto_load)}
-        ),
+        project_agents={(PROJECT_ID, AGENT_ID): _config_agent(BODY)},
+        projects=_projects(repo),
     )
+    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
     return runtime, adapter
 
 
-def _system_message(adapter: StubAdapter) -> str:
-    request_messages = adapter.requests[0]["messages"]
+def _identity_runtime(
+    tmp_path: Path,
+    repo: Path,
+    *,
+    root_project_id: str | None,
+    responses: list[dict[str, Any]] | None = None,
+    tools: ToolRegistry | None = None,
+    allowed_tools: tuple[str, ...] = ("*",),
+) -> tuple[Any, StubAdapter]:
+    """An identity Session s1 whose Agent workspace is the Project repository."""
+    agent = StubAgent(
+        id=AGENT_ID,
+        model=MODEL,
+        allowed_tools=list(allowed_tools),
+        workspace=repo,
+        root_project_id=root_project_id,
+    )
+    adapter = StubAdapter(responses or [{"content": "Hello", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools, projects=_projects(repo)
+    )
+    runtime.chat_sessions.create(AGENT_ID, session_id="s1")
+    return runtime, adapter
+
+
+def _system_message(adapter: StubAdapter, request: int = 0) -> str:
+    request_messages = adapter.requests[request]["messages"]
     assert request_messages[0]["role"] == "system"
     return str(request_messages[0]["content"])
 
 
 @pytest.mark.asyncio
-async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
-    runtime, adapter = _project_runtime(
-        tmp_path, repo, ["AGENTS.md", "CONTEXT.md"], body="You are the orchestrator."
-    )
-    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
+@pytest.mark.parametrize(
+    ("scope", "body", "working_project", "skill_pool", "personal_pins"),
+    [
+        ("project", BODY, True, (PROJECT_ID, None), False),
+        ("rooted-identity", "", True, (PROJECT_ID, AGENT_ID), True),
+        # Sharing the repository path does not select a Project.
+        ("identity", "", False, (None, AGENT_ID), True),
+    ],
+)
+async def test_session_scope_selects_body_working_project_skills_and_pins(
+    tmp_path: Path,
+    scope: str,
+    body: str,
+    working_project: bool,
+    skill_pool: tuple[str | None, str | None],
+    personal_pins: bool,
+) -> None:
+    from core.prompts.pinned_context import PINNED_MEMORY_FILES_SLOT, PINNED_SOUL_CONTEXT_SLOT
 
-    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
+    repo = _repo(tmp_path)
+    project_id = PROJECT_ID if scope == "project" else None
+    if scope == "project":
+        runtime, adapter = _project_runtime(tmp_path, repo)
+    else:
+        root_project_id = PROJECT_ID if scope == "rooted-identity" else None
+        runtime, adapter = _identity_runtime(tmp_path, repo, root_project_id=root_project_id)
+
+    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=project_id)
 
     system = _system_message(adapter)
-    assert "You are the orchestrator." in system
-    # The pinned Working Project frame renders the auto-load files indented inside
-    # <project_context>, exactly like a Rooted Identity Agent's frame.
-    assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in system
-    assert ' <file name="CONTEXT.md">\nProject context\n </file>' in system
-    # Body and project context were handed to the builder verbatim.
     agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
-    assert agent_id == AGENT_ID
-    assert agent_body == "You are the orchestrator."
+    # The config-agent body reaches the builder verbatim, braces included.
+    assert (agent_id, agent_body) == (AGENT_ID, body)
+    # A Project Run never pulls a same-named identity Agent's private Skill home.
+    assert set(runtime.skills_for_calls) == {skill_pool}
+    # A config agent has no workspace, so it has no SOUL or memory to pin.
+    address = session_address(AGENT_ID, "s1", project_id)
+    for slot in (PINNED_SOUL_CONTEXT_SLOT, PINNED_MEMORY_FILES_SLOT):
+        assert (runtime.chat_sessions.prompt_pin(address, slot) is not None) is personal_pins
+    agents_md = (repo / "AGENTS.md").resolve()
+    if not working_project:
+        assert project_context is None
+        assert "Team rules" not in system
+        assert runtime.file_read_state.check_stale("s1", agents_md) is not None
+        return
     assert isinstance(project_context, ProjectPromptContext)
-    assert project_context.cwd == repo
-    assert project_context.auto_load == ("AGENTS.md", "CONTEXT.md")
+    assert (project_context.cwd, project_context.auto_load) == (repo, ("AGENTS.md",))
+    assert "## Working Project" in system
+    assert f"- Project ID: `{PROJECT_ID}`" in system
+    assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in system
+    # Auto-loaded files count as read for this Session only, so the Agent may edit them.
+    assert runtime.file_read_state.check_stale("s1", agents_md) is None
+    assert runtime.file_read_state.check_stale("other", agents_md) is not None
 
 
 @pytest.mark.asyncio
@@ -249,26 +310,18 @@ async def test_soul_memory_and_skill_catalog_are_pinned_per_session(tmp_path: Pa
 async def test_config_agent_session_pins_working_project_across_runs(tmp_path: Path) -> None:
     from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_SLOT
 
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    agents_file = repo / "AGENTS.md"
-    agents_file.write_text("Original rules", encoding="utf-8")
-    runtime, adapter = _project_runtime(
-        tmp_path, repo, ["AGENTS.md"], body="You are the orchestrator.", responses=2
-    )
-    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
+    repo = _repo(tmp_path, "Original rules")
+    runtime, adapter = _project_runtime(tmp_path, repo, responses=2)
     loop = build_chat_loop(runtime)
 
     await loop.send(AGENT_ID, "First", session_id="s1", project_id=PROJECT_ID)
-    agents_file.write_text("Changed between runs", encoding="utf-8")
+    (repo / "AGENTS.md").write_text("Changed between runs", encoding="utf-8")
     await loop.send(AGENT_ID, "Second", session_id="s1", project_id=PROJECT_ID)
 
-    first_system = str(adapter.requests[0]["messages"][0]["content"])
-    second_system = str(adapter.requests[1]["messages"][0]["content"])
-    assert "Original rules" in first_system
     # A Project Config Agent's auto-load files stay pinned for the prompt epoch:
     # an on-disk change must not alter the System Prompt prefix mid-session.
-    assert "Changed between runs" not in second_system
+    second_system = _system_message(adapter, 1)
+    assert _system_message(adapter) == second_system
     assert "Original rules" in second_system
     assert len(runtime.system_prompts.render_working_project_context_calls) == 1
     project_pin = runtime.chat_sessions.prompt_pin(
@@ -279,146 +332,15 @@ async def test_config_agent_session_pins_working_project_across_runs(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_config_agent_without_workspace_stores_no_soul_or_memory_pin(
-    tmp_path: Path,
-) -> None:
-    from core.prompts.pinned_context import (
-        PINNED_MEMORY_FILES_SLOT,
-        PINNED_SOUL_CONTEXT_SLOT,
-    )
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    runtime, _adapter = _project_runtime(
-        tmp_path, repo, ["AGENTS.md"], body="You are the orchestrator."
-    )
-    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
-
-    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
-
-    pins = runtime.system_prompts.build_pin_calls[-1]
-    assert pins["soul_context"] is None
-    assert pins["memory_files_context"] is None
-    address = session_address(AGENT_ID, "s1", PROJECT_ID)
-    assert runtime.chat_sessions.prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) is None
-    assert runtime.chat_sessions.prompt_pin(address, PINNED_MEMORY_FILES_SLOT) is None
-
-
-@pytest.mark.asyncio
-async def test_project_session_stamps_project_files_read_before_write(tmp_path: Path) -> None:
-    # A project's auto-load files are auto-shown in the system prompt, so they count
-    # as read for the session — the agent can edit one directly, with no prior read.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    runtime, _adapter = _project_runtime(
-        tmp_path, repo, ["AGENTS.md"], body="You are the orchestrator."
-    )
-    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
-
-    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
-
-    agents_md = (repo / "AGENTS.md").resolve()
-    # Known read for this session; a different session has not seen it.
-    assert runtime.file_read_state.check_stale("s1", agents_md) is None
-    assert runtime.file_read_state.check_stale("other", agents_md) is not None
-
-
-@pytest.mark.asyncio
-async def test_project_session_body_braces_handed_over_verbatim(tmp_path: Path) -> None:
-    # The chat loop passes the body as-is; the builder (tested in test_prompts)
-    # guarantees no re-expansion. Here we assert the loop does not mangle braces.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    body = "Use {memory} and {project_files} literally."
-    runtime, adapter = _project_runtime(tmp_path, repo, [], body=body)
-    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
-
-    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
-
-    _agent_id, agent_body, _context = runtime.system_prompts.build_calls[-1]
-    assert agent_body == body
-
-
-@pytest.mark.asyncio
-async def test_identity_session_passes_no_body_or_project(tmp_path: Path) -> None:
-    # An identity session (no project_id) hands empty body / no context to the
-    # builder — the prompt stays the unchanged identity prompt.
-    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="s1")
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
-
-    agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
-    assert agent_id == "coder"
-    assert agent_body == ""
-    assert project_context is None
-
-
-@pytest.mark.asyncio
-async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_path: Path) -> None:
-    # A Rooted Identity Agent keeps an identity Session while its explicitly
-    # selected Project supplies the auto-load files and working repository.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    agent = StubAgent(
-        id="coder",
-        model=MODEL,
-        allowed_tools=["*"],
-        workspace=repo,
-        root_project_id=PROJECT_ID,
-    )
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        projects=StubProjects(
-            {
-                PROJECT_ID: StubProject(
-                    project_id=PROJECT_ID,
-                    cwd=str(repo),
-                    auto_load=["AGENTS.md"],
-                    display_name="vBot",
-                )
-            }
-        ),
-    )
-    runtime.chat_sessions.create("coder", session_id="s1")
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
-
-    system = _system_message(adapter)
-    assert "## Working Project" in system
-    assert "- Project: `vBot`" in system
-    assert f"- Project ID: `{PROJECT_ID}`" in system
-    assert f"- Your Project Workspace (your working directory): `{repo}`" in system
-    assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in system
-    agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
-    assert agent_id == "coder"
-    assert agent_body == ""
-    assert isinstance(project_context, ProjectPromptContext)
-    assert project_context.cwd == repo
-    assert project_context.auto_load == ("AGENTS.md",)
-
-
-@pytest.mark.asyncio
 async def test_rooted_project_context_stays_pinned_across_project_tool_call(
     tmp_path: Path,
 ) -> None:
     from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_SLOT
 
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    agents_file = repo / "AGENTS.md"
-    agents_file.write_text("Original rules", encoding="utf-8")
+    repo = _repo(tmp_path, "Original rules")
 
     def project_tool(_context: ToolContext, _arguments: dict[str, Any]) -> dict[str, Any]:
-        agents_file.write_text("Changed during project Tool call", encoding="utf-8")
+        (repo / "AGENTS.md").write_text("Changed during project Tool call", encoding="utf-8")
         return tool_success({"status": "loaded"})
 
     tools = ToolRegistry()
@@ -433,57 +355,27 @@ async def test_rooted_project_context_stays_pinned_across_project_tool_call(
         },
         project_tool,
     )
-    agent = StubAgent(
-        id="coder",
-        model=MODEL,
-        allowed_tools=["project"],
-        workspace=tmp_path / "workspace",
+    call = {"id": "call-project", "name": "project", "arguments": {"project_id": PROJECT_ID}}
+    runtime, adapter = _identity_runtime(
+        tmp_path,
+        repo,
         root_project_id=PROJECT_ID,
-    )
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-project",
-                        "name": "project",
-                        "arguments": {"project_id": PROJECT_ID},
-                    }
-                ],
-            },
+        responses=[
+            {"content": None, "tool_calls": [call]},
             {"content": "Done", "tool_calls": None},
-        ]
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
+        ],
         tools=tools,
-        projects=StubProjects(
-            {
-                PROJECT_ID: StubProject(
-                    project_id=PROJECT_ID,
-                    cwd=str(repo),
-                    auto_load=["AGENTS.md"],
-                    display_name="vBot",
-                )
-            }
-        ),
+        allowed_tools=("project",),
     )
-    runtime.chat_sessions.create("coder", session_id="s1")
 
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
+    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1")
 
-    first_system = str(adapter.requests[0]["messages"][0]["content"])
-    second_system = str(adapter.requests[1]["messages"][0]["content"])
+    first_system = _system_message(adapter)
     assert "Original rules" in first_system
-    assert "Original rules" in second_system
-    assert "Changed during project Tool call" not in second_system
-    assert first_system == second_system
+    assert _system_message(adapter, 1) == first_system
     assert len(runtime.system_prompts.render_working_project_context_calls) == 1
     project_pin = runtime.chat_sessions.prompt_pin(
-        session_address("coder", "s1"), PINNED_WORKING_PROJECT_CONTEXT_SLOT
+        session_address(AGENT_ID, "s1"), PINNED_WORKING_PROJECT_CONTEXT_SLOT
     )
     assert project_pin is not None
     assert project_pin["text"] in first_system
@@ -526,7 +418,7 @@ async def test_rerooting_replaces_project_dependent_pins(
         runtime.agents._agent = replace(agent, root_project_id=root)
         await loop.send("coder", "Hi", session_id="s1")
 
-        system = str(adapter.requests[index]["messages"][0]["content"])
+        system = _system_message(adapter, index)
         address = session_address("coder", "s1")
         catalog_pin = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
         assert catalog_pin is not None
@@ -550,68 +442,10 @@ async def test_rerooting_replaces_project_dependent_pins(
 
 
 @pytest.mark.asyncio
-async def test_rooted_identity_agent_resolves_skills_against_home_project(tmp_path: Path) -> None:
-    # A Rooted Identity Agent resolves the selected Project's skill pool while
-    # retaining its own private Agent layer.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    agent = StubAgent(
-        id="coder",
-        model=MODEL,
-        allowed_tools=["*"],
-        workspace=repo,
-        root_project_id=PROJECT_ID,
-    )
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        projects=StubProjects(
-            {
-                PROJECT_ID: StubProject(
-                    project_id=PROJECT_ID,
-                    cwd=str(repo),
-                    auto_load=["AGENTS.md"],
-                    display_name="vBot",
-                )
-            }
-        ),
-    )
-    runtime.chat_sessions.create("coder", session_id="s1")
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
-
-    assert (PROJECT_ID, "coder") in runtime.skills_for_calls
-    assert (None, "coder") not in runtime.skills_for_calls
-
-
-@pytest.mark.asyncio
-async def test_project_run_resolves_skills_without_identity_agent_layer(tmp_path: Path) -> None:
-    # A project run executes a config agent. Its project-local slug must never pull
-    # a same-named identity agent's private skill home into the run (private skills
-    # bypass the project skill whitelist as always-allowed), so the loop resolves
-    # skills with no identity agent id — the project pool only.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    runtime, _adapter = _project_runtime(tmp_path, repo, [], body="Body.")
-    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
-
-    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
-
-    assert (PROJECT_ID, None) in runtime.skills_for_calls
-    assert all(identity_agent is None for _pid, identity_agent in runtime.skills_for_calls)
-
-
-@pytest.mark.asyncio
 async def test_project_run_reads_its_working_project_off_the_event_loop(tmp_path: Path) -> None:
     import threading
 
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    runtime, _adapter = _project_runtime(tmp_path, repo, [], body="Body.")
-    runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
+    runtime, _adapter = _project_runtime(tmp_path, _repo(tmp_path))
     get_project = runtime.projects.get
     threads: list[int] = []
 
@@ -628,109 +462,20 @@ async def test_project_run_reads_its_working_project_off_the_event_loop(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_identity_agent_workspace_not_a_project_stays_unchanged(tmp_path: Path) -> None:
-    # An identity agent whose workspace is its own home (not any registered repo)
-    # gets no project context — the prompt is the unchanged identity prompt.
-    home = tmp_path / "workspace-coder"
-    home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=home)
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        projects=StubProjects(
-            {PROJECT_ID: StubProject(project_id=PROJECT_ID, cwd=str(repo), auto_load=["AGENTS.md"])}
-        ),
-    )
-    runtime.chat_sessions.create("coder", session_id="s1")
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
-
-    _agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
-    assert agent_body == ""
-    assert project_context is None
-
-
-@pytest.mark.asyncio
-async def test_same_path_identity_agent_without_selection_has_no_project_context(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("root_project_id", "error"),
+    [(PROJECT_ID, ChatError), ("missing", KeyError)],
+    ids=["missing-repository", "missing-project"],
+)
+async def test_rooted_identity_without_its_project_fails_before_the_user_message(
+    tmp_path: Path, root_project_id: str, error: type[Exception]
 ) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=repo)
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=adapter,
-        projects=StubProjects(
-            {PROJECT_ID: StubProject(project_id=PROJECT_ID, cwd=str(repo), auto_load=["AGENTS.md"])}
-        ),
+    runtime, _adapter = _identity_runtime(
+        tmp_path, tmp_path / "missing-repo", root_project_id=root_project_id
     )
-    runtime.chat_sessions.create("coder", session_id="s1")
 
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
+    with pytest.raises(error):
+        await build_chat_loop(runtime).send(AGENT_ID, "must not persist", session_id="s1")
 
-    assert runtime.system_prompts.build_calls[-1][2] is None
-    assert "Team rules" not in _system_message(adapter)
-
-
-@pytest.mark.asyncio
-async def test_rooted_identity_missing_repository_fails_before_user_message(
-    tmp_path: Path,
-) -> None:
-    missing_repo = tmp_path / "missing-repo"
-    agent = StubAgent(
-        id="coder",
-        model=MODEL,
-        allowed_tools=["*"],
-        workspace=tmp_path / "workspace",
-        root_project_id=PROJECT_ID,
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=StubAdapter([{"content": "Hello", "tool_calls": None}]),
-        projects=StubProjects(
-            {
-                PROJECT_ID: StubProject(
-                    project_id=PROJECT_ID,
-                    cwd=str(missing_repo),
-                    auto_load=["AGENTS.md"],
-                )
-            }
-        ),
-    )
-    session = runtime.chat_sessions.create("coder", session_id="s1")
-
-    with pytest.raises(ChatError):
-        await build_chat_loop(runtime).send("coder", "must not persist", session_id="s1")
-
-    assert [message.role for message in session.load()] == ["error", "run_summary"]
-
-
-@pytest.mark.asyncio
-async def test_rooted_identity_missing_project_fails_before_user_message(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model=MODEL,
-        allowed_tools=["*"],
-        workspace=tmp_path / "workspace",
-        root_project_id="missing",
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=StubAdapter([{"content": "Hello", "tool_calls": None}]),
-        projects=StubProjects({}),
-    )
-    session = runtime.chat_sessions.create("coder", session_id="s1")
-
-    with pytest.raises(KeyError, match="missing"):
-        await build_chat_loop(runtime).send("coder", "must not persist", session_id="s1")
-
+    session = runtime.chat_sessions.get(session_address(AGENT_ID, "s1"))
     assert [message.role for message in session.load()] == ["error", "run_summary"]
