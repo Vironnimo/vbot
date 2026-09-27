@@ -29,14 +29,14 @@ def delay_os_launch(monkeypatch: pytest.MonkeyPatch) -> tuple[asyncio.Event, asy
     """Hold every later OS process creation until the returned release event is set."""
     started = asyncio.Event()
     release = asyncio.Event()
-    original = asyncio.create_subprocess_exec
+    original = process_manager_module.create_subprocess_exec
 
     async def delayed_spawn(*args, **kwargs):
         started.set()
         await release.wait()
         return await original(*args, **kwargs)
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
+    monkeypatch.setattr(process_manager_module, "create_subprocess_exec", delayed_spawn)
     return started, release
 
 
@@ -170,7 +170,7 @@ async def test_synchronous_stop_kills_running_processes_and_retires_a_late_launc
 async def test_cancel_during_os_launch_waits_and_kills_created_process(manager, monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
-    original = asyncio.create_subprocess_exec
+    original = process_manager_module.create_subprocess_exec
     processes = []
 
     async def delayed_return(*args, **kwargs):
@@ -180,7 +180,7 @@ async def test_cancel_during_os_launch_waits_and_kills_created_process(manager, 
         await release.wait()
         return proc
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_return)
+    monkeypatch.setattr(process_manager_module, "create_subprocess_exec", delayed_return)
     launch = asyncio.create_task(spawn(manager))
     await started.wait()
     try:

@@ -20,6 +20,7 @@ from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 from core.utils.processes import (
+    create_subprocess_exec,
     guarded_process_launch,
     kill_process_tree,
     kill_process_tree_async,
@@ -318,7 +319,7 @@ class ProcessManager:
         start_new_session = os.name != "nt"
         pass_fds = launch.pass_fds if os.name != "nt" else ()
 
-        proc = await asyncio.create_subprocess_exec(
+        proc = await create_subprocess_exec(
             *launch.argv,
             stdin=DEVNULL,
             stdout=PIPE,

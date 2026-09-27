@@ -10,6 +10,8 @@ Lets an Agent inspect and control only its own background processes created by t
 
 Shared OS launch flags, server-lifetime containment, and verified process-tree termination live in `core/utils/processes.py`; Bash/Process, Terminal, local Speech, and server startup use that owner. `ProcessManager` owns only tracked background command lifecycle and output.
 
+`ProcessManager` launches through `core.utils.processes.create_subprocess_exec`, never `asyncio.create_subprocess_exec` directly. On the Windows Proactor loop, the stdlib runs `CreateProcess` on the Event Loop thread, which stalled the live server for 1-4 s under antivirus or disk load; the shared helper creates the OS process on the bounded `process-launch` worker pool and then attaches the stdlib transport and stream protocol on the loop. A launch cancelled after creation kills the created process. Other platforms delegate to asyncio unchanged (`tests/core/utils/test_processes_launch.py`).
+
 ## Data Model
 
 - `process_id` values are distinct from Chat Session ids and identify only commands that `bash` started through `ProcessManager`. Every tracked process starts with stdin connected to `DEVNULL`; EOF is immediate and no later input can be sent. `TrackedProcess` has no input state or idle-input heuristic.
