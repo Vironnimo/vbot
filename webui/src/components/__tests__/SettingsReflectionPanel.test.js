@@ -50,24 +50,7 @@ describe('SettingsReflectionPanel', () => {
     document.body.innerHTML = '';
   });
 
-  it('seeds the form from the settings prop', () => {
-    mountedComponent = mount(SettingsReflectionPanel, {
-      target: document.body,
-      props: { settings: SETTINGS },
-    });
-    flushSync();
-
-    const toggle = document.body.querySelector('[role="switch"]');
-    expect(toggle.getAttribute('aria-checked')).toBe('false');
-    expect(
-      document.getElementById('settings-reflection-memory-interval').value,
-    ).toBe('10');
-    expect(
-      document.getElementById('settings-reflection-skill-interval').value,
-    ).toBe('10');
-  });
-
-  it('saves the toggled section and commits the server response', async () => {
+  it('seeds the form from settings and saves the edited section, then commits the response', async () => {
     const commits = [];
     mountedComponent = mount(SettingsReflectionPanel, {
       target: document.body,
@@ -78,46 +61,37 @@ describe('SettingsReflectionPanel', () => {
     });
     flushSync();
 
-    document.body.querySelector('[role="switch"]').click();
-    flushSync();
-    findSaveButton().click();
-    flushSync();
-    await waitForCondition(() => commits.length === 1);
-
-    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
-      reflection: {
-        enabled: true,
-        memory_turn_interval: 10,
-        skill_model_step_interval: 10,
-      },
-    });
-    expect(commits[0].reflection.enabled).toBe(true);
-  });
-
-  it('sends changed intervals on manual save', async () => {
-    mountedComponent = mount(SettingsReflectionPanel, {
-      target: document.body,
-      props: { settings: SETTINGS },
-    });
-    flushSync();
-
+    const toggle = document.body.querySelector('[role="switch"]');
     const memoryInput = document.getElementById(
       'settings-reflection-memory-interval',
     );
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(memoryInput.value).toBe('10');
+    expect(
+      document.getElementById('settings-reflection-skill-interval').value,
+    ).toBe('10');
+
+    toggle.click();
     memoryInput.value = '5';
     memoryInput.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
     findSaveButton().click();
     flushSync();
-    await waitForCondition(() => rpcMock.mock.calls.length === 1);
+    await waitForCondition(() => commits.length === 1);
 
-    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
-      reflection: {
-        enabled: false,
-        memory_turn_interval: 5,
-        skill_model_step_interval: 10,
-      },
-    });
+    expect(rpcMock.mock.calls).toEqual([
+      [
+        'settings.update',
+        {
+          reflection: {
+            enabled: true,
+            memory_turn_interval: 5,
+            skill_model_step_interval: 10,
+          },
+        },
+      ],
+    ]);
+    expect(commits[0].reflection.enabled).toBe(true);
   });
 });
 

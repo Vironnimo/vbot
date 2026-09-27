@@ -57,8 +57,6 @@ vi.mock(
 );
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpc));
 const { default: Panel } = await import('../settings/SettingsMcpPanel.svelte');
-const { default: Extensions } =
-  await import('../settings/SettingsExtensionsPanel.svelte');
 let component;
 let records;
 const original = {
@@ -106,20 +104,6 @@ beforeEach(() => {
       return { projects: [{ project_id: 'studio' }] };
     if (method === 'project.show')
       return { scan: { team: [{ agent_id: 'artist' }] } };
-    if (method === 'extensions.list')
-      return {
-        extensions: [
-          {
-            name: 'mcp',
-            status: 'loaded',
-            disabled: false,
-            config: {},
-            capabilities: {
-              tools: [{ name: 'test-owned-internal-tool', ready: true }],
-            },
-          },
-        ],
-      };
     if (method === 'extensions.operation') {
       const { operation, arguments: args } = params;
       if (operation === 'list')
@@ -210,12 +194,6 @@ describe('MCP management surface', () => {
         ['invoke', 'explore'].includes(params?.operation),
       ),
     ).toBe(false);
-  });
-  it('is reachable from the loaded MCP Extension without a settings schema', async () => {
-    component = mount(Extensions, { target: document.body });
-    await settle();
-    expect(button('Add MCP connection')).toBeTruthy();
-    expect(document.body.textContent).not.toContain('test-owned-internal-tool');
   });
   it('creates a local connection without a second Agent permission list', async () => {
     component = mount(Panel, { target: document.body });

@@ -70,6 +70,7 @@ describe('task model bindings', () => {
     ).toEqual([
       { id: 'target-1', label: 'Target 1', usable: true, kind: 'provider' },
     ]);
+    expect(normalizeTargets({})).toEqual([]);
 
     const fields = normalizeOptionSchema({
       schema: {

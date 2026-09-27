@@ -1,5 +1,9 @@
 // @vitest-environment jsdom
 
+// Shared harness for SettingsView and the settings panels: `$lib/api.js` is
+// routed through `rpcMock`, `createSettingsRpcMock` serves a stateful
+// settings backend, and the query helpers scope to the last opened section.
+
 import { expect, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
@@ -24,10 +28,6 @@ vi.mock('$lib/api.js', () =>
       rpcMock('task_model.update', { model_tasks: modelTasks }),
   }),
 );
-
-export const { default: AgentsView } = await import('../AgentsView.svelte');
-
-export const { default: SettingsView } = await import('../SettingsView.svelte');
 
 export function resetSettingsViewHarness() {
   document.body.innerHTML = '';
@@ -92,13 +92,6 @@ export async function openSubAgentsPanel() {
   );
 }
 
-export async function openCompactionPanel() {
-  await openSettingsSection('Compaction', 'compaction');
-  await waitForCondition(() =>
-    activeSection.textContent.includes('Summary model'),
-  );
-}
-
 export async function openRecallPanel() {
   await openSettingsSection('Memory', 'recall');
   await waitForCondition(() =>
@@ -110,23 +103,6 @@ export async function openWebSearchPanel() {
   await openSettingsSection('Tools', 'web_search');
   await waitForCondition(() =>
     activeSection.textContent.includes('Search provider'),
-  );
-}
-
-export async function openDefaultsPanel() {
-  await openSettingsSection('Agent defaults', 'defaults');
-  await waitForCondition(() =>
-    activeSection.textContent.includes('Fallback model'),
-  );
-}
-
-export async function openMediaModelsPanel() {
-  await openSettingsSection('Tools', 'media_models');
-  // The panel calls task_model.list_targets on mount; waiting for that call
-  // is the strongest signal the panel is mounted and its first paint is
-  // committed.
-  await waitForCondition(() =>
-    rpcMock.mock.calls.some((call) => call[0] === 'task_model.list_targets'),
   );
 }
 
@@ -143,7 +119,7 @@ export async function waitForModelCatalogs() {
 // (index nav, portaled dropdowns, and modals live outside the section).
 let activeSection = null;
 
-export function scopedQueryAll(selector) {
+function scopedQueryAll(selector) {
   const scoped = activeSection
     ? Array.from(activeSection.querySelectorAll(selector))
     : [];
@@ -209,7 +185,7 @@ export function getSettingsUpdateCalls() {
   return rpcMock.mock.calls.filter((call) => call[0] === 'settings.update');
 }
 
-export function scopedQuerySelector(selector) {
+function scopedQuerySelector(selector) {
   return (
     activeSection?.querySelector(selector) ??
     document.body.querySelector(selector)
@@ -221,14 +197,6 @@ export function setInputValue(selector, value) {
   expect(input).toBeTruthy();
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  flushSync();
-}
-
-export function setTextareaValue(selector, value) {
-  const textarea = scopedQuerySelector(selector);
-  expect(textarea).toBeTruthy();
-  textarea.value = value;
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
   flushSync();
 }
 
@@ -254,17 +222,17 @@ export function selectSearchableOption(id, label) {
   flushSync();
 }
 
-export function getSearchableRoot(id) {
+function getSearchableRoot(id) {
   return getSearchableTrigger(id)?.closest('.searchable-dropdown');
 }
 
-export function getSearchableTrigger(id) {
+function getSearchableTrigger(id) {
   const trigger = scopedQuerySelector(`button#${id}`);
   expect(trigger).toBeTruthy();
   return trigger;
 }
 
-export function getSearchablePanel() {
+function getSearchablePanel() {
   // The panel is portaled to <body>; only the open dropdown renders one.
   return document.body.querySelector('.searchable-dropdown__panel');
 }
@@ -290,12 +258,12 @@ export function getSimpleTrigger(id) {
   return trigger;
 }
 
-export function getSimpleList() {
+function getSimpleList() {
   // The list is portaled to <body>; only the open dropdown renders one.
   return document.body.querySelector('.dropdown-primitive__list');
 }
 
-export function stubTriggerRect(trigger, rect) {
+function stubTriggerRect(trigger, rect) {
   trigger.getBoundingClientRect = () => ({
     x: rect.left,
     y: rect.top,
@@ -309,7 +277,7 @@ export function stubTriggerRect(trigger, rect) {
   });
 }
 
-export function defaultTriggerRect() {
+function defaultTriggerRect() {
   return {
     left: 96,
     top: 144,
@@ -661,11 +629,11 @@ export function createSettingsRpcMock(options = {}) {
   };
 }
 
-export function deepClone(value) {
+function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-export function mergeSettingsPayload(currentSettings, patch) {
+function mergeSettingsPayload(currentSettings, patch) {
   const nextSettings = deepClone(currentSettings);
 
   if (patch?.appearance && typeof patch.appearance === 'object') {
@@ -784,7 +752,7 @@ export function agentsPayload() {
   ];
 }
 
-export function modelsPayload() {
+function modelsPayload() {
   return [
     {
       id: 'openai/gpt-5.2',
@@ -816,7 +784,7 @@ export function modelsPayload() {
   ];
 }
 
-export function connectionsPayload() {
+function connectionsPayload() {
   return [
     {
       id: 'openai:api-key',
@@ -905,6 +873,10 @@ export function settingsPayload(options = {}) {
     defaults: {
       agent: {},
     },
+    session_titles: {
+      enabled: false,
+      model: '',
+    },
     appearance: {
       language: 'en',
       available_languages: ['en'],
@@ -949,10 +921,10 @@ export function refreshResult() {
   };
 }
 
-export async function waitForCondition(check, attempts = 20) {
+export async function waitForCondition(check, attempts = 20, delayMs = 0) {
   for (let index = 0; index < attempts; index += 1) {
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
     flushSync();
 
     if (check()) {
