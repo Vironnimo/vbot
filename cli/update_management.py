@@ -37,7 +37,7 @@ from cli.install_state import (
     SERVER_DESKTOP_SHAPE,
     InstallState,
     InstallStateError,
-    file_digest,
+    dependency_digest,
     infer_legacy_install_state,
     read_install_state,
     write_install_state,
@@ -355,16 +355,24 @@ def run_update(
 
     announce("success", "Code is current")
     announce("busy", "Checking and installing Python dependencies")
+    current_digest = dependency_digest(repo)
     deps = _refresh_dependencies(
         run,
         repo,
         state,
+        current_digest,
         platform_name=effective_platform,
     )
     if deps.message:
         record(deps.message, deps.ok)
     if not deps.ok:
         return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
+    if state.dependency_digest != current_digest:
+        state = replace(state, dependency_digest=current_digest)
+        saved = _save_state(repo, state)
+        if not saved.ok:
+            record(saved.message, saved.ok)
+            return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
     announce("success", "Python dependencies are current")
     if state.install_shape != "desktop-client":
         announce("busy", "Checking the bundled search engine")
@@ -373,13 +381,6 @@ def run_update(
             record(f"search engine installation failed: {native.stderr or native.stdout}", False)
             return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
         announce("success", "Search engine is current")
-    current_digest = file_digest(repo / "pyproject.toml")
-    if state.dependency_digest != current_digest:
-        state = replace(state, dependency_digest=current_digest)
-        saved = _save_state(repo, state)
-        if not saved.ok:
-            record(saved.message, saved.ok)
-            return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
     announce("busy", "Checking command launcher and Desktop shortcuts")
     command_shim = _refresh_windows_command_shim(
@@ -571,7 +572,7 @@ def _applied_at(state: InstallState, repo: Path, *, track: str, revision: str) -
     return (
         state.source_track == track
         and state.applied_revision == revision
-        and state.dependency_digest == file_digest(repo / "pyproject.toml")
+        and state.dependency_digest == dependency_digest(repo)
         and (
             state.install_shape == DESKTOP_CLIENT_SHAPE
             or (
@@ -724,12 +725,13 @@ def _refresh_dependencies(
     run: Runner,
     repo: Path,
     state: InstallState,
+    current_digest: str,
     *,
     platform_name: str,
 ) -> _Step:
     """Apply the manifest's exact dependency groups until their digest is current."""
 
-    if file_digest(repo / "pyproject.toml") == state.dependency_digest:
+    if current_digest == state.dependency_digest:
         return _Step(True, "")
 
     desktop_guard = _guard_windows_desktop_not_running(

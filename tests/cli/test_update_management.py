@@ -12,6 +12,7 @@ import cli.update_management as update_management
 from cli import _update_assets
 from cli._update_types import UpdateResult, _SnapshotStep
 from cli.install_state import (
+    dependency_digest,
     read_install_state,
 )
 from cli.main import dispatch_update_command
@@ -754,6 +755,69 @@ def test_dispatch_update_passes_flags_through() -> None:
         "port": None,
         "data_dir": None,
     }
+
+
+def _dev_update_handler(
+    tmp_path: Path, *, pyproject_after: str, search_runtime: CommandRun | None = None
+) -> Callable[[list[str]], CommandRun]:
+    """Answer one dev update from ``old`` to ``new`` whose merge rewrites pyproject.toml."""
+
+    revisions = iter(["old", "new"])
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(next(revisions))
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
+        if command[:2] == ["git", "merge"]:
+            (tmp_path / "pyproject.toml").write_bytes(pyproject_after.encode())
+            return _ok()
+        if search_runtime is not None and command[1:] == ["-m", "cli.search_runtime"]:
+            return search_runtime
+        return _ok()
+
+    return handler
+
+
+def test_version_bump_does_not_reinstall_dependencies(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    project = '[project]\nname = "vbot"\nversion = "1.0.0"\ndependencies = ["httpx"]\n'
+    (tmp_path / "pyproject.toml").write_bytes(project.encode())
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("existing build", encoding="utf-8")
+    _write_state(tmp_path, revision="old", webui_revision="old")
+
+    runner = ScriptedRunner(
+        _dev_update_handler(tmp_path, pyproject_after=project.replace("1.0.0", "1.0.1"))
+    )
+    events, stop, start = _recording_restart()
+    result = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+
+    assert result.ok, result.message
+    assert not runner.ran("-m", "pip")
+    assert events == ["stop", "start"]
+
+
+def test_installed_dependencies_are_recorded_when_a_later_step_fails(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
+    _write_state(tmp_path, revision="old", webui_revision="old")
+
+    runner = ScriptedRunner(
+        _dev_update_handler(tmp_path, pyproject_after="after", search_runtime=_err("offline"))
+    )
+    events, stop, start = _recording_restart()
+    failed = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+
+    assert not failed.ok
+    assert runner.ran("-m", "pip", "install")
+    state = read_install_state(tmp_path)
+    assert state is not None
+    assert state.dependency_digest == dependency_digest(tmp_path)
+    assert events == []
 
 
 def test_dependency_failure_is_retried_after_head_already_advanced(tmp_path: Path) -> None:

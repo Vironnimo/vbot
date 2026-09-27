@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -118,7 +119,7 @@ def build_install_state(
             "python_executable": _absolute_path_preserving_symlinks(python_executable),
             "source_track": track,
             "applied_revision": revision,
-            "dependency_digest": file_digest(root / "pyproject.toml"),
+            "dependency_digest": dependency_digest(root),
             "webui_revision": webui_revision,
             "server_host": server_host,
             "server_port": server_port,
@@ -169,7 +170,7 @@ def infer_legacy_install_state(root: Path, *, track: str, revision: str) -> Inst
         python_executable=_absolute_path_preserving_symlinks(sys.executable),
         source_track=track,
         applied_revision=revision,
-        dependency_digest=file_digest(root / "pyproject.toml"),
+        dependency_digest=dependency_digest(root),
         webui_revision=webui_revision,
     )
 
@@ -188,13 +189,38 @@ def git_revision(root: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def file_digest(path: Path) -> str:
-    """Return a SHA-256 digest, or an empty string when the file is unavailable."""
+def dependency_digest(root: Path) -> str:
+    """Digest the ``pyproject.toml`` parts that decide what an editable install installs.
 
+    Covered are ``[build-system]``, ``[project]`` without its version, and
+    ``[tool.hatch]``.  A release version bump or a linter, type-checker, test or
+    vBot tool setting therefore does not force a reinstall; vBot reads its version
+    live from the file.  A file that does not parse falls back to its byte digest,
+    so no change is missed.  Returns an empty string when the file is unavailable.
+    """
+
+    path = root / "pyproject.toml"
     try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        content = path.read_bytes()
     except OSError:
         return ""
+    try:
+        document = tomllib.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return hashlib.sha256(content).hexdigest()
+    project = document.get("project")
+    tool = document.get("tool")
+    inputs = {
+        "build-system": document.get("build-system"),
+        "project": (
+            {key: value for key, value in project.items() if key != "version"}
+            if isinstance(project, dict)
+            else project
+        ),
+        "tool.hatch": tool.get("hatch") if isinstance(tool, dict) else None,
+    }
+    canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _absolute_path_preserving_symlinks(path: str) -> str:
