@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../../lib/i18n.js';
+import { init, t } from '../../../lib/i18n.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -29,56 +29,45 @@ describe('ProjectScanBanner', () => {
     document.body.innerHTML = '';
   });
 
-  it('renders nothing for a clean report', () => {
+  function mountBanner(props) {
     mountedComponent = mount(ProjectScanBanner, {
       target: document.body,
-      props: { report: { clean: true, findingCount: 0 } },
+      props,
     });
     flushSync();
+    return document.querySelector('.project-scan-banner');
+  }
 
-    expect(document.querySelector('.project-scan-banner')).toBeNull();
+  it.each([
+    ['a clean report', { clean: true, findingCount: 0 }],
+    ['an absent report', null],
+  ])('renders nothing for %s', (_case, report) => {
+    expect(mountBanner({ report })).toBeNull();
   });
 
-  it('renders nothing when the report is absent', () => {
-    mountedComponent = mount(ProjectScanBanner, {
-      target: document.body,
-      props: { report: null },
-    });
-    flushSync();
+  it.each([
+    [
+      'with its finding count',
+      { clean: false, findingCount: 3 },
+      t('chat.project.scanBannerCount', '', { count: 3 }),
+    ],
+    ['without a finding count', { clean: false }, t('chat.project.scanBanner')],
+  ])(
+    'shows a non-blocking banner for an unclean report %s',
+    (_case, report, message) => {
+      const onNavigateToProjects = vi.fn();
+      const banner = mountBanner({ report, onNavigateToProjects });
 
-    expect(document.querySelector('.project-scan-banner')).toBeNull();
-  });
+      expect(
+        banner.querySelector('.project-scan-banner__message').textContent,
+      ).toBe(message);
+      // Non-blocking: it is a status region, not a modal or alert.
+      expect(banner.getAttribute('role')).toBe('status');
 
-  it('shows a non-blocking banner with a finding count for an unclean report', () => {
-    mountedComponent = mount(ProjectScanBanner, {
-      target: document.body,
-      props: { report: { clean: false, findingCount: 3 } },
-    });
-    flushSync();
-
-    const banner = document.querySelector('.project-scan-banner');
-    expect(banner).not.toBeNull();
-    expect(banner.textContent).toContain('3');
-    // Non-blocking: it is a status region, not a modal/alert.
-    expect(banner.getAttribute('role')).toBe('status');
-  });
-
-  it('invokes the navigate callback when the review link is clicked', () => {
-    const onNavigateToProjects = vi.fn();
-    mountedComponent = mount(ProjectScanBanner, {
-      target: document.body,
-      props: {
-        report: { clean: false, findingCount: 1 },
-        onNavigateToProjects,
-      },
-    });
-    flushSync();
-
-    const link = document.querySelector('.project-scan-banner__link');
-    expect(link).not.toBeNull();
-    link.click();
-    flushSync();
-
-    expect(onNavigateToProjects).toHaveBeenCalledTimes(1);
-  });
+      const link = banner.querySelector('.project-scan-banner__link');
+      expect(link.textContent.trim()).toBe(t('chat.project.scanBannerLink'));
+      link.click();
+      expect(onNavigateToProjects).toHaveBeenCalledTimes(1);
+    },
+  );
 });

@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../../lib/i18n.js';
+import { init, t } from '../../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
@@ -29,6 +29,13 @@ const ACTIVITY = {
   delta: { status: 'unread', unreadCount: 1, latestUnreadAt: 5_000 },
   epsilon: { status: 'running', unreadCount: 0, latestUnreadAt: 0 },
 };
+
+const running = (name) => t('chat.agentActivity.running', '', { name });
+const idle = (name) => t('chat.agentActivity.idle', '', { name });
+const unread = (name, count) =>
+  count === 1
+    ? t('chat.agentActivity.unreadOne', '', { name })
+    : t('chat.agentActivity.unreadCount', '', { name, count });
 
 describe('ChatHeader', () => {
   let mountedComponent;
@@ -100,7 +107,7 @@ describe('ChatHeader', () => {
     expect(trigger.textContent).toContain('Beta');
     expect(trigger.querySelector('.tab-indicator--running')).toBeTruthy();
     expect(trigger.getAttribute('aria-label')).toBe(
-      'Select agent (Beta: Running)',
+      t('chat.agentPicker.label', '', { activity: running('Beta') }),
     );
 
     vi.useFakeTimers();
@@ -109,8 +116,10 @@ describe('ChatHeader', () => {
     const tooltipElement = document.getElementById('app-tooltip');
     expect(
       tooltipElement.querySelector('.app-tooltip__title').textContent,
-    ).toBe('Beta: Running');
-    expect(tooltipElement.querySelector('dt').textContent).toBe('Model');
+    ).toBe(running('Beta'));
+    expect(tooltipElement.querySelector('dt').textContent).toBe(
+      t('chat.agentActivity.model'),
+    );
     expect(tooltipElement.querySelector('dd').textContent).toBe(
       'anthropic/claude-sonnet-4',
     );
@@ -122,11 +131,11 @@ describe('ChatHeader', () => {
     const options = await openPicker();
 
     expect(options.map((option) => option.getAttribute('aria-label'))).toEqual([
-      'Beta: Running',
-      'Epsilon: Running',
-      'Delta: 1 unread result',
-      'Gamma: 2 unread results',
-      'Alpha: Idle',
+      running('Beta'),
+      running('Epsilon'),
+      unread('Delta', 1),
+      unread('Gamma', 2),
+      idle('Alpha'),
     ]);
     expect(
       options.map(
@@ -147,20 +156,16 @@ describe('ChatHeader', () => {
 
     // The selected Agent (Delta) is not a chip; idle Alpha has none.
     expect(chipLabels()).toEqual([
-      'Gamma: 2 unread results',
-      'Beta: Running',
-      'Epsilon: Running',
+      unread('Gamma', 2),
+      running('Beta'),
+      running('Epsilon'),
     ]);
-    const gammaChip = document.querySelector(
-      '.agent-chips > button[aria-label="Gamma: 2 unread results"]',
+    const [gammaChip, betaChip] = document.querySelectorAll(
+      '.agent-chips > button',
     );
     expect(gammaChip.querySelector('.tab-indicator--unread')).toBeTruthy();
     expect(gammaChip.querySelector('.count-badge')?.textContent).toBe('2');
-    expect(
-      document
-        .querySelector('.agent-chips > button[aria-label="Beta: Running"]')
-        .querySelector('.tab-indicator--running'),
-    ).toBeTruthy();
+    expect(betaChip.querySelector('.tab-indicator--running')).toBeTruthy();
 
     gammaChip.click();
     expect(onSelectAgent).toHaveBeenCalledWith('gamma');
@@ -204,9 +209,9 @@ describe('ChatHeader', () => {
     });
 
     expect(chipLabels()).toEqual([
-      'Delta: 1 unread result',
-      'Gamma: 2 unread results',
-      '2 more agents with activity',
+      unread('Delta', 1),
+      unread('Gamma', 2),
+      t('chat.agentChips.more', '', { count: 2 }),
     ]);
     const more = document.querySelector('.agent-chip--more');
     expect(more.textContent.trim()).toBe('+2');
@@ -275,7 +280,7 @@ describe('ChatHeader', () => {
       expect(document.activeElement?.getAttribute('role')).toBe('combobox');
     });
     const input = document.activeElement;
-    expect(input.getAttribute('aria-label')).toBe('Filter agents…');
+    expect(input.getAttribute('aria-label')).toBe(t('chat.agentPicker.filter'));
     input.value = 'ze';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
@@ -302,9 +307,9 @@ describe('ChatHeader', () => {
     expect(chipRow.classList.contains('agent-chips--compact')).toBe(true);
     const chips = Array.from(chipRow.querySelectorAll(':scope > button'));
     expect(chips.map((chip) => chip.getAttribute('aria-label'))).toEqual([
-      'Delta: 1 unread result',
-      'Beta: Running',
-      'Epsilon: Running',
+      unread('Delta', 1),
+      running('Beta'),
+      running('Epsilon'),
     ]);
     for (const chip of chips) {
       expect(chip.textContent.trim()).toBe('');
@@ -321,16 +326,16 @@ describe('ChatHeader', () => {
 
     expect(
       document.querySelector('.agent-switcher__personal-label')?.textContent,
-    ).toContain('Personal');
+    ).toContain(t('chat.personalBarLabel'));
     const trigger = pickerTrigger();
-    expect(trigger.getAttribute('aria-label')).toBe('Select agent');
-    expect(trigger.textContent).toContain('Select agent');
+    expect(trigger.getAttribute('aria-label')).toBe(t('chat.selectAgent'));
+    expect(trigger.textContent).toContain(t('chat.selectAgent'));
     expect(trigger.querySelector('.tab-indicator')).toBeNull();
     expect(chipLabels()).toEqual([
-      'Delta: 1 unread result',
-      'Gamma: 2 unread results',
-      'Beta: Running',
-      'Epsilon: Running',
+      unread('Delta', 1),
+      unread('Gamma', 2),
+      running('Beta'),
+      running('Epsilon'),
     ]);
   });
 
@@ -348,7 +353,7 @@ describe('ChatHeader', () => {
 
     expect(pickerTrigger()).toBeNull();
     expect(document.querySelector('.agent-switcher')?.textContent).toContain(
-      'No agents are available yet.',
+      t('chat.noAgents'),
     );
   });
 });

@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../../lib/i18n.js';
+import { init, t } from '../../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
@@ -16,40 +15,29 @@ const { default: ChatActivityPanel } =
 function subAgentTask({
   id,
   agentId,
-  content,
+  content = 'Review',
   status,
   delivery = 'automatic',
 }) {
+  const data = {
+    id: `sub-${id}`,
+    agent_id: agentId,
+    session_id: `session-${id}`,
+    status,
+    delivery,
+  };
   return {
     type: 'tool_call',
     id,
     name: 'subagent',
     status: 'success',
     arguments: { action: 'run', agent_id: agentId, content },
-    subAgentSession: {
-      id: `sub-${id}`,
-      agent_id: agentId,
-      session_id: `session-${id}`,
-      run_id: `run-${id}`,
-      status,
-      delivery,
-    },
-    result: {
-      ok: true,
-      error: null,
-      data: {
-        id: `sub-${id}`,
-        agent_id: agentId,
-        session_id: `session-${id}`,
-        status,
-        delivery,
-      },
-      artifacts: [],
-    },
+    subAgentSession: { ...data, run_id: `run-${id}` },
+    result: { ok: true, error: null, data, artifacts: [] },
   };
 }
 
-function backgroundBashTask({ id, command, status = 'running' }) {
+function backgroundBashTask({ id, command, ...fields }) {
   return {
     type: 'tool_call',
     id,
@@ -62,13 +50,62 @@ function backgroundBashTask({ id, command, status = 'running' }) {
       error: null,
       data: {
         process_id: `process-${id}`,
-        status,
+        status: 'running',
         delivery: 'automatic',
       },
       artifacts: [],
     },
+    ...fields,
   };
 }
+
+function lineChangeTool(name, path, added, removed) {
+  return {
+    type: 'tool_call',
+    id: `tool-${name}`,
+    name,
+    status: 'success',
+    arguments: { path },
+    startedEvent: {
+      type: 'tool_call_started',
+      payload: { tool_call: { id: `call-${name}`, name } },
+    },
+    resultEvent: {
+      type: 'tool_call_result',
+      payload: {
+        tool_call: { id: `call-${name}`, name },
+        display: {
+          version: 1,
+          summary: path,
+          hidden_argument_keys: [],
+          primary: [],
+          facts: [
+            { kind: 'line_change', change: 'added', value: added },
+            { kind: 'line_change', change: 'removed', value: removed },
+          ],
+        },
+      },
+    },
+  };
+}
+
+function runItem(items, id = 'assistant-run') {
+  return { id, type: 'assistant_run', items };
+}
+
+function rail() {
+  return document.querySelector('.chat-activity__rail');
+}
+
+function taskRows() {
+  return [...document.querySelectorAll('.chat-activity__task-row')];
+}
+
+function rowContaining(text) {
+  return taskRows().find((row) => row.textContent.includes(text));
+}
+
+const status = (key) => t(`chat.activity.status.${key}`);
 
 describe('ChatActivityPanel', () => {
   let mountedComponent;
@@ -85,267 +122,227 @@ describe('ChatActivityPanel', () => {
       mountedComponent = null;
     }
     document.body.innerHTML = '';
+    vi.useRealTimers();
   });
 
-  it('opens current Session tasks with cancel controls only for active work', async () => {
-    const navigate = vi.fn();
-    const cancelSubAgent = vi.fn();
-    const cancelBackgroundProcess = vi.fn();
-    const running = subAgentTask({
-      id: 'running',
-      agentId: 'builder',
-      content: 'Implement the sidebar',
-      status: 'running',
-    });
-    const completed = subAgentTask({
-      id: 'completed',
-      agentId: 'reviewer',
-      content: 'Review the layout',
-      status: 'completed',
-    });
-    const cancelled = subAgentTask({
-      id: 'cancelled',
-      agentId: 'writer',
-      content: 'Write the release notes',
-      status: 'cancelled',
-    });
-    const failed = subAgentTask({
-      id: 'failed',
-      agentId: 'tester',
-      content: 'Run the browser checks',
-      status: 'failed',
-    });
-    const foreground = subAgentTask({
-      id: 'foreground',
-      agentId: 'planner',
-      content: 'Run foreground checks',
-      status: 'completed',
-      delivery: 'inline',
-    });
-    const runningBash = backgroundBashTask({
-      id: 'bash-running',
-      command: 'npm run dev',
-    });
-    const failedBash = backgroundBashTask({
-      id: 'bash-failed',
-      command: 'npm test',
-    });
-
+  function mountPanel(props = {}) {
     mountedComponent = mount(ChatActivityPanel, {
       target: document.body,
-      props: {
-        timelineItems: [
-          {
-            id: 'assistant-run',
-            type: 'assistant_run',
-            items: [
-              completed,
-              cancelled,
-              failed,
-              foreground,
-              running,
-              failedBash,
-              runningBash,
-            ],
-          },
-        ],
-        backgroundBashStatuses: { 'process-bash-failed': 'failed' },
-        onNavigateToSubAgent: navigate,
-        onCancelSubAgent: cancelSubAgent,
-        onCancelBackgroundProcess: cancelBackgroundProcess,
-      },
+      props,
     });
     flushSync();
+  }
 
-    const rail = document.querySelector('.chat-activity__rail');
-    expect(rail).not.toBeNull();
-    expect(rail.getAttribute('aria-expanded')).toBe('false');
+  function openPanel(props) {
+    mountPanel(props);
+    rail().click();
+    flushSync();
+  }
+
+  // Sub-Agent Runs in every state (the running one listed last), a foreground
+  // Sub-Agent, and two Bash processes (one failed through its tracked status).
+  function sessionTasks() {
+    const tasks = {
+      completed: subAgentTask({
+        id: 'completed',
+        agentId: 'reviewer',
+        status: 'completed',
+      }),
+      cancelled: subAgentTask({
+        id: 'cancelled',
+        agentId: 'writer',
+        status: 'cancelled',
+      }),
+      failed: subAgentTask({
+        id: 'failed',
+        agentId: 'tester',
+        status: 'failed',
+      }),
+      foreground: subAgentTask({
+        id: 'foreground',
+        agentId: 'planner',
+        content: 'Run foreground checks',
+        status: 'completed',
+        delivery: 'inline',
+      }),
+      running: subAgentTask({
+        id: 'running',
+        agentId: 'builder',
+        content: 'Implement the sidebar',
+        status: 'running',
+      }),
+      failedBash: backgroundBashTask({
+        id: 'bash-failed',
+        command: 'npm test',
+      }),
+      runningBash: backgroundBashTask({
+        id: 'bash-running',
+        command: 'npm run dev',
+      }),
+    };
+    return {
+      tasks,
+      props: {
+        timelineItems: [runItem(Object.values(tasks))],
+        backgroundBashStatuses: { 'process-bash-failed': 'failed' },
+      },
+    };
+  }
+
+  it('opens the current Session tasks grouped by kind with their states', () => {
+    const { props } = sessionTasks();
+    mountPanel(props);
+    expect(rail().getAttribute('aria-expanded')).toBe('false');
     expect(document.querySelector('.chat-activity__panel')).toBeNull();
 
-    rail.click();
+    rail().click();
     flushSync();
 
-    expect(rail.getAttribute('aria-expanded')).toBe('true');
+    expect(rail().getAttribute('aria-expanded')).toBe('true');
     expect(document.querySelector('.chat-activity__title')).not.toBeNull();
-    const rows = [...document.querySelectorAll('.chat-activity__task-row')];
-    expect(rows).toHaveLength(6);
     const subagents = document.querySelector(
       '.chat-activity__group--subagents',
     );
     const bash = document.querySelector('.chat-activity__group--bash');
-    expect(subagents.querySelectorAll('.chat-activity__task-row')).toHaveLength(
-      4,
-    );
-    expect(bash.querySelectorAll('.chat-activity__task-row')).toHaveLength(2);
     expect([...document.querySelectorAll('.chat-activity__group')]).toEqual([
       subagents,
       bash,
     ]);
+    expect(subagents.querySelector('[data-status]').dataset.status).toBe(
+      'running',
+    );
     expect(bash.open).toBe(false);
     expect(bash.querySelector('.chat-activity__running-count')).not.toBeNull();
     bash.querySelector('summary').click();
     expect(bash.open).toBe(true);
-    expect(subagents.querySelector('[data-status]').dataset.status).toBe(
-      'running',
+
+    // Foreground Sub-Agents stay in the timeline only.
+    expect(document.body.textContent).not.toContain('Run foreground checks');
+    const subAgentRows = Object.fromEntries(
+      [...subagents.querySelectorAll('.chat-activity__task-row')].map((row) => [
+        row.querySelector('.chat-activity__task-name').textContent.trim(),
+        [
+          row
+            .querySelector('.chat-activity__task-link')
+            .getAttribute('aria-label'),
+          row.querySelector('[data-status]').dataset.status,
+        ],
+      ]),
     );
-    const runningSubAgentRow = rows.find(
-      (row) =>
-        row.querySelector('.chat-activity__task-name')?.textContent.trim() ===
-        'builder',
-    );
-    const runningSubAgentLink = runningSubAgentRow.querySelector(
-      '.chat-activity__task-link',
-    );
-    expect(runningSubAgentLink.getAttribute('aria-label')).toBe(
-      'Open builder Session · Working',
-    );
-    expect(
-      runningSubAgentRow.querySelector('[data-status="running"]'),
-    ).not.toBeNull();
-    const completedRow = rows.find(
-      (row) =>
-        row.querySelector('.chat-activity__task-name')?.textContent.trim() ===
-        'reviewer',
-    );
-    expect(
-      completedRow
-        .querySelector('.chat-activity__task-link')
-        .getAttribute('aria-label'),
-    ).toBe('Open reviewer Session · Completed');
-    expect(
-      completedRow.querySelector('[data-status="success"]'),
-    ).not.toBeNull();
-    const cancelledRow = rows.find(
-      (row) =>
-        row.querySelector('.chat-activity__task-name')?.textContent.trim() ===
-        'writer',
+    expect(subAgentRows).toEqual(
+      Object.fromEntries(
+        [
+          ['builder', 'running', 'running'],
+          ['reviewer', 'completed', 'success'],
+          ['writer', 'cancelled', 'cancelled'],
+          ['tester', 'failed', 'failed'],
+        ].map(([agent, statusKey, dot]) => [
+          agent,
+          [
+            t('chat.activity.taskAria', '', {
+              agent,
+              status: status(statusKey),
+            }),
+            dot,
+          ],
+        ]),
+      ),
     );
     expect(
-      cancelledRow
-        .querySelector('.chat-activity__task-link')
-        .getAttribute('aria-label'),
-    ).toBe('Open writer Session · Cancelled');
-    expect(
-      cancelledRow.querySelector('[data-status="cancelled"]'),
-    ).not.toBeNull();
-    const failedRow = rows.find(
-      (row) =>
-        row.querySelector('.chat-activity__task-name')?.textContent.trim() ===
-        'tester',
-    );
-    expect(
-      failedRow
-        .querySelector('.chat-activity__task-link')
-        .getAttribute('aria-label'),
-    ).toBe('Open tester Session · Failed');
-    expect(failedRow.querySelector('[data-status="failed"]')).not.toBeNull();
-    const runningBashRow = rows.find((row) =>
-      row.textContent.includes('npm run dev'),
-    );
-    expect(runningBashRow.tagName).toBe('DIV');
-    expect(runningBashRow.textContent.replace(/\s+/g, '')).toBe('npmrundev');
-    expect(runningBashRow.getAttribute('aria-label')).toBe(
-      'Bash · npm run dev · Working',
-    );
-    expect(
-      runningBashRow.querySelector('[data-status="running"]'),
-    ).not.toBeNull();
-    const failedBashRow = rows.find((row) =>
-      row.textContent.includes('npm test'),
-    );
-    expect(failedBashRow.tagName).toBe('DIV');
-    expect(failedBashRow.getAttribute('aria-label')).toBe(
-      'Bash · npm test · Failed',
-    );
-    expect(
-      failedBashRow.querySelector('[data-status="failed"]'),
-    ).not.toBeNull();
-    expect(document.querySelectorAll('.chat-activity__cancel')).toHaveLength(2);
-    expect(
-      runningSubAgentRow
-        .querySelector('[data-cancel-kind="subagent"]')
-        .getAttribute('aria-label'),
-    ).toBe('Cancel builder background task');
-    expect(
-      runningBashRow
-        .querySelector('[data-cancel-kind="bash"]')
-        .getAttribute('aria-label'),
-    ).toBe('Cancel Bash background process · npm run dev');
-    expect(cancelledRow.querySelector('.chat-activity__cancel')).toBeNull();
-    expect(failedBashRow.querySelector('.chat-activity__cancel')).toBeNull();
-    expect(
-      runningSubAgentRow.querySelector('.chat-activity__task-preview')
+      rowContaining('builder').querySelector('.chat-activity__task-preview')
         .textContent,
     ).toBe('Implement the sidebar');
-    expect(document.body.textContent).not.toContain('View session');
-    expect(document.body.textContent).not.toContain('Run foreground checks');
 
-    runningBashRow.click();
-    expect(navigate).not.toHaveBeenCalled();
-
-    runningSubAgentLink.click();
-    expect(navigate).toHaveBeenCalledWith({
-      agentId: 'builder',
-      sessionId: 'session-running',
-    });
-
-    runningSubAgentRow.querySelector('[data-cancel-kind="subagent"]').click();
-    runningBashRow.querySelector('[data-cancel-kind="bash"]').click();
-    await Promise.resolve();
-    expect(cancelSubAgent).toHaveBeenCalledWith({ tool: running });
-    expect(cancelBackgroundProcess).toHaveBeenCalledWith({
-      processId: 'process-bash-running',
-    });
-    expect(navigate).toHaveBeenCalledTimes(1);
+    // Bash rows are plain rows that show only their command.
+    for (const [command, statusKey, dot] of [
+      ['npm run dev', 'running', 'running'],
+      ['npm test', 'failed', 'failed'],
+    ]) {
+      const row = rowContaining(command);
+      expect(row.tagName).toBe('DIV');
+      expect(row.textContent.replace(/\s+/g, ' ').trim()).toBe(command);
+      expect(row.getAttribute('aria-label')).toBe(
+        t('chat.activity.bashTaskAria', '', {
+          command,
+          status: status(statusKey),
+        }),
+      );
+      expect(row.querySelector(`[data-status="${dot}"]`)).not.toBeNull();
+    }
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();
     expect(document.querySelector('.chat-activity__panel')).toBeNull();
   });
 
+  it('cancels only active work and navigates only from Sub-Agent links', async () => {
+    const { tasks, props } = sessionTasks();
+    const onNavigateToSubAgent = vi.fn();
+    const onCancelSubAgent = vi.fn();
+    const onCancelBackgroundProcess = vi.fn();
+    openPanel({
+      ...props,
+      onNavigateToSubAgent,
+      onCancelSubAgent,
+      onCancelBackgroundProcess,
+    });
+
+    const subAgentCancel = document.querySelector(
+      '[data-cancel-kind="subagent"]',
+    );
+    const bashCancel = document.querySelector('[data-cancel-kind="bash"]');
+    expect(document.querySelectorAll('.chat-activity__cancel')).toHaveLength(2);
+    expect(subAgentCancel.closest('.chat-activity__task-row')).toBe(
+      rowContaining('builder'),
+    );
+    expect(subAgentCancel.getAttribute('aria-label')).toBe(
+      t('chat.activity.cancelSubAgentAria', '', { agent: 'builder' }),
+    );
+    expect(bashCancel.getAttribute('aria-label')).toBe(
+      t('chat.activity.cancelBashAria', '', { command: 'npm run dev' }),
+    );
+
+    rowContaining('npm run dev').click();
+    expect(onNavigateToSubAgent).not.toHaveBeenCalled();
+    rowContaining('builder').querySelector('.chat-activity__task-link').click();
+    expect(onNavigateToSubAgent).toHaveBeenCalledWith({
+      agentId: 'builder',
+      sessionId: 'session-running',
+    });
+
+    subAgentCancel.click();
+    bashCancel.click();
+    await Promise.resolve();
+    expect(onCancelSubAgent).toHaveBeenCalledWith({ tool: tasks.running });
+    expect(onCancelBackgroundProcess).toHaveBeenCalledWith({
+      processId: 'process-bash-running',
+    });
+    expect(onNavigateToSubAgent).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves the Bash disclosure choice while running work updates the clock', async () => {
     vi.useFakeTimers();
-    try {
-      mountedComponent = mount(ChatActivityPanel, {
-        target: document.body,
-        props: {
-          timelineItems: [
-            {
-              id: 'run',
-              type: 'assistant_run',
-              items: [
-                subAgentTask({
-                  id: 'a',
-                  agentId: 'alba',
-                  content: 'Review',
-                  status: 'running',
-                }),
-                backgroundBashTask({ id: 'b', command: 'npm run dev' }),
-              ],
-            },
-          ],
-        },
-      });
-      flushSync();
-      document.querySelector('.chat-activity__rail').click();
-      flushSync();
-      const bash = document.querySelector('details');
-      expect(bash.open).toBe(false);
+    openPanel({
+      timelineItems: [
+        runItem([
+          subAgentTask({ id: 'a', agentId: 'alba', status: 'running' }),
+          backgroundBashTask({ id: 'b', command: 'npm run dev' }),
+        ]),
+      ],
+    });
+
+    const bash = document.querySelector('details');
+    expect(bash.open).toBe(false);
+    for (const open of [true, false]) {
       bash.querySelector('summary').click();
       await vi.advanceTimersByTimeAsync(1100);
       flushSync();
-      expect(bash.open).toBe(true);
-      bash.querySelector('summary').click();
-      await vi.advanceTimersByTimeAsync(1100);
-      flushSync();
-      expect(bash.open).toBe(false);
-    } finally {
-      vi.useRealTimers();
+      expect(bash.open).toBe(open);
     }
   });
 
   it('keeps panel identities separate in split Chat and restores focus on Escape', async () => {
-    mountedComponent = mount(ChatActivityPanel, { target: document.body });
+    mountPanel();
     const second = mount(ChatActivityPanel, { target: document.body });
     try {
       flushSync();
@@ -370,265 +367,120 @@ describe('ChatActivityPanel', () => {
     }
   });
 
-  it('shows a calm empty state when the Session has no background work', () => {
-    mountedComponent = mount(ChatActivityPanel, {
-      target: document.body,
-      props: { timelineItems: [] },
-    });
-    flushSync();
+  it('shows calm empty states when the Session has no work or changes', () => {
+    openPanel({ timelineItems: [], reflectionTasks: [] });
 
-    document.querySelector('.chat-activity__rail').click();
-    flushSync();
-
-    expect(document.querySelector('.chat-activity__empty')).toBeTruthy();
-    expect(document.querySelector('.chat-activity__parent-link')).toBeNull();
+    expect(
+      document.querySelector('.chat-activity__empty').textContent,
+    ).toContain(t('chat.activity.empty'));
+    expect(
+      document.querySelector('.chat-activity__stats-empty').textContent.trim(),
+    ).toBe(t('chat.activity.statsEmpty'));
+    expect(
+      document.querySelector(
+        '.chat-activity__group, .chat-activity__parent-link',
+      ),
+    ).toBeNull();
   });
 
   it.each([
     ['running', 'running'],
     ['completed', 'success'],
   ])(
-    'opens overlapping History/live background work in %s state',
-    (status, dotStatus) => {
+    'lists overlapping History and live background work once in %s state',
+    (processStatus, dot) => {
       const bash = backgroundBashTask({
         id: 'overlap',
         command: 'npm run build',
       });
-      mountedComponent = mount(ChatActivityPanel, {
-        target: document.body,
-        props: {
-          timelineItems: [
-            { id: 'history-run', type: 'assistant_run', items: [bash] },
-            {
-              id: 'live-run',
-              type: 'assistant_run',
-              items: [{ ...bash, id: 'live-tool' }],
-            },
-          ],
-          backgroundBashStatuses: { 'process-overlap': status },
-        },
+      openPanel({
+        timelineItems: [
+          runItem([bash], 'history-run'),
+          runItem([{ ...bash, id: 'live-tool' }], 'live-run'),
+        ],
+        backgroundBashStatuses: { 'process-overlap': processStatus },
       });
-      flushSync();
 
-      document.querySelector('.chat-activity__rail').click();
-      flushSync();
-
-      expect(document.querySelector('.chat-activity__panel')).not.toBeNull();
-      expect(
-        document.querySelectorAll('.chat-activity__task-row'),
-      ).toHaveLength(1);
-      expect(
-        document.querySelector(`[data-status="${dotStatus}"]`),
-      ).not.toBeNull();
+      expect(taskRows()).toHaveLength(1);
+      expect(document.querySelector(`[data-status="${dot}"]`)).not.toBeNull();
       expect(
         document.querySelectorAll('[data-cancel-kind="bash"]'),
-      ).toHaveLength(status === 'running' ? 1 : 0);
-      document.querySelector('.chat-activity__rail').click();
+      ).toHaveLength(processStatus === 'running' ? 1 : 0);
+      rail().click();
       flushSync();
       expect(document.querySelector('.chat-activity__panel')).toBeNull();
     },
   );
 
   it('shows the resolved Parent Session as a navigation link', async () => {
-    const navigateToParent = vi.fn();
+    const onNavigateToParentSession = vi.fn();
     const target = {
       agentAddress: 'alpha',
       sessionId: 'source-session',
       isSubAgentSession: false,
     };
-    mountedComponent = mount(ChatActivityPanel, {
-      target: document.body,
-      props: {
-        timelineItems: [],
-        parentSession: {
-          displayName: 'Original research',
-          target,
-        },
-        onNavigateToParentSession: navigateToParent,
-      },
+    openPanel({
+      timelineItems: [],
+      parentSession: { displayName: 'Original research', target },
+      onNavigateToParentSession,
     });
-    flushSync();
-
-    document.querySelector('.chat-activity__rail').click();
-    flushSync();
 
     expect(
       document.querySelector('.chat-activity__parent h3').textContent.trim(),
-    ).toBe('Parent Session');
+    ).toBe(t('chat.activity.parentSession'));
     const parentLink = document.querySelector('.chat-activity__parent-link');
     expect(parentLink.textContent.trim()).toBe('Original research');
     expect(parentLink.getAttribute('aria-label')).toBe(
-      'Open parent Session · Original research',
+      t('chat.activity.openParentSession', '', {
+        session: 'Original research',
+      }),
     );
 
     parentLink.click();
     await Promise.resolve();
-    expect(navigateToParent).toHaveBeenCalledWith(target);
-  });
-
-  it('keeps completed Subagent Runs visible without a separate status group', () => {
-    mountedComponent = mount(ChatActivityPanel, {
-      target: document.body,
-      props: {
-        timelineItems: [
-          {
-            id: 'assistant-run',
-            type: 'assistant_run',
-            items: [
-              subAgentTask({
-                id: 'completed',
-                agentId: 'reviewer',
-                content: 'Review the result',
-                status: 'completed',
-              }),
-            ],
-          },
-        ],
-      },
-    });
-    flushSync();
-
-    document.querySelector('.chat-activity__rail').click();
-    flushSync();
-
-    expect(document.querySelector('.chat-activity__group--active')).toBeNull();
-    expect(
-      document.querySelector('.chat-activity__group--subagents h3'),
-    ).toBeTruthy();
+    expect(onNavigateToParentSession).toHaveBeenCalledWith(target);
   });
 
   it('shows the aggregated Session change stats above the tasks', async () => {
-    mountedComponent = mount(ChatActivityPanel, {
-      target: document.body,
-      props: {
-        timelineItems: [
-          {
-            id: 'assistant-run',
-            type: 'assistant_run',
-            items: [
-              {
-                type: 'tool_call',
-                id: 'tool-edit-1',
-                name: 'edit',
-                status: 'success',
-                arguments: { path: 'a.txt' },
-                startedEvent: {
-                  type: 'tool_call_started',
-                  payload: { tool_call: { id: 'call-edit-1', name: 'edit' } },
-                },
-                resultEvent: {
-                  type: 'tool_call_result',
-                  payload: {
-                    tool_call: { id: 'call-edit-1', name: 'edit' },
-                    display: {
-                      version: 1,
-                      summary: 'a.txt',
-                      hidden_argument_keys: [],
-                      primary: [],
-                      facts: [
-                        { kind: 'line_change', change: 'added', value: 3 },
-                        { kind: 'line_change', change: 'removed', value: 2 },
-                      ],
-                    },
-                  },
-                },
-              },
-            ],
-          },
-          {
-            id: 'assistant-run-2',
-            type: 'assistant_run',
-            items: [
-              {
-                type: 'tool_call',
-                id: 'tool-write-1',
-                name: 'write',
-                status: 'success',
-                arguments: { path: 'b.txt' },
-                startedEvent: {
-                  type: 'tool_call_started',
-                  payload: { tool_call: { id: 'call-write-1', name: 'write' } },
-                },
-                resultEvent: {
-                  type: 'tool_call_result',
-                  payload: {
-                    tool_call: { id: 'call-write-1', name: 'write' },
-                    display: {
-                      version: 1,
-                      summary: 'b.txt',
-                      hidden_argument_keys: [],
-                      primary: [],
-                      facts: [
-                        { kind: 'line_change', change: 'added', value: 5 },
-                        { kind: 'line_change', change: 'removed', value: 0 },
-                      ],
-                    },
-                  },
-                },
-              },
-            ],
-          },
-        ],
-      },
+    openPanel({
+      timelineItems: [
+        runItem([lineChangeTool('edit', 'a.txt', 3, 2)]),
+        runItem([lineChangeTool('write', 'b.txt', 5, 0)], 'assistant-run-2'),
+      ],
     });
-    flushSync();
 
-    document.querySelector('.chat-activity__rail').click();
-    flushSync();
-
+    const filesChanged = `${t('chat.changeStats.filesMany', '', { count: 2 })},`;
     const statsValue = document.querySelector('.chat-activity__stats-value');
-    expect(statsValue).toBeTruthy();
-    expect(statsValue.getAttribute('aria-label')).toBe(
-      '2 files changed, +8 -2',
-    );
-    const parts = [
-      ...statsValue.querySelectorAll('.chat-activity__stats-part'),
-    ];
-    expect(parts.map((part) => part.textContent.trim())).toEqual([
-      '2 files changed,',
-      '+8',
-      '-2',
+    expect(statsValue.getAttribute('aria-label')).toBe(`${filesChanged} +8 -2`);
+    expect(
+      [...statsValue.querySelectorAll('.chat-activity__stats-part')].map(
+        (part) => [
+          part.textContent.trim(),
+          ['added', 'removed'].find((variant) =>
+            part.classList.contains(`chat-activity__stats-part--${variant}`),
+          ) ?? null,
+        ],
+      ),
+    ).toEqual([
+      [filesChanged, null],
+      ['+8', 'added'],
+      ['-2', 'removed'],
     ]);
-    expect(
-      parts[1].classList.contains('chat-activity__stats-part--added'),
-    ).toBe(true);
-    expect(
-      parts[2].classList.contains('chat-activity__stats-part--removed'),
-    ).toBe(true);
-    expect(
-      parts[0].classList.contains('chat-activity__stats-part--added'),
-    ).toBe(false);
     expect(document.querySelector('.chat-activity__stats-empty')).toBeNull();
 
     vi.useFakeTimers();
     statsValue.dispatchEvent(new Event('pointerenter'));
     await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
     flushSync();
-    expect(document.getElementById('app-tooltip')?.textContent).toBe(
+    expect(document.getElementById('app-tooltip').textContent).toBe(
       'a.txt\nb.txt',
     );
     statsValue.dispatchEvent(new Event('pointerleave'));
-    vi.useRealTimers();
   });
 
-  it('shows a calm empty state for the Session stats when nothing changed', () => {
-    mountedComponent = mount(ChatActivityPanel, {
-      target: document.body,
-      props: { timelineItems: [] },
-    });
-    flushSync();
-
-    document.querySelector('.chat-activity__rail').click();
-    flushSync();
-
-    expect(
-      document.querySelector('.chat-activity__stats-empty').textContent.trim(),
-    ).toBe('No changes yet');
-  });
-
-  it('lists reflection reviews per scope with navigation and no cancel control', async () => {
-    const openReflection = vi.fn();
-    const navigate = vi.fn();
+  it('lists reflection reviews with navigation and no cancel control', async () => {
+    const onOpenReflection = vi.fn();
+    const onNavigateToSubAgent = vi.fn();
     const runningReview = {
       runId: 'run-refl-running',
       sessionId: 'session-fork-running',
@@ -645,20 +497,12 @@ describe('ChatActivityPanel', () => {
       status: 'completed',
       startedAt: '2026-08-24T10:00:00.000Z',
     };
-
-    mountedComponent = mount(ChatActivityPanel, {
-      target: document.body,
-      props: {
-        timelineItems: [],
-        reflectionTasks: [finishedReview, runningReview],
-        onOpenReflection: openReflection,
-        onNavigateToSubAgent: navigate,
-      },
+    openPanel({
+      timelineItems: [],
+      reflectionTasks: [finishedReview, runningReview],
+      onOpenReflection,
+      onNavigateToSubAgent,
     });
-    flushSync();
-
-    document.querySelector('.chat-activity__rail').click();
-    flushSync();
 
     const reflections = document.querySelector(
       '.chat-activity__group--reflections',
@@ -669,147 +513,70 @@ describe('ChatActivityPanel', () => {
     expect(reflections.querySelector('[data-status]').dataset.status).toBe(
       'running',
     );
-    const rows = [...document.querySelectorAll('.chat-activity__task-row')];
-    const runningRow = rows.find((row) =>
-      row.textContent.includes('Memory review'),
-    );
+    const memoryScope = t('chat.activity.reflectionScope.memory');
+    const runningRow = rowContaining(memoryScope);
     const runningLink = runningRow.querySelector('.chat-activity__task-link');
     expect(runningLink.getAttribute('aria-label')).toBe(
-      'Open Memory review Session · Working',
+      t('chat.activity.reflectionOpenAria', '', {
+        scope: memoryScope,
+        status: status('running'),
+      }),
     );
     expect(runningRow.querySelector('[data-status="running"]')).not.toBeNull();
     // Running reviews show coarse elapsed time from their start timestamp.
     expect(runningRow.textContent).toMatch(/·\s*\d+s/);
-
-    const finishedRow = rows.find((row) =>
-      row.textContent.includes('Skill review'),
-    );
+    const finishedRow = rowContaining(t('chat.activity.reflectionScope.skill'));
     expect(finishedRow.textContent).not.toMatch(/\d+s/);
     expect(finishedRow.querySelector('[data-status="success"]')).not.toBeNull();
-
-    // Reviews are server-owned background Runs; they expose navigation but no
-    // cancel affordance.
-    expect(document.querySelectorAll('.chat-activity__cancel')).toHaveLength(0);
+    // Reviews are server-owned background Runs: navigation, but no cancel.
+    expect(document.querySelector('.chat-activity__cancel')).toBeNull();
 
     runningLink.click();
     await Promise.resolve();
-    expect(openReflection).toHaveBeenCalledWith(runningReview);
-    expect(navigate).not.toHaveBeenCalled();
-
+    expect(onOpenReflection).toHaveBeenCalledWith(runningReview);
+    expect(onNavigateToSubAgent).not.toHaveBeenCalled();
     finishedRow.querySelector('.chat-activity__task-link').click();
     await Promise.resolve();
-    expect(openReflection).toHaveBeenCalledWith(finishedReview);
-  });
-
-  it('keeps the empty state when neither tasks nor reflections exist', () => {
-    mountedComponent = mount(ChatActivityPanel, {
-      target: document.body,
-      props: { timelineItems: [], reflectionTasks: [] },
-    });
-    flushSync();
-
-    document.querySelector('.chat-activity__rail').click();
-    flushSync();
-
-    expect(document.querySelector('.chat-activity__empty')).toBeTruthy();
-    expect(document.querySelector('.chat-activity__group--active')).toBeNull();
-    expect(
-      document.querySelector('.chat-activity__group--finished'),
-    ).toBeNull();
+    expect(onOpenReflection).toHaveBeenCalledWith(finishedReview);
   });
 
   it('shows Bash background runtimes from terminal data on panel rows', () => {
-    const finishedBash = {
-      type: 'tool_call',
-      id: 'bash-done',
-      name: 'bash',
-      status: 'success',
-      resultEvent: { type: 'tool_call_result' },
-      arguments: { command: 'npm run build', mode: 'background' },
-      timing: {
-        started_at: '2026-09-04T12:00:00+00:00',
-        completed_at: '2026-09-04T12:00:01+00:00',
-        duration_ms: 1000,
-      },
-      result: {
-        ok: true,
-        error: null,
-        data: {
-          process_id: 'process-done',
-          status: 'running',
-          delivery: 'automatic',
-        },
-        artifacts: [],
-      },
+    const timing = {
+      started_at: '2026-09-04T12:00:00+00:00',
+      completed_at: '2026-09-04T12:00:01+00:00',
+      duration_ms: 1000,
     };
-    const runningBash = {
-      type: 'tool_call',
-      id: 'bash-ticking',
-      name: 'bash',
-      status: 'success',
-      resultEvent: { type: 'tool_call_result' },
-      arguments: { command: 'npm run dev', mode: 'background' },
-      timing: {
-        started_at: '2026-09-04T12:00:00+00:00',
-        completed_at: '2026-09-04T12:00:01+00:00',
-        duration_ms: 1000,
-      },
-      result: {
-        ok: true,
-        error: null,
-        data: {
-          process_id: 'process-ticking',
-          status: 'running',
-          delivery: 'automatic',
+    openPanel({
+      timelineItems: [
+        runItem([
+          backgroundBashTask({ id: 'done', command: 'npm run build', timing }),
+          backgroundBashTask({ id: 'ticking', command: 'npm run dev', timing }),
+        ]),
+      ],
+      backgroundBashProcesses: {
+        'process-done': {
+          status: 'completed',
+          exitCode: 0,
+          cancelledByUser: false,
+          startedAt: '2026-09-04T12:00:00+00:00',
+          finishedAt: '2026-09-04T12:04:12+00:00',
+          output: 'built',
+          truncated: false,
+          logFile: '',
         },
-        artifacts: [],
       },
-    };
-
-    mountedComponent = mount(ChatActivityPanel, {
-      target: document.body,
-      props: {
-        timelineItems: [
-          {
-            id: 'run-1',
-            type: 'assistant_run',
-            items: [finishedBash, runningBash],
-          },
-        ],
-        backgroundBashProcesses: {
-          'process-done': {
-            status: 'completed',
-            exitCode: 0,
-            cancelledByUser: false,
-            startedAt: '2026-09-04T12:00:00+00:00',
-            finishedAt: '2026-09-04T12:04:12+00:00',
-            output: 'built',
-            truncated: false,
-            logFile: '',
-          },
-        },
-        reflectionTasks: [],
-      },
+      reflectionTasks: [],
     });
-    flushSync();
 
-    document.querySelector('.chat-activity__rail').click();
-    flushSync();
-
-    const finishedRow = [
-      ...document.querySelectorAll('.chat-activity__task-row'),
-    ].find((row) => row.textContent.includes('npm run build'));
+    const finishedRow = rowContaining('npm run build');
     expect(finishedRow.querySelector('[data-status="success"]')).not.toBeNull();
     expect(
-      finishedRow.querySelector('.chat-activity__task-time')?.textContent,
+      finishedRow.querySelector('.chat-activity__task-time').textContent,
     ).toContain('4m 12s');
-
-    const runningRow = [
-      ...document.querySelectorAll('.chat-activity__task-row'),
-    ].find((row) => row.textContent.includes('npm run dev'));
-    expect(runningRow.querySelector('[data-status="running"]')).not.toBeNull();
     // The running row ticks from the panel's own clock, so only its presence
-    // is asserted; the finished row above asserts the exact runtime label.
+    // is asserted.
+    const runningRow = rowContaining('npm run dev');
+    expect(runningRow.querySelector('[data-status="running"]')).not.toBeNull();
     expect(
       runningRow.querySelector('.chat-activity__task-time'),
     ).not.toBeNull();
