@@ -20,8 +20,9 @@ work in progress are reported without blocking.
 pytest runs the tests affected by the working tree through pytest-testmon, which
 compares the code each test executed last time with the current code, plus the
 tests that read a staged data file (``tests/file_dependencies.py``,
-``scripts/_test_impact.py``). A change to
-``pyproject.toml`` or to a file read during collection runs the complete suite.
+``scripts/_test_impact.py``). A change to ``pyproject.toml`` or to a file read
+during collection runs the complete suite. A merge commit runs only the tests
+that neither this checkout's nor the merged worktree's test runs cover as merged.
 A failing test blocks the commit when it depends on a staged file or only on
 committed code; failures that depend on another session's unstaged work are
 reported without blocking. Vitest runs the tests related to staged WebUI
@@ -30,6 +31,7 @@ sources plus the guard tests, and the WebUI build runs.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -61,8 +63,6 @@ EXTENSION_UI_PATTERN = re.compile(
 )
 MYPY_LINE_PATTERN = re.compile(r"^(?P<path>[^:\n]+?):\d+(?::\d+)?: (?:error|note):")
 PYTEST_SUMMARY_PATTERN = re.compile(r"^(?:FAILED|ERROR) (?P<test>.+?)(?: - .*)?$")
-# Changes that can affect any test: pytest and plugin configuration.
-FULL_SUITE_TRIGGERS = frozenset({"pyproject.toml"})
 TESTS_LOCK_NAME = "vbot-commit-tests.lock"
 TESTS_ARGUMENTS_NAME = "vbot-commit-tests.args"
 # Recorded test seconds per xdist worker; starting a worker costs about a second.
@@ -441,18 +441,10 @@ def _primary_checkout(root: Path) -> Path | None:
     return common.parent
 
 
-def _adopt_test_impact_data(root: Path, lock_path: Path) -> None:
-    """Give this checkout the best available test-impact data before selecting tests.
-
-    A merge commit adopts the records of the worktree that holds the merged branch:
-    its commits ran their tests on the branch's code, so the merge reruns only what
-    main's own changes since the fork affect. A worktree without records copies the
-    primary checkout's.
-    """
-    source = _merged_branch_checkout(root)
-    if source is None and not (root / file_dependencies.TESTMON_DATA).is_file():
-        source = _primary_checkout(root)
-    if source is None:
+def _adopt_primary_data(root: Path, lock_path: Path) -> None:
+    """Give a worktree without test-impact data a copy of the primary checkout's."""
+    source = _primary_checkout(root)
+    if source is None or (root / file_dependencies.TESTMON_DATA).is_file():
         return
     with _exclusive(lock_path):
         try:
@@ -463,6 +455,31 @@ def _adopt_test_impact_data(root: Path, lock_path: Path) -> None:
         print(f"Commit check: using the test-impact data of {source}.", flush=True)
 
 
+def _merge_selection(
+    root: Path, branch: Path, selection: _test_impact.Selection
+) -> _test_impact.Selection:
+    """Narrow a merge commit's *selection* to the tests neither side ran as merged.
+
+    *selection* judges the merge against this checkout's test runs. The worktree
+    *branch* ran its tests on the merged branch, which the merge changes by the
+    commits made here since the fork. A test either side leaves out passed there
+    with the code and files it has now. This checkout adopts the branch's record
+    of each test whose current state the branch tested, so later commits here
+    judge that test by it.
+    """
+    since_branch = _git_paths(root, "diff", "--cached", "MERGE_HEAD", "--name-only", "--no-renames")
+    on_branch = _test_impact.select(root, since_branch, records=branch)
+    tested_on_branch = {
+        test
+        for test in on_branch.durations
+        if selection.selects(test) and not on_branch.selects(test)
+    }
+    with contextlib.suppress(OSError, sqlite3.Error):
+        _test_impact.adopt(branch, root, tested_on_branch)
+    print(f"Commit check: reusing the test runs of {branch}.", flush=True)
+    return selection & on_branch
+
+
 def _workers(seconds: float) -> list[str]:
     """Size xdist to the recorded test duration; short runs are fastest in one process."""
     workers = math.ceil(seconds / SECONDS_PER_WORKER)
@@ -471,74 +488,57 @@ def _workers(seconds: float) -> list[str]:
     return ["-n", str(min(workers, os.cpu_count() or 1))]
 
 
-def _test_runs(
-    root: Path,
-    changed: list[str],
-    python_changed: bool,
-    complete: bool,
-    readers: set[str],
-    arguments_file: Path,
-) -> list[tuple[str, list[str]]]:
-    # testmon only records here (--testmon-noselect): this hook selects the tests,
-    # because testmon selecting inside each xdist worker races with the records
-    # the other workers write.
-    pytest = [sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header", "--testmon-noselect"]
-    if complete:
-        return [("complete suite", [*pytest, "-n", "auto"])]
-    runs: list[tuple[str, list[str]]] = []
-    if python_changed:
-        selection = _test_impact.select(root)
-        if selection.complete:
-            print(
-                "Commit check: no usable test-impact data in this checkout; this commit runs "
-                "the complete suite once to record it (about 10 minutes).",
-                flush=True,
-            )
-            return [("complete suite", [*pytest, "-n", "auto"])]
-        # Staged test modules may hold tests testmon has not recorded yet. Other
-        # sessions' new test modules are left to their own commits.
-        staged_tests = [path for path in changed if TEST_MODULE_PATTERN.match(path)]
-        arguments = selection.pytest_arguments(root, staged_tests)
-        if arguments:
-            arguments_file.write_text("\n".join(arguments) + "\n", encoding="utf-8")
-            workers = _workers(selection.seconds)
-            runs.append(("affected by code", [*pytest, *workers, f"@{arguments_file}"]))
-    # testmon selects by Python code only; run the modules of data-file readers
-    # without its selection. Deleted tests leave stale records behind.
-    modules = sorted({test.partition("::")[0] for test in readers})
-    modules = [module for module in modules if (root / module).is_file()]
-    if modules:
-        runs.append(("reading staged data files", [*pytest, *modules]))
-    return runs
+def _pytest_command(
+    root: Path, selection: _test_impact.Selection, staged_tests: list[str], arguments_file: Path
+) -> list[str] | None:
+    # testmon only records here: this hook selects the tests. testmon's selection
+    # plugin would select and order them inside each xdist worker from records the
+    # controller rewrites meanwhile, and xdist needs every worker to collect alike.
+    pytest = [sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header"]
+    pytest += ["--testmon-noselect", "-p", "no:TestmonSelect"]
+    if selection.complete:
+        print(
+            "Commit check: running the complete suite (about 5-10 minutes): no usable "
+            "test-impact data yet, or a change that can affect any test.",
+            flush=True,
+        )
+        return [*pytest, "-n", "auto"]
+    arguments = selection.pytest_arguments(root, staged_tests)
+    if not arguments:
+        return None
+    arguments_file.write_text("\n".join(arguments) + "\n", encoding="utf-8")
+    return [*pytest, *_workers(selection.seconds), f"@{arguments_file}"]
 
 
 def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepResult]:
     """Run the pytest tests affected by *changed*, the staged and deleted paths."""
     git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir").strip())
     lock_path = git_dir / TESTS_LOCK_NAME
-    _adopt_test_impact_data(root, lock_path)
+    branch = _merged_branch_checkout(root)
+    if branch is None:
+        _adopt_primary_data(root, lock_path)
+    selection = _test_impact.select(root, changed)
+    # Staged test modules may hold tests no record knows yet. Other sessions' new
+    # test modules are left to their own commits.
+    staged_tests = [path for path in changed if TEST_MODULE_PATTERN.match(path)]
     python_changed = any(Path(path).suffix in PYTHON_SUFFIXES for path in changed)
-    data_files = {path for path in changed if Path(path).suffix not in PYTHON_SUFFIXES}
-    readers = _test_impact.readers(root, data_files)
-    complete = bool(FULL_SUITE_TRIGGERS & data_files) or file_dependencies.COLLECTION in readers
-    readers.discard(file_dependencies.COLLECTION)
-    if not (python_changed or complete or readers):
-        return []
+    unaffected = [StepResult("pytest", "PASS (no test affected)", False)] if python_changed else []
+    if branch is None and not (selection.complete or selection.tests or staged_tests):
+        return unaffected
 
     env = _test_environment(root)
-    outputs: list[str] = []
     with _exclusive(lock_path):
-        runs = _test_runs(
-            root, changed, python_changed, complete, readers, git_dir / TESTS_ARGUMENTS_NAME
-        )
-        if not runs:
-            return [StepResult("pytest", "PASS (no test affected)", False)]
-        for label, command in runs:
-            result = _run(command, root, env)
-            if result.returncode not in (0, 1, 5):  # 5: no test selected
-                return [StepResult("pytest", f"FAIL ({label})", True, _output(result))]
-            outputs.append(result.stdout)
-    output = "\n".join(outputs)
+        if branch is not None:
+            selection = _merge_selection(root, branch, selection)
+        command = _pytest_command(root, selection, staged_tests, git_dir / TESTS_ARGUMENTS_NAME)
+        if command is None:
+            return unaffected
+        result = _run(command, root, env)
+    if result.returncode not in (0, 1, 5):  # 5: no test selected
+        return [
+            StepResult("pytest", f"FAIL (exit code {result.returncode})", True, _output(result))
+        ]
+    output = result.stdout
     failed = failed_tests(output)
     if not failed:
         return [StepResult("pytest", "PASS", False)]
