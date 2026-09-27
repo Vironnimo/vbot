@@ -3,7 +3,7 @@
 Everything here is pure. The Tool handlers own Store access, receipts, and wakes;
 these functions turn Store values into the text an Agent reads and explain any
 correction with the exact next call. Stored posts keep participant IDs; names
-and the "all" ping exist only at this Tool boundary.
+and the "all" recipient exist only at this Tool boundary.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import Any
 from core.tools._call_vocabulary import spelling
 
 from . import agent_text as text
+from ._wake_pacing import ADDRESSED_ROUTES, QUIET_SECONDS
 
 Json = dict[str, Any]
 
@@ -193,8 +194,14 @@ def close_discussion(value: str, discussions: Sequence[Json]) -> Json | None:
     return next(row for row in discussions if row["id"] == close[0]) if len(close) == 1 else None
 
 
-def post_block(post: Json, roster: Roster, main_id: str, *, with_discussion: bool) -> str:
-    """Render one post as a header line and its verbatim text."""
+def post_block(
+    post: Json, roster: Roster, main_id: str, *, with_discussion: bool, opening: bool = False
+) -> str:
+    """Render one post as a header line and its verbatim text.
+
+    With ``opening``, a long main-discussion post that reached the reader only
+    through the main discussion shows its opening and the call to read it all.
+    """
 
     details = []
     if with_discussion:
@@ -207,16 +214,43 @@ def post_block(post: Json, roster: Roster, main_id: str, *, with_discussion: boo
         )
     if post.get("reply_to"):
         details.append(text.POST_HEADER_REPLY.format(post_id=post["reply_to"]))
-    pinged = [
+    addressed = [
         text.POST_YOU if recipient == roster.self_id else roster.name(recipient)
         for recipient in roster.ordered(post.get("recipients") or [])
     ]
-    if pinged:
-        details.append(text.POST_HEADER_PINGED.format(names=spoken_list(pinged)))
+    if addressed:
+        details.append(text.POST_HEADER_TO.format(names=spoken_list(addressed)))
     header = f"[{post['id']}] {post['author']['name']}"
     if details:
         header += f" ({'; '.join(details)})"
-    return f"{header}:\n{post['text']}"
+    body = post["text"]
+    if opening and shortened(post):
+        start = _opening(body)
+        body = f"{start} ...\n" + text.POST_SHORTENED.format(
+            count=len(body) - len(start),
+            call=call_text({"action": "read", "message_id": post["id"]}),
+        )
+    return f"{header}:\n{body}"
+
+
+def shortened(post: Json) -> bool:
+    """Whether a delivered post reaches its reader as its opening only."""
+
+    return (
+        post.get("route_class") == "main"
+        and post["author"]["kind"] != "user"
+        and len(post["text"]) > text.FULL_POST_CHARS
+    )
+
+
+def _opening(value: str) -> str:
+    """Return about the first ``OPENING_CHARS`` characters, ending at a word boundary."""
+
+    cut = value[: text.OPENING_CHARS]
+    boundary = max(cut.rfind(" "), cut.rfind("\n"))
+    if boundary > text.OPENING_CHARS // 2:
+        cut = cut[:boundary]
+    return cut.rstrip()
 
 
 def posts_text(
@@ -237,7 +271,7 @@ def messages_text(posts: Iterable[Json], roster: Roster, main_id: str) -> str:
             current = post["discussion_id"]
             label = discussion_label(current, post.get("discussion_title"), main_id)
             blocks.append(text.MESSAGES_IN.format(discussion=label))
-        blocks.append(post_block(post, roster, main_id, with_discussion=False))
+        blocks.append(post_block(post, roster, main_id, with_discussion=False, opening=True))
     return "\n\n".join(blocks)
 
 
@@ -269,6 +303,12 @@ def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
         for mode, routes in status["delivery"].items()
     )
     wake = status["wake_on_messages"]
+    wake_text = text.STATE_WAKE.format(routes=_routes(wake, capital=True)) if wake else ""
+    if set(wake) - ADDRESSED_ROUTES:
+        wake_text += " " + text.STATE_WAKE_PACED.format(
+            addressed=text.STATE_WAKE_ADDRESSED if "ping" in wake else "",
+            minutes=round(QUIET_SECONDS[-1] / 60),
+        )
     totals = status["state_totals"]
     data: Json = {
         "you": text.STATE_YOU.format(
@@ -276,9 +316,7 @@ def status_data(status: Json, roster: Roster, *, inbox: bool) -> Json:
         ),
         "pending": pending,
         "delivery": delivery,
-        "wake": text.STATE_WAKE.format(routes=_routes(wake, capital=True))
-        if wake
-        else text.STATE_NO_WAKE,
+        "wake": wake_text or text.STATE_NO_WAKE,
         "participants": text.STATE_PARTICIPANTS.format(
             count=sum(totals.values()),
             totals=", ".join(f"{number} {state}" for state, number in sorted(totals.items())),
@@ -323,13 +361,19 @@ def discussions_text(entries: Iterable[Json], main_id: str) -> str:
     return "\n".join(lines)
 
 
-def queued_text(routes: Mapping[str, int]) -> str:
+def queued_text(routes: Mapping[str, int], addressed: Sequence[str], *, opening: int) -> str:
+    """Say who receives a new post, who receives it in full, and who only its opening."""
+
     count = sum(routes.values())
     if not count:
         return text.BOARD_QUEUED_NONE
-    pinged = text.BOARD_PINGED.format(count=routes["ping"]) if routes.get("ping") else ""
     participants = text.BOARD_PARTICIPANTS["one" if count == 1 else "many"].format(count=count)
-    return text.BOARD_QUEUED.format(participants=participants, pinged=pinged)
+    parts = [text.BOARD_QUEUED.format(participants=participants)]
+    if addressed:
+        parts.append(text.BOARD_ADDRESSED.format(names=spoken_list(addressed)))
+    if opening:
+        parts.append(text.BOARD_OPENING["one" if opening == 1 else "many"].format(count=opening))
+    return " ".join(parts)
 
 
 def with_notes(data: Json, notes: Sequence[str]) -> Json:
@@ -354,6 +398,7 @@ __all__ = [
     "posts_text",
     "queued_text",
     "resolve_recipients",
+    "shortened",
     "status_data",
     "unknown_recipients_message",
     "with_notes",

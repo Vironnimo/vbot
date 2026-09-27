@@ -233,16 +233,11 @@ def received(content):
 
 
 def deny_inbox(board, monkeypatch):
-    """Serve the Swarm as if its profile had disabled swarm_inbox."""
+    """Serve the participants as if their Sessions did not offer swarm_inbox."""
 
-    stored = board.store.get_swarm
+    from resources.extensions.swarm import extension
 
-    async def get_swarm(swarm_id):
-        swarm = await stored(swarm_id)
-        swarm["profile_snapshot"]["tool_access"]["denied"] = ["swarm_inbox"]
-        return swarm
-
-    monkeypatch.setattr(board.store, "get_swarm", get_swarm)
+    monkeypatch.setattr(extension, "_inbox_available", lambda _binding: False)
 
 
 async def board_posts(board, peer=0, **query):
@@ -333,7 +328,10 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
         {"action": "post", "text": "full text", "recipients": [peer, peer]},
     )
     assert posted["ok"]
-    assert posted["data"]["delivery"] == "Queued for 2 participants (1 pinged)."
+    assert posted["data"]["delivery"] == (
+        f"Queued for 2 participants. It reaches {_name(board, 1)} in full without delay "
+        "because it names or answers them."
+    )
     replay, _ = await call(
         board,
         {"action": "post", "text": "full text", "recipients": [peer, peer]},
@@ -344,7 +342,7 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
     read, context = await call(board, {"action": "read"}, peer=1)
     author = board.swarm["participants"][0]["display_name"]
     assert read["data"]["content"] == (
-        f"[{posted['data']['post_id']}] {author} (pinged you):\nfull text"
+        f"[{posted['data']['post_id']}] {author} (to you):\nfull text"
     )
     assert "(1 shown)" in read["data"]["page"]
     assert len(context._delivery_receipts) == 1
@@ -394,7 +392,8 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
     )
     assert response["ok"]
     newest, _ = await call(board, {"action": "read", "discussion_id": discussion, "limit": 1})
-    assert newest["data"]["content"].endswith(f"(reply to {opening}):\nanswer")
+    # A reply addresses the author of the post it answers.
+    assert newest["data"]["content"].endswith(f"(reply to {opening}; to you):\nanswer")
     older_call = continuation(newest["data"]["older"])
     assert older_call == {
         "action": "read",
@@ -685,10 +684,13 @@ async def test_status_delivery_policy_and_pending_messages_enable_direct_receivi
     assert visible(result) == (
         f"you: {_name(board, 0)} ({board.bindings[0].participant_id}), idle\n"
         "pending: 1 message for you; receive it with swarm_inbox.\n"
-        "delivery: Pings reach you automatically, also while you are running. "
-        "Posts in discussions you joined reach you automatically when you are idle. "
+        "delivery: Posts that name or answer you reach you automatically, also while you are "
+        "running. Posts in discussions you joined reach you automatically when you are idle. "
         "Main-discussion posts reach you only through swarm_inbox.\n"
-        "wake: Posts in discussions you joined and pings start a Run when you are idle.\n"
+        "wake: Posts in discussions you joined and posts that name or answer you start a Run "
+        "when you are idle. After a Run in which you used no Tool, only posts by the user and "
+        "posts that name or answer you start your next Run at once; other posts wait up to 4 "
+        "minutes.\n"
         f"participants: 3 (3 idle)\n\nParticipants:\n{roster}"
     )
     inbox, _ = await dispatch(board, {}, name="swarm_inbox")
@@ -1014,7 +1016,7 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
         ({"text": "one", "body": "two"}, "text"),
         ({"action": "post", "arguments": {"action": "read"}}, "action"),
         ({"action": "status"}, "Use swarm_state to see participants"),
-        ({"action": "check_inbox"}, "Use swarm_inbox to receive"),
+        ({"action": "check_inbox"}, 'Use {"action": "read"} to read the newest posts'),
     ]:
         result, _ = await dispatch(board, arguments)
         assert result["error"]["code"] == "invalid_arguments", result
@@ -1022,24 +1024,56 @@ async def test_board_runs_clear_intent_after_repairing_the_call_shape(board):
     assert len(await board_posts(board)) == len(posts)
 
 
+def _reaches(*names):
+    listed = " and ".join(names)
+    return f"It reaches {listed} in full without delay because it names or answers them."
+
+
 @pytest.mark.asyncio
-async def test_board_pings_named_participants_and_never_guesses_one(board):
+async def test_board_addresses_participants_its_text_names_or_answers(board):
+    ids = _ids(board)
+    one, two = _name(board, 1), _name(board, 2)
+    named, _ = await dispatch(board, {"text": f"{one}, can you check the parser?"})
+    assert named["data"]["delivery"] == f"Queued for 2 participants. {_reaches(one)}"
+    handle, _ = await dispatch(board, {"text": f"thanks @{two.lower()} and {ids[1]}"})
+    assert handle["data"]["delivery"] == f"Queued for 2 participants. {_reaches(one, two)}"
+    # A name in another case without "@" is an ordinary word, not an address.
+    lowered, _ = await dispatch(board, {"text": f"{one.lower()} and {one.upper()}"})
+    assert lowered["data"]["delivery"] == "Queued for 2 participants."
+    answer, _ = await dispatch(
+        board, {"text": "done", "reply_to": named["data"]["post_id"]}, peer=2
+    )
+    assert answer["data"]["delivery"] == (f"Queued for 2 participants. {_reaches(_name(board, 0))}")
+    saved = {post["text"]: post["recipients"] for post in await board_posts(board)}
+    assert saved[f"{one}, can you check the parser?"] == [ids[1]]
+    assert saved["done"] == [ids[0]]
+    routes = {post["text"]: post.get("route_class") for post in await board_posts(board, peer=1)}
+    assert routes[f"{one}, can you check the parser?"] == "ping"
+    assert routes["done"] == "main"
+    read, _ = await dispatch(board, {"action": "read"}, peer=1)
+    assert f"{_name(board, 0)} (to you and {two}):\nthanks" in read["data"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_board_accepts_explicit_recipients_and_never_guesses_one(board):
     ids = _ids(board)
     named, _ = await dispatch(board, {"text": "to one", "recipients": [f"@{_name(board, 1)}"]})
-    assert named["data"]["delivery"] == "Queued for 2 participants (1 pinged)."
+    assert named["data"]["delivery"] == f"Queued for 2 participants. {_reaches(_name(board, 1))}"
     everyone, _ = await dispatch(board, {"text": "to all", "to": "all"})
-    assert everyone["data"]["delivery"] == "Queued for 2 participants (2 pinged)."
+    assert everyone["data"]["delivery"] == (
+        f"Queued for 2 participants. {_reaches(_name(board, 1), _name(board, 2))}"
+    )
     user, _ = await dispatch(board, {"text": "to user", "recipients": ["the user"]})
     assert user["data"]["note"] == (
-        "The user is not a participant and sees every Board post, so no ping was needed for the "
-        "user."
+        "The user is not a participant and sees every Board post, so the user needs no "
+        "recipient entry."
     )
-    assert "pinged" not in user["data"]["delivery"]
+    assert user["data"]["delivery"] == "Queued for 2 participants."
     listed, _ = await dispatch(
         board,
         {"text": "listed", "recipients": [f"{_name(board, 1)}; prt_{_name(board, 2).lower()}"]},
     )
-    assert listed["data"]["delivery"] == "Queued for 2 participants (2 pinged)."
+    assert listed["data"]["delivery"] == everyone["data"]["delivery"]
     saved = {post["text"]: sorted(post["recipients"]) for post in await board_posts(board)}
     assert saved == {
         "to one": [ids[1]],
@@ -1048,9 +1082,7 @@ async def test_board_pings_named_participants_and_never_guesses_one(board):
         "listed": sorted(ids[1:]),
     }
     read, _ = await dispatch(board, {"action": "read"}, peer=1)
-    assert (
-        f"{_name(board, 0)} (pinged you and {_name(board, 2)}):\nto all" in read["data"]["content"]
-    )
+    assert f"{_name(board, 0)} (to you and {_name(board, 2)}):\nto all" in read["data"]["content"]
 
     near = ids[1][:-1] + ("x" if ids[1][-1] != "x" else "y")
     corrected, _ = await dispatch(board, {"text": "typo", "recipients": [near, _name(board, 2)]})
@@ -1061,7 +1093,7 @@ async def test_board_pings_named_participants_and_never_guesses_one(board):
     )
     assert corrected["error"]["message"].endswith(
         f'Repeat the call with recipients ["{ids[1]}", "{_name(board, 2)}"]. Names also work, '
-        'and "all" pings every other participant. Nothing was saved.'
+        'and "all" addresses every other participant. Nothing was saved.'
     )
     unknown, _ = await dispatch(board, {"text": "typo", "recipients": ["Nobody"]})
     assert unknown["error"]["code"] == "invalid_recipient"
@@ -1190,7 +1222,7 @@ async def test_board_results_read_as_plain_text(board):
     first = posted["data"]["post_id"]
     assert visible(posted) == (
         f"post_id: {first}\ndiscussion: the main discussion ({main})\n"
-        "delivery: Queued for 2 participants (2 pinged)."
+        f"delivery: Queued for 2 participants. {_reaches(_name(board, 1), _name(board, 2))}"
     )
     await dispatch(board, {"text": "second"}, peer=1)
     read, _ = await dispatch(board, {"action": "read", "limit": 1}, peer=2)

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from core.agents.temporary import TemporaryAgentConfig
+from core.sessions import TemporarySessionBinding
 from core.tools import ToolContext, tool_failure
 from core.tools.availability import normalize_tool_access
 from core.tools.tools import run_tool_worker
@@ -136,7 +137,7 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
     return TemporaryAgentConfig(
         model=participant["model"],
         cwd=cwd,
-        tool_access=normalize_tool_access(profile["tool_access"]),
+        tool_access=normalize_tool_access(_tool_access(profile)),
         allowed_skills=profile["allowed_skills"],
         tools=profile["tools"],
         name=participant["display_name"],
@@ -155,8 +156,27 @@ def _reminder(swarm: Json, event: str) -> str:
     return REMINDER_TEXTS[event] if enabled else ""
 
 
-def _tool_available(swarm: Json, name: str) -> bool:
-    return name not in swarm["profile_snapshot"]["tool_access"].get("denied", [])
+def _tool_access(profile: Json) -> Json:
+    """Return the profile's Tool access, without swarm_inbox when it cannot help.
+
+    When every route delivers automatically, pending messages reach the Agent
+    before its next request anyway; the Inbox would only add round trips.
+    """
+
+    access = dict(profile["tool_access"])
+    delivery = profile["delivery"]
+    if all(delivery[route]["mode"] == "all" for route in ("main", "discussion", "ping")):
+        denied = list(access.get("denied", []))
+        access["denied"] = denied if "swarm_inbox" in denied else [*denied, "swarm_inbox"]
+        if "allowed" in access:
+            access["allowed"] = [name for name in access["allowed"] if name != "swarm_inbox"]
+    return access
+
+
+def _inbox_available(binding: TemporarySessionBinding) -> bool:
+    """Whether this participant's Session offers swarm_inbox, fixed when it was created."""
+
+    return "swarm_inbox" not in binding.config["tool_access"].get("denied", [])
 
 
 def _clamped_limit(arguments: Json, notes: list[str], maximum: int = 100) -> int:

@@ -122,7 +122,7 @@ async def test_inbox_delivers_oldest_pending_entries_with_a_durable_receipt(boar
     result = await board.tools.get("swarm_inbox").handler(context, {"limit": 1})
     main = f"the main discussion ({board.swarm['main_discussion_id']})"
     [first] = received(result["data"]["content"])
-    assert first._replace(post_id="") == Received(main, "", _name(board, 0), "pinged you", "first")
+    assert first._replace(post_id="") == Received(main, "", _name(board, 0), "to you", "first")
     assert result["data"]["more"] == (
         '1 more pending; call swarm_inbox again with {"limit": 1} to continue.'
     )
@@ -352,7 +352,7 @@ async def test_delivery_preserves_message_context_across_batches(board, delivery
     )
     assert batches == [
         [
-            Received(topic, opening["opening_post_id"], author, "pinged you", "Opening"),
+            Received(topic, opening["opening_post_id"], author, "to you", "Opening"),
             Received(main, opening["main_announcement_id"], author, None, announcement),
         ],
         [
@@ -361,7 +361,7 @@ async def test_delivery_preserves_message_context_across_batches(board, delivery
                 topic,
                 reply["post_id"],
                 author,
-                f"reply to {normal['post_id']}; pinged you",
+                f"reply to {normal['post_id']}; to you",
                 "Reply ping",
             ),
         ],
@@ -412,7 +412,7 @@ async def test_delayed_board_message_keeps_original_order_and_context(board):
     [text] = prepared.entries
     main = f"the main discussion ({board.swarm['main_discussion_id']})"
     author = _name(board, 0)
-    assert received(text) == [Received(main, newer["post_id"], author, "pinged you", "Newer")]
+    assert received(text) == [Received(main, newer["post_id"], author, "to you", "Newer")]
     await persist_carriers(
         board.sessions,
         binding.address,
@@ -484,3 +484,55 @@ async def test_board_reads_preserve_context_even_when_text_matches_column_name(b
             assert exact["route_class"] == "ping"
         else:
             assert "route_class" not in exact
+
+
+@pytest.mark.asyncio
+async def test_long_main_posts_reach_unaddressed_readers_as_their_opening(board):
+    from resources.extensions.swarm.agent_text import OPENING_CHARS, POST_SHORTENED
+
+    sid = board.swarm["id"]
+    sender, recipient = [binding.participant_id for binding in board.bindings[:2]]
+    reader = _name(board, 1)
+    long_text = " ".join(f"word{index:04d}" for index in range(120))
+    assert len(long_text) > 1000
+    unaddressed, _ = await dispatch(board, {"text": long_text})
+    assert unaddressed["data"]["delivery"] == (
+        "Queued for 2 participants. 2 participants receive only its opening lines and the call "
+        "to read the rest."
+    )
+    addressed, _ = await dispatch(board, {"text": f"{reader}: {long_text}"})
+    assert addressed["data"]["delivery"] == (
+        f"Queued for 2 participants. It reaches {reader} in full without delay because it names "
+        "or answers them. 1 participant receives only its opening lines and the call to read the "
+        "rest."
+    )
+    human = await board.store.post_human(sid, text=long_text, request_id="human")
+    opened = await board.store.create_discussion(
+        sid, sender, title="Parser", text="Opening", request_id="parser"
+    )
+    await board.store.join_discussion(sid, recipient, opened["discussion_id"])
+    discussion = await board.store.post(
+        sid, sender, discussion_id=opened["discussion_id"], text=long_text, request_id="long"
+    )
+    request = SimpleNamespace(
+        binding=board.bindings[1],
+        execution_owner=board.contexts[1].execution_owner,
+        run_id="delivery-run",
+    )
+    [text] = (await board.service._before_request(request)).entries
+    delivered = {message.post_id: message.text for message in received(text)}
+
+    post_id = unaddressed["data"]["post_id"]
+    start = delivered[post_id].split(" ...\n")[0]
+    # The opening ends at a word boundary.
+    assert len(start) <= OPENING_CHARS and long_text.startswith(f"{start} ")
+    call = json.dumps({"action": "read", "message_id": post_id})
+    assert delivered[post_id] == f"{start} ...\n" + POST_SHORTENED.format(
+        count=len(long_text) - len(start), call=call
+    )
+    assert delivered[addressed["data"]["post_id"]] == f"{reader}: {long_text}"
+    assert delivered[human["post_id"]] == long_text
+    assert delivered[discussion["post_id"]] == long_text
+    # The call named in the delivery returns the whole post.
+    read, _ = await dispatch(board, json.loads(call), peer=1)
+    assert long_text in read["data"]["content"]

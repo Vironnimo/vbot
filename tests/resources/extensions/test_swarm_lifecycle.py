@@ -393,9 +393,9 @@ async def test_forty_participants_become_idle_without_closing_the_swarm(lifecycl
 
     snapshot = await wait_idle(lifecycle.service, started["swarm_id"])
     assert {item["state"] for item in snapshot["participants"]} == {"idle"}
+    # Every route delivers automatically by default, so no Session offers swarm_inbox.
     assert {tool["name"] for tool in lifecycle.runtime.adapter.requests[0]["kwargs"]["tools"]} == {
         "swarm_board",
-        "swarm_inbox",
         "swarm_state",
         "swarm_wiki",
     }
@@ -1050,6 +1050,78 @@ async def test_delivery_mode_after_wake(lifecycle, tmp_path, mode):
 
 
 @pytest.mark.asyncio
+async def test_runs_without_tools_pace_wakes_until_addressed_or_quiet_ends(
+    lifecycle, tmp_path, monkeypatch
+):
+    from resources.extensions.swarm import _wake_pacing
+
+    # A short first quiet period lets its end wake the participant within the test.
+    monkeypatch.setattr(_wake_pacing, "QUIET_SECONDS", (1.0, 30.0, 30.0, 30.0))
+    requests = lifecycle.runtime.adapter.requests
+    lifecycle.runtime.adapter._responses[:] = [  # noqa: SLF001 - deterministic Provider fixture
+        {"content": "Run finished"},
+        {"content": "Run finished"},
+        {"content": "Nothing to add"},
+        {"tool_calls": [{"id": "look", "name": "swarm_state", "arguments": {}}]},
+        {"content": "Checked"},
+        {"content": "Seen"},
+    ]
+    profile = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "name": "Paced",
+            "participants": [{"model": "fixture/model", "count": 2}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": []},
+        },
+        expected_revision=None,
+    )
+    started = await lifecycle.service.operation(
+        "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
+    )
+    for run in started["runs"]:
+        await lifecycle.runtime.chat_run_manager.get(run["run_id"]).wait()
+    sid = started["swarm_id"]
+    sender, reader = (await lifecycle.service.store.get_swarm(sid))["participants"]
+    pacing = lifecycle.service._pacing  # noqa: SLF001 - observe the in-memory quiet period
+
+    async def post(text: str) -> None:
+        await lifecycle.service.store.post(sid, sender["id"], text=text, request_id=text)
+        lifecycle.service._enqueue_wakes(sid)  # noqa: SLF001 - the board Tool's wake scan
+
+    async def settled(routes: frozenset[str] | None) -> None:
+        async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
+            while (
+                pacing.wake_routes(sid, reader["id"]) != routes
+                or (await lifecycle.service.store.get_swarm(sid))["state"] != "idle"
+            ):
+                await asyncio.sleep(0.01)
+
+    async def next_request(count: int) -> str:
+        async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
+            while len(requests) < count:
+                await asyncio.sleep(0.01)
+        return str(requests[count - 1]["messages"])
+
+    # Both first Runs used no Tool, so an ordinary post waits for the quiet period.
+    await settled(_wake_pacing.ADDRESSED_ROUTES)
+    await post("ordinary-sentinel")
+    await asyncio.sleep(0.1)
+    assert len(requests) == 2
+    assert "ordinary-sentinel" in await next_request(3)
+
+    # The second Run without a Tool starts a 30 s period; a post naming the reader ends the wait.
+    await settled(_wake_pacing.ADDRESSED_ROUTES)
+    await post(f"{reader['display_name']}, addressed-sentinel")
+    assert "addressed-sentinel" in await next_request(4)
+
+    # That Run used a Tool, so the next ordinary post wakes the reader at once.
+    await settled(None)
+    await post("after-tool-sentinel")
+    assert "after-tool-sentinel" in await next_request(6)
+
+
+@pytest.mark.asyncio
 async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
     adapter = PausedSwarmAdapter()
     lifecycle.runtime.adapter = adapter
@@ -1130,6 +1202,8 @@ async def test_disabled_swarm_tools_stay_unavailable_on_start_and_resume(
             "participants": [{"model": "fixture/model", "count": 1}],
             "working_directory": {"kind": "directory", "path": str(tmp_path)},
             "tool_access": {"mode": "selected", "allowed": [], "denied": denied},
+            # Main-discussion posts wait for an idle participant, so swarm_inbox can help.
+            "delivery": {"main": {"mode": "idle", "wake_idle": True}},
         },
         expected_revision=None,
     )
@@ -1160,6 +1234,29 @@ async def test_disabled_swarm_tools_stay_unavailable_on_start_and_resume(
         {tool["name"] for tool in request["kwargs"].get("tools", [])} == names - set(denied)
         for request in lifecycle.runtime.adapter.requests
     )
+
+
+@pytest.mark.asyncio
+async def test_swarm_inbox_is_offered_only_when_a_route_can_wait(lifecycle, tmp_path):
+    from resources.extensions.swarm._extension_values import _participant_config
+
+    profile = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "name": "Inbox",
+            "participants": [{"model": "fixture/model", "count": 1}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": ["swarm_inbox"]},
+        },
+        expected_revision=None,
+    )
+    participant = {"ordinal": 1, "model": "fixture/model", "display_name": "Emma"}
+    automatic = _participant_config(profile, participant, tmp_path).tool_access
+    assert automatic.denied == ("swarm_inbox",) and automatic.allowed == ()
+    for route in ("main", "discussion", "ping"):
+        waiting = {**profile["delivery"], route: {"mode": "pull", "wake_idle": False}}
+        access = _participant_config({**profile, "delivery": waiting}, participant, tmp_path)
+        assert "swarm_inbox" not in access.tool_access.denied
 
 
 @pytest.mark.asyncio

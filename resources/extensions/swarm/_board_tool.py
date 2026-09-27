@@ -229,10 +229,17 @@ class BoardCall:
             )
         except SwarmStoreError as error:
             raise await self._write_error(error, values) from error
+        long_main = (
+            data["discussion_id"] == self.main and len(values["text"]) > text.FULL_POST_CHARS
+        )
         result: Json = {
             "post_id": data["post_id"],
             "discussion": await self._label(data["discussion_id"]),
-            "delivery": queued_text(data["routes"]),
+            "delivery": queued_text(
+                data["routes"],
+                [self.roster.name(pid) for pid in data.get("addressed", [])],
+                opening=data["routes"].get("main", 0) if long_main else 0,
+            ),
         }
         if data.get("replayed"):
             result["replayed"] = text.REPLAYED
