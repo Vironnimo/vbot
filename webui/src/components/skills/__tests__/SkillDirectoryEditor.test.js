@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../../lib/i18n.js';
+import { init, t } from '../../../lib/i18n.js';
 import { rpcBackedApiMock } from '../../__tests__/apiMock.support.js';
 
 const rpcMock = vi.fn();
@@ -64,7 +64,9 @@ describe('SkillDirectoryEditor', () => {
     input().dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
     const addButtons = [...document.body.querySelectorAll('button')].filter(
-      (button) => button.textContent.trim() === 'Add directory',
+      (button) =>
+        button.textContent.trim() ===
+        t('settings.skills.addDirectory', 'Add directory'),
     );
     expect(addButtons.length).toBe(1);
     addButtons[0].click();
@@ -93,7 +95,7 @@ describe('SkillDirectoryEditor', () => {
 
     await addDirectory('C:/manual');
     const saveButton = [...document.body.querySelectorAll('button')].find(
-      (button) => button.textContent.trim() === 'Save',
+      (button) => button.textContent.trim() === t('common.save', 'Save'),
     );
     saveButton.click();
     flushSync();
@@ -104,7 +106,7 @@ describe('SkillDirectoryEditor', () => {
     ).toBe(true);
   });
 
-  it('removes a configured directory and saves without it', async () => {
+  it('saves nothing while the list matches the server state and saves a removal without the directory', async () => {
     rpcMock.mockImplementation((method, params) => {
       if (method === 'settings.update') {
         return Promise.resolve({
@@ -114,28 +116,20 @@ describe('SkillDirectoryEditor', () => {
       return Promise.resolve({});
     });
     mountEditor(vi.fn());
+    const updateCalls = () =>
+      rpcMock.mock.calls.filter((call) => call[0] === 'settings.update');
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(updateCalls()).toHaveLength(0);
 
     const removeButton = [...document.body.querySelectorAll('button')].find(
-      (button) => button.textContent.trim() === 'Remove',
+      (button) => button.textContent.trim() === t('common.remove', 'Remove'),
     );
-    expect(removeButton).not.toBeUndefined();
     removeButton.click();
     flushSync();
     await vi.advanceTimersByTimeAsync(900);
 
-    const updateCall = rpcMock.mock.calls.find(
-      (call) => call[0] === 'settings.update',
-    );
-    expect(JSON.stringify(updateCall?.[1])).not.toContain('C:/existing');
-  });
-
-  it('does not save while the list matches the server state', async () => {
-    mountEditor(vi.fn());
-
-    await vi.advanceTimersByTimeAsync(2000);
-
-    expect(
-      rpcMock.mock.calls.some((call) => call[0] === 'settings.update'),
-    ).toBe(false);
+    expect(updateCalls()).toHaveLength(1);
+    expect(updateCalls()[0][1]).toEqual({ skills: { directories: [] } });
   });
 });

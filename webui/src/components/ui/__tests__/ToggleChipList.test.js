@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../../lib/i18n.js';
+import { init, t } from '../../../lib/i18n.js';
 import { HOVER_CARD_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
@@ -31,6 +31,37 @@ describe('ToggleChipList', () => {
       mountedComponent = null;
     }
     document.body.innerHTML = '';
+  });
+
+  it('counts allowed unlocked chips and filters them by a case-insensitive name query', () => {
+    mountedComponent = mount(ToggleChipList, {
+      target: clippedHost,
+      props: {
+        items: [
+          { name: 'read', allowed: true },
+          { name: 'web_search', allowed: false },
+          { name: 'web_fetch', allowed: true },
+          { name: 'memory', allowed: true, locked: true },
+        ],
+      },
+    });
+    flushSync();
+
+    expect(
+      clippedHost.querySelector('.access-chips__count').textContent.trim(),
+    ).toBe(t('access.count', '{on} / {total} on', { on: 2, total: 3 }));
+    const search = clippedHost.querySelector('.access-chips__search-input');
+    const visibleChips = (query) => {
+      search.value = query;
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      return [...clippedHost.querySelectorAll('.access-chip')].map((chip) =>
+        chip.textContent.trim(),
+      );
+    };
+    expect(visibleChips('WEB')).toEqual(['web_search', 'web_fetch']);
+    expect(visibleChips('zzz')).toEqual([]);
+    expect(visibleChips('   ')).toHaveLength(4);
   });
 
   it('portals the skill hover card outside a clipping container', () => {

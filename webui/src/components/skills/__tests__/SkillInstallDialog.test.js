@@ -88,42 +88,6 @@ afterEach(async () => {
 });
 
 describe('Skill installation dialog', () => {
-  it('dismisses the destination selector without discarding the reviewed installation', async () => {
-    installSkill.mockResolvedValue(
-      preview({ candidates: [{ exists: true, unchanged: false }] }),
-    );
-    render();
-    input('skill-install-source', 'https://example.test/demo.skill');
-    click(button(t('skills.install.check')));
-    await settle();
-    click(document.querySelector('[role="switch"]'));
-    const destination = button(t('skills.install.destination'));
-    click(destination);
-    await settle();
-    const list = document.querySelector('[role="listbox"]');
-    expect(document.activeElement).toBe(list);
-    list.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'Escape',
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    flushSync();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(document.querySelector('[role="listbox"]')).toBeNull();
-    expect(document.activeElement).toBe(destination);
-    expect(button(t('skills.install.replaceAction')).disabled).toBe(false);
-    destination.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'Escape',
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
   it('previews a link in the selected private scope and installs exactly the reviewed package', async () => {
     render();
     expect(button(t('skills.install.check')).disabled).toBe(true);
@@ -160,7 +124,7 @@ describe('Skill installation dialog', () => {
     );
   });
 
-  it('requires an explicit replacement choice and clears approval when inputs change', async () => {
+  it('requires an explicit replacement choice that survives dismissing the destination selector and clears when inputs change', async () => {
     installSkill.mockResolvedValue(
       preview({ candidates: [{ exists: true, unchanged: false }] }),
     );
@@ -168,9 +132,35 @@ describe('Skill installation dialog', () => {
     input('skill-install-source', 'https://example.test/demo.skill');
     click(button(t('skills.install.check')));
     await settle();
-    expect(button(t('skills.install.replaceAction')).disabled).toBe(true);
+    const replaceAction = () => button(t('skills.install.replaceAction'));
+    expect(replaceAction().disabled).toBe(true);
     click(document.querySelector('[role="switch"]'));
-    expect(button(t('skills.install.replaceAction')).disabled).toBe(false);
+    expect(replaceAction().disabled).toBe(false);
+
+    // Escape closes only the open destination list; a second Escape closes
+    // the dialog.
+    const escape = (target) =>
+      target.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    const destination = button(t('skills.install.destination'));
+    click(destination);
+    await settle();
+    const list = document.querySelector('[role="listbox"]');
+    expect(document.activeElement).toBe(list);
+    escape(list);
+    flushSync();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="listbox"]')).toBeNull();
+    expect(document.activeElement).toBe(destination);
+    expect(replaceAction().disabled).toBe(false);
+    escape(destination);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
     input('skill-install-source', 'https://example.test/changed.skill');
     expect(document.querySelector('.skills-install-preview')).toBeNull();
     click(button(t('skills.install.check')));
@@ -179,7 +169,7 @@ describe('Skill installation dialog', () => {
       document.querySelector('[role="switch"]').getAttribute('aria-checked'),
     ).toBe('false');
     click(document.querySelector('[role="switch"]'));
-    click(button(t('skills.install.replaceAction')));
+    click(replaceAction());
     await settle();
     expect(installSkill).toHaveBeenLastCalledWith(
       expect.objectContaining({ replace: true, dry_run: false }),

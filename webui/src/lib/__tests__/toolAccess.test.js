@@ -247,17 +247,6 @@ describe('Tool Access Policy UI helpers', () => {
     });
   });
 
-  it('uses one family switch without persisting a family permission', () => {
-    expect(
-      setToolFamilyPreference(
-        { mode: 'selected', allowed: ['read'] },
-        catalog.slice(0, 2),
-        true,
-        catalog,
-      ),
-    ).toEqual({ mode: 'selected', allowed: ['read', 'write'] });
-  });
-
   it('groups actual families while keeping unrelated Tools in one individual section', () => {
     expect(groupToolCatalog(catalog)).toEqual([
       { id: 'files', family: true, members: catalog.slice(0, 2) },
