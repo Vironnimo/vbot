@@ -290,7 +290,7 @@ def failure_text(error: JsonObject) -> str:
             done += " Not done: " + ", ".join(error["pending_paths"]) + "."
         lines.append(done)
     if error.get("attempts_made"):
-        lines.append(f"The file was busy; {error['attempts_made']} attempts were made.")
+        lines.append(f"The write was attempted {error['attempts_made']} times.")
     return "\n".join(lines)
 
 

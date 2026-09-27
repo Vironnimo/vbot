@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
+from typing import Any, cast
 
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
@@ -39,15 +40,25 @@ FILE_STATE_GUARD_ENABLED = True
 # not grow the map without bound; oldest insertions are evicted first. A rarely
 # evicted entry only costs a harmless re-read.
 _MAX_TRACKED_FILES = 8192
-_REPLACE_RETRY_DELAYS = (0.02, 0.05, 0.1, 0.2, 0.4, 0.8)
+# Windows refuses to replace a file while another program holds it open without
+# delete sharing. Test runs and scripts held edited files for several seconds in
+# Swarm Sessions (2026-09), so the retries wait about five seconds in total.
+_REPLACE_RETRY_DELAYS = (0.02, 0.05, 0.1, 0.2, 0.4, 0.8, 1.5, 2.0)
+_ACCESS_DENIED = 5
+_SHARING_VIOLATION = 32
 
 
 class _ReplaceRetriesExhaustedError(OSError):
-    def __init__(self, error: OSError, attempts_made: int):
-        # Keep the cause's codes so ``os_error_reason`` can describe it.
-        super().__init__(
-            error.errno, error.strerror, error.filename, getattr(error, "winerror", None)
-        )
+    def __init__(self, error: OSError, attempts_made: int, *, held_open: bool):
+        # Keep the cause's codes so ``os_error_reason`` can describe it. Windows reports
+        # "access denied" for a target that another program holds open; name that cause.
+        winerror = getattr(error, "winerror", None)
+        if held_open and winerror == _ACCESS_DENIED:
+            winerror = _SHARING_VIOLATION
+        super().__init__(error.errno, error.strerror, error.filename, winerror)
+        if winerror is not None:
+            # Other platforms drop the constructor's Windows code.
+            self.winerror = winerror
         self.attempts_made = attempts_made
 
 
@@ -194,7 +205,8 @@ def atomic_write_bytes(
     retry Windows replace access/sharing failures. Check all caller
     preconditions before every attempt; never replay a write whose replacement
     completed or retry other I/O stages. Exhausted replacement errors carry their
-    one-based ``attempts_made`` count.
+    one-based ``attempts_made`` count and report a sharing violation when another
+    program still holds the target open.
     """
     target_mode = _existing_mode(resolved)
     if _is_windows_read_only(target_mode):
@@ -224,7 +236,9 @@ def atomic_write_bytes(
                 if before_replace is None or getattr(error, "winerror", None) not in {5, 32, 33}:
                     raise
                 if attempt == len(_REPLACE_RETRY_DELAYS):
-                    raise _ReplaceRetriesExhaustedError(error, attempt + 1) from error
+                    raise _ReplaceRetriesExhaustedError(
+                        error, attempt + 1, held_open=_held_open_elsewhere(resolved)
+                    ) from error
                 time.sleep(_REPLACE_RETRY_DELAYS[attempt])
         temporary = None
     except BaseException:
@@ -233,6 +247,42 @@ def atomic_write_bytes(
         if temporary is not None:
             _discard_temporary(temporary)
         raise
+
+
+def _held_open_elsewhere(resolved: Path) -> bool:
+    """Whether another program holds ``resolved`` open without allowing its deletion.
+
+    Replacing such a file fails with "access denied", like a missing permission.
+    Opening the file for deletion tells them apart: only the open handle causes a
+    sharing violation.
+    """
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    windows_ctypes = cast(Any, ctypes)
+    kernel32 = windows_ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    delete_access, share_all, open_existing = 0x00010000, 0x7, 3
+    handle = kernel32.CreateFileW(
+        str(resolved), delete_access, share_all, None, open_existing, 0, None
+    )
+    if handle == ctypes.c_void_p(-1).value:
+        return bool(windows_ctypes.get_last_error() == _SHARING_VIOLATION)
+    kernel32.CloseHandle(handle)
+    return False
 
 
 # Reasons for file-system errors, in English: Windows reports its own messages in

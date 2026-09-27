@@ -92,6 +92,10 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
 
 _BOM = b"\xef\xbb\xbf"
 _WRITE_FAILED = "Could not change {path}: {reason}. Check this path before resending this change."
+_WRITE_BUSY = (
+    "Could not change {path}: {reason}. {path} is unchanged; send this change again after "
+    "that program has finished, for example a running test or script."
+)
 _DEPENDENCY_FAILED = (
     "{where} was not tried because an earlier change to {path} in this patch did not "
     "complete. Resend it together with that change."
@@ -250,6 +254,22 @@ def _os_reason(error: OSError, batch: _Batch) -> str:
     return reason
 
 
+def _write_failure(path: str, error: OSError) -> JsonObject:
+    """Describe a failed write, delete or rename of the shown ``path``."""
+    # Windows sharing and lock violations: another program holds the file open.
+    held_open = getattr(error, "winerror", None) in {32, 33}
+    failure: JsonObject = {
+        "code": "file_write_error",
+        "message": (_WRITE_BUSY if held_open else _WRITE_FAILED).format(
+            path=path, reason=os_error_reason(error)
+        ),
+    }
+    attempts = getattr(error, "attempts_made", None)
+    if attempts is not None:
+        failure.update(retryable=True, attempts_made=attempts)
+    return failure
+
+
 def _error_data(error: _PatchError | OSError, batch: _Batch) -> JsonObject:
     if not isinstance(error, _PatchError):
         return {"code": "file_read_error", "message": f"Could not read {_os_reason(error, batch)}."}
@@ -294,20 +314,9 @@ def _commit(
                 )
         except (OSError, _PatchError) as error:
             batch.blocked.update(before)
-            failure: JsonObject = (
-                _error_data(error, batch)
-                if isinstance(error, _PatchError)
-                else {
-                    "code": "file_write_error",
-                    "message": _WRITE_FAILED.format(
-                        path=batch.shown(path), reason=os_error_reason(error)
-                    ),
-                }
-            )
-            attempts = getattr(error, "attempts_made", None)
-            if attempts is not None:
-                failure.update(retryable=True, attempts_made=attempts)
-            return completed, failure
+            if isinstance(error, _PatchError):
+                return completed, _error_data(error, batch)
+            return completed, _write_failure(batch.shown(path), error)
         batch.before.setdefault(path, before[path])
         batch.after[path] = batch.observed[path] = target
         completed.append(batch.shown(path))
@@ -371,12 +380,7 @@ def _rename(
         _rename_entry(source, destination, before)
     except OSError as error:
         batch.blocked.update(before)
-        return [], {
-            "code": "file_write_error",
-            "message": _WRITE_FAILED.format(
-                path=batch.shown(source), reason=os_error_reason(error)
-            ),
-        }
+        return [], _write_failure(batch.shown(source), error)
     completed = [batch.shown(destination)]
     batch.before.setdefault(source, snapshot)
     if destination == source:
