@@ -8,6 +8,7 @@ import tarfile
 from collections.abc import Callable
 from pathlib import Path
 
+from cli._update_types import _Step
 from cli.install_state import (
     INSTALL_STATE_SCHEMA_VERSION,
     InstallState,
@@ -36,6 +37,12 @@ def _ok(stdout: str = "") -> CommandRun:
 
 def _err(stderr: str = "boom") -> CommandRun:
     return CommandRun(returncode=1, stdout="", stderr=stderr)
+
+
+def _upstream(*, behind: int = 0, ahead: int = 0) -> CommandRun:
+    """Answer ``git rev-list --left-right --count HEAD...@{upstream}``."""
+
+    return _ok(f"{ahead}	{behind}")
 
 
 class ScriptedRunner:
@@ -72,6 +79,16 @@ def _recording_restart() -> tuple[
         return CommandResult(ok=True, message="started", instance=instance)
 
     return events, stop, start
+
+
+def _recording_snapshot() -> tuple[list[ServerInstance], Callable[[ServerInstance], _Step]]:
+    taken: list[ServerInstance] = []
+
+    def snapshot(instance: ServerInstance) -> _Step:
+        taken.append(instance)
+        return _Step(True, "test-owned snapshot")
+
+    return taken, snapshot
 
 
 def _webui_tar_bytes(files: dict[str, bytes] | None = None) -> bytes:

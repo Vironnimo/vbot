@@ -404,6 +404,8 @@ def _update_completion_message(result: CommandResult) -> str:
                     "Update installed — server was not restarted (--no-restart). "
                     "Restart it to use the update."
                 )
+            if result.restart_state == "unchanged":
+                return "vBot is already up to date — nothing changed, so the server kept running."
             if result.restart_state == "not_applicable":
                 return (
                     "Update completed — Desktop client is current; "

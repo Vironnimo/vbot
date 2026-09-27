@@ -30,6 +30,7 @@ from cli._update_types import (
     UpdateResult,
     _SnapshotStep,
     _Step,
+    _UpstreamStep,
 )
 from cli.install_state import (
     DESKTOP_CLIENT_SHAPE,
@@ -248,15 +249,67 @@ def run_update(
     if not desktop_guard.ok:
         return _fail(instance, desktop_guard.message)
 
-    announce("busy", "Creating and verifying a data snapshot")
-    data_snapshot = data_snapshot_fn(instance)
-    if data_snapshot.message:
-        record(data_snapshot.message, data_snapshot.ok)
-    if not data_snapshot.ok:
-        return _fail(instance, data_snapshot.message)
+    # Everything up to the snapshot only reads the checkout, so a refused or
+    # unnecessary update neither takes a snapshot nor restarts the server.
+    announce("busy", "Checking local changes")
+    dirty_result = run(["git", "status", "--porcelain", "--untracked-files=no"], repo)
+    if dirty_result.returncode != 0:
+        return _fail(
+            instance,
+            f"update: checking local changes failed: {dirty_result.stderr or dirty_result.stdout}",
+        )
+    dirty = bool(dirty_result.stdout.strip())
+    if dirty and not (discard or stash):
+        return _fail(
+            instance,
+            "update: the checkout has local changes. Commit them, or re-run with "
+            "--discard (drop them) or --stash (keep them).",
+        )
 
-    announce("success", "Data snapshot check completed")
-    snapshot_id = data_snapshot.snapshot_id if isinstance(data_snapshot, _SnapshotStep) else None
+    announce("busy", "Checking for new code")
+    release: ReleaseInfo | None = None
+    if track == "dev":
+        upstream = _compare_upstream(run, repo)
+        if not upstream.ok:
+            return _fail(instance, upstream.message)
+        code_current = upstream.behind == 0
+    else:
+        try:
+            release = lookup()
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            return _fail(instance, f"update: could not query the latest release: {exc}")
+        if not release.tag:
+            return _fail(instance, "update: no published release found to update to")
+        code_current = _current_release_tag(run, repo) == release.tag
+        asset_required = state.install_shape != DESKTOP_CLIENT_SHAPE and not (
+            code_current
+            and state.webui_revision == before
+            and (repo / "webui" / "dist" / "index.html").is_file()
+        )
+        if asset_required and not release.webui_asset_url:
+            return _fail(
+                instance,
+                f"update: release {release.tag} has no {WEBUI_ASSET_NAME} asset yet; "
+                "the checkout was left unchanged",
+            )
+    unchanged = (
+        code_current
+        and not dirty
+        and not inferred_state
+        and _applied_at(state, repo, track=track, revision=before)
+    )
+
+    snapshot_id: str | None = None
+    if not unchanged:
+        announce("busy", "Creating and verifying a data snapshot")
+        data_snapshot = data_snapshot_fn(instance)
+        if data_snapshot.message:
+            record(data_snapshot.message, data_snapshot.ok)
+        if not data_snapshot.ok:
+            return _fail(instance, data_snapshot.message)
+        announce("success", "Data snapshot check completed")
+        if isinstance(data_snapshot, _SnapshotStep):
+            snapshot_id = data_snapshot.snapshot_id
 
     if inferred_state:
         try:
@@ -271,63 +324,20 @@ def run_update(
         )
     record(f"install shape: {state.install_shape}")
 
-    announce("busy", "Checking local changes")
-    dirty_result = run(["git", "status", "--porcelain", "--untracked-files=no"], repo)
-    if dirty_result.returncode != 0:
-        return _fail(
-            instance,
-            f"update: checking local changes failed: {dirty_result.stderr or dirty_result.stdout}",
-        )
-    dirty = bool(dirty_result.stdout.strip())
     stashed: _UpdateStash | None = None
     if dirty:
-        guard = _handle_dirty(run, repo, discard=discard, stash=stash)
+        guard = _handle_dirty(run, repo, stash=stash)
         if not guard.ok:
             return _fail(instance, guard.message)
         stashed = guard.stashed
 
-    announce("busy", "Checking and downloading the latest code")
-    release: ReleaseInfo | None = None
-    if track == "dev":
-        advanced = _advance_dev(run, repo)
-    else:
-        try:
-            release = lookup()
-        except (httpx.HTTPError, ValueError, TypeError) as exc:
-            return _failure_with_stash(
-                instance,
-                [f"update: could not query the latest release: {exc}"],
-                run,
-                repo,
-                stashed=stashed,
-            )
-        if not release.tag:
-            return _failure_with_stash(
-                instance,
-                ["update: no published release found to update to"],
-                run,
-                repo,
-                stashed=stashed,
-            )
-        asset_required = state.install_shape != DESKTOP_CLIENT_SHAPE and not (
-            _current_release_tag(run, repo) == release.tag
-            and state.webui_revision == before
-            and (repo / "webui" / "dist" / "index.html").is_file()
+    if not code_current:
+        announce("busy", "Applying the latest code")
+        advanced = (
+            _advance_dev(run, repo) if release is None else _advance_release(run, repo, release)
         )
-        if asset_required and not release.webui_asset_url:
-            return _failure_with_stash(
-                instance,
-                [
-                    f"update: release {release.tag} has no {WEBUI_ASSET_NAME} asset yet; "
-                    "the checkout was left unchanged"
-                ],
-                run,
-                repo,
-                stashed=stashed,
-            )
-        advanced = _advance_release(run, repo, release)
-    if not advanced.ok:
-        return _failure_with_stash(instance, [advanced.message], run, repo, stashed=stashed)
+        if not advanced.ok:
+            return _failure_with_stash(instance, [advanced.message], run, repo, stashed=stashed)
 
     after = _head_commit(run, repo)
     if not after:
@@ -441,6 +451,7 @@ def run_update(
         start=start,
         service_name=service_name,
         install_shape=state.install_shape,
+        unchanged=unchanged,
         snapshot_id=snapshot_id,
         previous_revision=before,
     )
@@ -484,63 +495,100 @@ def _resolve_update_instance(
     )
 
 
-def _handle_dirty(run: Runner, repo: Path, *, discard: bool, stash: bool) -> _DirtyResolution:
-    """Resolve a dirty checkout per the override flags, or refuse."""
+def _handle_dirty(run: Runner, repo: Path, *, stash: bool) -> _DirtyResolution:
+    """Keep local changes in an exact temporary ref (``--stash``) or drop them."""
 
-    if discard:
+    if not stash:
         reset = run(["git", "reset", "--hard", "HEAD"], repo)
         if reset.returncode != 0:
             return _DirtyResolution(
                 False, f"update: discarding local changes failed: {reset.stderr}"
             )
         return _DirtyResolution(True, "")
-    if stash:
-        created = run(["git", "stash", "create", "vbot update"], repo)
-        if created.returncode != 0:
-            return _DirtyResolution(
-                False, f"update: snapshotting local changes failed: {created.stderr}"
-            )
-        object_id = created.stdout.strip()
-        if not object_id:
-            return _DirtyResolution(True, "")
-        reference = f"refs/vbot/update-stashes/{uuid.uuid4().hex}"
-        retained = run(["git", "update-ref", reference, object_id], repo)
-        if retained.returncode != 0:
-            return _DirtyResolution(
-                False,
-                "update: retaining the local-change snapshot failed: "
-                f"{retained.stderr or retained.stdout}",
-            )
-        cleared = run(["git", "reset", "--hard", "HEAD"], repo)
-        if cleared.returncode != 0:
-            return _DirtyResolution(
-                False,
-                "update: preparing the checkout after snapshotting local changes failed; "
-                f"the exact recovery snapshot remains at {reference}: "
-                f"{cleared.stderr or cleared.stdout}",
-            )
+    created = run(["git", "stash", "create", "vbot update"], repo)
+    if created.returncode != 0:
         return _DirtyResolution(
-            True,
-            "",
-            stashed=_UpdateStash(object_id=object_id, reference=reference),
+            False, f"update: snapshotting local changes failed: {created.stderr}"
+        )
+    object_id = created.stdout.strip()
+    if not object_id:
+        return _DirtyResolution(True, "")
+    reference = f"refs/vbot/update-stashes/{uuid.uuid4().hex}"
+    retained = run(["git", "update-ref", reference, object_id], repo)
+    if retained.returncode != 0:
+        return _DirtyResolution(
+            False,
+            "update: retaining the local-change snapshot failed: "
+            f"{retained.stderr or retained.stdout}",
+        )
+    cleared = run(["git", "reset", "--hard", "HEAD"], repo)
+    if cleared.returncode != 0:
+        return _DirtyResolution(
+            False,
+            "update: preparing the checkout after snapshotting local changes failed; "
+            f"the exact recovery snapshot remains at {reference}: "
+            f"{cleared.stderr or cleared.stdout}",
         )
     return _DirtyResolution(
-        False,
-        "update: the checkout has local changes. Commit them, or re-run with "
-        "--discard (drop them) or --stash (keep them).",
+        True,
+        "",
+        stashed=_UpdateStash(object_id=object_id, reference=reference),
+    )
+
+
+def _compare_upstream(run: Runner, repo: Path) -> _UpstreamStep:
+    """Fetch the branch's upstream without touching the checkout, and compare it."""
+
+    fetch = run(["git", "fetch"], repo)
+    if fetch.returncode != 0:
+        detail = fetch.stderr or fetch.stdout
+        return _UpstreamStep(False, f"update: 'git fetch' failed (offline?): {detail}".strip())
+    counted = run(["git", "rev-list", "--left-right", "--count", "HEAD...@{upstream}"], repo)
+    if counted.returncode != 0:
+        detail = counted.stderr or counted.stdout
+        return _UpstreamStep(
+            False, f"update: comparing the branch with its upstream failed: {detail}".strip()
+        )
+    try:
+        ahead, behind = (int(count) for count in counted.stdout.split())
+    except ValueError:
+        return _UpstreamStep(
+            False, f"update: unexpected upstream comparison output: {counted.stdout!r}"
+        )
+    if ahead and behind:
+        return _UpstreamStep(
+            False,
+            f"update: the branch has diverged from its upstream ({ahead} local and {behind} "
+            "upstream commits); integrate them, then update again",
+        )
+    # Local commits ahead of the upstream are kept; there is nothing to pull.
+    return _UpstreamStep(True, "", behind=behind)
+
+
+def _applied_at(state: InstallState, repo: Path, *, track: str, revision: str) -> bool:
+    """Whether dependencies and WebUI were already installed for ``revision``."""
+
+    return (
+        state.source_track == track
+        and state.applied_revision == revision
+        and state.dependency_digest == file_digest(repo / "pyproject.toml")
+        and (
+            state.install_shape == DESKTOP_CLIENT_SHAPE
+            or (
+                state.webui_revision == revision
+                and (repo / "webui" / "dist" / "index.html").is_file()
+            )
+        )
     )
 
 
 def _advance_dev(run: Runner, repo: Path) -> _Step:
-    """Fast-forward the current branch from its upstream."""
+    """Fast-forward the current branch to its fetched upstream."""
 
-    pull = run(["git", "pull", "--ff-only"], repo)
-    if pull.returncode != 0:
-        detail = pull.stderr or pull.stdout
-        return _Step(
-            False,
-            f"update: 'git pull --ff-only' failed (branch diverged or offline): {detail}".strip(),
-        )
+    merged = run(["git", "merge", "--ff-only", "@{upstream}"], repo)
+    if merged.returncode != 0:
+        detail = merged.stderr or merged.stdout
+        return _Step(False, f"update: fast-forwarding to the upstream failed: {detail}".strip())
     return _Step(True, "")
 
 
@@ -793,10 +841,11 @@ def _finish(
     start: Restart,
     service_name: str,
     install_shape: str,
+    unchanged: bool = False,
     snapshot_id: str | None = None,
     previous_revision: str = "",
 ) -> CommandResult:
-    """Restart the resolved server target (unless suppressed) and report.
+    """Restart the resolved server target (unless suppressed or unchanged) and report.
 
     The restart is systemd-aware: on a unit-managed install it goes through the
     unit rather than fighting it with an out-of-band terminate/start.
@@ -811,6 +860,12 @@ def _finish(
         lines.append("server: not applicable (desktop-client install)")
         return UpdateResult(
             ok=True, message="\n".join(lines), instance=instance, restart_state="not_applicable"
+        )
+
+    if unchanged:
+        lines.append("server: not restarted (nothing changed)")
+        return UpdateResult(
+            ok=True, message="\n".join(lines), instance=instance, restart_state="unchanged"
         )
 
     if not restart:

@@ -10,7 +10,7 @@ import pytest
 
 import cli.update_management as update_management
 from cli import _update_assets
-from cli._update_types import _SnapshotStep
+from cli._update_types import UpdateResult, _SnapshotStep
 from cli.install_state import (
     read_install_state,
 )
@@ -32,6 +32,8 @@ from tests.cli.update_management_test_support import (
     _instance,
     _ok,
     _recording_restart,
+    _recording_snapshot,
+    _upstream,
     _write_state,
 )
 
@@ -146,11 +148,20 @@ def test_update_refuses_dirty_without_flags(tmp_path: Path) -> None:
 
     runner = ScriptedRunner(handler)
     events, stop, start = _recording_restart()
-    result = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+    snapshots, snapshot = _recording_snapshot()
+    result = run_update(
+        _instance(),
+        runner=runner,
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        data_snapshot_fn=snapshot,
+    )
 
     assert not result.ok
+    assert "--discard" in result.message
     assert events == []
-    assert not runner.ran("git", "pull")
+    assert snapshots == []
 
 
 def test_update_discard_resets_then_updates(tmp_path: Path) -> None:
@@ -162,6 +173,8 @@ def test_update_discard_resets_then_updates(tmp_path: Path) -> None:
             return _ok("main")
         if command[:2] == ["git", "status"]:
             return _ok(" M x.py")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream()
         return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
 
     runner = ScriptedRunner(handler)
@@ -175,23 +188,151 @@ def test_update_discard_resets_then_updates(tmp_path: Path) -> None:
     assert events == ["stop", "start"]
 
 
-def test_dev_track_up_to_date_restarts(tmp_path: Path) -> None:
-    (tmp_path / ".git").mkdir()
-    _write_state(tmp_path)
+def _applied_checkout(root: Path) -> None:
+    """A branch checkout whose dependencies and WebUI match its current commit."""
+
+    (root / ".git").mkdir()
+    (root / "pyproject.toml").write_text("same", encoding="utf-8")
+    dist = root / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    _write_state(root, webui_revision="samesha")
+
+
+@pytest.mark.parametrize("ahead", [0, 2], ids=["current", "local-commits-ahead"])
+@pytest.mark.parametrize("caller", ["human", "no-restart", "agent"])
+def test_an_update_with_nothing_new_neither_snapshots_nor_restarts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ahead: int, caller: str
+) -> None:
+    _applied_checkout(tmp_path)
 
     def handler(command: list[str]) -> CommandRun:
         if command[:2] == ["git", "symbolic-ref"]:
             return _ok("main")
         if command[:2] == ["git", "status"]:
             return _ok("")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(ahead=ahead)
         return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
+
+    def schedule(instance: ServerInstance, *, service_name: str) -> CommandResult:
+        raise AssertionError("an unchanged installation must not schedule a restart")
+
+    monkeypatch.setattr(update_management, "has_vbot_run_context", lambda: caller == "agent")
+    monkeypatch.setattr(update_management, "schedule_server_restart", schedule)
+    runner = ScriptedRunner(handler)
+    events, stop, start = _recording_restart()
+    snapshots, snapshot = _recording_snapshot()
+    result = run_update(
+        _instance(),
+        restart=caller != "no-restart",
+        runner=runner,
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        data_snapshot_fn=snapshot,
+    )
+
+    assert isinstance(result, UpdateResult)
+    assert result.ok, result.message
+    assert result.restart_state == "unchanged"
+    assert "already up to date at samesha" in result.message
+    assert snapshots == []
+    assert events == []
+    assert runner.ran("git", "fetch")
+    assert not runner.ran("git", "merge")
+    assert not runner.ran("pip")
+
+
+def test_new_upstream_commits_are_applied_after_the_snapshot(tmp_path: Path) -> None:
+    _applied_checkout(tmp_path)
+    heads = iter(["samesha", "newsha"])
+    order: list[str] = []
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(next(heads))
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=3)
+        if command[:2] == ["git", "merge"]:
+            order.append("merge")
+        return _ok()
+
+    def snapshot(instance: ServerInstance) -> _SnapshotStep:
+        order.append("snapshot")
+        return _SnapshotStep(True, "pre-update data snapshot: s-1", "s-1")
 
     runner = ScriptedRunner(handler)
     events, stop, start = _recording_restart()
-    result = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+    result = run_update(
+        _instance(),
+        runner=runner,
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        data_snapshot_fn=snapshot,
+    )
 
     assert result.ok, result.message
+    assert "updated samesha -> newsha" in result.message
+    assert order == ["snapshot", "merge"]
+    assert runner.ran("git", "merge", "--ff-only", "@{upstream}")
     assert events == ["stop", "start"]
+    state = read_install_state(tmp_path)
+    assert state is not None
+    assert state.applied_revision == "newsha"
+
+
+@pytest.mark.parametrize(
+    ("fetch", "comparison", "reason"),
+    [
+        (_err("could not resolve host"), _upstream(behind=1), "'git fetch' failed"),
+        (
+            _ok(),
+            _upstream(ahead=1, behind=2),
+            "diverged from its upstream (1 local and 2 upstream commits)",
+        ),
+        (_ok(), _err("no upstream configured for branch 'main'"), "no upstream configured"),
+    ],
+    ids=["offline", "diverged", "no-upstream"],
+)
+def test_an_update_that_cannot_fast_forward_is_refused_before_the_snapshot(
+    tmp_path: Path, fetch: CommandRun, comparison: CommandRun, reason: str
+) -> None:
+    _applied_checkout(tmp_path)
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok("samesha")
+        if command[:2] == ["git", "fetch"]:
+            return fetch
+        if command[:2] == ["git", "rev-list"]:
+            return comparison
+        raise AssertionError(f"unexpected command after refusal: {command}")
+
+    events, stop, start = _recording_restart()
+    snapshots, snapshot = _recording_snapshot()
+    result = run_update(
+        _instance(),
+        runner=ScriptedRunner(handler),
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        data_snapshot_fn=snapshot,
+    )
+
+    assert not result.ok
+    assert reason in result.message
+    assert snapshots == []
+    assert events == []
 
 
 def test_agent_update_schedules_internal_restart_without_inline_stop(
@@ -205,6 +346,8 @@ def test_agent_update_schedules_internal_restart_without_inline_stop(
             return _ok("main")
         if command[:2] == ["git", "status"]:
             return _ok("")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream()
         return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
 
     scheduled: list[tuple[ServerInstance, str]] = []
@@ -246,6 +389,8 @@ def test_update_restarts_the_installer_recorded_server_target(tmp_path: Path) ->
             return _ok("main")
         if command[:2] == ["git", "status"]:
             return _ok("")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream()
         return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
 
     resolved_targets: list[dict[str, object]] = []
@@ -312,6 +457,8 @@ def test_update_explicit_target_fields_override_the_installation_manifest(
             return _ok("main")
         if command[:2] == ["git", "status"]:
             return _ok("")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream()
         return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
 
     explicit_data_dir = tmp_path / "explicit-data"
@@ -367,7 +514,9 @@ def test_dev_track_reinstalls_deps_and_rebuilds_webui(tmp_path: Path) -> None:
             return _ok("")
         if command[:2] == ["git", "rev-parse"]:
             return _ok(next(revisions))
-        if command[:2] == ["git", "pull"]:
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
+        if command[:2] == ["git", "merge"]:
             (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
             return _ok("")
         if command[:3] == ["git", "diff", "--quiet"]:
@@ -456,6 +605,8 @@ def test_dev_webui_build_failure_preserves_revision_for_retry(tmp_path: Path) ->
             return _ok("main")
         if command[:2] == ["git", "rev-parse"]:
             return _ok(next(revisions))
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
         if command[:3] == ["git", "diff", "--quiet"]:
             assert command[3:5] == ["old", "new"]
             return _err()
@@ -519,6 +670,8 @@ def test_no_restart_skips_server(tmp_path: Path) -> None:
             return _ok("main")
         if command[:2] == ["git", "status"]:
             return _ok("")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream()
         return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
 
     runner = ScriptedRunner(handler)
@@ -616,7 +769,9 @@ def test_dependency_failure_is_retried_after_head_already_advanced(tmp_path: Pat
             return _ok(next(first_revisions))
         if command[:2] == ["git", "status"]:
             return _ok("")
-        if command[:2] == ["git", "pull"]:
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
+        if command[:2] == ["git", "merge"]:
             (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
             return _ok()
         if "pip" in command:
@@ -643,6 +798,8 @@ def test_dependency_failure_is_retried_after_head_already_advanced(tmp_path: Pat
             return _ok("main")
         if command[:2] == ["git", "rev-parse"]:
             return _ok("new")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream()
         if command[:2] == ["git", "status"]:
             return _ok("")
         if command[:3] == ["git", "diff", "--quiet"]:
@@ -686,7 +843,7 @@ def test_release_asset_preflight_can_be_retried_without_poisoning_checkout(
     assert not first.ok
 
 
-def test_stash_is_restored_when_git_pull_fails(tmp_path: Path) -> None:
+def test_stash_is_restored_when_the_fast_forward_fails(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _write_state(tmp_path, revision="old", webui_revision="old")
 
@@ -699,8 +856,10 @@ def test_stash_is_restored_when_git_pull_fails(tmp_path: Path) -> None:
             return _ok(" M local.py")
         if command[:3] == ["git", "stash", "create"]:
             return _ok("updater-stash-object")
-        if command[:2] == ["git", "pull"]:
-            return _err("offline")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
+        if command[:2] == ["git", "merge"]:
+            return _err("not possible to fast-forward")
         return _ok()
 
     runner = ScriptedRunner(handler)
@@ -735,8 +894,10 @@ def test_stash_flag_does_not_restore_an_existing_stash_when_changes_disappear(
             return _ok(" M local.py")
         if command[:3] == ["git", "stash", "create"]:
             return _ok("")
-        if command[:2] == ["git", "pull"]:
-            return _err("offline")
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
+        if command[:2] == ["git", "merge"]:
+            return _err("not possible to fast-forward")
         return _ok()
 
     runner = ScriptedRunner(handler)
@@ -762,6 +923,8 @@ def test_a_failed_restart_names_the_unrestored_snapshot_and_the_previous_revisio
             return _ok("")
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return _ok(next(heads))
+        if command[:2] == ["git", "rev-list"]:
+            return _upstream(behind=1)
         return _ok("")
 
     def start(instance: ServerInstance) -> CommandResult:

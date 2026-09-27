@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import respx
 
+from cli._update_types import UpdateResult
 from cli.update_management import (
     CommandRun,
     ReleaseInfo,
@@ -18,6 +19,7 @@ from tests.cli.update_management_test_support import (
     _instance,
     _ok,
     _recording_restart,
+    _recording_snapshot,
     _webui_tar_bytes,
     _write_state,
 )
@@ -53,9 +55,7 @@ def test_release_track_requires_webui_asset(tmp_path: Path) -> None:
     assert events == []
 
 
-def test_release_track_does_not_require_missing_asset_for_intact_current_tag(
-    tmp_path: Path,
-) -> None:
+def test_release_track_at_the_intact_current_tag_changes_nothing(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     dist = tmp_path / "webui" / "dist"
     dist.mkdir(parents=True)
@@ -73,15 +73,26 @@ def test_release_track_does_not_require_missing_asset_for_intact_current_tag(
             return _ok("v1.0.0")
         return _ok("")
 
+    runner = ScriptedRunner(handler)
+    events, stop, start = _recording_restart()
+    snapshots, snapshot = _recording_snapshot()
     result = run_update(
         _instance(),
-        runner=ScriptedRunner(handler),
+        runner=runner,
         root=tmp_path,
-        restart=False,
+        stop=stop,
+        start=start,
+        data_snapshot_fn=snapshot,
         latest_release=lambda: ReleaseInfo(tag="v1.0.0", webui_asset_url=None),
     )
 
+    assert isinstance(result, UpdateResult)
     assert result.ok, result.message
+    assert result.restart_state == "unchanged"
+    assert snapshots == []
+    assert events == []
+    assert not runner.ran("git", "fetch")
+    assert not runner.ran("git", "checkout")
 
 
 @respx.mock
