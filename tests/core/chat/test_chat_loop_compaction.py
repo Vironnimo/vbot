@@ -144,6 +144,8 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
         "context_tokens_after": tokens_after,
     }
     assert isinstance(duration_ms, int) and duration_ms >= 0
+    assert lifecycle[1].payload["duration_ms"] == duration_ms
+    assert lifecycle[1].payload["message"]["usage"]["compaction_duration_ms"] == duration_ms
 
 
 @pytest.mark.asyncio

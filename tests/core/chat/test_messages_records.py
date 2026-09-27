@@ -297,6 +297,23 @@ def test_factories_persist_only_their_role_fields_and_round_trip(
             "model": "openai/gpt-4.1",
             "reasoning_meta": {"provider": "opaque"},
         },
+        {
+            "id": "checkpoint-one",
+            "timestamp": "2026-05-03T14:30:05+00:00",
+            "role": "compaction_checkpoint",
+            "content": "Summary.",
+            "projection": [
+                {
+                    "id": "u2",
+                    "timestamp": "2026-05-03T14:30:04+00:00",
+                    "role": "user",
+                    "content": "tail",
+                }
+            ],
+            "compaction_policy": "summary_tail",
+            "compaction_strategy": "summary_tail",
+            "usage": {"compacted_token_count": 10},
+        },
     ],
     ids=[
         "assistant-usage",
@@ -306,6 +323,7 @@ def test_factories_persist_only_their_role_fields_and_round_trip(
         "takeover",
         "assistant-reasoning-only",
         "assistant-reasoning-meta-only",
+        "checkpoint",
     ],
 )
 def test_persisted_payloads_round_trip_exactly(data: dict[str, Any]) -> None:
@@ -483,6 +501,13 @@ _CHECKPOINT = {
         (_payload("compaction_checkpoint", **_CHECKPOINT, sender=_SENDER), None),
         (
             _payload(
+                "compaction_checkpoint",
+                **{key: value for key, value in _CHECKPOINT.items() if key != "projection"},
+            ),
+            "require a projection",
+        ),
+        (
+            _payload(
                 "run_summary",
                 **_SUMMARY,
                 change_stats={"files": -1, "added": 1, "removed": 0, "paths": []},
@@ -542,6 +567,7 @@ _CHECKPOINT = {
         "sender-on-assistant",
         "sender-on-run-summary",
         "sender-on-checkpoint",
+        "checkpoint-without-projection",
         "negative-change-stats",
         "negative-iteration-count",
         "bool-iteration-count",
