@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../../lib/i18n.js';
+import { init, t } from '../../../lib/i18n.js';
 import { HOVER_CARD_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
@@ -93,32 +93,36 @@ describe('ToolAccessEditor', () => {
     document.body.innerHTML = '';
   });
 
-  it('offers explicit opt-in while retaining the default policy', () => {
-    const onChange = vi.fn();
-    mountedComponent = mount(ToolAccessEditor, {
-      target: document.body,
-      props: {
-        value: { mode: 'all' },
-        tools: [
-          ...tools,
-          {
-            name: 'computer',
-            activation: 'configurable',
-            requires_opt_in: true,
-            ready: true,
-          },
-        ],
-        onChange,
-      },
-    });
-    flushSync();
-    expect(toolChip('computer').getAttribute('aria-checked')).toBe('false');
-    toolChip('computer').click();
-    expect(onChange).toHaveBeenCalledWith({
-      mode: 'all',
-      granted: ['computer'],
-    });
-  });
+  it.each([
+    ['read', 'true', { mode: 'all', denied: ['read'] }],
+    // An opt-in Tool is granted explicitly without leaving All mode.
+    ['computer', 'false', { mode: 'all', granted: ['computer'] }],
+  ])(
+    'toggles %s with one binary checkbox while keeping All mode',
+    (name, checked, expected) => {
+      const onChange = vi.fn();
+      mountedComponent = mount(ToolAccessEditor, {
+        target: document.body,
+        props: {
+          value: { mode: 'all' },
+          tools: [
+            ...tools,
+            {
+              name: 'computer',
+              activation: 'configurable',
+              requires_opt_in: true,
+              ready: true,
+            },
+          ],
+          onChange,
+        },
+      });
+      flushSync();
+      expect(toolChip(name).getAttribute('aria-checked')).toBe(checked);
+      toolChip(name).click();
+      expect(onChange).toHaveBeenCalledWith(expected);
+    },
+  );
 
   it('selects all Tools inside the ceiling, including explicit permissions', () => {
     const onChange = vi.fn();
@@ -132,7 +136,7 @@ describe('ToolAccessEditor', () => {
       },
     });
     flushSync();
-    buttonWithText('Select all').click();
+    buttonWithText(t('toolAccess.selectAll', 'Select all')).click();
     const selected = onChange.mock.calls.at(-1)[0];
     expect(selected.mode).toBe('selected');
     expect(selected.allowed).toEqual(
@@ -141,6 +145,10 @@ describe('ToolAccessEditor', () => {
     expect(selected.allowed).toHaveLength(2);
     expect(selected.granted).toEqual(['computer']);
     expect(toolChip('read').disabled).toBe(false);
+    // The image override only exists inside the Project ceiling.
+    expect(
+      document.querySelector('button[aria-label="Available with vision"]'),
+    ).toBeNull();
   });
 
   it('clears all access and permits individual selection from an empty policy', async () => {
@@ -155,7 +163,7 @@ describe('ToolAccessEditor', () => {
       props,
     });
     flushSync();
-    buttonWithText('Deselect all').click();
+    buttonWithText(t('toolAccess.deselectAll', 'Deselect all')).click();
     flushSync();
     expect(onChange).toHaveBeenLastCalledWith({ mode: 'none' });
     await unmount(mountedComponent);
@@ -196,7 +204,7 @@ describe('ToolAccessEditor', () => {
     expect(
       document.getElementById(sessionRead.getAttribute('aria-describedby'))
         .textContent,
-    ).toBe('Automatic');
+    ).toBe(t('toolAccess.automatic', 'Automatic'));
     expect(toolChip('read').textContent.trim()).toBe('read');
     const readTip = toolTipWithText('Read a file from disk.');
     expect(readTip.textContent).toContain('Read a file from disk.');
@@ -210,9 +218,13 @@ describe('ToolAccessEditor', () => {
     vi.useRealTimers();
     expect(readTip.dataset.floatingOpen).toBe('true');
 
-    expect(document.body.textContent).toContain('Memory is currently off');
+    expect(document.body.textContent).toContain(
+      t('toolAccess.activation.memoryOff', 'Memory is currently off'),
+    );
     expect(buttonByAriaLabel('Available with vision').disabled).toBe(true);
-    expect(document.body.textContent).toContain('Individual Tools');
+    expect(document.body.textContent).toContain(
+      t('toolAccess.family.individual', 'Individual Tools'),
+    );
     expect(document.body.textContent).not.toContain('Allow current');
     expect(document.body.textContent).not.toContain('Block current');
   });
@@ -262,92 +274,29 @@ describe('ToolAccessEditor', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('omits the image override outside the Project ceiling', () => {
-    mountedComponent = mount(ToolAccessEditor, {
-      target: document.body,
-      props: { value: { mode: 'all' }, tools, ceiling: ['read'] },
-    });
-    flushSync();
-    expect(
-      document.querySelector('button[aria-label="Available with vision"]'),
-    ).toBeNull();
-  });
+  it.each([
+    ['All Files Tools', ['read'], ['read', 'write']],
+    // An Extension-declared family is labelled by its declared name.
+    ['All Home Assistant Tools', [], ['ha_call_service', 'ha_get_state']],
+  ])(
+    'uses one family checkbox (%s) for every member',
+    (familyLabel, allowed, expected) => {
+      const onChange = vi.fn();
+      mountedComponent = mount(ToolAccessEditor, {
+        target: document.body,
+        props: { value: { mode: 'selected', allowed }, tools, onChange },
+      });
+      flushSync();
 
-  it('uses one family checkbox for every member', () => {
-    const onChange = vi.fn();
-    mountedComponent = mount(ToolAccessEditor, {
-      target: document.body,
-      props: {
-        value: { mode: 'selected', allowed: ['read'] },
-        tools,
-        onChange,
-      },
-    });
-    flushSync();
+      buttonByAriaLabel(familyLabel).click();
+      expect(onChange).toHaveBeenCalledWith({
+        mode: 'selected',
+        allowed: expected,
+      });
+    },
+  );
 
-    buttonByAriaLabel('All Files Tools').click();
-    expect(onChange).toHaveBeenCalledWith({
-      mode: 'selected',
-      allowed: ['read', 'write'],
-    });
-  });
-
-  it('renders an Extension-declared family label and controls its Tools together', () => {
-    const onChange = vi.fn();
-    mountedComponent = mount(ToolAccessEditor, {
-      target: document.body,
-      props: {
-        value: { mode: 'selected', allowed: [] },
-        tools,
-        onChange,
-      },
-    });
-    flushSync();
-
-    expect(document.body.textContent).toContain('Home Assistant');
-    buttonByAriaLabel('All Home Assistant Tools').click();
-    expect(onChange).toHaveBeenCalledWith({
-      mode: 'selected',
-      allowed: ['ha_call_service', 'ha_get_state'],
-    });
-  });
-
-  it('uses one binary Tool checkbox while preserving all-mode denials', () => {
-    const onChange = vi.fn();
-    mountedComponent = mount(ToolAccessEditor, {
-      target: document.body,
-      props: { value: { mode: 'all' }, tools, onChange },
-    });
-    flushSync();
-
-    toolChip('read').click();
-    expect(onChange).toHaveBeenCalledWith({
-      mode: 'all',
-      denied: ['read'],
-    });
-  });
-
-  it('filters live and exposes keyboard-focusable native controls', () => {
-    mountedComponent = mount(ToolAccessEditor, {
-      target: document.body,
-      props: { value: { mode: 'all' }, tools },
-    });
-    flushSync();
-
-    const search = document.querySelector('input[type="search"]');
-    search.value = 'session';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    expect(toolChip('session_search')).toBeTruthy();
-    expect(document.querySelector('[data-tool-name="read"]')).toBeNull();
-
-    const bulkAction = buttonWithText('Select all');
-    bulkAction.focus();
-    expect(document.activeElement).toBe(bulkAction);
-    expect(document.querySelector('[role="radiogroup"]')).toBeNull();
-  });
-
-  it('finds Tools by description and family without changing hidden permissions', () => {
+  it('filters live by name, description and family without changing hidden permissions', () => {
     const onChange = vi.fn();
     mountedComponent = mount(ToolAccessEditor, {
       target: document.body,
@@ -355,27 +304,32 @@ describe('ToolAccessEditor', () => {
     });
     flushSync();
     const search = document.querySelector('input[type="search"]');
-    search.value = 'from disk';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    expect(
-      [...document.querySelectorAll('[data-tool-name]')].map(
+    const visibleTools = (query) => {
+      search.value = query;
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      return [...document.querySelectorAll('[data-tool-name]')].map(
         (tool) => tool.dataset.toolName,
-      ),
-    ).toEqual(['read']);
+      );
+    };
+
+    expect(visibleTools('session')).toEqual(['session_read', 'session_search']);
+    expect(visibleTools('from disk')).toEqual(['read']);
+    // The family checkbox only changes the visible members.
     buttonByAriaLabel('All Files Tools').click();
     expect(onChange).toHaveBeenLastCalledWith({
       mode: 'all',
       denied: ['read'],
     });
-    search.value = 'Home Assistant';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    expect(
-      [...document.querySelectorAll('[data-tool-name]')].map(
-        (tool) => tool.dataset.toolName,
-      ),
-    ).toEqual(['ha_call_service', 'ha_get_state']);
+    expect(visibleTools('Home Assistant')).toEqual([
+      'ha_call_service',
+      'ha_get_state',
+    ]);
+
+    const bulkAction = buttonWithText(t('toolAccess.selectAll', 'Select all'));
+    bulkAction.focus();
+    expect(document.activeElement).toBe(bulkAction);
+    expect(document.querySelector('[role="radiogroup"]')).toBeNull();
   });
 });
 

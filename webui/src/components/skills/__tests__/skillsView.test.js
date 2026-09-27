@@ -262,7 +262,7 @@ describe('Skills manager', () => {
     click(options[1]);
     expect(rows().map((row) => row.dataset.skillId)).toEqual(['disabled']);
   });
-  it('keeps actions beside search and locations in navigation without header or refresh buttons', async () => {
+  it('keeps actions beside search and opens folder setup from the installation dialog with the location draft', async () => {
     await render();
     expect(document.querySelector('.skills-header button')).toBeNull();
     expect(button('Refresh')).toBeUndefined();
@@ -279,10 +279,23 @@ describe('Skills manager', () => {
       '/draft/location',
     );
     collection('All skills');
+    expect(rows()).toHaveLength(4);
+
     click(button('Add skills'));
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(
+      button('Create a custom skill…').classList.contains('btn-tertiary'),
+    ).toBe(true);
     click(button('Add a skill folder…'));
     await settle();
+    const directories = document.querySelector('.skills-directories');
+    expect(directories.hidden).toBe(false);
+    expect(document.activeElement).toBe(
+      directories.querySelector('.skills-directory-add input'),
+    );
     expect(document.activeElement.value).toBe('/draft/location');
+    expect(button('Skill locations').getAttribute('aria-current')).toBe('page');
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
   it('shows direct actions and exposes descriptions only through hover or focus', async () => {
     await render();
@@ -416,35 +429,28 @@ describe('Skills manager', () => {
       content: 'updated-content-sentinel',
     });
   });
-  it('allows stopping sharing by deselecting all recipients', async () => {
-    await render();
-    click(button('Share notes'));
-    const dialog = document.querySelector('[role="dialog"]');
-    click(dialog.querySelector('[role="switch"]'));
-    click(button('Save', dialog));
-    await settle();
-    expect(rpcMock).toHaveBeenCalledWith('skill.share', {
-      agent_id: 'main',
-      name: 'notes',
-      shared: false,
-      receivers: [],
-    });
-  });
-  it('shares a private original with the selected receiver only', async () => {
-    await render();
-    click(button('Share deploy'));
-    const dialog = document.querySelector('[role="dialog"]');
-    expect(dialog.querySelectorAll('[role="switch"]')).toHaveLength(1);
-    click(dialog.querySelector('[role="switch"]'));
-    click(button('Save', dialog));
-    await settle();
-    expect(rpcMock).toHaveBeenCalledWith('skill.share', {
-      agent_id: 'main',
-      name: 'deploy',
-      shared: true,
-      receivers: ['reviewer'],
-    });
-  });
+  it.each([
+    ['deploy', true, ['reviewer']],
+    // Deselecting every recipient stops sharing.
+    ['notes', false, []],
+  ])(
+    'toggles the only receiver of %s and saves the sharing policy',
+    async (name, shared, receivers) => {
+      await render();
+      click(button(`Share ${name}`));
+      const dialog = document.querySelector('[role="dialog"]');
+      expect(dialog.querySelectorAll('[role="switch"]')).toHaveLength(1);
+      click(dialog.querySelector('[role="switch"]'));
+      click(button(t('common.save', 'Save'), dialog));
+      await settle();
+      expect(rpcMock).toHaveBeenCalledWith('skill.share', {
+        agent_id: 'main',
+        name,
+        shared,
+        receivers,
+      });
+    },
+  );
   it('creates in the selected Agent scope and retains draft content during inventory refresh', async () => {
     await render();
     collection('Main');
@@ -553,54 +559,6 @@ describe('Skills manager', () => {
       disabled: false,
     });
   });
-  it('keeps the selected Skill actions above its scrolling content', async () => {
-    await render();
-    choose('private');
-    await settle();
-    const detail = document.querySelector('.skills-detail');
-    expect(button('Delete deploy', detail)).toBeTruthy();
-    expect(button('Share deploy', detail)).toBeTruthy();
-    const enable = detail.querySelector(
-      '.skills-detail-header [role="switch"]',
-    );
-    expect(enable.getAttribute('aria-label')).toBe(
-      t('skills.enabledNamed', '', { name: 'deploy' }),
-    );
-    expect(enable.closest('label').textContent.trim()).toBe(
-      t('skills.enabled'),
-    );
-    expect(
-      document
-        .querySelector('[data-skill-id="private"]')
-        .closest('.skills-row')
-        .querySelector('[role="switch"]')
-        .closest('label'),
-    ).toBeNull();
-    expect(
-      detail.querySelector('.skills-detail-scroll .skills-actions'),
-    ).toBeNull();
-    expect(detail.querySelector('.skills-description')).toBeNull();
-    expect(detail.querySelector('.skills-management')).toBeNull();
-  });
-  it('opens folder setup from the installation dialog without showing an authoring form', async () => {
-    await render();
-    click(button('Add skills'));
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-    click(button('Add a skill folder…'));
-    const directories = document.querySelector('.skills-directories');
-    expect(directories.hidden).toBe(false);
-    await settle();
-    expect(document.activeElement).toBe(
-      directories.querySelector('.skills-directory-add input'),
-    );
-    expect(button('Skill locations').getAttribute('aria-current')).toBe('page');
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect(
-      button('Create a custom skill…').classList.contains('btn-tertiary'),
-    ).toBe(true);
-    collection('All skills');
-    expect(rows()).toHaveLength(4);
-  });
   it('refreshes the list immediately after connecting a Skill folder', async () => {
     await render();
     click(button('Add skills'));
@@ -653,13 +611,36 @@ describe('Skills manager', () => {
       name: 'notes',
     });
   });
-  it('returns focus to the selected row and switches content tabs with the keyboard', async () => {
+  it('opens a Skill detail with header actions, keyboard content tabs, and focus return', async () => {
     await render();
     choose('private');
     await settle();
-    expect(document.activeElement).toBe(
-      document.querySelector('.skills-detail'),
+    const detail = document.querySelector('.skills-detail');
+    expect(document.activeElement).toBe(detail);
+    expect(button('Delete deploy', detail)).toBeTruthy();
+    expect(button('Share deploy', detail)).toBeTruthy();
+    const enable = detail.querySelector(
+      '.skills-detail-header [role="switch"]',
     );
+    expect(enable.getAttribute('aria-label')).toBe(
+      t('skills.enabledNamed', '', { name: 'deploy' }),
+    );
+    expect(enable.closest('label').textContent.trim()).toBe(
+      t('skills.enabled'),
+    );
+    expect(
+      document
+        .querySelector('[data-skill-id="private"]')
+        .closest('.skills-row')
+        .querySelector('[role="switch"]')
+        .closest('label'),
+    ).toBeNull();
+    expect(
+      detail.querySelector('.skills-detail-scroll .skills-actions'),
+    ).toBeNull();
+    expect(detail.querySelector('.skills-description')).toBeNull();
+    expect(detail.querySelector('.skills-management')).toBeNull();
+
     const tab = document.querySelector('[role="tab"]');
     tab.focus();
     tab.dispatchEvent(
@@ -670,7 +651,7 @@ describe('Skills manager', () => {
       document
         .querySelector('[role="tab"][aria-selected="true"]')
         .textContent.trim(),
-    ).toBe('Original text');
+    ).toBe(t('skills.original', 'Original text'));
     click(button('Back to list'));
     await settle();
     expect(document.activeElement.dataset.skillId).toBe('private');
