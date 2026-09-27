@@ -1,8 +1,9 @@
-"""Tests for commands status."""
+"""The /status command: the dispatched reply and the report pieces it is built from."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,10 +11,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat import (
-    ChatMessage,
-    CommandDispatcher,
-)
+from core.chat import ChatMessage, CommandDispatcher
 from core.chat.status_report import (
     STATUS_PLACEHOLDER,
     ReasoningIntent,
@@ -28,7 +26,7 @@ from core.chat.status_report import (
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolver, ProjectStore
-from core.providers.providers import ProviderConfig
+from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, ProviderConfig
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.chat.commands_test_support import (
@@ -40,12 +38,17 @@ from tests.core.chat.commands_test_support import (
     _StubResolver,
 )
 
+_SESSION_STARTED = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+_APP_STARTED = datetime(2026, 5, 18, 9, 0, tzinfo=UTC)
+
 
 def _make_model(
     *,
     model_id: str = "gpt-5.2",
     name: str = "GPT-5.2",
     recommended_temperature: float | None = None,
+    context_window: int | None = 200_000,
+    reasoning: ReasoningCapabilities | None = None,
 ) -> Model:
     return Model(
         model_id=model_id,
@@ -54,11 +57,21 @@ def _make_model(
             vision=True,
             tools=True,
             json_mode=True,
-            reasoning=ReasoningCapabilities(supported=True),
+            reasoning=reasoning or ReasoningCapabilities(supported=True),
         ),
-        context_window=200_000,
+        context_window=context_window,
         max_output_tokens=8_192,
         recommended_temperature=recommended_temperature,
+    )
+
+
+def _provider(**options: Any) -> ProviderConfig:
+    return ProviderConfig(
+        id="provider",
+        name="Provider",
+        adapter="openai_compatible",
+        base_url="https://example.test/v1",
+        **options,
     )
 
 
@@ -73,38 +86,17 @@ class _StubSession:
         return status_session_facts(self._messages)
 
 
-class _StubCreatedSession:
-    def __init__(self, session_id: str) -> None:
-        self.id = session_id
-
-
 class _StubSessions:
-    def __init__(
-        self,
-        messages: list[ChatMessage] | None = None,
-        created_session_id: str = "session-new",
-    ) -> None:
+    def __init__(self, messages: list[ChatMessage] | None = None) -> None:
         self._session = _StubSession(messages or [])
-        self._created_session_id = created_session_id
-        self.create_calls: list[str] = []
 
     def get(self, _address: SessionAddress) -> _StubSession:
         return self._session
 
-    def create(self, agent_id: str) -> _StubCreatedSession:
-        self.create_calls.append(agent_id)
-        return _StubCreatedSession(self._created_session_id)
-
-
-class _StubModels:
-    def __init__(self, model: Model) -> None:
-        self._model = model
-
-    def get(self, _provider_id: str, _model_id: str) -> Model:
-        return self._model
-
 
 class _RecordingModels:
+    """Model registry holding one ``openai`` Model and recording each lookup."""
+
     def __init__(self, model: Model) -> None:
         self._model = model
         self.calls: list[tuple[str, str]] = []
@@ -116,14 +108,56 @@ class _RecordingModels:
         return self._model
 
 
-def test_dispatch_status_with_no_deps_returns_degraded_reply() -> None:
-    dispatcher = CommandDispatcher(ChatRunManager())
+class _AnyModels:
+    """Model registry answering every lookup with one Model."""
 
-    result = _execute_sync(dispatcher, "/status")
+    def __init__(self, model: Model) -> None:
+        self._model = model
+
+    def get(self, _provider_id: str, _model_id: str) -> Model:
+        return self._model
+
+
+class _Providers:
+    def __init__(self, provider: ProviderConfig) -> None:
+        self._provider = provider
+
+    def get(self, _provider_id: str) -> ProviderConfig:
+        return self._provider
+
+
+def _cached_turn(usage: dict[str, Any], content: str = "Answer.") -> ChatMessage:
+    return ChatMessage.assistant(
+        model="openai/gpt-5.2", content=content, usage=usage, timestamp=_SESSION_STARTED
+    )
+
+
+def _status_dispatcher(
+    manager: ChatRunManager | None = None,
+    *,
+    resolver: _StubResolver | None = None,
+    messages: list[ChatMessage] | None = None,
+    model: Model | None = None,
+) -> tuple[CommandDispatcher, _StubResolver, _RecordingModels]:
+    resolver = resolver or _StubResolver(_make_agent())
+    models = _RecordingModels(model or _make_model())
+    dispatcher = CommandDispatcher(
+        manager or ChatRunManager(),
+        agent_resolver=cast(AgentResolver, resolver),
+        sessions=cast(ChatSessionManager, _StubSessions(messages)),
+        models=cast(ModelRegistry, models),
+        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+        started_at=_APP_STARTED,
+    )
+    return dispatcher, resolver, models
+
+
+def test_status_without_services_is_a_degraded_detail_reply() -> None:
+    result = _execute_sync(CommandDispatcher(ChatRunManager()), "/status")
 
     assert result.feedback is not None
+    assert result.feedback.kind == "detail"
     reply = result.feedback.text
-    assert reply != ""
     assert f"Agent: {STATUS_PLACEHOLDER}" in reply
     assert "Activity: idle" in reply
     assert f"Run created at: {STATUS_PLACEHOLDER}" in reply
@@ -133,48 +167,70 @@ def test_dispatch_status_with_no_deps_returns_degraded_reply() -> None:
     assert "Current time:" in reply
 
 
-def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> None:
-    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+def test_status_reports_the_identity_sessions_agent_model_and_cache() -> None:
     messages = [
-        ChatMessage.user("Status check", timestamp=session_started),
-        ChatMessage.assistant(
-            model="openai/gpt-5.2",
-            content="All systems go.",
-            usage={
+        ChatMessage.user("Status check", timestamp=_SESSION_STARTED),
+        _cached_turn(
+            {
                 "input_tokens": 1234,
                 "output_tokens": 42,
                 "cache_read_tokens": 800,
                 "cache_write_tokens": 100,
-            },
-            timestamp=session_started,
+            }
         ),
     ]
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent())),
-        sessions=cast(ChatSessionManager, _StubSessions(messages)),
-        models=cast(ModelRegistry, _StubModels(_make_model())),
-        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+    # A pinned connection suffix is stripped before the Model registry lookup.
+    dispatcher, resolver, models = _status_dispatcher(
+        resolver=_StubResolver(_make_agent(model="openai/gpt-5.2::primary")),
+        messages=messages,
+        model=_make_model(name="GPT-5.2 Registry"),
     )
 
     result = _execute_sync(dispatcher, "/status")
 
     assert result.feedback is not None
     reply = result.feedback.text
-    assert "Agent: Coder (openai/gpt-5.2)" in reply
-    assert "Model display name: GPT-5.2" in reply
+    assert resolver.calls == [(None, "coder")]
+    assert models.calls == [("openai", "gpt-5.2")]
+    assert "Agent: Coder (openai/gpt-5.2::primary)" in reply
+    assert "Model display name: GPT-5.2 Registry" in reply
     assert "Temperature: 0.3 (agent)" in reply
+    assert f"Project: {STATUS_PLACEHOLDER}" in reply
     assert "Activity: idle" in reply
     assert f"Run created at: {STATUS_PLACEHOLDER}" in reply
-    assert f"Run updated at: {STATUS_PLACEHOLDER}" in reply
     assert "Context usage: 1234 / 200000" in reply
     assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in reply
     assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in reply
     assert "Current time:" in reply
 
 
+def test_status_in_a_project_session_resolves_its_config_agent() -> None:
+    dispatcher, resolver, _ = _status_dispatcher(
+        messages=[ChatMessage.user("Status check", timestamp=_SESSION_STARTED)]
+    )
+
+    result = _execute_sync(dispatcher, "/status", agent_id="builder", project_id="vbot")
+
+    assert result.feedback is not None
+    assert resolver.calls == [("vbot", "builder")]
+    assert "Agent: Coder (openai/gpt-5.2)" in result.feedback.text
+    assert "Project: vBot (vbot)" in result.feedback.text
+
+
+def test_status_reports_the_model_recommended_temperature() -> None:
+    dispatcher, _, _ = _status_dispatcher(
+        resolver=_StubResolver(_make_agent(temperature=None)),
+        model=_make_model(recommended_temperature=1.0),
+    )
+
+    result = _execute_sync(dispatcher, "/status")
+
+    assert result.feedback is not None
+    assert "Temperature: 1 (model recommendation)" in result.feedback.text
+
+
 @pytest.mark.asyncio
-async def test_dispatch_status_reports_active_run_timestamps() -> None:
+async def test_status_reports_active_run_timestamps() -> None:
     manager = ChatRunManager()
     started = asyncio.Event()
     release = asyncio.Event()
@@ -188,12 +244,7 @@ async def test_dispatch_status_reports_active_run_timestamps() -> None:
         SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), execute
     )
     await started.wait()
-    dispatcher = CommandDispatcher(
-        manager,
-        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent())),
-        sessions=cast(ChatSessionManager, _StubSessions([])),
-        models=cast(ModelRegistry, _StubModels(_make_model())),
-    )
+    dispatcher, _, _ = _status_dispatcher(manager)
 
     result = await _execute(dispatcher, "/status")
     expected_updated_at = run.updated_at
@@ -206,147 +257,66 @@ async def test_dispatch_status_reports_active_run_timestamps() -> None:
     assert f"Run updated at: {expected_updated_at}" in result.feedback.text
 
 
-def test_dispatch_status_reports_resolved_model_recommended_temperature() -> None:
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agent_resolver=cast(AgentResolver, _StubResolver(_make_agent(temperature=None))),
-        sessions=cast(ChatSessionManager, _StubSessions([])),
-        models=cast(ModelRegistry, _StubModels(_make_model(recommended_temperature=1.0))),
-    )
+@pytest.mark.parametrize(
+    ("store", "project_id", "expected"),
+    [
+        (_StubProject("vbot", "vBot"), "vbot", "vBot (vbot)"),
+        (_StubProject("vbot", "vBot"), None, None),
+        # A missing store or an unloadable Project still names the stable id.
+        (None, "vbot", "vbot"),
+        (_StubProject("other", "Other"), "vbot", "vbot"),
+    ],
+    ids=["name-and-id", "identity-session", "no-store", "unknown-project"],
+)
+def test_status_project_label(
+    store: _StubProject | None, project_id: str | None, expected: str | None
+) -> None:
+    projects = cast(ProjectStore, _StubProjects(store)) if store is not None else None
 
-    result = _execute_sync(dispatcher, "/status")
-
-    assert result.feedback is not None
-    assert "Temperature: 1 (model recommendation)" in result.feedback.text
-
-
-def test_dispatch_status_strips_pinned_suffix_before_registry_lookup() -> None:
-    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
-    messages = [
-        ChatMessage.user("Status check", timestamp=session_started),
-    ]
-    models = _RecordingModels(_make_model(name="GPT-5.2 Registry"))
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agent_resolver=cast(
-            AgentResolver, _StubResolver(_make_agent(model="openai/gpt-5.2::primary"))
-        ),
-        sessions=cast(ChatSessionManager, _StubSessions(messages)),
-        models=cast(ModelRegistry, models),
-        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
-    )
-
-    result = _execute_sync(dispatcher, "/status")
-
-    assert result.feedback is not None
-    assert "Model display name: GPT-5.2 Registry" in result.feedback.text
-    assert models.calls == [("openai", "gpt-5.2")]
+    assert resolve_status_project_label(projects, project_id) == expected
 
 
-def test_dispatch_status_in_project_session_resolves_config_agent() -> None:
-    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
-    messages = [ChatMessage.user("Status check", timestamp=session_started)]
-    resolver = _StubResolver(_make_agent(model="openai/gpt-5.2"))
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agent_resolver=cast(AgentResolver, resolver),
-        sessions=cast(ChatSessionManager, _StubSessions(messages)),
-        models=cast(ModelRegistry, _StubModels(_make_model())),
-        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
-        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
-    )
-
-    result = _execute_sync(dispatcher, "/status", agent_id="builder", project_id="vbot")
-
-    assert result.feedback is not None
-    # The project session resolves through the run-path seam instead of degrading
-    # to an empty reply, and the resolver sees the session's project id.
-    assert resolver.calls == [("vbot", "builder")]
-    assert "Agent: Coder (openai/gpt-5.2)" in result.feedback.text
-    assert "Project: vBot (vbot)" in result.feedback.text
-
-
-def test_dispatch_status_identity_session_shows_project_placeholder() -> None:
-    resolver = _StubResolver(_make_agent())
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agent_resolver=cast(AgentResolver, resolver),
-        sessions=cast(ChatSessionManager, _StubSessions([])),
-        models=cast(ModelRegistry, _StubModels(_make_model())),
-        projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
-    )
-
-    result = _execute_sync(dispatcher, "/status")
-
-    assert result.feedback is not None
-    assert resolver.calls == [(None, "coder")]
-    assert f"Project: {STATUS_PLACEHOLDER}" in result.feedback.text
-
-
-def test_resolve_status_project_label_renders_name_and_id() -> None:
-    projects = cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot")))
-
-    assert resolve_status_project_label(projects, "vbot") == "vBot (vbot)"
-
-
-def test_resolve_status_project_label_identity_session_is_none() -> None:
-    projects = cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot")))
-
-    assert resolve_status_project_label(projects, None) is None
-
-
-def test_resolve_status_project_label_degrades_to_id_when_unresolvable() -> None:
-    # Missing store, or a project that can't be loaded, still names the stable id.
-    assert resolve_status_project_label(None, "vbot") == "vbot"
-    projects = cast(ProjectStore, _StubProjects(_StubProject("other", "Other")))
-    assert resolve_status_project_label(projects, "vbot") == "vbot"
-
-
-def test_build_status_text_degraded_with_no_data() -> None:
+def test_status_text_without_data_shows_placeholders() -> None:
     text = build_status_text(None, [], None, None)
 
-    assert f"Agent: {STATUS_PLACEHOLDER}" in text
-    assert f"Project: {STATUS_PLACEHOLDER}" in text
-    assert f"Model display name: {STATUS_PLACEHOLDER}" in text
-    assert f"Fallback models: {STATUS_PLACEHOLDER}" in text
-    assert f"Selected thinking effort: {STATUS_PLACEHOLDER}" in text
-    assert f"Actual model thinking effort: {STATUS_PLACEHOLDER}" in text
-    assert f"Temperature: {STATUS_PLACEHOLDER}" in text
-    assert f"Context usage: {STATUS_PLACEHOLDER}" in text
-    assert f"Last request cache: {STATUS_PLACEHOLDER}" in text
-    assert f"Session cache: {STATUS_PLACEHOLDER}" in text
-    assert f"Activity: {STATUS_PLACEHOLDER}" in text
-    assert f"Run created at: {STATUS_PLACEHOLDER}" in text
-    assert f"Run updated at: {STATUS_PLACEHOLDER}" in text
-    assert f"Session started: {STATUS_PLACEHOLDER}" in text
-    assert f"Turn count: {STATUS_PLACEHOLDER}" in text
-    assert f"App uptime: {STATUS_PLACEHOLDER}" in text
+    for label in (
+        "Agent",
+        "Project",
+        "Model display name",
+        "Fallback models",
+        "Selected thinking effort",
+        "Actual model thinking effort",
+        "Temperature",
+        "Context usage",
+        "Last request cache",
+        "Session cache",
+        "Activity",
+        "Run created at",
+        "Run updated at",
+        "Session started",
+        "Turn count",
+        "App uptime",
+    ):
+        assert f"{label}: {STATUS_PLACEHOLDER}" in text
     assert "Current time:" in text
 
 
-def test_build_status_text_with_full_data() -> None:
-    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+def test_status_text_marks_an_estimated_context_and_omits_its_cache() -> None:
     messages = [
-        ChatMessage.user("Status check", timestamp=session_started),
-        ChatMessage.assistant(
-            model="openai/gpt-5.2",
-            content="All systems go.",
-            usage={
+        ChatMessage.user("Status check", timestamp=_SESSION_STARTED),
+        _cached_turn(
+            {
                 "input_tokens": 987,
                 "output_tokens": 12,
                 "input_tokens_estimated": True,
                 "output_tokens_estimated": True,
                 "estimated": True,
-            },
-            timestamp=session_started,
+            }
         ),
     ]
 
     text = build_status_text(
-        _make_agent(),
-        messages,
-        context_window=200_000,
-        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+        _make_agent(), messages, context_window=200_000, started_at=_APP_STARTED
     )
 
     assert "Agent: Coder (openai/gpt-5.2)" in text
@@ -356,126 +326,83 @@ def test_build_status_text_with_full_data() -> None:
     assert f"Actual model thinking effort: {STATUS_PLACEHOLDER}" in text
     assert "Temperature: 0.3" in text
     assert f"Activity: {STATUS_PLACEHOLDER}" in text
-    assert f"Run created at: {STATUS_PLACEHOLDER}" in text
-    assert f"Run updated at: {STATUS_PLACEHOLDER}" in text
     assert "Context usage: ~987 / 200000" in text
     assert f"Last request cache: {STATUS_PLACEHOLDER}" in text
     assert f"Session cache: {STATUS_PLACEHOLDER}" in text
     assert "Session started:" in text
     assert "Turn count: 1" in text
     assert "App uptime:" in text
-    assert "Current time:" in text
 
 
-def test_build_status_text_reports_latest_and_session_cache() -> None:
-    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
-    messages = [
-        ChatMessage.user("Status check", timestamp=session_started),
-        ChatMessage.assistant(
-            model="openai/gpt-5.2",
-            content="First answer.",
-            usage={
-                "input_tokens": 1000,
-                "output_tokens": 12,
-                "cache_read_tokens": 800,
-                "cache_write_tokens": 100,
-            },
-            timestamp=session_started,
-        ),
-        ChatMessage.assistant(
-            model="openai/gpt-5.2",
-            content="Second answer.",
-            usage={"input_tokens": 500, "output_tokens": 8, "cache_read_tokens": 200},
-            timestamp=session_started,
-        ),
-    ]
-
-    text = build_status_text(
-        _make_agent(),
-        messages,
-        context_window=200_000,
-        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
-    )
-
-    assert "Context usage: 500 / 200000" in text
-    assert "Last request cache: read 200 / 500 (40.0% hit), write 0" in text
-    assert "Session cache: read 1000 / 1500 (66.7% hit), write 100, turns 2" in text
-
-
-def _output_estimated_session() -> list[ChatMessage]:
+def _two_cached_turns() -> list[ChatMessage]:
     """One fully measured turn, then one whose Provider omitted only the output."""
-    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
     return [
-        ChatMessage.user("Status check", timestamp=session_started),
-        ChatMessage.assistant(
-            model="openai/gpt-5.2",
-            content="First answer.",
-            usage={
+        ChatMessage.user("Status check", timestamp=_SESSION_STARTED),
+        _cached_turn(
+            {
                 "input_tokens": 1000,
                 "output_tokens": 12,
                 "cache_read_tokens": 800,
                 "cache_write_tokens": 100,
             },
-            timestamp=session_started,
+            "First answer.",
         ),
-        ChatMessage.assistant(
-            model="openai/gpt-5.2",
-            content="Second answer.",
-            usage={
+        _cached_turn(
+            {
                 "input_tokens": 500,
                 "output_tokens": 8,
                 "output_tokens_estimated": True,
                 "estimated": True,
                 "cache_read_tokens": 200,
             },
-            timestamp=session_started,
+            "Second answer.",
         ),
     ]
 
 
-def test_build_status_text_keeps_measured_input_when_only_output_is_estimated() -> None:
+@pytest.mark.parametrize(
+    ("latest_usage", "context", "latest_cache", "session_cache"),
+    [
+        (
+            None,
+            "500 / 200000",
+            "read 200 / 500 (40.0% hit), write 0",
+            "read 1000 / 1500 (66.7% hit), write 100, turns 2",
+        ),
+        (
+            {
+                "input_tokens": 500,
+                "input_tokens_estimated": True,
+                "output_tokens": 8,
+                "estimated": True,
+                "cache_read_tokens": 200,
+            },
+            "~500 / 200000",
+            STATUS_PLACEHOLDER,
+            "read 800 / 1000 (80.0% hit), write 100, turns 1",
+        ),
+    ],
+    ids=["output-estimated", "input-estimated"],
+)
+def test_status_text_cache_figures_count_only_measured_input(
+    latest_usage: dict[str, Any] | None, context: str, latest_cache: str, session_cache: str
+) -> None:
+    messages = _two_cached_turns()
+    if latest_usage is not None:
+        messages[-1] = replace(messages[-1], usage=latest_usage)
+
     text = build_status_text(
-        _make_agent(),
-        _output_estimated_session(),
-        context_window=200_000,
-        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+        _make_agent(), messages, context_window=200_000, started_at=_APP_STARTED
     )
 
-    assert "Context usage: 500 / 200000" in text
-    assert "Last request cache: read 200 / 500 (40.0% hit), write 0" in text
-    assert "Session cache: read 1000 / 1500 (66.7% hit), write 100, turns 2" in text
-
-
-def test_build_status_text_excludes_estimated_input_from_cache_figures() -> None:
-    messages = _output_estimated_session()
-    latest = messages[-1]
-    assert latest.usage is not None
-    messages[-1] = replace(
-        latest,
-        usage={
-            "input_tokens": 500,
-            "input_tokens_estimated": True,
-            "output_tokens": 8,
-            "estimated": True,
-            "cache_read_tokens": 200,
-        },
-    )
-
-    text = build_status_text(
-        _make_agent(),
-        messages,
-        context_window=200_000,
-        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
-    )
-
-    assert "Context usage: ~500 / 200000" in text
-    assert f"Last request cache: {STATUS_PLACEHOLDER}" in text
-    assert "Session cache: read 800 / 1000 (80.0% hit), write 100, turns 1" in text
+    assert f"Context usage: {context}" in text
+    assert f"Last request cache: {latest_cache}" in text
+    assert f"Session cache: {session_cache}" in text
 
 
 @pytest.mark.usefixtures("current_format_data_directory")
 def test_status_session_facts_match_the_persisted_status_snapshot(tmp_path: Path) -> None:
-    messages = _output_estimated_session()
+    messages = _two_cached_turns()
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("agent", session_id="session-one")
     session.append_many(messages)
@@ -489,319 +416,187 @@ def test_status_session_facts_match_the_persisted_status_snapshot(tmp_path: Path
     assert persisted.latest_assistant_usage == in_memory.latest_assistant_usage
 
 
-def test_build_status_text_handles_unresolved_nullable_defaults() -> None:
-    text = build_status_text(
+def test_status_text_renders_unset_defaults_and_the_effort_split() -> None:
+    unset = build_status_text(
         _make_agent(temperature=None, thinking_effort=None),
         messages=[],
         context_window=None,
         started_at=None,
     )
-
-    assert "Selected thinking effort: default" in text
-    assert "Temperature: default" in text
-
-
-def test_resolve_actual_thinking_effort_snaps_to_ladder() -> None:
-    """The actual effort is the selection snapped against the model's ladder."""
-    assert resolve_actual_thinking_effort("max", ("low", "medium", "high")) == "high"
-    assert resolve_actual_thinking_effort("medium", ("low", "high")) == "low"
-
-
-def test_resolve_actual_thinking_effort_none_without_ladder_or_selection() -> None:
-    """No ladder or no selection means the wire effort is not resolvable here."""
-    assert resolve_actual_thinking_effort("high", ()) is None
-    assert resolve_actual_thinking_effort("", ("low", "high")) is None
-    assert resolve_actual_thinking_effort(None, ("low", "high")) is None
-
-
-def test_resolve_actual_thinking_effort_on_off_reports_state() -> None:
-    """A toggle model has no effort ladder, so report on/off instead of '—'.
-
-    This is the minimax-m3 (opencode-go, on_off control) case the user hit: any
-    non-``none`` selection means reasoning is on; ``none`` means off; no selection
-    stays unresolved (provider default)."""
-    assert resolve_actual_thinking_effort("high", (), "on_off") == "on"
-    assert resolve_actual_thinking_effort("minimal", (), "on_off") == "on"
-    assert resolve_actual_thinking_effort("none", (), "on_off") == "off"
-    assert resolve_actual_thinking_effort("", (), "on_off") is None
-
-
-def test_resolve_actual_thinking_effort_budget_reports_rendered_budget() -> None:
-    """A budget model reports the rendered token budget, not a bare 'on'."""
-    # No budget_max → absolute fallback ladder (medium → 8192).
-    assert resolve_actual_thinking_effort("medium", (), "budget") == "on (8,192 tokens)"
-    # A seeded budget_max scales the budget proportionally (high → 0.75 * 32000).
-    assert resolve_actual_thinking_effort("high", (), "budget", 32000) == "on (24,000 tokens)"
-    # ``none`` still reports off.
-    assert resolve_actual_thinking_effort("none", (), "budget") == "off"
-
-
-def _on_off_details() -> StatusModelDetails:
-    return StatusModelDetails(
-        context_window=1_048_576,
-        display_name="glm-5.3-flash",
-        reasoning_levels=(),
-        reasoning_control="on_off",
-    )
-
-
-def test_resolve_reported_thinking_effort_prefers_adapter_description() -> None:
-    """The adapter's render description wins over the declared-control fallback.
-
-    This is the ollama-cloud glm-5.3-flash case the user hit: the catalog
-    declares a binary on_off control, but the Cloud wire carries the effort
-    level — so /status must report ``max``, not ``on``.
-    """
-
-    def describe_render(provider_id: str, model_id: str, effort: str | None):
-        assert provider_id == "ollama-cloud"
-        assert model_id == "glm-5.3-flash"
-        return ReasoningIntent("effort", effort_level="max")
-
-    text_value = resolve_reported_thinking_effort(
-        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="xhigh"),
-        models=cast(ModelRegistry, object()),
-        model_details=_on_off_details(),
-        describe_render=describe_render,
-    )
-
-    assert text_value == "max"
-
-
-def test_resolve_reported_thinking_effort_falls_back_without_describer() -> None:
-    text_value = resolve_reported_thinking_effort(
-        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="xhigh"),
-        models=cast(ModelRegistry, object()),
-        model_details=_on_off_details(),
-        describe_render=None,
-    )
-
-    assert text_value == "on"
-
-
-def test_resolve_reported_thinking_effort_falls_back_when_unresolvable() -> None:
-    text_value = resolve_reported_thinking_effort(
-        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="xhigh"),
-        models=cast(ModelRegistry, object()),
-        model_details=_on_off_details(),
-        describe_render=lambda *_args: None,
-    )
-
-    assert text_value == "on"
-
-
-def test_resolve_reported_thinking_effort_falls_back_on_describer_error() -> None:
-    def broken_describer(*_args: Any) -> ReasoningIntent:
-        raise KeyError("provider missing")
-
-    text_value = resolve_reported_thinking_effort(
-        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="xhigh"),
-        models=cast(ModelRegistry, object()),
-        model_details=_on_off_details(),
-        describe_render=broken_describer,
-    )
-
-    assert text_value == "on"
-
-
-def test_resolve_reported_thinking_effort_none_without_agent() -> None:
-    assert (
-        resolve_reported_thinking_effort(
-            agent=None,
-            models=None,
-            model_details=_on_off_details(),
-        )
-        is None
-    )
-
-
-def test_resolve_reported_thinking_effort_reports_off_from_description() -> None:
-    text_value = resolve_reported_thinking_effort(
-        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort="none"),
-        models=cast(ModelRegistry, object()),
-        model_details=_on_off_details(),
-        describe_render=lambda *_args: ReasoningIntent("off"),
-    )
-
-    assert text_value == "off"
-
-
-def test_build_status_text_reports_selected_and_actual_effort_split() -> None:
-    """When the model ladder snaps the selection, both lines show distinct values."""
-    text = build_status_text(
+    snapped = build_status_text(
         _make_agent(thinking_effort="max"),
         messages=[],
         context_window=200_000,
         started_at=None,
-        actual_thinking_effort=resolve_actual_thinking_effort("max", ("low", "medium", "high")),
+        actual_thinking_effort="high",
     )
 
-    assert "Selected thinking effort: max" in text
-    assert "Actual model thinking effort: high" in text
+    assert "Selected thinking effort: default" in unset
+    assert "Temperature: default" in unset
+    assert "Selected thinking effort: max" in snapped
+    assert "Actual model thinking effort: high" in snapped
 
 
-def test_resolve_status_model_details_returns_reasoning_ladder() -> None:
-    """The model resolver surfaces the effective ladder for the actual-effort split."""
-    model = Model(
-        model_id="gpt-5.2",
-        name="GPT-5.2",
-        capabilities=Capabilities(
-            vision=False,
-            tools=True,
-            json_mode=True,
-            reasoning=ReasoningCapabilities(
-                supported=True,
-                control="levels",
-                levels=("low", "medium", "high"),
+_LADDER = ("low", "medium", "high")
+
+
+@pytest.mark.parametrize(
+    ("selection", "levels", "control", "budget_max", "expected"),
+    [
+        ("max", _LADDER, None, None, "high"),
+        ("medium", ("low", "high"), None, None, "low"),
+        ("high", (), None, None, None),
+        ("", _LADDER, None, None, None),
+        (None, _LADDER, None, None, None),
+        ("high", (), "on_off", None, "on"),
+        ("none", (), "on_off", None, "off"),
+        ("", (), "on_off", None, None),
+        ("medium", (), "budget", None, "on (8,192 tokens)"),
+        ("high", (), "budget", 32000, "on (24,000 tokens)"),
+        ("none", (), "budget", None, "off"),
+    ],
+    ids=[
+        "snaps-down-to-ladder",
+        "snaps-to-nearest-lower",
+        "no-ladder",
+        "empty-selection",
+        "no-selection",
+        "toggle-on",
+        "toggle-off",
+        "toggle-unselected",
+        "budget-fallback-ladder",
+        "budget-scaled-to-max",
+        "budget-off",
+    ],
+)
+def test_actual_thinking_effort_follows_the_models_reasoning_control(
+    selection: str | None,
+    levels: tuple[str, ...],
+    control: str | None,
+    budget_max: int | None,
+    expected: str | None,
+) -> None:
+    arguments: list[Any] = [selection, levels]
+    if control is not None:
+        arguments.append(control)
+    if budget_max is not None:
+        arguments.append(budget_max)
+
+    assert resolve_actual_thinking_effort(*arguments) == expected
+
+
+def _broken_describer(*_args: Any) -> ReasoningIntent:
+    raise KeyError("provider missing")
+
+
+@pytest.mark.parametrize(
+    ("effort", "describe", "expected"),
+    [
+        # The adapter's render description wins over the declared on/off control: the
+        # Cloud wire carries the effort level, so the report is the level, not "on".
+        ("xhigh", lambda *_args: ReasoningIntent("effort", effort_level="max"), "max"),
+        ("none", lambda *_args: ReasoningIntent("off"), "off"),
+        ("xhigh", None, "on"),
+        ("xhigh", lambda *_args: None, "on"),
+        ("xhigh", _broken_describer, "on"),
+    ],
+    ids=["described-level", "described-off", "no-describer", "undescribed", "describer-error"],
+)
+def test_reported_thinking_effort_prefers_the_adapter_description(
+    effort: str, describe: Callable[..., ReasoningIntent | None] | None, expected: str
+) -> None:
+    calls: list[tuple[Any, ...]] = []
+
+    def recording(*args: Any) -> ReasoningIntent | None:
+        calls.append(args)
+        assert describe is not None
+        return describe(*args)
+
+    reported = resolve_reported_thinking_effort(
+        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort=effort),
+        models=cast(ModelRegistry, object()),
+        model_details=StatusModelDetails(
+            context_window=1_048_576,
+            display_name="glm-5.3-flash",
+            reasoning_levels=(),
+            reasoning_control="on_off",
+        ),
+        describe_render=recording if describe is not None else None,
+    )
+
+    assert reported == expected
+    assert calls == ([] if describe is None else [("ollama-cloud", "glm-5.3-flash", effort)])
+
+
+def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:
+    details = StatusModelDetails(context_window=None, display_name=None)
+
+    assert resolve_reported_thinking_effort(agent=None, models=None, model_details=details) is None
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "expected"),
+    [
+        (
+            _make_model(
+                reasoning=ReasoningCapabilities(supported=True, control="levels", levels=_LADDER)
             ),
+            None,
+            {
+                "context_window": 200_000,
+                "display_name": "GPT-5.2",
+                "reasoning_levels": _LADDER,
+                "reasoning_control": "levels",
+            },
         ),
-        context_window=200_000,
-        max_output_tokens=8_192,
-    )
-
-    class _Models:
-        def get(self, _provider_id: str, _model_id: str) -> Model:
-            return model
-
-    details = resolve_status_model_details(
-        _make_agent(model="openai/gpt-5.2"),
-        cast(ModelRegistry, _Models()),
-    )
-
-    assert details.context_window == 200_000
-    assert details.display_name == "GPT-5.2"
-    assert details.reasoning_levels == ("low", "medium", "high")
-    assert details.reasoning_control == "levels"
-
-
-def test_resolve_status_model_details_resolves_window_through_default_chain() -> None:
-    """A null-window model reports a usable window via the provider-config default,
-    so /status shows the budget compaction actually uses rather than 'unknown'."""
-    model = Model(
-        model_id="thin-model",
-        name="Thin Model",
-        capabilities=Capabilities(
-            vision=False,
-            tools=True,
-            json_mode=False,
-            reasoning=ReasoningCapabilities(supported=False),
+        # A null window resolves through the Provider default, then the global floor,
+        # so /status shows the budget Compaction actually uses.
+        (
+            _make_model(context_window=None),
+            _provider(context_window=64_000),
+            {"context_window": 64_000},
         ),
-        context_window=None,
-        max_output_tokens=None,
-    )
-
-    class _Models:
-        def get(self, _provider_id: str, _model_id: str) -> Model:
-            return model
-
-    class _Providers:
-        def get(self, _provider_id: str) -> Any:
-            return ProviderConfig(
-                id="thin",
-                name="Thin",
-                adapter="openai_compatible",
-                base_url="https://example.test/v1",
-                context_window=64_000,
-            )
-
-    details = resolve_status_model_details(
-        _make_agent(model="thin/thin-model"),
-        cast(ModelRegistry, _Models()),
-        cast(Any, _Providers()),
-    )
-
-    assert details.context_window == 64_000
-
-
-def test_resolve_status_model_details_falls_back_to_global_floor() -> None:
-    """With neither a model window nor a provider default, /status reports the
-    conservative global floor instead of failing or showing nothing."""
-    from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
-
-    model = Model(
-        model_id="custom",
-        name="Custom",
-        capabilities=Capabilities(
-            vision=False,
-            tools=True,
-            json_mode=False,
-            reasoning=ReasoningCapabilities(supported=False),
+        (_make_model(context_window=None), None, {"context_window": GLOBAL_CONTEXT_WINDOW_FLOOR}),
+        (
+            _make_model(recommended_temperature=1.0),
+            _provider(defaults={"temperature": 0.7}),
+            {"recommended_temperature": 1.0, "provider_default_temperature": 0.7},
         ),
-        context_window=None,
-        max_output_tokens=None,
-    )
-
-    class _Models:
-        def get(self, _provider_id: str, _model_id: str) -> Model:
-            return model
-
+    ],
+    ids=["reasoning-ladder", "provider-window", "global-floor-window", "temperature-tiers"],
+)
+def test_status_model_details_resolve_through_the_model_and_provider(
+    model: Model, provider: ProviderConfig | None, expected: dict[str, Any]
+) -> None:
     details = resolve_status_model_details(
-        _make_agent(model="custom/custom"),
-        cast(ModelRegistry, _Models()),
-        None,
+        _make_agent(model="provider/gpt-5.2"),
+        cast(ModelRegistry, _AnyModels(model)),
+        cast(Any, _Providers(provider)) if provider is not None else None,
     )
 
-    assert details.context_window == GLOBAL_CONTEXT_WINDOW_FLOOR
+    assert {name: getattr(details, name) for name in expected} == expected
 
 
-def test_resolve_status_model_details_surfaces_temperature_tiers() -> None:
-    """The model recommendation and the provider default feed the status line."""
-    model = _make_model(recommended_temperature=1.0)
-
-    class _Models:
-        def get(self, _provider_id: str, _model_id: str) -> Model:
-            return model
-
-    class _Providers:
-        def get(self, _provider_id: str) -> Any:
-            return ProviderConfig(
-                id="warm",
-                name="Warm",
-                adapter="openai_compatible",
-                base_url="https://example.test/v1",
-                defaults={"temperature": 0.7},
-            )
-
-    details = resolve_status_model_details(
-        _make_agent(model="warm/gpt-5.2"),
-        cast(ModelRegistry, _Models()),
-        cast(Any, _Providers()),
-    )
-
-    assert details.recommended_temperature == 1.0
-    assert details.provider_default_temperature == 0.7
-
-
-def test_resolve_status_temperature_reports_tier_sources() -> None:
-    """Each tier of the resolution chain renders its value with its source."""
+@pytest.mark.parametrize(
+    ("agent_temperature", "recommended", "provider_default", "expected"),
+    [
+        (0.2, 1.0, 0.7, "0.2 (agent)"),
+        (None, 1.0, 0.7, "1 (model recommendation)"),
+        (None, None, 0.7, "0.7 (provider default)"),
+        (None, None, None, "default"),
+    ],
+)
+def test_status_temperature_names_the_winning_tier(
+    agent_temperature: float | None,
+    recommended: float | None,
+    provider_default: float | None,
+    expected: str,
+) -> None:
     details = StatusModelDetails(
         context_window=None,
         display_name=None,
-        recommended_temperature=1.0,
-        provider_default_temperature=0.7,
+        recommended_temperature=recommended,
+        provider_default_temperature=provider_default,
     )
 
-    assert resolve_status_temperature(0.2, details) == "0.2 (agent)"
-    assert resolve_status_temperature(None, details) == "1 (model recommendation)"
-
-    provider_only = StatusModelDetails(
-        context_window=None,
-        display_name=None,
-        provider_default_temperature=0.7,
-    )
-    assert resolve_status_temperature(None, provider_only) == "0.7 (provider default)"
-
-    empty = StatusModelDetails(context_window=None, display_name=None)
-    assert resolve_status_temperature(None, empty) == "default"
-
-
-def test_build_status_text_renders_resolved_temperature_status() -> None:
-    text = build_status_text(
-        _make_agent(temperature=None),
-        messages=[],
-        context_window=None,
-        started_at=None,
-        temperature_status="1 (model recommendation)",
-    )
-
-    assert "Temperature: 1 (model recommendation)" in text
+    assert resolve_status_temperature(agent_temperature, details) == expected
