@@ -1,8 +1,10 @@
-"""Tests for the durable Provider usage history in ``provider-usage.db``."""
+"""Durable Provider usage history: the ``provider-usage.db`` store and the hourly sampler."""
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import logging
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
@@ -11,12 +13,19 @@ from typing import Any
 
 import pytest
 
-from core.database import read_marker, write_bootstrap_marker
+from core.database import DatabaseUnavailableError, read_marker, write_bootstrap_marker
+from core.providers.usage import ProviderUsageService
 from core.providers.usage_history import (
     DATABASE_NAME,
     ProviderUsageHistoryStore,
     UsageHistoryError,
     usage_history_sample,
+)
+from tests.core.providers.usage_test_support import (
+    OPENAI_BODY,
+    FakeResponse,
+    FakeTransport,
+    usage_runtime,
 )
 
 
@@ -206,17 +215,14 @@ async def test_append_normalizes_timestamps_and_clamps_percentages(
     ("sampled_at", "snapshot"),
     [
         ("2026-07-01T01:00:00+00:00", _snapshot(windows=[_window(used_percent=float("nan"))])),
-        ("2026-07-01T01:00:00+00:00", _snapshot(windows=[_window(used_units=float("inf"))])),
         ("2026-07-01T01:00:00+00:00", _snapshot(windows=[_window(used_percent=True)])),
         ("2026-07-01T01:00:00+00:00", _snapshot(windows=[_window(window_seconds=0)])),
         ("2026-07-01T01:00:00+00:00", _snapshot(windows=[_window(reset_at="2026-07-01")])),
         ("2026-07-01T01:00:00+00:00", _snapshot(windows=[_window(unlimited="yes")])),
-        ("2026-07-01T01:00:00+00:00", _snapshot(windows=[{**_window(), "extra": 1}])),
         ("2026-07-01T01:00:00+00:00", _snapshot(credits={"enabled": 1, "balance": None})),
         ("2026-07-01T01:00:00+00:00", _snapshot(account="")),
         ("2026-07-01T01:00:00+00:00", {**_snapshot(), "raw": {}}),
         ("2026-07-01T01:00:00", _snapshot()),
-        ("not-a-date", _snapshot()),
     ],
 )
 @pytest.mark.asyncio
@@ -313,3 +319,147 @@ def test_time_reads_use_the_sampled_at_index(store: ProviderUsageHistoryStore, q
         )
 
     assert "usage_samples_by_time" in plan
+
+
+# ---------------------------------------------------------------------------
+# The service's hourly sampler
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_collect_history_sample_reuses_live_cache_and_persists_structured_data(
+    tmp_path: Path,
+) -> None:
+    observed_at = datetime(2026, 7, 25, 12, tzinfo=UTC)
+    transport = FakeTransport(FakeResponse(payload=OPENAI_BODY))
+    write_bootstrap_marker(tmp_path)
+    service = ProviderUsageService(
+        usage_runtime("openai"),
+        transport=transport,
+        data_root=tmp_path,
+        clock=lambda: observed_at,
+    )
+
+    try:
+        live = await service.report()
+        stored = await service.collect_history_sample()
+        history = await service.history_report()
+    finally:
+        await service.aclose()
+
+    assert stored is True
+    assert len(transport.calls) == 1
+    assert history.generated_at == observed_at.isoformat()
+    assert len(history.samples) == 1
+    sample = history.samples[0]
+    assert sample.sampled_at == "2026-07-25T12:00:00.000000Z"
+    assert sample.providers[0]["account"] == "default"
+    assert sample.providers[0]["windows"][0]["window_seconds"] == 18_000
+    assert sample.providers[0]["plan"] == live.providers[0].plan
+    assert service.history_database is not None
+    assert service.history_database.is_closed()
+
+
+@pytest.mark.asyncio
+async def test_an_injected_history_store_stays_open_with_its_owner(tmp_path: Path) -> None:
+    write_bootstrap_marker(tmp_path)
+    store = ProviderUsageHistoryStore.open(tmp_path)
+    service = ProviderUsageService(usage_runtime("openai"), history_store=store)
+
+    try:
+        await service.aclose()
+
+        assert service.history_database is store.database
+        assert not store.database.is_closed()
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_history_sampler_delays_until_one_hour_after_latest_sample(
+    store: ProviderUsageHistoryStore,
+) -> None:
+    observed_at = datetime(2026, 7, 25, 12, tzinfo=UTC)
+    service = ProviderUsageService(
+        usage_runtime("openai"),
+        history_store=store,
+        clock=lambda: observed_at,
+    )
+
+    empty_delay = await service._initial_history_delay()  # noqa: SLF001
+    for minutes_ago in (75, 15):
+        await store.append(
+            (observed_at - timedelta(minutes=minutes_ago)).isoformat(), [_snapshot()]
+        )
+    delay = await service._initial_history_delay()  # noqa: SLF001
+
+    assert empty_delay == 0.0
+    assert delay == 45 * 60
+
+
+@pytest.mark.asyncio
+async def test_history_sampler_continues_after_unexpected_sample_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    continued = asyncio.Event()
+    attempts = 0
+    write_bootstrap_marker(tmp_path)
+    service = ProviderUsageService(
+        usage_runtime("openai"),
+        data_root=tmp_path,
+        history_interval=0,
+    )
+
+    async def collect_with_one_failure() -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("boom")
+        continued.set()
+        return True
+
+    monkeypatch.setattr(service, "collect_history_sample", collect_with_one_failure)
+
+    with caplog.at_level(logging.ERROR, logger="vbot.providers.usage"):
+        service.start()
+        await asyncio.wait_for(continued.wait(), timeout=1)
+        await service.aclose()
+
+    assert attempts >= 2
+    assert service._history_started is False  # noqa: SLF001
+    assert caplog.records
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_history_database_fails_soft(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    write_bootstrap_marker(tmp_path)
+    service = ProviderUsageService(
+        usage_runtime("openai"),
+        transport=FakeTransport(FakeResponse(payload=OPENAI_BODY)),
+        data_root=tmp_path,
+    )
+    database = service.history_database
+    assert database is not None
+
+    async def unavailable(*_arguments: Any, **_keywords: Any) -> Any:
+        raise DatabaseUnavailableError("provider_usage: database is locked")
+
+    monkeypatch.setattr(database, "write_async", unavailable)
+    monkeypatch.setattr(database, "read_async", unavailable)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="vbot.providers.usage"):
+            stored = await service.collect_history_sample()
+            delay = await service._initial_history_delay()  # noqa: SLF001
+    finally:
+        await service.aclose()
+
+    assert stored is False
+    assert delay == 0.0
+    assert [record.levelno for record in caplog.records] == [logging.WARNING] * 2

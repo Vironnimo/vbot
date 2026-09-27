@@ -1,18 +1,18 @@
-"""Shared fixtures and fakes for usage behavior tests.
+"""Offline fakes, Provider configs and upstream bodies for Provider usage tests.
 
-Parsing tests use synthetic provider bodies; service tests use a fake runtime
-and a fake transport so nothing touches the live network.
+Service tests drive ``ProviderUsageService`` through a fake Runtime and a fake
+transport, so nothing touches the live network.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from core.providers.accounts import ConnectionRef
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
-# Fakes
 class FakeResponse:
     def __init__(self, status_code: int = 200, payload: Any = None) -> None:
         self.status_code = status_code
@@ -29,17 +29,22 @@ class FakeResponse:
 
 
 class FakeTransport:
-    """Returns a fixed response and counts calls."""
+    """Answers by URL substring (``""`` matches every URL) and records each call."""
 
-    def __init__(self, response: FakeResponse) -> None:
-        self._response = response
+    def __init__(self, responses: FakeResponse | Mapping[str, FakeResponse]) -> None:
+        self._responses = (
+            {"": responses} if isinstance(responses, FakeResponse) else dict(responses)
+        )
         self.calls: list[tuple[str, dict[str, str]]] = []
 
     async def get(
         self, url: str, *, headers: Any, timeout: float, params: Any = None
     ) -> FakeResponse:
         self.calls.append((url, dict(headers)))
-        return self._response
+        for marker, response in self._responses.items():
+            if marker in url:
+                return response
+        raise RuntimeError(f"no fake response for {url}")
 
 
 class FakeCredentials:
@@ -109,8 +114,18 @@ class FakeRuntime:
         )
 
 
-def _openai_provider_config() -> ProviderConfig:
-    return ProviderConfig(
+def _api_key_connection(credential_key: str, *, mode: str | None = None) -> ConnectionConfig:
+    return ConnectionConfig(
+        id="api-key",
+        type="api_key",
+        label="API key",
+        auth=AuthConfig(header="Authorization", prefix="Bearer ", credential_key=credential_key),
+        mode=mode,
+    )
+
+
+PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
+    "openai": ProviderConfig(
         id="openai",
         name="OpenAI",
         adapter="openai",
@@ -125,20 +140,75 @@ def _openai_provider_config() -> ProviderConfig:
                 mode="codex_responses",
             )
         ],
-    )
+    ),
+    "github-copilot": ProviderConfig(
+        id="github-copilot",
+        name="GitHub Copilot",
+        adapter="github_copilot",
+        base_url="https://api.githubcopilot.com",
+        connections=[
+            ConnectionConfig(
+                id="oauth",
+                type="oauth",
+                label="Sign in with GitHub",
+                auth=AuthConfig(header="Authorization", prefix="Bearer "),
+            )
+        ],
+    ),
+    "ollama-cloud": ProviderConfig(
+        id="ollama-cloud",
+        name="Ollama Cloud",
+        adapter="ollama",
+        base_url="https://ollama.com",
+        connections=[_api_key_connection("OLLAMA_API_KEY", mode="cloud")],
+    ),
+    "minimax": ProviderConfig(
+        id="minimax",
+        name="MiniMax",
+        adapter="minimax",
+        base_url="https://api.minimaxi.com/v1",
+        connections=[_api_key_connection("MINIMAX_API_KEY")],
+    ),
+    "openrouter": ProviderConfig(
+        id="openrouter",
+        name="OpenRouter",
+        adapter="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        connections=[_api_key_connection("OPENROUTER_API_KEY")],
+    ),
+}
+
+USAGE_CONNECTIONS = {
+    "openai": "openai:subscription",
+    "github-copilot": "github-copilot:oauth",
+    "ollama-cloud": "ollama-cloud:api-key",
+    "minimax": "minimax:api-key",
+    "openrouter": "openrouter:api-key",
+}
 
 
-def _openai_runtime(*, usable: bool = True) -> FakeRuntime:
-    providers = FakeProviders({"openai": _openai_provider_config()})
-    usable_set = {"openai:subscription"} if usable else set()
+def usage_runtime(*provider_ids: str, usable: bool = True) -> FakeRuntime:
+    """A Runtime whose named Providers each have one logged-in usage Connection."""
+
     return FakeRuntime(
-        providers=providers,
-        credentials=FakeCredentials(usable_set),
-        extras={"openai:subscription": {"chatgpt_account_id": "acct-123"}},
+        providers=FakeProviders(
+            {provider_id: PROVIDER_CONFIGS[provider_id] for provider_id in provider_ids}
+        ),
+        credentials=FakeCredentials(
+            {USAGE_CONNECTIONS[provider_id] for provider_id in provider_ids} if usable else set()
+        ),
+        tokens={
+            "ollama-cloud:api-key:default": "ollama-secret",
+            "openrouter:api-key:default": "or-secret",
+        },
+        extras={
+            "openai:subscription": {"chatgpt_account_id": "acct-123"},
+            "github-copilot:oauth": {"github_oauth_token": "gho_example"},
+        },
     )
 
 
-_OPENAI_BODY: dict[str, Any] = {
+OPENAI_BODY: dict[str, Any] = {
     "plan_type": "Plus",
     "credits": {"balance": 0},
     "rate_limit": {
@@ -155,7 +225,24 @@ _OPENAI_BODY: dict[str, Any] = {
     },
 }
 
-_OLLAMA_BODY: dict[str, Any] = {
+# GitHub Copilot and MiniMax bodies are openclaw-shaped (inferred upstream shapes).
+COPILOT_BODY: dict[str, Any] = {
+    "copilot_plan": "individual",
+    "quota_reset_date": "2026-07-01",
+    "quota_snapshots": {
+        "premium_interactions": {
+            "percent_remaining": 75.0,
+            "remaining": 225,
+            "entitlement": 300,
+            "unlimited": False,
+        },
+        "chat": {"unlimited": True, "percent_remaining": 100.0},
+        "completions": {"unlimited": True},
+    },
+}
+
+# Live-verified Ollama Cloud shape.
+OLLAMA_BODY: dict[str, Any] = {
     "activity": {
         "cost": "0.00000",
         "models": [],
@@ -179,8 +266,7 @@ _OLLAMA_BODY: dict[str, Any] = {
     },
 }
 
-# MiniMax parsing (openclaw-shaped fixtures)
-_MINIMAX_BODY: dict[str, Any] = {
+MINIMAX_BODY: dict[str, Any] = {
     "plan": "Token Plan",
     "model_remains": [
         {"model_name": "MiniMax-Text-01", "current_interval_total_count": 0},
@@ -194,10 +280,10 @@ _MINIMAX_BODY: dict[str, Any] = {
     ],
 }
 
-# OpenRouter parsing and fetch (credits + key spending cap)
-_OPENROUTER_CREDITS_BODY: dict[str, Any] = {"data": {"total_credits": 50.0, "total_usage": 12.5}}
+# OpenRouter credits plus the API-key spending cap.
+OPENROUTER_CREDITS_BODY: dict[str, Any] = {"data": {"total_credits": 50.0, "total_usage": 12.5}}
 
-_OPENROUTER_KEY_BODY: dict[str, Any] = {
+OPENROUTER_KEY_BODY: dict[str, Any] = {
     "data": {
         "limit": 100.0,
         "limit_remaining": 25.0,
@@ -207,4 +293,14 @@ _OPENROUTER_KEY_BODY: dict[str, Any] = {
         "usage_weekly": 8.0,
         "usage_monthly": 12.5,
     }
+}
+
+# One successful body per supported Connection, keyed by URL substring.
+USAGE_RESPONSES: dict[str, FakeResponse] = {
+    "wham/usage": FakeResponse(payload=OPENAI_BODY),
+    "copilot_internal/user": FakeResponse(payload=COPILOT_BODY),
+    "api/usage": FakeResponse(payload=OLLAMA_BODY),
+    "token_plan/remains": FakeResponse(payload=MINIMAX_BODY),
+    "/credits": FakeResponse(payload=OPENROUTER_CREDITS_BODY),
+    "/key": FakeResponse(payload=OPENROUTER_KEY_BODY),
 }
