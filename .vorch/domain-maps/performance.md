@@ -78,4 +78,4 @@ Durations are milliseconds. Names are dotted lowercase words with low cardinalit
 
 ## Tests
 
-`tests/core/performance/` (histograms, sink, monitor/watchdog, Recording files), `tests/server/rpc/test_performance_methods.py`, `tests/server/rpc/test_dispatcher.py`, `tests/cli/test_cli_performance.py`, `tests/core/runtime/test_runtime_performance.py`, `tests/core/chat/test_chat_loop_performance.py`, `tests/core/database/test_connections.py`, `tests/core/utils/test_workers.py`.
+`tests/core/performance/` (histograms, sink, monitor/watchdog, Recording files), `tests/server/rpc/test_performance_methods.py`, `tests/server/rpc/test_dispatcher.py`, `tests/cli/test_cli_performance.py`, `tests/core/runtime/test_runtime_performance.py`, `tests/core/chat/test_chat_loop_performance.py`, `tests/core/database/test_database_runtime.py`, `tests/core/utils/test_workers.py`.

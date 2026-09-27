@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
+from collections.abc import Callable
 from concurrent.futures import Future
 from contextlib import closing
 from pathlib import Path
@@ -21,12 +22,12 @@ from core.database import (
     DatabaseSpec,
     DatabaseUnavailableError,
     DisposableDatabase,
+    Migration,
+    canonical_database_path,
     open_database,
     projection_failure,
     read_marker,
 )
-from core.database.spec import canonical_relative_path
-from core.sessions._store_schema import session_database_spec
 from tests.core.database.database_test_support import (
     NOTES_SCHEMA_SQL,
     TEST_APPLICATION_ID,
@@ -38,7 +39,13 @@ from tests.core.database.database_test_support import (
 )
 
 
-def _synchronous(database) -> int:
+@pytest.fixture
+def no_busy_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Connections opened from now on report a held lock at once instead of after 1s."""
+    monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
+
+
+def _synchronous(database: Any) -> int:
     return int(database.writer.execute("PRAGMA synchronous").fetchone()[0])
 
 
@@ -70,52 +77,58 @@ def test_disposable_databases_need_no_marker_and_are_never_registered(
     assert inside.data_dir is None
 
 
-def _identity(path: Path) -> dict[str, str]:
-    with closing(sqlite3.connect(path)) as connection:
-        return dict(connection.execute("SELECT key, value FROM kernel_meta").fetchall())
+def _new_projection_version(path: Path) -> int:
+    return 2
 
 
-def test_a_projection_version_change_discards_and_rebuilds(tmp_path: Path) -> None:
+def _foreign(path: Path) -> int:
+    raw_execute(path, "PRAGMA application_id = 1")
+    return 1
+
+
+def _newer_generation(path: Path) -> int:
+    raw_execute(
+        path,
+        "PRAGMA user_version = 2",
+        "UPDATE kernel_meta SET value = '2' WHERE key = 'format_generation'",
+    )
+    return 1
+
+
+def _garbage(path: Path) -> int:
+    path.write_bytes(b"X" * 8192)
+    return 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [_new_projection_version, _foreign, _newer_generation, _garbage],
+    ids=["projection-version", "foreign", "newer", "garbage"],
+)
+def test_an_outdated_foreign_newer_or_damaged_projection_is_discarded_and_rebuilt(
+    tmp_path: Path, change: Callable[[Path], int]
+) -> None:
     path = tmp_path / "index.db"
     database = open_database(projection_spec(path))
     add_note(database, "derived")
     database.close()
     Path(f"{path}-journal").write_bytes(b"")
+    projection_version = change(path)
 
-    rebuilt = open_database(projection_spec(path, projection_version=2))
+    rebuilt = open_database(projection_spec(path, projection_version=projection_version))
     try:
         assert note_bodies(rebuilt) == []
+        assert rebuilt.database_id != database.database_id
     finally:
         rebuilt.close()
-    assert _identity(path)["projection_version"] == "2"
-    assert rebuilt.database_id != database.database_id
+    with closing(sqlite3.connect(path)) as connection:
+        identity = dict(connection.execute("SELECT key, value FROM kernel_meta").fetchall())
+    assert identity["projection_version"] == str(projection_version)
 
 
-@pytest.mark.parametrize("damage", ["foreign", "newer", "garbage"])
-def test_a_foreign_newer_or_damaged_projection_is_discarded(tmp_path: Path, damage: str) -> None:
-    path = tmp_path / "index.db"
-    database = open_database(projection_spec(path))
-    add_note(database, "derived")
-    database.close()
-    if damage == "foreign":
-        raw_execute(path, "PRAGMA application_id = 1")
-    elif damage == "newer":
-        raw_execute(
-            path,
-            "PRAGMA user_version = 2",
-            "UPDATE kernel_meta SET value = '2' WHERE key = 'format_generation'",
-        )
-    else:
-        path.write_bytes(b"X" * 8192)
-
-    rebuilt = open_database(projection_spec(path))
-    try:
-        assert note_bodies(rebuilt) == []
-    finally:
-        rebuilt.close()
-
-
-def test_a_busy_projection_is_unavailable_and_never_discarded(tmp_path: Path) -> None:
+def test_a_busy_projection_is_unavailable_and_never_discarded(
+    tmp_path: Path, no_busy_wait: None
+) -> None:
     path = tmp_path / "index.db"
     database = open_database(projection_spec(path))
     add_note(database, "derived")
@@ -136,16 +149,20 @@ def test_a_busy_projection_is_unavailable_and_never_discarded(tmp_path: Path) ->
         kept.close()
 
 
-def test_a_projection_open_in_this_process_is_never_deleted(tmp_path: Path) -> None:
+def test_a_projection_open_in_this_process_is_never_discarded(tmp_path: Path) -> None:
     path = tmp_path / "index.db"
     database = open_database(projection_spec(path))
+    projection = DisposableDatabase(projection_spec(path))
     try:
         add_note(database, "in use")
         with pytest.raises(DatabaseUnavailableError, match="still open"):
             open_database(projection_spec(path, projection_version=2))
+        with pytest.raises(DatabaseUnavailableError, match="still open"):
+            projection.discard()
         assert note_bodies(database) == ["in use"]
     finally:
         database.close()
+        projection.close()
 
 
 def test_connection_setup_prepares_the_writer_and_every_pooled_reader(tmp_path: Path) -> None:
@@ -221,27 +238,20 @@ async def test_a_disposable_database_serves_every_handle_from_one_worker_pool(
     finally:
         projection.close()
 
-
-@pytest.mark.asyncio
-async def test_work_on_a_closed_disposable_database_is_unavailable(tmp_path: Path) -> None:
-    projection = DisposableDatabase(projection_spec(tmp_path / "index.db"))
-    handle = await projection.get_async()
-    projection.close()
-
     assert projection.is_closed() is True
-    assert handle.is_closed() is True
+    assert rebuilt.is_closed() is True
     for work in (
         lambda: projection.run_async(_worker_thread),
         projection.get_async,
         projection.discard_async,
-        lambda: handle.read_async(lambda connection: connection.execute("SELECT 1").fetchone()),
+        lambda: rebuilt.read_async(lambda connection: connection.execute("SELECT 1").fetchone()),
     ):
         with pytest.raises(DatabaseUnavailableError):
             await work()
 
 
 @pytest.mark.asyncio
-async def test_cached_disposable_handle_does_not_block_the_loop_during_a_write(
+async def test_a_cached_disposable_handle_does_not_block_the_loop_during_a_write(
     tmp_path: Path,
 ) -> None:
     projection = DisposableDatabase(projection_spec(tmp_path / "index.db"))
@@ -267,24 +277,8 @@ async def test_cached_disposable_handle_does_not_block_the_loop_during_a_write(
         projection.close()
 
 
-def test_a_disposable_database_open_in_another_handle_is_never_discarded(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "index.db"
-    projection = DisposableDatabase(projection_spec(path))
-    other = open_database(projection_spec(path))
-    try:
-        add_note(other, "in use")
-        with pytest.raises(DatabaseUnavailableError, match="still open"):
-            projection.discard()
-        assert note_bodies(other) == ["in use"]
-    finally:
-        other.close()
-        projection.close()
-
-
 def test_projection_failures_separate_contention_unavailability_and_damage(
-    tmp_path: Path,
+    tmp_path: Path, no_busy_wait: None
 ) -> None:
     path = tmp_path / "index.db"
     database = open_database(projection_spec(path))
@@ -292,7 +286,12 @@ def test_projection_failures_separate_contention_unavailability_and_damage(
         with closing(sqlite3.connect(path, isolation_level=None, timeout=0)) as holder:
             holder.execute("BEGIN EXCLUSIVE")
             with pytest.raises(DatabaseUnavailableError) as busy:
-                add_note_with_patience(database, patience_s=0.1)
+                database.write(
+                    lambda connection: connection.execute(
+                        "INSERT INTO notes (body) VALUES ('late')"
+                    ),
+                    patience_s=0.0,
+                )
             holder.execute("ROLLBACK")
         with pytest.raises(sqlite3.OperationalError) as missing:
             database.write(lambda connection: connection.execute("SELECT * FROM missing"))
@@ -315,13 +314,6 @@ def test_projection_failures_separate_contention_unavailability_and_damage(
     assert projection_failure(ValueError("owner bug")) is None
 
 
-def add_note_with_patience(database, *, patience_s: float) -> None:
-    database.write(
-        lambda connection: connection.execute("INSERT INTO notes (body) VALUES ('late')"),
-        patience_s=patience_s,
-    )
-
-
 def test_spec_validation_rejects_inconsistent_declarations(tmp_path: Path) -> None:
     base: dict[str, Any] = {
         "name": "notes",
@@ -341,28 +333,17 @@ def test_spec_validation_rejects_inconsistent_declarations(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="invalid database name"):
         DatabaseSpec(profile=CANONICAL, **{**base, "name": "Notes"})
     with pytest.raises(ValueError, match="unique"):
-        from core.database import Migration
-
         DatabaseSpec(profile=CANONICAL, migrations=(Migration("a"), Migration("a")), **base)
 
 
-@pytest.mark.parametrize(
-    ("name", "relative"),
-    [
-        ("sessions", "sessions.db"),
-        ("provider_usage", "provider-usage.db"),
-        ("ext.swarm.board", "extension-data/swarm/board.db"),
-    ],
-)
-def test_canonical_names_map_to_fixed_paths(name: str, relative: str) -> None:
-    assert canonical_relative_path(name).as_posix() == relative
-
-
-def test_application_ids_are_distinct_and_the_session_database_uses_its_own() -> None:
+def test_canonical_names_map_to_fixed_paths_and_distinct_application_ids() -> None:
+    data_dir = Path("data")
+    assert canonical_database_path(data_dir, "sessions") == data_dir / "sessions.db"
+    assert canonical_database_path(data_dir, "provider_usage") == data_dir / "provider-usage.db"
+    assert canonical_database_path(data_dir, "ext.swarm.board") == (
+        data_dir / "extension-data" / "swarm" / "board.db"
+    )
+    # Application ids are persisted in every file: distinct and never renumbered.
     assert len(set(APPLICATION_IDS.values())) == len(APPLICATION_IDS)
-    assert TEST_APPLICATION_ID not in APPLICATION_IDS.values()
     assert APPLICATION_IDS["sessions"] == 0x56425353
-    spec = session_database_spec(Path("data") / "sessions.db")
-    assert spec.application_id == APPLICATION_IDS["sessions"]
-    assert spec.profile == CANONICAL
-    assert spec.format_generation == 1
+    assert TEST_APPLICATION_ID not in APPLICATION_IDS.values()

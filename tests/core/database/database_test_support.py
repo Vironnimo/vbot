@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from core.database import (
     CANONICAL,
     DISPOSABLE,
+    MARKER_FILE_NAME,
     Database,
     DatabaseHealth,
     DatabaseSpec,
@@ -18,6 +23,7 @@ from core.database import (
     create_data_snapshot,
     open_database,
 )
+from core.database.snapshots import SNAPSHOT_MANIFEST_NAME
 
 #: A test-only application id ("VBTX"), distinct from every real vBot database.
 TEST_APPLICATION_ID = 0x56425458
@@ -92,6 +98,22 @@ def add_note(database: Database, body: str, tag: str | None = None) -> None:
     )
 
 
+def add_notes(database: Database, count: int) -> None:
+    """Write ``count`` short notes in one transaction."""
+    database.write(
+        lambda connection: connection.execute(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) "
+            "INSERT INTO notes (body) SELECT 'note ' || i FROM n",
+            (count,),
+        )
+    )
+
+
+def note_count(database: Database) -> int:
+    with database.read() as connection:
+        return int(connection.execute("SELECT COUNT(*) FROM notes").fetchone()[0])
+
+
 def note_bodies(database: Database) -> list[str]:
     with database.read() as connection:
         return [
@@ -129,3 +151,45 @@ def raw_execute(path: Path, *statements: str) -> None:
             connection.execute(statement)
     finally:
         connection.close()
+
+
+def pin_journal_mode(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """Make new databases use ``mode`` ("wal" or "delete") whatever the SQLite build.
+
+    The kernel picks the rollback journal on a WAL-reset-vulnerable SQLite and WAL
+    otherwise. Forcing WAL on a vulnerable build is safe while one writer is the only
+    connection that writes or checkpoints.
+    """
+    versions = {"wal": (3, 51, 3), "delete": (3, 40, 1)}
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", versions[mode])
+
+
+def rewrite_marker(data_dir: Path, change: Callable[[dict[str, Any]], None]) -> None:
+    """Change the persisted data-store marker outside the kernel."""
+    path = data_dir / MARKER_FILE_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    change(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def manifest_payload(snapshot: Path) -> dict[str, Any]:
+    """The persisted manifest of one data snapshot."""
+    payload: dict[str, Any] = json.loads(
+        (snapshot / SNAPSHOT_MANIFEST_NAME).read_text(encoding="utf-8")
+    )
+    return payload
+
+
+def rewrite_manifest(snapshot: Path, change: Callable[[dict[str, Any]], None]) -> None:
+    """Change the persisted manifest of one data snapshot outside the kernel."""
+    payload = manifest_payload(snapshot)
+    change(payload)
+    (snapshot / SNAPSHOT_MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def write_document(data_dir: Path, relative: str, text: str) -> Path:
+    """Write one JSON document of the data directory by its relative path."""
+    path = data_dir.joinpath(*relative.split("/"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="")
+    return path
