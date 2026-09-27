@@ -63,6 +63,7 @@ from ._store_profiles import (
 from ._store_reads import (
     _list_discussions,
     _list_human_discussions,
+    _newest_post_number,
     _post_suggestions,
     _read_human_posts,
     _read_posts,
@@ -479,6 +480,10 @@ class SwarmStore:
     async def post_suggestions(self, swarm_id: str, value: str) -> list[Json]:
         """Return posts that a post reference which matched nothing may mean."""
         return await self._run(_post_suggestions, swarm_id, value)
+
+    async def newest_post_number(self, swarm_id: str) -> int | None:
+        """Return the Board number of the newest post, or None without posts."""
+        return cast(int | None, await self._run(_newest_post_number, swarm_id))
 
     async def read_human_posts(
         self,

@@ -1129,6 +1129,17 @@ async def test_board_corrects_read_references_but_never_write_targets(board):
     assert "note" not in by_number["data"]
     answer, _ = await dispatch(board, {"text": "answer", "reply_to": first}, peer=1)
     assert answer["ok"] and _reaches(_name(board, 0)) in answer["data"]["delivery"]
+    # Every post is older than a number past the newest post.
+    ahead, _ = await dispatch(board, {"action": "read", "before": "#9"})
+    assert ahead["data"]["note"] == (
+        'before "#9" names no post yet; the newest post is #4, so this shows the newest posts.'
+    )
+    assert ahead["data"]["page"].startswith("Newest posts of the main discussion (d1)")
+    assert ahead["data"]["content"].endswith(":\nanswer")
+    unposted, _ = await dispatch(board, {"action": "read", "message_id": "#9"})
+    assert unposted["error"]["message"] == (
+        'message_id "#9" names no post yet; the newest post is #4.'
+    )
 
     near_post = stored[:-1] + ("x" if stored[-1] != "x" else "y")
     close_message, _ = await dispatch(board, {"action": "read", "message_id": near_post})

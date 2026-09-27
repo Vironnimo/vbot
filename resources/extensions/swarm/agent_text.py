@@ -268,6 +268,11 @@ USER_RECIPIENT = (
 POST_CLOSE_MATCH = (
     '{field} "{value}" does not exist; this uses post {post_id}, its only close match.'
 )
+BEFORE_PAST_NEWEST = (
+    'before "{value}" names no post yet; the newest post is {newest}, so this shows the '
+    "newest posts."
+)
+MESSAGE_PAST_NEWEST = '{field} "{value}" names no post yet; the newest post is {newest}.'
 DISCUSSION_CLOSE_MATCH = (
     'discussion_id "{value}" does not exist; this shows {discussion}, its only close match.'
 )

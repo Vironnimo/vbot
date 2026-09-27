@@ -256,8 +256,11 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   corrects a read-only reference with a note when exactly one candidate exists:
   a close stored post id (`pst_...`), a close stored discussion id (`dsc_...`),
   or a post reference passed as `cursor`. Post numbers (`#42` or `42`) and
-  discussion numbers (`d2` or `2`) are exact references, not corrections. It
-  never corrects a write target (`reply_to`, a post's `discussion_id`,
+  discussion numbers (`d2` or `2`) are exact references, not corrections. A
+  post number past the newest post names it (`SwarmStore.newest_post_number`):
+  `before` then reads the newest posts with a note, since every post is older;
+  `message_id` fails. An Agent sent `before: "#46"` while `#45` was newest
+  (Sessions, 2026-09). It never corrects a write target (`reply_to`, a post's `discussion_id`,
   recipients); those fail before any effect with the exact corrected call.
 - `_board_view.py` renders results as plain text: one header line per post
   (`[#N] Author (in ...; reply to #M; to ...)`), then its verbatim
