@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -625,7 +624,7 @@ async def test_stream_connect_failures_are_classified_after_retries(
     reply, error_type, attempts
 ) -> None:
     mock = {"return_value": reply} if isinstance(reply, httpx.Response) else {"side_effect": reply}
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(OPENAI_URL).mock(**mock)
         with pytest.raises(error_type):
             await collect(make_adapter())

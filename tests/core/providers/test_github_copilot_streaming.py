@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Callable
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -82,7 +81,7 @@ async def test_responses_stream_joins_split_crlf_and_keeps_raw_line_separators()
 async def test_stream_connect_retry_rebuilds_auth_headers() -> None:
     token_getter = RotatingTokenGetter(["stale-token", "fresh-token"])
 
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(RESPONSES_URL).mock(
             side_effect=[
                 httpx.Response(503, text="Service Unavailable"),

@@ -1,27 +1,21 @@
-"""Shared current-format data-directory setup for core tests."""
+"""Core test isolation: the shared retry backoff does not wait."""
 
 from __future__ import annotations
 
-import shutil
+import asyncio
 
 import pytest
 
-from core.database import write_bootstrap_marker
-from core.sessions import ChatSessionManager
+
+async def _skip_backoff_wait(_delay: float) -> None:
+    # Yield once like a real wait so concurrent tasks still interleave.
+    await asyncio.sleep(0)
 
 
-@pytest.fixture(scope="session")
-def current_session_store_template(tmp_path_factory):
-    """Build one empty current-format store per test worker."""
-    template = tmp_path_factory.mktemp("current-session-store")
-    write_bootstrap_marker(template)
-    manager = ChatSessionManager(template)
-    manager.close()
-    return template
+@pytest.fixture(autouse=True)
+def _no_retry_backoff_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip ``core.utils.retry`` backoff waits in every core test.
 
-
-@pytest.fixture
-def current_format_data_directory(tmp_path, current_session_store_template):
-    """Clone an empty current-format store for tests that consume Sessions."""
-    shutil.copy2(current_session_store_template / "data-store.json", tmp_path)
-    shutil.copy2(current_session_store_template / "sessions.db", tmp_path)
+    A test that observes the waits patches ``core.utils.retry._sleep`` itself.
+    """
+    monkeypatch.setattr("core.utils.retry._sleep", _skip_backoff_wait)

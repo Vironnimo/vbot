@@ -3,10 +3,8 @@ response classification."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -69,12 +67,6 @@ def _counting_client() -> ProviderTaskClient:
         token_getter=next_token,
         model_id="example/some-model",
     )
-
-
-@pytest.fixture(autouse=True)
-def _no_retry_waits() -> Iterator[None]:
-    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
-        yield
 
 
 def _json(response: httpx.Response) -> Any:

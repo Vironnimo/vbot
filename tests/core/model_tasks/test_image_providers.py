@@ -399,10 +399,7 @@ async def test_unusable_image_response_is_never_replayed(
 async def test_openrouter_retries_the_documented_not_processed_503(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def no_delay(_seconds: float) -> None:
-        return None
 
-    monkeypatch.setattr("core.utils.retry._sleep", no_delay)
     route = respx.post(OPENROUTER_IMAGES_URL).mock(
         side_effect=[
             httpx.Response(503, text="no provider available"),

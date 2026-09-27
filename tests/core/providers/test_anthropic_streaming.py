@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -381,7 +380,7 @@ async def test_in_band_error_event_is_classified_by_its_documented_type(
 async def test_stream_connect_failures_are_classified_after_retries(
     attempt, expected_type, calls
 ) -> None:
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(ANTHROPIC_URL).mock(side_effect=[attempt] * 4)
         with pytest.raises(expected_type):
             await _collect(make_adapter())
@@ -442,7 +441,7 @@ class _RotatingTokenGetter:
 async def test_stream_connect_retry_rebuilds_auth_headers() -> None:
     adapter = make_adapter(token_getter=_RotatingTokenGetter(["stale-token", "fresh-token"]))
 
-    with respx.mock, patch("core.utils.retry._sleep", new_callable=AsyncMock):
+    with respx.mock:
         route = respx.post(ANTHROPIC_URL).mock(
             side_effect=[httpx.Response(503, text="Service Unavailable"), sse_response(sse())]
         )

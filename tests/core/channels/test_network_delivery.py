@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -15,11 +14,6 @@ from core.channels.config import ChannelError
 from .network_test_support import HttpHandler, make_adapter
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
-
-
-@pytest.fixture
-def no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("core.utils.retry._sleep", AsyncMock())
 
 
 def _is_message_post(request: httpx.Request) -> bool:
@@ -81,7 +75,6 @@ async def test_mattermost_upload_and_thread(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("no_retry_delay")
 @pytest.mark.parametrize(
     ("platform", "exhausted"),
     [("slack", False), ("mattermost", True)],
@@ -132,7 +125,6 @@ async def test_long_markdown_is_split_without_breaking_code_fences(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("no_retry_delay")
 @pytest.mark.parametrize(
     ("failing_step", "status", "uploads", "completions"),
     [

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -29,11 +28,6 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_EMBEDDINGS_URL = f"{OPENROUTER_BASE_URL}/embeddings"
 GENERIC_BASE_URL = "https://example.test/v1"
 MODEL_ID = "google/gemini-embedding-2"
-
-
-@pytest.fixture
-def no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("core.utils.retry._sleep", AsyncMock())
 
 
 def _client(
@@ -369,7 +363,6 @@ def _entries(*embeddings: Any, indices: tuple[Any, ...] = (0, 1)) -> dict[str, A
 )
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("no_retry_delay")
 async def test_unusable_response_fails_and_only_transient_ones_are_retried(
     response: httpx.Response, error_type: type[ProviderError], retryable: bool
 ) -> None:
@@ -385,7 +378,6 @@ async def test_unusable_response_fails_and_only_transient_ones_are_retried(
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("no_retry_delay")
 async def test_provider_error_object_in_a_200_is_final_and_passes_its_message_through() -> None:
     route = respx.post(OPENROUTER_EMBEDDINGS_URL).mock(
         return_value=httpx.Response(
@@ -403,7 +395,6 @@ async def test_provider_error_object_in_a_200_is_final_and_passes_its_message_th
 
 @respx.mock
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("no_retry_delay")
 async def test_overloaded_provider_is_retried() -> None:
     route = respx.post(OPENROUTER_EMBEDDINGS_URL).mock(
         side_effect=[

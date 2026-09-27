@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -40,6 +43,50 @@ def _remove_inherited_vbot_run_context(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in tuple(os.environ):
         if name.startswith("VBOT_RUN_"):
             monkeypatch.delenv(name)
+
+
+@pytest.fixture(scope="session")
+def _home_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("homes")
+
+
+_HOME_NUMBERS = itertools.count()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_home(_home_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test an empty home directory of its own.
+
+    ``Path.home()`` and ``~`` read HOME on POSIX and USERPROFILE on Windows,
+    so no test reads or writes the real home: its ``~/.vbot`` data, the
+    ``~/.vbot-dev`` data a worktree checkout resolves, or Git configuration.
+    Tests reach the directory through ``Path.home()``.
+    """
+    home = _home_root / str(next(_HOME_NUMBERS))
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+
+@pytest.fixture(scope="session")
+def current_session_store_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build one empty current-format store per test worker."""
+    # Imported here so that collecting a test module costs only its own imports.
+    from core.database import write_bootstrap_marker
+    from core.sessions import ChatSessionManager
+
+    template = tmp_path_factory.mktemp("current-session-store")
+    write_bootstrap_marker(template)
+    ChatSessionManager(template).close()
+    return template
+
+
+@pytest.fixture
+def current_format_data_directory(tmp_path: Path, current_session_store_template: Path) -> None:
+    """Clone an empty current-format store for tests that consume Sessions."""
+    shutil.copy2(current_session_store_template / "data-store.json", tmp_path)
+    shutil.copy2(current_session_store_template / "sessions.db", tmp_path)
 
 
 _VBOT_LOGGER_NAMESPACE = "vbot"
