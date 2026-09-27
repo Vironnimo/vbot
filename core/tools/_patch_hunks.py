@@ -217,12 +217,14 @@ def _aligned_start(file_lines: list[str], start: int, wanted_lines: list[str], f
     A candidate window starts where its best-matching lines put it, so every line
     the copy added or dropped before them shifts it. The first patch line the
     file holds near the window fixes the alignment instead; the lines before it
-    belong directly above it.
+    belong directly above it. Lines without a word, such as a closing quote or
+    bracket, occur too often to fix it. When the file holds none of the patch
+    lines, the file line most like patch line ``first`` is where it belongs.
     """
     span = len(wanted_lines) - first
     for position in range(first, len(wanted_lines)):
         text = _loose(wanted_lines[position])
-        if not text:
+        if not re.search(r"\w", text):
             continue
         expected = start - 1 + position - first
         near = [
@@ -233,7 +235,14 @@ def _aligned_start(file_lines: list[str], start: int, wanted_lines: list[str], f
         if near:
             index = min(near, key=lambda index: (abs(index - expected), index))
             return max(1, index + 1 - (position - first))
-    return start
+    text = _loose(wanted_lines[first])
+    expected = start - 1
+    scores = [
+        (SequenceMatcher(None, text, _loose(file_lines[index])).ratio(), index)
+        for index in range(max(0, expected - span), min(len(file_lines), expected + span + 1))
+    ]
+    similarity, index = max(scores, key=lambda score: (score[0], -abs(score[1] - expected)))
+    return index + 1 if similarity >= _SIMILAR_LINE else start
 
 
 def _line_list(numbers: list[int]) -> str:

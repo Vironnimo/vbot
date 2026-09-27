@@ -390,6 +390,33 @@ def test_first_difference_is_found_where_new_lines_without_prefix_shift_the_copy
     assert path.read_bytes() == before
 
 
+def test_first_difference_of_reworded_lines_is_their_counterpart_not_a_quote_line(tmp_path):
+    path = tmp_path / "file.py"
+    filler = "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 21))
+    before = (
+        f'{filler}\n\ndef describe():\n    """Describe the table.\n\n'
+        "    Each row lists the owner and the date it was last checked.\n"
+        "    Rows without an owner are skipped.\n    The order follows the file.\n"
+        '    """\n    return rows\n'
+    ).encode()
+    path.write_bytes(before)
+    # The copy rewords the docstring and drops a line, so only the closing quotes,
+    # which occur everywhere, match exactly.
+    body = (
+        "@@ def describe():\n"
+        "     Each record names its owner and the time of the last review.\n"
+        '     Records that have no owner are left out.\n     """\n+    rows = load()'
+    )
+    result = apply(tmp_path, update(body, "file.py"))
+    assert result["error"]["code"] == "text_not_found"
+    assert (
+        "First difference, line 26: the file has '    Each row lists the owner and the date "
+        "it was last checked.' where the patch has '    Each record names its owner and the "
+        "time of the last review.'.\n"
+    ) in text(result)
+    assert path.read_bytes() == before
+
+
 def test_closest_text_is_shown_when_long_new_lines_hide_the_copied_ones(tmp_path):
     path = tmp_path / "file.py"
     filler = "".join(f"value_{index:02d} = compute({index})\n" for index in range(1, 40))
