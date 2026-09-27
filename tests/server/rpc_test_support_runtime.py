@@ -27,7 +27,7 @@ from core.providers.accounts import (
     derive_credential_key,
     split_connection_id,
 )
-from core.runs import ChatRunManager, RunKind
+from core.runs import ChatRunManager
 from core.runtime.runtime import Runtime
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
@@ -546,35 +546,3 @@ def make_state(
         agent_delete_lock=asyncio.Lock(),
         server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
     )
-
-
-class StubDelegateRun:
-    def __init__(
-        self,
-        *,
-        run_id: str,
-        agent_id: str,
-        session_id: str,
-        status: str,
-        final_message: ChatMessage | None = None,
-        iteration_count: int = 0,
-        created_at: str = "2026-05-03T14:30:01+00:00",
-    ) -> None:
-        self.id = run_id
-        self.agent_id = agent_id
-        self.session_id = session_id
-        self.status = SimpleNamespace(value=status)
-        self.run_kind = RunKind.USER
-        self.iteration_count = iteration_count
-        self.created_at = created_at
-        self.events: list[Any] = []
-        self._final_message = final_message or ChatMessage.assistant(
-            model="openai/gpt-5.2",
-            content="OK",
-        )
-
-    async def wait(self) -> ChatMessage:
-        return self._final_message
-
-    def controls(self) -> dict:
-        return {"compaction": "unavailable", "background_tool_call_ids": []}
