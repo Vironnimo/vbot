@@ -30,6 +30,7 @@ from cli.application.packages import (
     validate_release,
     version_label,
 )
+from cli.application.retention import remove_retired, retire_unneeded
 from cli.application.state import (
     ApplicationError,
     Installation,
@@ -497,11 +498,14 @@ def run(install: Installation, operation_id: str) -> None:
         operation.worker_pid = current_pid
         operation.worker_created = current_created
         operation.save(install)
+    retired: list[Path] = []
     try:
         # This lifetime lock also excludes manual lifecycle/customization mutations.
         # Dispatch uses its separate short lock so callers can observe/coalesce work.
         with exclusive(install.root, "operation", timeout=3600):
             execute(install, operation)
+            if operation.phase == "completed":
+                retired = retire_unneeded(install)
     except Exception as exc:
         _LOGGER.exception("Application update failed for %s", operation.id)
         operation.error = str(exc)
@@ -516,6 +520,8 @@ def run(install: Installation, operation_id: str) -> None:
                 control(install, "maintenance_end", operation)
             except Exception:
                 _LOGGER.warning("Could not release server maintenance for %s", operation.id)
+    # Deleting takes a while and needs no lock: nothing can use a retired tree.
+    remove_retired(retired)
 
 
 def main(argv: list[str] | None = None) -> int:
