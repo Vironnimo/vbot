@@ -19,9 +19,7 @@ from core.database import write_bootstrap_marker
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import AgentResolutionError, ConfigAgent
 from core.providers.accounts import ConnectionRef
-from core.runs import (
-    ChatRunManager,
-)
+from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ChatRunManager, Run
 from core.sessions import ChatSession, SessionAddress
 from core.tools import (
     ToolRegistry,
@@ -126,6 +124,27 @@ def persisted_roles(messages: list[ChatMessage]) -> list[str]:
 
 def persisted_dict_roles(messages: list[JsonObject]) -> list[str]:
     return [str(message["role"]) for message in messages if message.get("role") != "run_summary"]
+
+
+def history(
+    runtime: Any, session_id: str = "session-one", agent_id: str = "coder"
+) -> list[ChatMessage]:
+    """The Session's persisted history, including notes and Run summaries."""
+    return cast(
+        list[ChatMessage], runtime.chat_sessions.get(session_address(agent_id, session_id)).load()
+    )
+
+
+def last_run(runtime: Any, session_id: str = "session-one", agent_id: str = "coder") -> Run:
+    """The Run that wrote the Session's latest Run summary."""
+    messages = history(runtime, session_id, agent_id)
+    summary = next(m for m in reversed(messages) if m.role == "run_summary")
+    return cast(Run, runtime.chat_runs.get(summary.run_id))
+
+
+def event_types(run: Run) -> list[str]:
+    """Run event types without the Provider request status updates."""
+    return [event.type for event in run.events if event.type != PROVIDER_REQUEST_STATUS_EVENT]
 
 
 def quoted_json_objects(text: str) -> list[JsonObject]:

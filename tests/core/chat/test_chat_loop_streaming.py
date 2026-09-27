@@ -33,12 +33,14 @@ from core.tools import (
     ToolRegistry,
     tool_success,
 )
-from tests.core.chat.chat_loop_streaming_test_support import history, last_run, stream_runtime
+from tests.core.chat.chat_loop_streaming_test_support import stream_runtime
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubRuntime,
     build_chat_loop,
+    history,
+    last_run,
     persisted_dict_roles,
     persisted_roles,
     session_address,

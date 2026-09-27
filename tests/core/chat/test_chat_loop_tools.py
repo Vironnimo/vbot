@@ -33,13 +33,13 @@ from tests.core.chat.chat_loop_support import (
     StubModels,
     StubStorage,
     build_chat_loop,
+    history,
     persisted_roles,
 )
 from tests.core.chat.chat_loop_tools_test_support import (
     WAIT_SECONDS,
     JsonObject,
     final,
-    history,
     tool_results,
     tool_runtime,
     tool_turn,

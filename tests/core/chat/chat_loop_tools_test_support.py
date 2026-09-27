@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from core.chat import ChatMessage
 from core.tools import ToolRegistry
-from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, session_address
+from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime
 
 JsonObject = dict[str, Any]
 
@@ -55,21 +55,9 @@ def tool_runtime(
     )
 
 
-def history(runtime: Any, session_id: str = "session-one") -> list[ChatMessage]:
-    return cast(
-        list[ChatMessage], runtime.chat_sessions.get(session_address("coder", session_id)).load()
-    )
-
-
 def tool_results(messages: list[ChatMessage]) -> list[JsonObject]:
     return [
         cast(JsonObject, json.loads(cast(str, message.content)))
         for message in messages
         if message.role == "tool"
     ]
-
-
-def last_run(runtime: Any, session_id: str = "session-one") -> Any:
-    """The Run that wrote the Session's latest Run summary."""
-    summary = next(m for m in reversed(history(runtime, session_id)) if m.role == "run_summary")
-    return runtime.chat_runs.get(summary.run_id)

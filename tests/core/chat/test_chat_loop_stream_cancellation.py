@@ -19,12 +19,7 @@ from core.runs import (
     RunCancelledError,
     RunStatus,
 )
-from tests.core.chat.chat_loop_streaming_test_support import (
-    JsonObject,
-    event_types,
-    history,
-    stream_runtime,
-)
+from tests.core.chat.chat_loop_streaming_test_support import JsonObject, stream_runtime
 from tests.core.chat.chat_loop_support import (
     BlockingReasoningStreamingStubAdapter,
     BlockingStreamingStubAdapter,
@@ -33,6 +28,8 @@ from tests.core.chat.chat_loop_support import (
     SilentBlockingStreamingStubAdapter,
     StubAdapter,
     build_chat_loop,
+    event_types,
+    history,
     persisted_roles,
     session_address,
 )

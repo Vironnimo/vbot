@@ -19,12 +19,10 @@ from core.chat.messages import ToolCall, ToolCallRejection
 from core.runs import TOOL_CALL_RESULT_EVENT, RunStatus
 from core.tools import ToolContext, ToolRegistry, tool_failure, tool_success
 from core.utils.errors import ProviderError
-from tests.core.chat.chat_loop_support import build_chat_loop, persisted_roles
+from tests.core.chat.chat_loop_support import build_chat_loop, history, last_run, persisted_roles
 from tests.core.chat.chat_loop_tools_test_support import (
     JsonObject,
     final,
-    history,
-    last_run,
     tool_results,
     tool_runtime,
     tool_turn,

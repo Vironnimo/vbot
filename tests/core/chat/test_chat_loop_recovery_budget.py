@@ -24,12 +24,13 @@ from core.runs import (
 )
 from core.tools import ToolRegistry, tool_success
 from core.utils.retry import retry_async
-from tests.core.chat.chat_loop_streaming_test_support import history, last_run
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubRuntime,
     build_chat_loop,
+    history,
+    last_run,
     session_address,
 )
 
