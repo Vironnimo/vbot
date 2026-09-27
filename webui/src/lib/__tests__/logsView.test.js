@@ -9,7 +9,6 @@ import {
   createLogsViewState,
   deriveLevelOptions,
   deriveSortOptions,
-  filterLogEntries,
   levelOptionValue,
   mergeLogStreamEvent,
   normalizeLevelFilter,
@@ -18,11 +17,10 @@ import {
   setLevelFilter,
   setSortOrder,
   setSearchText,
-  sortLogEntries,
   visibleLogEntries,
 } from '../logsView.js';
 
-describe('logsView helpers', () => {
+describe('logsView state', () => {
   it('creates default logs view state', () => {
     expect(createLogsViewState()).toEqual({
       files: [],
@@ -41,7 +39,7 @@ describe('logsView helpers', () => {
     });
   });
 
-  it('applies log catalog and keeps a valid current selection', () => {
+  it('applies the log catalog and keeps a valid current selection', () => {
     const state = createLogsViewState();
 
     expect(
@@ -51,14 +49,19 @@ describe('logsView helpers', () => {
       }),
     ).toBe('2026-05-11');
 
-    state.selectedFile = '2026-05-10';
-
+    selectLogFile(state, '2026-05-10');
     expect(
       applyLogCatalog(state, {
         files: ['2026-05-11', '2026-05-10', '2026-05-09'],
         default_file: '2026-05-11',
       }),
     ).toBe('2026-05-10');
+
+    // Without a default file the newest listed file is the default.
+    expect(applyLogCatalog(state, { files: ['2026-05-12'] })).toBe(
+      '2026-05-12',
+    );
+    expect(state.defaultFile).toBe('2026-05-12');
   });
 
   it('counts file, level, and order choices that differ from the default view', () => {
@@ -71,7 +74,6 @@ describe('logsView helpers', () => {
       file: '2026-05-11',
       entries: [entry({ level: 'info' }), entry({ level: 'error' })],
     });
-    expect(state.defaultFile).toBe('2026-05-11');
     expect(changedFilterSelectionCount(state)).toBe(0);
 
     setSearchText(state, 'boot');
@@ -93,11 +95,11 @@ describe('logsView helpers', () => {
     expect(changedFilterSelectionCount(state)).toBe(1);
   });
 
-  it('replaces entries and merges append and reset stream events', () => {
+  it('replaces entries and merges append and reset stream events for the selected file only', () => {
     const state = createLogsViewState();
     replaceLogEntries(state, {
       file: '2026-05-11',
-      entries: [entry({ message: 'Ready', level: 'info' })],
+      entries: [entry({ message: 'Ready' })],
     });
 
     mergeLogStreamEvent(state, {
@@ -105,7 +107,11 @@ describe('logsView helpers', () => {
       file: '2026-05-11',
       entries: [entry({ message: 'Failed', level: 'error' })],
     });
-
+    mergeLogStreamEvent(state, {
+      type: 'append',
+      file: '2026-05-10',
+      entries: [entry({ message: 'Other file' })],
+    });
     expect(state.entries.map((item) => item.message)).toEqual([
       'Ready',
       'Failed',
@@ -116,60 +122,54 @@ describe('logsView helpers', () => {
       file: '2026-05-11',
       entries: [entry({ message: 'Reset', level: 'warn' })],
     });
-
     expect(state.entries.map((item) => item.message)).toEqual(['Reset']);
   });
 
-  it('normalizes the level filter when loaded entries no longer include it', () => {
+  it('keeps the level filter only while the loaded entries include that level', () => {
     const state = createLogsViewState();
-
+    state.entries = [entry({ level: 'info' }), entry({ level: 'warn' })];
     setLevelFilter(state, 'warn');
+    expect(normalizeLevelFilter(state)).toBe('warn');
 
     replaceLogEntries(state, {
       file: '2026-05-11',
-      entries: [entry({ level: 'info', message: 'Ready' })],
+      entries: [entry({ level: 'info' })],
     });
-
     expect(state.levelFilter).toBe('all');
 
     setLevelFilter(state, 'error');
-
     mergeLogStreamEvent(state, {
       type: 'reset',
       file: '2026-05-11',
-      entries: [entry({ level: 'warn', message: 'Retry soon' })],
+      entries: [entry({ level: 'warn' })],
     });
-
     expect(state.levelFilter).toBe('all');
   });
 
-  it('ignores stream events for a different file', () => {
-    const state = createLogsViewState();
-    replaceLogEntries(state, {
-      file: '2026-05-11',
-      entries: [entry({ message: 'Ready' })],
-    });
-
-    mergeLogStreamEvent(state, {
-      type: 'append',
-      file: '2026-05-10',
-      entries: [entry({ message: 'Ignored' })],
-    });
-
-    expect(state.entries.map((item) => item.message)).toEqual(['Ready']);
+  it('offers all plus the distinct parsed levels in sorted order', () => {
+    expect(
+      deriveLevelOptions([
+        entry({ level: 'warn' }),
+        entry({ level: 'warn', message: 'Second warning' }),
+        entry({ level: 'info' }),
+        entry({ level: 'error' }),
+        entry({ level: '' }),
+        entry({ level: null }),
+      ]),
+    ).toEqual([levelOptionValue(), 'error', 'info', 'warn']);
   });
+});
 
-  it('derives level options and filters by level and text search', () => {
-    const entries = [
+describe('logsView visible entries', () => {
+  it('filters by level and by search text across every entry field', () => {
+    const state = createLogsViewState();
+    state.entries = [
+      entry({ level: 'info', message: 'Ready' }),
       entry({
-        level: 'info',
-        logger_name: 'vbot.server.app',
-        message: 'Ready',
-      }),
-      entry({
+        timestamp: '2026-05-11 09:00:01',
         level: 'error',
-        logger_name: 'vbot.server.app',
         message: 'Failed',
+        continuation: 'Traceback line',
       }),
       entry({
         level: 'warn',
@@ -177,144 +177,43 @@ describe('logsView helpers', () => {
         message: 'Retry soon',
       }),
     ];
+    const visibleMessages = () =>
+      visibleLogEntries(state).map((item) => item.message);
 
-    expect(deriveLevelOptions(entries)).toEqual([
-      'all',
-      'error',
-      'info',
-      'warn',
-    ]);
-    expect(
-      filterLogEntries(entries, { levelFilter: 'error', searchText: '' }).map(
-        (item) => item.message,
-      ),
-    ).toEqual(['Failed']);
-    expect(
-      filterLogEntries(entries, {
-        levelFilter: levelOptionValue(),
-        searchText: 'worker retry',
-      }).map((item) => item.message),
-    ).toEqual(['Retry soon']);
-    expect(deriveSortOptions()).toEqual(['newest', 'oldest']);
-  });
-
-  it('keeps all plus distinct parsed levels only', () => {
-    const entries = [
-      entry({ level: 'warn' }),
-      entry({ level: 'warn', message: 'Second warning' }),
-      entry({ level: 'error' }),
-      entry({ level: '' }),
-      entry({ level: null }),
-    ];
-
-    expect(deriveLevelOptions(entries)).toEqual(['all', 'error', 'warn']);
-  });
-
-  it('keeps the current level filter when it remains valid', () => {
-    const state = createLogsViewState();
-    state.entries = [entry({ level: 'info' }), entry({ level: 'warn' })];
-
-    setLevelFilter(state, 'warn');
-
-    expect(normalizeLevelFilter(state)).toBe('warn');
-    expect(state.levelFilter).toBe('warn');
-  });
-
-  it('searches timestamp, level, logger, message, and continuation text', () => {
-    const entries = [
-      entry({
-        timestamp: '2026-05-11 09:00:00',
-        level: 'error',
-        logger_name: 'vbot.server.app',
-        message: 'Failed',
-        continuation: 'Traceback line',
-      }),
-    ];
-
-    expect(filterLogEntries(entries, { searchText: '09:00:00' })).toHaveLength(
-      1,
-    );
-    expect(filterLogEntries(entries, { searchText: 'error' })).toHaveLength(1);
-    expect(
-      filterLogEntries(entries, { searchText: 'server.app' }),
-    ).toHaveLength(1);
-    expect(filterLogEntries(entries, { searchText: 'failed' })).toHaveLength(1);
-    expect(filterLogEntries(entries, { searchText: 'traceback' })).toHaveLength(
-      1,
-    );
-  });
-
-  it('computes visible entries from state filters', () => {
-    const state = createLogsViewState();
-    state.entries = [
-      entry({
-        timestamp: '2026-05-11 09:00:00',
-        level: 'info',
-        message: 'Ready',
-      }),
-      entry({
-        timestamp: '2026-05-11 09:00:01',
-        level: 'error',
-        message: 'Failed',
-      }),
-    ];
-
-    selectLogFile(state, '2026-05-11');
     setLevelFilter(state, 'error');
-    setSearchText(state, 'failed');
+    expect(visibleMessages()).toEqual(['Failed']);
 
-    expect(visibleLogEntries(state).map((item) => item.message)).toEqual([
-      'Failed',
-    ]);
+    setLevelFilter(state, levelOptionValue());
+    setSearchText(state, '  WORKER retry ');
+    expect(visibleMessages()).toEqual(['Retry soon']);
+
+    for (const needle of ['09:00:01', 'error', 'failed', 'traceback']) {
+      setSearchText(state, needle);
+      expect(visibleMessages()).toEqual(['Failed']);
+    }
+    setSearchText(state, 'server.app');
+    expect(visibleMessages()).toEqual(['Failed', 'Ready']);
   });
 
-  it('defaults to newest-first and supports oldest-first ordering', () => {
-    const entries = [
-      entry({ timestamp: '2026-05-11 09:00:00', message: 'First' }),
-      entry({ timestamp: '2026-05-11 09:00:01', message: 'Second' }),
-      entry({ timestamp: '2026-05-11 09:00:02', message: 'Third' }),
-    ];
-
-    expect(
-      sortLogEntries(entries, LOGS_SORT_ORDER_NEWEST).map(
-        (item) => item.message,
-      ),
-    ).toEqual(['Third', 'Second', 'First']);
-    expect(
-      sortLogEntries(entries, LOGS_SORT_ORDER_OLDEST).map(
-        (item) => item.message,
-      ),
-    ).toEqual(['First', 'Second', 'Third']);
-  });
-
-  it('applies visible ordering from state sort selection', () => {
+  it('orders entries newest first unless oldest first is chosen', () => {
     const state = createLogsViewState();
-    state.entries = [
-      entry({ timestamp: '2026-05-11 09:00:00', message: 'First' }),
-      entry({ timestamp: '2026-05-11 09:00:01', message: 'Second' }),
-      entry({ timestamp: '2026-05-11 09:00:02', message: 'Third' }),
-    ];
+    state.entries = ['First', 'Second', 'Third'].map((message) =>
+      entry({ message }),
+    );
+    const visibleMessages = () =>
+      visibleLogEntries(state).map((item) => item.message);
 
-    expect(visibleLogEntries(state).map((item) => item.message)).toEqual([
-      'Third',
-      'Second',
-      'First',
+    expect(deriveSortOptions()).toEqual([
+      LOGS_SORT_ORDER_NEWEST,
+      LOGS_SORT_ORDER_OLDEST,
     ]);
+    expect(visibleMessages()).toEqual(['Third', 'Second', 'First']);
 
     setSortOrder(state, LOGS_SORT_ORDER_OLDEST);
-
-    expect(visibleLogEntries(state).map((item) => item.message)).toEqual([
-      'First',
-      'Second',
-      'Third',
-    ]);
-  });
-
-  it('falls back to newest sort order for invalid values', () => {
-    const state = createLogsViewState();
+    expect(visibleMessages()).toEqual(['First', 'Second', 'Third']);
 
     expect(setSortOrder(state, 'sideways')).toBe(LOGS_SORT_ORDER_NEWEST);
-    expect(state.sortOrder).toBe(LOGS_SORT_ORDER_NEWEST);
+    expect(visibleMessages()).toEqual(['Third', 'Second', 'First']);
   });
 });
 

@@ -127,6 +127,7 @@ describe('DebugBody', () => {
     expect(document.querySelector('[role="tablist"]')).toBeNull();
     const pre = document.querySelector('.body-content pre');
     expect(pre.textContent).toBe(raw);
+    expect(pre.parentElement.getAttribute('role')).toBe('region');
     document.querySelector('[role="switch"]').click();
     flushSync();
     expect(pre.classList.contains('body-wrapped')).toBe(false);

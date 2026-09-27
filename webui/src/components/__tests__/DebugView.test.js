@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
@@ -135,7 +135,7 @@ describe('DebugView', () => {
     mountedComponent = mount(DebugView, { target: document.body });
     await waitForText('claude');
     clickTraceRow('a');
-    await switchToDetailTabWhenReady('Request');
+    await switchToDetailTabWhenReady('request');
     const search = document.querySelector('.trace-filters input');
     search.value = 'CLAUDE';
     search.dispatchEvent(new Event('input', { bubbles: true }));
@@ -157,25 +157,23 @@ describe('DebugView', () => {
         .getElementById('debug-trace-provider-filter')
         .getAttribute('aria-label'),
     ).toBe('Provider');
+    const allStatuses = t('debug.allStatuses', 'All statuses');
+    const statusOk = t('debug.statusOk', 'HTTP 2xx / WS 101');
     expect(dropdownOptionLabels('debug-trace-status-filter')).toEqual([
-      'All statuses',
-      'HTTP 2xx / WS 101',
-      'HTTP 4xx / 5xx',
-      'Other / no status',
+      allStatuses,
+      statusOk,
+      t('debug.statusErrors', 'HTTP 4xx / 5xx'),
+      t('debug.statusOther', 'Other / no status'),
     ]);
-    chooseDropdownOption('debug-trace-status-filter', 'HTTP 2xx / WS 101');
-    expect(dropdownTriggerLabel('debug-trace-status-filter')).toBe(
-      'HTTP 2xx / WS 101',
-    );
+    chooseDropdownOption('debug-trace-status-filter', statusOk);
+    expect(dropdownTriggerLabel('debug-trace-status-filter')).toBe(statusOk);
     expect(document.querySelectorAll('.debug-trace')).toHaveLength(0);
     document.querySelector('.trace-no-matches button').click();
     flushSync();
     expect(document.querySelectorAll('.debug-trace')).toHaveLength(2);
-    expect(dropdownTriggerLabel('debug-trace-status-filter')).toBe(
-      'All statuses',
-    );
+    expect(dropdownTriggerLabel('debug-trace-status-filter')).toBe(allStatuses);
     expect(dropdownOptionLabels('debug-trace-provider-filter')).toEqual([
-      'All Providers',
+      t('debug.allProviders', 'All Providers'),
       'anthropic',
       'openai',
     ]);
@@ -274,7 +272,7 @@ describe('DebugView', () => {
 
     resolveB();
     flushSync();
-    await switchToDetailTabWhenReady('Request');
+    await switchToDetailTabWhenReady('request');
 
     expect(getBodyBlockText()).toContain('"trace":"b"');
 
@@ -284,7 +282,7 @@ describe('DebugView', () => {
     flushSync();
 
     expect(getSelectedTraceId()).toBe('trace-b');
-    await switchToDetailTabWhenReady('Request');
+    await switchToDetailTabWhenReady('request');
     flushSync();
     expect(getBodyBlockText()).toContain('"trace":"b"');
     expect(getBodyBlockText()).not.toContain('"trace":"a"');
@@ -332,7 +330,7 @@ describe('DebugView', () => {
         .getAttribute('aria-selected'),
     ).toBe('true');
     expect(document.querySelector('.json-string').textContent).toBe('hi');
-    await switchToDetailTabWhenReady('Request');
+    await switchToDetailTabWhenReady('request');
     flushSync();
     await waitForBodyText('"prompt":"hi"');
 
@@ -361,48 +359,6 @@ describe('DebugView', () => {
     expect(formattedBlock?.textContent).toBe(
       '{\n  "prompt": "hi",\n  "options": {\n    "temperature": 0.7\n  }\n}',
     );
-  });
-
-  it('omits the body view toggle when the body is not parseable JSON', async () => {
-    const trace = traceListEntry({
-      trace_id: 'trace-no-json',
-      provider_id: 'openai',
-      model_id: 'gpt-5.2',
-    });
-    debugTraceListMock.mockResolvedValue({ traces: [trace] });
-    debugTraceGetMock.mockResolvedValue({
-      trace: fullTraceFixture(trace, {
-        request: {
-          method: 'POST',
-          body: 'this is plain text that is not JSON',
-        },
-        response: {
-          status_code: 200,
-          body: 'plain text response',
-        },
-      }),
-    });
-
-    mountedComponent = mount(DebugView, { target: document.body });
-    flushSync();
-
-    await waitForText('gpt-5.2');
-
-    clickTraceRow('trace-no-json');
-    flushSync();
-    await switchToDetailTabWhenReady('Request');
-    flushSync();
-    await waitForBodyText('this is plain text that is not JSON');
-
-    expect(
-      document.querySelector(
-        '.debug-view__detail-section .debug-view__body-tab-list',
-      ),
-    ).toBeNull();
-    expect(getBodyBlock()?.textContent).toBe(
-      'this is plain text that is not JSON',
-    );
-    expect(getBodyBlock()?.parentElement?.getAttribute('role')).toBe('region');
   });
 
   it('shows the aggregate streaming response body under the Response tab and exposes no Stream Events tab', async () => {
@@ -440,13 +396,17 @@ describe('DebugView', () => {
 
     clickTraceRow('trace-stream');
     flushSync();
-    await switchToDetailTabWhenReady('Response');
+    await switchToDetailTabWhenReady('response');
     flushSync();
 
     const tabLabels = Array.from(
       document.querySelectorAll('.debug-view__detail-tab-list .tab-list__tab'),
     ).map((tab) => tab.textContent?.trim() ?? '');
-    expect(tabLabels).toEqual(['Request', 'Response', 'Metadata']);
+    expect(tabLabels).toEqual([
+      t('debug.request', 'Request'),
+      t('debug.response', 'Response'),
+      t('debug.metadata', 'Metadata'),
+    ]);
     expect(tabLabels).not.toContain('Stream Events');
 
     await waitForBodyText('data: [DONE]');
@@ -460,7 +420,7 @@ describe('DebugView', () => {
     expect(responseBlock?.textContent).toContain('"delta":" there"');
   });
 
-  it('keeps the selected list entry when refreshTraces returns a list still containing the id', async () => {
+  it('keeps the inspected trace across refreshes while it is listed and closes it once it is gone', async () => {
     const props = reactiveProps({ debugTracesRefreshToken: 0 });
     const traceA = traceListEntry({
       trace_id: 'trace-keep',
@@ -473,115 +433,53 @@ describe('DebugView', () => {
       model_id: 'claude-sonnet-4',
     });
     debugTraceListMock.mockResolvedValueOnce({ traces: [traceA, traceB] });
-
-    mountedComponent = mount(DebugView, { target: document.body, props });
-    flushSync();
-
-    await waitForText('claude-sonnet-4');
-
     debugTraceGetMock.mockResolvedValue({
       trace: fullTraceFixture(traceA, {
         request: { method: 'POST', body: '{"x":1}' },
       }),
     });
 
+    mountedComponent = mount(DebugView, { target: document.body, props });
+    await waitForText('claude-sonnet-4');
     clickTraceRow('trace-keep');
-    flushSync();
-    await switchToDetailTabWhenReady('Request');
-    flushSync();
+    await switchToDetailTabWhenReady('request');
     await waitForBodyText('"x":1');
 
-    expect(getSelectedTraceId()).toBe('trace-keep');
-
     debugTraceListMock.mockResolvedValueOnce({
-      traces: [
-        traceA,
-        traceB,
-        traceListEntry({
-          trace_id: 'trace-fresh',
-          provider_id: 'openai',
-          model_id: 'gpt-5.2',
-        }),
-      ],
+      traces: [traceA, traceB, traceListEntry({ trace_id: 'trace-fresh' })],
     });
-
     props.debugTracesRefreshToken += 1;
     await waitForCondition(
       () =>
         document.querySelectorAll('.debug-trace[data-trace-id]').length === 3,
     );
-
     expect(getSelectedTraceId()).toBe('trace-keep');
     expect(getBodyBlockText()).toBe('{"x":1}');
-  });
-
-  it('clears the selection when refreshTraces returns a list without the selected id', async () => {
-    const props = reactiveProps({ debugTracesRefreshToken: 0 });
-    const traceA = traceListEntry({
-      trace_id: 'trace-vanish',
-      provider_id: 'openai',
-      model_id: 'gpt-5.2',
-    });
-    debugTraceListMock.mockResolvedValueOnce({ traces: [traceA] });
-
-    mountedComponent = mount(DebugView, { target: document.body, props });
-    flushSync();
-
-    await waitForText('gpt-5.2');
-
-    clickTraceRow('trace-vanish');
-    flushSync();
 
     debugTraceListMock.mockResolvedValueOnce({ traces: [] });
     props.debugTracesRefreshToken += 1;
     await waitForCondition(() =>
       document.querySelector('.debug-view .empty-state'),
     );
-
     expect(document.querySelector('.debug-view__detail-panel')).toBeNull();
     expect(document.querySelector('.debug-view__refresh-btn')).toBeNull();
   });
 
   it('falls back to the placeholder when headers are missing and never shows (none)', async () => {
-    const trace = traceListEntry({
-      trace_id: 'trace-headers',
-      provider_id: 'openai',
-      model_id: 'gpt-5.2',
-    });
+    const trace = traceListEntry({ trace_id: 'trace-headers' });
+    const detail = fullTraceFixture(trace);
+    delete detail.request.headers;
+    delete detail.response.headers;
     debugTraceListMock.mockResolvedValue({ traces: [trace] });
-    debugTraceGetMock.mockResolvedValue({
-      trace: {
-        ...fullTraceFixture(trace, {
-          request: { method: 'POST' },
-          response: { status_code: 200 },
-        }),
-        request: {
-          method: 'POST',
-          url: 'https://api.openai.com/v1/responses',
-          body: '{}',
-        },
-        response: {
-          status_code: 200,
-          body: '{}',
-        },
-      },
-    });
+    debugTraceGetMock.mockResolvedValue({ trace: detail });
 
     mountedComponent = mount(DebugView, { target: document.body });
-    flushSync();
-
-    await waitForText('gpt-5.2');
-
+    await waitForText(trace.model_id);
     clickTraceRow('trace-headers');
-    flushSync();
-    await switchToDetailTabWhenReady('Request');
-    flushSync();
-    expect(getHeadersBlockText()).toBe('—');
 
-    await switchToDetailTabWhenReady('Response');
-    flushSync();
+    await switchToDetailTabWhenReady('request');
     expect(getHeadersBlockText()).toBe('—');
-    flushSync();
+    await switchToDetailTabWhenReady('response');
     expect(getHeadersBlockText()).toBe('—');
   });
 
@@ -620,13 +518,7 @@ describe('DebugView', () => {
     await waitForText(entry.model_id);
     clickTraceRow(entry.trace_id);
     flushSync();
-    [...document.querySelectorAll('.storage-actions button')]
-      .find((button) => button.textContent.trim() === 'Clear all traces')
-      .click();
-    flushSync();
-    [...document.querySelectorAll('.storage-actions button')]
-      .find((button) => button.textContent.trim() === 'Confirm')
-      .click();
+    clearAllTraces();
     await waitForCondition(() =>
       document.querySelector('.debug-view .empty-state'),
     );
@@ -651,14 +543,8 @@ describe('DebugView', () => {
     mountedComponent = mount(DebugView, { target: document.body });
     await waitForText(entry.model_id);
     clickTraceRow(entry.trace_id);
-    await switchToDetailTabWhenReady('Request');
-    [...document.querySelectorAll('.storage-actions button')]
-      .find((button) => button.textContent.trim() === 'Clear all traces')
-      .click();
-    flushSync();
-    [...document.querySelectorAll('.storage-actions button')]
-      .find((button) => button.textContent.trim() === 'Confirm')
-      .click();
+    await switchToDetailTabWhenReady('request');
+    clearAllTraces();
     await waitForText('test-owned-clear-error');
     expect(getBodyBlockText()).toBe('test-owned-retained-body');
     expect(debugTraceListMock).toHaveBeenCalledOnce();
@@ -679,9 +565,7 @@ describe('DebugView', () => {
       document.querySelector('.debug-view .empty-state'),
     );
     const input = document.querySelector('input[type="number"]');
-    const save = [...document.querySelectorAll('.storage-actions button')].find(
-      (button) => button.textContent.trim() === 'Save',
-    );
+    const save = storageButton(t('common.save', 'Save'));
     input.value = '0';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
@@ -733,9 +617,7 @@ describe('DebugView', () => {
     input.value = '75';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    [...document.querySelectorAll('.storage-actions button')]
-      .find((button) => button.textContent.trim() === 'Save')
-      .click();
+    storageButton(t('common.save', 'Save')).click();
     await waitForCondition(() =>
       document.querySelector('.debug-utilities').textContent.includes('/ 75'),
     );
@@ -748,28 +630,7 @@ describe('DebugView', () => {
     );
   });
 
-  it('pretty-prints the probe raw response when it is JSON', async () => {
-    const rawBlock = await runModelProbe(
-      '{"data":[{"id":"gpt-5.2","object":"model"}]}',
-    );
-
-    expect(
-      rawBlock?.classList.contains('debug-view__code-block--formatted'),
-    ).toBe(true);
-    expect(rawBlock?.textContent).toBe(
-      '{\n  "data": [\n    {\n      "id": "gpt-5.2",\n      "object": "model"\n    }\n  ]\n}',
-    );
-  });
-
-  it('keeps a non-JSON probe raw response unchanged', async () => {
-    const rawBlock = await runModelProbe('plain text response');
-
-    expect(rawBlock?.textContent).toBe('plain text response');
-  });
-
-  // Selects the first probe provider and connection, runs the probe, and
-  // returns the raw-response code block once the results are rendered.
-  async function runModelProbe(rawResponse) {
+  it('probes the selected Provider connection and shows its raw response and model preview', async () => {
     rpcMock.mockImplementation(async (method) => {
       if (method === 'settings.get') {
         return {
@@ -788,20 +649,16 @@ describe('DebugView', () => {
       }
       throw new Error(`Unexpected RPC method: ${method}`);
     });
-    debugModelProbeMock.mockResolvedValue({
-      raw_response: rawResponse,
-      status_code: 200,
-      duration_ms: 120,
-      trace_id: 'probe-trace',
-      model_preview: {
-        model_count: 0,
-        models: [],
-      },
-    });
+    debugModelProbeMock
+      .mockResolvedValueOnce(
+        probeResult('{"data":[{"id":"gpt-5.2","object":"model"}]}', {
+          model_count: 1,
+          models: [{ id: 'gpt-5.2', name: 'GPT-5.2' }],
+        }),
+      )
+      .mockResolvedValueOnce(probeResult('plain text response'));
 
     mountedComponent = mount(DebugView, { target: document.body });
-    flushSync();
-
     // Settings (and with them the probe Providers) resolve with the trace
     // list; the empty trace state marks that initial load as complete.
     await waitForCondition(() =>
@@ -813,7 +670,7 @@ describe('DebugView', () => {
     expect(providerTrigger.getAttribute('aria-label')).toBe('Provider');
     expect(connectionTrigger.getAttribute('aria-label')).toBe('Connection');
     expect(dropdownTriggerLabel('debug-probe-provider')).toBe(
-      'Select a provider',
+      t('debug.modelProbe.selectProvider', 'Select a provider'),
     );
     expect(connectionTrigger.disabled).toBe(true);
 
@@ -821,24 +678,58 @@ describe('DebugView', () => {
     expect(dropdownTriggerLabel('debug-probe-provider')).toBe('OpenAI');
     expect(connectionTrigger.disabled).toBe(false);
     expect(dropdownTriggerLabel('debug-probe-connection')).toBe(
-      'Select a connection',
+      t('debug.modelProbe.selectConnection', 'Select a connection'),
     );
+    const probeButton = document.querySelector('.debug-view__probe-btn');
+    expect(probeButton.disabled).toBe(true);
 
     chooseDropdownOption('debug-probe-connection', 'Default');
     expect(dropdownTriggerLabel('debug-probe-connection')).toBe('Default');
+    expect(probeButton.disabled).toBe(false);
 
-    const probeButton = document.querySelector('.debug-view__probe-btn');
-    expect(probeButton?.disabled).toBe(false);
-    probeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    flushSync();
-
+    // A JSON response is pretty-printed next to the model preview.
+    probeButton.click();
     await waitForCondition(() =>
-      document.querySelector('.debug-view__probe-results'),
+      document.querySelector('.debug-view__probe-model-chip'),
     );
     expect(debugModelProbeMock).toHaveBeenCalledWith('openai', 'default');
-    return document.querySelector('.debug-view__probe-result-section pre');
-  }
+    expect(probeRawResponseBlock().textContent).toBe(
+      JSON.stringify({ data: [{ id: 'gpt-5.2', object: 'model' }] }, null, 2),
+    );
+    expect(
+      document.querySelector('.debug-view__probe-model-chip').textContent,
+    ).toBe('GPT-5.2');
+    expect(
+      document
+        .querySelector('.debug-view__probe-model-count')
+        .textContent.trim(),
+    ).toBe(t('debug.modelProbe.modelCount', '{count} models', { count: 1 }));
+
+    // Any other response stays exactly as received.
+    probeButton.click();
+    await waitForCondition(
+      () => probeRawResponseBlock()?.textContent === 'plain text response',
+    );
+    expect(document.querySelector('.debug-view__probe-model-chip')).toBeNull();
+  });
 });
+
+function probeResult(
+  rawResponse,
+  modelPreview = { model_count: 0, models: [] },
+) {
+  return {
+    raw_response: rawResponse,
+    status_code: 200,
+    duration_ms: 120,
+    trace_id: 'probe-trace',
+    model_preview: modelPreview,
+  };
+}
+
+function probeRawResponseBlock() {
+  return document.querySelector('.debug-view__probe-result-section pre');
+}
 
 function traceListEntry(overrides = {}) {
   return {
@@ -943,7 +834,9 @@ function clickTraceRow(traceId) {
   row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 }
 
-async function switchToDetailTabWhenReady(label, attempts = 40) {
+// Opens the `request` or `response` detail tab and its raw body view.
+async function switchToDetailTabWhenReady(tab, attempts = 40) {
+  const label = t(`debug.${tab}`);
   for (let i = 0; i < attempts; i += 1) {
     flushSync();
     const tab = Array.from(
@@ -962,6 +855,18 @@ async function switchToDetailTabWhenReady(label, attempts = 40) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error(`Detail tab not found: ${label}`);
+}
+
+function storageButton(label) {
+  return [...document.querySelectorAll('.storage-actions button')].find(
+    (button) => button.textContent.trim() === label,
+  );
+}
+
+function clearAllTraces() {
+  storageButton(t('debug.clearAll', 'Clear all traces')).click();
+  flushSync();
+  storageButton(t('common.confirm', 'Confirm')).click();
 }
 
 function getSelectedTraceId() {
