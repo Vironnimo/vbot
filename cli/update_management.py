@@ -653,7 +653,8 @@ def _refresh_windows_command_shim(
         return _Step(True, "")
 
     escaped_python = state.python_executable.replace("%", "%%")
-    # -P keeps a cli package or cli.py in the caller's directory from shadowing vBot.
+    # -P keeps same-named packages in the caller's directory (cli, core, ...) from
+    # shadowing vBot's own.
     content = f'@echo off\r\n"{escaped_python}" -P -m cli.main %*\r\n'
     encoded_content = content.encode("utf-8")
     try:
