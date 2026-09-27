@@ -875,16 +875,6 @@ def cmd_merge(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # A leftover mid-merge state (crash during an earlier merge) is not user
-    # dirt; the locked recovery step below aborts it before anything runs.
-    merge_leftover = (PROJECT_ROOT / ".git" / "MERGE_HEAD").exists()
-    uncommitted = [] if merge_leftover else _list_uncommitted_paths(PROJECT_ROOT)
-    if uncommitted:
-        print_error("primary checkout has uncommitted changes; commit or clean it first")
-        for line in uncommitted:
-            print(f"uncommitted: {line}")
-        return 1
-
     lock_path, holder_path, release_path = _merge_lock_paths()
     message = args.message or f"merge: {name}"
 
@@ -932,6 +922,15 @@ def _merge_and_cleanup(
     if merge_head_path.exists():
         _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--abort"])
         print("recovered: aborted an unfinished merge left in the primary checkout")
+
+    # Checked under the merge lock: while another merge's commit check runs, main
+    # holds that merge's staged result, and git writes MERGE_HEAD only afterwards.
+    uncommitted = _list_uncommitted_paths(PROJECT_ROOT)
+    if uncommitted:
+        print_error("primary checkout has uncommitted changes; commit or clean it first")
+        for line in uncommitted:
+            print(f"uncommitted: {line}")
+        return 1
 
     return_code, stderr = _run_command(
         ["git", "-C", str(PROJECT_ROOT), "merge", branch, "--no-ff", "-m", message]

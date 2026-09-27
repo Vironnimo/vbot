@@ -222,7 +222,7 @@ worktree.
 
 `python scripts/worktree.py merge <name>` is the only supported way to land a task branch while other sessions are running. It serializes all merges and protected repair windows through an OS-level file lock in the shared Git directory — exactly one merge touches `main` at a time, and a second caller simply waits inside its own command until the first is done. Never hand-merge into `main` while sessions are running; a manual merge can collide with an automated one.
 
-The command refuses to run when the primary checkout is not on `main` or has uncommitted changes, and it self-heals one crash scenario: if an earlier merge was killed halfway, it aborts that leftover state before doing anything.
+The command refuses to run when the primary checkout is not on `main` or, once it holds the merge lock, has uncommitted changes; while another merge is being checked, `main` holds that merge's staged result, so a second merge waits for the lock instead of refusing. It self-heals one crash scenario: if an earlier merge was killed halfway, it aborts that leftover state before doing anything.
 
 On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts or a merged result the commit check rejected; exit code 1 means refusal, timeout, or cleanup failure.
 
@@ -495,7 +495,7 @@ inside the worktree's `webui/` directory. Fix the frontend dependency or build i
 
 ### `merge` reports uncommitted changes in the primary checkout
 
-The merge refuses to run while `main` carries uncommitted changes. Commit or clean them first; if a leftover mid-merge state from a crashed merge is present, the merge aborts that state automatically instead of refusing.
+The merge refuses to run while `main` carries uncommitted changes once no other merge holds the lock. Commit or clean them first; if a leftover mid-merge state from a crashed merge is present, the merge aborts that state automatically instead of refusing.
 
 ### A repair window did not shut down
 

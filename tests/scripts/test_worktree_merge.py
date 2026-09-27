@@ -238,7 +238,7 @@ def _poll_the_merge_lock_quickly(monkeypatch):
     monkeypatch.setattr(worktree_lock, "MERGE_LOCK_POLL_MAX_SECONDS", 0.02)
 
 
-def test_merge_lock_blocks_second_merger_until_release(real_repo, monkeypatch):
+def test_merge_lock_blocks_second_merger_until_release(real_repo, monkeypatch, capsys):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
     _poll_the_merge_lock_quickly(monkeypatch)
@@ -249,14 +249,19 @@ def test_merge_lock_blocks_second_merger_until_release(real_repo, monkeypatch):
 
     with lock_path.open("a+b") as handle:
         assert worktree_lock._acquire_file_lock(handle)
+        # The lock holder's merge is being checked, with its result staged in main.
+        (real_repo / "other.txt").write_text("other\n", encoding="utf-8")
+        _git_output(real_repo, "add", "other.txt")
         blocked = module.cmd_merge(
             argparse.Namespace(name="task-b", message=None, wait_timeout=0.3)
         )
+        _git_output(real_repo, "commit", "-m", "other merge")
         worktree_lock._release_file_lock(handle)
     merged_without_lock = (real_repo / "feature-b.txt").exists()
     released = module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=60))
 
     assert blocked == 1
+    assert "merge lock stayed busy" in capsys.readouterr().out
     assert not merged_without_lock
     assert released == 0
     assert (real_repo / "feature-b.txt").exists()
