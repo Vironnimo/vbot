@@ -1,43 +1,26 @@
 """Prompt layout, override, and scope-selection tests."""
 
-from .prompts_test_support import (
-    BlockDefinition,
-    LayoutEntry,
-    Path,
+from dataclasses import replace
+from pathlib import Path
+
+from core.agents.temporary import TemporaryAgent
+from core.prompts.blocks import BlockDefinition, LayoutEntry
+from core.prompts.prompts import ProjectPromptContext
+from core.storage.prompt_blocks import PromptBlockStore
+from core.tools.availability import ToolAccess
+from tests.core.prompts.prompts_test_support import (
     StubBlockStore,
     StubSkill,
     StubSkills,
     StubStorage,
-    StubTools,
-    SystemPromptManager,
     _agent,
     _manager,
 )
-from .prompts_test_support import workspace as workspace
+from tests.core.prompts.prompts_test_support import workspace as workspace
 
 
-def test_explicit_participant_selection_controls_preview_and_runtime(tmp_path):
-    from dataclasses import replace
-
-    from core.agents.temporary import TemporaryAgent
-    from core.prompts.prompts import ProjectPromptContext
-    from core.tools.availability import ToolAccess
-
-    project_file = tmp_path / "AGENTS.md"
-    project_file.write_text("project-content-sentinel", encoding="utf-8")
-    context = ProjectPromptContext.from_project("test", "Test", str(tmp_path), ["AGENTS.md"])
-    calls = []
-    manager = _manager(
-        tmp_path,
-        block_definitions=[
-            BlockDefinition(
-                id="extension:future",
-                owner="always",
-                render=lambda _context: calls.append(True) or "future-sentinel",
-            )
-        ],
-    )
-    agent = TemporaryAgent(
+def _temporary_agent(tmp_path: Path, prompt_blocks: list[str]) -> TemporaryAgent:
+    return TemporaryAgent(
         id="preview",
         name="Test",
         model="fixture/model",
@@ -46,9 +29,28 @@ def test_explicit_participant_selection_controls_preview_and_runtime(tmp_path):
         allowed_skills=[],
         tools={},
         fallback_models=[],
-        prompt_blocks=["core:agent_body"],
+        prompt_blocks=prompt_blocks,
     )
-    reads = []
+
+
+def test_explicit_participant_selection_controls_preview_and_runtime(tmp_path: Path) -> None:
+    project_file = tmp_path / "AGENTS.md"
+    project_file.write_text("project-content-sentinel", encoding="utf-8")
+    context = ProjectPromptContext.from_project("test", "Test", str(tmp_path), ["AGENTS.md"])
+    calls: list[bool] = []
+
+    def render_future(_context: object) -> str:
+        calls.append(True)
+        return "future-sentinel"
+
+    manager = _manager(
+        tmp_path,
+        block_definitions=[
+            BlockDefinition(id="extension:future", owner="always", render=render_future)
+        ],
+    )
+    agent = _temporary_agent(tmp_path, ["core:agent_body"])
+    reads: list[Path] = []
     assert (
         manager.build_system_prompt(
             agent,
@@ -60,7 +62,7 @@ def test_explicit_participant_selection_controls_preview_and_runtime(tmp_path):
     )
     assert calls == []
     assert project_file not in reads
-    details = []
+    details: list[dict[str, object]] = []
     preview = manager.build_system_prompt(
         agent,
         agent_body="body-sentinel",
@@ -70,7 +72,7 @@ def test_explicit_participant_selection_controls_preview_and_runtime(tmp_path):
     assert preview == "body-sentinel"
     project = next(block for block in details if block["id"] == "core:working_project")
     assert project["included"] is False
-    assert "project-content-sentinel" in project["text"]
+    assert "project-content-sentinel" in str(project["text"])
     enabled = replace(agent, prompt_blocks=["core:agent_body", "core:working_project"])
     prompt = manager.build_system_prompt(
         enabled,
@@ -87,66 +89,36 @@ def test_explicit_participant_selection_controls_preview_and_runtime(tmp_path):
     )
 
 
-def test_participant_selection_overrides_shared_enablement(workspace, tmp_path):
-    from dataclasses import replace
-
-    from core.agents.temporary import TemporaryAgent
-    from core.tools.availability import ToolAccess
-
-    manager = SystemPromptManager(
-        StubStorage(
+def test_participant_selection_overrides_shared_enablement(tmp_path: Path) -> None:
+    manager = _manager(
+        tmp_path,
+        storage=StubStorage(
             {
                 "tools.md": "tools-sentinel",
                 "skills.md": "skills-sentinel",
                 "runtime.md": "runtime-sentinel",
             }
         ),
-        StubTools(),
-        StubSkills([]),
-        vbot_version="test",
-        vbot_root=tmp_path,
-        data_root=tmp_path,
         block_store=StubBlockStore(
             layouts={"default": [LayoutEntry(id="core:tools", enabled=False, source="core")]}
         ),
     )
-    agent = TemporaryAgent(
-        id="test",
-        name="Test",
-        model="fixture/model",
-        cwd=tmp_path,
-        tool_access=ToolAccess(mode="selected", allowed=()),
-        allowed_skills=[],
-        tools={},
-        fallback_models=[],
-        prompt_blocks=["core:tools", "core:skills"],
-    )
+    agent = _temporary_agent(tmp_path, ["core:tools", "core:skills"])
+
     assert manager.build_system_prompt(agent) == "tools-sentinel\n\nskills-sentinel"
     assert "runtime-sentinel" in manager.build_system_prompt(replace(agent, prompt_blocks=None))
 
 
-def test_request_local_data_does_not_read_persistent_override_paths(workspace, tmp_path):
-    from core.storage.prompt_blocks import PromptBlockStore
-
+def test_request_local_data_does_not_read_persistent_override_paths(
+    workspace: Path, tmp_path: Path
+) -> None:
     storage = PromptBlockStore(data_dir=tmp_path, ensure_directories=lambda: None)
 
     class RealOverrideStore(StubBlockStore):
-        def read_block_override(self, scope, block_id):
+        def read_block_override(self, scope: str, block_id: str) -> str | None:
             return storage.read_block_override(None if scope == "default" else scope[6:], block_id)
 
-    manager = SystemPromptManager(
-        StubStorage(),
-        StubTools(),
-        StubSkills([]),
-        vbot_version="0.1.0",
-        vbot_root=tmp_path / "app",
-        data_root=tmp_path,
-        server_hostname="h",
-        operating_system="o",
-        current_local_date=lambda: "2026-09-08",
-        timezone_name=lambda: "UTC",
-        block_store=RealOverrideStore(),
-    )
+    manager = _manager(tmp_path, block_store=RealOverrideStore())
     agent = _agent(workspace)
     block = BlockDefinition(
         id="extension_session:orientation",
@@ -156,61 +128,32 @@ def test_request_local_data_does_not_read_persistent_override_paths(workspace, t
         default_rank=10_000,
     )
     prompt = manager.build_system_prompt(agent, request_block_definitions=[block])
-    assert block.default_text in prompt
+    assert str(block.default_text) in prompt
     assert "private-context-sentinel" not in manager.build_system_prompt(agent)
     assert all(item["id"] != block.id for item in manager.list_blocks())
 
 
-def test_saved_layout_disables_a_core_block(workspace: Path, tmp_path: Path) -> None:
-    # A scope that disables the skills block in its saved layout drops it; the other
-    # blocks still default in at their rank.
-    layout = [LayoutEntry(id="core:skills", enabled=False, source="core")]
-    store = StubBlockStore(layouts={"default": layout})
-    manager = SystemPromptManager(
-        StubStorage(),
-        StubTools(),
-        StubSkills([StubSkill("agent-cli", "Delegate")]),
-        vbot_version="0.1.0",
-        vbot_root=tmp_path / "app",
-        data_root=tmp_path / "data",
-        server_hostname="h",
-        operating_system="o",
-        current_local_date=lambda: "2026-05-04",
-        timezone_name=lambda: "Europe/Berlin",
-        block_store=store,
+def test_default_scope_layout_and_override_shape_the_prompt(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # A saved layout disabling the skills block drops it while the other blocks default
+    # in; an override replaces the owner default text and still expands its producers.
+    store = StubBlockStore(
+        layouts={"default": [LayoutEntry(id="core:skills", enabled=False, source="core")]},
+        overrides={("default", "core:tools"): "## Custom Tools\n{generated:tool_list}"},
     )
-    agent = _agent(workspace, allowed_skills=["agent-cli"])
+    manager = _manager(
+        tmp_path, skills=StubSkills([StubSkill("agent-cli", "Delegate")]), block_store=store
+    )
+    agent = _agent(workspace, allowed_tools=["read_file"], allowed_skills=["agent-cli"])
 
     prompt = manager.build_system_prompt(agent)
 
     assert "agent-cli" not in prompt
     assert "Delegate" not in prompt
-    assert "0.1.0" in prompt  # other blocks still render
-
-
-def test_block_override_replaces_owner_default_text(workspace: Path, tmp_path: Path) -> None:
-    store = StubBlockStore(
-        overrides={("default", "core:tools"): "## Custom Tools\n{generated:tool_list}"}
-    )
-    manager = SystemPromptManager(
-        StubStorage(),
-        StubTools(),
-        StubSkills([]),
-        vbot_version="0.1.0",
-        vbot_root=tmp_path / "app",
-        data_root=tmp_path / "data",
-        server_hostname="h",
-        operating_system="o",
-        current_local_date=lambda: "2026-05-04",
-        timezone_name=lambda: "Europe/Berlin",
-        block_store=store,
-    )
-    agent = _agent(workspace, allowed_tools=["read_file"])
-
-    prompt = manager.build_system_prompt(agent)
-
+    assert "0.1.0" in prompt
     assert "## Custom Tools" in prompt
-    assert "- read_file: Read a workspace file" in prompt  # producer still expands
+    assert "- read_file: Read a workspace file" in prompt
 
 
 def test_update_block_definitions_refreshes_contributed_blocks(
@@ -238,7 +181,7 @@ def test_custom_agent_scope_uses_agent_fragments_without_default_fallback(
     workspace: Path, tmp_path: Path
 ) -> None:
     # An agent scope reads agent fragments with no default fallback: an unset
-    # runtime fragment makes the runtime block empty → it collapses.
+    # fragment makes its block empty, so it collapses.
     storage = StubStorage()
     storage.set_agent_prompt_fragment(
         "coder",
@@ -252,24 +195,11 @@ def test_custom_agent_scope_uses_agent_fragments_without_default_fallback(
 
     assert "## Custom Runtime" in prompt
     assert "Host test-host" in prompt
-    # Default-scope runtime fragment is not read for an agent build.
+    # Default-scope fragments are not read for an agent build.
     assert ("default", "runtime.md") not in storage.reads
-    # Tools fragment is unset for the agent scope → tools block collapses.
     assert ("default", "tools.md") not in storage.reads
 
-
-def test_default_prompt_scope_preview_ignores_agent_custom_toggle(
-    workspace: Path, tmp_path: Path
-) -> None:
-    storage = StubStorage()
-    storage.set_agent_prompt_fragment("coder", "runtime.md", "## Custom Runtime")
-    manager = _manager(tmp_path, storage=storage)
-
-    prompt = manager.build_system_prompt(
-        _agent(workspace, custom_system_prompt_enabled=True),
-        scope={"type": "default"},
-    )
-
-    # Default scope uses bundled runtime, not the agent's custom fragment.
-    assert "## Custom Runtime" not in prompt
-    assert "test-os" in prompt
+    # A default-scope preview ignores the Agent's custom toggle.
+    default_scope_preview = manager.build_system_prompt(agent, scope={"type": "default"})
+    assert "## Custom Runtime" not in default_scope_preview
+    assert "test-os" in default_scope_preview

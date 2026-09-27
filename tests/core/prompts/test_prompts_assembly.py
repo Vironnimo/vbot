@@ -1,19 +1,23 @@
 """System Prompt assembly and core data-block tests."""
 
 import asyncio
+import logging
 import threading
+from datetime import UTC, datetime
+from pathlib import Path
 
-from core.utils.paths import model_path
+import pytest
 
-from .prompts_test_support import (
+from core.channels import ChannelConfig
+from core.memory import (
     MEMORY_PROMPT_MODE_AGENT,
     MEMORY_PROMPT_MODE_AGENT_USER,
     MEMORY_PROMPT_MODE_OFF,
-    SOUL_FRAMING,
-    ChannelConfig,
-    Path,
-    ProjectPromptContext,
-    PromptError,
+    MemoryPromptMode,
+)
+from core.prompts.prompts import SOUL_FRAMING, ProjectPromptContext, SystemPromptManager
+from core.utils.paths import model_path
+from tests.core.prompts.prompts_test_support import (
     StubChannels,
     StubSkill,
     StubSkills,
@@ -21,11 +25,19 @@ from .prompts_test_support import (
     StubTools,
     _agent,
     _manager,
-    logging,
-    pytest,
-    validate_workspace_include,
 )
-from .prompts_test_support import workspace as workspace
+from tests.core.prompts.prompts_test_support import workspace as workspace
+
+
+def _channel(channel_id: str, *, agent_id: str = "coder", enabled: bool = True) -> ChannelConfig:
+    return ChannelConfig(
+        id=channel_id,
+        platform="telegram",
+        agent_id=agent_id,
+        allowed_chat_ids=["111"],
+        token_env_var="TELEGRAM_BOT_TOKEN",
+        enabled=enabled,
+    )
 
 
 def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
@@ -38,30 +50,9 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     )
     channels = StubChannels(
         [
-            ChannelConfig(
-                id="tg-private",
-                platform="telegram",
-                agent_id="coder",
-                allowed_chat_ids=["8506476339"],
-                token_env_var="TELEGRAM_BOT_TOKEN",
-                enabled=True,
-            ),
-            ChannelConfig(
-                id="tg-group",
-                platform="telegram",
-                agent_id="coder",
-                allowed_chat_ids=["111", "222"],
-                token_env_var="TELEGRAM_GROUP_TOKEN",
-                enabled=True,
-            ),
-            ChannelConfig(
-                id="other-agent-channel",
-                platform="telegram",
-                agent_id="other-agent",
-                allowed_chat_ids=["333"],
-                token_env_var="OTHER_TOKEN",
-                enabled=True,
-            ),
+            _channel("tg-private"),
+            _channel("tg-group"),
+            _channel("other-agent-channel", agent_id="other-agent"),
         ]
     )
     manager = _manager(tmp_path, tools=tools, skills=skills, channels=channels)
@@ -71,7 +62,6 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
 
     # Runtime-owned values are expanded and preserved without pinning their prose labels.
     assert "test-host" in prompt
-
     assert "test-os" in prompt
     assert "0.1.0" in prompt
     assert model_path((tmp_path / "app").resolve()) in prompt
@@ -149,12 +139,37 @@ async def test_async_prompt_build_keeps_sync_assembly_off_event_loop(
     assert await build_task == "prompt"
 
 
+@pytest.mark.parametrize(
+    ("mode", "memory_files"),
+    [
+        (MEMORY_PROMPT_MODE_OFF, ()),
+        (MEMORY_PROMPT_MODE_AGENT, ("MEMORY.md",)),
+        (MEMORY_PROMPT_MODE_AGENT_USER, ("MEMORY.md", "USER.md")),
+    ],
+)
+def test_memory_mode_selects_the_rendered_and_reported_memory_files(
+    workspace: Path, tmp_path: Path, mode: MemoryPromptMode, memory_files: tuple[str, ...]
+) -> None:
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=mode)
+    read_paths: list[Path] = []
+
+    prompt = manager.build_system_prompt(agent, read_paths=read_paths)
+
+    # Collecting read paths is a pure side channel.
+    assert prompt == manager.build_system_prompt(agent)
+    assert "Soul text" in prompt
+    assert ("<memory>" in prompt) is bool(memory_files)
+    assert ("- Memory text" in prompt) is ("MEMORY.md" in memory_files)
+    assert ("- User text" in prompt) is ("USER.md" in memory_files)
+    # Every auto-injected file is reported so the chat loop can stamp it read-before-write.
+    assert set(read_paths) == {(workspace / name).resolve() for name in ("SOUL.md", *memory_files)}
+
+
 def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:
     # The guidance is the block's own text and the owner gate is "memory tool enabled",
-    # so the block appears whenever memory_prompt_mode != off. With lazy file ownership,
-    # not-yet-created files render their default "no entries" content (identical to an
-    # empty on-disk file), so the framing is present from the first turn — and rendering
-    # never creates the files.
+    # so the block appears whenever memory_prompt_mode != off. Not-yet-created files
+    # render like empty ones, and rendering never creates them.
     empty_workspace = tmp_path / "empty-ws"
     empty_workspace.mkdir()
     manager = _manager(tmp_path)
@@ -192,114 +207,81 @@ def test_memory_entries_and_skill_descriptions_are_never_expanded(
     assert '<file name="USER.md">' not in prompt
 
 
-def test_memory_block_absent_when_memory_off(workspace: Path, tmp_path: Path) -> None:
-    manager = _manager(tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    prompt = manager.build_system_prompt(agent)
-
-    assert "Soul text" in prompt  # SOUL still renders
-    assert "<memory>" not in prompt
-    assert "Memory text" not in prompt
-    assert "User text" not in prompt
-
-
-def test_memory_block_includes_only_agent_memory(workspace: Path, tmp_path: Path) -> None:
-    manager = _manager(tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
-
-    prompt = manager.build_system_prompt(agent)
-
-    assert "<memory>" in prompt
-    assert "- Memory text" in prompt
-    assert "User text" not in prompt
-
-
-def test_channel_less_agent_has_no_channels_block(workspace: Path, tmp_path: Path) -> None:
-    # Adapted from the old "renders - None" test: with no enabled Channels the whole
-    # block gates out (owner "channel"), it does not render "- None".
-    agent = _agent(workspace, allowed_tools=["read_file"])
-    without_channels = _manager(tmp_path, channels=StubChannels([])).build_system_prompt(agent)
-    with_channels = _manager(
-        tmp_path,
-        channels=StubChannels(
-            [
-                ChannelConfig(
-                    id="enabled-fixture-channel",
-                    platform="telegram",
-                    agent_id="coder",
-                    allowed_chat_ids=["1"],
-                    token_env_var="TOKEN",
-                    enabled=True,
-                )
-            ]
-        ),
-    ).build_system_prompt(agent)
-
-    assert without_channels != with_channels
-    assert "enabled-fixture-channel" not in without_channels
-    assert "enabled-fixture-channel" in with_channels
-
-
-def test_disabled_channel_does_not_enable_channels_block(
-    workspace: Path,
-    tmp_path: Path,
+@pytest.mark.parametrize("mode", [MEMORY_PROMPT_MODE_OFF, MEMORY_PROMPT_MODE_AGENT_USER])
+def test_agent_without_workspace_never_reads_server_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: MemoryPromptMode
 ) -> None:
-    channels = StubChannels(
-        [
-            ChannelConfig(
-                id="tg-disabled",
-                platform="telegram",
-                agent_id="coder",
-                allowed_chat_ids=["8506476339"],
-                token_env_var="TELEGRAM_BOT_TOKEN",
-                enabled=False,
-            )
-        ]
-    )
-    agent = _agent(workspace)
-    prompt = _manager(tmp_path, channels=channels).build_system_prompt(agent)
-    empty = _manager(tmp_path, channels=StubChannels([])).build_system_prompt(agent)
-
-    assert prompt == empty
-    assert "tg-disabled" not in prompt
-
-
-def test_channels_block_absent_without_channel_registry(workspace: Path, tmp_path: Path) -> None:
-    agent = _agent(workspace)
-
-    assert _manager(tmp_path, channels=None).build_system_prompt(agent) == _manager(
-        tmp_path, channels=StubChannels([])
-    ).build_system_prompt(agent)
-
-
-def test_soul_block_collapses_without_workspace_file(tmp_path: Path) -> None:
-    # A config agent has workspace "" → SOUL block collapses (gate 3); no decoy
-    # SOUL from the process CWD is read.
     manager = _manager(tmp_path)
-    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    monkeypatch.chdir(tmp_path)
+    for name in ("SOUL.md", "MEMORY.md", "USER.md"):
+        (tmp_path / name).write_text(f"- SERVER_{name}_SENTINEL", encoding="utf-8")
+    reads: list[Path] = []
+    read_paths: list[Path] = []
+    agent = _agent("", memory_prompt_mode=mode)
 
-    prompt = manager.build_system_prompt(agent)
+    assert manager.render_memory_files(agent, on_read=reads.append) == ""
+    prompt = manager.build_system_prompt(agent, read_paths=read_paths)
+
+    assert "SENTINEL" not in prompt
+    assert "<memory>" not in prompt
+    assert reads == []
+    assert read_paths == []
+
+
+def test_channels_block_renders_only_with_an_enabled_channel_of_this_agent(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # Without such a Channel the whole block gates out (owner "channel").
+    agent = _agent(workspace, allowed_tools=["read_file"])
+
+    def prompt(channels: StubChannels | None) -> str:
+        return _manager(tmp_path, channels=channels).build_system_prompt(agent)
+
+    empty = prompt(StubChannels([]))
+    assert prompt(None) == empty
+    assert prompt(StubChannels([_channel("tg-disabled", enabled=False)])) == empty
+    assert prompt(StubChannels([_channel("tg-other", agent_id="other-agent")])) == empty
+    assert "enabled-fixture-channel" in prompt(StubChannels([_channel("enabled-fixture-channel")]))
+
+
+def test_soul_block_frames_the_workspace_soul_file(workspace: Path, tmp_path: Path) -> None:
+    # SOUL is identity, not reference material: the framing line sits immediately above
+    # the file tag so the model reads it as its core contract.
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF, allowed_tools=[])
+
+    prompt = _manager(tmp_path).build_system_prompt(agent)
+
+    assert f'{SOUL_FRAMING}\n\n<file name="SOUL.md">\nSoul text\n</file>' in prompt
+
+
+@pytest.mark.parametrize("soul", ["no-workspace", "unreadable"])
+def test_soul_block_and_framing_gate_out_without_a_readable_soul(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, soul: str
+) -> None:
+    # A config Agent (workspace "") has no SOUL, and an unreadable SOUL never aborts
+    # the Run; the framing line never renders on its own.
+    workspace: str | Path = ""
+    if soul == "unreadable":
+        workspace = tmp_path / "ws"
+        (workspace / "SOUL.md").mkdir(parents=True)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF, allowed_tools=[])
+
+    with caplog.at_level(logging.WARNING):
+        prompt = _manager(tmp_path).build_system_prompt(agent)
 
     assert '<file name="SOUL.md">' not in prompt
+    assert SOUL_FRAMING not in prompt
+    if soul == "unreadable":
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
 
 
 def test_config_agent_body_renders_verbatim(tmp_path: Path) -> None:
-    manager = _manager(tmp_path)
-    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    prompt = manager.build_system_prompt(agent, agent_body="You are the orchestrator.")
-
-    assert "You are the orchestrator." in prompt
-
-
-def test_config_agent_body_with_braces_is_not_expanded(tmp_path: Path) -> None:
-    # Plan risk "Body-Wörtlichkeit": the agent body is a data block, never expanded —
-    # a "{...}" inside it (even a real vBot placeholder name) survives verbatim.
+    # The Agent body is a data block, never expanded: a "{...}" inside it (even a real
+    # vBot placeholder name) survives verbatim.
     manager = _manager(tmp_path)
     agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
     body = (
-        "Use {server_hostname} and {include:SOUL.md} and "
+        "You are the orchestrator. Use {server_hostname} and {include:SOUL.md} and "
         "{generated:tool_list} literally; also {custom}."
     )
 
@@ -308,36 +290,24 @@ def test_config_agent_body_with_braces_is_not_expanded(tmp_path: Path) -> None:
     assert body in prompt
 
 
-def test_legacy_identity_environment_placeholders_are_not_resolved(tmp_path: Path) -> None:
-    legacy = "Legacy {host} {app_version} {agent_workspace} {app_dir}"
-    storage = StubStorage(
-        {
-            "identity_runtime.md": legacy,
-            "runtime.md": "",
-        }
-    )
+@pytest.mark.parametrize(
+    ("fragment", "legacy", "identity"),
+    [
+        ("identity_runtime.md", "Legacy {host} {app_version} {agent_workspace} {app_dir}", True),
+        ("runtime.md", "Legacy {os} {current_date}", False),
+    ],
+)
+def test_legacy_environment_placeholders_are_not_resolved(
+    tmp_path: Path, fragment: str, legacy: str, identity: bool
+) -> None:
+    storage = StubStorage({"identity_runtime.md": "", "runtime.md": "", fragment: legacy})
     manager = _manager(tmp_path, storage=storage)
-    agent = _agent(tmp_path / "empty-workspace", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    prompt = manager.build_system_prompt(agent)
-
-    assert prompt == legacy
-
-
-def test_legacy_runtime_environment_placeholders_are_not_resolved(tmp_path: Path) -> None:
-    legacy = "Legacy {os} {current_date}"
-    storage = StubStorage(
-        {
-            "identity_runtime.md": "",
-            "runtime.md": legacy,
-        }
+    agent = _agent(
+        tmp_path / "empty-workspace" if identity else "",
+        memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
     )
-    manager = _manager(tmp_path, storage=storage)
-    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
 
-    prompt = manager.build_system_prompt(agent)
-
-    assert prompt == legacy
+    assert manager.build_system_prompt(agent) == legacy
 
 
 @pytest.mark.parametrize("thinking_effort", [None, ""])
@@ -361,6 +331,25 @@ def test_runtime_environment_renders_provider_default_thinking_effort(
     )
     assert prompt == manager.build_system_prompt(equivalent_agent)
     assert "{thinking_effort}" not in prompt
+
+
+def test_runtime_date_defaults_to_today_in_the_configured_time_zone(tmp_path: Path) -> None:
+    manager = SystemPromptManager(
+        StubStorage({"runtime.md": "{current_local_date} {timezone}"}),
+        StubTools(),
+        StubSkills([]),
+        vbot_version="0.1.0",
+        vbot_root=tmp_path,
+        data_root=tmp_path,
+        timezone_name=lambda: "UTC",
+    )
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    before = datetime.now(UTC).date().isoformat()
+    prompt = manager.build_system_prompt(agent)
+    after = datetime.now(UTC).date().isoformat()
+
+    assert prompt in {f"{before} UTC", f"{after} UTC"}
 
 
 def test_project_config_agent_receives_project_workspace_without_identity_runtime(
@@ -411,27 +400,43 @@ def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
     assert model_path(repo) in prompt
 
 
-def test_project_files_render_in_order_after_memory(workspace: Path, tmp_path: Path) -> None:
+def test_project_files_render_readable_files_after_memory_and_report_them(
+    workspace: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A missing, unreadable or non-UTF-8 auto-load file is dropped without aborting
+    # the Run and is not reported as read.
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
     (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
+    (repo / "ADIR").mkdir()
+    (repo / "BINARY.md").write_bytes(b"\xff\xfe\x00\x01 not utf-8")
     manager = _manager(tmp_path)
     agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
     context = ProjectPromptContext.from_project(
         "vbot",
         "vBot",
         repo,
-        ["AGENTS.md", "CONTEXT.md"],
+        ["AGENTS.md", "MISSING.md", "ADIR", "BINARY.md", "CONTEXT.md"],
     )
+    read_paths: list[Path] = []
 
-    prompt = manager.build_system_prompt(agent, project_context=context)
+    with caplog.at_level(logging.WARNING):
+        prompt = manager.build_system_prompt(agent, project_context=context, read_paths=read_paths)
 
     assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in prompt
     assert ' <file name="CONTEXT.md">\nProject context\n </file>' in prompt
+    assert '<file name="ADIR">' not in prompt
+    assert '<file name="BINARY.md">' not in prompt
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
     # Default layout: memory before Working Project; AGENTS.md before CONTEXT.md.
-    assert prompt.index("<memory>") < prompt.index("AGENTS.md")
-    assert prompt.index("AGENTS.md") < prompt.index("CONTEXT.md")
+    assert prompt.index("<memory>") < prompt.index("AGENTS.md") < prompt.index("CONTEXT.md")
+    assert set(read_paths) == {
+        (workspace / "SOUL.md").resolve(),
+        (workspace / "MEMORY.md").resolve(),
+        (repo / "AGENTS.md").resolve(),
+        (repo / "CONTEXT.md").resolve(),
+    }
 
 
 def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -> None:
@@ -527,78 +532,6 @@ def test_legacy_working_project_placeholders_are_not_resolved(tmp_path: Path) ->
     assert snapshot == legacy
 
 
-def test_project_files_collapse_without_context(workspace: Path, tmp_path: Path) -> None:
-    manager = _manager(tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
-
-    prompt = manager.build_system_prompt(agent, project_context=None)
-
-    # No project block; the identity content is unaffected.
-    assert "Soul text" in prompt
-    assert "<memory>" in prompt
-
-
-def test_build_system_prompt_reports_auto_injected_files_via_read_paths(
-    workspace: Path, tmp_path: Path
-) -> None:
-    # Every file whose content reaches the prompt — SOUL, the pinned-memory files,
-    # and the project's readable auto-load files — is reported so the chat loop can
-    # stamp it read-before-write. A configured-but-absent auto-load file is not.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
-    manager = _manager(tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
-    context = ProjectPromptContext.from_project(
-        "vbot",
-        "vBot",
-        repo,
-        ["AGENTS.md", "MISSING.md", "CONTEXT.md"],
-    )
-    read_paths: list[Path] = []
-
-    manager.build_system_prompt(agent, project_context=context, read_paths=read_paths)
-
-    assert set(read_paths) == {
-        (workspace / "SOUL.md").resolve(),
-        (workspace / "MEMORY.md").resolve(),
-        (workspace / "USER.md").resolve(),
-        (repo / "AGENTS.md").resolve(),
-        (repo / "CONTEXT.md").resolve(),
-    }
-
-
-def test_build_system_prompt_read_paths_stays_none_by_default(
-    workspace: Path, tmp_path: Path
-) -> None:
-    # Passing no read_paths (preview, tests) leaves the assembled text byte-identical
-    # to a build that collects them — the observer is a pure side channel.
-    manager = _manager(tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
-    read_paths: list[Path] = []
-
-    without_sink = manager.build_system_prompt(agent)
-    with_sink = manager.build_system_prompt(agent, read_paths=read_paths)
-
-    assert without_sink == with_sink
-    assert read_paths  # the observed build still collected the workspace files
-
-
-def test_build_system_prompt_read_paths_empty_for_off_memory_config_agent(
-    tmp_path: Path,
-) -> None:
-    # An empty-workspace config agent with memory off and no project reports nothing
-    # — nothing is auto-injected, and the empty workspace never resolves to Path(".").
-    manager = _manager(tmp_path)
-    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    read_paths: list[Path] = []
-
-    manager.build_system_prompt(agent, project_context=None, read_paths=read_paths)
-
-    assert read_paths == []
-
-
 def test_render_project_files_one_source_for_reminder_and_prompt(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -612,113 +545,3 @@ def test_render_project_files_one_source_for_reminder_and_prompt(tmp_path: Path)
 
     assert rendered == '<file name="AGENTS.md">\nTeam rules\n</file>'
     assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in in_prompt
-
-
-def test_project_files_never_abort_run_on_unreadable_file(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "GOOD.md").write_text("Good doc", encoding="utf-8")
-    (repo / "ADIR").mkdir()
-    (repo / "BINARY.md").write_bytes(b"\xff\xfe\x00\x01 not utf-8")
-    manager = _manager(tmp_path)
-    agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(
-        "vbot",
-        "vBot",
-        repo,
-        ["ADIR", "BINARY.md", "GOOD.md"],
-    )
-
-    with caplog.at_level(logging.WARNING):
-        prompt = manager.build_system_prompt(agent, project_context=context)
-
-    assert ' <file name="GOOD.md">\nGood doc\n </file>' in prompt
-    assert '<file name="ADIR">' not in prompt
-    assert '<file name="BINARY.md">' not in prompt
-    assert any(record.levelno == logging.WARNING for record in caplog.records)
-
-
-@pytest.mark.parametrize("filename", ["SOUL.md", "CUSTOM.md", "my-notes.txt", "notes.json"])
-def test_validate_workspace_include_accepts_safe_flat_filenames(filename: str) -> None:
-    validate_workspace_include(filename)  # should not raise
-
-
-@pytest.mark.parametrize(
-    "filename",
-    ["../foo", "foo/bar", "/etc/passwd", "C:\\Windows\\system32\\cmd.exe"],
-)
-def test_validate_workspace_include_rejects_unsafe_paths(filename: str) -> None:
-    with pytest.raises(PromptError):
-        validate_workspace_include(filename)
-
-
-def test_soul_block_wraps_content_in_xml_file_tag(workspace: Path, tmp_path: Path) -> None:
-    manager = _manager(tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF, allowed_tools=[])
-
-    prompt = manager.build_system_prompt(agent)
-
-    assert '<file name="SOUL.md">\nSoul text\n</file>' in prompt
-
-
-def test_soul_block_prefixes_identity_framing_above_file_tag(
-    workspace: Path, tmp_path: Path
-) -> None:
-    # SOUL is identity, not reference material: the framing line names it as such and
-    # sits immediately above the file tag so the model reads it as its core contract.
-    manager = _manager(tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF, allowed_tools=[])
-
-    prompt = manager.build_system_prompt(agent)
-
-    assert f'{SOUL_FRAMING}\n\n<file name="SOUL.md">\nSoul text\n</file>' in prompt
-
-
-def test_soul_framing_absent_when_block_gates_out(tmp_path: Path) -> None:
-    # A config agent (workspace "") has no SOUL: the framing line must never render on
-    # its own — it renders only as a prefix to a present SOUL, so it gates out with it.
-    manager = _manager(tmp_path)
-    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF, allowed_tools=[])
-
-    prompt = manager.build_system_prompt(agent)
-
-    assert '<file name="SOUL.md">' not in prompt
-    assert SOUL_FRAMING not in prompt
-
-
-def test_soul_block_never_aborts_run_on_unreadable_file(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    (ws / "SOUL.md").mkdir()  # a directory where the file is expected
-    manager = _manager(tmp_path)
-    agent = _agent(ws, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-
-    with caplog.at_level(logging.WARNING):
-        prompt = manager.build_system_prompt(agent)
-
-    assert '<file name="SOUL.md">' not in prompt
-    assert any(record.levelno == logging.WARNING for record in caplog.records)
-
-
-@pytest.mark.parametrize("mode", [MEMORY_PROMPT_MODE_AGENT, MEMORY_PROMPT_MODE_AGENT_USER])
-def test_memory_without_workspace_never_reads_server_cwd(tmp_path, monkeypatch, mode):
-    manager = _manager(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "MEMORY.md").write_text("- SERVER_MEMORY_SENTINEL", encoding="utf-8")
-    (tmp_path / "USER.md").write_text("- SERVER_USER_SENTINEL", encoding="utf-8")
-    reads = []
-    agent = _agent("", memory_prompt_mode=mode)
-
-    assert manager.render_memory_files(agent, on_read=reads.append) == ""
-    prompt = manager.build_system_prompt(agent)
-
-    assert "SERVER_MEMORY_SENTINEL" not in prompt
-    assert "SERVER_USER_SENTINEL" not in prompt
-    assert "<memory>" not in prompt
-    assert reads == []

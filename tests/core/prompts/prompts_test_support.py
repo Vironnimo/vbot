@@ -1,6 +1,5 @@
-"""Shared stubs, fixtures, and dependencies for System Prompt tests."""
+"""Shared stubs and builders for System Prompt tests."""
 
-import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,27 +10,9 @@ import pytest
 
 from core.agents.agents import Agent
 from core.channels import ChannelConfig
-from core.memory import (
-    MEMORY_PROMPT_MODE_AGENT,
-    MEMORY_PROMPT_MODE_AGENT_USER,
-    MEMORY_PROMPT_MODE_OFF,
-    MemoryPromptMode,
-)
-from core.prompts.blocks import (
-    BlockDefinition,
-    LayoutEntry,
-    validate_workspace_include,
-)
-from core.prompts.prompts import (
-    SOUL_FRAMING,
-    PinnedSkillCatalog,
-    ProjectPromptContext,
-    PromptAgent,
-    PromptError,
-    SkillPromptMetadata,
-    SystemPromptManager,
-)
-from core.tools import HISTORY_TOOL_NAME, ToolRegistry, tool_success
+from core.memory import MEMORY_PROMPT_MODE_AGENT_USER, MemoryPromptMode
+from core.prompts.blocks import BlockDefinition, LayoutEntry
+from core.prompts.prompts import PromptAgent, SkillPromptMetadata, SystemPromptManager
 from core.tools.availability import ToolAccess
 
 _RESOURCES_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "resources" / "prompts"
@@ -47,6 +28,18 @@ _CORE_FRAGMENT_NAMES = (
     "skill_maintenance.md",
 )
 
+# (name, description, activation, constraints) of the registered stub Tools.
+_STUB_TOOLS = (
+    ("read_file", "Read a workspace file", "configurable", ()),
+    ("shell", "Run a shell command", "configurable", ()),
+    ("memory", "Manage pinned memory", "memory_mode", ("identity_agent",)),
+    ("skill", "Load a skill", "configurable", ()),
+    ("skill_manage", "Author a skill", "configurable", ("identity_agent",)),
+    ("session_read", "Read a Session", "follows", ()),
+    ("session_search", "Search Sessions", "configurable", ()),
+    ("history", "Read compacted history", "session_grant", ()),
+)
+
 
 @dataclass(frozen=True)
 class StubSkill:
@@ -58,14 +51,20 @@ class StubSkill:
 class StubStorage:
     """Storage stub returning the real bundled resource fragments by default.
 
-    The core text blocks read their default text through ``read_prompt_fragment``;
-    seeding it with the real ``resources/prompts/*.md`` exercises the production
-    block texts. Agent-scope fragments default to ``""`` (no default fallback),
-    matching the real storage contract.
+    Seeding ``read_prompt_fragment`` with the real ``resources/prompts/*.md`` exercises
+    the production block texts. Agent-scope fragments default to ``""`` (no default
+    fallback), matching the real storage contract.
     """
 
     def __init__(self, fragments: dict[str, str] | None = None) -> None:
-        self._fragments = fragments if fragments is not None else _real_fragments()
+        self._fragments = (
+            fragments
+            if fragments is not None
+            else {
+                name: (_RESOURCES_PROMPTS_DIR / name).read_text(encoding="utf-8")
+                for name in _CORE_FRAGMENT_NAMES
+            }
+        )
         self._agent_fragments: dict[tuple[str, str], str] = {}
         self.reads: list[tuple[str, str]] = []
 
@@ -93,9 +92,9 @@ class StubAgentStore:
 
 
 class StubTools:
+    """Tool registry stub recording the allow-lists and profiles it was asked for."""
+
     def __init__(self) -> None:
-        self.prompt_allowlist: list[str] | None = None
-        self.provider_allowlist: list[str] | None = None
         self.prompt_allowlist_calls: list[list[str] | None] = []
         self.provider_allowlist_calls: list[list[str] | None] = []
         self.prompt_profile_agent_ids: list[str | None] = []
@@ -104,54 +103,13 @@ class StubTools:
     def list_tools(self) -> list[Any]:
         return [
             SimpleNamespace(
-                name="read_file",
+                name=name,
                 internal=False,
-                activation="configurable",
-                constraints=(),
-            ),
-            SimpleNamespace(
-                name="shell",
-                internal=False,
-                activation="configurable",
-                constraints=(),
-            ),
-            SimpleNamespace(
-                name="memory",
-                internal=False,
-                activation="memory_mode",
-                constraints=("identity_agent",),
-            ),
-            SimpleNamespace(
-                name="skill",
-                internal=False,
-                activation="configurable",
-                constraints=(),
-            ),
-            SimpleNamespace(
-                name="skill_manage",
-                internal=False,
-                activation="configurable",
-                constraints=("identity_agent",),
-            ),
-            SimpleNamespace(
-                name="session_read",
-                internal=False,
-                activation="follows",
-                activation_source="session_search",
-                constraints=(),
-            ),
-            SimpleNamespace(
-                name="session_search",
-                internal=False,
-                activation="configurable",
-                constraints=(),
-            ),
-            SimpleNamespace(
-                name="history",
-                internal=False,
-                activation="session_grant",
-                constraints=(),
-            ),
+                activation=activation,
+                activation_source="session_search" if activation == "follows" else None,
+                constraints=constraints,
+            )
+            for name, _description, activation, constraints in _STUB_TOOLS
         ]
 
     def prompt_definitions(
@@ -162,24 +120,9 @@ class StubTools:
         session_grants: Sequence[str] = (),
         profile_context: Any | None = None,
     ) -> list[dict[str, Any]]:
-        self.prompt_allowlist = list(allowed_tools) if allowed_tools is not None else None
-        self.prompt_allowlist_calls.append(self.prompt_allowlist)
+        self.prompt_allowlist_calls.append(_listed(allowed_tools))
         self.prompt_profile_agent_ids.append(getattr(profile_context, "agent_id", None))
-        # skill / skill_manage are ordinary registered tools, so the real registry
-        # lists them in the prompt surface too (both prompt and provider definitions
-        # build from one ``list_tools``). Gate 2 for a ``tool:<name>``-owned block
-        # reads through this surface, so it must carry them for parity.
-        tools = [
-            {"name": "read_file", "description": "Read a workspace file"},
-            {"name": "shell", "description": "Run a shell command"},
-            {"name": "memory", "description": "Manage pinned memory"},
-            {"name": "skill", "description": "Load a skill"},
-            {"name": "skill_manage", "description": "Author a skill"},
-            {"name": "session_read", "description": "Read a Session"},
-            {"name": "session_search", "description": "Search Sessions"},
-            {"name": "history", "description": "Read compacted history"},
-        ]
-        return _filter_by_allowlist(tools, allowed_tools)
+        return _definitions(allowed_tools, with_parameters=False)
 
     def provider_definitions(
         self,
@@ -189,52 +132,9 @@ class StubTools:
         session_grants: Sequence[str] = (),
         profile_context: Any | None = None,
     ) -> list[dict[str, Any]]:
-        self.provider_allowlist = list(allowed_tools) if allowed_tools is not None else None
-        self.provider_allowlist_calls.append(self.provider_allowlist)
+        self.provider_allowlist_calls.append(_listed(allowed_tools))
         self.provider_profile_agent_ids.append(getattr(profile_context, "agent_id", None))
-        tools = [
-            {
-                "name": "read_file",
-                "description": "Read a workspace file",
-                "parameters": {"type": "object"},
-            },
-            {
-                "name": "shell",
-                "description": "Run a shell command",
-                "parameters": {"type": "object"},
-            },
-            {
-                "name": "memory",
-                "description": "Manage pinned memory",
-                "parameters": {"type": "object"},
-            },
-            {
-                "name": "skill",
-                "description": "Load a skill",
-                "parameters": {"type": "object"},
-            },
-            {
-                "name": "skill_manage",
-                "description": "Author a skill",
-                "parameters": {"type": "object"},
-            },
-            {
-                "name": "session_read",
-                "description": "Read a Session",
-                "parameters": {"type": "object"},
-            },
-            {
-                "name": "session_search",
-                "description": "Search Sessions",
-                "parameters": {"type": "object"},
-            },
-            {
-                "name": "history",
-                "description": "Read compacted history",
-                "parameters": {"type": "object"},
-            },
-        ]
-        return _filter_by_allowlist(tools, allowed_tools)
+        return _definitions(allowed_tools, with_parameters=True)
 
 
 class StubSkills:
@@ -257,60 +157,11 @@ class StubChannels:
         return list(self._channels)
 
 
-def _real_fragments() -> dict[str, str]:
-    return {
-        name: (_RESOURCES_PROMPTS_DIR / name).read_text(encoding="utf-8")
-        for name in _CORE_FRAGMENT_NAMES
-    }
-
-
-@pytest.fixture
-def workspace(tmp_path: Path) -> Path:
-    directory = tmp_path / "workspace"
-    directory.mkdir()
-    (directory / "SOUL.md").write_text("Soul text", encoding="utf-8")
-    (directory / "MEMORY.md").write_text("- Memory text\n", encoding="utf-8")
-    (directory / "USER.md").write_text("- User text\n", encoding="utf-8")
-    return directory
-
-
-def _manager(
-    tmp_path: Path,
-    *,
-    storage: StubStorage | None = None,
-    tools: Any | None = None,
-    skills: StubSkills | None = None,
-    channels: StubChannels | None = None,
-    block_definitions: Sequence[BlockDefinition] = (),
-    loaded_extensions: Sequence[str] = (),
-    server_hostname: str = "test-host",
-    operating_system: str = "test-os",
-    current_local_date: str = "2026-05-04",
-) -> SystemPromptManager:
-    return SystemPromptManager(
-        storage or StubStorage(),
-        tools or StubTools(),
-        skills or StubSkills([]),
-        channel_registry=channels,
-        vbot_version="0.1.0",
-        vbot_root=tmp_path / "app",
-        data_root=tmp_path / "data",
-        server_hostname=server_hostname,
-        operating_system=operating_system,
-        current_local_date=lambda: current_local_date,
-        timezone_name=lambda: "Europe/Berlin",
-        block_definitions=block_definitions,
-        loaded_extensions=loaded_extensions,
-    )
-
-
 class StubBlockStore:
-    """A BlockStore stub: a per-scope layout + per-(scope, id) override map.
+    """An in-memory BlockStore: a per-scope layout and a per-(scope, id) override map.
 
-    Implements the full read **and** write surface in memory so the block-edit
-    facade (update/reset/set_layout/create/remove/reset_layout) can be unit-tested
-    without the on-disk store. The write side keeps the same scope-key convention
-    the manager uses (``"default"`` / ``"agent:<id>"``).
+    Implements the read and write surface the block-edit facade uses, with the
+    manager's scope keys (``"default"`` / ``"agent:<id>"``).
     """
 
     def __init__(
@@ -352,26 +203,59 @@ class StubBlockStore:
         return self._overrides.pop((scope, block_id), None) is not None
 
 
-def _facade_manager(
+@pytest.fixture
+def workspace(tmp_path: Path) -> Path:
+    directory = tmp_path / "workspace"
+    directory.mkdir()
+    (directory / "SOUL.md").write_text("Soul text", encoding="utf-8")
+    (directory / "MEMORY.md").write_text("- Memory text\n", encoding="utf-8")
+    (directory / "USER.md").write_text("- User text\n", encoding="utf-8")
+    return directory
+
+
+def _manager(
     tmp_path: Path,
     *,
-    store: StubBlockStore | None = None,
+    storage: StubStorage | None = None,
+    tools: Any | None = None,
+    skills: StubSkills | None = None,
+    channels: StubChannels | None = None,
+    block_store: Any | None = None,
     agents: list[PromptAgent] | None = None,
+    block_definitions: Sequence[BlockDefinition] = (),
+    loaded_extensions: Sequence[str] = (),
 ) -> SystemPromptManager:
-    """A manager wired with the block store + agent store the edit facade needs."""
     return SystemPromptManager(
-        StubStorage(),
-        StubTools(),
-        StubSkills([StubSkill("agent-cli", "Delegate")]),
+        storage or StubStorage(),
+        tools or StubTools(),
+        skills or StubSkills([]),
+        channel_registry=channels,
         vbot_version="0.1.0",
         vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
-        server_hostname="h",
-        operating_system="o",
+        server_hostname="test-host",
+        operating_system="test-os",
         current_local_date=lambda: "2026-05-04",
         timezone_name=lambda: "Europe/Berlin",
-        block_store=store or StubBlockStore(),
+        block_definitions=block_definitions,
+        loaded_extensions=loaded_extensions,
+        block_store=block_store,
         agent_store=StubAgentStore(agents) if agents is not None else None,
+    )
+
+
+def _facade_manager(
+    tmp_path: Path,
+    *,
+    store: Any | None = None,
+    agents: list[PromptAgent] | None = None,
+) -> SystemPromptManager:
+    """A manager wired with the block store and Agent store the edit facade needs."""
+    return _manager(
+        tmp_path,
+        skills=StubSkills([StubSkill("agent-cli", "Delegate")]),
+        block_store=store or StubBlockStore(),
+        agents=agents,
     )
 
 
@@ -408,54 +292,21 @@ def _agent(
     )
 
 
-def _filter_by_allowlist(
-    definitions: list[dict[str, Any]],
-    allowlist: Sequence[str] | None,
+def _listed(allowed_tools: Sequence[str] | None) -> list[str] | None:
+    return list(allowed_tools) if allowed_tools is not None else None
+
+
+def _definitions(
+    allowed_tools: Sequence[str] | None, *, with_parameters: bool
 ) -> list[dict[str, Any]]:
-    if allowlist is None or "*" in allowlist:
-        return definitions
-    return [definition for definition in definitions if definition["name"] in allowlist]
-
-
-__all__ = [
-    "logging",
-    "Sequence",
-    "dataclass",
-    "Path",
-    "Any",
-    "pytest",
-    "Agent",
-    "ChannelConfig",
-    "MEMORY_PROMPT_MODE_AGENT",
-    "MEMORY_PROMPT_MODE_AGENT_USER",
-    "MEMORY_PROMPT_MODE_OFF",
-    "MemoryPromptMode",
-    "BlockDefinition",
-    "LayoutEntry",
-    "validate_workspace_include",
-    "SOUL_FRAMING",
-    "PinnedSkillCatalog",
-    "ProjectPromptContext",
-    "PromptAgent",
-    "PromptError",
-    "SkillPromptMetadata",
-    "SystemPromptManager",
-    "HISTORY_TOOL_NAME",
-    "ToolRegistry",
-    "tool_success",
-    "_RESOURCES_PROMPTS_DIR",
-    "_CORE_FRAGMENT_NAMES",
-    "StubSkill",
-    "StubStorage",
-    "StubAgentStore",
-    "StubTools",
-    "StubSkills",
-    "StubChannels",
-    "_real_fragments",
-    "workspace",
-    "_manager",
-    "StubBlockStore",
-    "_facade_manager",
-    "_agent",
-    "_filter_by_allowlist",
-]
+    # skill / skill_manage are ordinary registered Tools, so both surfaces list them;
+    # gate 2 of a ``tool:<name>``-owned block reads through the prompt surface.
+    definitions: list[dict[str, Any]] = []
+    for name, description, _activation, _constraints in _STUB_TOOLS:
+        if allowed_tools is not None and "*" not in allowed_tools and name not in allowed_tools:
+            continue
+        definition: dict[str, Any] = {"name": name, "description": description}
+        if with_parameters:
+            definition["parameters"] = {"type": "object"}
+        definitions.append(definition)
+    return definitions
