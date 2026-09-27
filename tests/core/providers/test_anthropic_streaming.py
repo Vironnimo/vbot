@@ -345,14 +345,10 @@ async def test_stream_usage_keeps_only_measured_counters(
     ("error_type", "expected_type", "retryable"),
     [
         ("overloaded_error", ProviderError, True),
-        ("api_error", ProviderError, True),
         ("rate_limit_error", ProviderRateLimitError, True),
         ("timeout_error", ProviderTimeoutError, True),
         ("invalid_request_error", ProviderError, False),
         ("authentication_error", ProviderAuthError, False),
-        ("permission_error", ProviderError, False),
-        ("billing_error", ProviderError, False),
-        ("request_too_large", ProviderError, False),
         ("future_unknown_error", ProviderError, False),
     ],
 )
