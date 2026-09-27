@@ -15,57 +15,7 @@ from tests.core.automation.cron_test_support import (
 
 
 @pytest.mark.asyncio
-async def test_run_cron_job_fires_and_updates_last_fired_at(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Arrange
-    service, trigger_service = make_service(tmp_path)
-    job = service.create_job(
-        agent_id="agent-one",
-        prompt="Cron prompt",
-        schedule_type="cron",
-        cron_expression="* * * * *",
-    )
-
-    monkeypatch.setattr(
-        "core.automation._cron_timing._sleep_until_utc", AsyncMock(return_value=True)
-    )
-
-    async def trigger_and_pause(
-        _agent_id: str,
-        _prompt: str,
-        _session_id: str | None = None,
-        *,
-        project_id: str | None = None,
-        run_kind: RunKind,
-        contributes_to_agent_activity: bool,
-    ) -> None:
-        assert run_kind is RunKind.CRON
-        assert contributes_to_agent_activity is False
-        service._jobs[job.id].status = "paused"
-
-    trigger_service.trigger_run.side_effect = trigger_and_pause
-
-    # Act
-    await service._run_cron_job(job)
-
-    # Assert
-    trigger_service.trigger_run.assert_awaited_once_with(
-        "agent-one",
-        "Cron prompt",
-        None,
-        project_id=None,
-        run_kind=RunKind.CRON,
-        contributes_to_agent_activity=False,
-    )
-    updated = service.get_job(job.id)
-    assert updated.last_fired_at is not None
-    assert updated.last_fired_at.endswith("+00:00")
-
-
-@pytest.mark.asyncio
-async def test_run_cron_job_continues_after_trigger_failure(
+async def test_run_cron_job_fires_and_continues_after_trigger_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -104,6 +54,14 @@ async def test_run_cron_job_continues_after_trigger_failure(
 
     # Assert
     assert trigger_service.trigger_run.await_count == 2
+    trigger_service.trigger_run.assert_awaited_with(
+        "agent-one",
+        "Cron prompt",
+        None,
+        project_id=None,
+        run_kind=RunKind.CRON,
+        contributes_to_agent_activity=False,
+    )
     updated = service.get_job(job.id)
     assert updated.status == "paused"
     assert updated.last_fired_at is not None
