@@ -224,8 +224,9 @@ class TestOtherShapes:
     @pytest.mark.asyncio
     async def test_question_spellings_and_label_lists(self, tmp_path):
         tool = Evaluate(tmp_path)
+        fix = "Fix the crash first: it is small, confirmed three times and blocks " + "x" * 80
 
-        result, _text = await tool.call(
+        result, text = await tool.call(
             {
                 "state": {"title": "Crash on start"},
                 "questions": [
@@ -241,11 +242,19 @@ class TestOtherShapes:
                         "prompt": "How severe?",
                         "levels": {"0": "Cosmetic", "1": "Annoying", "2": "Blocking"},
                     },
+                    # Session shape: option texts too long to be labels.
+                    {
+                        "id": "next",
+                        "type": "choice",
+                        "instructions": "What comes next?",
+                        "criteria": [fix, "Release it as it is"],
+                    },
                 ],
             }
         )
 
         assert result["ok"] is True
+        assert text.endswith(f"\nnext: 1 '{fix[:77]}...' (confidence 0.9; 1 0.9, 2 0.1)")
         assert tool.received[0][1] == [
             {
                 "id": "kind",
@@ -258,6 +267,12 @@ class TestOtherShapes:
                 "type": "score",
                 "instructions": "How severe?",
                 "criteria": ["Cosmetic", "Annoying", "Blocking"],
+            },
+            {
+                "id": "next",
+                "type": "choice",
+                "instructions": "What comes next?",
+                "criteria": {"1": fix, "2": "Release it as it is"},
             },
         ]
 

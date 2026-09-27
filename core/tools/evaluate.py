@@ -138,9 +138,19 @@ def _result_data(questions: list[Any], result: dict[str, Any]) -> dict[str, Any]
         for question in questions
         if isinstance(question, dict) and question.get("type") == "score"
     }
+    # Options numbered from 1 carry their meaning only in the criteria; the
+    # answer quotes the chosen one, so the number needs no lookup.
+    numbered = {
+        question["id"]: question["criteria"]
+        for question in questions
+        if isinstance(question, dict)
+        and question.get("type") == "choice"
+        and list(question.get("criteria") or ())
+        == [str(number) for number in range(1, len(question["criteria"]) + 1)]
+    }
     lines = [
-        f"{identifier}: {_answer_text(answer, levels.get(identifier))}"
-        for identifier, answer in answers.items()
+        f"{key}: {_answer_text(answer, levels.get(key), numbered.get(key))}"
+        for key, answer in answers.items()
     ]
     return {
         "model": result["model"],
@@ -149,12 +159,18 @@ def _result_data(questions: list[Any], result: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def _answer_text(answer: dict[str, Any], levels: int | None) -> str:
+def _answer_text(
+    answer: dict[str, Any], levels: int | None, options: dict[str, Any] | None = None
+) -> str:
     kind = answer["type"]
     if kind == "noul":
         return f"probability of yes {_number(answer['noul'])}"
     if kind == "choice":
         text = str(answer["choice"])
+        if options and text in options:
+            option = str(options[text])
+            shown = option if len(option) <= 80 else option[:77] + "..."
+            text += f" {shown!r}"
     else:
         top = f" on levels 0-{levels - 1}" if levels else ""
         text = f"level {_number(answer['score'])}{top}"

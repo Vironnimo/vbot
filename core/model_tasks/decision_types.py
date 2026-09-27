@@ -8,6 +8,9 @@ from typing import Any, cast
 
 from core.utils.errors import TaskError
 
+# The most characters a choice label (a key of choice criteria) has.
+CHOICE_LABEL_LIMIT = 128
+
 
 class DecisionError(TaskError):
     """An expected decision operation failure with a stable public code."""
@@ -63,8 +66,8 @@ def validate_input(state: Any, questions: Any) -> tuple[Any, list[dict[str, Any]
                     f"Question {identifier}: choice needs at least two named criteria."
                 )
             for key, description in criteria.items():
-                text(key, "Choice id", maximum=128)
-                text(description, "Choice description")
+                text(key, f"Question {identifier}: a choice label", maximum=CHOICE_LABEL_LIMIT)
+                text(description, f"Question {identifier}: a choice description")
         elif kind == "score":
             if not isinstance(criteria, list) or not criteria:
                 raise DecisionError(

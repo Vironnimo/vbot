@@ -3,7 +3,8 @@
 Models write judgment questions in several shapes: the Decisions wire's map of id to
 question, one question object or bare text instead of a list, question fields at the
 top level, ``question``/``prompt`` for the instructions, ``options``/``labels`` for
-choice criteria, ``yes_no``/``boolean`` for noul, and ``yes``/``no`` noul criteria.
+choice criteria, a list of choice option texts too long for labels (numbered from 1),
+``yes_no``/``boolean`` for noul, and ``yes``/``no`` noul criteria.
 This owner maps them onto the canonical call. It never infers a question type or
 shifts score levels: when readings would differ, it refuses before the Provider is
 called and shows the corrected question.
@@ -15,6 +16,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from core.model_tasks.decision_types import CHOICE_LABEL_LIMIT
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools._call_vocabulary import SpellingAliases, is_placeholder, spelling
 from core.tools.contracts import ToolContract, ToolContractError
@@ -215,6 +217,11 @@ def _criteria(kind: Any, criteria: Any) -> Any:
     if is_placeholder(criteria) or criteria in ([], {}):
         return None
     if kind == "choice" and isinstance(criteria, list):
+        if all(isinstance(entry, str) for entry in criteria) and any(
+            len(entry) > CHOICE_LABEL_LIMIT for entry in criteria
+        ):
+            # Texts too long for labels are the options themselves: number them.
+            return {str(number): entry for number, entry in enumerate(criteria, 1)}
         labels: dict[str, Any] = {}
         for entry in criteria:
             if isinstance(entry, str):
