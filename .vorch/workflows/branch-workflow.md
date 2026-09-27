@@ -30,7 +30,7 @@ git commit -m "<type>(<scope>): <what this phase accomplished>"
 
 ## Merge & Finalize
 
-Run all quality gates from `.vorch/PROJECT.md` against the full repo. Everything must be green before merging.
+Run the tests affected by the branch (`AGENTS.md` -> Testing); they must pass before merging. CI runs the complete suite after the push.
 
 ```bash
 git checkout main

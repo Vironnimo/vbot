@@ -104,11 +104,12 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 ```bash
 pip install -e ".[dev]"
 python -m cli.search_runtime
+git config core.hooksPath .githooks   # once per clone; worktrees share it
 ```
 Use the current interpreter; do not assume a virtual environment for installs, gates, or runtime commands. Before editing installer/uninstall scripts in `scripts/`, read [USAGE.md](../USAGE.md#installation) for end-user installation/update/removal.
 The development extra includes the native tray dependency on Windows so fresh local and CI environments can run its platform-specific tests. `cli.search_runtime` provisions the private, digest-locked ripgrep/PCRE2 executable; setup, update, worktree creation, CI, and server application packaging perform this step. Tool calls never download an executable or fall back to a host-installed search engine.
 
-**Worktrees:** `python scripts/worktree.py create|list|merge|delete <task-name>`; also `repair-start|repair-finish`. `create` reports path, ports, data dir, URL; it reserves `dev` and refuses an existing data root. Cleanup stops services and removes data only with matching ownership records; older worktrees keep their unverified data, reported in the output. Non-force `delete` fails closed on Git removal errors unless `git worktree list` confirms deregistration; a leftover directory without `.git` holds no work, so both modes finish it (branch read from Git's registration). `delete --force` discards uncommitted work. `merge` lands the task branch on `main` and removes the worktree, with a merge lock and protected conflict-repair window. The agent must pass quality gates before merging; this tool never runs them. On failure/unexpected behavior, read `scripts/README-worktree.md`.
+**Worktrees:** `python scripts/worktree.py create|list|merge|delete <task-name>`; also `repair-start|repair-finish`. `create` reports path, ports, data dir, URL; it reserves `dev` and refuses an existing data root. Cleanup stops services and removes data only with matching ownership records; older worktrees keep their unverified data, reported in the output. Non-force `delete` fails closed on Git removal errors unless `git worktree list` confirms deregistration; a leftover directory without `.git` holds no work, so both modes finish it (branch read from Git's registration). `delete --force` discards uncommitted work. `merge` lands the task branch on `main` and removes the worktree, with a merge lock and protected conflict-repair window. The agent runs the affected tests before merging; this tool never runs tests. On failure/unexpected behavior, read `scripts/README-worktree.md`.
 
 **Dependencies:** `pyproject.toml` groups include `server`, `cli`, `windows-app`, `desktop`, `local-speech`, `local-tts`, and `dev`; frontend: `webui/package.json`. `desktop` carries the pywebview shell and the on-device Voice stack, including echo cancellation (`livekit`, Windows-only `PyAudioWPatch`); see `desktop.md` -> External Dependencies. A change to the base dependencies or the `server`, `cli`, `windows-app`, or `desktop` extras also regenerates the hashed Windows runtime locks (`scripts/windows/requirements.md`). `core/model_tasks/speech_setup.py` owns optional speech setup. Packaged Windows STT/TTS use managed user-data environments and child workers; source-checkout STT retains its server-interpreter recipe. No optional setup mutates a packaged release. `psutil` provides verified process-tree cleanup and server restart support. `sniffio` is a direct dependency although vBot never imports it: httpcore probes it on every connection and stream, and without it each probe pays a failed import and `sys.path` scan (~0.4 ms of GIL time). See `model_tasks/speech.md` and `USAGE.md` -> Local speech recognition / synthesis.
 
@@ -122,7 +123,7 @@ A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`. Insta
 
 **Data store:** Live operator-safe health of every canonical database: `python cli/main.py data-store status|snapshot|incident|unregister`; `snapshot restore` requires a proven-stopped target, and `unregister` releases a removed Extension's database. Session Runs, Messages, Tool invocations/results and checkpoints are stored relationally in `sessions.db`. A data directory from before Generation 1 (the 0.4.x releases, `~/.vbot-dev` included) is converted once, offline, with `python -m scripts.converters.persistence_generation_1 <data-dir> [--dry-run]`; procedure, `pre-generation-1/` and interruption: `database/generation-1-conversion.md`.
 
-**Frontend build:** `cd webui && npm ci && npm run build`. Also compiles bundled Extension `ui/page.html` entries to relative `web/` assets via `webui/scripts/build-extension-pages.mjs`; installers ship assets and Extension sources. The frontend gate covers these external source/test paths with the shared dependency tree.
+**Frontend build:** `cd webui && npm ci && npm run build`. Also compiles bundled Extension `ui/page.html` entries to relative `web/` assets via `webui/scripts/build-extension-pages.mjs`; installers ship assets and Extension sources. `npm run format`/`format:check`/`lint` and the commit hook cover these external sources with the shared dependency tree.
 
 **Release:** Read `.vorch/workflows/release-workflow.md` when the user requests a release.
 
@@ -136,17 +137,23 @@ Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsd
 
 **Event Loop isolation:** Async tests and fixtures on a worker share one session-scoped Event Loop, so a task a test leaves behind keeps running during later tests. Close every `Runtime` started inside a test's Event Loop with `await runtime.aclose()`; the root `tests/conftest.py` fails a test that leaves one running. Never patch the process-wide `asyncio.sleep`: a module whose waits tests skip exposes a module-local `_sleep` seam (for example `core.utils.retry._sleep`), and tests patch that seam.
 
-**Quality gates:** `scripts/quality.py` (backend) and `scripts/quality-frontend.py` share format -> lint -> type-check -> test, scoped by paths or full with none. Use `--check` for non-mutating development/CI feedback; before commits use scoped auto-fix mode and keep every fix, so tests cover the fixed code. Include affected callers/tests explicitly; mapping misses cross-domain dependencies. Use full gates for broad or unscopable effects. Frontend pre-commit requires `--build`: whole WebUI build, unchanged lint/test scope. Use gates, not direct pytest/ruff/vitest; record suspected gate omissions in `.vorch/FLAGGED.md`. Pipeline, test mapping, and output details: `scripts/README-quality.md`.
+**Running tests and checks:** Call the tools directly; their configuration lives in `pyproject.toml` (pytest, Ruff, mypy) and `webui/package.json` (scripts). What to test and run: `AGENTS.md` -> Testing.
 ```bash
-python scripts/quality.py <paths...>                  # Backend pre-commit
-python scripts/quality.py --check <paths...>          # Backend feedback
-python scripts/quality.py --check --profile           # Full check + 25 slowest tests
-python scripts/quality-frontend.py --build <paths...>  # Frontend pre-commit
-python scripts/quality-frontend.py --check <paths...>  # Frontend feedback
-# Omit paths for full gates on the affected side(s).
+python -m pytest tests/core/tools/test_bash_modes.py   # file, directory, node id; -k/-x/--lf as usual
+python -m pytest --durations=25 tests/core/chat        # plus the slowest tests
+python -m ruff check --fix <paths>; python -m ruff format <paths>
+python -m mypy                                         # configured project; seconds with a warm cache
+cd webui && npx vitest run src/lib/__tests__/i18n.test.js
+cd webui && npx vitest run src/lib/__tests__/*.guard.test.js   # repo-wide WebUI guards
+cd webui && npm run build              # also: npm run lint, npm run format:check
 ```
+pytest runs on all physical cores (`-n auto`, work-stealing xdist) with a 30 s per-test timeout; pass `-n 0` for a handful of tests or a debugger. WebUI guard tests (`src/**/__tests__/*.guard.test.js`) scan every WebUI and Extension page source. The complete suites are `python -m pytest` and `npx vitest run`; CI runs them.
 
-**Performance:** Manual, outside the gates. `python scripts/perf_load.py` (concurrent-Agent load test on a disposable server with a scripted fake Provider), `python scripts/perf_bench.py` (hot-path microbenchmarks), and the always-on server metrics/Recordings (`vbot performance`, `performance.md`). Prove optimizations with `--compare` against a baseline from the same machine; results stay in the git-ignored `perf-results/`. Usage and interpretation: `scripts/README-perf.md`.
+**Commit hook:** `.githooks/pre-commit` runs `scripts/commit_check.py` on staged files: Ruff fix, format and lint for Python; mypy over the configured project plus staged Python files outside it; Prettier and ESLint for WebUI and Extension page `ui/` sources. It applies and re-stages fixes only for completely staged files and checks partially staged files as they are in the working tree. mypy errors block in staged files and in files without uncommitted changes; errors in files with unstaged or untracked work are reported without blocking. It runs no tests. The first mypy run in a new worktree builds its cache (~40 s).
+
+**CI:** `.github/workflows/main.yml` runs `ci.yml` for every push to `main`; a newer push cancels a running check. `release.yml` calls the same workflow as its gate. `ci.yml` runs static checks (Ruff, mypy) on Linux and Windows; pytest on Linux (Python 3.11, 3.13, 3.14; arm64 3.11) and Windows (3.11, 3.14, each split into three shards through `VBOT_TEST_SHARD=<index>/<count>`, `tests/conftest.py`); WebUI format, lint, Vitest and build; E2E; release-candidate install smoke tests. Read failures with `gh run list --workflow=main.yml` and `gh run view <run-id> --log-failed`.
+
+**Performance:** Manual, outside the test suites and CI. `python scripts/perf_load.py` (concurrent-Agent load test on a disposable server with a scripted fake Provider), `python scripts/perf_bench.py` (hot-path microbenchmarks), and the always-on server metrics/Recordings (`vbot performance`, `performance.md`). Prove optimizations with `--compare` against a baseline from the same machine; results stay in the git-ignored `perf-results/`. Usage and interpretation: `scripts/README-perf.md`.
 
 ## Live Testing
 
@@ -154,7 +161,7 @@ Before live tests, fully read `.vorch/workflows/web-test-workflow.md` for browse
 
 ## End-to-End Testing
 
-Playwright `tests/e2e/` is excluded from both quality gates; release CI requires it before publishing (`.github/workflows/e2e.yml`). Local runs require explicit user request and a full read of `.vorch/workflows/e2e-test-workflow.md` before every run.
+Playwright `tests/e2e/` is excluded from the pytest and Vitest suites; CI runs it for every push to `main` and requires it before publishing (`.github/workflows/e2e.yml`). Local runs require explicit user request and a full read of `.vorch/workflows/e2e-test-workflow.md` before every run.
 
 ## Context
 

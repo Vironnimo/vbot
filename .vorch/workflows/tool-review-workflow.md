@@ -25,7 +25,7 @@ Session data is the user's private data. Keep database copies outside the reposi
 8. **Recheck** after the change: Provider rendering and the non-strict invariant, schema fingerprints, descriptions, `ToolDisplay`, prompts and guidance blocks, E2E fake-provider calls, generated Tool catalogs, and the consumers from step 1. Rerun the family case file and the affected Session views' failure shapes as probes. For a tolerance change, also replay the real failed calls through it with the file state reconstructed from the Session (reads in the same Run, later successful retries) and check every newly applied result against the intended effect: unit tests and synthetic cases miss the shapes real copies take.
 9. **Evaluate** with black-box tasks (rules below) when the change affects Tool choice or first use. A live installation round trip is not required.
 10. **Document** in the owning Tool map; update the design guide only when a rule changed.
-11. **Commit** each verified Tool or coordinated family change as one cohesive releasable unit, with the quality gates of `AGENTS.md` -> Git. Tool work adds no separate gate schedule.
+11. **Commit** each verified Tool or coordinated family change as one cohesive releasable unit, with the tests and commit hook of `AGENTS.md` -> Testing and Git. Tool work adds no separate verification schedule.
 
 ## Evidence rules
 

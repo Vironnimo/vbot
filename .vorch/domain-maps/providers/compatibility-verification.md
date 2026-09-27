@@ -168,7 +168,7 @@ Put each fact in its durable owner:
 - Provider-specific reference for dated Provider/Model observations, endpoint decisions, exceptions, and remaining unknowns.
 - This reference for the generic verification method; never copy the whole workflow into one Provider's reference.
 
-Run the scoped tests while iterating and the required full quality gate before committing code. In the final audit report, list included and excluded Models, exact policy/control/limit changes, unresolved cases, verification date, tests/gates, updated domain references, and any Provider facts that remain intentionally unknown.
+Run the affected Provider, Model and request-policy tests while iterating and before committing code. In the final audit report, list included and excluded Models, exact policy/control/limit changes, unresolved cases, verification date, tests run, updated domain references, and any Provider facts that remain intentionally unknown.
 
 ## Existing local probes
 
