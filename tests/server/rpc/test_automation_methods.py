@@ -13,6 +13,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from core.automation import CronService
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -40,14 +41,6 @@ _CREATE_DEFAULTS: JsonObject = {
 }
 
 
-def _format_schedule(job: Any) -> str:
-    if job.schedule_type == "cron":
-        return str(job.cron_expression)
-    if job.schedule_type == "interval":
-        return f"every {job.interval_seconds // 3600}h"
-    return str(job.run_at)
-
-
 def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None) -> SimpleNamespace:
     # The cron RPC validates the target through the Agent resolver (the seam every
     # run path uses); the default resolver accepts any target.
@@ -56,7 +49,7 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
         resolver.resolve_agent.return_value = SimpleNamespace(id="main")
     if cron_service is None:
         cron_service = Mock()
-        cron_service.format_schedule.side_effect = _format_schedule
+        cron_service.format_schedule.side_effect = CronService.format_schedule
         cron_service.next_fire_at.return_value = None
     return SimpleNamespace(
         runtime=SimpleNamespace(cron_service=cron_service, agent_resolver=resolver)
@@ -152,6 +145,19 @@ async def test_bootstrap_create_and_update_pass_the_parsed_target_and_session() 
     service.update_job.assert_called_once_with("bootstrap-123", session_id=None)
 
 
+@pytest.mark.asyncio
+async def test_bootstrap_list_projects_each_job() -> None:
+    service = Mock()
+    service.list_jobs.return_value = [_bootstrap_job(agent_id="builder", project_id="vbot")]
+    state = SimpleNamespace(runtime=SimpleNamespace(bootstrap_service=service))
+
+    result = await rpc_result(state, "bootstrap.list")
+
+    assert [(job["id"], job["target"], job["mode"]) for job in result["jobs"]] == [
+        ("bootstrap-123", "builder@vbot", "once")
+    ]
+
+
 # ---------------------------------------------------------------------------
 # cron.*
 # ---------------------------------------------------------------------------
@@ -214,6 +220,23 @@ async def test_bootstrap_create_and_update_pass_the_parsed_target_and_session() 
             {"schedule": "every 2h", "remaining_runs": 3},
             id="interval-repeat-unnamed",
         ),
+        pytest.param(
+            {
+                "agent_id": "main",
+                "prompt": "Check once",
+                "schedule_type": "once",
+                "run_at": "2099-01-01T09:00:00+00:00",
+            },
+            _cron_job(
+                name="Check once",
+                schedule_type="once",
+                cron_expression=None,
+                run_at="2099-01-01T09:00:00+00:00",
+            ),
+            {"agent_id": "main", "schedule_type": "once", "run_at": "2099-01-01T09:00:00+00:00"},
+            {"schedule": "2099-01-01T09:00:00+00:00", "run_at": "2099-01-01T09:00:00+00:00"},
+            id="once",
+        ),
     ],
 )
 async def test_cron_create_passes_the_normalized_job_to_the_service(
@@ -250,7 +273,7 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
     ]
     cron_service.system_timezone_name.return_value = "Europe/Berlin"
     cron_service.next_fire_at.return_value = "2026-05-14T10:05:00+00:00"
-    cron_service.format_schedule.side_effect = _format_schedule
+    cron_service.format_schedule.side_effect = CronService.format_schedule
 
     result = await rpc_result(_cron_state(cron_service), "cron.list")
 
@@ -371,6 +394,7 @@ async def test_cron_job_actions_address_one_job(
             },
         ),
         ("cron.list", {"extra": True}),
+        ("bootstrap.list", {"extra": True}),
         ("cron.update", {"prompt": "missing id"}),
         ("cron.delete", {}),
         ("cron.enable", {}),

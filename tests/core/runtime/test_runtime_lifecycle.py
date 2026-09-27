@@ -13,7 +13,7 @@ import time
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -21,6 +21,7 @@ import pytest
 import core.runtime._bootstrap as bootstrap_module
 import core.runtime.runtime as runtime_module
 from core.automation import CronService
+from core.automation import _cron_claims as cron_claims
 from core.chat import ChatMessage
 from core.database import canonical_database_path
 from core.debug import DebugTraceStore
@@ -478,6 +479,62 @@ def test_runtime_start_survives_corrupt_optional_configuration(
         assert runtime.agents.list()
     finally:
         runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_loop_started_runtime_survives_corrupt_agent_and_automation_state(
+    config: Config,
+) -> None:
+    data_dir = config.data_dir
+    seed_cron = CronService(cast(Any, SimpleNamespace()), data_dir)
+    once = seed_cron.create_job(
+        agent_id="main",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at="2099-01-01T00:00:00+00:00",
+    )
+    claim_path = cron_claims.path_for(seed_cron._once_fire_claims_dir, once.id)  # noqa: SLF001
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    claim_path.write_text("{", encoding="utf-8")
+    (data_dir / "agents" / "main").mkdir(parents=True)
+    (data_dir / "agents" / "main" / "agent.json").write_text(
+        json.dumps({"name": "Missing id"}), encoding="utf-8"
+    )
+    (data_dir / "settings.json").write_text(
+        json.dumps({"format_version": 1, "compaction": {"enabled": "yes"}}), encoding="utf-8"
+    )
+    (data_dir / "bootstrap").mkdir()
+    (data_dir / "bootstrap" / "jobs.json").write_text("{", encoding="utf-8")
+    runtime = Runtime(config)
+
+    runtime.start()
+    try:
+        # The serving lifespan activates Bootstrap; a degraded store skips it.
+        runtime.activate_bootstrap()
+        assert [agent.id for agent in runtime.agents.list()] == ["main-2"]
+        # Only the once job with the unreadable claim is held; Cron stays available.
+        assert [job.id for job in runtime.cron_service.list_jobs()] == [once.id]
+        assert runtime.bootstrap_service.list_jobs() == []
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_loop_started_runtime_leaves_a_corrupt_cron_store_untouched(
+    config: Config,
+) -> None:
+    jobs_path = config.data_dir / "cron" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    jobs_path.write_text("{", encoding="utf-8")
+    runtime = Runtime(config)
+
+    runtime.start()
+    try:
+        assert [agent.id for agent in runtime.agents.list()] == ["main"]
+        assert runtime.cron_service.list_jobs() == []
+    finally:
+        await runtime.aclose()
+    assert jobs_path.read_text(encoding="utf-8") == "{"
 
 
 def test_runtime_loads_and_reloads_custom_provider_settings_in_place(config: Config) -> None:
