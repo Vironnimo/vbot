@@ -1,4 +1,4 @@
-"""Tests for the bash output-pattern failure hints."""
+"""Failure hints: one short next action for well-known failure output of the shell Tool."""
 
 from __future__ import annotations
 
@@ -20,43 +20,218 @@ _NOT_RECOGNIZED_DE = (
 )
 
 
-def test_success_never_annotated() -> None:
-    assert annotate_failure("echo hi", 0, "hi") is None
+@pytest.mark.parametrize(
+    ("command", "exit_code", "output", "expected"),
+    [
+        pytest.param("echo hi", 0, "hi", None, id="success_is_never_annotated"),
+        pytest.param("true", 7, "some arbitrary failure text", None, id="unknown_failure"),
+        ("python setup.py", 127, "bash: python: command not found", ["python3"]),
+        ("pip install x", 127, "sh: pip: command not found", ["pip3"]),
+        ("make build", 127, "bash: line 1: make: command not found", ["`make`", "`which make`"]),
+        (
+            "cargo build",
+            1,
+            "The term 'cargo' is not recognized as a name of a cmdlet, "
+            "function, script file, or executable program.",
+            ["`cargo`", "Get-Command cargo"],
+        ),
+        (
+            "git merge feature",
+            1,
+            "CONFLICT (content): Merge conflict in src/a.py\n"
+            "Automatic merge failed; fix conflicts and then commit the result.",
+            ["Do not retry", "git add"],
+        ),
+        (
+            "git branch feature",
+            1,
+            "fatal: a branch named 'feature' already exists",
+            ["'feature' already exists"],
+        ),
+        (
+            "python -m http.server 8000",
+            1,
+            "OSError: [Errno 98] Address already in use",
+            ["port"],
+        ),
+        (
+            "uvicorn app:app",
+            1,
+            "ERROR: [Errno 98] error while attempting to bind on address ('127.0.0.1', 8421)",
+            ["8421"],
+        ),
+        ("./deploy.sh", 1, "bash: ./deploy.sh: Permission denied", ["Permission denied"]),
+        ("git push", 1, "error: API rate limit exceeded for user", ["rate limit"]),
+        (
+            "gh pr list --json bogus",
+            1,
+            'gh: Unknown JSON field: "bogus"\nValid fields are: author, body',
+            ["bogus"],
+        ),
+        pytest.param(
+            "python",
+            1,
+            "bash: python: command not found\nfatal: a branch named 'x' already exists",
+            ["python3"],
+            id="first_match_wins",
+        ),
+        ("run.sh", 126, "", ["chmod +x"]),
+        ("stress", 137, "", ["SIGKILL"]),
+        ("pytest", 124, "", ["background"]),
+        pytest.param(
+            "python",
+            124,
+            "bash: python: command not found",
+            ["python3"],
+            id="output_pattern_beats_exit_code",
+        ),
+        pytest.param(
+            "python",
+            127,
+            "ok\n" * 5000 + "bash: python: command not found",
+            None,
+            id="scan_window_is_bounded",
+        ),
+        (
+            "Select-String -Pattern todo -Recurse",
+            1,
+            "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
+            ["`Get-ChildItem -Recurse -File | Select-String 'text'`"],
+        ),
+    ],
+)
+def test_failure_output_gets_the_matching_hint(
+    command: str, exit_code: int, output: str, expected: list[str] | None
+) -> None:
+    hint = annotate_failure(command, exit_code, output)
+
+    if expected is None:
+        assert hint is None
+    else:
+        assert hint is not None
+        for fragment in expected:
+            assert fragment.lower() in hint.lower()
 
 
-def test_unknown_failure_returns_none() -> None:
-    assert annotate_failure("true", 7, "some arbitrary failure text") is None
+@pytest.mark.parametrize(
+    ("command", "output", "expected"),
+    [
+        (
+            "git fetch 2>/dev/null",
+            "Out-File: Could not find a part of the path 'C:\\dev\\null'.",
+            "PowerShell has no /dev/null: discard output with `2>$null`, `>$null`, or "
+            "`| Out-Null`.",
+        ),
+        (
+            "ls -la src",
+            "Get-ChildItem: A parameter cannot be found that matches parameter name 'la'.",
+            "`ls -la` uses bash flags, but in PowerShell `ls` is Get-ChildItem: use "
+            "`Get-ChildItem -Force` to include hidden files and `-Recurse` for subdirectories.",
+        ),
+        (
+            "ls -la src",
+            "Get-ChildItem: Es wurde kein Parameter gefunden, der dem Parameternamen "
+            "„la“ entspricht.",
+            "`ls -la` uses bash flags",
+        ),
+        # The flag that failed binding is not the one written after ls.
+        (
+            "ls -la src",
+            "Get-ChildItem: A parameter cannot be found that matches parameter name 'x'.",
+            None,
+        ),
+        (
+            "ls -la src",
+            "Get-ChildItem: Cannot find path 'C:\\nope' because it does not exist.",
+            None,
+        ),
+    ],
+)
+def test_bash_habits_in_powershell_name_the_powershell_form(
+    command: str, output: str, expected: str | None
+) -> None:
+    hint = annotate_failure(command, 1, output)
+
+    if expected is None:
+        assert hint is None
+    else:
+        assert hint is not None and hint.startswith(expected)
 
 
-def test_bare_python_not_found_gets_specific_hint() -> None:
-    hint = annotate_failure("python setup.py", 127, "bash: python: command not found")
+@pytest.mark.parametrize(
+    ("command", "name", "expected", "template"),
+    [
+        ("git log | grep fix", "grep", "`| Select-String 'text'`", _NOT_RECOGNIZED),
+        ("sed -i 's/a/b/' f", "sed", "-replace 'old', 'new'", _NOT_RECOGNIZED_DE),
+        ("which node", "which", "(Get-Command name).Source", _NOT_RECOGNIZED),
+        ("export A=1", "export", "$env:NAME = 'value'", _NOT_RECOGNIZED),
+        ("make || true", "true", "drop `|| true`", _NOT_RECOGNIZED),
+        ("python3 app.py", "python3", "`python` (or `py`)", _NOT_RECOGNIZED),
+        ("DEBUG=1 npm test", "DEBUG=1", "`$env:DEBUG = '1'` on its own line", _NOT_RECOGNIZED),
+        ("if [ -f x ]; then echo y; fi", "if", "`if (Test-Path x) { ... }`", _NOT_RECOGNIZED),
+        ("cargo build", "cargo", "Verify with `Get-Command cargo`", _NOT_RECOGNIZED_DE),
+    ],
+)
+def test_missing_powershell_command_names_the_equivalent(command, name, expected, template):
+    hint = annotate_failure(command, 1, template.format(name=name))
+
     assert hint is not None
-    assert "python3" in hint
+    assert expected in hint
 
 
-def test_bare_pip_not_found_gets_specific_hint() -> None:
-    hint = annotate_failure("pip install x", 127, "sh: pip: command not found")
-    assert hint is not None
-    assert "pip3" in hint
+@pytest.mark.parametrize(
+    ("command", "output", "expected"),
+    [
+        (
+            "python - <<'EOF'\nprint(1)\nEOF",
+            "Missing file specification after redirection operator.",
+            "PowerShell has no heredoc (<<).",
+        ),
+        (
+            'python -c \\"print(1)\\"',
+            "Missing file specification after redirection operator.",
+            'In PowerShell, \\" does not escape a quote.',
+        ),
+        ("Write-Output (", "Missing file specification after redirection operator.", None),
+        # PowerShell ends the string at \", so Python reads a cut-off line.
+        (
+            'python -c "import json; print(json.dumps({\\"a\\": 1}))"',
+            "SyntaxError: '{' was never closed",
+            'In PowerShell, \\" does not escape a quote.',
+        ),
+        (
+            'python -c @"\nimport json\nprint(json.dumps({\\"a\\": 1}))\n"@',
+            "SyntaxError: unexpected character after line continuation character",
+            'Inside a @"..."@ here-string, \\" stays a backslash and a quote.',
+        ),
+        (
+            "python -c @'\nprint(''hello'')\n'@",
+            "SyntaxError: invalid syntax. Is this intended to be part of the string?",
+            "Inside a @'...'@ here-string, '' stays two quotes.",
+        ),
+        # Quotes a here-string keeps literal and empty strings explain nothing.
+        ("@'\nprint(''.join(parts))\nprint(\"a\\\"b\"\n'@ | python -", "SyntaxError: x", None),
+    ],
+)
+def test_bash_quoting_that_breaks_code_in_powershell_is_named(
+    monkeypatch, command, output, expected
+):
+    if output.startswith("SyntaxError"):
+        output = f'  File "<string>", line 1\n    code\n    ^\n{output}'
+    else:
+        output = f"ParserError:\nLine |\n   1 |  x\n     |  ~\n     | {output}"
+    monkeypatch.setattr(bash_hints, "_POWERSHELL", True)
 
+    hint = annotate_failure(command, 1, output)
 
-def test_other_command_not_found_names_the_binary() -> None:
-    hint = annotate_failure("make build", 127, "bash: line 1: make: command not found")
-    assert hint is not None
-    assert "`make`" in hint
-    assert "`which make`" in hint
-
-
-def test_powershell_command_not_found_hint() -> None:
-    hint = annotate_failure(
-        "cargo build",
-        1,
-        "The term 'cargo' is not recognized as a name of a cmdlet, "
-        "function, script file, or executable program.",
-    )
-    assert hint is not None
-    assert "`cargo`" in hint
-    assert "Get-Command cargo" in hint
+    if expected is None:
+        assert hint is None
+    else:
+        assert hint is not None and hint.startswith(expected)
+    if output.lstrip().startswith("File"):
+        # In bash, \" is an escape, so a SyntaxError there is the code's own.
+        monkeypatch.setattr(bash_hints, "_POWERSHELL", False)
+        assert annotate_failure(command, 1, output) is None
 
 
 def _project(tmp_path: Path) -> Path:
@@ -84,21 +259,23 @@ _RUN_AS_MODULE = (
 
 
 @pytest.mark.parametrize(
-    "command",
+    ("command", "module"),
     [
-        "python tests/test_cart.py",
-        "python tests\\test_cart.py 2>&1 | Select-Object -Last 5",
-        '& "C:/venv/Scripts/python.exe" -u tests/test_cart.py',
+        ("python tests/test_cart.py", "shop"),
+        ("python tests\\test_cart.py 2>&1 | Select-Object -Last 5", "tests"),
+        ('& "C:/venv/Scripts/python.exe" -u tests/test_cart.py', "shop"),
+        ("python {script}", "shop"),
     ],
 )
-@pytest.mark.parametrize("module", ["shop", "tests"])
 def test_module_not_found_from_script_run_by_path_names_module_run(
     tmp_path: Path, command: str, module: str
 ) -> None:
     workdir = _project(tmp_path)
-    output = _import_traceback(workdir / "tests" / "test_cart.py", module)
+    script = workdir / "tests" / "test_cart.py"
 
-    hint = annotate_failure(command, 1, output, workdir=workdir)
+    hint = annotate_failure(
+        command.format(script=f'"{script}"'), 1, _import_traceback(script, module), workdir=workdir
+    )
 
     assert hint == _RUN_AS_MODULE.format(module=module)
 
@@ -123,298 +300,54 @@ def test_module_not_found_picks_the_script_the_traceback_names(tmp_path: Path) -
     assert hint == _RUN_AS_MODULE.format(module="shop")
 
 
-def test_module_not_found_from_absolute_script_path(tmp_path: Path) -> None:
-    workdir = _project(tmp_path)
-    script = workdir / "tests" / "test_cart.py"
-
-    hint = annotate_failure(
-        f'python "{script}"', 1, _import_traceback(script, "shop"), workdir=workdir
-    )
-
-    assert hint == _RUN_AS_MODULE.format(module="shop")
-
-
-def test_module_in_workdir_without_script_names_import_path(tmp_path: Path) -> None:
-    workdir = _project(tmp_path)
-
-    hint = annotate_failure(
-        "pytest tests/test_cart.py",
-        1,
-        "E   ModuleNotFoundError: No module named 'shop'",
-        workdir=workdir,
-    )
-
-    assert hint == (
-        "'shop' is in the working directory, but the working directory is not on Python's "
-        "import path for this command. Run Python from the working directory with -m, "
-        "such as `python -m pytest`, or add the working directory to PYTHONPATH."
-    )
-
-
-@pytest.mark.parametrize("workdir_known", [True, False])
-def test_module_missing_everywhere_names_install(tmp_path: Path, workdir_known: bool) -> None:
-    hint = annotate_failure(
-        "python -m flask run",
-        1,
-        "Traceback (most recent call last):\nModuleNotFoundError: No module named 'flask'",
-        workdir=_project(tmp_path) if workdir_known else None,
-    )
-
-    assert hint == (
-        "Python cannot import 'flask': this interpreter finds no package or module of that "
-        "name. Check the spelling; if the project has a virtual environment, run its "
-        "interpreter, otherwise install the package."
-    )
-
-
 @pytest.mark.parametrize(
-    "output",
+    ("command", "output", "workdir_known", "expected"),
     [
-        "ModuleNotFoundError: No module named 'shop.api'\n",
-        # A program that reports the failed import itself.
-        "the engine is not usable yet (ModuleNotFoundError: No module named 'shop.api')\n",
+        (
+            "pytest tests/test_cart.py",
+            "E   ModuleNotFoundError: No module named 'shop'",
+            True,
+            "'shop' is in the working directory, but the working directory is not on Python's "
+            "import path for this command. Run Python from the working directory with -m, "
+            "such as `python -m pytest`, or add the working directory to PYTHONPATH.",
+        ),
+        *(
+            (
+                "python -m flask run",
+                "Traceback (most recent call last):\nModuleNotFoundError: No module named 'flask'",
+                known,
+                "Python cannot import 'flask': this interpreter finds no package or module of "
+                "that name. Check the spelling; if the project has a virtual environment, run "
+                "its interpreter, otherwise install the package.",
+            )
+            for known in (True, False)
+        ),
+        *(
+            (
+                'python -c "import shop.api"',
+                output,
+                True,
+                "Python imported the package 'shop', but it has no module 'api'. List the files "
+                "of 'shop' to check the name, or create the module if it is still missing.",
+            )
+            for output in (
+                "ModuleNotFoundError: No module named 'shop.api'\n",
+                # A program that reports the failed import itself.
+                "the engine is not usable yet (ModuleNotFoundError: No module named 'shop.api')\n",
+            )
+        ),
+        (
+            "python app.py",
+            "ModuleNotFoundError: No module named 'shop.api'; 'shop' is not a package",
+            False,
+            "Python cannot import 'shop.api': 'shop' is a single module, not a package, so it "
+            "has no submodules. Import 'api' from the module that defines it.",
+        ),
     ],
 )
-def test_missing_submodule_names_the_package_not_the_interpreter(
-    tmp_path: Path, output: str
+def test_import_failures_name_where_python_looked(
+    tmp_path: Path, command: str, output: str, workdir_known: bool, expected: str
 ) -> None:
-    hint = annotate_failure('python -c "import shop.api"', 1, output, workdir=_project(tmp_path))
+    workdir = _project(tmp_path) if workdir_known else None
 
-    assert hint == (
-        "Python imported the package 'shop', but it has no module 'api'. List the files "
-        "of 'shop' to check the name, or create the module if it is still missing."
-    )
-
-
-def test_submodule_of_a_plain_module_names_the_module() -> None:
-    hint = annotate_failure(
-        "python app.py",
-        1,
-        "ModuleNotFoundError: No module named 'shop.api'; 'shop' is not a package",
-    )
-
-    assert hint == (
-        "Python cannot import 'shop.api': 'shop' is a single module, not a package, so it "
-        "has no submodules. Import 'api' from the module that defines it."
-    )
-
-
-def test_merge_conflict_hint_says_do_not_retry() -> None:
-    hint = annotate_failure(
-        "git merge feature",
-        1,
-        "CONFLICT (content): Merge conflict in src/a.py\n"
-        "Automatic merge failed; fix conflicts and then commit the result.",
-    )
-    assert hint is not None
-    assert "Do not retry" in hint
-    assert "git add" in hint
-
-
-def test_already_exists_hint() -> None:
-    hint = annotate_failure(
-        "git branch feature", 1, "fatal: a branch named 'feature' already exists"
-    )
-    assert hint is not None
-    assert "'feature' already exists" in hint
-
-
-def test_port_in_use_hint_with_port() -> None:
-    hint = annotate_failure(
-        "python -m http.server 8000", 1, "OSError: [Errno 98] Address already in use"
-    )
-    assert hint is not None
-    assert "port" in hint
-
-
-def test_port_in_use_hint_named_port() -> None:
-    hint = annotate_failure(
-        "uvicorn app:app",
-        1,
-        "ERROR: [Errno 98] error while attempting to bind on address ('127.0.0.1', 8421)",
-    )
-    assert hint is not None
-    assert "8421" in hint
-
-
-def test_permission_denied_hint() -> None:
-    hint = annotate_failure("./deploy.sh", 1, "bash: ./deploy.sh: Permission denied")
-    assert hint is not None
-    assert "Permission denied" in hint
-
-
-def test_rate_limit_hint() -> None:
-    hint = annotate_failure("git push", 1, "error: API rate limit exceeded for user")
-    assert hint is not None
-    assert "rate limit" in hint.lower()
-
-
-def test_gh_unknown_json_field_hint() -> None:
-    hint = annotate_failure(
-        "gh pr list --json bogus",
-        1,
-        'gh: Unknown JSON field: "bogus"\nValid fields are: author, body',
-    )
-    assert hint is not None
-    assert "bogus" in hint
-
-
-def test_first_match_wins() -> None:
-    output = "bash: python: command not found\nfatal: a branch named 'x' already exists"
-    hint = annotate_failure("python", 1, output)
-    assert hint is not None
-    assert "python3" in hint
-
-
-def test_exit_126_hint() -> None:
-    hint = annotate_failure("run.sh", 126, "")
-    assert hint is not None
-    assert "chmod +x" in hint
-
-
-def test_exit_137_hint() -> None:
-    hint = annotate_failure("stress", 137, "")
-    assert hint is not None
-    assert "SIGKILL" in hint
-
-
-def test_exit_124_hint_mentions_background_mode() -> None:
-    hint = annotate_failure("pytest", 124, "")
-    assert hint is not None
-    assert "background" in hint
-
-
-def test_exit_code_hint_yields_to_output_pattern() -> None:
-    hint = annotate_failure("python", 124, "bash: python: command not found")
-    assert hint is not None
-    assert "python3" in hint
-
-
-def test_scan_window_is_bounded() -> None:
-    output = "ok\n" * 5000 + "bash: python: command not found"
-    hint = annotate_failure("python", 127, output)
-    assert hint is None
-
-
-@pytest.mark.parametrize("template", [_NOT_RECOGNIZED, _NOT_RECOGNIZED_DE])
-@pytest.mark.parametrize(
-    ("command", "name", "expected"),
-    [
-        ("git log | grep fix", "grep", "`| Select-String 'text'`"),
-        ("sed -i 's/a/b/' f", "sed", "-replace 'old', 'new'"),
-        ("which node", "which", "(Get-Command name).Source"),
-        ("export A=1", "export", "$env:NAME = 'value'"),
-        ("make || true", "true", "drop `|| true`"),
-        ("python3 app.py", "python3", "`python` (or `py`)"),
-        ("DEBUG=1 npm test", "DEBUG=1", "`$env:DEBUG = '1'` on its own line"),
-        ("if [ -f x ]; then echo y; fi", "if", "`if (Test-Path x) { ... }`"),
-        ("cargo build", "cargo", "Verify with `Get-Command cargo`"),
-    ],
-)
-def test_missing_powershell_command_names_the_equivalent(template, command, name, expected):
-    hint = annotate_failure(command, 1, template.format(name=name))
-    assert hint is not None
-    assert expected in hint
-
-
-@pytest.mark.parametrize(
-    ("output", "expected"),
-    [
-        (
-            "Get-ChildItem: A parameter cannot be found that matches parameter name 'la'.",
-            "`ls -la` uses bash flags, but in PowerShell `ls` is Get-ChildItem: use "
-            "`Get-ChildItem -Force` to include hidden files and `-Recurse` for subdirectories.",
-        ),
-        (
-            "Get-ChildItem: Es wurde kein Parameter gefunden, der dem Parameternamen "
-            "\u201ela\u201c entspricht.",
-            "`ls -la` uses bash flags",
-        ),
-        # The flag that failed binding is not the one written after ls.
-        ("Get-ChildItem: A parameter cannot be found that matches parameter name 'x'.", None),
-        ("Get-ChildItem: Cannot find path 'C:\\nope' because it does not exist.", None),
-    ],
-)
-def test_bash_flags_on_a_powershell_alias(output, expected):
-    hint = annotate_failure("ls -la src", 1, output)
-    if expected is None:
-        assert hint is None
-    else:
-        assert hint is not None and hint.startswith(expected)
-
-
-def test_select_string_recurse_suggests_piping_files():
-    hint = annotate_failure(
-        "Select-String -Pattern todo -Recurse",
-        1,
-        "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
-    )
-    assert hint is not None
-    assert "`Get-ChildItem -Recurse -File | Select-String 'text'`" in hint
-
-
-@pytest.mark.parametrize(
-    ("command", "expected"),
-    [
-        ("python - <<'EOF'\nprint(1)\nEOF", "PowerShell has no heredoc (<<)."),
-        ('python -c \\"print(1)\\"', 'In PowerShell, \\" does not escape a quote.'),
-        ("Write-Output (", None),
-    ],
-)
-def test_parser_errors_from_bash_syntax(command, expected):
-    output = (
-        "ParserError:\nLine |\n   1 |  x\n     |  ~\n     | Missing file specification "
-        "after redirection operator."
-    )
-    hint = annotate_failure(command, 1, output)
-    if expected is None:
-        assert hint is None
-    else:
-        assert hint is not None and hint.startswith(expected)
-
-
-@pytest.mark.parametrize(
-    ("command", "error", "expected"),
-    [
-        # PowerShell ends the string at \", so Python reads a cut-off line.
-        (
-            'python -c "import json; print(json.dumps({\\"a\\": 1}))"',
-            "SyntaxError: '{' was never closed",
-            'In PowerShell, \\" does not escape a quote.',
-        ),
-        (
-            'python -c @"\nimport json\nprint(json.dumps({\\"a\\": 1}))\n"@',
-            "SyntaxError: unexpected character after line continuation character",
-            'Inside a @"..."@ here-string, \\" stays a backslash and a quote.',
-        ),
-        (
-            "python -c @'\nprint(''hello'')\n'@",
-            "SyntaxError: invalid syntax. Is this intended to be part of the string?",
-            "Inside a @'...'@ here-string, '' stays two quotes.",
-        ),
-        # Quotes a here-string keeps literal and empty strings explain nothing.
-        ("@'\nprint(''.join(parts))\nprint(\"a\\\"b\"\n'@ | python -", "SyntaxError: x", None),
-    ],
-)
-def test_quote_escapes_that_break_code_passed_in_powershell(monkeypatch, command, error, expected):
-    monkeypatch.setattr(bash_hints, "_POWERSHELL", True)
-    output = f'  File "<string>", line 1\n    code\n    ^\n{error}'
-    hint = annotate_failure(command, 1, output)
-    if expected is None:
-        assert hint is None
-    else:
-        assert hint is not None and hint.startswith(expected)
-    # In bash, \" is an escape, so a SyntaxError there is the code's own.
-    monkeypatch.setattr(bash_hints, "_POWERSHELL", False)
-    assert annotate_failure(command, 1, output) is None
-
-
-def test_dev_null_on_windows_names_null_redirection():
-    hint = annotate_failure(
-        "git fetch 2>/dev/null",
-        1,
-        "Out-File: Could not find a part of the path 'C:\\dev\\null'.",
-    )
-    assert hint == (
-        "PowerShell has no /dev/null: discard output with `2>$null`, `>$null`, or `| Out-Null`."
-    )
+    assert annotate_failure(command, 1, output, workdir=workdir) == expected

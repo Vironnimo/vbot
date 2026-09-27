@@ -1,4 +1,4 @@
-"""Shared fixtures and fakes for bash behavior tests."""
+"""Shared fixtures and fakes for the shell Tool tests."""
 
 from __future__ import annotations
 
@@ -98,3 +98,43 @@ def make_spool_manager(tmp_path: Path) -> ProcessManager:
         sweep_interval_seconds=3600,
         temporary_files=TemporaryFileManager(tmp_path),
     )
+
+
+class RecordingTrigger:
+    """A trigger service that records each background completion it receives."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.submitted = asyncio.Event()
+
+    def submit_completion(
+        self,
+        agent_id: str,
+        session_id: str,
+        *,
+        notice_id: str,
+        origin_run_id: str,
+        body: str,
+        project_id: str | None = None,
+        execution_owner: object | None = None,
+    ) -> asyncio.Future[None]:
+        self.calls.append(
+            {
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "notice_id": notice_id,
+                "origin_run_id": origin_run_id,
+                "body": body,
+                "project_id": project_id,
+                "execution_owner": execution_owner,
+            }
+        )
+        self.submitted.set()
+        return delivered_future()
+
+    async def body(self) -> str:
+        """Wait for the one completion and return its message body."""
+        await asyncio.wait_for(self.submitted.wait(), 5)
+        assert len(self.calls) == 1
+        body: str = self.calls[0]["body"]
+        return body
