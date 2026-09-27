@@ -929,6 +929,20 @@ def _apply_hunk(
             position = difference["copy_line"] - 1
             if position < len(numbered) and numbered[position] in unmarked:
                 difference["unprefixed"] = True
+        elif not details["candidates"] and "part_of" not in details:
+            # Nothing resembles the lines as a whole; a line the file has nowhere
+            # is then the one to fix, often a new line written without +.
+            present = {_loose(line) for line in split_text_lines(content)}
+            absent = next(
+                (
+                    (prefix, text)
+                    for prefix, text in hunk.lines
+                    if prefix in " -" and text.strip() and _loose(text) not in present
+                ),
+                None,
+            )
+            if absent is not None:
+                details["absent"] = {"text": absent[1].strip(), "removed": absent[0] == "-"}
         raise _PatchError("text_not_found", path=path, label=hunk.label, details=details)
     if [t for p, t in hunk.lines if p in " -"] == [t for p, t in hunk.lines if p in " +"]:
         return content, warnings

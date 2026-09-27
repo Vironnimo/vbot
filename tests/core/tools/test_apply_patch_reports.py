@@ -170,16 +170,32 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(tmp_p
     assert "already occurs" not in text(leftover)
 
 
-def test_missing_hunk_without_close_candidate_offers_no_excerpt_promise(tmp_path):
+@pytest.mark.parametrize(
+    ("body", "report"),
+    [
+        (
+            "@@\n-gamma delta epsilon zeta eta theta iota kappa lambda\n+changed",
+            "The patch line 'gamma delta epsilon zeta eta theta iota kappa lambda' is not in the "
+            "file. A - line names a line to remove, so it must match a line of the file.",
+        ),
+        # Session shape: new lines after the last + line were written without +.
+        (
+            "@@\n beta\n+for name in (\n        'gamma delta epsilon zeta eta theta',\n"
+            "        'iota kappa lambda mu nu xi omicron',\n    ):\n        use(name)",
+            "The patch line \"'gamma delta epsilon zeta eta theta',\" is not in the file. "
+            "That patch line has no + prefix, so it must already be in the file; if it is new, "
+            "start it with +.",
+        ),
+    ],
+)
+def test_missing_hunk_without_close_candidate_names_a_line_the_file_lacks(tmp_path, body, report):
     path = tmp_path / "file.txt"
     path.write_bytes(b"alpha\nbeta\n")
-    result = apply(
-        tmp_path, update("@@\n-gamma delta epsilon zeta eta theta iota kappa lambda\n+changed")
-    )
+    result = apply(tmp_path, update(body))
     assert result["error"] == {
         "code": "text_not_found",
-        "message": "file.txt: the lines to replace were not found.\n"
-        'No similar text is in the file; read(path="file.txt") shows its current content.\n'
+        "message": f"file.txt: the lines to replace were not found.\n{report} "
+        'read(path="file.txt") shows its current content.\n'
         "No file was changed.",
     }
     assert path.read_bytes() == b"alpha\nbeta\n"
@@ -232,7 +248,9 @@ def test_failed_hunk_report_shows_the_file_as_it_is_now(tmp_path, bad_index):
     assert text(result).endswith(
         f"\nUpdated file.txt:\n{shown}\n"
         f"Failed: file.txt, hunk {bad_index + 1}: the lines to replace were not found.\n"
-        'No similar text is in the file; read(path="file.txt") shows its current content.'
+        "The patch line 'unrelated missing declaration' is not in the file. A - line names a "
+        'line to remove, so it must match a line of the file. read(path="file.txt") shows its '
+        "current content."
     )
 
 

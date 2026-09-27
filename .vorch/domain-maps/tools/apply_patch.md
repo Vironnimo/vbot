@@ -213,8 +213,17 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   line) is named before similarity candidates when it sits in at most 3 lines:
   `The patch line '...' is only part of line(s) N. Each patch line is a whole
   line, so copy all of line N:` plus those lines (`part_of`, `_part_of_lines`).
-  Otherwise the closest-text candidates show, and `No similar text` only when
-  neither applies. `old_string` text is compared by its first difference instead.
+  Otherwise the closest-text candidates show. Without candidates, the report
+  names the hunk's first unchanged or removed line that no file line matches
+  (ignoring spacing, `absent`): `The patch line '...' is not in the file.` plus,
+  for an unchanged line, that without `+` it must already be in the file and a
+  new line starts with `+`, or, for a `-` line, that it must match a line of the
+  file. `No similar text` remains only when every such line occurs somewhere.
+  Evidence: in one Swarm run, 6 failures said only `No similar text`; each held
+  a line the file lacked (new lines after the last `+` line written without `+`,
+  a misremembered or output-copied context line), and 4 were followed by a
+  `read` before the retry, 1 by the same mistake again (Sessions, 2026-09).
+  `old_string` text is compared by its first difference instead.
 - A hunk that is exactly one `-` line and one `+` line, whose `-` text is not a
   whole line but occurs exactly once inside one line of the matched window
   (overlaps count), is replaced within that line, with `Note: The - line is part

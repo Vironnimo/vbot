@@ -766,7 +766,7 @@ def test_unprefixed_lines_are_added_only_where_unchanged_lines_place_them(tmp_pa
     path = tmp_path / "file.txt"
     path.write_bytes(b"start\nkeep this line\nend\n")
     result = apply(tmp_path, update(body))
-    assert "no + prefix" not in text(result)
+    assert "added as a + line" not in text(result)
     assert b"lien" not in path.read_bytes() and b"missing" not in path.read_bytes()
 
 

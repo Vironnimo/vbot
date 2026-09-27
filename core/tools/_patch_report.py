@@ -223,6 +223,13 @@ def _difference_text(difference: JsonObject) -> list[str]:
     return [*lines, *unprefixed]
 
 
+def _read_hint(error: JsonObject) -> str:
+    """Name the read call that shows the file, after a space; empty without a path."""
+    if not error.get("path_label"):
+        return ""
+    return f' {model_tool_name("read")}(path="{error["path_label"]}") shows its current content.'
+
+
 def failure_text(error: JsonObject) -> str:
     """Render one failed change with the current text the next call needs."""
     lines = [str(error["message"])]
@@ -251,12 +258,21 @@ def failure_text(error: JsonObject) -> str:
                 f"{part['lines']}. Each patch line is a whole line, so copy {whole}:"
             )
             lines.extend(_excerpts(part["excerpts"], error.get("path_label")))
-        elif error.get("path_label"):
-            read = model_tool_name("read")
+        elif error.get("absent"):
+            absent = error["absent"]
+            text = absent["text"] if len(absent["text"]) <= 80 else absent["text"][:77] + "..."
             lines.append(
-                f'No similar text is in the file; {read}(path="{error["path_label"]}") '
-                "shows its current content."
+                f"The patch line {text!r} is not in the file. "
+                + (
+                    "A - line names a line to remove, so it must match a line of the file."
+                    if absent["removed"]
+                    else "That patch line has no + prefix, so it must already be in the "
+                    "file; if it is new, start it with +."
+                )
+                + _read_hint(error)
             )
+        elif error.get("path_label"):
+            lines.append(f"No similar text is in the file;{_read_hint(error)}")
         present = error.get("already_present")
         if present:
             lines.append(
