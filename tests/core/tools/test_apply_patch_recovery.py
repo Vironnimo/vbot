@@ -276,42 +276,77 @@ async def test_context_only_patch_shows_the_lines_around_each_occurrence(tmp_pat
     )
 
 
-def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path):
-    # Session shape: the + on a statement's continuation lines was left off.
-    path = tmp_path / "file.py"
-    path.write_bytes(b"def f(rows):\n    for row in rows:\n        check(row)\n    return rows\n")
-    result = apply(
-        tmp_path,
-        update(
+@pytest.mark.parametrize(
+    ("body", "added", "example"),
+    [
+        # Session shape: the + on a statement's continuation lines was left off.
+        (
             "@@ def f(rows):\n         check(row)\n+        if row in seen:\n"
             '+            raise ValueError(\n                f"duplicate {row}"\n'
             "+            )\n\n+        seen.add(row)\n     return rows",
-            "file.py",
+            b"        if row in seen:\n            raise ValueError(\n"
+            b'                f"duplicate {row}"\n            )\n\n        seen.add(row)\n',
+            'f"duplicate {row}"',
         ),
-    )
+        # Session shape: statements written with the space prefix of unchanged
+        # lines, one space deeper than the + lines around them.
+        (
+            "@@\n         check(row)\n+        if row in seen:\n+            seen.discard(row)\n"
+            "             log(row)\n             count(row)\n+        seen.add(row)\n"
+            "     return rows",
+            b"        if row in seen:\n            seen.discard(row)\n            log(row)\n"
+            b"            count(row)\n        seen.add(row)\n",
+            "log(row)",
+        ),
+    ],
+)
+def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body, added, example):
+    path = tmp_path / "file.py"
+    path.write_bytes(b"def f(rows):\n    for row in rows:\n        check(row)\n    return rows\n")
+    result = apply(tmp_path, update(body, "file.py"))
     assert result["ok"], text(result)
     assert path.read_bytes() == (
-        b"def f(rows):\n    for row in rows:\n        check(row)\n        if row in seen:\n"
-        b'            raise ValueError(\n                f"duplicate {row}"\n            )\n'
-        b"\n        seen.add(row)\n    return rows\n"
+        b"def f(rows):\n    for row in rows:\n        check(row)\n" + added + b"    return rows\n"
     )
     assert text(result).endswith(
         "Note: 2 patch lines between + lines have no + prefix, but the file does not have "
-        "them there, so they were added as + lines; for example 'f\"duplicate {row}\"'. "
+        f"them there, so they were added as + lines; for example {example!r}. "
         "Start every added line with +."
     )
 
 
-def test_unprefixed_lines_the_file_has_between_additions_stay_unchanged(tmp_path):
+@pytest.mark.parametrize(
+    ("before", "body", "after", "note"),
+    [
+        (
+            b"start\nkeep\nend\n",
+            "@@\n start\n+one\nkeep\n+two\n    three\n+four\n end",
+            b"start\none\nkeep\ntwo\n    three\nfour\nend\n",
+            "The patch line 'three' between + lines has no + prefix, but the file does not "
+            "have it there, so it was added as a + line.",
+        ),
+        # Session shape: the line after a replaced one stays unchanged while
+        # blank lines without + follow in the added block.
+        (
+            b'__all__ = [\n    "a",\n]\n',
+            '@@\n __all__ = [\n-    "a",\n+    "a", "b",\n ]\n+\n+\n+def b():\n+    x = 1\n\n'
+            "+    y = 2\n\n+    return x",
+            b'__all__ = [\n    "a", "b",\n]\n\n\n'
+            b"def b():\n    x = 1\n\n    y = 2\n\n    return x\n",
+            "2 blank patch lines between + lines have no + prefix, but the file does not "
+            "have them there, so they were added as + lines.",
+        ),
+    ],
+)
+def test_unprefixed_lines_the_file_has_between_additions_stay_unchanged(
+    tmp_path, before, body, after, note
+):
     path = tmp_path / "file.txt"
-    path.write_bytes(b"start\nkeep\nend\n")
-    result = apply(tmp_path, update("@@\n start\n+one\nkeep\n+two\n    three\n+four\n end"))
+    path.write_bytes(before)
+    result = apply(tmp_path, update(body))
     assert result["ok"], text(result)
-    assert path.read_bytes() == b"start\none\nkeep\ntwo\n    three\nfour\nend\n"
-    assert text(result).endswith(
-        "Note: The patch line 'three' between + lines has no + prefix, but the file does not "
-        "have it there, so it was added as a + line. Start every added line with +."
-    )
+    assert path.read_bytes() == after
+    assert text(result).endswith(f"Note: {note} Start every added line with +.")
 
 
 @pytest.mark.parametrize(

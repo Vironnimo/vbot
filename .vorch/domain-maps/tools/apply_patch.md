@@ -337,8 +337,18 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - Unprefixed or space-prefixed V4A Update lines between two `+` lines parse as
   context (`_Hunk.written` keeps each line as written). When the hunk, its other
   recoveries and `copy_match` all miss, `_unmarked_readings` re-reads such runs as
-  `+` lines with the text as written (whitespace-only becomes blank): first only
-  runs holding a nonblank line the file lacks, then all runs. A reading needs at
+  `+` lines: first only runs holding a nonblank line the file lacks, then also
+  blank runs, then all runs, so a run the file has stays context while that
+  places the hunk. `_unmarked_texts` adds each line as written (whitespace-only
+  becomes blank). A run written with a space prefix whose indentation matches
+  the nearest nonblank lines around it only without that space loses it: the
+  Model wrote the prefix of unchanged lines instead of `+`. Evidence: in one
+  Swarm run, 2 of 55 re-reads applied wrongly, one adding a real context line
+  `]` a second time after the block because two blank runs kept it from
+  placing the hunk without it, one indenting two statements one space too deep.
+  All 11 of that run's 128 re-readable runs that the indentation rule strips
+  were written with the space prefix of unchanged lines (Sessions, 2026-09).
+  A reading needs at
   least one remaining context/removal line and applies only through precise
   matching (`precise_only`), so the file must hold the surrounding lines
   adjacent; a failing reading falls back to the original error. A re-read run

@@ -427,33 +427,64 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]
     """Return readings of a parsed hunk that add its unprefixed lines between + lines.
 
     Models leave the + off some added lines, often a statement's continuation
-    lines; such a line parses as unchanged. Each reading is the hunk with the
-    lines of some such runs added as the patch wrote them, paired with their
-    positions: first the runs holding a line the file lacks, then all runs. A
-    reading keeps at least one unchanged or removed line to place it.
+    lines or a blank line; such a line parses as unchanged. Each reading is the
+    hunk with the lines of some such runs added (``_unmarked_texts``), paired
+    with their positions: first the runs holding a line the file lacks, then
+    also the blank runs, then all runs. A run whose lines the file has stays
+    unchanged while a reading without it places the hunk. A reading keeps at
+    least one unchanged or removed line to place it.
     """
     lines = hunk.lines
     if len(hunk.written) != len(lines):
         return []
     runs = _unmarked_runs(lines)
     present = {_loose(line) for line in split_text_lines(content)}
-    missing = [
-        run
-        for run in runs
-        if any(lines[i][1].strip() and _loose(lines[i][1]) not in present for i in run)
-    ]
+
+    def rank(run: range) -> int:
+        texts = [lines[i][1] for i in run if lines[i][1].strip()]
+        if not texts:
+            return 1
+        return 0 if any(_loose(text) not in present for text in texts) else 2
+
+    ranks = {run: rank(run) for run in runs}
+    choices = (tuple(run for run in runs if ranks[run] <= most) for most in range(3))
     readings = []
-    for chosen in dict.fromkeys((tuple(missing), tuple(runs))):
+    for chosen in dict.fromkeys(choices):
         if not chosen:
             continue
-        added = [i for run in chosen for i in run]
-        # A line the patch wrote with only whitespace is a blank added line.
-        texts = {i: hunk.written[i] if hunk.written[i].strip() else "" for i in added}
+        texts = {i: text for run in chosen for i, text in _unmarked_texts(hunk, run).items()}
         read = [("+", texts[i]) if i in texts else line for i, line in enumerate(lines)]
         if any(prefix in " -" for prefix, _ in read):
             reading = replace(hunk, lines=read, written=[], precise_only=True)
-            readings.append((reading, added))
+            readings.append((reading, list(texts)))
     return readings
+
+
+def _unmarked_texts(hunk: _Hunk, run: range) -> dict[int, str]:
+    """Return the text each line of an unprefixed run adds, by position in ``hunk``.
+
+    A line the patch wrote without a prefix adds itself as written; one with only
+    whitespace adds a blank line. A Model that wrote the space prefix of unchanged
+    lines instead of + indents the run one space deeper than the nearest lines
+    around it. When only the run without that space matches their indentation,
+    each line adds its text without it.
+    """
+    texts = {i: hunk.written[i] if hunk.written[i].strip() else "" for i in run}
+    first = next((text for text in texts.values() if text), "")
+    if not first or not all(text.startswith(" ") for text in texts.values() if text):
+        return texts
+    before = (text for _, text in reversed(hunk.lines[: run.start]) if text.strip())
+    after = (text for _, text in hunk.lines[run.stop :] if text.strip())
+    around = {_leading(text) for text in (next(before, None), next(after, None)) if text}
+    indent = _leading(first)
+    if indent not in around and indent[1:] in around:
+        return {i: text[1:] for i, text in texts.items()}
+    return texts
+
+
+def _leading(text: str) -> str:
+    """Return the whitespace ``text`` starts with."""
+    return text[: len(text) - len(text.lstrip())]
 
 
 def _repeats_neighbors(content: str, edited: str, reading: _Hunk, added: list[int]) -> bool:
