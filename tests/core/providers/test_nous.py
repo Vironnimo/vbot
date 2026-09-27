@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -14,6 +15,10 @@ from core.providers.nous import NOUS_MAX_OUTPUT_TOKENS, NousAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 NOUS_CHAT_URL = "https://inference-api.nousresearch.com/v1/chat/completions"
+HELLO = [{"role": "user", "content": "Hello"}]
+CHAT_SUCCESS = {
+    "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]
+}
 
 
 def _config() -> ProviderConfig:
@@ -67,53 +72,54 @@ def adapter() -> NousAdapter:
     return NousAdapter(_config(), "nous-secret", model_lookup=models.get)
 
 
-def test_payload_enforces_documented_output_and_sampling_contract(adapter: NousAdapter) -> None:
-    payload = adapter._build_payload(
-        [{"role": "user", "content": "Hello"}],
-        "openai/gpt-5.5-pro",
-        max_output_tokens=100_000,
-        top_p=0.8,
-        seed=42,
-        temperature=1.5,
-    )
-
-    assert payload["max_tokens"] == NOUS_MAX_OUTPUT_TOKENS
-    assert payload["temperature"] == 1.5
-    assert "max_output_tokens" not in payload
-    assert "top_p" not in payload
-    assert "seed" not in payload
+async def _sent_body(adapter: NousAdapter, **kwargs: Any) -> dict[str, Any]:
+    with respx.mock:
+        route = respx.post(NOUS_CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
+        await adapter.send(HELLO, model_id="openai/gpt-5.5-pro", **kwargs)
+    body: dict[str, Any] = json.loads(route.calls.last.request.content)
+    return body
 
 
-def test_invalid_temperature_fails_before_network(adapter: NousAdapter) -> None:
-    with pytest.raises(ProviderError) as exc_info:
-        adapter._build_payload(
-            [{"role": "user", "content": "Hello"}],
-            "openai/gpt-5.5-pro",
-            temperature=2.1,
-        )
+@pytest.mark.asyncio
+async def test_request_enforces_documented_output_sampling_and_media_contract(
+    adapter: NousAdapter,
+) -> None:
+    body = await _sent_body(adapter, max_output_tokens=100_000, top_p=0.8, seed=42, temperature=1.5)
+
+    assert body["max_tokens"] == NOUS_MAX_OUTPUT_TOKENS
+    assert body["temperature"] == 1.5
+    for removed in ("max_output_tokens", "top_p", "seed"):
+        assert removed not in body, removed
+    # The Portal wire documents no native multipart media.
+    assert adapter.wire_media_support("openai/gpt-5.5-pro") == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_invalid_temperature_fails_before_network(adapter: NousAdapter) -> None:
+    with respx.mock:
+        route = respx.post(NOUS_CHAT_URL)
+        with pytest.raises(ProviderError) as exc_info:
+            await adapter.send(HELLO, model_id="openai/gpt-5.5-pro", temperature=2.1)
 
     assert exc_info.value.retryable is False
+    assert route.call_count == 0
 
 
-def test_reasoning_effort_uses_nous_object_and_off_is_omitted(adapter: NousAdapter) -> None:
-    enabled = adapter._build_payload(
-        [{"role": "user", "content": "Think"}],
-        "openai/gpt-5.5-pro",
-        thinking_effort="high",
-    )
-    disabled = adapter._build_payload(
-        [{"role": "user", "content": "Answer"}],
-        "openai/gpt-5.5-pro",
-        thinking_effort="none",
-    )
+@pytest.mark.parametrize(
+    ("effort", "reasoning"),
+    [
+        pytest.param("high", {"enabled": True, "effort": "high"}, id="effort-uses-nous-object"),
+        pytest.param("none", None, id="off-is-omitted"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_reasoning_uses_the_nous_object_and_off_is_omitted(
+    adapter: NousAdapter, effort: str, reasoning: dict[str, Any] | None
+) -> None:
+    body = await _sent_body(adapter, thinking_effort=effort)
 
-    assert enabled["reasoning"] == {"enabled": True, "effort": "high"}
-    assert "reasoning_effort" not in enabled
-    assert "reasoning" not in disabled
-
-
-def test_portal_wire_does_not_claim_undocumented_native_media(adapter: NousAdapter) -> None:
-    assert adapter.wire_media_support("openai/gpt-5.5-pro") == frozenset()
+    assert body.get("reasoning") == reasoning
+    assert "reasoning_effort" not in body
 
 
 def test_catalog_requires_explicit_capability_evidence_and_caps_output() -> None:

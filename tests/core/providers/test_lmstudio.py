@@ -54,78 +54,60 @@ CHAT_RESPONSE = {
 }
 
 
-class TestCatalogNormalization:
-    def test_native_llm_entry_preserves_local_capabilities(self) -> None:
-        model = LMStudioAdapter.normalize_catalog_entry(NATIVE_MODEL)
+def test_native_llm_entry_preserves_local_capabilities() -> None:
+    model = LMStudioAdapter.normalize_catalog_entry(NATIVE_MODEL)
 
-        assert model.model_id == MODEL_ID
-        assert model.name == "Gemma 4 12B Heretic"
-        assert model.family == "gemma4"
-        assert model.context_window == 262144
-        assert model.metadata["lmstudio"] == {"local": True}
-        assert model.capabilities.vision is True
-        assert model.capabilities.tools is True
-        assert model.capabilities.reasoning.supported is True
-        assert model.capabilities.reasoning.control == REASONING_CONTROL_ON_OFF
-
-    def test_non_chat_entry_is_skipped(self) -> None:
-        with pytest.raises(CatalogEntrySkipped):
-            LMStudioAdapter.normalize_catalog_entry({"type": "embedding", "key": "nomic-embed"})
+    assert model.model_id == MODEL_ID
+    assert model.name == "Gemma 4 12B Heretic"
+    assert model.family == "gemma4"
+    assert model.context_window == 262144
+    assert model.metadata["lmstudio"] == {"local": True}
+    assert model.capabilities.vision is True
+    assert model.capabilities.tools is True
+    assert model.capabilities.reasoning.supported is True
+    assert model.capabilities.reasoning.control == REASONING_CONTROL_ON_OFF
 
 
-class TestLazyModelLoading:
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_unloaded_model_is_loaded_with_resolved_context_before_chat(self) -> None:
-        adapter = LMStudioAdapter(
-            LMSTUDIO_CONFIG,
-            "",
-            local_context_resolver=lambda model_id: 32768,
+def test_non_chat_entry_is_skipped() -> None:
+    with pytest.raises(CatalogEntrySkipped):
+        LMStudioAdapter.normalize_catalog_entry({"type": "embedding", "key": "nomic-embed"})
+
+
+@pytest.mark.parametrize(
+    ("loaded_instances", "load_payload"),
+    [
+        pytest.param([], {"model": MODEL_ID, "context_length": 32768}, id="unloaded-is-loaded"),
+        pytest.param([{"id": "existing-instance"}], None, id="loaded-is-reused"),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_chat_loads_an_unloaded_model_with_the_resolved_context_first(
+    loaded_instances: list[dict[str, str]], load_payload: dict[str, object] | None
+) -> None:
+    adapter = LMStudioAdapter(LMSTUDIO_CONFIG, "", local_context_resolver=lambda model_id: 32768)
+    respx.get("http://localhost:1234/api/v1/models").mock(
+        return_value=httpx.Response(
+            200, json={"models": [{**NATIVE_MODEL, "loaded_instances": loaded_instances}]}
         )
-        models_route = respx.get("http://localhost:1234/api/v1/models").mock(
-            return_value=httpx.Response(200, json={"models": [NATIVE_MODEL]})
-        )
-        load_route = respx.post("http://localhost:1234/api/v1/models/load").mock(
-            return_value=httpx.Response(200, json={"instance_id": "loaded-instance"})
-        )
-        chat_route = respx.post("http://localhost:1234/v1/chat/completions").mock(
-            return_value=httpx.Response(200, json=CHAT_RESPONSE)
-        )
+    )
+    load_route = respx.post("http://localhost:1234/api/v1/models/load").mock(
+        return_value=httpx.Response(200, json={"instance_id": "loaded-instance"})
+    )
+    chat_route = respx.post("http://localhost:1234/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=CHAT_RESPONSE)
+    )
 
-        response = await adapter.send(
-            [{"role": "user", "content": "Hello"}],
-            model_id=MODEL_ID,
-        )
-
-        assert response == CHAT_RESPONSE
-        assert models_route.called
-        assert load_route.called
-        assert chat_route.called
-        load_payload = json.loads(load_route.calls.last.request.content)
-        assert load_payload == {"model": MODEL_ID, "context_length": 32768}
-        assert "authorization" not in chat_route.calls.last.request.headers
+    try:
+        response = await adapter.send([{"role": "user", "content": "Hello"}], model_id=MODEL_ID)
+    finally:
         await adapter.aclose()
 
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_already_loaded_model_is_reused_without_load_request(self) -> None:
-        adapter = LMStudioAdapter(
-            LMSTUDIO_CONFIG,
-            "",
-            local_context_resolver=lambda model_id: 32768,
-        )
-        loaded_model = {**NATIVE_MODEL, "loaded_instances": [{"id": "existing-instance"}]}
-        respx.get("http://localhost:1234/api/v1/models").mock(
-            return_value=httpx.Response(200, json={"models": [loaded_model]})
-        )
-        load_route = respx.post("http://localhost:1234/api/v1/models/load").mock(
-            return_value=httpx.Response(200, json={"instance_id": "unexpected"})
-        )
-        respx.post("http://localhost:1234/v1/chat/completions").mock(
-            return_value=httpx.Response(200, json=CHAT_RESPONSE)
-        )
-
-        await adapter.send([{"role": "user", "content": "Hello"}], model_id=MODEL_ID)
-
-        assert load_route.call_count == 0
-        await adapter.aclose()
+    assert response == CHAT_RESPONSE
+    requested = [call.request.url.path for call in respx.calls]
+    if load_payload is None:
+        assert requested == ["/api/v1/models", "/v1/chat/completions"]
+    else:
+        assert requested == ["/api/v1/models", "/api/v1/models/load", "/v1/chat/completions"]
+        assert json.loads(load_route.calls.last.request.content) == load_payload
+    assert "authorization" not in chat_route.calls.last.request.headers
