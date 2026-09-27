@@ -1,4 +1,4 @@
-"""Chat-loop tests grouped by fallback."""
+"""Run-local Model fallback: when a route switches, what the new route receives, and cleanup."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import io
 import json
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from PIL import Image
@@ -17,17 +17,11 @@ from core.chat._request_builder import RequestBuilder
 from core.chat._request_history import _restore_in_run_tool_result_content
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.providers.errors import (
-    ProviderAuthError,
-    ProviderRateLimitError,
-)
-from core.runs import (
-    ERROR_MESSAGE_PERSISTED_EVENT,
-    MODEL_FALLBACK_ACTIVATED_EVENT,
-    RunStatus,
-)
+from core.providers.errors import ProviderAuthError, ProviderRateLimitError
+from core.runs import ERROR_MESSAGE_PERSISTED_EVENT, MODEL_FALLBACK_ACTIVATED_EVENT, RunStatus
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
+    ToolAccess,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -35,6 +29,7 @@ from core.tools import (
 from core.tools.file_state import FileReadState
 from core.tools.read import register_read_tool
 from core.utils.errors import ConfigError, ProviderError
+from tests.core.chat.chat_loop_streaming_test_support import event_types, history, last_run
 from tests.core.chat.chat_loop_support import (
     ClosingStubAdapter,
     StubAdapter,
@@ -43,60 +38,471 @@ from tests.core.chat.chat_loop_support import (
     StubRuntime,
     build_chat_loop,
     persisted_roles,
-    session_address,
 )
 
 JsonObject = dict[str, Any]
 
+PRIMARY = "openai/gpt-5.2"
+FALLBACK = "anthropic/claude-sonnet-4::api-key"
 
-@pytest.mark.asyncio
-async def test_fallback_prepares_multiple_retained_images_in_original_order():
-    colors = [(255, 0, 0), (0, 0, 255)]
-    content = []
-    for index, color in enumerate(colors):
-        stream = io.BytesIO()
-        Image.new("RGB", (16, 12), color).save(stream, format="PNG")
-        content.extend(
-            [
-                {
-                    "type": "media",
-                    "media_type": "image/png",
-                    "base64": base64.b64encode(stream.getvalue()).decode("ascii"),
-                },
-                {"type": "text", "text": f"[Path: /missing/original-{index}.png]"},
-            ]
-        )
-    live = [
-        {
-            "id": "msg_images",
-            "role": "tool",
-            "tool_call_id": "images",
-            "content": "loaded",
-            TOOL_RESULT_CONTENT_BLOCKS_FIELD: content,
-        }
-    ]
-    rebuilt = [{"id": "msg_images", "role": "tool", "tool_call_id": "images", "content": "loaded"}]
-    restored = await _restore_in_run_tool_result_content(
-        rebuilt,
-        live,
-        input_modalities=frozenset({"image"}),
-        wire_media_types=frozenset({"image/jpeg"}),
-        max_image_bytes=512,
+
+def _fallback_runtime(
+    tmp_path: Path,
+    primary: StubAdapter,
+    fallback: StubAdapter | None = None,
+    *,
+    fallback_models: list[str] | None = None,
+    model: str = PRIMARY,
+    allowed_tools: list[str] | None = None,
+    **runtime_options: Any,
+) -> Any:
+    """Primary route on openai:api-key; every fallback candidate on anthropic:api-key."""
+    adapters = {"openai:api-key": primary}
+    if fallback is not None:
+        adapters["anthropic:api-key"] = fallback
+    agent = StubAgent(
+        id="coder",
+        model=model,
+        fallback_models=[FALLBACK] if fallback_models is None else fallback_models,
+        allowed_tools=["*"] if allowed_tools is None else allowed_tools,
     )
-    blocks = restored[0][TOOL_RESULT_CONTENT_BLOCKS_FIELD]
-    assert len(blocks) == 6
-    for index, color in enumerate(colors):
-        with Image.open(io.BytesIO(base64.b64decode(blocks[index * 3]["base64"]))) as image:
-            assert all(abs(a - b) <= 2 for a, b in zip(image.getpixel((0, 0)), color, strict=True))
-        assert "lossy compression" in blocks[index * 3 + 1]["text"]
-        assert f"original-{index}.png" in blocks[index * 3 + 2]["text"]
-    assert len(content) == 4
-    assert content[0]["media_type"] == "image/png"
+    return StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary,
+        adapters_by_connection=adapters,
+        provider_ids={"openai", "anthropic"},
+        **runtime_options,
+    )
+
+
+def _fallback_events(run: Any) -> list[tuple[str, str]]:
+    return [
+        (event.payload["from_model"], event.payload["to_model"])
+        for event in run.events
+        if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
+    ]
+
+
+def _model_not_found() -> ProviderError:
+    retired = ProviderError("Provider error: model not found", retryable=False)
+    retired.status_code = 404
+    return retired
+
+
+def _probe_tools(handler: Any) -> ToolRegistry:
+    tools = ToolRegistry()
+    tools.register("probe", "Probe", {"type": "object"}, handler)
+    return tools
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "vision,wire_type,byte_limit",
+    ("failure", "streaming"),
+    [
+        (ProviderRateLimitError("primary rate limited"), False),
+        (_model_not_found(), False),
+        # A rate limit skips the remaining same-Model restarts on a dead quota.
+        (ProviderRateLimitError("quota exhausted"), True),
+    ],
+    ids=["rate-limit", "model-not-found", "streaming-rate-limit"],
+)
+async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
+    tmp_path: Path, failure: ProviderError, streaming: bool
+) -> None:
+    recovered = [
+        {"type": "content_delta", "text": "Recovered"},
+        {"type": "finish", "reason": "stop"},
+    ]
+    primary = StubAdapter([failure], stream_responses=[failure])
+    fallback = StubAdapter(
+        [{"content": "Recovered", "tool_calls": None}], stream_responses=[recovered]
+    )
+    runtime = _fallback_runtime(tmp_path, primary, fallback)
+
+    assistant = await build_chat_loop(runtime, streaming=streaming).send(
+        "coder", "Hi", session_id="session-one"
+    )
+
+    run = last_run(runtime)
+    messages = history(runtime)
+    primary_requests = primary.stream_requests if streaming else primary.requests
+    fallback_requests = fallback.stream_requests if streaming else fallback.requests
+    assert assistant.content == "Recovered"
+    assert persisted_roles(messages) == ["user", "note", "assistant"]
+    assert (
+        messages[1].content == f"Model {PRIMARY} unavailable. Switched to {FALLBACK} for this run."
+    )
+    # Usage and cost belong to the Model that actually answered.
+    assert messages[2].model == FALLBACK
+    assert _fallback_events(run) == [(PRIMARY, FALLBACK)]
+    assert run.iteration_count == 1
+    assert messages[-1].iteration_count == 1
+    assert run.events[-1].payload["iteration_count"] == 1
+    assert [request["model_id"] for request in primary_requests] == ["gpt-5.2"]
+    assert [request["model_id"] for request in fallback_requests] == ["claude-sonnet-4"]
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_without_a_fallback_fails_the_run_after_same_model_recovery(
+    tmp_path: Path, recovery_waits: list[float]
+) -> None:
+    adapter = StubAdapter([ProviderRateLimitError("too many requests")] * 9)
+    runtime = _fallback_runtime(tmp_path, adapter, fallback_models=[])
+
+    with pytest.raises(ProviderRateLimitError, match="too many requests"):
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = last_run(runtime)
+    messages = history(runtime)
+    assert len(adapter.requests) == 9
+    assert run.status == RunStatus.FAILED
+    assert persisted_roles(messages) == ["user", "error"]
+    assert (run.iteration_count, messages[-1].iteration_count) == (0, 0)
+    assert run.events[-1].payload["iteration_count"] == 0
+    assert (messages[1].error_kind, messages[1].content) == ("rate_limit", "too many requests")
+    assert event_types(run) == [
+        "run_started",
+        "user_message_persisted",
+        ERROR_MESSAGE_PERSISTED_EVENT,
+        "run_failed",
+    ]
+    persisted_error = next(e for e in run.events if e.type == ERROR_MESSAGE_PERSISTED_EVENT)
+    assert persisted_error.payload["message"]["role"] == "error"
+    assert persisted_error.payload["message"]["error_kind"] == "rate_limit"
+
+
+@pytest.mark.asyncio
+async def test_account_wide_fatal_error_never_advances_the_fallback_chain(tmp_path: Path) -> None:
+    primary = StubAdapter([ProviderAuthError("invalid credential")])
+    fallback = StubAdapter([{"content": "Should not be used", "tool_calls": None}])
+    runtime = _fallback_runtime(tmp_path, primary, fallback)
+
+    with pytest.raises(ProviderAuthError, match="invalid credential"):
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = last_run(runtime)
+    assert run.status == RunStatus.FAILED
+    assert persisted_roles(history(runtime)) == ["user", "error"]
+    assert _fallback_events(run) == []
+    assert fallback.requests == []
+
+
+@pytest.mark.asyncio
+async def test_fallback_serves_the_rest_of_the_run_and_the_next_run_starts_on_the_primary(
+    tmp_path: Path,
+) -> None:
+    primary = StubAdapter(
+        [
+            ProviderRateLimitError("primary rate limited"),
+            {"content": "Primary turn 2", "tool_calls": None},
+        ]
+    )
+    fallback = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "probe", "arguments": {"value": "x"}}],
+            },
+            {"content": "Fallback turn 1", "tool_calls": None},
+        ]
+    )
+    tools = _probe_tools(lambda _context, arguments: tool_success({"value": arguments["value"]}))
+    runtime = _fallback_runtime(tmp_path, primary, fallback, allowed_tools=["probe"], tools=tools)
+
+    first = await build_chat_loop(runtime).send("coder", "turn 1", session_id="session-one")
+    first_run = last_run(runtime)
+    second = await build_chat_loop(runtime).send("coder", "turn 2", session_id="session-one")
+
+    assert (first.content, first.model) == ("Fallback turn 1", FALLBACK)
+    assert (second.content, second.model) == ("Primary turn 2", PRIMARY)
+    assert [request["model_id"] for request in primary.requests] == ["gpt-5.2", "gpt-5.2"]
+    assert [request["model_id"] for request in fallback.requests] == ["claude-sonnet-4"] * 2
+    assert _fallback_events(first_run) == [(PRIMARY, FALLBACK)]
+    assert _fallback_events(last_run(runtime)) == []
+
+
+class _RecordingAdapter(StubAdapter):
+    """Stub adapter recording the wire model id of every send."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        super().__init__(responses)
+        self.served_model_ids: list[str] = []
+
+    async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
+        self.served_model_ids.append(model_id)
+        return await super().send(messages, model_id=model_id, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_fallback_chain_skips_unresolvable_candidates_and_cascades_in_order(
+    tmp_path: Path,
+) -> None:
+    primary = StubAdapter([ProviderRateLimitError("primary rate limited")])
+    # Both resolvable candidates share anthropic:api-key, so one adapter serves them in order.
+    candidates = _RecordingAdapter(
+        [
+            ProviderRateLimitError("first resort limited"),
+            {"content": "Recovered", "tool_calls": None},
+        ]
+    )
+    chain = [
+        "ghost-provider/no-such-model",
+        "anthropic/first-resort::api-key",
+        "anthropic/last-resort::api-key",
+    ]
+    runtime = _fallback_runtime(tmp_path, primary, candidates, fallback_models=chain)
+
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    messages = history(runtime)
+    assert assistant.content == "Recovered"
+    assert _fallback_events(last_run(runtime)) == [
+        (PRIMARY, "anthropic/first-resort::api-key"),
+        ("anthropic/first-resort::api-key", "anthropic/last-resort::api-key"),
+    ]
+    assert persisted_roles(messages) == ["user", "note", "note", "assistant"]
+    assert "Switched to anthropic/first-resort::api-key" in str(messages[1].content)
+    assert "Switched to anthropic/last-resort::api-key" in str(messages[2].content)
+    assert candidates.served_model_ids == ["first-resort", "last-resort"]
+
+
+@pytest.mark.asyncio
+async def test_candidate_whose_adapter_cannot_be_built_is_skipped(tmp_path: Path) -> None:
+    primary = StubAdapter([ProviderRateLimitError("primary rate limited")])
+    runtime = _fallback_runtime(
+        tmp_path, primary, raise_on_connection={"anthropic:api-key": ConfigError("bad credential")}
+    )
+
+    # The broken candidate is never activated; the Run fails with the last actual
+    # send failure, the primary's original error.
+    with pytest.raises(ProviderRateLimitError, match="primary rate limited"):
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = last_run(runtime)
+    assert run.status == RunStatus.FAILED
+    assert persisted_roles(history(runtime)) == ["user", "error"]
+    assert ERROR_MESSAGE_PERSISTED_EVENT in event_types(run)
+    assert _fallback_events(run) == []
+
+
+@pytest.mark.asyncio
+async def test_fallback_failure_persists_the_fallback_error(tmp_path: Path) -> None:
+    primary = StubAdapter([ProviderRateLimitError("primary rate limited")])
+    fallback = StubAdapter([ProviderRateLimitError("fallback rate limited")])
+    runtime = _fallback_runtime(tmp_path, primary, fallback)
+
+    with pytest.raises(ProviderRateLimitError, match="fallback rate limited"):
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = last_run(runtime)
+    messages = history(runtime)
+    assert run.status == RunStatus.FAILED
+    assert event_types(run).count(ERROR_MESSAGE_PERSISTED_EVENT) == 1
+    assert _fallback_events(run) == [(PRIMARY, FALLBACK)]
+    assert persisted_roles(messages) == ["user", "note", "error"]
+    assert messages[-2].error_kind == "rate_limit"
+
+
+@pytest.mark.asyncio
+async def test_fallback_request_strips_primary_provider_reasoning_meta(tmp_path: Path) -> None:
+    primary = StubAdapter(
+        [
+            {
+                "content": None,
+                "reasoning": "Primary readable reasoning",
+                "reasoning_meta": {"reasoning_details": [{"type": "primary-opaque"}]},
+                "tool_calls": [{"id": "call_1", "name": "probe", "arguments": {"value": "x"}}],
+            },
+            ProviderRateLimitError("primary rate limited"),
+        ]
+    )
+    fallback = StubAdapter(
+        [
+            {
+                "content": "Done",
+                "reasoning": "Fallback reasoning",
+                "reasoning_meta": {"content_blocks": [{"type": "thinking", "signature": "fb"}]},
+                "tool_calls": None,
+            }
+        ]
+    )
+    tools = _probe_tools(lambda _context, arguments: tool_success({"value": arguments["value"]}))
+    runtime = _fallback_runtime(tmp_path, primary, fallback, allowed_tools=["probe"], tools=tools)
+
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert assistant.content == "Done"
+    assert assistant.reasoning_scope == FALLBACK
+    # The primary's own Tool-continuation request still round-trips its meta.
+    assert any(
+        "reasoning_meta" in message
+        for message in primary.requests[1]["messages"]
+        if message.get("role") == "assistant"
+    )
+    # The fallback Provider never sees the primary's reasoning fields.
+    fallback_messages = fallback.requests[0]["messages"]
+    fallback_assistants = [m for m in fallback_messages if m.get("role") == "assistant"]
+    assert fallback_assistants
+    assert all("reasoning" not in m and "reasoning_meta" not in m for m in fallback_assistants)
+    assert "primary-opaque" not in str(fallback_messages)
+    # The completed Tool turn's readable work survives the route change only as
+    # explicitly provider-neutral context, after its Tool Result.
+    portable_notes = [
+        index
+        for index, message in enumerate(fallback_messages)
+        if message.get("role") == "user"
+        and "Primary readable reasoning" in message.get("content", "")
+    ]
+    tool_result_index = next(i for i, m in enumerate(fallback_messages) if m.get("role") == "tool")
+    assert len(portable_notes) == 1
+    assert portable_notes[0] > tool_result_index
+
+
+@pytest.mark.asyncio
+async def test_fallback_keeps_the_consumed_tool_round_budget(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def record(context: Any, _arguments: Any) -> JsonObject:
+        calls.append(context.tool_call_id)
+        return tool_success({})
+
+    primary = StubAdapter(
+        [
+            {"tool_calls": [{"id": "first", "name": "probe", "arguments": {}}]},
+            ProviderRateLimitError("switch route"),
+        ]
+    )
+    fallback = StubAdapter(
+        [
+            {"tool_calls": [{"id": "second", "name": "probe", "arguments": {}}]},
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    runtime = _fallback_runtime(
+        tmp_path,
+        primary,
+        fallback,
+        model="openai/primary",
+        fallback_models=["anthropic/fallback::api-key"],
+        allowed_tools=["probe"],
+        tools=_probe_tools(record),
+    )
+
+    await build_chat_loop(runtime, max_tool_iterations=1).send("coder", "Work", session_id="s1")
+
+    assert calls == ["first"]
+    rejected = next(
+        message
+        for message in history(runtime, "s1")
+        if message.role == "tool" and message.tool_call_id == "second"
+    )
+    assert json.loads(str(rejected.content))["error"]["code"] == "tool_iteration_limit"
+    assert fallback.requests[-1]["kwargs"]["tools"] == []
+
+
+@pytest.mark.asyncio
+async def test_identical_tool_failures_share_the_circuit_breaker_across_fallback(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def fail(context: Any, _arguments: Any) -> JsonObject:
+        calls.append(context.tool_call_id)
+        return tool_failure("unavailable", "still unavailable")
+
+    primary_responses: list[Any] = [
+        {"tool_calls": [{"id": f"call-{index}", "name": "probe", "arguments": {}}]}
+        for index in range(7)
+    ]
+    primary = StubAdapter([*primary_responses, ProviderRateLimitError("switch route")])
+    fallback = StubAdapter(
+        [
+            {"tool_calls": [{"id": "last", "name": "probe", "arguments": {}}]},
+            {"content": "Cannot complete", "tool_calls": None},
+        ]
+    )
+    runtime = _fallback_runtime(
+        tmp_path,
+        primary,
+        fallback,
+        model="openai/primary",
+        fallback_models=["anthropic/fallback::api-key"],
+        allowed_tools=["probe"],
+        tools=_probe_tools(fail),
+    )
+
+    await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
+
+    assert len(calls) == 8
+    assert fallback.requests[-1]["kwargs"]["tools"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("vision_granted", "fallback_vision"),
+    [(False, False), (False, True), (True, False)],
+    ids=["fallback-without-vision", "fallback-with-vision", "granted"],
+)
+async def test_fallback_rebuilds_route_gated_image_tool_visibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    vision_granted: bool,
+    fallback_vision: bool,
+) -> None:
+    policy = ToolAccess(
+        mode="selected",
+        allowed=(ANALYZE_IMAGE_TOOL_NAME,),
+        granted=(ANALYZE_IMAGE_TOOL_NAME,) if vision_granted else (),
+    )
+    monkeypatch.setattr(StubAgent, "tool_access", property(lambda _self: policy))
+    primary = StubAdapter(
+        [ProviderRateLimitError("primary rate limited")],
+        wire_media_types=frozenset({"image/png"}),
+    )
+    fallback = StubAdapter(
+        [{"content": "Recovered", "tool_calls": None}],
+        wire_media_types=frozenset({"image/png"}) if fallback_vision else frozenset(),
+    )
+    tools = ToolRegistry()
+    tools.register(
+        ANALYZE_IMAGE_TOOL_NAME,
+        "Analyze images.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({"analysis": "ok"}),
+    )
+    runtime = _fallback_runtime(
+        tmp_path,
+        primary,
+        fallback,
+        model="openai/vision-model",
+        fallback_models=["anthropic/text-model::api-key"],
+        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
+        tools=tools,
+        models=StubModels(
+            {("openai", "vision-model"): 128_000, ("anthropic", "text-model"): 128_000},
+            input_modalities={
+                ("openai", "vision-model"): ("text", "image"),
+                ("anthropic", "text-model"): ("text", "image") if fallback_vision else ("text",),
+            },
+        ),
+        available_task_models={TASK_IMAGE_UNDERSTANDING},
+    )
+
+    await build_chat_loop(runtime).send("coder", "Inspect it", session_id="s1")
+
+    def offered(adapter: StubAdapter) -> bool:
+        return ANALYZE_IMAGE_TOOL_NAME in {
+            t["name"] for t in adapter.requests[0]["kwargs"]["tools"]
+        }
+
+    assert offered(primary) is vision_granted
+    assert offered(fallback) is (vision_granted or not fallback_vision)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("vision", "wire_type", "byte_limit"),
     [
         (True, "image/png", None),
         (True, "image/jpeg", None),
@@ -109,11 +515,11 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
     tmp_path: Path, vision: bool, wire_type: str, byte_limit: int | None
 ) -> None:
     source = tmp_path / "original.png"
-    stream = io.BytesIO()
-    Image.frombytes("RGB", (128, 64), random.Random(4).randbytes(128 * 64 * 3)).save(
-        stream, format="PNG"
+    encoded = io.BytesIO()
+    Image.frombytes("RGB", (48, 24), random.Random(4).randbytes(48 * 24 * 3)).save(
+        encoded, format="PNG"
     )
-    pixels = stream.getvalue()
+    pixels = encoded.getvalue()
     source.write_bytes(pixels)
 
     class DeletingAdapter(StubAdapter):
@@ -121,6 +527,10 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
             if self.requests:
                 source.unlink()
             return await super().send(*args, **kwargs)
+
+    class LimitedAdapter(StubAdapter):
+        def image_size_limit(self, model_id: str) -> int | None:
+            return byte_limit
 
     primary = DeletingAdapter(
         [
@@ -130,18 +540,12 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
                     {"id": "read-image", "name": "read", "arguments": {"path": str(source)}}
                 ],
             },
-            ProviderRateLimitError("switch target"),  # type: ignore[list-item]
+            ProviderRateLimitError("switch target"),
         ],
         wire_media_types=frozenset({"image/png"}),
     )
-
-    class LimitedAdapter(StubAdapter):
-        def image_size_limit(self, model_id: str) -> int | None:
-            return byte_limit
-
     fallback = LimitedAdapter(
-        [{"content": "done", "tool_calls": None}],
-        wire_media_types=frozenset({wire_type}),
+        [{"content": "done", "tool_calls": None}], wire_media_types=frozenset({wire_type})
     )
     tools = ToolRegistry()
     register_read_tool(
@@ -151,18 +555,13 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
         file_state=FileReadState(),
         speech_max_size_bytes=1024,
     )
-    agent = StubAgent(
-        id="coder",
+    runtime = _fallback_runtime(
+        tmp_path,
+        primary,
+        fallback,
         model="openai/primary",
         fallback_models=["anthropic/fallback::api-key"],
         allowed_tools=["read"],
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary,
-        adapters_by_connection={"openai:api-key": primary, "anthropic:api-key": fallback},
-        provider_ids={"openai", "anthropic"},
         tools=tools,
         models=StubModels(
             {("openai", "primary"): 128_000, ("anthropic", "fallback"): 128_000},
@@ -172,7 +571,9 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
             },
         ),
     )
+
     await build_chat_loop(runtime).send("coder", "inspect", session_id="s1")
+
     parts = [
         part
         for message in fallback.requests[0]["messages"]
@@ -194,890 +595,115 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
         assert native == []
     assert any(source.as_posix() in part.get("text", "") for part in parts)
     assert not list((tmp_path / "artifacts" / "attachments").rglob("*"))
-    persisted = runtime.chat_sessions.get(session_address("coder", "s1")).load()
+    persisted = history(runtime, "s1")
     assert "base64" not in json.dumps([message.to_dict() for message in persisted])
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("vision_granted", [False, True])
-@pytest.mark.parametrize("fallback_vision", [False, True])
-async def test_fallback_rebuilds_route_gated_image_tool_visibility(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    vision_granted: bool,
-    fallback_vision: bool,
-) -> None:
-    from core.tools import ToolAccess
-
-    policy = ToolAccess(
-        mode="selected",
-        allowed=(ANALYZE_IMAGE_TOOL_NAME,),
-        granted=(ANALYZE_IMAGE_TOOL_NAME,) if vision_granted else (),
-    )
-    monkeypatch.setattr(StubAgent, "tool_access", property(lambda _self: policy))
-    agent = StubAgent(
-        id="coder",
-        model="openai/vision-model",
-        fallback_models=["anthropic/text-model::api-key"],
-        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
-    )
-    primary_adapter = StubAdapter(
-        [ProviderRateLimitError("primary rate limited")],  # type: ignore[list-item]
-        wire_media_types=frozenset({"image/png"}),
-    )
-    fallback_adapter = StubAdapter(
-        [{"content": "Recovered", "tool_calls": None}],
-        wire_media_types=frozenset({"image/png"}) if fallback_vision else frozenset(),
-    )
-    tools = ToolRegistry()
-    tools.register(
-        ANALYZE_IMAGE_TOOL_NAME,
-        "Analyze images.",
-        {"type": "object"},
-        lambda _context, _arguments: tool_success({"analysis": "ok"}),
-    )
-    models = StubModels(
+async def test_fallback_prepares_multiple_retained_images_in_original_order() -> None:
+    colors = [(255, 0, 0), (0, 0, 255)]
+    content: list[JsonObject] = []
+    for index, color in enumerate(colors):
+        encoded = io.BytesIO()
+        Image.new("RGB", (16, 12), color).save(encoded, format="PNG")
+        content.extend(
+            [
+                {
+                    "type": "media",
+                    "media_type": "image/png",
+                    "base64": base64.b64encode(encoded.getvalue()).decode("ascii"),
+                },
+                {"type": "text", "text": f"[Path: /missing/original-{index}.png]"},
+            ]
+        )
+    live = [
         {
-            ("openai", "vision-model"): 128_000,
-            ("anthropic", "text-model"): 128_000,
-        },
-        input_modalities={
-            ("openai", "vision-model"): ("text", "image"),
-            ("anthropic", "text-model"): ("text", "image") if fallback_vision else ("text",),
-        },
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-        tools=tools,
-        models=models,
-        available_task_models={TASK_IMAGE_UNDERSTANDING},
+            "id": "msg_images",
+            "role": "tool",
+            "tool_call_id": "images",
+            "content": "loaded",
+            TOOL_RESULT_CONTENT_BLOCKS_FIELD: content,
+        }
+    ]
+    rebuilt = [{"id": "msg_images", "role": "tool", "tool_call_id": "images", "content": "loaded"}]
+
+    restored = await _restore_in_run_tool_result_content(
+        rebuilt,
+        live,
+        input_modalities=frozenset({"image"}),
+        wire_media_types=frozenset({"image/jpeg"}),
+        max_image_bytes=512,
     )
 
-    await build_chat_loop(runtime).send("coder", "Inspect it", session_id="s1")
-
-    primary_tools = primary_adapter.requests[0]["kwargs"]["tools"]
-    fallback_tools = fallback_adapter.requests[0]["kwargs"]["tools"]
-    assert (
-        ANALYZE_IMAGE_TOOL_NAME in {definition["name"] for definition in primary_tools}
-    ) is vision_granted
-    assert (ANALYZE_IMAGE_TOOL_NAME in {definition["name"] for definition in fallback_tools}) is (
-        vision_granted or not fallback_vision
-    )
+    blocks = restored[0][TOOL_RESULT_CONTENT_BLOCKS_FIELD]
+    assert len(blocks) == 6
+    for index, color in enumerate(colors):
+        with Image.open(io.BytesIO(base64.b64decode(blocks[index * 3]["base64"]))) as image:
+            pixel = cast(tuple[int, ...], image.getpixel((0, 0)))
+        assert all(abs(a - b) <= 2 for a, b in zip(pixel, color, strict=True))
+        assert "lossy compression" in blocks[index * 3 + 1]["text"]
+        assert f"original-{index}.png" in blocks[index * 3 + 2]["text"]
+    # The live Tool Result keeps its original blocks.
+    assert len(content) == 4
+    assert content[0]["media_type"] == "image/png"
 
 
 @pytest.mark.asyncio
-async def test_fallback_closes_adapter_when_request_preparation_fails(tmp_path, monkeypatch):
-    primary = ClosingStubAdapter([ProviderRateLimitError("switch route")])
+@pytest.mark.parametrize("outcome", ["answer", "provider-error", "context-preparation-failure"])
+async def test_the_run_adapter_is_closed_whatever_the_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    response: Any = (
+        ProviderError("provider failed", retryable=False)
+        if outcome == "provider-error"
+        else {"content": "Hello", "tool_calls": None}
+    )
+    adapter = ClosingStubAdapter([response])
+    runtime = _fallback_runtime(tmp_path, adapter, fallback_models=[])
+    if outcome == "context-preparation-failure":
+
+        def fail_catalog(*_args: Any, **_kwargs: Any) -> None:
+            raise ConfigError("catalog preparation failed")
+
+        monkeypatch.setattr("core.chat._run_state.pinned_skill_catalog", fail_catalog)
+    send = build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    if outcome == "answer":
+        await send
+    else:
+        with pytest.raises((ProviderError, ConfigError)):
+            await send
+
+    assert adapter.closed is True
+    assert len(adapter.requests) == (0 if outcome == "context-preparation-failure" else 1)
+
+
+@pytest.mark.asyncio
+async def test_fallback_adapter_is_closed_when_its_request_preparation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    switch_route: Any = ProviderRateLimitError("switch route")
+    primary = ClosingStubAdapter([switch_route])
     fallback = ClosingStubAdapter([])
-    runtime = StubRuntime(
-        data_dir=tmp_path,
-        agent=StubAgent(
-            id="coder", model="openai/primary", fallback_models=["anthropic/fallback::api-key"]
-        ),
-        adapter=primary,
-        adapters_by_connection={"openai:api-key": primary, "anthropic:api-key": fallback},
-        provider_ids={"openai", "anthropic"},
+    runtime = _fallback_runtime(
+        tmp_path,
+        primary,
+        fallback,
+        model="openai/primary",
+        fallback_models=["anthropic/fallback::api-key"],
         models=StubModels({("openai", "primary"): 128_000, ("anthropic", "fallback"): 128_000}),
     )
     original = RequestBuilder.build_request_state
 
-    async def fail_fallback(self, *args, **kwargs):
+    async def fail_fallback(self: Any, *args: Any, **kwargs: Any) -> Any:
         if kwargs["inputs"].reasoning_scope_model.startswith("anthropic/fallback"):
             raise ConfigError("fallback preparation failed")
         return await original(self, *args, **kwargs)
 
     monkeypatch.setattr(RequestBuilder, "build_request_state", fail_fallback)
+
     with pytest.raises(ConfigError, match="fallback preparation failed"):
         await build_chat_loop(runtime).send("coder", "hello", session_id="session")
-    assert primary.closed
-    assert fallback.closed
+
+    assert (primary.closed, fallback.closed) == (True, True)
     assert fallback.requests == []
-
-
-@pytest.mark.asyncio
-async def test_primary_adapter_closes_when_context_preparation_fails(tmp_path, monkeypatch):
-    adapter = ClosingStubAdapter([])
-    runtime = StubRuntime(
-        data_dir=tmp_path,
-        agent=StubAgent(id="coder", model="openai/gpt-5.2"),
-        adapter=adapter,
-    )
-
-    def fail_catalog(*args, **kwargs):
-        raise ConfigError("catalog preparation failed")
-
-    monkeypatch.setattr("core.chat._run_state.pinned_skill_catalog", fail_catalog)
-    with pytest.raises(ConfigError, match="catalog preparation failed"):
-        await build_chat_loop(runtime).send("coder", "hello", session_id="session")
-    assert adapter.closed
-    assert adapter.requests == []
-
-
-@pytest.mark.asyncio
-async def test_send_closes_adapter_when_aclose_exists(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = ClosingStubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    assert adapter.closed is True
-
-
-@pytest.mark.asyncio
-async def test_send_closes_adapter_after_provider_error(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = ClosingStubAdapter([ProviderError("provider failed", retryable=False)])  # type: ignore[list-item]
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    with pytest.raises(ProviderError, match="provider failed"):
-        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    assert adapter.closed is True
-
-
-@pytest.mark.asyncio
-async def test_provider_rate_limit_error_is_persisted_and_run_fails(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([ProviderRateLimitError("too many requests")] * 9)  # type: ignore[list-item]
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    with pytest.raises(ProviderRateLimitError, match="too many requests"):
-        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert run.status == RunStatus.FAILED
-    assert persisted_roles(messages) == ["user", "error"]
-    assert run.iteration_count == 0
-    assert messages[-1].iteration_count == 0
-    assert run.events[-1].payload["iteration_count"] == 0
-    assert messages[1].error_kind == "rate_limit"
-    assert messages[1].content == "too many requests"
-    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
-        "run_started",
-        "user_message_persisted",
-        ERROR_MESSAGE_PERSISTED_EVENT,
-        "run_failed",
-    ]
-    assert (
-        next(event for event in run.events if event.type == ERROR_MESSAGE_PERSISTED_EVENT).payload[
-            "message"
-        ]["role"]
-        == "error"
-    )
-    assert (
-        next(event for event in run.events if event.type == ERROR_MESSAGE_PERSISTED_EVENT).payload[
-            "message"
-        ]["error_kind"]
-        == "rate_limit"
-    )
-
-
-@pytest.mark.asyncio
-async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["*"],
-    )
-    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
-    fallback_adapter = StubAdapter([{"content": "Recovered", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    fallback_events = [
-        event for event in run.events if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
-    ]
-    assert assistant.content == "Recovered"
-    assert persisted_roles(messages) == ["user", "note", "assistant"]
-    # Usage and cost belong to the Model that actually answered.
-    assert messages[2].model == "anthropic/claude-sonnet-4::api-key"
-    assert run.iteration_count == 1
-    assert messages[-1].iteration_count == 1
-    assert run.events[-1].payload["iteration_count"] == 1
-    assert messages[1].content == (
-        "Model openai/gpt-5.2 unavailable. "
-        "Switched to anthropic/claude-sonnet-4::api-key for this run."
-    )
-    assert len(fallback_events) == 1
-    assert fallback_events[0].payload == {
-        "from_model": "openai/gpt-5.2",
-        "to_model": "anthropic/claude-sonnet-4::api-key",
-    }
-    assert primary_adapter.requests[0]["model_id"] == "gpt-5.2"
-    assert fallback_adapter.requests[0]["model_id"] == "claude-sonnet-4"
-
-
-@pytest.mark.asyncio
-async def test_streaming_fallback_activates_after_same_model_recovery_is_exhausted(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["*"],
-    )
-    # A generic (non-rate-limit) retryable provider failure still burns the
-    # same-model restart budget; only rate limits skip it via the fast path.
-    primary_adapter = StubAdapter(
-        [],
-        stream_responses=[ProviderError("provider overloaded", retryable=True) for _ in range(9)],
-    )
-    fallback_adapter = StubAdapter(
-        [],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Recovered"},
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    assert assistant.content == "Recovered"
-    assert assistant.model == "anthropic/claude-sonnet-4::api-key"
-    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert [m.model for m in persisted if m.role == "assistant"] == [
-        "anthropic/claude-sonnet-4::api-key"
-    ]
-    assert len(primary_adapter.stream_requests) == 9
-    assert len(fallback_adapter.stream_requests) == 1
-    assert run.status == RunStatus.COMPLETED
-    assert [event.type for event in run.events if event.type == MODEL_FALLBACK_ACTIVATED_EVENT] == [
-        MODEL_FALLBACK_ACTIVATED_EVENT
-    ]
-
-
-@pytest.mark.asyncio
-async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["*"],
-    )
-    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={"openai:api-key": primary_adapter},
-        raise_on_connection={"anthropic:api-key": ConfigError("bad credential")},
-        provider_ids={"openai", "anthropic"},
-    )
-
-    # The broken candidate is skipped (warned, never activated); the run fails
-    # with the last actual send failure — the primary's original error.
-    with pytest.raises(ProviderRateLimitError, match="primary rate limited"):
-        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    event_types = [event.type for event in run.events]
-    assert run.status == RunStatus.FAILED
-    assert persisted_roles(messages) == ["user", "error"]
-    assert ERROR_MESSAGE_PERSISTED_EVENT in event_types
-    assert MODEL_FALLBACK_ACTIVATED_EVENT not in event_types
-
-
-@pytest.mark.asyncio
-async def test_next_turn_reuses_primary_model(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["*"],
-    )
-    primary_adapter = StubAdapter(
-        [
-            ProviderRateLimitError("primary rate limited"),
-            {"content": "Primary turn 2", "tool_calls": None},
-        ]
-    )
-    fallback_adapter = StubAdapter([{"content": "Fallback turn 1", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    first_assistant = await build_chat_loop(runtime).send("coder", "turn 1", session_id="s1")
-    second_assistant = await build_chat_loop(runtime).send("coder", "turn 2", session_id="s1")
-
-    fallback_event_count = sum(
-        1
-        for run in runtime.chat_runs._runs.values()
-        for event in run.events
-        if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
-    )
-    assert first_assistant.content == "Fallback turn 1"
-    assert second_assistant.content == "Primary turn 2"
-    assert (first_assistant.model, second_assistant.model) == (
-        "anthropic/claude-sonnet-4::api-key",
-        "openai/gpt-5.2",
-    )
-    assert len(primary_adapter.requests) == 2
-    assert len(fallback_adapter.requests) == 1
-    assert fallback_event_count == 1
-
-
-@pytest.mark.asyncio
-async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["*"],
-    )
-    primary_adapter = StubAdapter([ProviderAuthError("invalid credential")])  # type: ignore[list-item]
-    fallback_adapter = StubAdapter([{"content": "Should not be used", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    with pytest.raises(ProviderAuthError, match="invalid credential"):
-        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert run.status == RunStatus.FAILED
-    assert persisted_roles(messages) == ["user", "error"]
-    assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
-    assert fallback_adapter.requests == []
-
-
-@pytest.mark.asyncio
-async def test_fallback_not_triggered_when_fallback_model_empty(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([ProviderRateLimitError("primary rate limited")] * 9)  # type: ignore[list-item]
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-
-    with pytest.raises(ProviderRateLimitError, match="primary rate limited"):
-        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    assert run.status == RunStatus.FAILED
-    assert persisted_roles(messages) == ["user", "error"]
-    assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
-
-
-@pytest.mark.asyncio
-async def test_fallback_stays_active_for_rest_of_run(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["echo"],
-    )
-    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
-    fallback_adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "tool_calls": [{"id": "call_1", "name": "echo", "arguments": {"value": "x"}}],
-            },
-            {"content": "Done", "tool_calls": None},
-        ]
-    )
-    tools = ToolRegistry()
-    tools.register(
-        "echo",
-        "Echo value.",
-        {"type": "object"},
-        lambda _context, arguments: tool_success({"value": arguments["value"]}),
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-        tools=tools,
-    )
-
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    assert assistant.content == "Done"
-    assert len(primary_adapter.requests) == 1
-    assert len(fallback_adapter.requests) == 2
-    assert primary_adapter.requests[0]["model_id"] == "gpt-5.2"
-    assert all(request["model_id"] == "claude-sonnet-4" for request in fallback_adapter.requests)
-
-
-@pytest.mark.asyncio
-async def test_fallback_request_strips_primary_provider_reasoning_meta(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["echo"],
-    )
-    primary_adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "reasoning": "Primary readable reasoning",
-                "reasoning_meta": {"reasoning_details": [{"type": "primary-opaque"}]},
-                "tool_calls": [{"id": "call_1", "name": "echo", "arguments": {"value": "x"}}],
-            },
-            ProviderRateLimitError("primary rate limited"),
-        ]
-    )
-    fallback_adapter = StubAdapter(
-        [
-            {
-                "content": "Done",
-                "reasoning": "Fallback reasoning",
-                "reasoning_meta": {"content_blocks": [{"type": "thinking", "signature": "fb"}]},
-                "tool_calls": None,
-            }
-        ]
-    )
-    tools = ToolRegistry()
-    tools.register(
-        "echo",
-        "Echo value.",
-        {"type": "object"},
-        lambda _context, arguments: tool_success({"value": arguments["value"]}),
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-        tools=tools,
-    )
-
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    assert assistant.content == "Done"
-    assert assistant.reasoning_scope == "anthropic/claude-sonnet-4::api-key"
-    # The primary's own tool-continuation request still round-trips its meta.
-    primary_followup_assistants = [
-        message
-        for message in primary_adapter.requests[1]["messages"]
-        if message.get("role") == "assistant"
-    ]
-    assert any("reasoning_meta" in message for message in primary_followup_assistants)
-    # The fallback provider must never see the primary's reasoning fields.
-    fallback_assistants = [
-        message
-        for message in fallback_adapter.requests[0]["messages"]
-        if message.get("role") == "assistant"
-    ]
-    assert fallback_assistants
-    assert all(
-        "reasoning" not in message and "reasoning_meta" not in message
-        for message in fallback_assistants
-    )
-    # The completed Tool turn's readable work survives the route change only
-    # as explicitly provider-neutral context, after its Tool result.
-    fallback_messages = fallback_adapter.requests[0]["messages"]
-    portable_notes = [
-        message
-        for message in fallback_messages
-        if message.get("role") == "user"
-        and "Primary readable reasoning" in message.get("content", "")
-    ]
-    assert len(portable_notes) == 1
-    tool_result_index = next(
-        index for index, message in enumerate(fallback_messages) if message.get("role") == "tool"
-    )
-    portable_note_index = fallback_messages.index(portable_notes[0])
-    assert portable_note_index > tool_result_index
-    assert "primary-opaque" not in str(fallback_messages)
-
-
-@pytest.mark.asyncio
-async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["*"],
-    )
-    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
-    fallback_adapter = StubAdapter([ProviderRateLimitError("fallback rate limited")])  # type: ignore[list-item]
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    with pytest.raises(ProviderRateLimitError, match="fallback rate limited"):
-        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    error_events = [event for event in run.events if event.type == ERROR_MESSAGE_PERSISTED_EVENT]
-    assert run.status == RunStatus.FAILED
-    assert len(error_events) == 1
-    assert any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
-    assert persisted_roles(messages) == ["user", "note", "error"]
-    error_message = next(message for message in messages if message.role == "error")
-    assert error_message.error_kind == "rate_limit"
-
-
-@pytest.mark.asyncio
-async def test_fallback_chain_cascades_through_candidates_in_order(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=[
-            "anthropic/first-resort::api-key",
-            "anthropic/last-resort::api-key",
-        ],
-        allowed_tools=["*"],
-    )
-    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
-    # Both candidates resolve onto anthropic:api-key, so one shared adapter
-    # serves them in queue order; it records which model id each request used.
-    shared_candidate_adapter = _RecordingAdapter(
-        [
-            ProviderRateLimitError("first resort limited"),  # type: ignore[list-item]
-            {"content": "Recovered", "tool_calls": None},
-        ]
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": shared_candidate_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    messages = runtime.chat_sessions.get(session_address("coder", "s1")).load()
-    fallback_events = [
-        (event.payload["from_model"], event.payload["to_model"])
-        for event in run.events
-        if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
-    ]
-    assert assistant.content == "Recovered"
-    assert fallback_events == [
-        ("openai/gpt-5.2", "anthropic/first-resort::api-key"),
-        ("anthropic/first-resort::api-key", "anthropic/last-resort::api-key"),
-    ]
-    assert list(persisted_roles(messages)) == ["user", "note", "note", "assistant"]
-    assert "Switched to anthropic/first-resort::api-key" in messages[1].content
-    assert "Switched to anthropic/last-resort::api-key" in messages[2].content
-    assert shared_candidate_adapter.served_model_ids == ["first-resort", "last-resort"]
-
-
-class _RecordingAdapter(StubAdapter):
-    """Stub adapter recording the wire model id of every send."""
-
-    def __init__(self, responses: list[Any]) -> None:
-        super().__init__(responses)
-        self.served_model_ids: list[str] = []
-
-    async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
-        self.served_model_ids.append(model_id)
-        return await super().send(messages, model_id=model_id, **kwargs)
-
-
-@pytest.mark.asyncio
-async def test_fallback_chain_skips_unresolvable_candidate(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=[
-            "ghost-provider/no-such-model",
-            "anthropic/claude-sonnet-4::api-key",
-        ],
-        allowed_tools=["*"],
-    )
-    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
-    fallback_adapter = StubAdapter([{"content": "Recovered", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    fallback_events = [
-        event.payload["to_model"]
-        for event in run.events
-        if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
-    ]
-    assert assistant.content == "Recovered"
-    assert fallback_events == ["anthropic/claude-sonnet-4::api-key"]
-
-
-@pytest.mark.asyncio
-async def test_fallback_chain_advances_on_model_scoped_fatal_error(tmp_path: Path) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["*"],
-    )
-    retired = ProviderError("Provider error: model not found", retryable=False)
-    retired.status_code = 404
-    primary_adapter = StubAdapter([retired])  # type: ignore[list-item]
-    fallback_adapter = StubAdapter([{"content": "Recovered", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
-
-    assert assistant.content == "Recovered"
-    assert fallback_adapter.requests[0]["model_id"] == "claude-sonnet-4"
-
-
-@pytest.mark.asyncio
-async def test_fallback_chain_does_not_advance_on_account_wide_fatal_error(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["*"],
-    )
-    primary_adapter = StubAdapter([ProviderAuthError("invalid credential")])  # type: ignore[list-item]
-    fallback_adapter = StubAdapter([{"content": "Should not be used", "tool_calls": None}])
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    with pytest.raises(ProviderAuthError, match="invalid credential"):
-        await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
-
-    run = next(iter(runtime.chat_runs._runs.values()))
-    assert run.status == RunStatus.FAILED
-    assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
-    assert fallback_adapter.requests == []
-
-
-@pytest.mark.asyncio
-async def test_streaming_rate_limit_with_chain_skips_same_model_restarts(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(
-        id="coder",
-        model="openai/gpt-5.2",
-        fallback_models=["anthropic/claude-sonnet-4::api-key"],
-        allowed_tools=["*"],
-    )
-    primary_adapter = StubAdapter(
-        [],
-        stream_responses=[ProviderRateLimitError("quota exhausted")],
-    )
-    fallback_adapter = StubAdapter(
-        [],
-        stream_responses=[
-            [
-                {"type": "content_delta", "text": "Recovered"},
-                {"type": "finish", "reason": "stop"},
-            ]
-        ],
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary_adapter,
-        adapters_by_connection={
-            "openai:api-key": primary_adapter,
-            "anthropic:api-key": fallback_adapter,
-        },
-        provider_ids={"openai", "anthropic"},
-    )
-
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
-
-    # The rate-limit fast path advances after the FIRST failing attempt instead
-    # of burning the two remaining same-model restarts on a dead quota.
-    assert assistant.content == "Recovered"
-    assert len(primary_adapter.stream_requests) == 1
-    assert len(fallback_adapter.stream_requests) == 1
-
-
-@pytest.mark.asyncio
-async def test_fallback_keeps_consumed_tool_round_budget(tmp_path: Path) -> None:
-    calls: list[str] = []
-    tools = ToolRegistry()
-
-    def record(context, arguments):
-        calls.append(context.tool_call_id)
-        return tool_success({})
-
-    tools.register("probe", "Probe", {"type": "object"}, record)
-    primary = StubAdapter(
-        [
-            {"tool_calls": [{"id": "first", "name": "probe", "arguments": {}}]},
-            ProviderRateLimitError("switch route"),
-        ]
-    )
-    fallback = StubAdapter(
-        [
-            {"tool_calls": [{"id": "second", "name": "probe", "arguments": {}}]},
-            {"content": "done", "tool_calls": None},
-        ]
-    )
-    agent = StubAgent(
-        id="coder",
-        model="openai/primary",
-        fallback_models=["anthropic/fallback::api-key"],
-        allowed_tools=["probe"],
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary,
-        tools=tools,
-        adapters_by_connection={"openai:api-key": primary, "anthropic:api-key": fallback},
-        provider_ids={"openai", "anthropic"},
-    )
-    await build_chat_loop(runtime, max_tool_iterations=1).send("coder", "Work", session_id="s1")
-    assert calls == ["first"]
-    messages = runtime.chat_sessions.get(session_address("coder", "s1")).load()
-    rejected = next(
-        message
-        for message in messages
-        if message.role == "tool" and message.tool_call_id == "second"
-    )
-    assert json.loads(str(rejected.content))["error"]["code"] == "tool_iteration_limit"
-    assert fallback.requests[-1]["kwargs"]["tools"] == []
-
-
-@pytest.mark.asyncio
-async def test_identical_tool_failures_share_circuit_breaker_across_fallback(
-    tmp_path: Path,
-) -> None:
-    tools = ToolRegistry()
-    calls: list[str] = []
-
-    def fail(context, arguments):
-        calls.append(context.tool_call_id)
-        return tool_failure("unavailable", "still unavailable")
-
-    tools.register("probe", "Probe", {"type": "object"}, fail)
-    primary_responses: list[Any] = [
-        {"tool_calls": [{"id": f"call-{index}", "name": "probe", "arguments": {}}]}
-        for index in range(7)
-    ]
-    primary_responses.append(ProviderRateLimitError("switch route"))
-    primary = StubAdapter(primary_responses)
-    fallback = StubAdapter(
-        [
-            {"tool_calls": [{"id": "last", "name": "probe", "arguments": {}}]},
-            {"content": "Cannot complete", "tool_calls": None},
-        ]
-    )
-    agent = StubAgent(
-        id="coder",
-        model="openai/primary",
-        fallback_models=["anthropic/fallback::api-key"],
-        allowed_tools=["probe"],
-    )
-    runtime: Any = StubRuntime(
-        data_dir=tmp_path,
-        agent=agent,
-        adapter=primary,
-        tools=tools,
-        adapters_by_connection={"openai:api-key": primary, "anthropic:api-key": fallback},
-        provider_ids={"openai", "anthropic"},
-    )
-    await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
-    assert len(calls) == 8
-    assert fallback.requests[-1]["kwargs"]["tools"] == []
