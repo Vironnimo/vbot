@@ -134,6 +134,8 @@ Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsd
 
 **Event Loop isolation:** Async tests and fixtures on a worker share one session-scoped Event Loop, so a task a test leaves behind keeps running during later tests. Close every `Runtime` started inside a test's Event Loop with `await runtime.aclose()`; the root `tests/conftest.py` fails a test that leaves one running. Never patch the process-wide `asyncio.sleep`: a module whose waits tests skip exposes a module-local `_sleep` seam (for example `core.utils.retry._sleep`), and tests patch that seam. `tests/core/conftest.py` skips the `core.utils.retry` backoff waits in every core test; a test that observes those waits patches the seam itself.
 
+**Home isolation:** The root `tests/conftest.py` gives every test an empty home directory (`HOME` and `USERPROFILE`, `XDG_CONFIG_HOME` unset), so `Path.home()` and `~` never reach the real home, its `~/.vbot` data or its Git configuration. A value computed from the home at import time, such as `core.storage.storage.DEFAULT_DATA_DIR`, still names the real home: tests pass an explicit data directory.
+
 **Running tests and checks:** Call the tools directly; their configuration lives in `pyproject.toml` (pytest, Ruff, mypy) and `webui/package.json` (scripts). What to test and run: `AGENTS.md` -> Testing.
 ```bash
 python -m pytest tests/core/tools/test_bash.py         # file, directory, node id; -k/-x/--lf as usual
