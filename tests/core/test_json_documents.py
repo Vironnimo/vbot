@@ -1,3 +1,5 @@
+"""The durable JSON document contract: shapes, unknown fields, versions and safe writes."""
+
 from __future__ import annotations
 
 import json
@@ -71,68 +73,69 @@ def test_strip_unknown_fields_keeps_only_modeled_fields_at_every_level() -> None
         "blob": {"anything": {"goes": 1}},
     }
 
-    assert strip_unknown_fields(raw, SHAPE) == {
+    stripped = strip_unknown_fields(raw, SHAPE)
+
+    assert stripped == {
         "format_version": 1,
         "title": "t",
         "entries": [{"id": "a", "name": "A", "options": {"level": 1}}],
         "tools": {"bash": {"env": []}, "other": {"enabled": True}},
         "blob": {"anything": {"goes": 1}},
     }
+    stripped["blob"]["anything"]["goes"] = 2
+    assert raw["blob"] == {"anything": {"goes": 1}}
 
 
-def test_strip_unknown_fields_returns_an_independent_copy() -> None:
-    raw = {"blob": {"nested": [1]}}
-
-    stripped = strip_unknown_fields(raw, SHAPE)
-    stripped["blob"]["nested"].append(2)
-
-    assert raw == {"blob": {"nested": [1]}}
-
-
-def test_preserve_unknown_fields_restores_unknowns_where_the_object_remains() -> None:
-    previous = {
-        "title": "old",
-        "future": {"keep": True},
-        "entries": [
-            {"id": "a", "name": "A", "extra": 1, "options": {"level": 1, "x": 2}},
-            {"id": "gone", "name": "G", "extra": 2},
-        ],
-        "tools": {"bash": {"env": [], "shell": "zsh"}, "other": {"enabled": True, "y": 1}},
-        "blob": {"old": True},
-    }
-    current = {
-        "title": "new",
-        "entries": [{"id": "a", "name": "A2", "options": {"level": 3}}, {"id": "b", "name": "B"}],
-        "tools": {"bash": {"env": ["X"]}},
-        "blob": {"new": True},
-    }
-
-    assert preserve_unknown_fields(previous, current, SHAPE) == {
-        "title": "new",
-        "entries": [
-            {"id": "a", "name": "A2", "options": {"level": 3, "x": 2}, "extra": 1},
-            {"id": "b", "name": "B"},
-        ],
-        "tools": {"bash": {"env": ["X"], "shell": "zsh"}},
-        "blob": {"new": True},
-        "future": {"keep": True},
-    }
-
-
-def test_preserve_unknown_fields_lets_the_current_value_win() -> None:
-    previous = {"future": "old"}
-    current = {"future": "owner"}
-
-    assert preserve_unknown_fields(previous, current, SHAPE) == {"future": "owner"}
-
-
-def test_preserve_unknown_fields_skips_entries_with_ambiguous_identity() -> None:
-    previous = {"entries": [{"id": "a", "extra": 1}, {"id": "a", "extra": 2}]}
-    current = {"entries": [{"id": "a", "name": "A"}]}
-
-    assert preserve_unknown_fields(previous, current, SHAPE) == {
-        "entries": [{"id": "a", "name": "A"}]
-    }
+@pytest.mark.parametrize(
+    ("previous", "current", "expected"),
+    [
+        pytest.param(
+            {
+                "title": "old",
+                "future": {"keep": True},
+                "entries": [
+                    {"id": "a", "name": "A", "extra": 1, "options": {"level": 1, "x": 2}},
+                    {"id": "gone", "name": "G", "extra": 2},
+                ],
+                "tools": {"bash": {"env": [], "shell": "zsh"}, "other": {"enabled": True, "y": 1}},
+                "blob": {"old": True},
+            },
+            {
+                "title": "new",
+                "entries": [
+                    {"id": "a", "name": "A2", "options": {"level": 3}},
+                    {"id": "b", "name": "B"},
+                ],
+                "tools": {"bash": {"env": ["X"]}},
+                "blob": {"new": True},
+            },
+            {
+                "title": "new",
+                "entries": [
+                    {"id": "a", "name": "A2", "options": {"level": 3, "x": 2}, "extra": 1},
+                    {"id": "b", "name": "B"},
+                ],
+                "tools": {"bash": {"env": ["X"], "shell": "zsh"}},
+                "blob": {"new": True},
+                "future": {"keep": True},
+            },
+            id="restored-where-the-object-remains",
+        ),
+        pytest.param(
+            {"future": "old"}, {"future": "owner"}, {"future": "owner"}, id="current-wins"
+        ),
+        pytest.param(
+            {"entries": [{"id": "a", "extra": 1}, {"id": "a", "extra": 2}]},
+            {"entries": [{"id": "a", "name": "A"}]},
+            {"entries": [{"id": "a", "name": "A"}]},
+            id="ambiguous-identity-skipped",
+        ),
+    ],
+)
+def test_preserve_unknown_fields(
+    previous: dict[str, Any], current: dict[str, Any], expected: dict[str, Any]
+) -> None:
+    assert preserve_unknown_fields(previous, current, SHAPE) == expected
 
 
 def test_warn_unknown_fields_reports_every_modeled_level() -> None:
@@ -161,44 +164,28 @@ def test_json_object_rejects_nested_shapes_for_undeclared_fields() -> None:
 
 
 @pytest.mark.parametrize(
-    ("data", "message"),
+    ("data", "supported", "fragments"),
     [
-        ({}, "is required"),
-        ({"format_version": True}, "must be a positive integer"),
-        ({"format_version": "1"}, "must be a positive integer"),
-        ({"format_version": 0}, "must be a positive integer"),
-        ({"format_version": 2}, "written by a newer vBot and is left unchanged"),
+        ({}, 1, ("is required", f"`{GENERATION_1_CONVERTER_COMMAND} <data-dir>`")),
+        ({"format_version": True}, 1, ("must be a positive integer",)),
+        ({"format_version": "1"}, 1, ("must be a positive integer",)),
+        ({"format_version": 0}, 1, ("must be a positive integer",)),
+        ({"format_version": 2}, 1, ("written by a newer vBot and is left unchanged",)),
+        ({"format_version": 1}, 2, ("convert the file first",)),
+        ({"format_version": 1}, 1, None),
     ],
 )
-def test_validate_format_version_rejects_unusable_versions(
-    data: dict[str, Any], message: str
+def test_validate_format_version_accepts_only_the_supported_version(
+    data: dict[str, Any], supported: int, fragments: tuple[str, ...] | None
 ) -> None:
     diagnostics: list[JsonDiagnostic] = []
 
-    assert validate_format_version(diagnostics, data, 1) is False
-    assert [diagnostic.path for diagnostic in diagnostics] == ["$.format_version"]
-    assert message in diagnostics[0].message
-
-
-def test_a_missing_format_version_names_the_generation_1_converter() -> None:
-    diagnostics: list[JsonDiagnostic] = []
-
-    assert validate_format_version(diagnostics, {}, 1) is False
-    assert f"`{GENERATION_1_CONVERTER_COMMAND} <data-dir>`" in diagnostics[0].message
-
-
-def test_validate_format_version_rejects_an_older_version() -> None:
-    diagnostics: list[JsonDiagnostic] = []
-
-    assert validate_format_version(diagnostics, {"format_version": 1}, 2) is False
-    assert "convert the file first" in diagnostics[0].message
-
-
-def test_validate_format_version_accepts_the_current_version() -> None:
-    diagnostics: list[JsonDiagnostic] = []
-
-    assert validate_format_version(diagnostics, {"format_version": 1}, 1) is True
-    assert diagnostics == []
+    assert validate_format_version(diagnostics, data, supported) is (fragments is None)
+    if fragments is None:
+        assert diagnostics == []
+    else:
+        assert [diagnostic.path for diagnostic in diagnostics] == ["$.format_version"]
+        assert all(fragment in diagnostics[0].message for fragment in fragments)
 
 
 @pytest.mark.parametrize(
