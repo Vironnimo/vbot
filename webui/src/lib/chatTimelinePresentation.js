@@ -1,17 +1,14 @@
 // Public Timeline presentation surface; internal files own message, Tool,
 // child-Run and activity projections without changing consumer imports.
 export {
-  DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS,
   toolRowFromEvent,
   toolStatusLabel,
   toolRowPresentation,
 } from './chatTimelinePresentation/toolRows.js';
 export {
-  subAgentRunDurationMs,
   subAgentLastToolName,
   subAgentToolStatusLabel,
   isSubAgentSpawnTool,
-  isBackgroundSubAgentSpawn,
   isStartingForegroundSubAgent,
   subAgentAgentId,
   subAgentEffectiveRunId,
@@ -103,9 +100,6 @@ export {
   formatDate,
   dateKeyForTimestamp,
 } from './chatTimelinePresentation/time.js';
-export {
-  compactToolValue,
-  toolDetailPresentation,
-} from '$lib/chatToolDetails.js';
+export { toolDetailPresentation } from '$lib/chatToolDetails.js';
 
 export { reasoningSummaryTitle } from './chatTimelinePresentation/reasoning.js';

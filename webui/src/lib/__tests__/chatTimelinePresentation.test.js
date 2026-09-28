@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  compactToolValue,
   compactionSeparatorLabel,
   compactionSummaryText,
   errorMessagePresentation,
@@ -533,19 +532,19 @@ describe('Tool row presentation', () => {
 describe('Tool detail values', () => {
   it('unwraps successful read content and hides envelope metadata', () => {
     expect(
-      compactToolValue(
+      toolDetailPresentation(
         {
           ok: true,
           data: { content: 'file contents' },
           artifacts: [{ id: 'internal' }],
         },
         { preferPayload: true, toolName: 'read' },
-      ),
+      ).copyText,
     ).toBe('file contents');
   });
 
   it('keeps search continuation metadata and warnings', () => {
-    const value = compactToolValue(
+    const value = toolDetailPresentation(
       {
         ok: true,
         data: {
@@ -556,7 +555,7 @@ describe('Tool detail values', () => {
         },
       },
       { preferPayload: true, toolName: 'search_files' },
-    );
+    ).copyText;
 
     expect(value).toContain('next_offset');
     expect(value).toContain('Search timed out');
@@ -564,7 +563,7 @@ describe('Tool detail values', () => {
 
   it('renders real line breaks in result and argument strings but keeps escaped ones', () => {
     expect(
-      compactToolValue(
+      toolDetailPresentation(
         {
           ok: true,
           data: {
@@ -574,13 +573,13 @@ describe('Tool detail values', () => {
           },
         },
         { preferPayload: true, toolName: 'probe' },
-      ),
+      ).copyText,
     ).toBe(
       'summary: first line\n  second line\n' +
         'nested: text: nested first\r\n    nested second\n' +
         'literal: keep \\n as text',
     );
-    expect(compactToolValue({ query: 'first\nsecond' })).toBe(
+    expect(toolDetailPresentation({ query: 'first\nsecond' }).copyText).toBe(
       'query: first\n  second',
     );
   });

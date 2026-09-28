@@ -35,7 +35,7 @@ const subAgentTaskText = (args) =>
 // only when no run id is known: a child session can be reused by later spawns,
 // so a session-scoped duration may describe a different run than this row's.
 // Returns null when no child duration was tracked yet.
-export const subAgentRunDurationMs = (tool, subAgentStatuses = {}) => {
+const subAgentRunDurationMs = (tool, subAgentStatuses = {}) => {
   const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
   const runId = subAgentEffectiveRunId(tool, statuses);
   if (runId) {
