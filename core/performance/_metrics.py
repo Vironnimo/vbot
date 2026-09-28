@@ -1,9 +1,10 @@
-"""Thread-safe log-scale duration histograms and last-value gauges.
+"""Thread-safe log-scale duration histograms, last-value gauges and counters.
 
 Durations are milliseconds. Buckets grow by a fixed factor (about 10% relative
 width) from ``MIN_BUCKET_MS`` to ``MAX_BUCKET_MS``, with one underflow and one
 overflow bucket, so percentiles cost no per-observation storage. A registry
-caps its distinct names; callers decide how a rejected new name is reported.
+caps its distinct names per kind; callers decide how a rejected new name is
+reported.
 """
 
 from __future__ import annotations
@@ -61,10 +62,43 @@ class HistogramData:
             self.max_ms = ms
         self.buckets[index] = self.buckets.get(index, 0) + 1
 
+    def merge(self, other: HistogramData) -> None:
+        """Add every observation of ``other``, a histogram over the same buckets."""
+        self.count += other.count
+        self.total_ms += other.total_ms
+        self.min_ms = min(self.min_ms, other.min_ms)
+        self.max_ms = max(self.max_ms, other.max_ms)
+        for index, bucket_count in other.buckets.items():
+            self.buckets[index] = self.buckets.get(index, 0) + bucket_count
+
     def copy(self) -> HistogramData:
         return HistogramData(
             self.count, self.total_ms, self.min_ms, self.max_ms, dict(self.buckets)
         )
+
+    def since(self, earlier: HistogramData) -> HistogramData:
+        """Return the observations added after ``earlier``, an older copy of this histogram.
+
+        Count, total and buckets are exact. An extreme is exact when the window
+        moved it; otherwise its outermost window bucket bounds it (about 10%).
+        """
+        buckets = {
+            index: added
+            for index, bucket_count in self.buckets.items()
+            if (added := bucket_count - earlier.buckets.get(index, 0)) > 0
+        }
+        window = HistogramData(
+            count=self.count - earlier.count,
+            total_ms=max(0.0, self.total_ms - earlier.total_ms),
+            buckets=buckets,
+        )
+        if not buckets:
+            return window
+        lowest, _upper = bucket_bounds(min(buckets))
+        _lower, highest = bucket_bounds(max(buckets))
+        window.min_ms = self.min_ms if self.min_ms < earlier.min_ms else max(lowest, self.min_ms)
+        window.max_ms = self.max_ms if self.max_ms > earlier.max_ms else min(highest, self.max_ms)
+        return window
 
     def summary(self) -> dict[str, float | int]:
         """Return count, sum, extremes and bucket-estimated percentiles."""
@@ -104,13 +138,16 @@ def _rounded(value: float) -> float:
 
 
 class MetricRegistry:
-    """Named histograms and gauges guarded by one lock, with a distinct-name cap."""
+    """Named histograms, gauges and counters guarded by one lock, with a distinct-name cap."""
 
     def __init__(self, *, max_names: int) -> None:
         self._max_names = max_names
         self._lock = threading.Lock()
         self._histograms: dict[str, HistogramData] = {}
         self._gauges: dict[str, float] = {}
+        # Highest value of each gauge since the last take_gauge_peaks().
+        self._peaks: dict[str, float] = {}
+        self._counters: dict[str, int] = {}
 
     def observe(self, name: str, ms: float) -> bool:
         """Add one duration; return False when a new name exceeds the cap."""
@@ -127,13 +164,38 @@ class MetricRegistry:
             histogram.add(ms, index)
         return True
 
+    def merge(self, name: str, data: HistogramData) -> bool:
+        """Add a histogram measured elsewhere; return False when a new name exceeds the cap."""
+        with self._lock:
+            histogram = self._histograms.get(name)
+            if histogram is None:
+                if len(self._histograms) >= self._max_names:
+                    return False
+                histogram = self._histograms[name] = HistogramData()
+            histogram.merge(data)
+        return True
+
     def set_gauge(self, name: str, value: float, *, capped: bool = True) -> bool:
         """Store the latest gauge value; return False when a new name exceeds the cap."""
         with self._lock:
             if capped and name not in self._gauges and len(self._gauges) >= self._max_names:
                 return False
             self._gauges[name] = value
+            peak = self._peaks.get(name)
+            if peak is None or value > peak:
+                self._peaks[name] = value
         return True
+
+    def take_gauge_peaks(self) -> dict[str, float]:
+        """Return each gauge's highest value since the previous take, sorted by name.
+
+        The next window starts from the current values, so a gauge that does
+        not change still reports its level.
+        """
+        with self._lock:
+            peaks = self._peaks
+            self._peaks = dict(self._gauges)
+        return {name: peaks[name] for name in sorted(peaks)}
 
     def raise_gauge(self, name: str, value: float) -> bool:
         """Keep the maximum value seen for one gauge name."""
@@ -147,10 +209,31 @@ class MetricRegistry:
                 self._gauges[name] = value
         return True
 
+    def add(self, name: str, amount: int) -> bool:
+        """Add to one counter; return False when a new name exceeds the cap."""
+        with self._lock:
+            current = self._counters.get(name)
+            if current is None:
+                if len(self._counters) >= self._max_names:
+                    return False
+                current = 0
+            self._counters[name] = current + amount
+        return True
+
+    def counters(self) -> dict[str, int]:
+        """Return the counter totals sorted by name."""
+        with self._lock:
+            values = dict(self._counters)
+        return {name: values[name] for name in sorted(values)}
+
+    def histograms(self) -> dict[str, HistogramData]:
+        """Return copies of every histogram, taken under the lock."""
+        with self._lock:
+            return {name: histogram.copy() for name, histogram in self._histograms.items()}
+
     def histogram_summaries(self) -> dict[str, dict[str, float | int]]:
         """Return per-name summaries sorted by name, computed outside the lock."""
-        with self._lock:
-            copies = {name: histogram.copy() for name, histogram in self._histograms.items()}
+        copies = self.histograms()
         return {name: copies[name].summary() for name in sorted(copies)}
 
     def gauges(self) -> dict[str, float]:

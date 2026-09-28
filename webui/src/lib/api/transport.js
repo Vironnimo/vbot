@@ -1,3 +1,4 @@
+import { trackRpc } from '../clientMetrics.js';
 import { isPlainObject } from '../values.js';
 
 const RPC_ENDPOINT = '/api/rpc';
@@ -43,6 +44,21 @@ export function createRpcEnvelope(method, params = {}) {
 
 export async function rpc(method, params = {}, options = {}) {
   const envelope = createRpcEnvelope(method, params);
+  // `untracked` keeps the client metrics report out of its own measurements.
+  if (options.untracked) return sendRpc(envelope, options);
+  const finish = trackRpc(method);
+  let ok = false;
+  try {
+    const result = await sendRpc(envelope, options);
+    ok = true;
+    return result;
+  } finally {
+    finish(ok);
+  }
+}
+
+async function sendRpc(envelope, options) {
+  const { method } = envelope;
   const fetchFunction = options.fetch ?? globalThis.fetch;
   if (typeof fetchFunction !== 'function') {
     throw new ApiClientError(RPC_ERROR_NETWORK, 'fetch is not available', {

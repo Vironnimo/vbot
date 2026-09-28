@@ -17,7 +17,14 @@ from cli._parser_common import (
     STATISTICS_SECTIONS,
     _add_command_parser,
 )
-from core.performance import DEFAULT_RECORDING_SECONDS, MAX_LABEL_LENGTH, MAX_RECORDING_SECONDS
+from core.performance import (
+    DEFAULT_HEAP_TOP,
+    DEFAULT_RECORDING_SECONDS,
+    HISTORY_RETENTION_DAYS,
+    MAX_HEAP_TOP,
+    MAX_LABEL_LENGTH,
+    MAX_RECORDING_SECONDS,
+)
 from core.utils.config import DEFAULT_HOST
 
 
@@ -431,4 +438,42 @@ def _add_performance_parsers(
         default=20,
         metavar="<count>",
         help="Maximum recordings to list (1-100, default: 20)",
+    )
+    heap_parser = _add_command_parser(
+        performance_subparsers,
+        "heap",
+        PERFORMANCE_HELP["heap"],
+        example="performance heap --top 30",
+    )
+    heap_parser.add_argument(
+        "--top",
+        type=int,
+        default=DEFAULT_HEAP_TOP,
+        metavar="<count>",
+        help=f"Rows per list (1-{MAX_HEAP_TOP}, default: {DEFAULT_HEAP_TOP})",
+    )
+    history_parser = _add_command_parser(
+        performance_subparsers,
+        "history",
+        PERFORMANCE_HELP["history"],
+        example='performance history --at "2026-09-28 16:40"',
+    )
+    history_parser.add_argument(
+        "--hours",
+        type=int,
+        default=24,
+        metavar="<hours>",
+        help=f"How far back to show windows (1-{HISTORY_RETENTION_DAYS * 24}, default: 24)",
+    )
+    history_parser.add_argument(
+        "--metric",
+        action="append",
+        default=[],
+        metavar="<name>",
+        help="Show this metric, counter or gauge per window instead (repeatable)",
+    )
+    history_parser.add_argument(
+        "--at",
+        metavar="<time>",
+        help="Show the full windows containing this time (as in log lines: local time)",
     )

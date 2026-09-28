@@ -11,11 +11,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core.event_stream import ReplayEventStream
+from core.performance import count
 
 JsonObject = dict[str, Any]
 DEFAULT_SERVER_EVENT_RETENTION_LIMIT = 4096
 DEFAULT_SERVER_EVENT_SUBSCRIBER_QUEUE_LIMIT = 1024
 _LOGGER = logging.getLogger("vbot.server.events")
+EVENTS_TRACK = "events"
 
 APP_ERROR_EVENT = "app_error"
 RUN_STARTED_SERVER_EVENT = "run_started"
@@ -164,6 +166,16 @@ class ServerEventBus:
         }
         self._next_sequence += 1
         self._event_stream.publish(event)
+        # Invalidations become instant events in a Recording, so the RPC burst
+        # that clients send in reply shows up right after its cause.
+        count(f"events.{event_type}")
+        kind = payload.get("kind") if event_type == RESOURCE_CHANGED_EVENT else None
+        if kind in ALLOWED_RESOURCE_KINDS:
+            count(
+                f"events.resource_changed.{kind}",
+                track=EVENTS_TRACK,
+                args={"subscribers": self._event_stream.subscriber_count},
+            )
 
     async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[JsonObject, None]:
         """Replay existing events and stream new events until the client disconnects."""

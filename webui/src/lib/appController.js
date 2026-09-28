@@ -1,4 +1,5 @@
 import { formatAgentAddress } from './agentAddress.js';
+import { noteInvalidation } from './clientMetrics.js';
 import {
   CONNECTION_REPLAY_STATUS_EPOCH_CHANGED,
   CONNECTION_REPLAY_STATUS_GAP,
@@ -593,6 +594,7 @@ export function createAppController({
     }
 
     const kind = event.payload?.kind;
+    noteInvalidation(kind);
     if (kind === 'extensions') {
       // An owner-scoped change names data behind that Extension's page; an
       // unscoped one follows a reload, whose page descriptors may differ.

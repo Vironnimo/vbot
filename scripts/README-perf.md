@@ -19,12 +19,14 @@ The server measures itself all the time with negligible overhead (around a micro
 
 What is measured:
 
-- **Event Loop health:** `event_loop.lag` (how late a 100 ms timer wakes up; Windows timer granularity adds a 0–16 ms baseline, so judge by p99), `event_loop.utilization` (CPU share of the loop thread), and **stalls**: a watchdog thread notices when the loop has not ticked for more than 250 ms and samples the loop thread's Python stack, so each stall comes with the code location that blocked it and the share of it spent in garbage collection (`gc_ms`).
+- **Event Loop health:** `event_loop.lag` (how late a 100 ms timer wakes up; Windows timer granularity adds a 0–16 ms baseline, so judge by p99), `event_loop.utilization` (CPU share of the loop thread), and **stalls**: a watchdog thread notices when the loop has not ticked for more than 250 ms and samples the loop thread's Python stack, so each stall comes with the code location that blocked it and the share of it spent in garbage collection (`gc_ms`). On Windows and Linux it also records how much CPU the loop used (`loop_cpu_ms`) and names the other threads that were busy meanwhile, with their stacks.
 - **Garbage collection:** `gc.gen0`/`gc.gen1`/`gc.gen2`, one observation per collection pause in any thread. On the packaged Python 3.13, `gc.gen2` is the full collection that blocks every thread, including the Event Loop.
 - **Worker pools:** `worker_pool.<name>.wait` (queueing for a slot) and `.run`, plus `.active`/`.waiting` gauges for every named `BoundedWorkerPool`.
 - **SQLite:** per database (`sessions`, ...): `sqlite.<database>.write` (one write transaction including commit/fsync), `sqlite.<database>.write_wait` (waiting for that database's single writer), `sqlite.<database>.read`. The load-suite digest and report use the `sqlite.sessions.*` series.
 - **Chat per Model step:** `chat.request_build`, `provider.first_token`, `provider.response`, `chat.persist`, `chat.tool_round`, `tool.<name>`, `chat.compaction`, `chat.run`.
 - **RPC:** `rpc.<method>` per registered method.
+- **Server push (counters):** `events.<type>` per `/ws` event, `events.resource_changed.<kind>` per invalidation kind, `events.sse` per Run event sent over SSE. Compare an invalidation count with the RPC counts it causes: `events.resource_changed.extensions=500` next to `rpc.extensions.page_descriptors count=11500` means every invalidation made 23 clients or pages reload. In a recording, each invalidation is a marker on the `events` row, followed by the RPC spans it caused.
+- **WebUI (reported by each open browser tab about once a minute):** `webui.rpc` (RPC time as the browser sees it, including its wait for a connection), `webui.rpc_errors`, `webui.long_task` and `webui.long_animation_frame` (main-thread blocks of 50 ms or more), `webui.invalidations.<kind>` (invalidations the tabs received), `webui.invalidation_rpcs.<kind>.<method>` (RPCs a tab started within 250 ms after such an invalidation, the reload wave it caused) and `webui.extension_page.invalidations.<reason>` (Extension pages told to refresh). In a recording, each report is a marker on the `webui` row.
 - **Process:** `process.cpu_percent`, `process.rss_mb`, `process.python_threads`, `asyncio.tasks`, `runs.active`, `runs.queued`.
 
 ```bash
@@ -32,11 +34,19 @@ vbot performance status                      # slowest operations since start, g
 vbot performance record start --label slow-ui --max-seconds 300
 vbot performance record stop                 # prints the trace path and the window's slowest operations
 vbot performance recordings                  # stored recordings (newest 20 are kept)
+vbot performance heap --top 30               # what the garbage collector tracks, by type and module
+vbot performance history                     # one line per 10 minutes of the last 24 hours, also before restarts
+vbot performance history --metric gc.gen2 --metric rpc.chat.send --hours 48
+vbot performance history --at "2026-09-28 16:40"   # everything about the window of that log time
 ```
 
 Add the usual target options (`--port 8421` for the development instance, the worktree port for a worktree).
 
+**History windows** answer "what happened yesterday afternoon": every 10 minutes and at shutdown the server appends what changed in that window (metrics, counters, gauge maxima, stalls) to `<data-dir>/artifacts/performance/history/<date>.jsonl`, kept 14 days. `history` shows one health line per window; copy a time from a slow log line into `--at` to see that window in full, and use `--metric` to follow one metric over hours or days.
+
 A **recording** is the tool for "it is slow right now": start it, let the slowness happen in real use, stop it. The trace (`<data-dir>/artifacts/performance/<id>.trace.json`) opens in [Perfetto](https://ui.perfetto.dev); the file is processed locally in the browser. Each Session is its own process row, so you see per Agent which phase (request build, first token, Tool round, persist) took how long and where Sessions wait for each other. Worker pools, SQLite, RPC and the runtime (Event Loop lag, stalls, process gauges) have rows of their own. Traces contain timings, ids and code locations, never message content.
+
+A **heap census** answers "what fills the heap" when `gc.gen2` pauses grow: it counts the objects the garbage collector tracks per generation and by type (`core.runs.RunEvent`, `builtins.dict`, ...) and by module. Run it twice some minutes apart under load; the second run lists which types grew. A census blocks the Event Loop for up to about 100 ms on a heap of 5 million objects, so do not run it in a loop.
 
 ## Load test
 
@@ -96,7 +106,7 @@ Some benchmarks reach into private functions (`_build_payload`, request-history 
 - **py-spy** (dev extra) samples a running Python process without code changes and shows where CPU time goes. `perf_load.py --profile` records the server during the highest level. By hand against any server: `py-spy record -o flame.svg --pid <server-pid> --duration 30`; add `--gil` to see only threads holding the GIL; `py-spy dump --pid <pid>` prints all current thread stacks once. Some samples fail on Windows; judge flamegraphs by proportions, not totals.
 - **Perfetto** (<https://ui.perfetto.dev>) opens recording traces. Use it to see ordering and waiting between Sessions, pools and SQLite, not just totals.
 - **Stall stacks** (`vbot performance status`, recording summaries, and a rate-limited WARNING in the server log for stalls of at least 1 s) point directly at code that blocked the Event Loop.
-- **Browser:** the DevTools Performance panel for UI work; `perf_load.py --ui` for Long Tasks under load.
+- **Browser:** the DevTools Performance panel for UI work; `perf_load.py --ui` for Long Tasks under load; the `webui.*` metrics for what real tabs experienced.
 
 ## Reading results
 
@@ -104,3 +114,5 @@ Some benchmarks reach into private functions (`_build_payload`, request-history 
 - Look at p99 and max, not only p50: concurrency problems show up as tails and as `*.wait` metrics (waiting for a pool slot or the SQLite writer).
 - A slow phase with low `event_loop.utilization` is waiting (disk, locks, subprocesses); a slow phase with high utilization or stalls is CPU work on the Event Loop.
 - A stall with only a few samples and a high `gc_ms` is a garbage collection pause, not the code in its stack; compare `gc.gen2` max with the stall duration.
+- A stall whose `loop_cpu_ms` is close to its CPU window is the loop computing; near zero, the loop waited. If another thread is named with high `cpu_ms`, it most likely held the GIL (or a lock the loop waited for); its stack shows what it did.
+- `webui.rpc` far above `rpc.<method>` means the time went into the network or the browser's connection queue, not the server. `webui.invalidation_rpcs.<kind>.*` divided by `webui.invalidations.<kind>` is the number of RPCs one invalidation costs a tab; an RPC the user happened to start in the same 250 ms counts too. `webui.*` values arrive up to a minute late.
