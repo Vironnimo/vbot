@@ -56,6 +56,10 @@ _FIRST_AFTER_PREVIOUS_NOTE = (
     "The lines to replace occur {occurrences} times; the first after the previous change "
     "in this file, at line {line}, was changed."
 )
+_FIRST_OF_TWINS_NOTE = (
+    "The lines to replace occur {occurrences} times, as many times as hunks of this patch "
+    "name them; the hunks change them in order, so the first, at line {line}, was changed."
+)
 # A line this similar to the file's line is a copy of it with a typo, not new text.
 _NEAR_COPY = 0.8
 _BREAK = TEXT_LINE_BREAK
@@ -923,8 +927,12 @@ def _apply_hunk(
     if isinstance(found, AmbiguousFuzzyMatch):
         # As in Codex, an @@ line or the file's previous change orders the
         # occurrences, and the first after it is meant (Sessions: 60 of 61 such
-        # hunks). A hunk with neither, or a copy with errors, must match once.
+        # hunks). So is the first when as many hunks name the lines as the file
+        # holds them. Any other hunk, or a copy with errors, must match once.
         start = offset if hunk.hints else previous
+        in_order = start is None and hunk.twins == found.occurrences
+        if in_order:
+            start = 0
         first = (
             _match(content[start:], old, new, eof=hunk.eof, first=True)
             if start is not None and not copied
@@ -948,7 +956,9 @@ def _apply_hunk(
                 line=line,
             )
             if hunk.hints
-            else _FIRST_AFTER_PREVIOUS_NOTE.format(occurrences=found.occurrences, line=line)
+            else (_FIRST_OF_TWINS_NOTE if in_order else _FIRST_AFTER_PREVIOUS_NOTE).format(
+                occurrences=found.occurrences, line=line
+            )
         )
         offset, window, found = start, content[start:], first
     if found is None:

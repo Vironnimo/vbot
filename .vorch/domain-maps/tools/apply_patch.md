@@ -44,7 +44,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Two kinds of change in one call, a `path` that
   contradicts the patch's file, incomplete old/new pairs and Cursor `code_edit`
   (placeholder comments leave the change open; the error shows a patch skeleton
-  with the call's real path) fail before any effect.
+  with the call's real path) fail before any effect. An `old_string` alone beside
+  a nonempty patch (no `new_string` or `insert_line`) is a copy of the lines the
+  patch changes: the patch runs and the result adds `old_string was ignored
+  because patch describes the change.` (`patch_ignores_old_string`). Evidence: 3
+  such calls in one Swarm run, all `old_text` beside a complete patch, were
+  refused as two kinds of change (Sessions, 2026-09).
   `old_string` replacements match precisely, else as a copy with errors
   (`copy_match`, below; never with `replace_all` or an expected count); an empty
   `old_string` creates a file or fills an empty one and fails with `file_exists`
@@ -166,11 +171,17 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   `_Batch.change_ends`, `replace_fuzzy(first=True)`), and fails with
   `ambiguous_match` when none follows. A note names the count and the changed
   line. Without a hint or an earlier change of that Update, and for `copy_match`
-  passages, several occurrences stay `ambiguous_match`. Evidence (Sessions since
+  passages, several occurrences stay `ambiguous_match`, unless as many hunks of
+  that Update without a hint name the same lines as the file holds them
+  (`_Hunk.twins`, counted in `_parse`): then the first is changed and the later
+  ones follow as above. As in Codex, where each hunk searches after the previous
+  one, only that order lets every hunk find its occurrence. Evidence (Sessions since
   2026-09-01, 89 ambiguous hunks): the Agent's later successful edit targeted the
   first occurrence after the hint in 16 of 16 and after the previous hunk in 44
   of 45; bare first hunks meant the file's first occurrence only 11 of 15 times,
-  too few to choose silently. Numeric unified-diff headers are advisory;
+  too few to choose silently. In one Swarm run, both refused bare first hunks
+  with as many identical hunks as occurrences meant them in order (Sessions,
+  2026-09). Numeric unified-diff headers are advisory;
   content remains authoritative. `*** End of File` restricts matching to EOF;
   when a hunk with context or removed lines fails there, it is retried without
   the marker and, if that places it, applied with a warning naming the marker.

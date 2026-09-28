@@ -646,6 +646,30 @@ def test_previous_change_orders_only_later_occurrences_of_the_same_update(tmp_pa
     assert path.read_bytes().count(b"x=0") == 2
 
 
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        # Session shape: as many identical hunks as the file holds their lines.
+        (b"x=0\nmid\nx=0\n", b"x=1\nmid\nx=2\n"),
+        # With more occurrences than hunks, which ones are meant stays open.
+        (b"x=0\nmid\nx=0\nx=0\n", None),
+    ],
+)
+def test_identical_hunks_change_as_many_occurrences_in_order(tmp_path, before, after):
+    path = tmp_path / "file.txt"
+    path.write_bytes(before)
+    result = apply(tmp_path, update("@@\n-x=0\n+x=1\n@@\n-x=0\n+x=2"))
+    if after is None:
+        assert "the lines to replace occur 3 times (lines 1, 3, 4)" in text(result)
+        assert path.read_bytes() == before
+    else:
+        assert path.read_bytes() == after
+        assert text(result).endswith(
+            "Note: The lines to replace occur 2 times, as many times as hunks of this patch "
+            "name them; the hunks change them in order, so the first, at line 1, was changed."
+        )
+
+
 def test_context_anchor_does_not_leak_to_next_file_or_edit(tmp_path):
     (tmp_path / "file.txt").write_bytes(b"before=1\nsection\nafter=1\n")
     (tmp_path / "other.txt").write_bytes(b"old\n")

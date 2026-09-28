@@ -246,13 +246,32 @@ def _edit_item(item: Any, number: int) -> Any:
     return edit
 
 
+def patch_ignores_old_string(arguments: JsonObject) -> bool:
+    """Tell whether old_string came alone beside a patch, which holds the whole change.
+
+    Models copy the lines the patch changes into old_string as well; the call
+    then means the patch, and old_string is ignored.
+    """
+    patch = arguments.get("patch")
+    return (
+        isinstance(patch, str)
+        and bool(patch.strip())
+        and "old_string" in arguments
+        and "new_string" not in arguments
+        and "insert_line" not in arguments
+    )
+
+
 def _check_change(arguments: dict[str, Any]) -> None:
     """Require exactly one kind of change, complete, with the file it applies to."""
     patch = arguments.get("patch")
+    ignored = {"old_string"} if patch_ignores_old_string(arguments) else set()
     kinds = {
         label
         for field, label in _CHANGE_FIELDS.items()
-        if field in arguments and (field != "patch" or (isinstance(patch, str) and patch.strip()))
+        if field in arguments
+        and field not in ignored
+        and (field != "patch" or (isinstance(patch, str) and patch.strip()))
     }
     if len(kinds) > 1:
         first, second = sorted(kinds)
@@ -260,7 +279,7 @@ def _check_change(arguments: dict[str, Any]) -> None:
             f"The call gives both {first} and {second}. Send one of them; for several changes, "
             "put them all in one patch."
         )
-    replacing = "old_string" in arguments or "new_string" in arguments
+    replacing = ("old_string" in arguments and not ignored) or "new_string" in arguments
     insert = "insert_line" in arguments
     if insert and ("old_string" in arguments or "new_string" not in arguments):
         raise ValueError(
@@ -313,7 +332,11 @@ def _carry_empty_text(arguments: dict[str, Any]) -> None:
     a file. A single edit therefore travels as an edits item, and empty content as
     the equivalent Add File patch.
     """
-    if "old_string" in arguments and "insert_line" not in arguments:
+    if (
+        "old_string" in arguments
+        and "insert_line" not in arguments
+        and not patch_ignores_old_string(arguments)
+    ):
         edit = {field: arguments.pop(field) for field in _SINGLE_EDIT_FIELDS if field in arguments}
         arguments["edits"] = [edit]
     if arguments.get("content") == "":
@@ -392,5 +415,6 @@ __all__ = [
     "APPLY_PATCH_TOOL_NAME",
     "PATCH_HIDDEN_PARAMETERS",
     "normalize_patch_arguments",
+    "patch_ignores_old_string",
     "patch_operations",
 ]

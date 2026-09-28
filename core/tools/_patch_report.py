@@ -359,9 +359,15 @@ def _partial_lead(entries: list[JsonObject], failed: list[JsonObject]) -> str:
 
 
 def patch_result(
-    files: list[_FileReport], entries: list[JsonObject], cancelled: list[str]
+    files: list[_FileReport],
+    entries: list[JsonObject],
+    cancelled: list[str],
+    call_notes: list[str] | None = None,
 ) -> JsonObject:
-    """Return the Tool Result envelope for a completed apply_patch call."""
+    """Return the Tool Result envelope for a completed apply_patch call.
+
+    ``call_notes`` say how the call was read; they follow the applied changes.
+    """
     failed = [entry for entry in entries if entry["status"] in _FAILED]
     no_ops = [entry for entry in entries if entry["status"] in {"unchanged", "already_applied"}]
     if failed and not files and len(failed) == len(entries):
@@ -386,11 +392,12 @@ def patch_result(
     if failed:
         sections.append(_partial_lead(entries, failed))
     sections.extend(_file_text(report) for report in files)
+    notes = list(call_notes or [])
     # Changes that leave no net effect, such as a line changed and changed back.
-    notes = [
+    notes.extend(
         f"The changes to {path} cancel each other out, so it is the same as before."
         for path in cancelled
-    ]
+    )
     if files or failed:
         notes.extend(_no_op_text(entry) for entry in no_ops)
     else:
