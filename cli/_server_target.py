@@ -128,6 +128,11 @@ def probe_health(
         )
     except httpx.RequestError as exc:
         return HealthProbeResult(reachable=False, is_vbot=False, error=exc.__class__.__name__)
+    return health_result(response)
+
+
+def health_result(response: httpx.Response) -> HealthProbeResult:
+    """Classify one `/health` response; only the exact vBot body counts as vBot."""
 
     if response.status_code != httpx.codes.OK:
         return HealthProbeResult(reachable=True, is_vbot=False, status_code=response.status_code)

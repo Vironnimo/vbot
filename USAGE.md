@@ -57,7 +57,7 @@ irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | 
 
 The Windows Installer downloads the matching native package, checks the release asset's SHA256 digest, and installs it for your user account. The application has its own `vBot.exe` tray and private Python runtime; it installs no Windows service and does not need a Git clone or Node.js. Server data remains separate at `~/.vbot`. Run it from a normal, non-elevated shell. The optional logon task belongs to your user account.
 
-The three packages are Server, Server with Desktop, and Desktop Client. Desktop is independently opened from the tray or `vbot desktop`; closing it never stops the server. Open Desktop windows keep their version until reopened after an update. WebView may still use several Windows processes.
+The three packages are Server, Server with Desktop, and Desktop Client. Desktop is independently opened from the tray or `vbot desktop`; closing it never stops the server. Click the tray icon to open vBot (Desktop, or the browser for the Server package) and right-click it for server, update and log actions. The icon shows whether the server is running, stopped or updating, or needs attention; **Status…** shows the version, server, data directory and update progress. Open Desktop windows keep their version until reopened after an update. WebView may still use several Windows processes.
 
 Fresh installs require a published matching Windows binary asset. If the selected release has none, the installer stops with an explanation; it does not silently clone the repository. On Windows, `-Dev` selects the native main installation: it prepares updates from a separate Git checkout and uses the same application lifecycle as release installations. Use `-SourceCheckout` for an explicit source installation; setup from an existing checkout without `-Dev` retains the source-development workflow.
 
@@ -210,7 +210,7 @@ Run the same command from your terminal or choose Update in the packaged Windows
 vbot update
 ```
 
-For a packaged Windows application, a separate updater saves the operation and continues even if the calling terminal or vBot Run exits. A human CLI invocation normally waits for the final result, shows readable progress with elapsed time, and returns a failing exit code when the update fails. The final summary reports the version and verified outcome once; `--output plain` returns the structured operation record for scripts. Read-only `update status` reports the saved record. The tray displays the same saved state. No Agent is created for a human or tray update.
+For a packaged Windows application, a separate updater saves the operation and continues even if the calling terminal or vBot Run exits. A human CLI invocation normally waits for the final result, shows readable progress with elapsed time, and returns a failing exit code when the update fails. The final summary reports the version and verified outcome once; `--output plain` returns the structured operation record for scripts. Read-only `update status` reports the saved record. The tray's **Status…** window shows the same progress while an update runs and its result afterwards. No Agent is created for a human or tray update.
 
 ```bash
 vbot update --detach           # return the saved operation id immediately
@@ -929,7 +929,7 @@ An installed vBot on Windows shows Windows notifications from its `vBot.exe` tra
 - **Update result**: an application update finished or failed.
 - **Server stopped**: the local vBot server stopped unexpectedly.
 
-A notification about a Session is skipped while you are already looking at that Session. The switches are the Settings paths `notifications.run_completed`, `notifications.run_failed`, `notifications.automation_failed`, `notifications.update_result`, and `notifications.server_stopped`, so `vbot config` reads and changes them too.
+Background work such as Subagents, Channel replies and reflections never notifies, and a cancelled Run does not either. A notification about a Session is skipped while you are already looking at that Session. Clicking it opens the Session (in Desktop, or in the browser for the Server package); it disappears when you open that Session or switch to the vBot Desktop window. The switches are the Settings paths `notifications.run_completed`, `notifications.run_failed`, `notifications.automation_failed`, `notifications.update_result`, and `notifications.server_stopped`, so `vbot config` reads and changes them too.
 
 ## Channels
 

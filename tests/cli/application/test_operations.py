@@ -187,3 +187,44 @@ def test_agent_handoff_requires_a_server_owned_ticket_in_this_data_directory(
         operations.request_update(install, handoff_token="opaque-token")
     assert minted == [{"handoff_token": "opaque-token"}]
     assert operations.operations(install) == []
+
+
+def test_observer_reports_the_newest_operation_and_rereads_only_changed_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    observer = operations.OperationObserver(install)
+    assert observer.latest() is None
+    Operation(
+        id="upd_older", phase="completed", message="done", created_at="2026-01-01T00:00:00+00:00"
+    ).save(install)
+    newer = Operation(
+        id="upd_newer",
+        phase="preparing",
+        message="Checking",
+        created_at="2026-02-01T00:00:00+00:00",
+    )
+    newer.save(install)
+    loads: list[str] = []
+    load = operations.load_operation
+
+    def counted(install: Installation, identifier: str) -> Operation:
+        loads.append(identifier)
+        return load(install, identifier)
+
+    monkeypatch.setattr(operations, "load_operation", counted)
+
+    assert cast(Operation, observer.latest()).id == "upd_newer"
+    assert sorted(loads) == ["upd_newer", "upd_older"]
+    loads.clear()
+    assert cast(Operation, observer.latest()).phase == "preparing"
+    assert loads == []
+
+    newer.transition(install, "completed", "Updated")
+    latest = cast(Operation, observer.latest())
+    assert (latest.phase, latest.message) == ("completed", "Updated")
+    assert loads == ["upd_newer"]
+
+    (install.root / "operations" / "upd_broken.json").write_text("{bad", encoding="utf-8")
+    with pytest.raises(ApplicationError):
+        observer.latest()

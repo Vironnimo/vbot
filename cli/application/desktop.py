@@ -11,9 +11,17 @@ from core.utils.processes import subprocess_creation_flags
 
 
 def open_desktop(
-    install: Installation, *, host: str | None = None, port: int | None = None
+    install: Installation,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    open_session: tuple[str, str] | None = None,
 ) -> None:
-    """Resolve the active version and launch under the removal-admission lock."""
+    """Resolve the active version and launch under the removal-admission lock.
+
+    ``open_session`` names an Agent address and Session id for the Desktop to
+    show; an already running Desktop receives it through its own handoff.
+    """
     from cli.application.state import ensure_not_removing
 
     # Serialize launch with the uninstaller's removal reservation.
@@ -30,6 +38,8 @@ def open_desktop(
         elif install.owns_server:
             assert install.server_host is not None and install.server_port is not None
             arguments.extend(("--host", install.server_host, "--port", str(install.server_port)))
+        if open_session is not None:
+            arguments.extend(("--open-session", *open_session))
         subprocess.Popen(
             arguments,
             cwd=install.version() / "app",

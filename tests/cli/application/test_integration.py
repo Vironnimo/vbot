@@ -6,7 +6,8 @@ import json
 import re
 import subprocess
 import sys
-from contextlib import nullcontext
+import uuid
+from contextlib import nullcontext, suppress
 from ctypes import wintypes
 from pathlib import Path
 from types import SimpleNamespace
@@ -178,6 +179,31 @@ def test_uninstall_launches_only_after_the_exact_server_stopped(
     assert events == ["exit-host", "stop:8420", *(["launch:unins000.exe"] if stopped else [])]
     if stopped:
         assert result["data_preserved"] is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows notification identity")
+def test_notification_identity_is_removed_only_by_the_installation_it_points_into(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import winreg
+
+    key = rf"Software\vBot-tests\{uuid.uuid4().hex}"
+    monkeypatch.setattr(integration, "_NOTIFICATION_IDENTITY_KEY", key)
+    owner, other = _install(tmp_path / "owner"), _install(tmp_path / "other")
+    try:
+        integration.register_notification_identity(owner.root / "versions" / "v1" / "icon.ico")
+        integration.remove_notification_identity(other)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as registered:
+            assert winreg.QueryValueEx(registered, "DisplayName")[0] == "vBot"
+
+        integration.remove_notification_identity(owner)
+
+        with pytest.raises(FileNotFoundError):
+            winreg.OpenKey(winreg.HKEY_CURRENT_USER, key)
+    finally:
+        for leftover in (key, r"Software\vBot-tests"):
+            with suppress(OSError):
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, leftover)
 
 
 def test_data_only_reset_preserves_application_autostart_and_running_state(tmp_path: Path) -> None:

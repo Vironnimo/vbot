@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from cli.application.state import (
     ApplicationError,
     Installation,
     Operation,
+    contained,
     create_operation,
     ensure_not_removing,
     exclusive,
@@ -206,6 +208,83 @@ def status(install: Installation, operation_id: str | None = None) -> Operation 
         return load_operation(install, operation_id)
     records = operations(install)
     return records[0] if records else None
+
+
+class OperationObserver:
+    """Report the newest operation, rereading only records whose file changed.
+
+    Each record is replaced atomically, so a changed modification time or size
+    identifies exactly the records to validate again; a long-running observer
+    stays as cheap as one directory listing.
+    """
+
+    def __init__(self, install: Installation) -> None:
+        self._install = install
+        self._lock = threading.Lock()
+        self._directory: Path | None = None
+        self._records: dict[str, tuple[tuple[int, int], Operation | ApplicationError]] = {}
+
+    def latest(self) -> Operation | None:
+        """Return the newest operation, raising like :func:`status` for invalid records."""
+
+        with self._lock:
+            # The managed directory is verified once; changed records are
+            # still loaded through the verifying reader.
+            if self._directory is None:
+                self._directory = contained(self._install.root, "operations")
+            directory = self._directory
+            try:
+                entries = [
+                    entry
+                    for entry in os.scandir(directory)
+                    if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False)
+                ]
+            except FileNotFoundError:
+                entries = []
+            records: dict[str, tuple[tuple[int, int], Operation | ApplicationError]] = {}
+            for entry in entries:
+                identifier = entry.name.removesuffix(".json")
+                stat = entry.stat(follow_symlinks=False)
+                signature = (stat.st_mtime_ns, stat.st_size)
+                cached = self._records.get(identifier)
+                if cached is None or cached[0] != signature:
+                    try:
+                        cached = (signature, load_operation(self._install, identifier))
+                    except ApplicationError as exc:
+                        cached = (signature, exc)
+                records[identifier] = cached
+            self._records = records
+        latest: Operation | None = None
+        for _signature, record in records.values():
+            if isinstance(record, ApplicationError):
+                raise record
+            if latest is None or record.created_at > latest.created_at:
+                latest = record
+        return latest
+
+
+def result_summary(install: Installation, operation: Operation) -> str:
+    """Describe a finished operation in one human sentence."""
+
+    if operation.phase == "completed":
+        if (
+            operation.candidate_version
+            and operation.candidate_version == operation.previous_version
+        ):
+            return "vBot is already up to date; no restart was needed."
+        if not install.owns_server:
+            return (
+                "Update completed — Desktop client is current; no local server restart is needed."
+            )
+        if operation.server_was_running:
+            return "Update completed — server restarted and passed its health check."
+        return "Update completed — the server remains stopped."
+    return {
+        "prepared": "Update prepared. The active version has not changed.",
+        "failed": "vBot update failed.",
+        "rolled_back": "Update failed. The previous version was restored.",
+        "needs_attention": "Update needs attention. Check its status before trying again.",
+    }.get(operation.phase, "Update accepted; running in the background.")
 
 
 def public_result(operation: Operation) -> dict[str, Any]:

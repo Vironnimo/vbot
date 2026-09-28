@@ -179,6 +179,44 @@ def autostart(
     return {"ok": True, "enabled": True, "task_name": name, "changed": not owned}
 
 
+# The tray's toasts carry this identity. Its registry entry names them "vBot"
+# with the application icon; the tray of the last started installation owns it.
+NOTIFICATION_APP_ID = "vBot.Tray"
+_NOTIFICATION_IDENTITY_KEY = rf"Software\Classes\AppUserModelId\{NOTIFICATION_APP_ID}"
+
+
+def register_notification_identity(icon_path: Path) -> None:
+    """Name the tray's toasts after vBot instead of the host executable."""
+    if sys.platform != "win32":
+        return
+    import winreg
+
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _NOTIFICATION_IDENTITY_KEY) as key:
+        winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "vBot")
+        winreg.SetValueEx(key, "IconUri", 0, winreg.REG_SZ, str(icon_path))
+
+
+def remove_notification_identity(install: Installation) -> None:
+    """Remove the toast identity only while it still points into this installation."""
+    if sys.platform != "win32":
+        return
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _NOTIFICATION_IDENTITY_KEY) as key:
+            icon, _kind = winreg.QueryValueEx(key, "IconUri")
+        owned = Path(str(icon)).resolve().is_relative_to(install.root.resolve())
+    except (OSError, ValueError):
+        return
+    if owned:
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, _NOTIFICATION_IDENTITY_KEY)
+        except OSError:
+            logging.getLogger("vbot.application.integration").warning(
+                "Could not remove the vBot notification identity", exc_info=True
+            )
+
+
 def registered_uninstaller(root: Path) -> Path:
     """Resolve exactly one complete Inno Setup uninstaller registration."""
     executables = sorted(root.glob("unins[0-9][0-9][0-9].exe"))
@@ -505,6 +543,8 @@ def begin_removal(install: Installation) -> dict[str, Any]:
             contained(install.root, "removal-pending.json"),
             {"schema_version": 1, "pid": parent.pid, "process_created": parent.create_time()},
         )
+        # The tray has exited; if removal is cancelled, its next start registers again.
+        remove_notification_identity(install)
     return {"ok": True, "removal_pending": True}
 
 
