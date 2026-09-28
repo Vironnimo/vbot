@@ -562,6 +562,7 @@ export default Object.freeze({
   'systemPrompt.blockTitle.core:runtime': 'Runtime',
   'systemPrompt.blockTitle.core:identity_runtime': 'Identity environment',
   'systemPrompt.blockTitle.core:tools': 'Tool guidance',
+  'systemPrompt.blockTitle.core:system_reminders': 'System reminders',
   'systemPrompt.blockTitle.core:tools_list': 'Optional Tool list',
   'systemPrompt.blockTitle.core:channels': 'Channels',
   'systemPrompt.blockTitle.core:skills': 'Available Skills',

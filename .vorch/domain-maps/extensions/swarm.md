@@ -64,8 +64,8 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   All/None Tool actions materialize a selected policy through `toolAccess.js`.
   Tests: `SwarmPage.profiles.test.js` and `test_swarm_store_profiles.py`.
 
-Profiles select every additional System Prompt block explicitly; Tool Call Style
-and Skills start enabled, other blocks (including Runtime and Working Project)
+Profiles select every additional System Prompt block explicitly; Tool Call Style,
+System reminders and Skills start enabled, other blocks (including Runtime and Working Project)
 start disabled, and newly registered blocks stay disabled. This selection controls
 prompt text independently of working directory and Tool/Skill access. It is
 persisted in temporary Agent bindings and each started Swarm's profile snapshot.

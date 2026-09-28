@@ -24,6 +24,10 @@ CORE_IDENTITY_RUNTIME_BLOCK_ID = "core:identity_runtime"
 
 CORE_TOOLS_BLOCK_ID = "core:tools"
 
+# Tells the Model where <system-reminder> messages come from. Static text, so it
+# stays byte-identical for the whole Session.
+CORE_SYSTEM_REMINDERS_BLOCK_ID = "core:system_reminders"
+
 # Ships disabled: native Provider definitions already carry Tool descriptions.
 CORE_TOOLS_LIST_BLOCK_ID = "core:tools_list"
 

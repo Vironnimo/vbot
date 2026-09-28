@@ -24,6 +24,7 @@ PROMPT_FRAGMENT_NAMES = frozenset(
         "runtime.md",
         "working_project.md",
         "tools.md",
+        "system_reminders.md",
         "tools_list.md",
         "channels.md",
         "skills.md",

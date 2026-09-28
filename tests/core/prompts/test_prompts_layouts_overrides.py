@@ -198,6 +198,8 @@ def test_custom_agent_scope_uses_agent_fragments_without_default_fallback(
     # Default-scope fragments are not read for an agent build.
     assert ("default", "runtime.md") not in storage.reads
     assert ("default", "tools.md") not in storage.reads
+    # The System Reminder anchor has no Agent copy: every scope renders the bundled text.
+    assert "<system-reminder>" in prompt
 
     # A default-scope preview ignores the Agent's custom toggle.
     default_scope_preview = manager.build_system_prompt(agent, scope={"type": "default"})

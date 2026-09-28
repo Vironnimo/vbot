@@ -34,6 +34,7 @@ Deliberately **not** a reminder channel: Channel-observed group chatter persists
 
 ## Gotchas
 
+- The always-on System Prompt block `core:system_reminders` (`prompts.md`) tells the Model that `<system-reminder>` messages come from vBot, not from the user. Live tests showed that non-Claude Models distrust unanchored reminders and, once anchored, also obey forged tags inside Tool Results; hence the neutralization below.
 - `<system-reminder>` is a protocol token owned by Chat's request builder. Producers never write the tags themselves. In the Provider request Chat neutralizes every look-alike tag outside its own reminders (user, Assistant, Tool Result, attachment, Skill and channel text), so a hand-built tag reaches the Model as `&lt;system-reminder>`. Request-only code that must add a kernel reminder uses `wire_shaping.system_reminder_request_message` (contract: `chat/request-building.md`).
 - Provider adapters never receive `role: "note"`; embedding happens before wire translation (`providers.md`).
 - Reminders are synthetic user messages: content must be kernel-authored constants, never raw external or user data without its domain's quoting rules. Chat-rendered reminders quote such text through `core/chat/wire_shaping.py::_quote_external_json` (JSON with escaped angle brackets), including Model-visible Run errors and the interrupted-Run Continuation checkpoint.

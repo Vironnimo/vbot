@@ -150,7 +150,7 @@ DEFAULT_INSTRUCTIONS = (
     "action. Do not acknowledge acknowledgments or post that you have nothing new to add. "
     "If no useful work remains now, end your reply normally; no closing Board post is needed."
 )
-DEFAULT_PROMPT_BLOCKS = ["core:tools", "core:skills"]
+DEFAULT_PROMPT_BLOCKS = ["core:tools", "core:system_reminders", "core:skills"]
 DEFAULT_REMINDERS = {"delivery": True, "resume": True}
 REMINDER_TEXTS = {
     "delivery": DELIVERY_PREFIX,

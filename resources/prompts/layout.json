@@ -4,6 +4,7 @@
   { "id": "core:runtime", "enabled": true, "source": "core" },
   { "id": "core:identity_runtime", "enabled": true, "source": "core" },
   { "id": "core:tools", "enabled": true, "source": "core" },
+  { "id": "core:system_reminders", "enabled": true, "source": "core" },
   { "id": "tool:project", "enabled": true, "source": "tool" },
   { "id": "tool:subagent", "enabled": true, "source": "tool" },
   { "id": "core:tools_list", "enabled": false, "source": "core" },
