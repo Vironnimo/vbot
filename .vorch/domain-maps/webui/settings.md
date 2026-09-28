@@ -94,7 +94,7 @@ Cross-cutting value coercion for JSON-derived data lives in `webui/src/lib/value
 
 ## Extension input outside Settings
 
-`ExtensionRequests.svelte` is mounted in the App content area and polls the shared Extension request projection with owned cleanup. A pending request shows a review banner; the shared Modal displays the external message, schema-derived controls, or a safe HTTP(S) login link and redirected-address field. Accept/decline/cancel use the Extension's declared response operation. Form validity remains server-owned. Polling does not reset an open draft, and a resolved or cancelled request dismisses its dialog. Tests: `ExtensionRequests.test.js` and `extensionInputs.test.js`.
+`ExtensionRequests.svelte` is mounted in the App content area and polls the shared Extension request projection with owned cleanup. A pending request shows a review banner; the shared Modal displays the external message, schema-derived controls, or a safe HTTP(S) login link and redirected-address field. Accept/decline/cancel use the Extension's declared response operation. Form validity remains server-owned. Polling does not reset an open draft, and a resolved or cancelled request dismisses its dialog. Tests: `ExtensionRequests.test.js`.
 
 
 ## MCP connection management

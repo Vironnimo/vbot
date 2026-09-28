@@ -17,6 +17,7 @@ vi.mock('$lib/api.js', () => ({
   readExtensionPageHistory: (...args) => history(...args),
   subscribeRunEvents: vi.fn(),
 }));
+const api = await import('$lib/api.js');
 const { default: ExtensionPageHost } =
   await import('./ExtensionPageHost.support.svelte');
 
@@ -27,6 +28,8 @@ const descriptor = {
   entry_url: '/asset',
   title: 'Alpha',
 };
+const pageRef = { id: 'main', epoch: 'epoch-a' };
+const OPEN_OPTIONS = ['_blank', 'noopener,noreferrer'];
 let component = null;
 
 afterEach(async () => {
@@ -34,40 +37,178 @@ afterEach(async () => {
   document.body.innerHTML = '';
   operation.mockReset();
   history.mockReset();
-  const api = await import('$lib/api.js');
   api.openExtensionPageRun.mockReset();
   api.subscribeRunEvents.mockReset();
+  api.cancelExtensionPageToolCall.mockClear();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+// Mounts the host and loads its frame; returns the frame bridge.
+function mountPage(props = {}) {
+  component = mount(ExtensionPageHost, {
+    target: document.body,
+    props: { initialDescriptor: descriptor, ...props },
+  });
+  flushSync();
+  return loadFrame();
+}
 
 function loadFrame() {
   const frame = document.querySelector('iframe');
   const child = frame.contentWindow;
   const sent = vi.spyOn(child, 'postMessage');
   frame.dispatchEvent(new Event('load'));
-  const init = sent.mock.calls.find(
-    ([data]) => data.type === 'vbot.extension.init',
-  )[0];
-  return { child, sent, init };
+  const posted = () => sent.mock.calls.map(([data]) => data);
+  const init = posted().findLast((data) => data.type === 'vbot.extension.init');
+  const page = {
+    child,
+    sent,
+    init,
+    posted,
+    message: (data) => message(child, data),
+    ready: () => message(child, { ...init, type: 'vbot.extension.ready' }),
+    call: (id, method, params) =>
+      message(child, {
+        ...init,
+        type: 'vbot.extension.call',
+        id,
+        method,
+        params,
+      }),
+    reply: (id) =>
+      posted().find(
+        (data) =>
+          data.id === id &&
+          ['vbot.extension.result', 'vbot.extension.error'].includes(data.type),
+      ),
+    replied: (id) => vi.waitFor(() => expect(page.reply(id)).toBeDefined()),
+    errors: () =>
+      posted()
+        .filter((data) => data.type === 'vbot.extension.error')
+        .map((data) => data.id),
+  };
+  return page;
 }
 
-function message(child, data) {
+// Mounts the host and completes the frame handshake.
+function openPage(props) {
+  const page = mountPage(props);
+  page.ready();
+  return page;
+}
+
+function message(source, data) {
   const event = new MessageEvent('message', { data });
   Object.defineProperties(event, {
     origin: { value: 'null' },
-    source: { value: child },
+    source: { value: source },
   });
   window.dispatchEvent(event);
 }
 
-describe('ExtensionPage', () => {
-  it.each(['reload', 'unmount'])(
+async function flushReplies() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe('ExtensionPage frame bridge', () => {
+  it('permits clipboard writes from the opaque frame without granting reads or same-origin access', () => {
+    mountPage();
+    const frame = document.querySelector('iframe');
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(frame.getAttribute('allow')).toBe('clipboard-write *');
+  });
+
+  it('accepts calls only after Ready from the current frame and publishes the display context', async () => {
+    const routeChange = vi.fn();
+    const page = mountPage({
+      initialContext: {
+        locale: 'de',
+        timezone: 'Europe/Berlin',
+        theme: { mode: 'dark' },
+      },
+      onRouteChange: routeChange,
+    });
+    const ready = { ...page.init, type: 'vbot.extension.ready' };
+    message(window, ready);
+    page.message(null);
+    page.message({ ...ready, nonce: 'stale' });
+    page.call('1', 'operation', { operation: 'read', arguments: {} });
+    expect(operation).not.toHaveBeenCalled();
+    expect(
+      page.posted().some((data) => data.type === 'vbot.extension.context'),
+    ).toBe(false);
+    page.ready();
+    operation.mockResolvedValue({ ok: true });
+    page.call('1', 'operation', { operation: 'read', arguments: {} });
+    await Promise.resolve();
+    expect(operation).toHaveBeenCalledWith('alpha', 'read', {}, pageRef);
+    expect(page.posted()).toContainEqual(
+      expect.objectContaining({
+        type: 'vbot.extension.context',
+        locale: 'de',
+        timezone: 'Europe/Berlin',
+      }),
+    );
+    page.call('2', 'route.replace', { route: '/details' });
+    expect(routeChange).toHaveBeenCalledWith('/details');
+  });
+
+  it('invalidates immediately on descriptor replacement and forwards display updates', () => {
+    const page = openPage();
+    component.update({
+      locale: 'fr',
+      timezone: 'America/New_York',
+      theme: { mode: 'light' },
+    });
+    flushSync();
+    expect(page.posted()).toContainEqual(
+      expect.objectContaining({
+        type: 'vbot.extension.context',
+        locale: 'fr',
+        timezone: 'America/New_York',
+        theme: { mode: 'light' },
+      }),
+    );
+    component.update({
+      invalidation: { owner: 'other', page: 'main', revision: 1 },
+    });
+    flushSync();
+    expect(page.posted()).not.toContainEqual(
+      expect.objectContaining({
+        type: 'vbot.extension.invalidate',
+        revision: 1,
+      }),
+    );
+    component.update({ descriptor: { ...descriptor, epoch: 'epoch-b' } });
+    flushSync();
+    expect(page.posted()).toContainEqual(
+      expect.objectContaining({
+        type: 'vbot.extension.invalidate',
+        reason: 'descriptor_changed',
+        nonce: page.init.nonce,
+      }),
+    );
+  });
+
+  it.each([
+    [
+      'reload',
+      () => document.querySelector('iframe').dispatchEvent(new Event('load')),
+    ],
+    [
+      'unmount',
+      async () => {
+        await unmount(component);
+        component = null;
+      },
+    ],
+  ])(
     'ignores pending operation and Run-open replies after frame %s',
-    async (transition) => {
+    async (_transition, leave) => {
       let resolveOperation;
       let resolveRun;
-      const api = await import('$lib/api.js');
       operation.mockReturnValue(
         new Promise((resolve) => {
           resolveOperation = resolve;
@@ -78,98 +219,26 @@ describe('ExtensionPage', () => {
           resolveRun = resolve;
         }),
       );
-      component = mount(ExtensionPageHost, {
-        target: document.body,
-        props: { initialDescriptor: descriptor },
+      const page = openPage();
+      page.call('pending-operation', 'operation', {
+        operation: 'read',
+        arguments: {},
       });
-      flushSync();
-      const { child, sent, init } = loadFrame();
-      message(child, { ...init, type: 'vbot.extension.ready' });
-      message(child, {
-        ...init,
-        type: 'vbot.extension.call',
-        id: 'pending-operation',
-        method: 'operation',
-        params: { operation: 'read', arguments: {} },
-      });
-      message(child, {
-        ...init,
-        type: 'vbot.extension.call',
-        id: 'pending-stream',
-        method: 'run.subscribe',
-        params: { group_id: 'group', run_id: 'run' },
+      page.call('pending-stream', 'run.subscribe', {
+        group_id: 'group',
+        run_id: 'run',
       });
       expect(operation).toHaveBeenCalledOnce();
       expect(api.openExtensionPageRun).toHaveBeenCalledOnce();
-      if (transition === 'reload')
-        document.querySelector('iframe').dispatchEvent(new Event('load'));
-      else {
-        await unmount(component);
-        component = null;
-      }
-      const sentBefore = sent.mock.calls.length;
+      await leave();
+      const sentBefore = page.sent.mock.calls.length;
       resolveOperation({ stale: true });
       resolveRun({ stream: { url: '/api/extension-runs/stale' } });
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(sent.mock.calls).toHaveLength(sentBefore);
+      await flushReplies();
+      expect(page.sent.mock.calls).toHaveLength(sentBefore);
       expect(api.subscribeRunEvents).not.toHaveBeenCalled();
     },
   );
-
-  it('invalidates page snapshots when a broken Run stream has no live replacement', async () => {
-    vi.useFakeTimers();
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
-    const api = await import('$lib/api.js');
-    api.openExtensionPageRun
-      .mockResolvedValueOnce({ stream: { url: '/api/extension-runs/one' } })
-      .mockResolvedValueOnce({ stream: null });
-    const close = vi.fn();
-    api.subscribeRunEvents.mockReturnValue({ close });
-    component = mount(ExtensionPageHost, {
-      target: document.body,
-      props: { initialDescriptor: descriptor },
-    });
-    flushSync();
-    const { child, sent, init } = loadFrame();
-    message(child, { ...init, type: 'vbot.extension.ready' });
-    message(child, {
-      ...init,
-      type: 'vbot.extension.call',
-      id: 'sub',
-      method: 'run.subscribe',
-      params: { group_id: 'group', run_id: 'run', after_sequence: 3 },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    api.subscribeRunEvents.mock.calls[0][1].onError();
-    await vi.advanceTimersByTimeAsync(500);
-    expect(close).toHaveBeenCalledOnce();
-    expect(api.openExtensionPageRun).toHaveBeenLastCalledWith(
-      'alpha',
-      { id: 'main', epoch: 'epoch-a' },
-      'group',
-      'run',
-      3,
-    );
-    expect(sent.mock.calls.map(([data]) => data)).toContainEqual(
-      expect.objectContaining({
-        type: 'vbot.extension.invalidate',
-        nonce: init.nonce,
-        reason: 'run_stream_recovered',
-      }),
-    );
-  });
-
-  it('permits clipboard writes from the opaque frame without granting reads or same-origin access', () => {
-    component = mount(ExtensionPageHost, {
-      target: document.body,
-      props: { initialDescriptor: descriptor },
-    });
-    flushSync();
-    const frame = document.querySelector('iframe');
-    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
-    expect(frame.getAttribute('allow')).toBe('clipboard-write *');
-  });
 
   it('waits for the current iframe editor to save and rejects a pending flush on reload', async () => {
     let participant;
@@ -179,28 +248,22 @@ describe('ExtensionPage', () => {
         return () => {};
       },
     };
-    component = mount(ExtensionPageHost, {
-      target: document.body,
-      props: { initialDescriptor: descriptor, autosaveContext },
-    });
-    flushSync();
-    const { child, sent, init } = loadFrame();
-    message(child, { ...init, type: 'vbot.extension.ready' });
-    message(child, {
-      ...init,
+    const page = openPage({ autosaveContext });
+    page.message({
+      ...page.init,
       type: 'vbot.extension.autosave.state',
       pending: true,
     });
     expect(participant.hasPending()).toBe(true);
     const pending = participant.flush();
-    const request = sent.mock.calls.at(-1)[0];
-    message(child, {
+    const request = page.posted().at(-1);
+    page.message({
       ...request,
       type: 'vbot.extension.autosave.result',
       id: 'wrong',
       saved: true,
     });
-    message(child, {
+    page.message({
       ...request,
       type: 'vbot.extension.autosave.result',
       saved: true,
@@ -212,308 +275,232 @@ describe('ExtensionPage', () => {
   });
 
   it.each([
-    [128 * 1024, 'vbot.extension.result'],
-    [8 * 1024 * 1024, 'vbot.extension.error'],
+    [128 * 1024, (result) => ({ type: 'vbot.extension.result', result })],
+    [8 * 1024 * 1024, () => ({ type: 'vbot.extension.error' })],
   ])(
     'settles a catalog reply of %i bytes instead of dropping it',
-    async (size, type) => {
-      component = mount(ExtensionPageHost, {
-        target: document.body,
-        props: { initialDescriptor: descriptor },
-      });
-      flushSync();
-      const { child, sent, init } = loadFrame();
-      message(child, { ...init, type: 'vbot.extension.ready' });
+    async (size, expected) => {
+      const page = openPage();
       const result = { catalog: { description: 'x'.repeat(size) } };
       operation.mockResolvedValue(result);
-      message(child, {
-        ...init,
-        type: 'vbot.extension.call',
-        id: 'catalog',
-        method: 'operation',
-        params: { operation: 'catalog', arguments: {} },
+      page.call('catalog', 'operation', {
+        operation: 'catalog',
+        arguments: {},
       });
-      await Promise.resolve();
-      await Promise.resolve();
-      const reply = sent.mock.calls
-        .map(([data]) => data)
-        .find((data) => data.id === 'catalog');
-      expect(reply?.type).toBe(type);
-      if (type === 'vbot.extension.result')
-        expect(reply.result).toEqual(result);
+      await flushReplies();
+      expect(page.reply('catalog')).toMatchObject(expected(result));
     },
   );
 
-  it('requires matching Ready before it invokes an owner-bound operation', async () => {
-    const routeChange = vi.fn();
-    component = mount(ExtensionPageHost, {
-      target: document.body,
-      props: {
-        initialDescriptor: descriptor,
-        initialContext: {
-          locale: 'de',
-          timezone: 'Europe/Berlin',
-          theme: { mode: 'dark' },
-        },
-        onRouteChange: routeChange,
-      },
-    });
-    flushSync();
-    const { child, sent, init } = loadFrame();
-    const call = {
+  it('forwards Tool cancellation only from the current page frame', async () => {
+    const page = openPage();
+    const request = {
+      ...page.init,
       type: 'vbot.extension.call',
-      version: 1,
-      nonce: init.nonce,
-      epoch: init.epoch,
-      descriptor: init.descriptor,
-      id: '1',
-      method: 'operation',
-      params: { operation: 'read', arguments: {} },
+      id: 'cancel-a',
+      method: 'run.cancel_tool',
+      params: { group_id: 'group-a', run_id: 'run-a', tool_call_id: 'call-a' },
     };
-    message(child, call);
-    expect(operation).not.toHaveBeenCalled();
-    message(child, {
-      type: 'vbot.extension.ready',
-      version: 1,
-      nonce: init.nonce,
-      epoch: init.epoch,
-      descriptor: init.descriptor,
-    });
-    operation.mockResolvedValue({ ok: true });
-    message(child, call);
-    await Promise.resolve();
-    expect(operation).toHaveBeenCalledWith(
+    message(window, request);
+    page.message({ ...request, nonce: 'stale' });
+    expect(api.cancelExtensionPageToolCall).not.toHaveBeenCalled();
+    page.message(request);
+    await page.replied('cancel-a');
+    expect(api.cancelExtensionPageToolCall).toHaveBeenCalledWith(
       'alpha',
-      'read',
-      {},
-      { id: 'main', epoch: 'epoch-a' },
+      pageRef,
+      'group-a',
+      'run-a',
+      'call-a',
     );
-    expect(
-      sent.mock.calls.some(
-        ([data]) =>
-          data.type === 'vbot.extension.context' &&
-          data.locale === 'de' &&
-          data.timezone === 'Europe/Berlin',
-      ),
-    ).toBe(true);
-    message(child, {
-      type: 'vbot.extension.call',
-      version: 1,
-      nonce: init.nonce,
-      epoch: init.epoch,
-      descriptor: init.descriptor,
-      id: '2',
-      method: 'route.replace',
-      params: { route: '/details' },
-    });
-    expect(routeChange).toHaveBeenCalledWith('/details');
+    expect(page.reply('cancel-a').result).toEqual({ ok: true });
   });
+});
 
-  it('rejects a foreign window, malformed envelope, and stale nonce', () => {
-    component = mount(ExtensionPageHost, {
-      target: document.body,
-      props: { initialDescriptor: descriptor },
-    });
-    flushSync();
-    const { child, init } = loadFrame();
-    message(window, {
-      type: 'vbot.extension.ready',
-      version: 1,
-      nonce: init.nonce,
-      epoch: init.epoch,
-      descriptor: init.descriptor,
-    });
-    message(child, null);
-    message(child, {
-      type: 'vbot.extension.ready',
-      version: 1,
-      nonce: 'stale',
-      epoch: init.epoch,
-      descriptor: init.descriptor,
-    });
-    expect(operation).not.toHaveBeenCalled();
-  });
-
-  it('invalidates immediately on descriptor replacement and forwards display updates', () => {
-    component = mount(ExtensionPageHost, {
-      target: document.body,
-      props: { initialDescriptor: descriptor },
-    });
-    flushSync();
-    const { child, sent, init } = loadFrame();
-    message(child, {
-      type: 'vbot.extension.ready',
-      version: 1,
-      nonce: init.nonce,
-      epoch: init.epoch,
-      descriptor: init.descriptor,
-    });
-
-    component.update({
-      locale: 'fr',
-      timezone: 'America/New_York',
-      theme: { mode: 'light' },
-    });
-    flushSync();
-    expect(
-      sent.mock.calls.some(
-        ([data]) =>
-          data.type === 'vbot.extension.context' &&
-          data.locale === 'fr' &&
-          data.timezone === 'America/New_York' &&
-          data.theme.mode === 'light',
-      ),
-    ).toBe(true);
-
-    component.update({
-      invalidation: { owner: 'other', page: 'main', revision: 1 },
-    });
-    flushSync();
-    expect(
-      sent.mock.calls.some(
-        ([data]) =>
-          data.type === 'vbot.extension.invalidate' && data.revision === 1,
-      ),
-    ).toBe(false);
-
-    component.update({ descriptor: { ...descriptor, epoch: 'epoch-b' } });
-    flushSync();
-    expect(
-      sent.mock.calls.some(
-        ([data]) =>
-          data.type === 'vbot.extension.invalidate' &&
-          data.reason === 'descriptor_changed' &&
-          data.nonce === init.nonce,
-      ),
-    ).toBe(true);
-  });
-
+describe('ExtensionPage file links', () => {
   it('opens only files projected by its current owner-bound history response', async () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-    component = mount(ExtensionPageHost, {
-      target: document.body,
-      props: { initialDescriptor: descriptor },
-    });
-    flushSync();
-    const { child, sent, init } = loadFrame();
-    message(child, {
-      type: 'vbot.extension.ready',
-      version: 1,
-      nonce: init.nonce,
-      epoch: init.epoch,
-      descriptor: init.descriptor,
-    });
+    const page = openPage();
     history.mockResolvedValue({
       messages: [{ role: 'assistant', content: 'report' }],
       file_urls: ['/api/files/capability.signature'],
     });
-    const historyCall = {
-      type: 'vbot.extension.call',
-      version: 1,
-      nonce: init.nonce,
-      epoch: init.epoch,
-      descriptor: init.descriptor,
-      id: 'history',
-      method: 'history.read',
-      params: {
-        group_id: 'group-a',
-        participant_id: 'participant-a',
-        query: { limit: 1 },
-      },
+    const historyParams = {
+      group_id: 'group-a',
+      participant_id: 'participant-a',
+      query: { limit: 1 },
     };
-    message(child, historyCall);
-    await Promise.resolve();
-    await Promise.resolve();
+    page.call('history', 'history.read', historyParams);
+    await flushReplies();
     expect(history).toHaveBeenCalledWith(
       'alpha',
-      { id: 'main', epoch: 'epoch-a' },
+      pageRef,
       'group-a',
       'participant-a',
       { limit: 1 },
     );
-    expect(
-      sent.mock.calls.some(
-        ([data]) =>
-          data.type === 'vbot.extension.result' && data.id === 'history',
-      ),
-    ).toBe(true);
+    expect(page.reply('history').type).toBe('vbot.extension.result');
 
-    const openCall = (id, url) =>
-      message(child, {
-        ...historyCall,
-        id,
-        method: 'media.open',
-        params: { url },
-      });
-    openCall('allowed', '/api/files/capability.signature');
-    openCall('forged', '/api/files/forged.signature');
-    openCall('script', 'javascript:alert(1)');
-    openCall('external', 'https://example.com/report');
-    await Promise.resolve();
-    await Promise.resolve();
+    for (const [id, url] of [
+      ['allowed', '/api/files/capability.signature'],
+      ['forged', '/api/files/forged.signature'],
+      ['script', 'javascript:alert(1)'],
+      ['external', 'https://example.com/report'],
+    ])
+      page.call(id, 'media.open', { url });
+    await flushReplies();
+    expect(open.mock.calls).toEqual([
+      [
+        window.location.origin + '/api/files/capability.signature',
+        ...OPEN_OPTIONS,
+      ],
+      ['https://example.com/report', ...OPEN_OPTIONS],
+    ]);
+    expect(page.errors()).toEqual(['forged', 'script']);
 
-    expect(open).toHaveBeenCalledTimes(2);
-    expect(open).toHaveBeenCalledWith(
-      window.location.origin + '/api/files/capability.signature',
-      '_blank',
-      'noopener,noreferrer',
-    );
-    expect(open).toHaveBeenLastCalledWith(
-      'https://example.com/report',
-      '_blank',
-      'noopener,noreferrer',
-    );
-    expect(
-      sent.mock.calls
-        .filter(([data]) => data.type === 'vbot.extension.error')
-        .map(([data]) => data.id),
-    ).toEqual(expect.arrayContaining(['forged', 'script']));
-
-    document.querySelector('iframe').dispatchEvent(new Event('load'));
-    const reloadedInit = sent.mock.calls
-      .map(([data]) => data)
-      .filter((data) => data.type === 'vbot.extension.init')
-      .at(-1);
-    message(child, {
-      type: 'vbot.extension.ready',
-      version: 1,
-      nonce: reloadedInit.nonce,
-      epoch: reloadedInit.epoch,
-      descriptor: reloadedInit.descriptor,
+    const reloaded = loadFrame();
+    reloaded.ready();
+    reloaded.call('expired-file', 'link.open', {
+      url: '/api/files/capability.signature',
     });
-    message(child, {
-      ...historyCall,
-      nonce: reloadedInit.nonce,
-      epoch: reloadedInit.epoch,
-      descriptor: reloadedInit.descriptor,
-      id: 'expired-file',
-      method: 'link.open',
-      params: { url: '/api/files/capability.signature' },
-    });
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushReplies();
     expect(open).toHaveBeenCalledTimes(2);
-    expect(
-      sent.mock.calls.some(
-        ([data]) =>
-          data.type === 'vbot.extension.error' && data.id === 'expired-file',
-      ),
-    ).toBe(true);
-    open.mockRestore();
+    expect(reloaded.errors()).toContain('expired-file');
   });
+
+  it('keeps file links from every loaded history page and rejects stale participant replies', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const page = openPage();
+    const read = (id, participant, query = {}) =>
+      page.call(id, 'history.read', {
+        group_id: 'group-a',
+        participant_id: participant,
+        query,
+      });
+    for (const [id, query] of [
+      ['newest', {}],
+      ['oldest', { before: 'older' }],
+    ]) {
+      history.mockResolvedValueOnce({
+        file_urls: [`/api/files/${id}.signature`],
+      });
+      read(id, 'participant-a', query);
+      await page.replied(id);
+    }
+    for (const id of ['newest', 'oldest'])
+      page.call(`open-${id}`, 'link.open', {
+        url: `/api/files/${id}.signature`,
+      });
+    expect(open).toHaveBeenCalledTimes(2);
+
+    let finishStale;
+    history.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishStale = resolve;
+        }),
+    );
+    read('stale', 'participant-a');
+    history.mockResolvedValueOnce({
+      file_urls: ['/api/files/current.signature'],
+    });
+    read('current', 'participant-b');
+    await page.replied('current');
+    finishStale({ file_urls: ['/api/files/stale.signature'] });
+    await page.replied('stale');
+    for (const id of ['newest', 'oldest', 'stale', 'current'])
+      page.call(`after-switch-${id}`, 'link.open', {
+        url: `/api/files/${id}.signature`,
+      });
+    await page.replied('after-switch-current');
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(open).toHaveBeenLastCalledWith(
+      window.location.origin + '/api/files/current.signature',
+      ...OPEN_OPTIONS,
+    );
+    expect(page.errors()).toEqual([
+      'after-switch-newest',
+      'after-switch-oldest',
+      'after-switch-stale',
+    ]);
+  });
+
+  it.each([
+    ['group-a', 'participant-b'],
+    ['group-b', 'participant-a'],
+  ])(
+    'opens streamed file links only for the selected history scope (switch to %s/%s)',
+    async (groupId, participantId) => {
+      const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+      let transport;
+      api.openExtensionPageRun.mockResolvedValue({
+        stream: { url: '/api/extension-runs/current' },
+        participant_id: 'participant-a',
+        replay_through_sequence: 0,
+      });
+      api.subscribeRunEvents.mockImplementation((_url, handlers) => {
+        transport = handlers;
+        return { close: vi.fn() };
+      });
+      history.mockResolvedValue({ messages: [], file_urls: [] });
+      const page = openPage();
+      const call = async (id, method, params) => {
+        page.call(id, method, params);
+        await page.replied(id);
+      };
+      await call('history-a', 'history.read', {
+        group_id: 'group-a',
+        participant_id: 'participant-a',
+      });
+      await call('stream-a', 'run.subscribe', {
+        group_id: 'group-a',
+        run_id: 'run-a',
+      });
+      const stream = (sequence, token) =>
+        transport.onEvent({
+          type: 'assistant_output',
+          data: {
+            run_id: 'run-a',
+            sequence,
+            payload: {
+              message: {
+                content: `[result](/api/files/${token}.signature) [unverified](/api/files/forged.signature)`,
+              },
+            },
+            file_urls: [`/api/files/${token}.signature`],
+          },
+        });
+      stream(1, 'fresh');
+      await call('open-fresh', 'link.open', {
+        url: '/api/files/fresh.signature',
+      });
+      expect(open).toHaveBeenCalledExactlyOnceWith(
+        `${window.location.origin}/api/files/fresh.signature`,
+        ...OPEN_OPTIONS,
+      );
+      expect(history).toHaveBeenCalledOnce();
+      await call('open-forged', 'link.open', {
+        url: '/api/files/forged.signature',
+      });
+      await call('history-next', 'history.read', {
+        group_id: groupId,
+        participant_id: participantId,
+      });
+      stream(2, 'late');
+      await call('open-late', 'media.open', {
+        url: '/api/files/late.signature',
+      });
+      await call('open-old', 'link.open', {
+        url: '/api/files/fresh.signature',
+      });
+      expect(open).toHaveBeenCalledOnce();
+      expect(page.errors()).toEqual(['open-forged', 'open-late', 'open-old']);
+    },
+  );
 });
 
-it.each([
-  ['assistant_output_delta', { content_delta: 'live-sentinel' }],
-  [
-    'tool_call_stdout',
-    { chunk: 'tool-output-sentinel', tool_call_id: 'tool-a' },
-  ],
-  ['model_step_usage', { context_usage: { tokens: 2468, estimated: true } }],
-])(
-  'forwards the actual %s SSE payload to the Extension page',
-  async (type, payload) => {
-    const mocked = await import('$lib/api.js');
+describe('ExtensionPage Run streams', () => {
+  it('forwards the canonical events of the API subscriber to the Extension page', async () => {
     const actual = await vi.importActual('$lib/api.js');
     let source;
     class ReviewEventSource extends EventTarget {
@@ -523,268 +510,206 @@ it.each([
       }
       close() {}
     }
-    mocked.openExtensionPageRun.mockResolvedValue({
+    api.openExtensionPageRun.mockResolvedValue({
       stream: { url: '/api/extension-runs/review' },
       replay_through_sequence: 3,
     });
-    mocked.subscribeRunEvents.mockImplementation((url, handlers) =>
+    api.subscribeRunEvents.mockImplementation((url, handlers) =>
       actual.subscribeRunEvents(url, handlers, {
         EventSource: ReviewEventSource,
       }),
     );
-    component = mount(ExtensionPageHost, {
-      target: document.body,
-      props: { initialDescriptor: descriptor },
-    });
-    flushSync();
-    const { child, sent, init } = loadFrame();
-    message(child, { ...init, type: 'vbot.extension.ready' });
-    message(child, {
-      ...init,
-      type: 'vbot.extension.call',
-      id: 'review-sub',
-      method: 'run.subscribe',
-      params: { group_id: 'review-group', run_id: 'review-run' },
-    });
-    await vi.waitFor(() => expect(source).toBeDefined());
-    source.dispatchEvent(
-      new MessageEvent(type, {
-        data: JSON.stringify({
-          run_id: 'review-run',
-          sequence: 3,
-          payload,
-        }),
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(
-        sent.mock.calls
-          .map(([value]) => value)
-          .find(
-            (value) =>
-              value.type === 'vbot.extension.result' &&
-              value.id === 'review-sub',
-          )?.result?.replay_through_sequence,
-      ).toBe(3),
-    );
-    const forwarded = sent.mock.calls
-      .map(([value]) => value)
-      .find((value) => value.type === 'vbot.extension.stream');
-    expect(forwarded.id).toBe('review-sub');
-    expect(forwarded.event).toMatchObject({
-      type,
+    const page = openPage();
+    page.call('review-sub', 'run.subscribe', {
+      group_id: 'review-group',
       run_id: 'review-run',
-      sequence: 3,
-      payload,
     });
-  },
-);
-
-it('keeps file links from every loaded history page and rejects stale participant replies', async () => {
-  const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-  component = mount(ExtensionPageHost, {
-    target: document.body,
-    props: { initialDescriptor: descriptor },
-  });
-  flushSync();
-  const { child, sent, init } = loadFrame();
-  message(child, { ...init, type: 'vbot.extension.ready' });
-  const call = (id, method, params) =>
-    message(child, {
-      ...init,
-      type: 'vbot.extension.call',
-      id,
-      method,
-      params,
+    await page.replied('review-sub');
+    expect(page.reply('review-sub').result).toMatchObject({
+      live: true,
+      subscription_id: 'review-sub',
+      replay_through_sequence: 3,
     });
-  const read = (id, participant, query = {}) =>
-    call(id, 'history.read', {
-      group_id: 'group-a',
-      participant_id: participant,
-      query,
-    });
-  const reply = (id) =>
-    vi.waitFor(() =>
-      expect(
-        sent.mock.calls.some(
-          ([data]) => data.type === 'vbot.extension.result' && data.id === id,
-        ),
-      ).toBe(true),
+    const events = [
+      ['assistant_output_delta', { content_delta: 'live-sentinel' }],
+      [
+        'tool_call_stdout',
+        { chunk: 'tool-output-sentinel', tool_call_id: 'tool-a' },
+      ],
+      [
+        'model_step_usage',
+        { context_usage: { tokens: 2468, estimated: true } },
+      ],
+    ];
+    for (const [index, [type, payload]] of events.entries())
+      source.dispatchEvent(
+        new MessageEvent(type, {
+          data: JSON.stringify({
+            run_id: 'review-run',
+            sequence: index + 3,
+            payload,
+          }),
+        }),
+      );
+    const forwarded = page
+      .posted()
+      .filter((data) => data.type === 'vbot.extension.stream');
+    expect(forwarded.map((data) => data.id)).toEqual([
+      'review-sub',
+      'review-sub',
+      'review-sub',
+    ]);
+    expect(forwarded.map((data) => data.event)).toEqual(
+      events.map(([type, payload], index) => ({
+        type,
+        run_id: 'review-run',
+        sequence: index + 3,
+        payload,
+      })),
     );
-  for (const [id, query] of [
-    ['newest', {}],
-    ['oldest', { before: 'older' }],
-  ]) {
-    history.mockResolvedValueOnce({
-      file_urls: [`/api/files/${id}.signature`],
-    });
-    read(id, 'participant-a', query);
-    await reply(id);
-  }
-  for (const id of ['newest', 'oldest'])
-    call(`open-${id}`, 'link.open', { url: `/api/files/${id}.signature` });
-  expect(open).toHaveBeenCalledTimes(2);
-
-  let finishStale;
-  history.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        finishStale = resolve;
-      }),
-  );
-  read('stale', 'participant-a');
-  history.mockResolvedValueOnce({
-    file_urls: ['/api/files/current.signature'],
   });
-  read('current', 'participant-b');
-  await reply('current');
-  finishStale({ file_urls: ['/api/files/stale.signature'] });
-  await reply('stale');
-  for (const id of ['newest', 'oldest', 'stale', 'current'])
-    call(`after-switch-${id}`, 'link.open', {
-      url: `/api/files/${id}.signature`,
-    });
-  await reply('after-switch-current');
-  expect(open).toHaveBeenCalledTimes(3);
-  expect(open).toHaveBeenLastCalledWith(
-    window.location.origin + '/api/files/current.signature',
-    '_blank',
-    'noopener,noreferrer',
-  );
-  expect(
-    sent.mock.calls
-      .filter(([data]) => data.type === 'vbot.extension.error')
-      .map(([data]) => data.id),
-  ).toEqual([
-    'after-switch-newest',
-    'after-switch-oldest',
-    'after-switch-stale',
-  ]);
 });
 
-it.each([
-  ['group-a', 'participant-b'],
-  ['group-b', 'participant-a'],
-])(
-  'opens streamed file links only for the selected history scope (switch to %s/%s)',
-  async (groupId, participantId) => {
-    const api = await import('$lib/api.js');
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-    let transport;
-    api.openExtensionPageRun.mockResolvedValue({
-      stream: { url: '/api/extension-runs/current' },
-      participant_id: 'participant-a',
-      replay_through_sequence: 0,
-    });
-    api.subscribeRunEvents.mockImplementation((_url, handlers) => {
-      transport = handlers;
-      return { close: vi.fn() };
-    });
-    history.mockResolvedValue({ messages: [], file_urls: [] });
-    component = mount(ExtensionPageHost, {
-      target: document.body,
-      props: { initialDescriptor: descriptor },
-    });
-    flushSync();
-    const { child, sent, init } = loadFrame();
-    message(child, { ...init, type: 'vbot.extension.ready' });
-    const call = async (id, method, params) => {
-      message(child, {
-        ...init,
-        type: 'vbot.extension.call',
-        id,
-        method,
-        params,
-      });
-      await vi.waitFor(() =>
-        expect(sent.mock.calls.some(([data]) => data.id === id)).toBe(true),
-      );
-    };
-    await call('history-a', 'history.read', {
-      group_id: 'group-a',
-      participant_id: 'participant-a',
-    });
-    await call('stream-a', 'run.subscribe', {
-      group_id: 'group-a',
-      run_id: 'run-a',
-    });
-    const stream = (sequence, token) =>
-      transport.onEvent({
-        type: 'assistant_output',
-        data: {
-          run_id: 'run-a',
-          sequence,
-          payload: {
-            message: {
-              content: `[result](/api/files/${token}.signature) [unverified](/api/files/forged.signature)`,
-            },
-          },
-          file_urls: [`/api/files/${token}.signature`],
-        },
-      });
-    stream(1, 'fresh');
-    await call('open-fresh', 'link.open', {
-      url: '/api/files/fresh.signature',
-    });
-    expect(open).toHaveBeenCalledExactlyOnceWith(
-      `${window.location.origin}/api/files/fresh.signature`,
-      '_blank',
-      'noopener,noreferrer',
-    );
-    expect(history).toHaveBeenCalledOnce();
-    await call('open-forged', 'link.open', {
-      url: '/api/files/forged.signature',
-    });
-    await call('history-next', 'history.read', {
-      group_id: groupId,
-      participant_id: participantId,
-    });
-    stream(2, 'late');
-    await call('open-late', 'media.open', { url: '/api/files/late.signature' });
-    await call('open-old', 'link.open', { url: '/api/files/fresh.signature' });
-    expect(open).toHaveBeenCalledOnce();
-    expect(
-      sent.mock.calls
-        .filter(([data]) => data.type === 'vbot.extension.error')
-        .map(([data]) => data.id),
-    ).toEqual(['open-forged', 'open-late', 'open-old']);
-  },
-);
+describe('ExtensionPage Run stream recovery', () => {
+  const initial = { stream: { url: '/api/extension-runs/initial' } };
 
-it('forwards Tool cancellation only from the current page frame', async () => {
-  const api = await import('$lib/api.js');
-  component = mount(ExtensionPageHost, {
-    target: document.body,
-    props: { initialDescriptor: descriptor },
+  // Subscribes a ready page after `afterSequence`; the test drives each
+  // transport the host opens through `streams`.
+  async function subscribe(afterSequence = 4) {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const streams = [];
+    api.subscribeRunEvents.mockImplementation((url, handlers, options) => {
+      const stream = { url, handlers, options, close: vi.fn() };
+      streams.push(stream);
+      return stream;
+    });
+    api.openExtensionPageRun.mockResolvedValueOnce(initial);
+    api.openExtensionPageRun.mockResolvedValue({
+      stream: { url: '/api/extension-runs/fresh' },
+    });
+    const page = openPage();
+    page.call('sub', 'run.subscribe', {
+      group_id: 'group',
+      run_id: 'run',
+      after_sequence: afterSequence,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    return {
+      page,
+      streams,
+      opens: () => api.openExtensionPageRun.mock.calls.map((call) => call[4]),
+      forwarded: () =>
+        page
+          .posted()
+          .filter((data) => data.type === 'vbot.extension.stream')
+          .map((data) => data.event.sequence),
+      resyncs: () =>
+        page
+          .posted()
+          .filter(
+            (data) =>
+              data.type === 'vbot.extension.invalidate' &&
+              data.reason === 'run_stream_recovered' &&
+              data.nonce === page.init.nonce,
+          ).length,
+    };
+  }
+  const deliver = (stream, type, sequence) =>
+    stream.handlers.onEvent({ type, data: { run_id: 'run', sequence } });
+
+  it('reports a transport that cannot start without leaving a watchdog behind', async () => {
+    vi.useFakeTimers();
+    api.openExtensionPageRun.mockResolvedValue(initial);
+    api.subscribeRunEvents.mockImplementation(() => {
+      throw new Error('EventSource unavailable');
+    });
+    const page = openPage();
+    page.call('sub', 'run.subscribe', { group_id: 'group', run_id: 'run' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.reply('sub')).toMatchObject({
+      type: 'vbot.extension.error',
+      error: 'EventSource unavailable',
+    });
+    expect(vi.getTimerCount()).toBe(0);
   });
-  flushSync();
-  const { child, init, sent } = loadFrame();
-  message(child, { ...init, type: 'vbot.extension.ready' });
-  const request = {
-    ...init,
-    type: 'vbot.extension.call',
-    id: 'cancel-a',
-    method: 'run.cancel_tool',
-    params: { group_id: 'group-a', run_id: 'run-a', tool_call_id: 'call-a' },
-  };
-  message(window, request);
-  message(child, { ...request, nonce: 'stale' });
-  expect(api.cancelExtensionPageToolCall).not.toHaveBeenCalled();
-  message(child, request);
-  await vi.waitFor(() =>
-    expect(api.cancelExtensionPageToolCall).toHaveBeenCalledWith(
+
+  it('reopens after the last delivered sequence and ignores retired transports', async () => {
+    const { streams, opens, forwarded, resyncs } = await subscribe();
+    deliver(streams[0], 'assistant_output_delta', 5);
+    streams[0].handlers.onError();
+    expect(streams[0].close).toHaveBeenCalledOnce();
+    deliver(streams[0], 'run_completed', 6);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(api.openExtensionPageRun).toHaveBeenLastCalledWith(
       'alpha',
-      { id: 'main', epoch: 'epoch-a' },
-      'group-a',
-      'run-a',
-      'call-a',
-    ),
-  );
-  await vi.waitFor(() =>
-    expect(
-      sent.mock.calls.some(
-        ([data]) => data.id === 'cancel-a' && data.result?.ok === true,
-      ),
-    ).toBe(true),
-  );
+      pageRef,
+      'group',
+      'run',
+      5,
+    );
+    expect(streams[1].options.afterSequence).toBe(5);
+    expect(resyncs()).toBe(1);
+    deliver(streams[1], 'assistant_output_delta', 5);
+    deliver(streams[1], 'run_completed', 6);
+    expect(forwarded()).toEqual([5, 6]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(opens()).toEqual([4, 5]);
+  });
+
+  it('treats heartbeats as liveness and recovers a silently stalled stream', async () => {
+    const { streams, opens } = await subscribe();
+    await vi.advanceTimersByTimeAsync(20_000);
+    streams[0].handlers.onHeartbeat();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(opens()).toEqual([4]);
+    await vi.advanceTimersByTimeAsync(5_500);
+    expect(opens()).toEqual([4, 4]);
+  });
+
+  it('invalidates page snapshots once when the Run has no replay stream left', async () => {
+    const { streams, opens, resyncs } = await subscribe();
+    api.openExtensionPageRun.mockResolvedValue({ stream: null });
+    streams[0].handlers.onError();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(streams[0].close).toHaveBeenCalledOnce();
+    expect(resyncs()).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(opens()).toEqual([4, 4]);
+    expect(streams).toHaveLength(1);
+  });
+
+  it('retries a failed capability refresh with backoff', async () => {
+    const { streams, opens } = await subscribe();
+    api.openExtensionPageRun.mockRejectedValueOnce(new Error('offline'));
+    streams[0].handlers.onError();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(opens()).toHaveLength(2);
+    expect(streams).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(opens()).toHaveLength(3);
+    expect(streams).toHaveLength(2);
+  });
+
+  it('stops recovery after unsubscribe, including a capability refresh in flight', async () => {
+    const { page, streams, opens, resyncs } = await subscribe();
+    let resolve;
+    api.openExtensionPageRun.mockReturnValue(
+      new Promise((finish) => {
+        resolve = finish;
+      }),
+    );
+    streams[0].handlers.onError();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(opens()).toHaveLength(2);
+    page.call('unsub', 'run.unsubscribe', { id: 'sub' });
+    resolve({ stream: { url: '/api/extension-runs/late' } });
+    await vi.advanceTimersByTimeAsync(0);
+    streams[0].handlers.onError();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(opens()).toHaveLength(2);
+    expect(streams).toHaveLength(1);
+    expect(resyncs()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

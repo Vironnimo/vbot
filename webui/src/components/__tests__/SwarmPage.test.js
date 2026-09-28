@@ -2,752 +2,475 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   flushSync,
+  mount,
   tick,
-  unmount,
+  SwarmPage,
+  profile,
   swarm,
   button,
   createBridge,
+  overrideOperations,
+  callsTo,
+  settle,
   fill,
+  choose,
   render,
+  openSwarm,
   fixtureState,
 } from './SwarmPage.support.js';
+import { t } from '../../lib/i18n.js';
 
-describe('SwarmPage', () => {
-  it.each(['dsc-main', 'dsc-findings'])(
-    'renders Board Markdown and opens links through the host in %s',
-    async (discussionId) => {
-      const { bridge, operation } = createBridge();
-      const original = operation.getMockImplementation();
-      operation.mockImplementation((name, args) =>
-        name === 'board.read'
-          ? Promise.resolve({
-              entries: [
-                {
-                  id: `pst-${args.discussion_id}`,
-                  author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
-                  text: [
-                    `## QA ${args.discussion_id}`,
-                    '',
-                    '**Final verification** with *emphasis*.',
-                    '',
-                    '1. **Unit tests:** 31/31',
-                    '2. **Facade:** 23/23',
-                    '3. **Game loop:** 600 frames',
-                    '4. **Browser:** 0 errors',
-                    '5. **HTTP:** 200 OK',
-                    '',
-                    'Files: `core-stats.js` and `arpg-game/start.bat`.',
-                    '',
-                    '- First item',
-                    '- Second item',
-                    '',
-                    '> Quoted result',
-                    '',
-                    '| Check | Result |',
-                    '| --- | --- |',
-                    '| QA | Passed |',
-                    '',
-                    '[Report](https://example.test/report)',
-                    'https://example.test/game',
-                  ].join('\n'),
-                },
-              ],
-            })
-          : original(name, args),
-      );
-      await render(bridge);
-      button('Investigate').click();
-      await vi.waitFor(() =>
-        expect(document.querySelector('.board')).not.toBeNull(),
-      );
-      if (discussionId !== swarm.main_discussion_id) {
-        const dropdown = document.getElementById('swarm-discussion');
-        dropdown.value = discussionId;
-        dropdown.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-      await vi.waitFor(() =>
-        expect(document.querySelector('.board h2')?.textContent).toBe(
-          `QA ${discussionId}`,
-        ),
-      );
-      const post = document.querySelector('.board > li');
-      expect(post.querySelector('p strong').textContent).toBe(
-        'Final verification',
-      );
-      expect(post.querySelector('em').textContent).toBe('emphasis');
-      expect(post.querySelectorAll('ol > li')).toHaveLength(5);
-      expect(post.querySelectorAll('ul > li')).toHaveLength(2);
-      expect(
-        [...post.querySelectorAll('code')].map((el) => el.textContent),
-      ).toEqual(['core-stats.js', 'arpg-game/start.bat']);
-      expect(post.querySelector('blockquote').textContent.trim()).toBe(
-        'Quoted result',
-      );
-      expect(post.querySelectorAll('table tbody td')).toHaveLength(2);
-      expect(post.querySelector('p').textContent).not.toContain('**');
-      const links = [...post.querySelectorAll('a')];
-      expect(links.map((link) => link.href)).toEqual([
-        'https://example.test/report',
-        'https://example.test/game',
-      ]);
-      for (const link of links) {
-        link.click();
-        expect(operation).toHaveBeenCalledWith('link.open', { url: link.href });
-      }
-    },
+const NEW_RUN = t('swarm.newRun', 'New run');
+const NEW_SWARM = t('swarm.newProfile', 'New Swarm');
+const START_RUN = t('swarm.startButton', 'Start Run');
+const DELETE_RUN = t('swarm.deleteRun.title', 'Delete Run');
+const RESUME = t('swarm.resume', 'Resume');
+const STOP = t('swarm.stop', 'Stop');
+const ACTIVE_RUNS = t('swarm.runs.active', 'Active runs');
+const INACTIVE_RUNS = t('swarm.runs.inactive', 'Inactive runs');
+
+const runGroup = (label) =>
+  document.querySelector(`nav[aria-label="${label}"]`);
+const dialog = () => document.querySelector('[role="dialog"]');
+const confirmDelete = () =>
+  [...dialog().querySelectorAll('button')].find(
+    (node) => node.textContent.trim() === t('common.delete', 'Delete'),
   );
 
-  it('copies the exact fenced code from a Board post', async () => {
-    const { bridge, operation } = createBridge();
-    const original = operation.getMockImplementation();
-    const code = 'const result = "<verified>";\n  console.log(result);\n';
-    operation.mockImplementation((name, args) =>
-      name === 'board.read'
-        ? Promise.resolve({
-            entries: [{ id: 'pst-code', text: '```js\n' + code + '```' }],
-          })
-        : original(name, args),
-    );
-    await render(bridge);
-    button('Investigate').click();
-    await vi.waitFor(() =>
-      expect(document.querySelector('.board .msg-code__copy')).not.toBeNull(),
-    );
-    expect(document.querySelector('.board pre code').textContent).toBe(code);
-    expect(
-      document.querySelector('.board .msg-code__language').textContent,
-    ).toBe('js');
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('navigator', { clipboard: { writeText } });
-    document.querySelector('.board .msg-code__copy').click();
-    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(code));
+describe('SwarmPage overview', () => {
+  it('shows a connection failure until the host initializes the page', async () => {
+    vi.useFakeTimers();
+    const { bridge } = createBridge();
+    fixtureState.mounted = mount(SwarmPage, {
+      target: document.body,
+      props: { bridgeClient: bridge },
+    });
+    flushSync();
+    await vi.advanceTimersByTimeAsync(10_000);
+    flushSync();
+    expect(document.querySelector('[role="alert"]')).not.toBeNull();
+    expect(button(t('common.refresh', 'Refresh')).disabled).toBe(false);
+    bridge.show();
+    await vi.advanceTimersByTimeAsync(0);
+    flushSync();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(button(NEW_SWARM)).toBeDefined();
   });
 
-  it('keeps raw HTML and unsafe Markdown links inert in Board posts', async () => {
+  it('loads retained lists without requesting the profile catalog', async () => {
     const { bridge, operation } = createBridge();
-    const original = operation.getMockImplementation();
-    const html = '<img src=x onerror=alert(1)><script>alert(1)</script>';
-    operation.mockImplementation((name, args) =>
-      name === 'board.read'
-        ? Promise.resolve({
-            entries: [
-              {
-                id: 'pst-unsafe',
-                text: `${html}\n\n[unsafe](javascript:alert(1))\n\n**Safe formatting**`,
-              },
-            ],
-          })
-        : original(name, args),
-    );
     await render(bridge);
-    button('Investigate').click();
-    await vi.waitFor(() =>
-      expect(document.querySelector('.board p strong')?.textContent).toBe(
-        'Safe formatting',
-      ),
-    );
-    const board = document.querySelector('.board');
-    expect(board.textContent).toContain(html);
-    expect(board.querySelector('img, script, [onerror], a')).toBeNull();
-  });
-
-  it('opens an announced discussion outside the loaded selector page and preserves ordinary JSON posts', async () => {
-    const { bridge, operation } = createBridge();
-    const original = operation.getMockImplementation();
-    const title = '<img src=x onerror=alert(1)> topic-sentinel';
-    const announcement = {
-      discussion_id: 'dsc-unlisted',
-      title,
-      opening_post_id: 'pst-opening',
-    };
-    const ordinaryText = JSON.stringify(announcement);
-    operation.mockImplementation((name, args) => {
-      if (name === 'board.list')
-        return Promise.resolve(
-          args.cursor
-            ? { entries: [{ id: 'dsc-unlisted', title }] }
-            : { entries: [swarm.discussions[0]], cursor: 'more-discussions' },
-        );
-      if (name === 'board.read')
-        return Promise.resolve({
-          entries:
-            args.discussion_id === 'dsc-unlisted'
-              ? [
-                  {
-                    id: 'pst-opening',
-                    author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
-                    text: 'opening-sentinel',
-                  },
-                ]
-              : [
-                  {
-                    id: 'pst-announcement',
-                    author: { id: 'prt-a', kind: 'participant', name: 'Alpha' },
-                    text: 'stored-body-sentinel',
-                    discussion_announcement: announcement,
-                  },
-                  {
-                    id: 'pst-ordinary',
-                    author: { id: 'prt-b', kind: 'participant', name: 'Beta' },
-                    text: ordinaryText,
-                  },
-                ],
-        });
-      return original(name, args);
-    });
-    await render(bridge);
-    button('Investigate').click();
-    await vi.waitFor(() =>
-      expect(
-        document.querySelector('.discussion-announcement button'),
-      ).not.toBeNull(),
-    );
-    const board = document.querySelector('.board');
-    expect(board.textContent).toContain(ordinaryText);
-    expect(board.textContent).not.toContain('stored-body-sentinel');
-    expect(board.querySelector('img')).toBeNull();
-    const target = document.querySelector('.discussion-announcement button');
-    expect(target.textContent.trim()).toBe(title);
-    target.click();
-    await vi.waitFor(() =>
-      expect(document.querySelector('.board').textContent).toContain(
-        'opening-sentinel',
-      ),
-    );
-    expect(operation).toHaveBeenCalledWith('board.read', {
-      swarm_id: 'swr-a',
-      discussion_id: 'dsc-unlisted',
-      limit: 100,
-    });
-    expect(
-      [...document.querySelectorAll('select')].some(
-        (select) => select.value === 'dsc-unlisted',
-      ),
-    ).toBe(true);
-    button('Load more discussions').click();
-    await vi.waitFor(() =>
-      expect(button('Load more discussions')).toBeUndefined(),
-    );
-    expect(
-      document.querySelectorAll('option[value="dsc-unlisted"]'),
-    ).toHaveLength(1);
-  });
-
-  it('keeps participant avatars consistent across Board, Activity and remounts', async () => {
-    const { bridge, operation } = createBridge();
-    const original = operation.getMockImplementation();
-    const participants = [
-      { ...swarm.participants[0], display_name: 'Participant 9' },
-      { ...swarm.participants[1], display_name: 'Participant 10' },
-    ];
-    operation.mockImplementation((name, args) => {
-      if (name === 'swarms.get')
-        return Promise.resolve({ swarm: { ...swarm, participants } });
-      if (name === 'board.read')
-        return Promise.resolve({
-          entries: participants.map((participant) => ({
-            id: `post-${participant.id}`,
-            author: {
-              id: participant.id,
-              name: participant.display_name,
-              kind: 'participant',
-            },
-            text: `message-${participant.id}`,
-            recipients:
-              participant === participants[0] ? [participants[1].id] : [],
-            created_at: '2026-09-08T09:15:00+00:00',
-          })),
-        });
-      return original(name, args);
-    });
-    const colors = new Map();
-    for (let pass = 0; pass < 2; pass += 1) {
-      await render(bridge);
-      button('Investigate').click();
-      await vi.waitFor(() =>
-        expect(document.querySelectorAll('.board li')).toHaveLength(2),
-      );
-      for (const [index, participant] of participants.entries()) {
-        const rosterAvatar = button(participant.display_name).querySelector(
-          '.participant-avatar',
-        );
-        const post = [...document.querySelectorAll('.board li')].find((item) =>
-          item.textContent.includes(`message-${participant.id}`),
-        );
-        const postAvatar = post.querySelector('.participant-avatar');
-        expect(postAvatar.textContent.trim()).toBe(index === 0 ? 'P9' : 'P10');
-        expect(postAvatar.getAttribute('aria-hidden')).toBe('true');
-        expect(post.querySelector('strong').textContent).toBe(
-          participant.display_name,
-        );
-        // Addressed participants appear by name, not by id.
-        expect(post.textContent.includes('To: Participant 10')).toBe(
-          index === 0,
-        );
-        const color = postAvatar.style.getPropertyValue('--participant-color');
-        expect(color).toBe(
-          rosterAvatar.style.getPropertyValue('--participant-color'),
-        );
-        expect(post.style.getPropertyValue('--participant-color')).toBe(color);
-        if (pass) expect(color).toBe(colors.get(participant.id));
-        colors.set(participant.id, color);
-      }
-      expect(new Set(colors.values()).size).toBe(2);
-      button('Participant 9').click();
-      await vi.waitFor(() =>
-        expect(document.querySelector('.history')).not.toBeNull(),
-      );
-      const activityAvatar = document.querySelector(
-        '.participants .participant-avatar',
-      );
-      expect(activityAvatar.style.getPropertyValue('--participant-color')).toBe(
-        colors.get('prt-a'),
-      );
-      const activityChip = activityAvatar.closest('button');
-      expect(activityChip.getAttribute('aria-pressed')).toBe('true');
-      expect(activityChip.textContent).not.toContain(participants[0].model);
-      expect(activityChip.getAttribute('aria-label')).toContain(
-        participants[0].model,
-      );
-      expect(activityChip.querySelector('.participant-status')).not.toBeNull();
-      fixtureState.mounted = await unmount(fixtureState.mounted);
-      document.body.innerHTML = '';
-    }
-  });
-
-  it('renders complete prompt, timestamped author headers and participants above posts', async () => {
-    const { bridge, operation } = createBridge();
-    const original = operation.getMockImplementation();
-    const prompt = 'test-owned long prompt '.repeat(15) + '\nsecond line';
-    operation.mockImplementation((name, args) => {
-      if (name === 'swarms.get')
-        return Promise.resolve({
-          swarm: { ...structuredClone(swarm), prompt },
-        });
-      if (name === 'board.read')
-        return Promise.resolve({
-          entries: [
-            {
-              id: 'post-time',
-              sequence: 7,
-              author: { name: 'Alpha' },
-              text: 'test-owned board text',
-              created_at: '2026-09-08T09:15:00+00:00',
-            },
-          ],
-        });
-      return original(name, args);
-    });
-    await render(bridge);
-    bridge.updateContext({
-      locale: 'en',
-      timezone: 'Europe/Berlin',
-      theme: {},
-    });
-    button('Investigate').click();
-    await vi.waitFor(() =>
-      expect(document.querySelector('.board time')).not.toBeNull(),
-    );
-    expect(document.querySelector('.swarm-head h2').textContent).toBe(
-      'Research',
-    );
-    expect(document.querySelector('.swarm-head').textContent).not.toContain(
-      prompt,
-    );
-    expect(
-      document.querySelector('.swarm-goal-post .msg-markdown').textContent,
-    ).toContain('second line');
-    expect(document.querySelectorAll('.swarm-goal-post')).toHaveLength(1);
-    expect(document.querySelector('.board-directory').textContent).toContain(
-      'C:/work',
-    );
-    expect(document.querySelector('.swarm-head').textContent).not.toContain(
-      'swr-a',
-    );
-    expect(document.querySelector('.swarm-head .chip')).not.toBeNull();
-    expect(button('Results')).toBeUndefined();
-    expect(document.querySelector('.post-header strong').textContent).toBe(
-      'Alpha',
-    );
-    // The post number is the reference participants use for this post.
-    expect(document.querySelector('.post-number').textContent).toBe('#7');
-    expect(document.querySelector('.board time').dateTime).toBe(
-      '2026-09-08T09:15:00+00:00',
-    );
-    expect(document.querySelector('.board time').textContent).toMatch(/11:15/);
-    const roster = document.querySelector('.participant-pane');
-    expect(
-      roster.compareDocumentPosition(document.querySelector('.board')) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    button('Usage').click();
+    expect(button(NEW_SWARM)).toBeDefined();
+    expect(runGroup(INACTIVE_RUNS)).not.toBeNull();
+    expect(operation).toHaveBeenCalledWith('profiles.list', { limit: 100 });
+    expect(callsTo(operation, 'catalog')).toHaveLength(0);
+    bridge.show();
     await tick();
-    expect(document.querySelector('.swarm-identity dd').textContent).toBe(
-      'swr-a',
-    );
-  });
-
-  it('keeps a failed post in the modal and closes only after successful submission', async () => {
-    const { bridge, operation } = createBridge();
-    const original = operation.getMockImplementation();
-    let fail = true;
-    operation.mockImplementation((name, args) =>
-      name === 'board.post' && fail
-        ? Promise.reject(new Error('post-failed-sentinel'))
-        : original(name, args),
-    );
-    await render(bridge);
-    button('Investigate').click();
-    await vi.waitFor(() => expect(button('Write post')).toBeDefined());
-    button('Write post').click();
-    await tick();
-    expect(
-      document.querySelector('[role="dialog"] #swarm-post'),
-    ).not.toBeNull();
-    fill('swarm-post', 'retained-draft-sentinel');
-    await tick();
-    button('Post').click();
-    await vi.waitFor(() =>
-      expect(
-        document.querySelector('[role="dialog"] [role="alert"]').textContent,
-      ).toContain('post-failed-sentinel'),
-    );
-    expect(document.getElementById('swarm-post').value).toBe(
-      'retained-draft-sentinel',
-    );
-    fail = false;
-    button('Post').click();
-    await vi.waitFor(() =>
-      expect(document.querySelector('[role="dialog"]')).toBeNull(),
-    );
-  });
-
-  it.each(['failed', 'cancelled', 'interrupted'])(
-    'shows canonical context and resumes only the selected %s participant',
-    async (state) => {
-      const { bridge, operation } = createBridge();
-      const original = operation.getMockImplementation();
-      operation.mockImplementation((name, args) =>
-        name === 'swarms.get'
-          ? Promise.resolve({
-              swarm: {
-                ...structuredClone(swarm),
-                participants: swarm.participants.map((peer) => ({
-                  ...peer,
-                  state: peer.id === 'prt-a' ? 'running' : state,
-                  run_active: peer.id === 'prt-a',
-                })),
-              },
-            })
-          : original(name, args),
-      );
-      bridge.readHistory.mockImplementation((_swarm, participant) =>
-        Promise.resolve({
-          messages: [],
-          context_usage: {
-            tokens: participant === 'prt-a' ? 120 : 850,
-            estimated: participant !== 'prt-a',
-          },
-          session_usage: { input_tokens: 99000 },
-        }),
-      );
-      await render(bridge);
-      button('Investigate').click();
-      await vi.waitFor(() => expect(button('Beta')).toBeDefined());
-      button('Beta').click();
-      await vi.waitFor(() =>
-        expect(button('Resume participant')).toBeDefined(),
-      );
-      expect(document.querySelector('.context-usage').textContent).toContain(
-        '~850',
-      );
-      button('Resume participant').click();
-      await vi.waitFor(() =>
-        expect(operation).toHaveBeenCalledWith(
-          'swarms.resume',
-          expect.objectContaining({
-            swarm_id: 'swr-a',
-            participant_id: 'prt-b',
-          }),
-        ),
-      );
-      button('Alpha').click();
-      await vi.waitFor(() =>
-        expect(document.querySelector('.context-usage').textContent).toContain(
-          '120 / 128,000',
-        ),
-      );
-      expect(button('Resume participant')).toBeUndefined();
-    },
-  );
-
-  it('posts a Board reply with explicit public recipients', async () => {
-    const { bridge, operation } = createBridge();
-    await render(bridge);
-    button('Investigate').click();
-    await tick();
+    expect(callsTo(operation, 'profiles.list')).toHaveLength(1);
+    button(NEW_SWARM).click();
     await tick();
     flushSync();
-    button('Write post').click();
+    expect(callsTo(operation, 'catalog')).toHaveLength(1);
+    expect(document.querySelector('input')).not.toBeNull();
+  });
+
+  it('groups Runs by execution state under headed groups that explain when empty', async () => {
+    const { bridge, operation } = createBridge();
+    let entries = [];
+    overrideOperations(operation, { 'swarms.list': () => ({ entries }) });
+    await render(bridge);
+    const emptyText = (label) =>
+      runGroup(label).querySelector('p')?.textContent.trim();
+    const rows = (label) => runGroup(label).querySelectorAll('button');
+    for (const [label, empty] of [
+      [ACTIVE_RUNS, t('swarm.runs.noActive', 'No active runs')],
+      [INACTIVE_RUNS, t('swarm.runs.noInactive', 'No inactive runs')],
+    ]) {
+      const section = runGroup(label).closest('section');
+      expect(
+        document.getElementById(section.getAttribute('aria-labelledby'))
+          .tagName,
+      ).toBe('H3');
+      expect(rows(label)).toHaveLength(0);
+      expect(emptyText(label)).toBe(empty);
+    }
+    entries = [
+      'preparing',
+      'running',
+      'stopping',
+      'idle',
+      'needs_attention',
+      'interrupted',
+      'stopped',
+      'failed',
+    ].map((state) => ({ id: state, title: `goal-${state}`, state }));
+    bridge.invalidate();
+    await vi.waitFor(() => expect(rows(ACTIVE_RUNS)).toHaveLength(3));
+    expect([...rows(ACTIVE_RUNS)].map((row) => row.textContent.trim())).toEqual(
+      ['goal-preparing', 'goal-running', 'goal-stopping'],
+    );
+    expect(rows(INACTIVE_RUNS)).toHaveLength(5);
+    expect(emptyText(ACTIVE_RUNS)).toBeUndefined();
+    expect(emptyText(INACTIVE_RUNS)).toBeUndefined();
+    const profileRow = document.querySelector(
+      `nav[aria-label="${t('swarm.profiles', 'Swarms')}"] button`,
+    );
+    expect(profileRow.textContent.trim()).toBe('Research (2)');
+    expect(profileRow.children).toHaveLength(1);
+    expect(document.querySelector('.run-group strong')).toBeNull();
+    entries = entries.map((entry) =>
+      entry.id === 'running' ? { ...entry, state: 'idle' } : entry,
+    );
+    bridge.invalidate();
+    await vi.waitFor(() => expect(rows(ACTIVE_RUNS)).toHaveLength(2));
+    expect(runGroup(INACTIVE_RUNS).textContent).toContain('goal-running');
+  });
+
+  it('marks New run as the current entry while the goal form is shown', async () => {
+    const { bridge } = createBridge();
+    await render(bridge);
+    expect(button(NEW_RUN).getAttribute('aria-current')).toBe('page');
+    await openSwarm(bridge);
+    expect(button(NEW_RUN).getAttribute('aria-current')).toBeNull();
+    button(NEW_RUN).click();
     await tick();
-    const textarea = document.querySelector('textarea');
-    textarea.value = 'Finding';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    const options = document.querySelectorAll('.post-options input');
-    options[0].value = 'pst-parent';
-    options[0].dispatchEvent(new Event('input', { bubbles: true }));
-    options[1].value = 'prt-a, prt-b';
-    options[1].dispatchEvent(new Event('input', { bubbles: true }));
+    expect(document.querySelector('.swarm-head')).toBeNull();
+    expect(button(NEW_RUN).getAttribute('aria-current')).toBe('page');
+    button('Research').click();
     await tick();
-    button('Post').click();
+    flushSync();
+    expect(button(NEW_RUN).getAttribute('aria-current')).toBeNull();
+  });
+
+  it('keeps the overview usable when the profile catalog fails and retries on request', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    operation.mockRejectedValueOnce(new Error('catalog-unavailable-test'));
+    button(NEW_SWARM).click();
     await tick();
+    flushSync();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      'catalog-unavailable-test',
+    );
+    expect(button(NEW_SWARM).disabled).toBe(false);
+    button(NEW_SWARM).click();
     await tick();
+    flushSync();
+    expect(document.querySelector('input')).not.toBeNull();
+  });
+
+  it('ignores old Swarm detail replies after selecting a new Swarm', async () => {
+    const { bridge, operation } = createBridge();
+    const other = {
+      ...structuredClone(swarm),
+      id: 'swr-b',
+      prompt: 'Second swarm',
+      main_discussion_id: 'dsc-b',
+    };
+    let finishDiscussions;
+    overrideOperations(operation, {
+      'swarms.list': () => ({ entries: [swarm, other] }),
+      'swarms.get': (args) => ({
+        swarm: structuredClone(args.swarm_id === 'swr-b' ? other : swarm),
+      }),
+      'board.list': (args) =>
+        args.swarm_id === 'swr-a'
+          ? new Promise((resolve) => {
+              finishDiscussions = resolve;
+            })
+          : { entries: [{ id: 'dsc-b', title: 'Second discussion' }] },
+      'board.read': (args) => ({
+        entries: [
+          { id: args.swarm_id, text: args.swarm_id, sender_id: 'prt-a' },
+        ],
+      }),
+    });
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() => expect(finishDiscussions).toBeTypeOf('function'));
+    button('Second swarm').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.board').textContent).toContain('swr-b'),
+    );
+    finishDiscussions({
+      entries: [{ id: 'dsc-main', title: 'Old discussion' }],
+    });
+    await settle();
+    expect(document.querySelector('.board').textContent).toContain('swr-b');
+    expect(bridge.replaceRoute).toHaveBeenLastCalledWith('/swarms/swr-b');
+    expect(document.getElementById('swarm-discussion').value).toBe('dsc-b');
+  });
+});
+
+describe('Swarm Run start', () => {
+  const projectProfile = {
+    ...profile,
+    working_directory: { kind: 'project', project_id: 'project-a' },
+  };
+  const directoryProfile = { ...profile, id: 'prf-b', name: 'Other' };
+  const directory = () => document.getElementById('swarm-start-directory');
+
+  it('prefills the Run directory, preserves edits during invalidation and submits only the override', async () => {
+    const { bridge, operation } = createBridge();
+    overrideOperations(operation, {
+      'swarms.start': () => ({ swarm_id: swarm.id }),
+    });
+    await render(bridge);
+    const input = directory();
+    expect(input.value).toBe('C:/work');
+    const form = document.querySelector('.start');
+    expect(
+      [...form.querySelectorAll('[id]')]
+        .map((el) => el.id)
+        .filter((id) =>
+          [
+            'swarm-start-profile',
+            'swarm-start-directory',
+            'swarm-goal',
+          ].includes(id),
+        ),
+    ).toEqual(['swarm-start-profile', 'swarm-start-directory', 'swarm-goal']);
+    fill('swarm-start-directory', 'D:/run-only');
+    fill('swarm-goal', 'goal-sentinel');
+    await tick();
+    bridge.invalidate();
+    await settle();
+    expect(input.value).toBe('D:/run-only');
+    button(START_RUN).click();
+    await vi.waitFor(() =>
+      expect(operation).toHaveBeenCalledWith(
+        'swarms.start',
+        expect.objectContaining({
+          profile_id: profile.id,
+          prompt: 'goal-sentinel',
+          working_directory: 'D:/run-only',
+        }),
+      ),
+    );
+    expect(callsTo(operation, 'profiles.save')).toHaveLength(0);
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    button(NEW_RUN).click();
+    await tick();
+    expect(directory().value).toBe('C:/work');
+  });
+
+  it('resolves Project defaults, preserves their Project selection and replaces the default on Swarm selection', async () => {
+    const { bridge, operation } = createBridge(projectProfile);
+    overrideOperations(operation, {
+      'profiles.list': () => ({ entries: [projectProfile, directoryProfile] }),
+      'swarms.start': () => ({ swarm_id: swarm.id }),
+    });
+    await render(bridge);
+    await vi.waitFor(() => expect(directory().value).toBe('C:/project'));
+    fill('swarm-goal', 'project-goal');
+    await tick();
+    button(START_RUN).click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    expect(callsTo(operation, 'swarms.start')[0][1]).not.toHaveProperty(
+      'working_directory',
+    );
+    button(NEW_RUN).click();
+    await tick();
+    await choose('swarm-start-profile', 'Other');
+    expect(directory().value).toBe('C:/work');
+  });
+
+  it('ignores stale Project lookups and prevents starting with a blank directory', async () => {
+    const { bridge, operation } = createBridge(projectProfile);
+    let resolveCatalog;
+    overrideOperations(operation, {
+      'profiles.list': () => ({ entries: [projectProfile, directoryProfile] }),
+      catalog: () =>
+        new Promise((resolve) => {
+          resolveCatalog = resolve;
+        }),
+    });
+    await render(bridge);
+    expect(button(START_RUN).disabled).toBe(true);
+    await choose('swarm-start-profile', 'Other');
+    resolveCatalog({
+      catalog: { projects: [{ id: 'project-a', cwd: 'C:/late' }] },
+    });
+    await tick();
+    expect(directory().value).toBe('C:/work');
+    fill('swarm-start-directory', '  ');
+    await tick();
+    expect(button(START_RUN).disabled).toBe(true);
+  });
+});
+
+describe('Swarm Run controls', () => {
+  it('requires Stop before a Swarm can be deleted', async () => {
+    const { bridge, operation } = createBridge();
+    await openSwarm(bridge);
+    await settle();
+    expect(button(DELETE_RUN).disabled).toBe(true);
+    button(DELETE_RUN).click();
+    expect(callsTo(operation, 'swarms.delete')).toHaveLength(0);
+  });
+
+  it('confirms deletion, keeps the profile and clears the selected Swarm', async () => {
+    const { bridge, operation } = createBridge(profile, {
+      ...structuredClone(swarm),
+      state: 'cancelled',
+    });
+    let deleted = false;
+    overrideOperations(operation, {
+      'swarms.delete': () => {
+        deleted = true;
+        return { deleted: true };
+      },
+      'swarms.list': (_args, fallback) =>
+        deleted ? { entries: [], has_more: false } : fallback(),
+    });
+    await openSwarm(bridge);
+    await settle();
+    button(DELETE_RUN).click();
+    await tick();
+    expect(dialog().textContent).toContain(
+      t(
+        'swarm.deleteRun.body',
+        'Permanently delete this Run, its Board, Wiki and participant Sessions? The Swarm will be kept. This cannot be undone.',
+      ),
+    );
+    button(t('common.cancel', 'Cancel')).click();
+    await tick();
+    expect(callsTo(operation, 'swarms.delete')).toHaveLength(0);
+    button(DELETE_RUN).click();
+    await tick();
+    confirmDelete().click();
+    await settle();
+    expect(operation).toHaveBeenCalledWith('swarms.delete', {
+      swarm_id: 'swr-a',
+    });
+    expect(callsTo(operation, 'profiles.delete')).toHaveLength(0);
+    expect(dialog()).toBeNull();
+    expect(button('Investigate')).toBeUndefined();
+    expect(bridge.replaceRoute).toHaveBeenLastCalledWith('');
+    expect(button('Research')).toBeDefined();
+  });
+
+  it('retains the Run deletion confirmation and allows retry after a failure', async () => {
+    const { bridge, operation } = createBridge(profile, {
+      ...structuredClone(swarm),
+      state: 'deleting',
+    });
+    overrideOperations(operation, {
+      'swarms.delete': () => Promise.reject(new Error('Storage unavailable')),
+    });
+    await openSwarm(bridge);
+    await settle();
+    expect(button(RESUME)).toBeUndefined();
+    button(DELETE_RUN).click();
+    await tick();
+    confirmDelete().click();
+    await settle();
+    expect(dialog().textContent).toContain('Storage unavailable');
+    expect(confirmDelete().disabled).toBe(false);
+    confirmDelete().click();
+    await settle();
+    expect(callsTo(operation, 'swarms.delete')).toHaveLength(2);
+  });
+
+  it.each([
+    ['running', 'idle', true],
+    ['cancelled', 'cancelled', false],
+    ['interrupted', 'interrupted', false],
+  ])(
+    'offers Resume for a %s Swarm with a %s participant (Stop offered: %s)',
+    async (swarmState, participantState, stopOffered) => {
+      const { bridge, operation } = createBridge(profile, {
+        ...structuredClone(swarm),
+        state: swarmState,
+        participants: [
+          {
+            ...structuredClone(swarm.participants[0]),
+            state: participantState,
+          },
+        ],
+      });
+      await openSwarm(bridge);
+      await settle();
+      expect(button(STOP) !== undefined).toBe(stopOffered);
+      button(RESUME).click();
+      await tick();
+      expect(operation).toHaveBeenCalledWith(
+        'swarms.resume',
+        expect.objectContaining({ swarm_id: 'swr-a' }),
+      );
+    },
+  );
+
+  it('names participants whose Resume failed although the operation succeeded', async () => {
+    const { bridge, operation } = createBridge();
+    overrideOperations(operation, {
+      'swarms.resume': () => ({
+        runs: [{ participant_id: 'prt-b', error: 'RuntimeError' }],
+      }),
+    });
+    await openSwarm(bridge);
+    await vi.waitFor(() => expect(button(RESUME)).toBeDefined());
+    button(RESUME).click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        'Beta',
+      ),
+    );
+  });
+
+  it('keeps failed participants visible while their peers are running', async () => {
+    const detail = structuredClone(swarm);
+    detail.participants[1].state = 'failed';
+    const { bridge } = createBridge(profile, detail);
+    await openSwarm(bridge);
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        'Beta',
+      ),
+    );
+  });
+
+  it('does not autosave delivery changes and stops only on an explicit click', async () => {
+    const { bridge, operation } = createBridge();
+    await openSwarm(bridge);
+    await tick();
+    flushSync();
+    button(
+      t('swarm.communication.title', 'Change communication settings'),
+    ).click();
+    flushSync();
+    const select = document.querySelector('.communication select');
+    select.value = 'pull';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+    expect(callsTo(operation, 'swarms.settings')).toHaveLength(0);
+    expect(document.body.textContent).toContain(
+      t('swarm.communication.proposed', 'Proposed changes'),
+    );
+    button(t('swarm.apply', 'Apply changes')).click();
+    await settle();
     expect(operation).toHaveBeenCalledWith(
-      'board.post',
+      'swarms.settings',
       expect.objectContaining({
         swarm_id: 'swr-a',
-        discussion_id: 'dsc-main',
-        text: 'Finding',
-        reply_to: 'pst-parent',
-        recipients: ['prt-a', 'prt-b'],
+        expected_revision: 3,
+        delivery: expect.objectContaining({
+          main: expect.objectContaining({ mode: 'pull' }),
+        }),
+      }),
+    );
+    button(STOP).click();
+    await tick();
+    expect(operation).toHaveBeenCalledWith(
+      'swarms.stop',
+      expect.objectContaining({
+        swarm_id: 'swr-a',
         request_id: expect.any(String),
       }),
     );
   });
-
-  it('changes Board discussion without treating a human read as a mutation', async () => {
-    const { bridge, operation } = createBridge();
-    await render(bridge);
-    button('Investigate').click();
-    await tick();
-    await tick();
-    await new Promise((resolve) => setTimeout(resolve));
-    const discussion = document.querySelector('#swarm-discussion');
-    discussion.value = 'dsc-findings';
-    discussion.dispatchEvent(new Event('change', { bubbles: true }));
-    await tick();
-    expect(operation).toHaveBeenCalledWith('board.read', {
-      swarm_id: 'swr-a',
-      discussion_id: 'dsc-findings',
-      limit: 100,
-    });
-    expect(operation).not.toHaveBeenCalledWith('board.post', expect.anything());
-  });
-
-  it('shows newest Board posts first and appends earlier pages below them', async () => {
-    const { bridge, operation } = createBridge();
-    const original = operation.getMockImplementation();
-    const posts = (ids) =>
-      ids.map((id) => ({
-        id: `post-${id}`,
-        text: `message-${id}`,
-        sender_id: 'prt-a',
-        created_at: '2026-09-08T09:00:00+00:00',
-      }));
-    operation.mockImplementation((name, args) =>
-      name === 'board.read'
-        ? Promise.resolve(
-            args.cursor
-              ? { entries: posts([1, 2]), cursor: null, has_more: false }
-              : {
-                  entries: posts([3, 4]),
-                  cursor: 'older-page',
-                  has_more: true,
-                },
-          )
-        : original(name, args),
-    );
-    await render(bridge);
-    button('Investigate').click();
-    await vi.waitFor(() =>
-      expect(document.querySelectorAll('.board li')).toHaveLength(2),
-    );
-    const messages = () =>
-      [...document.querySelectorAll('.board li p')].map((el) =>
-        el.textContent.trim(),
-      );
-    expect(messages()).toEqual(['message-4', 'message-3']);
-    button('Load earlier messages').click();
-    await vi.waitFor(() =>
-      expect(messages()).toEqual([
-        'message-4',
-        'message-3',
-        'message-2',
-        'message-1',
-      ]),
-    );
-    expect(operation).toHaveBeenCalledWith('board.read', {
-      swarm_id: swarm.id,
-      discussion_id: swarm.main_discussion_id,
-      limit: 100,
-      cursor: 'older-page',
-    });
-    expect(button('Load earlier messages')).toBeUndefined();
-  });
-
-  it('links cited post and Wiki page numbers and reveals a cited post', async () => {
-    const { bridge, operation } = createBridge();
-    const original = operation.getMockImplementation();
-    const post = (sequence, discussionId, name, text, extra = {}) => ({
-      id: `pst-${sequence}`,
-      sequence,
-      discussion_id: discussionId,
-      author: { id: `prt-${name}`, kind: 'participant', name },
-      text,
-      ...extra,
-    });
-    const baseline = post(5, 'dsc-main', 'Beta', 'Baseline   measured.');
-    const finding = post(3, 'dsc-findings', 'Beta', 'Findings detail');
-    const citing = post(
-      7,
-      'dsc-main',
-      'Alpha',
-      'Agrees with #5 and w2 after #3; not #7, #99, w3, `#5` or abc#5.',
-      { reply_to: 'pst-5', reply_sequence: 5 },
-    );
-    operation.mockImplementation((name, args) => {
-      if (name === 'swarms.get')
-        return Promise.resolve({
-          swarm: {
-            ...structuredClone(swarm),
-            prompt: 'Investigate #5 and w2',
-            goal_post_sequence: 0,
-            newest_post_sequence: 12,
-            newest_wiki_page_number: 2,
-          },
-        });
-      if (name === 'board.read' && args.message_id === '#3')
-        return Promise.resolve({ entries: [finding], has_more: false });
-      if (name === 'board.read')
-        return Promise.resolve({
-          entries:
-            args.discussion_id === 'dsc-findings'
-              ? [finding]
-              : [baseline, citing],
-          has_more: false,
-        });
-      if (name === 'wiki')
-        return Promise.resolve({
-          title: 'Benchmarks',
-          content: 'Median latency by build.',
-          deleted: false,
-        });
-      return original(name, args);
-    });
-    await render(bridge);
-    button('Investigate').click();
-    await vi.waitFor(() =>
-      expect(document.querySelectorAll('.board > li')).toHaveLength(2),
-    );
-    const references = () =>
-      [
-        ...document.querySelectorAll(
-          '.board > li[data-post-number="7"] a[data-swarm-reference]',
-        ),
-      ].map((link) => [link.textContent, link.getAttribute('href')]);
-    // A post cites only earlier posts and existing pages, outside code.
-    expect(references()).toEqual([
-      ['#5', '#post/5'],
-      ['w2', '#wiki/w2'],
-      ['#3', '#post/3'],
-    ]);
-    expect(
-      document.querySelector('.swarm-goal-post a[data-swarm-reference]'),
-    ).toBeNull();
-
-    const tooltipText = () =>
-      document.querySelector('#app-tooltip')?.textContent ?? '';
-    const link = (text) =>
-      [...document.querySelectorAll('a[data-swarm-reference]')].find(
-        (item) => item.textContent === text,
-      );
-    link('#5').focus();
-    await vi.waitFor(() =>
-      expect(tooltipText()).toContain('Baseline measured.'),
-    );
-    expect(tooltipText()).toContain('#5 · Beta');
-    link('w2').focus();
-    await vi.waitFor(() =>
-      expect(tooltipText()).toContain('Median latency by build.'),
-    );
-    expect(tooltipText()).toContain('w2 · Benchmarks');
-    expect(operation).toHaveBeenCalledWith('wiki', {
-      swarm_id: swarm.id,
-      action: 'read',
-      page_id: 'w2',
-      limit: 300,
-    });
-    // The loaded post described itself; only the page needed a read.
-    expect(operation).not.toHaveBeenCalledWith(
-      'board.read',
-      expect.objectContaining({ message_id: '#5' }),
-    );
-
-    document
-      .querySelector('.board a[href="#post/5"]:not([data-swarm-reference])')
-      .click();
-    await vi.waitFor(() =>
-      expect(
-        document.querySelector('.board > li[data-post-number="5"]').dataset
-          .revealed,
-      ).toBe(''),
-    );
-
-    link('#3').click();
-    await vi.waitFor(() =>
-      expect(document.activeElement.dataset.postNumber).toBe('3'),
-    );
-    expect(document.querySelector('#swarm-discussion').value).toBe(
-      'dsc-findings',
-    );
-    expect(operation).not.toHaveBeenCalledWith('link.open', expect.anything());
-  });
-});
-
-it('shows compact discussion members with live status and refreshes join/leave changes', async () => {
-  const { bridge, operation } = createBridge();
-  const original = operation.getMockImplementation();
-  let participants = structuredClone(swarm.participants);
-  participants[0].state = 'idle';
-  participants[0].run_active = true;
-  operation.mockImplementation((name, args) =>
-    name === 'swarms.get'
-      ? Promise.resolve({
-          swarm: { ...swarm, participants: structuredClone(participants) },
-        })
-      : original(name, args),
-  );
-  await render(bridge);
-  button('Investigate').click();
-  const names = () =>
-    [...document.querySelectorAll('.participant-chip strong')].map(
-      (node) => node.textContent,
-    );
-  await vi.waitFor(() => expect(names()).toEqual(['Alpha', 'Beta']));
-  expect(document.querySelector('.participant-chip').textContent).not.toContain(
-    'demo/model',
-  );
-  expect(
-    document.querySelector('.participant-chip').getAttribute('aria-label'),
-  ).toContain('demo/model');
-  expect(document.querySelector('.participant-status').dataset.state).toBe(
-    'running',
-  );
-  const dropdown = document.getElementById('swarm-discussion');
-  dropdown.value = 'dsc-findings';
-  dropdown.dispatchEvent(new Event('change', { bubbles: true }));
-  await vi.waitFor(() => expect(names()).toEqual(['Beta']));
-  participants[0].discussion_ids.push('dsc-findings');
-  bridge.invalidate();
-  await vi.waitFor(() => expect(names()).toEqual(['Alpha', 'Beta']));
-  participants = participants.map((peer) => ({
-    ...peer,
-    discussion_ids: ['dsc-main'],
-  }));
-  bridge.invalidate();
-  await vi.waitFor(() => expect(names()).toEqual([]));
-  expect(document.querySelector('.participant-pane .muted')).not.toBeNull();
-  dropdown.value = 'dsc-main';
-  dropdown.dispatchEvent(new Event('change', { bubbles: true }));
-  await vi.waitFor(() => expect(names()).toEqual(['Alpha', 'Beta']));
 });

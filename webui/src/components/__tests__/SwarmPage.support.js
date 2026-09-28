@@ -82,7 +82,8 @@ function saveButton() {
   return document.querySelector('.swarm-profile-editor .save-button');
 }
 
-function createBridge(initialProfile = profile) {
+// `detail` replaces the Swarm fixture for every Swarm read of this bridge.
+function createBridge(initialProfile = profile, detail = swarm) {
   let storedProfile = structuredClone(initialProfile);
   let autosaveParticipant;
   const invalidationListeners = new Set();
@@ -157,13 +158,13 @@ function createBridge(initialProfile = profile) {
       });
     if (name === 'swarms.list')
       return Promise.resolve({
-        entries: [{ ...swarm, participant_count: 2 }],
+        entries: [{ ...detail, participant_count: detail.participants.length }],
         has_more: false,
       });
     if (name === 'swarms.get')
-      return Promise.resolve({ swarm: structuredClone(swarm) });
+      return Promise.resolve({ swarm: structuredClone(detail) });
     if (name === 'board.list')
-      return Promise.resolve({ entries: structuredClone(swarm.discussions) });
+      return Promise.resolve({ entries: structuredClone(detail.discussions) });
     if (name === 'board.read')
       return Promise.resolve({ entries: [], has_more: false });
     if (name === 'swarms.events')
@@ -196,7 +197,7 @@ function createBridge(initialProfile = profile) {
       return Promise.resolve({
         usage: {
           ...report(args.participant_id),
-          participants: swarm.participants.map((participant) =>
+          participants: detail.participants.map((participant) =>
             report(participant.id),
           ),
         },
@@ -266,6 +267,43 @@ function createBridge(initialProfile = profile) {
   };
 }
 
+// Replaces the named bridge operations; `fallback()` returns the fixture reply.
+function overrideOperations(operation, handlers) {
+  const original = operation.getMockImplementation();
+  operation.mockImplementation((name, args) => {
+    if (!Object.hasOwn(handlers, name)) return original(name, args);
+    try {
+      return Promise.resolve(handlers[name](args, () => original(name, args)));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  });
+}
+
+// The Swarm fixture reduced to Alpha, attached to an active lifecycle Run.
+function swarmWithRun(runId, fields = {}) {
+  return {
+    ...structuredClone(swarm),
+    participants: [
+      {
+        ...structuredClone(swarm.participants[0]),
+        lifecycle_run_id: runId,
+        run_active: true,
+        ...fields,
+      },
+    ],
+  };
+}
+
+function callsTo(operation, name) {
+  return operation.mock.calls.filter(([called]) => called === name);
+}
+
+async function settle(ms = 0) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  await tick();
+}
+
 function fill(id, value) {
   const input = document.getElementById(id);
   input.value = value;
@@ -295,6 +333,27 @@ async function render(bridge) {
   flushSync();
 }
 
+// Opens the fixture Swarm, whose goal "Investigate" names it in the Run list.
+async function openSwarm(bridge) {
+  await render(bridge);
+  button('Investigate').click();
+  await vi.waitFor(() =>
+    expect(document.querySelector('.swarm-head')).not.toBeNull(),
+  );
+}
+
+// Opens a participant's Activity from the Swarm roster.
+async function openParticipant(bridge, name = 'Alpha') {
+  await render(bridge);
+  button('Investigate').click();
+  await vi.waitFor(() => expect(button(name)).toBeDefined());
+  button(name).click();
+}
+
+function historyText() {
+  return document.querySelector('.history')?.textContent ?? '';
+}
+
 afterEach(async () => {
   if (mounted) mounted = await unmount(mounted);
   document.body.innerHTML = '';
@@ -318,9 +377,16 @@ export {
   button,
   saveButton,
   createBridge,
+  overrideOperations,
+  swarmWithRun,
+  callsTo,
+  settle,
   fill,
   choose,
   render,
+  openSwarm,
+  openParticipant,
+  historyText,
   fixtureState,
 };
 
