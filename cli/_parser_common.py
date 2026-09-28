@@ -316,6 +316,7 @@ PERFORMANCE_HELP = {
     "record-stop": "Stop the active recording and write its trace file",
     "recordings": "List stored performance recordings, newest first",
     "heap": "Count the objects the garbage collector tracks, by type and module",
+    "history": "Show stored 10-minute summaries, also from earlier server processes",
 }
 
 

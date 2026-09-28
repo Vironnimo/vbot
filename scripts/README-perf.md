@@ -34,9 +34,14 @@ vbot performance record start --label slow-ui --max-seconds 300
 vbot performance record stop                 # prints the trace path and the window's slowest operations
 vbot performance recordings                  # stored recordings (newest 20 are kept)
 vbot performance heap --top 30               # what the garbage collector tracks, by type and module
+vbot performance history                     # one line per 10 minutes of the last 24 hours, also before restarts
+vbot performance history --metric gc.gen2 --metric rpc.chat.send --hours 48
+vbot performance history --at "2026-09-28 16:40"   # everything about the window of that log time
 ```
 
 Add the usual target options (`--port 8421` for the development instance, the worktree port for a worktree).
+
+**History windows** answer "what happened yesterday afternoon": every 10 minutes and at shutdown the server appends what changed in that window (metrics, counters, gauge maxima, stalls) to `<data-dir>/artifacts/performance/history/<date>.jsonl`, kept 14 days. `history` shows one health line per window; copy a time from a slow log line into `--at` to see that window in full, and use `--metric` to follow one metric over hours or days.
 
 A **recording** is the tool for "it is slow right now": start it, let the slowness happen in real use, stop it. The trace (`<data-dir>/artifacts/performance/<id>.trace.json`) opens in [Perfetto](https://ui.perfetto.dev); the file is processed locally in the browser. Each Session is its own process row, so you see per Agent which phase (request build, first token, Tool round, persist) took how long and where Sessions wait for each other. Worker pools, SQLite, RPC and the runtime (Event Loop lag, stalls, process gauges) have rows of their own. Traces contain timings, ids and code locations, never message content.
 

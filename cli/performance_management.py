@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cli.formatting import bool_text as _bool_text
@@ -11,6 +12,7 @@ from cli.formatting import value_text as _value_text
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
+from core.performance import MAX_HISTORY_WINDOWS
 
 PERFETTO_URL = "https://ui.perfetto.dev"
 _TOP_METRICS = 10
@@ -26,6 +28,13 @@ _KEY_GAUGES = (
     "runs.active",
     "runs.queued",
     "performance.dropped_metrics",
+)
+_HISTORY_NAMES = (
+    "process.rss_mb",
+    "process.cpu_percent",
+    "runs.active",
+    "event_loop.lag",
+    "gc.gen2",
 )
 
 
@@ -54,7 +63,7 @@ def performance_status(instance: ServerInstance) -> CommandResult:
         *_metric_section("top metrics by p99", metrics, "p99_ms", _TOP_METRICS),
         *_metric_section("top metrics by total time", metrics, "sum_ms", _TOP_METRICS),
         *_counter_section(_mapping(payload.data.get("counters"))),
-        *_stall_section(stalls),
+        *_stall_section(stalls, f"recent stalls (newest first, {len(stalls)} retained):"),
     ]
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
@@ -159,6 +168,142 @@ def performance_heap(instance: ServerInstance, top: int) -> CommandResult:
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
+def performance_history(
+    instance: ServerInstance, hours: int, at: str | None, metrics: Sequence[str]
+) -> CommandResult:
+    """Show stored window summaries via `performance.history` RPC.
+
+    Without options it prints one health line per window of the last ``hours``;
+    ``metrics`` prints those metrics per window instead, and ``at`` prints the
+    full windows containing that time (local time unless it has an offset).
+    """
+
+    params: dict[str, Any] = {"limit": MAX_HISTORY_WINDOWS}
+    if at is not None:
+        moment = _parse_local_time(at)
+        if moment is None:
+            return CommandResult(
+                ok=False,
+                message=f"invalid --at time: {at} (expected e.g. 2026-09-28 16:40)",
+                instance=instance,
+            )
+        params["since"] = params["until"] = moment.isoformat()
+    else:
+        params["since"] = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+        params["names"] = list(metrics or _HISTORY_NAMES)
+    payload = _rpc_call(instance, "performance.history", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    windows = [entry for entry in _sequence(payload.data.get("windows")) if isinstance(entry, dict)]
+    if not windows:
+        return CommandResult(
+            ok=True, message="no performance history stored for this period", instance=instance
+        )
+    lines = [
+        f"performance history: {len(windows)} windows of "
+        f"{_value_text(payload.data.get('interval_seconds'))} s, oldest first, "
+        f"times in local time (UTC{datetime.now().astimezone().strftime('%z')})"
+    ]
+    previous_process: object = None
+    for window in windows:
+        process = window.get("process_started_at")
+        if process != previous_process:
+            lines.append(f"server started {_local_time(process)}")
+            previous_process = process
+        if at is not None:
+            lines.extend(_window_details(window))
+        elif metrics:
+            lines.extend(_window_series(window, metrics))
+        else:
+            lines.append(_window_health(window))
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def _window_health(window: Mapping[str, Any]) -> str:
+    gauges_max = _mapping(window.get("gauges_max"))
+    metrics = _mapping(window.get("metrics"))
+    lag = _mapping(metrics.get("event_loop.lag"))
+    gen2 = _mapping(metrics.get("gc.gen2"))
+    return (
+        f"- {_window_span(window)} "
+        f"rss_mb_max={_value_text(gauges_max.get('process.rss_mb'))} "
+        f"cpu_percent_max={_value_text(gauges_max.get('process.cpu_percent'))} "
+        f"runs_active_max={_value_text(gauges_max.get('runs.active'))} "
+        f"lag_p99_ms={_value_text(lag.get('p99_ms'))} "
+        f"gc_gen2={_value_text(gen2.get('count', 0))}x max_ms={_value_text(gen2.get('max_ms'))} "
+        f"stalls={len(_sequence(window.get('stalls')))}"
+    )
+
+
+def _window_series(window: Mapping[str, Any], names: Sequence[str]) -> list[str]:
+    metrics = _mapping(window.get("metrics"))
+    counters = _mapping(window.get("counters"))
+    gauges = _mapping(window.get("gauges"))
+    gauges_max = _mapping(window.get("gauges_max"))
+    lines: list[str] = []
+    for name in names:
+        if isinstance(metrics.get(name), dict):
+            row = _metric_row(name, metrics[name]).removeprefix("- ")
+        elif name in counters:
+            row = f"{name}=+{_value_text(counters[name])}"
+        elif name in gauges or name in gauges_max:
+            row = (
+                f"{name} last={_value_text(gauges.get(name))} "
+                f"max={_value_text(gauges_max.get(name))}"
+            )
+        else:
+            row = f"{name} -"
+        lines.append(f"- {_window_span(window)} {row}")
+    return lines
+
+
+def _window_details(window: Mapping[str, Any]) -> list[str]:
+    metrics = _mapping(window.get("metrics"))
+    gauges_max = _mapping(window.get("gauges_max"))
+    stalls = _sequence(window.get("stalls"))
+    dropped = window.get("stalls_dropped")
+    extra = f", {dropped} more not stored" if isinstance(dropped, int) and dropped else ""
+    return [
+        f"window {_window_span(window)} reason={_string_or_default(window.get('reason'), '-')}",
+        _gauge_line(gauges_max, "gauges max"),
+        *_metric_section("top metrics by p99", metrics, "p99_ms", _TOP_METRICS),
+        *_metric_section("top metrics by total time", metrics, "sum_ms", _TOP_METRICS),
+        *_counter_section(_mapping(window.get("counters"))),
+        *_stall_section(stalls, f"stalls (newest first, {len(stalls)} stored{extra}):"),
+    ]
+
+
+def _window_span(window: Mapping[str, Any]) -> str:
+    started = _local_datetime(window.get("started_at"))
+    ended = _local_datetime(window.get("ended_at"))
+    if started is None or ended is None:
+        return "?"
+    return f"{started:%Y-%m-%d %H:%M}-{ended:%H:%M}"
+
+
+def _local_time(value: object) -> str:
+    moment = _local_datetime(value)
+    return "?" if moment is None else f"{moment:%Y-%m-%d %H:%M:%S}"
+
+
+def _local_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value).astimezone()
+    except ValueError:
+        return None
+
+
+def _parse_local_time(value: str) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    # Log lines carry local time without an offset; read such a time the same way.
+    return moment.astimezone() if moment.tzinfo is None else moment
+
+
 def _census_section(title: str, rows: Sequence[object]) -> list[str]:
     entries = [row for row in rows if isinstance(row, dict)]
     if not entries:
@@ -187,9 +332,9 @@ def _recording_line(recording: object) -> str:
     )
 
 
-def _gauge_line(gauges: Mapping[str, Any]) -> str:
+def _gauge_line(gauges: Mapping[str, Any], title: str = "gauges") -> str:
     fields = [f"{name}={_value_text(gauges[name])}" for name in _KEY_GAUGES if name in gauges]
-    return "gauges: " + (" ".join(fields) if fields else "-")
+    return f"{title}: " + (" ".join(fields) if fields else "-")
 
 
 def _metric_section(title: str, metrics: Mapping[str, Any], key: str, limit: int) -> list[str]:
@@ -221,10 +366,10 @@ def _metric_row(name: str, values: Mapping[str, Any]) -> str:
     )
 
 
-def _stall_section(stalls: Sequence[object]) -> list[str]:
+def _stall_section(stalls: Sequence[object], title: str) -> list[str]:
     if not stalls:
-        return ["recent stalls: none"]
-    lines = [f"recent stalls (newest first, {len(stalls)} retained):"]
+        return [f"{title.split(' (', 1)[0]}: none"]
+    lines = [title]
     for stall in list(reversed(stalls))[:_RECENT_STALLS]:
         if not isinstance(stall, dict):
             lines.append("- invalid stall entry")

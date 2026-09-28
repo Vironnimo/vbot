@@ -67,6 +67,30 @@ class HistogramData:
             self.count, self.total_ms, self.min_ms, self.max_ms, dict(self.buckets)
         )
 
+    def since(self, earlier: HistogramData) -> HistogramData:
+        """Return the observations added after ``earlier``, an older copy of this histogram.
+
+        Count, total and buckets are exact. An extreme is exact when the window
+        moved it; otherwise its outermost window bucket bounds it (about 10%).
+        """
+        buckets = {
+            index: added
+            for index, bucket_count in self.buckets.items()
+            if (added := bucket_count - earlier.buckets.get(index, 0)) > 0
+        }
+        window = HistogramData(
+            count=self.count - earlier.count,
+            total_ms=max(0.0, self.total_ms - earlier.total_ms),
+            buckets=buckets,
+        )
+        if not buckets:
+            return window
+        lowest, _upper = bucket_bounds(min(buckets))
+        _lower, highest = bucket_bounds(max(buckets))
+        window.min_ms = self.min_ms if self.min_ms < earlier.min_ms else max(lowest, self.min_ms)
+        window.max_ms = self.max_ms if self.max_ms > earlier.max_ms else min(highest, self.max_ms)
+        return window
+
     def summary(self) -> dict[str, float | int]:
         """Return count, sum, extremes and bucket-estimated percentiles."""
         result: dict[str, float | int] = {
@@ -112,6 +136,8 @@ class MetricRegistry:
         self._lock = threading.Lock()
         self._histograms: dict[str, HistogramData] = {}
         self._gauges: dict[str, float] = {}
+        # Highest value of each gauge since the last take_gauge_peaks().
+        self._peaks: dict[str, float] = {}
         self._counters: dict[str, int] = {}
 
     def observe(self, name: str, ms: float) -> bool:
@@ -135,7 +161,21 @@ class MetricRegistry:
             if capped and name not in self._gauges and len(self._gauges) >= self._max_names:
                 return False
             self._gauges[name] = value
+            peak = self._peaks.get(name)
+            if peak is None or value > peak:
+                self._peaks[name] = value
         return True
+
+    def take_gauge_peaks(self) -> dict[str, float]:
+        """Return each gauge's highest value since the previous take, sorted by name.
+
+        The next window starts from the current values, so a gauge that does
+        not change still reports its level.
+        """
+        with self._lock:
+            peaks = self._peaks
+            self._peaks = dict(self._gauges)
+        return {name: peaks[name] for name in sorted(peaks)}
 
     def raise_gauge(self, name: str, value: float) -> bool:
         """Keep the maximum value seen for one gauge name."""
@@ -166,10 +206,14 @@ class MetricRegistry:
             values = dict(self._counters)
         return {name: values[name] for name in sorted(values)}
 
+    def histograms(self) -> dict[str, HistogramData]:
+        """Return copies of every histogram, taken under the lock."""
+        with self._lock:
+            return {name: histogram.copy() for name, histogram in self._histograms.items()}
+
     def histogram_summaries(self) -> dict[str, dict[str, float | int]]:
         """Return per-name summaries sorted by name, computed outside the lock."""
-        with self._lock:
-            copies = {name: histogram.copy() for name, histogram in self._histograms.items()}
+        copies = self.histograms()
         return {name: copies[name].summary() for name in sorted(copies)}
 
     def gauges(self) -> dict[str, float]:

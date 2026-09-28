@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -303,3 +304,124 @@ def test_heap_prints_generations_top_types_modules_and_growth(
         f"- builtins count=1100{change_text}",
         *expected_tail,
     ]
+
+
+def _local(value: str, pattern: str = "%Y-%m-%d %H:%M") -> str:
+    return datetime.fromisoformat(value).astimezone().strftime(pattern)
+
+
+HISTORY_WINDOW: dict[str, Any] = {
+    "started_at": "2026-09-28T14:30:00+00:00",
+    "ended_at": "2026-09-28T14:40:00+00:00",
+    "reason": "interval",
+    "process_started_at": "2026-09-28T14:00:00+00:00",
+    "metrics": {
+        "event_loop.lag": {**METRIC, "p99_ms": 41.0},
+        "gc.gen2": {**METRIC, "count": 12, "max_ms": 350.0},
+    },
+    "counters": {"events.sse": 90},
+    "gauges": {"process.rss_mb": 700.0},
+    "gauges_max": {"process.rss_mb": 812.5, "process.cpu_percent": 95.0, "runs.active": 5},
+    "stalls": [{"started_at": "2026-09-28T14:35:00+00:00", "duration_ms": 900.0, "gc_ms": 0.0}],
+    "stalls_dropped": 0,
+}
+WINDOW_SPAN = (
+    f"{_local(HISTORY_WINDOW['started_at'])}-{_local(HISTORY_WINDOW['ended_at'], '%H:%M')}"
+)
+STARTED_LINE = f"server started {_local(HISTORY_WINDOW['process_started_at'], '%Y-%m-%d %H:%M:%S')}"
+
+
+@pytest.mark.parametrize(
+    ("options", "names", "expected"),
+    [
+        pytest.param(
+            (),
+            ["process.rss_mb", "process.cpu_percent", "runs.active", "event_loop.lag", "gc.gen2"],
+            [
+                f"- {WINDOW_SPAN} rss_mb_max=812.5 cpu_percent_max=95.0 runs_active_max=5 "
+                "lag_p99_ms=41.0 gc_gen2=12x max_ms=350.0 stalls=1"
+            ],
+            id="health",
+        ),
+        pytest.param(
+            ("--metric", "gc.gen2", "--metric", "events.sse", "--metric", "process.rss_mb"),
+            ["gc.gen2", "events.sse", "process.rss_mb"],
+            [
+                f"- {WINDOW_SPAN} gc.gen2 count=12 p50_ms=10.5 p90_ms=38.1 p99_ms=40.0 "
+                "max_ms=350.0 sum_ms=80.0",
+                f"- {WINDOW_SPAN} events.sse=+90",
+                f"- {WINDOW_SPAN} process.rss_mb last=700.0 max=812.5",
+            ],
+            id="series",
+        ),
+    ],
+)
+def test_history_prints_window_health_or_metric_series(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    options: tuple[str, ...],
+    names: list[str],
+    expected: list[str],
+) -> None:
+    rpc.reply(
+        "performance.history",
+        {"interval_seconds": 600, "retention_days": 14, "windows": [HISTORY_WINDOW]},
+    )
+
+    code, out, _err = run_cli("performance", "history", "--hours", "6", *options)
+
+    assert code == 0
+    ((method, params),) = rpc.calls
+    assert method == "performance.history"
+    assert params["names"] == names and params["limit"] == 2016
+    since_age = datetime.now(UTC) - datetime.fromisoformat(params["since"])
+    assert timedelta(hours=6) <= since_age < timedelta(hours=6, minutes=1)
+    lines = out.splitlines()
+    assert lines[0].startswith("performance history: 1 windows of 600 s, oldest first")
+    assert lines[1:] == [STARTED_LINE, *expected]
+
+
+def test_history_at_prints_the_full_windows_containing_a_local_time(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply(
+        "performance.history",
+        {"interval_seconds": 600, "retention_days": 14, "windows": [HISTORY_WINDOW]},
+    )
+    moment = _local("2026-09-28T14:35:00+00:00")
+
+    code, out, _err = run_cli("performance", "history", "--at", moment)
+
+    assert code == 0
+    ((_method, params),) = rpc.calls
+    assert params == {
+        "limit": 2016,
+        "since": datetime.fromisoformat(moment).astimezone().isoformat(),
+        "until": datetime.fromisoformat(moment).astimezone().isoformat(),
+    }
+    lines = out.splitlines()
+    assert lines[1:5] == [
+        STARTED_LINE,
+        f"window {WINDOW_SPAN} reason=interval",
+        "gauges max: process.cpu_percent=95.0 process.rss_mb=812.5 runs.active=5",
+        "top metrics by p99:",
+    ]
+    assert "top counters:" in lines and "- events.sse=90" in lines
+    assert "stalls (newest first, 1 stored):" in lines
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        pytest.param((), "no performance history stored for this period", id="empty"),
+        pytest.param(("--at", "yesterday"), "invalid --at time: yesterday", id="bad-time"),
+    ],
+)
+def test_history_reports_an_empty_period_or_an_unreadable_time(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], expected: str
+) -> None:
+    rpc.reply("performance.history", {"interval_seconds": 600, "retention_days": 14, "windows": []})
+
+    _code, out, _err = run_cli("performance", "history", *options)
+
+    assert expected in out

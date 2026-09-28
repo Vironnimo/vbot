@@ -5,6 +5,7 @@ Coverage:
 - a recording starts, reports status, stops into a trace file and is listed,
 - starting while recording and stopping while idle return their stable error codes,
 - ``performance.heap`` returns the documented census fields,
+- ``performance.history`` accepts a time range, limit and names,
 - request parameters are validated before the service is touched.
 """
 
@@ -145,6 +146,20 @@ async def test_heap_census_returns_the_documented_fields(service: PerformanceSer
 
 
 @pytest.mark.asyncio
+async def test_history_reads_stored_windows_in_a_time_range(service: PerformanceService) -> None:
+    history = await _result(
+        service,
+        "performance.history",
+        since="2026-09-28T10:00:00+02:00",
+        until="2026-09-28T12:00:00Z",
+        limit=10,
+        names=["gc.gen2"],
+    )
+
+    assert history == {"interval_seconds": 600, "retention_days": 14, "windows": []}
+
+
+@pytest.mark.asyncio
 async def test_recording_start_while_active_and_stop_while_idle_are_rejected(
     service: PerformanceService,
 ) -> None:
@@ -176,6 +191,12 @@ async def test_recording_start_while_active_and_stop_while_idle_are_rejected(
         ("performance.heap", {"top": 0}),
         ("performance.heap", {"top": 101}),
         ("performance.heap", {"depth": 2}),
+        ("performance.history", {"since": "2026-09-28T10:00:00"}),
+        ("performance.history", {"until": "yesterday"}),
+        ("performance.history", {"limit": 2017}),
+        ("performance.history", {"names": "gc.gen2"}),
+        ("performance.history", {"names": [f"name.{index}" for index in range(51)]}),
+        ("performance.history", {"hours": 2}),
     ],
 )
 async def test_invalid_requests_are_rejected(

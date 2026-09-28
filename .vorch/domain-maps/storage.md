@@ -14,7 +14,7 @@ Data-directory bootstrap, temporary-file lifecycle, atomic settings and credenti
 
 Callers that require a fresh root use `initialize_data_directory(require_new=True)`: an existing root, including one created concurrently, raises `FileExistsError` before any seeding. Worktree creation uses this mode; its separate ownership records govern cleanup (`scripts/README-worktree.md`).
 
-Directory creation does not transfer ownership: Agents own their trees, Channels theirs, Cron/Bootstrap their job stores, Attachments/Speech their artifacts, Performance its Recordings (`performance.md`), Live voice its call records (`model_tasks/live.md`), Models the Model DB, Statistics its read model, Terminal Manager launch history. Layout changes belong in `layout.py`; format/retention changes stay with owning domains.
+Directory creation does not transfer ownership: Agents own their trees, Channels theirs, Cron/Bootstrap their job stores, Attachments/Speech their artifacts, Performance its Recordings and History Windows (`performance.md`), Live voice its call records (`model_tasks/live.md`), Models the Model DB, Statistics its read model, Terminal Manager launch history. Layout changes belong in `layout.py`; format/retention changes stay with owning domains.
 
 Current code reads only the canonical paths; there is no dual-read of an older layout. Older data directories are converted once, offline, by the Generation 1 converter (`database/generation-1-conversion.md`), which stages inside the data directory as `generation-1-staging/` and keeps every replaced file under `pre-generation-1/`.
 
