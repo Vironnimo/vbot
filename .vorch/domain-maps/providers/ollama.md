@@ -79,6 +79,13 @@ Regression coverage: `test_models_resources.py::test_ollama_cloud_deepseek_v41_v
 
 Official references read on 2026-09-11: the Model page above, [Ollama compatibility](https://docs.ollama.com/api/openai-compatibility), [native Chat](https://docs.ollama.com/api/chat), [thinking](https://docs.ollama.com/capabilities/thinking), [Tool calling](https://docs.ollama.com/capabilities/tool-calling), and [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode). The upstream contract informed the request shapes; the live comparisons establish this gateway's behavior.
 
+### Tools announced outside `tools[]` (2026-09-28)
+
+Probes through the real `OllamaCloudAdapter` on `ollama-cloud:api-key` (`/v1/chat/completions`) used the same shape as the OpenCode Go probe (`providers/opencode-go.md` -> Tools announced outside `tools[]`): a `<system-reminder>` User message announcing a Tool that `tools[]` did not contain, plus history calling Tools missing from `tools[]`. Every such history was accepted.
+
+- `deepseek-v4.1-flash` and `glm-5.3-flash` both returned structured calls to the announced unlisted Tool in 6 of 6 streaming and 4 of 4 non-streaming runs. Repeated calls: DeepSeek 3 of 3, GLM 2 of 3 (one text answer). Removal announcements were honored 3 of 3 on both. Both keep the default `capabilities.unlisted_tool_calls: true`; GLM-5.3-Flash drops such calls only on the OpenCode Go route, which is why the capability is keyed per Provider/Model entry.
+- Cache: adding one Tool to an otherwise identical `tools[]` dropped cached reads from 10368 to 256 (DeepSeek) and from 4480 to 0 (GLM) against same-Tools controls.
+
 ## Catalog discovery
 
 - `GET /api/tags` lists available Models. On the local service, an entry with `remote_host` is a proxied Cloud Model (`metadata.ollama.remote: true`; the `:cloud` name suffix is convention, `remote_host` is the fact), otherwise normalization stamps `metadata.ollama.local: true`. The direct `ollama-cloud` Connection is authoritative remote scope: its post-normalization finalizer removes any baseline local marker and stamps `metadata.ollama.remote: true` even though direct entries have no `remote_host`.

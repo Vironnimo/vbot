@@ -34,6 +34,7 @@ def _profile(model: Model, *keys: str) -> dict[str, Any]:
         "input_modalities": model.capabilities.input_modalities,
         "reasoning": (reasoning.supported, reasoning.control, reasoning.levels),
         "reasoning_replay": model.reasoning_replay,
+        "unlisted_tool_calls": model.capabilities.unlisted_tool_calls,
     }
     return {key: facts[key] for key in keys}
 
@@ -370,10 +371,17 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
         # vBot probes on 2026-09-02 showed persisted ``reasoning_content`` is
         # billed in a Tool continuation. No ``reasoning_request_format`` field.
         pytest.param("glm-5.2", {"reasoning_replay": "full_history"}, _GO_GLM, id="glm-5.2"),
-        pytest.param("glm-5.3", {"reasoning_replay": "full_history"}, _GO_GLM, id="glm-5.3"),
+        # Only GLM-5.3-Flash on this gateway silently dropped calls to Tools that a
+        # System Reminder announced outside ``tools[]`` (vBot probes 2026-09-28).
+        pytest.param(
+            "glm-5.3",
+            {"reasoning_replay": "full_history", "unlisted_tool_calls": True},
+            _GO_GLM,
+            id="glm-5.3",
+        ),
         pytest.param(
             "glm-5.3-flash",
-            {"context_window": 1_000_000, "reasoning_replay": None},
+            {"context_window": 1_000_000, "reasoning_replay": None, "unlisted_tool_calls": False},
             _GO_GLM,
             id="glm-5.3-flash",
         ),

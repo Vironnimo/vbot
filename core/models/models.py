@@ -165,6 +165,12 @@ class Capabilities:
     for providers whose APIs publish nothing (OpenAI native). Like
     ``metadata``, it is frozen on construction and merged wholesale as one
     ``capabilities`` sub-field at load.
+
+    ``unlisted_tool_calls`` says whether the route returns calls to Tool names
+    that are not in the request's ``tools[]`` (Tools announced by a System
+    Reminder). Absent means supported; an override sets ``false`` for the exact
+    Provider/Model entry where calls to unlisted names were observed to be
+    dropped.
     """
 
     vision: bool
@@ -177,6 +183,7 @@ class Capabilities:
     supported_voices: tuple[str, ...] = ()
     task_types: tuple[str, ...] = ()
     task_options: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    unlisted_tool_calls: bool = True
 
     def __post_init__(self) -> None:
         input_modalities = _normalize_string_tuple(self.input_modalities)
@@ -873,6 +880,7 @@ def _model_from_record(
         supported_voices=tuple(caps.get("supported_voices", ())),
         task_types=tuple(caps.get("task_types", ())),
         task_options=caps.get("task_options", {}),
+        unlisted_tool_calls=caps.get("unlisted_tool_calls", True),
     )
     return Model(
         model_id=model_id,
