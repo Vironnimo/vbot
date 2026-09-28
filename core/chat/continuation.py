@@ -13,9 +13,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from core.chat.wire_shaping import (
-    SYSTEM_REMINDER_CLOSE_TAG,
-    SYSTEM_REMINDER_OPEN_TAG,
     _quote_external_json,
+    system_reminder_request_message,
 )
 from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.sessions import ChatSession, SessionContinuationState, SessionContinuationStep
@@ -611,10 +610,7 @@ def inject_continuation_reminder(
             and CONTINUATION_REMINDER_MARKER in message["content"]
         )
     ]
-    reminder_message = {
-        "role": "user",
-        "content": f"{SYSTEM_REMINDER_OPEN_TAG}\n{reminder}\n{SYSTEM_REMINDER_CLOSE_TAG}",
-    }
+    reminder_message = system_reminder_request_message(reminder)
     for index in range(len(filtered) - 1, -1, -1):
         if filtered[index].get("role") == "user":
             return [*filtered[:index], reminder_message, *filtered[index:]]

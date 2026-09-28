@@ -287,7 +287,8 @@ class WireRequestRunner:
         ``public_model`` is the user-facing Model string of the answering route:
         the Agent's primary Model, or the fallback candidate serving this Run.
         """
-        messages, tools = model_facing_request(messages, tools)
+        # The projection reads every request text, so it stays off the Event Loop.
+        messages, tools = await _CHAT_TRANSFORM_WORKERS.run(model_facing_request, messages, tools)
         request_context = _resolve_request_context_kwargs(
             adapter,
             run,

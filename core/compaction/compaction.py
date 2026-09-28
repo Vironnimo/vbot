@@ -26,6 +26,7 @@ from core.chat.wire_shaping import (
     SYSTEM_REMINDER_CLOSE_TAG,
     SYSTEM_REMINDER_OPEN_TAG,
     _notes_to_request_messages,
+    model_facing_request,
 )
 from core.compaction._model_request import _send_streaming_model_request
 from core.compaction.errors import (
@@ -494,13 +495,14 @@ class CompactionService:
                         prompt_cache_affinity_id=prompt_cache_affinity_id,
                     )
                 )
-                if active_tools is not None:
-                    request_options["tools"] = list(active_tools)
-                model_messages = await _COMPACTION_WORKERS.run(
-                    _prepare_compaction_model_messages,
+                model_messages, model_tools = await _COMPACTION_WORKERS.run(
+                    _prepare_compaction_model_request,
                     plan,
+                    active_tools,
                     strip_reasoning=(adapter is not active_adapter or model_id != active_model_id),
                 )
+                if active_tools is not None:
+                    request_options["tools"] = model_tools
                 reference = (
                     summary_model_reference
                     if plan.model_target == "summary"
@@ -591,17 +593,19 @@ class CompactionService:
         )
 
 
-def _prepare_compaction_model_messages(
+def _prepare_compaction_model_request(
     plan: CompactionPlan,
+    tools: Sequence[JsonObject] | None,
     *,
     strip_reasoning: bool,
-) -> list[JsonObject]:
+) -> tuple[list[JsonObject], list[JsonObject]]:
+    """Return the Model-facing messages and Tools of one Compaction request."""
     if plan.model_messages is None:
         raise CompactionError("Compaction plan has no Model request")
     model_messages = [dict(message) for message in plan.model_messages]
     if strip_reasoning:
         _strip_assistant_reasoning_fields(model_messages)
-    return model_messages
+    return model_facing_request(model_messages, list(tools or []))
 
 
 def _finalize_compaction(

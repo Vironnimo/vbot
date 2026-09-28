@@ -2,10 +2,11 @@
 
 Owns the canonical-to-wire direction of the chat message pipeline: request
 history assembly, note embedding as system reminders, reasoning replay policy
-shaping, dangling tool-call repair, current-turn continuation dicts, and
-request-only sender attribution. Also owns the opposite ingestion direction:
-parsing a normalized provider response into a canonical assistant message and
-completing its usage counters.
+shaping, dangling tool-call repair, current-turn continuation dicts,
+request-only sender attribution, and the final Model-facing projection that
+keeps real System Reminder tags exclusive to Chat's own reminders. Also owns
+the opposite ingestion direction: parsing a normalized provider response into
+a canonical assistant message and completing its usage counters.
 
 The canonical persisted model itself lives in :mod:`core.chat.messages`; this
 module depends on it, never the reverse. Everything here is request-only or
@@ -40,6 +41,7 @@ from core.providers.adapter import (
     TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
     TOOL_CALL_REJECTION_FIELD,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
+    neutralize_system_reminder_tags,
     normalize_tool_call_candidates,
 )
 from core.providers.reasoning import (
@@ -63,6 +65,35 @@ INTERRUPTED_TOOL_RESULT_MESSAGE = "Tool run was interrupted before a result was 
 
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
+
+
+class _SystemReminderContent(str):
+    """Request content that Chat rendered as System Reminders.
+
+    The type marks provenance for ``model_facing_request``: only content of
+    this type keeps real System Reminder tags. Every string operation returns
+    a plain ``str``, so content that anything rewrites, such as an Extension
+    ``context`` hook, loses the mark and is neutralized like any other text.
+    """
+
+    __slots__ = ()
+
+
+def system_reminder_request_message(*bodies: str) -> JsonObject:
+    """Return the request message that carries kernel System Reminders.
+
+    Each body becomes one tagged reminder block. Look-alike tags inside a body
+    are neutralized first, so the wrappers are the only real tags it holds.
+    """
+
+    content = "\n".join(
+        f"{SYSTEM_REMINDER_OPEN_TAG}\n"
+        f"{neutralize_system_reminder_tags(body)}\n"
+        f"{SYSTEM_REMINDER_CLOSE_TAG}"
+        for body in bodies
+    )
+    return {"role": "user", "content": _SystemReminderContent(content)}
+
 
 PORTABLE_REASONING_NOTE_HEADER = (
     "Readable Reasoning from a completed Assistant turn on another Model route is quoted "
@@ -245,12 +276,19 @@ def _message_to_request_dict(
 def model_facing_request(
     messages: list[JsonObject], tools: list[JsonObject]
 ) -> tuple[list[JsonObject], list[JsonObject]]:
-    """Name each Tool in one Provider request the way the Model knows it.
+    """Project one Provider request onto what the Model reads.
 
     Session history, dispatch and Run events keep registry names; only the
     request renames Tools that have a host-specific Model name, such as the
-    shell Tool on Windows (``core.tools.model_names``). Unchanged items are
-    returned as they are.
+    shell Tool on Windows (``core.tools.model_names``).
+
+    Only Chat's own System Reminders keep real ``<system-reminder>`` tags.
+    Look-alike tags are neutralized in user text and text blocks, Assistant
+    content and readable Reasoning, and Tool Result content blocks; Provider
+    wires neutralize the Tool Result body when they render it
+    (``tool_result_text``). System messages, opaque ``reasoning_meta`` and Tool
+    call arguments are never changed. The projection is deterministic and
+    returns unchanged items as they are; persisted history is never modified.
     """
 
     def renamed(item: JsonObject) -> JsonObject:
@@ -261,15 +299,58 @@ def model_facing_request(
 
     projected: list[JsonObject] = []
     for message in messages:
-        calls = message.get("tool_calls")
-        if message.get("role") == "assistant" and isinstance(calls, list):
-            renamed_calls = [renamed(call) if isinstance(call, dict) else call for call in calls]
-            if any(new is not old for new, old in zip(renamed_calls, calls, strict=True)):
-                message = {**message, "tool_calls": renamed_calls}
-        elif message.get("role") == "tool":
+        role = message.get("role")
+        changes: JsonObject = {}
+        if role == "user":
+            if not isinstance(message.get("content"), _SystemReminderContent):
+                _neutralize_field(message, "content", changes)
+        elif role == "assistant":
+            _neutralize_field(message, "content", changes)
+            _neutralize_field(message, "reasoning", changes)
+            calls = message.get("tool_calls")
+            if isinstance(calls, list):
+                renamed_calls = [
+                    renamed(call) if isinstance(call, dict) else call for call in calls
+                ]
+                if any(new is not old for new, old in zip(renamed_calls, calls, strict=True)):
+                    changes["tool_calls"] = renamed_calls
+        elif role == "tool":
+            _neutralize_field(message, TOOL_RESULT_CONTENT_BLOCKS_FIELD, changes)
             message = renamed(message)
-        projected.append(message)
+        projected.append({**message, **changes} if changes else message)
     return projected, [renamed(tool) for tool in tools]
+
+
+def _neutralize_field(message: JsonObject, key: str, changes: JsonObject) -> None:
+    """Record ``key`` in ``changes`` when neutralizing its readable text changes it."""
+
+    value = message.get(key)
+    neutralized = _neutralized_text(value)
+    if neutralized is not value:
+        changes[key] = neutralized
+
+
+def _neutralized_text(value: Any) -> Any:
+    """Neutralize a string, or the ``text`` of each block in a content list.
+
+    Other blocks, such as media and native documents, stay unchanged. Returns
+    ``value`` itself when nothing changes.
+    """
+
+    if isinstance(value, str):
+        neutralized = neutralize_system_reminder_tags(value)
+        return value if neutralized == value else neutralized
+    if not isinstance(value, list):
+        return value
+    blocks = list(value)
+    changed = False
+    for index, block in enumerate(blocks):
+        if isinstance(block, dict) and isinstance(text := block.get("text"), str):
+            neutralized = neutralize_system_reminder_tags(text)
+            if neutralized != text:
+                blocks[index] = {**block, "text": neutralized}
+                changed = True
+    return blocks if changed else value
 
 
 def _replays_assistant_reasoning(
@@ -663,10 +744,7 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
 
 
 def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:
-    return {
-        "role": "user",
-        "content": "\n".join(_system_reminder_block(note) for note in notes),
-    }
+    return system_reminder_request_message(*(_system_reminder_body(note) for note in notes))
 
 
 def _untrusted_channel_messages_request(notes: list[ChatMessage]) -> JsonObject:
@@ -697,25 +775,26 @@ def _quote_external_json(value: JsonObject) -> str:
     return serialized.replace("<", "\\u003c").replace(">", "\\u003e")
 
 
-def _system_reminder_block(message: ChatMessage) -> str:
+def _system_reminder_body(message: ChatMessage) -> str:
+    """Return the Model-facing text of one note or Model-visible Run error."""
     message.validate()
     content = message.content
+    if not isinstance(content, str):
+        raise ChatMessageValidationError(f"{message.role} messages content must be a string")
     reply_surface = reply_surface_from_note(message)
     if reply_surface is not None:
         content = reply_surface.reminder_text()
-    if message.role == "error" and isinstance(content, str):
+    if message.role == "error":
         # Model-visible error text can carry raw Provider payloads.
         content = _quote_external_json({"run_error": content})
-    if isinstance(content, str):
-        for prefix in (
-            SKILL_AVAILABLE_NOTE_PREFIX,
-            COMPACTION_SUMMARY_NOTE_PREFIX,
-            COMPACTION_SKILL_NOTE_PREFIX,
-        ):
-            if content.startswith(prefix):
-                content = content.removeprefix(prefix)
-                break
-    return f"{SYSTEM_REMINDER_OPEN_TAG}\n{content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
+    for prefix in (
+        SKILL_AVAILABLE_NOTE_PREFIX,
+        COMPACTION_SUMMARY_NOTE_PREFIX,
+        COMPACTION_SKILL_NOTE_PREFIX,
+    ):
+        if content.startswith(prefix):
+            return content.removeprefix(prefix)
+    return content
 
 
 def _sanitize_unpaired_surrogates(text: str) -> str:
