@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ctypes
+import json
+import queue
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -214,7 +216,7 @@ def test_other_platforms_have_no_instance_guard_or_permission_hook(monkeypatch, 
     _windows.allow_server_microphone(window, lambda: None)
 
     assert instance is not None
-    instance.listen(lambda: None)
+    instance.listen(lambda _request: None)
     instance.close()
     assert api.events == []
     assert window.events.before_show == []
@@ -227,28 +229,84 @@ def test_instance_scope_is_stable_per_config_directory(tmp_path):
     assert first.startswith("Local\\vBot.Desktop.")
 
 
-def test_second_launch_signals_the_first_and_releases_its_handles(monkeypatch, tmp_path):
+def _handoff_file(config_directory: Path) -> Path:
+    return config_directory / _windows.ACTIVATION_REQUEST_FILE_NAME
+
+
+def _signal(api: FakeInstanceApi) -> None:
+    api.signaled.add(
+        next(handle for name, handle in api.registry.items() if name.endswith(".activate"))
+    )
+
+
+def test_second_launch_hands_its_request_to_the_first_and_releases_its_handles(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(_windows.sys, "platform", "win32")
     registry: dict[str, int] = {}
     first_api = FakeInstanceApi(registry)
     second_api = FakeInstanceApi(registry)
-    activated = threading.Event()
+    third_api = FakeInstanceApi(registry)
+    received: queue.Queue[object] = queue.Queue()
 
-    first = _windows.claim_desktop_instance(tmp_path, api=first_api)
+    first = _windows.claim_desktop_instance(tmp_path, api=first_api, clock=lambda: 1060.0)
     assert first is not None
-    first.listen(activated.set)
-    second = _windows.claim_desktop_instance(tmp_path, api=second_api)
-    # The shared event is one kernel object in both processes.
-    first_api.signaled |= second_api.signaled
+    first.listen(received.put)
+    second = _windows.claim_desktop_instance(
+        tmp_path, request={"session": "session-1"}, api=second_api, clock=lambda: 1000.0
+    )
 
     assert second is None
     assert second_api.events[-2:] == ["allow_foreground", "signal"]
     assert len(second_api.closed) == 2
-    assert activated.wait(timeout=2)
+    # The request is on disk before the running instance can wake.
+    assert json.loads(_handoff_file(tmp_path).read_text(encoding="utf-8")) == {
+        "created_at": 1000.0,
+        "request": {"session": "session-1"},
+    }
+    # The shared event is one kernel object in both processes.
+    first_api.signaled |= second_api.signaled
+    assert received.get(timeout=2) == {"session": "session-1"}  # 60 s old: still fresh
+    assert not _handoff_file(tmp_path).exists()
+
+    # A launch without a request only brings the window to the front.
+    assert _windows.claim_desktop_instance(tmp_path, api=third_api) is None
+    first_api.signaled |= third_api.signaled
+    assert received.get(timeout=2) is None
     first.close()
     assert len(first_api.closed) == 2
     first.close()
     assert len(first_api.closed) == 2
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{not json",
+        '["session-1"]',
+        '{"created_at": 1000.0}',
+        '{"created_at": true, "request": {"session": "session-1"}}',
+        '{"created_at": 939.0, "request": {"session": "session-1"}}',
+        '{"created_at": 1061.0, "request": {"session": "session-1"}}',
+    ],
+    ids=["not-json", "not-an-object", "no-request", "bad-timestamp", "stale", "from-the-future"],
+)
+def test_a_malformed_or_stale_request_only_brings_the_window_to_the_front(
+    monkeypatch, tmp_path, content
+):
+    monkeypatch.setattr(_windows.sys, "platform", "win32")
+    api = FakeInstanceApi()
+    instance = _windows.claim_desktop_instance(tmp_path, api=api, clock=lambda: 1000.0)
+    assert instance is not None
+    received: queue.Queue[object] = queue.Queue()
+    instance.listen(received.put)
+
+    _handoff_file(tmp_path).write_text(content, encoding="utf-8")
+    _signal(api)
+
+    assert received.get(timeout=2) is None
+    assert not _handoff_file(tmp_path).exists()
+    instance.close()
 
 
 def test_activation_failures_do_not_stop_the_listener(monkeypatch, tmp_path):
@@ -259,17 +317,16 @@ def test_activation_failures_do_not_stop_the_listener(monkeypatch, tmp_path):
     first_call = threading.Event()
     second_call = threading.Event()
 
-    def on_activate() -> None:
+    def on_activate(_request: object) -> None:
         if not first_call.is_set():
             first_call.set()
             raise RuntimeError("window gone")
         second_call.set()
 
     instance.listen(on_activate)
-    event = next(handle for name, handle in api.registry.items() if name.endswith(".activate"))
-    api.signaled.add(event)
+    _signal(api)
     assert first_call.wait(timeout=2)
-    api.signaled.add(event)
+    _signal(api)
 
     assert second_call.wait(timeout=2)
     instance.close()
@@ -281,7 +338,7 @@ def test_failed_wait_ends_the_listener(monkeypatch, tmp_path, caplog):
     instance = _windows.claim_desktop_instance(tmp_path, api=api)
     assert instance is not None
 
-    instance.listen(lambda: None)
+    instance.listen(lambda _request: None)
     instance.close()
 
     assert any("waiting failed" in record.getMessage() for record in caplog.records)
@@ -295,7 +352,7 @@ def test_guard_creation_failure_keeps_the_launch_unguarded(monkeypatch, tmp_path
     instance = _windows.claim_desktop_instance(tmp_path, api=api)
 
     assert isinstance(instance, _windows.DesktopInstance)
-    instance.listen(lambda: None)
+    instance.listen(lambda _request: None)
     instance.close()
 
 

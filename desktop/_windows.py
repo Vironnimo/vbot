@@ -1,9 +1,10 @@
 """Windows-native glue for the Desktop shell.
 
-DPI bootstrap and screen conversion, the per-user single-instance guard, the
-WebView2 browser arguments (secure remote HTTP origins, autoplay), and the
-WebView2 microphone permission hook. Every function is a no-op on other
-platforms and loads Win32/.NET code only on Windows.
+DPI bootstrap and screen conversion, the per-user single-instance guard with
+its activation request handoff, the WebView2 browser arguments (secure remote
+HTTP origins, autoplay), and the WebView2 microphone permission hook. Every
+function is a no-op on other platforms and loads Win32/.NET code only on
+Windows.
 """
 
 from __future__ import annotations
@@ -12,11 +13,15 @@ import contextlib
 import hashlib
 import importlib
 import ipaddress
+import json
 import logging
+import math
 import os
 import sys
+import tempfile
 import threading
-from collections.abc import Callable, Iterable
+import time
+from collections.abc import Callable, Iterable, Mapping
 from copy import copy
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +41,8 @@ _PYWEBVIEW_DISABLED_FEATURES = ("ElasticOverscroll",)
 _LIST_SWITCHES = (_SECURE_ORIGIN_SWITCH, _DISABLE_FEATURES_SWITCH)
 _ORIGIN_HOST_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.-_:")
 _ACTIVATION_POLL_MS = 500
+ACTIVATION_REQUEST_FILE_NAME = "activation-request.json"
+ACTIVATION_REQUEST_MAX_AGE_SECONDS = 60.0
 
 
 def configure_dpi() -> None:
@@ -244,12 +251,16 @@ class _Win32InstanceApi:
         self._close_handle(handle)
 
 
+ActivationRequest = dict[str, Any]
+
+
 class DesktopInstance:
     """Ownership of the Desktop for one config directory (the first instance).
 
     :meth:`listen` runs ``on_activate`` on a daemon thread each time a later
-    launch asks this instance to come to the front; :meth:`close` releases the
-    guard on exit. Both are no-ops for the platform-neutral instance.
+    launch asks this instance to come to the front, passing the request that
+    launch handed over (or ``None``); :meth:`close` releases the guard on exit.
+    Both are no-ops for the platform-neutral instance.
     """
 
     def __init__(
@@ -257,14 +268,19 @@ class DesktopInstance:
         api: InstanceApi | None = None,
         mutex: int = 0,
         event: int = 0,
+        *,
+        request_path: Path | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self._api = api
         self._mutex = mutex
         self._event = event
+        self._request_path = request_path
+        self._clock = clock
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def listen(self, on_activate: Callable[[], None]) -> None:
+    def listen(self, on_activate: Callable[[ActivationRequest | None], None]) -> None:
         """Start the activation listener once."""
 
         if self._api is None or not self._event or self._thread is not None:
@@ -298,7 +314,7 @@ class DesktopInstance:
         self,
         api: InstanceApi,
         event: int,
-        on_activate: Callable[[], None],
+        on_activate: Callable[[ActivationRequest | None], None],
     ) -> None:
         while not self._stop.is_set():
             signaled = api.wait(event, _ACTIVATION_POLL_MS)
@@ -307,8 +323,13 @@ class DesktopInstance:
                 return
             if signaled and not self._stop.is_set():
                 logger.info("Another Desktop launch asked this window to come to the front")
+                request = (
+                    _take_activation_request(self._request_path, now=self._clock())
+                    if self._request_path is not None
+                    else None
+                )
                 try:
-                    on_activate()
+                    on_activate(request)
                 except Exception:
                     logger.warning(
                         "Desktop window could not be brought to the front", exc_info=True
@@ -326,7 +347,9 @@ def instance_scope(config_directory: Path) -> str:
 def claim_desktop_instance(
     config_directory: Path,
     *,
+    request: Mapping[str, Any] | None = None,
     api: InstanceApi | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> DesktopInstance | None:
     """Claim the Desktop for ``config_directory`` or hand off to the running one.
 
@@ -338,10 +361,19 @@ def claim_desktop_instance(
     independent settings directories (tests, portable setups) never collide.
     Other platforms have no guard; failures to create the guard are logged and
     the launch continues unguarded.
+
+    ``request`` (a JSON object) travels with the signal: it is written
+    atomically to :data:`ACTIVATION_REQUEST_FILE_NAME` in the config directory
+    first, and the running instance's listener takes it (reads and deletes the
+    file) when it wakes. A request older than
+    :data:`ACTIVATION_REQUEST_MAX_AGE_SECONDS` or malformed reaches the listener
+    as ``None``. A request that cannot be written is logged; the running
+    instance still comes to the front.
     """
 
     if sys.platform != "win32":
         return DesktopInstance()
+    request_path = Path(config_directory) / ACTIVATION_REQUEST_FILE_NAME
     try:
         instance_api = api if api is not None else _Win32InstanceApi()
         scope = instance_scope(config_directory)
@@ -356,9 +388,13 @@ def claim_desktop_instance(
     if not already_running:
         if not event:
             logger.warning("Desktop activation event could not be created")
-        return DesktopInstance(instance_api, mutex, event)
+        # A request left over from an ended instance expires on its own; deleting
+        # it here could drop the request of a launch that raced this one.
+        return DesktopInstance(instance_api, mutex, event, request_path=request_path, clock=clock)
     try:
         if event:
+            if request is not None:
+                _write_activation_request(request_path, request, created_at=clock())
             instance_api.allow_foreground()
             instance_api.signal(event)
     finally:
@@ -366,6 +402,67 @@ def claim_desktop_instance(
             if handle:
                 instance_api.close(handle)
     return None
+
+
+def _write_activation_request(path: Path, request: Mapping[str, Any], *, created_at: float) -> None:
+    """Write the request for the running instance in one atomic replace."""
+
+    temporary_path: Path | None = None
+    try:
+        payload = json.dumps({"created_at": created_at, "request": dict(request)})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            delete=False,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(payload)
+        temporary_path.replace(path)
+    except (OSError, TypeError, ValueError):
+        logger.warning("The request for the running Desktop could not be written", exc_info=True)
+        if temporary_path is not None:
+            with contextlib.suppress(OSError):
+                temporary_path.unlink(missing_ok=True)
+
+
+def _take_activation_request(path: Path, *, now: float) -> ActivationRequest | None:
+    """Read and delete the handed-over request; ``None`` when absent, stale, or malformed."""
+
+    try:
+        payload = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError):
+        logger.warning("The request of another Desktop launch could not be read", exc_info=True)
+        payload = None
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("The request of another Desktop launch could not be deleted", exc_info=True)
+    if payload is None:
+        return None
+    try:
+        document = json.loads(payload)
+    except ValueError:
+        document = None
+    created_at = document.get("created_at") if isinstance(document, dict) else None
+    request = document.get("request") if isinstance(document, dict) else None
+    if (
+        not isinstance(created_at, int | float)
+        or isinstance(created_at, bool)
+        or not isinstance(request, dict)
+    ):
+        logger.warning("Ignoring a malformed request from another Desktop launch")
+        return None
+    age = now - created_at
+    if not math.isfinite(age) or abs(age) > ACTIVATION_REQUEST_MAX_AGE_SECONDS:
+        logger.info("Ignoring a stale request from another Desktop launch")
+        return None
+    return request
 
 
 # -- WebView2 browser arguments -------------------------------------------------

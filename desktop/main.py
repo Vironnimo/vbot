@@ -24,7 +24,7 @@ import logging
 import os
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -72,6 +72,7 @@ PROBE_INVALID_TARGET = "invalid_target"
 # ever carrying a markup/script payload into the connection screen.
 INVALID_HOST_CHARACTERS = frozenset("/\\:?#@[]'\"`<>&();")
 ACCESSOR_QUERY_PARAM = "accessor=desktop"
+SESSION_LINK_PART_MAX_LENGTH = 512
 DESKTOP_LOG_DIRECTORY_NAME = "logs"
 DESKTOP_LOG_FILE_SUFFIX = ".log"
 _DESKTOP_LOG_HANDLER_FLAG = "_vbot_desktop_log_handler"
@@ -121,6 +122,15 @@ class DesktopTarget:
     port: int
     url: str
     configuration_error: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionLink:
+    """One Session to open in the WebUI: its Agent address (``agent`` or
+    ``agent@project``) and its Session id."""
+
+    agent: str
+    session: str
 
 
 @dataclass(frozen=True)
@@ -248,6 +258,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--host")
     parser.add_argument("--port", type=_parse_port)
     parser.add_argument(
+        "--open-session",
+        nargs=2,
+        metavar=("AGENT_ADDRESS", "SESSION_ID"),
+        type=_parse_session_link_part,
+        help=(
+            "Open this Session once the WebUI has loaded. A vBot Desktop that is "
+            "already running comes to the front and opens the Session when it "
+            "shows the --host/--port server (without them, whichever it shows)."
+        ),
+    )
+    parser.add_argument(
         "--mock-wakeword",
         action="store_true",
         help="Use a mock wakeword engine for UI validation without a real microphone.",
@@ -356,14 +377,29 @@ def launch_desktop(
     auto-connect. The effective launch target (override else last-used) is
     resolved once and used for both the window navigation and Voice's server
     URL, so window and Voice always point at the same server.
+
+    ``--open-session`` rides on the first navigation to the WebUI. A launch
+    that finds a running Desktop hands it over with the activation instead
+    (see :func:`_activation_handler`).
     """
 
     args = parse_args(argv)
     override = _resolve_launch_override(args)
+    session_link = _resolve_session_link(args)
     desktop_config_directory = settings_file.parent if settings_file is not None else config_dir()
-    instance = _windows.claim_desktop_instance(desktop_config_directory)
+    instance = _windows.claim_desktop_instance(
+        desktop_config_directory,
+        request=_activation_request(override, session_link),
+    )
     if instance is None:
-        if override is not None:
+        if session_link is not None:
+            logger.info(
+                "vBot Desktop is already running; focused the open window and handed "
+                "over Session %s of %s",
+                session_link.session,
+                session_link.agent,
+            )
+        elif override is not None:
             logger.info(
                 "vBot Desktop is already running; focused the open window and ignored "
                 "the requested target %s:%s",
@@ -376,6 +412,7 @@ def launch_desktop(
         _run_desktop(
             args,
             override,
+            session_link,
             instance,
             desktop_config_directory=desktop_config_directory,
             settings_file=settings_file,
@@ -391,6 +428,7 @@ def launch_desktop(
 def _run_desktop(
     args: argparse.Namespace,
     override: tuple[str, int] | None,
+    session_link: SessionLink | None,
     instance: _windows.DesktopInstance,
     *,
     desktop_config_directory: Path,
@@ -456,7 +494,7 @@ def _run_desktop(
     )
     controller.attach_window(window)
     page_events.attach_window(window)
-    instance.listen(_WindowFocus(window).bring_to_front)
+    instance.listen(_activation_handler(controller, page_events, _WindowFocus(window)))
 
     start_kwargs: dict[str, Any] = {}
     resolved_icon_path = app_icon_path if app_icon_path is not None else icon_path()
@@ -474,7 +512,7 @@ def _run_desktop(
     start_kwargs["private_mode"] = False
     start_kwargs["storage_path"] = str(desktop_config_directory / WEBVIEW_STORAGE_DIR_NAME)
 
-    connection_entry = _select_launch_entry(controller, override)
+    connection_entry = _select_launch_entry(controller, override, session_link)
 
     def start_visible_services() -> None:
         # The lightweight shell must become visible before any network probe or
@@ -672,14 +710,16 @@ def _screen_work_area(screen: Any) -> tuple[int, int, int, int]:
 def _select_launch_entry(
     controller: ConnectionController,
     override: tuple[str, int] | None,
+    session_link: SessionLink | None,
 ) -> Callable[[], Any]:
     """Return the nullary visible-window entry callable and log the chosen branch.
 
     An explicit CLI override connects straight to that target (the controller
     remembers it as a side effect of a successful connect); otherwise the
     controller auto-connects to last-used, or shows the connection screen on
-    first run. The callback is attached to pywebview's window ``shown`` event,
-    so the override branch is wrapped in a zero-argument closure.
+    first run. A ``session_link`` rides on that first connect only. The
+    callback is attached to pywebview's window ``shown`` event, so both
+    branches are wrapped in a zero-argument closure.
     """
 
     if override is not None:
@@ -687,7 +727,7 @@ def _select_launch_entry(
         logger.info("Desktop starting; connecting to CLI override %s:%s", host, port)
 
         def connect_override() -> Any:
-            return controller.connect(host, port)
+            return controller.connect(host, port, open_session=session_link)
 
         return connect_override
 
@@ -700,7 +740,87 @@ def _select_launch_entry(
             launch_target.host,
             launch_target.port,
         )
-    return controller.auto_connect
+
+    def auto_connect() -> Any:
+        return controller.auto_connect(open_session=session_link)
+
+    return auto_connect
+
+
+def _activation_handler(
+    controller: ConnectionController,
+    page_events: PageEventDispatcher,
+    focus: _WindowFocus,
+) -> Callable[[Mapping[str, Any] | None], None]:
+    """Return the running Desktop's answer to a later launch.
+
+    The window always comes to the front. A handed-over ``--open-session``
+    request additionally opens its Session through the page, but only when
+    the window shows the requested server: the one the launch named with
+    ``--host`` / ``--port``, or any server when it named none.
+    """
+
+    def on_activate(request: Mapping[str, Any] | None) -> None:
+        link = _requested_session(request, controller)
+        if link is not None:
+            page_events.request_open_session(link.agent, link.session)
+        focus.bring_to_front()
+
+    return on_activate
+
+
+def _activation_request(
+    override: tuple[str, int] | None,
+    session_link: SessionLink | None,
+) -> dict[str, Any] | None:
+    """Return what a launch hands over to a running Desktop, if anything."""
+
+    if session_link is None:
+        return None
+    host, port = override if override is not None else (None, None)
+    return {
+        "host": host,
+        "port": port,
+        "agent": session_link.agent,
+        "session": session_link.session,
+    }
+
+
+def _requested_session(
+    request: Mapping[str, Any] | None,
+    controller: ConnectionController,
+) -> SessionLink | None:
+    """Return the handed-over Session when the window shows its server."""
+
+    if request is None:
+        return None
+    agent = request.get("agent")
+    session = request.get("session")
+    host = request.get("host")
+    port = request.get("port")
+    if not (
+        isinstance(agent, str)
+        and isinstance(session, str)
+        and _is_session_link_part(agent)
+        and _is_session_link_part(session)
+    ):
+        logger.warning("Ignoring a malformed Session request from another Desktop launch")
+        return None
+    if host is None and port is None:
+        shown = controller.active_server_url() is not None
+    elif isinstance(host, str) and isinstance(port, int) and not isinstance(port, bool):
+        shown = controller.is_active_server(host, port)
+    else:
+        logger.warning("Ignoring a malformed Session request from another Desktop launch")
+        return None
+    if not shown:
+        logger.info(
+            "Not opening Session %s of %s: the window does not show the requested server",
+            session,
+            agent,
+        )
+        return None
+    return SessionLink(agent=agent, session=session)
 
 
 def validate_port(value: Any, *, source: str = "port") -> int:
@@ -805,6 +925,15 @@ def _resolve_launch_override(args: argparse.Namespace) -> tuple[str, int] | None
     return (host, port)
 
 
+def _resolve_session_link(args: argparse.Namespace) -> SessionLink | None:
+    """Return the ``--open-session`` request, if one was given."""
+
+    if args.open_session is None:
+        return None
+    agent, session = args.open_session
+    return SessionLink(agent=agent, session=session)
+
+
 def _resolve_launch_server_url(
     override: tuple[str, int] | None,
     controller: ConnectionController,
@@ -854,6 +983,27 @@ def _parse_port(value: str) -> int:
         return validate_port(value, source="--port")
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _parse_session_link_part(value: str) -> str:
+    """Argparse adapter for the Agent address and Session id of ``--open-session``."""
+
+    if not _is_session_link_part(value):
+        raise argparse.ArgumentTypeError(
+            "--open-session needs a non-empty Agent address and Session id without "
+            f"spaces or control characters, at most {SESSION_LINK_PART_MAX_LENGTH} "
+            "characters each"
+        )
+    return value
+
+
+def _is_session_link_part(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= SESSION_LINK_PART_MAX_LENGTH
+        and value.isprintable()
+        and not any(character.isspace() for character in value)
+    )
 
 
 if __name__ == "__main__":
