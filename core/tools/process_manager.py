@@ -95,7 +95,6 @@ class TrackedProcess:
     exit_code: int | None
     started_at: datetime
     finished_at: datetime | None
-    last_poll_at: datetime | None
     execution_owner: RunExecutionOwner | None = None
     buffer_start_offset: int = 0
     poll_offset: int = 0
@@ -343,7 +342,6 @@ class ProcessManager:
             exit_code=None,
             started_at=_utc_now(),
             finished_at=None,
-            last_poll_at=None,
             execution_owner=execution_owner,
             command=command,
             cwd=Path(cwd) if cwd is not None else None,
@@ -420,7 +418,6 @@ class ProcessManager:
             end_offset = tracked.buffer_start_offset + len(tracked.combined_buffer)
             chunks = _chunks_between(tracked.output_chunks, start_offset, end_offset)
             tracked.poll_offset = end_offset
-            tracked.last_poll_at = _utc_now()
             return {
                 "status": tracked.status,
                 "chunks": [

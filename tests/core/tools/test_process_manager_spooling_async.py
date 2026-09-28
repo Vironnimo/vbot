@@ -65,7 +65,6 @@ def make_tracked() -> tuple[TrackedProcess, dict[int, PipeTransport]]:
         exit_code=None,
         started_at=datetime.now(UTC),
         finished_at=None,
-        last_poll_at=None,
     )
     return tracked, pipes
 
