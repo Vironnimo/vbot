@@ -14,6 +14,10 @@
   import { assistantRunChildProgressKey } from '../lib/chatState.js';
   import ChatAssistantRun from './chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from './chat/ChatTimelineEntry.svelte';
+  import {
+    createTimelineViewState,
+    provideTimelineViewState,
+  } from './chat/timelineViewState.svelte.js';
   import ImageLightbox from './ImageLightbox.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -82,7 +86,9 @@
   let scrollContainer = $state();
   let timelineContent = $state();
   let lightboxImage = $state(null);
-  let reasoningDisclosureState = $state({});
+  // Disclosure and pending-action state of the rows, per displayed Session;
+  // rows read it through context so it outlives their components.
+  const viewState = provideTimelineViewState(createTimelineViewState());
   let showJumpToLatest = $state(false);
   let timelineSignature = $derived(
     `${timelineItems.map((item) => timelineItemSignature(item)).join('|')}` +
@@ -172,6 +178,7 @@
     if (key !== renderedSessionScrollKey) {
       renderedSessionScrollKey = key;
       controller.sessionChanged(key);
+      viewState.setSession(key);
     }
   });
 
@@ -372,11 +379,11 @@
   }
 
   function isReasoningOpen(id) {
-    return Boolean(reasoningDisclosureState[id]);
+    return viewState.isOpen(`reasoning:${id}`);
   }
 
   function setReasoningOpen(id, isOpen) {
-    reasoningDisclosureState[id] = isOpen;
+    viewState.setOpen(`reasoning:${id}`, isOpen);
   }
 
   function shouldRenderTimelineDateSeparator(itemIndex) {

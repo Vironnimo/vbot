@@ -3,6 +3,7 @@
   import Banner from './Banner.svelte';
   import Dropdown from '../Dropdown.svelte';
   import { t } from '$lib/i18n.js';
+  import { mountHold } from '$lib/mountHold.js';
 
   let {
     src,
@@ -11,6 +12,7 @@
     class: className = '',
   } = $props();
   let audio;
+  let root = $state();
   let paused = $state(true);
   let loading = $state(true);
   let duration = $state(0);
@@ -35,6 +37,14 @@
   );
   let playLabel = $derived(paused ? t('audio.play') : t('audio.pause'));
   let muteLabel = $derived(silent ? t('audio.unmute') : t('audio.mute'));
+  // A host that unmounts content scrolled out of view (the Chat timeline)
+  // keeps a playing player mounted, so playback survives scrolling away.
+  const holdMounted = mountHold();
+
+  $effect(() => {
+    if (paused || !root) return undefined;
+    return holdMounted(root);
+  });
 
   function timeLabel(value) {
     const seconds = Math.floor(Number.isFinite(value) && value > 0 ? value : 0);
@@ -188,7 +198,12 @@
   }
 </script>
 
-<div class={`audio-player ${className}`} role="group" aria-label={ariaLabel}>
+<div
+  bind:this={root}
+  class={`audio-player ${className}`}
+  role="group"
+  aria-label={ariaLabel}
+>
   <audio
     use:ownMedia={src}
     aria-hidden="true"

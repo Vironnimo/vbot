@@ -49,6 +49,7 @@
   import ChatTimelineEntry from './ChatTimelineEntry.svelte';
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
+  import { timelineViewState } from './timelineViewState.svelte.js';
 
   let {
     item,
@@ -68,8 +69,9 @@
     nowMs = Date.now(),
   } = $props();
 
-  let pendingActions = $state({});
-  let workingDisclosureState = $state({});
+  // Disclosure and pending-action state lives in the timeline's view state,
+  // so it survives this Run being unmounted and mounted again.
+  const viewState = timelineViewState();
 
   let runDisplayGroups = $derived(
     groupRunChildren(visibleRunChildren(item), chatWorkingMode),
@@ -95,20 +97,21 @@
     }
   }
 
+  function actionKey(kind, id) {
+    return `action:${item?.runId ?? ''}:${kind}:${id ?? ''}`;
+  }
+
   async function handleBackgroundToolCall(event, tool) {
     event.preventDefault();
     event.stopPropagation();
-    const actionKey = `background:${tool.toolCallId}`;
-    if (pendingActions[actionKey]) return;
-    pendingActions[actionKey] = true;
-    try {
-      await onBackgroundToolCall({
+    const key = actionKey('background', tool.toolCallId);
+    if (viewState.isPending(key)) return;
+    await viewState.runPending(key, () =>
+      onBackgroundToolCall({
         runId: item.runId,
         toolCallId: tool.toolCallId,
-      });
-    } finally {
-      pendingActions[actionKey] = false;
-    }
+      }),
+    );
   }
 
   async function handleCancelToolCall(event, tool) {
@@ -122,30 +125,23 @@
     if (!runId || !toolCallId) {
       return;
     }
-    const actionKey = `tool:${toolCallId}`;
-    pendingActions[actionKey] = true;
-    try {
-      await onCancelToolCall({ runId, toolCallId });
-    } finally {
-      pendingActions[actionKey] = false;
-    }
+    await viewState.runPending(actionKey('tool', toolCallId), () =>
+      onCancelToolCall({ runId, toolCallId }),
+    );
   }
 
   async function handleCancelSubAgent(event, tool) {
     event.preventDefault();
     event.stopPropagation();
 
-    const actionKey = `subagent:${tool?.toolCallId ?? tool?.id ?? ''}`;
-    pendingActions[actionKey] = true;
-    try {
-      await onCancelSubAgent({ tool });
-    } finally {
-      pendingActions[actionKey] = false;
-    }
+    await viewState.runPending(
+      actionKey('subagent', tool?.toolCallId ?? tool?.id),
+      () => onCancelSubAgent({ tool }),
+    );
   }
 
-  function setWorkingOpen(groupId, open) {
-    workingDisclosureState[groupId] = open;
+  function toolDisclosureKey(tool) {
+    return `tool:${tool.id}`;
   }
 
   function workingGroupIsActive(group) {
@@ -353,7 +349,15 @@
             dotStatus === 'running'
               ? subAgentLastToolName(child, subAgentStatuses)
               : ''}
-          <details class="tool-event run-tool-event subagent-tool-event">
+          <details
+            class="tool-event run-tool-event subagent-tool-event"
+            open={viewState.isOpen(toolDisclosureKey(child))}
+            ontoggle={(event) =>
+              viewState.setOpen(
+                toolDisclosureKey(child),
+                event.currentTarget.open,
+              )}
+          >
             <summary class="tool-event-line subagent-line">
               <span
                 class:done={dotStatus === 'success'}
@@ -420,10 +424,8 @@
                   icon
                   class="tool-row-action row-cancel"
                   data-cancel="subagent"
-                  loading={Boolean(
-                    pendingActions[
-                      `subagent:${child?.toolCallId ?? child?.id ?? ''}`
-                    ],
+                  loading={viewState.isPending(
+                    actionKey('subagent', child?.toolCallId ?? child?.id),
                   )}
                   tooltip={t('chat.cancelSubAgentAria')}
                   ariaLabel={t('chat.cancelSubAgentAria')}
@@ -487,7 +489,15 @@
           {@const rowTimeLabel = bashRowState
             ? backgroundBashToolStatusLabel(child, bashRowState, nowMs)
             : toolStatusLabel(child, nowMs)}
-          <details class="tool-event run-tool-event">
+          <details
+            class="tool-event run-tool-event"
+            open={viewState.isOpen(toolDisclosureKey(child))}
+            ontoggle={(event) =>
+              viewState.setOpen(
+                toolDisclosureKey(child),
+                event.currentTarget.open,
+              )}
+          >
             <summary class="tool-event-line">
               <span
                 class:done={rowDotStatus === 'success'}
@@ -518,8 +528,8 @@
                     variant="tertiary"
                     icon
                     class="tool-row-action"
-                    loading={Boolean(
-                      pendingActions[`background:${child.toolCallId}`],
+                    loading={viewState.isPending(
+                      actionKey('background', child.toolCallId),
                     )}
                     tooltip={t('chat.moveToBackground')}
                     ariaLabel={t('chat.moveToBackground')}
@@ -540,8 +550,8 @@
                   icon
                   class="tool-row-action row-cancel"
                   data-cancel="tool"
-                  loading={Boolean(
-                    pendingActions[`tool:${child?.toolCallId ?? ''}`],
+                  loading={viewState.isPending(
+                    actionKey('tool', child?.toolCallId),
                   )}
                   tooltip={t('chat.cancelToolCallAria')}
                   ariaLabel={t('chat.cancelToolCallAria')}
@@ -592,13 +602,15 @@
           {#if isTextToSpeechTool(child)}
             {@const speechArtifact = speechArtifactFromTool(child)}
             {#if speechArtifact}
-              <!-- Only a live Run starts its fresh speech; a player first
-                   mounted for a Run rebuilt from Session history stays paused,
-                   while one kept through that handoff keeps playing. -->
+              <!-- Only a live Run starts its fresh speech, once per source: a
+                   player first mounted for a Run rebuilt from Session history,
+                   or mounted again after scrolling away, stays paused, while
+                   one kept through the handoff keeps playing. -->
               <AudioPlayer
                 class="speech-audio-player"
                 src={speechArtifact.url}
-                autoplay={item.source === 'live'}
+                autoplay={item.source === 'live' &&
+                  viewState.claimAutoplay(speechArtifact.url)}
               />
             {/if}
           {/if}
@@ -626,13 +638,13 @@
     {#each runDisplayGroups as group (group.id)}
       {#if group.type === 'working'}
         {@const groupActive = workingGroupIsActive(group)}
-        {@const groupOpen = Boolean(workingDisclosureState[group.id])}
+        {@const groupOpen = viewState.isOpen(group.id)}
         {@const groupToolName = groupActive ? workingGroupToolName(group) : ''}
         <details
           class="working-block"
           open={groupOpen}
           ontoggle={(event) =>
-            setWorkingOpen(group.id, event.currentTarget.open)}
+            viewState.setOpen(group.id, event.currentTarget.open)}
         >
           <summary class="working-block__summary">
             <span class="working-block__label">
