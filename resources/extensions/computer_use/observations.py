@@ -94,7 +94,7 @@ def _directory(context: ToolContext) -> Path:
     return directory
 
 
-def screenshot_bytes(payload: dict[str, Any], expected_path: Path | None = None) -> bytes | None:
+def screenshot_bytes(payload: dict[str, Any]) -> bytes | None:
     encoded = payload.pop("screenshot_png_b64", None)
     # Paths supplied by the driver are never trusted as local file read authority.
     payload.pop("screenshot_file_path", None)
@@ -107,12 +107,6 @@ def screenshot_bytes(payload: dict[str, Any], expected_path: Path | None = None)
             raise ComputerUseError(
                 "The image is invalid or exceeds the supported size. Capture a smaller target."
             ) from exc
-    if expected_path is not None and expected_path.is_file():
-        if expected_path.stat().st_size > MAX_BYTES:
-            raise ComputerUseError(
-                "The image is invalid or exceeds the supported size. Capture a smaller target."
-            )
-        return expected_path.read_bytes()
     return None
 
 
@@ -173,10 +167,9 @@ def capture(
     *,
     mode: str = "som",
     resolution: str = "auto",
-    expected_path: Path | None = None,
 ) -> tuple[Observation, dict[str, Any]]:
     payload = dict(payload)
-    raw = screenshot_bytes(payload, expected_path)
+    raw = screenshot_bytes(payload)
     for key in ("_note", "screenshot_width", "screenshot_height"):
         payload.pop(key, None)
     observation = Observation(target, resolution=resolution)
