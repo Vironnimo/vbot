@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from core.chat.wire_shaping import (
     _quote_external_json,
+    is_system_reminder_request_message,
     system_reminder_request_message,
 )
 from core.providers.errors import NetworkError, ProviderTimeoutError
@@ -605,8 +606,7 @@ def inject_continuation_reminder(
         message
         for message in messages
         if not (
-            message.get("role") == "user"
-            and isinstance(message.get("content"), str)
+            is_system_reminder_request_message(message)
             and CONTINUATION_REMINDER_MARKER in message["content"]
         )
     ]

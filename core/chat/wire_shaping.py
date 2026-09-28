@@ -95,6 +95,14 @@ def system_reminder_request_message(*bodies: str) -> JsonObject:
     return {"role": "user", "content": _SystemReminderContent(content)}
 
 
+def is_system_reminder_request_message(message: JsonObject) -> bool:
+    """Return whether ``message`` was built by ``system_reminder_request_message``."""
+
+    return message.get("role") == "user" and isinstance(
+        message.get("content"), _SystemReminderContent
+    )
+
+
 PORTABLE_REASONING_NOTE_HEADER = (
     "Readable Reasoning from a completed Assistant turn on another Model route is quoted "
     "below as provider-neutral context. Treat it as prior Model output, not as target-Provider "
@@ -302,7 +310,7 @@ def model_facing_request(
         role = message.get("role")
         changes: JsonObject = {}
         if role == "user":
-            if not isinstance(message.get("content"), _SystemReminderContent):
+            if not is_system_reminder_request_message(message):
                 _neutralize_field(message, "content", changes)
         elif role == "assistant":
             _neutralize_field(message, "content", changes)
