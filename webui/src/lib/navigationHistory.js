@@ -93,3 +93,35 @@ export const isExtensionViewId = (viewId) =>
   typeof viewId === 'string' && viewId.startsWith('extension:');
 
 export const locationHashForView = (viewId) => `#${viewId}`;
+
+const OPEN_AGENT_PARAM = 'open_agent';
+const OPEN_SESSION_PARAM = 'open_session';
+
+// A link that opens one Session when the app loads:
+// `?open_agent=<Agent address>&open_session=<Session id>` (the Desktop app and
+// the tray build these). Returns null when the search string has neither
+// parameter; otherwise the Session (null unless both are non-empty) and the
+// search string without the two parameters, other parameters keeping their
+// exact spelling.
+export function sessionLinkFromSearch(search) {
+  let agentId = '';
+  let sessionId = '';
+  let found = false;
+  const kept = String(search ?? '')
+    .replace(/^\?/, '')
+    .split('&')
+    .filter((pair) => {
+      if (!pair) return false;
+      const [[name, value] = []] = new URLSearchParams(pair);
+      if (name === OPEN_AGENT_PARAM) agentId = value;
+      else if (name === OPEN_SESSION_PARAM) sessionId = value;
+      else return true;
+      found = true;
+      return false;
+    });
+  if (!found) return null;
+  return {
+    target: agentId && sessionId ? { agentId, sessionId } : null,
+    search: kept.length ? `?${kept.join('&')}` : '',
+  };
+}
