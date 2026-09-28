@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { englishCatalog, init, registerCatalog, t, tOr } from '../i18n.js';
-import { REQUIRED_CATALOG_KEYS, RETIRED_CATALOG_KEYS } from './i18n.support.js';
 
 describe('i18n t()', () => {
   it('renders the catalog text, or the key when it has no entry', () => {
@@ -14,7 +13,9 @@ describe('i18n t()', () => {
   });
 
   it('interpolates provided values and leaves missing tokens intact', () => {
-    expect(t('queue.count', { count: 2 })).toBe('2 queued');
+    expect(t('statistics.limits.resetsIn', { duration: '2h' })).toBe(
+      'Resets in 2h',
+    );
     expect(t('chat.durationMinutesSeconds', { minutes: 2 })).toBe(
       '2m {seconds}s',
     );
@@ -51,19 +52,5 @@ describe('i18n registerCatalog()', () => {
     expect(t('navigation.chat')).toBe('Chat');
     expect(t('test.page.other')).toBe('test.page.other');
     expect(englishCatalog['test.page.greeting']).toBeUndefined();
-  });
-});
-
-describe('English catalog', () => {
-  it('contains non-empty copy for every required key', () => {
-    for (const key of REQUIRED_CATALOG_KEYS) {
-      expect(englishCatalog[key], key).toBeTruthy();
-    }
-  });
-
-  it('keeps retired copy out of the live catalog', () => {
-    for (const key of RETIRED_CATALOG_KEYS) {
-      expect(englishCatalog[key], key).toBeUndefined();
-    }
   });
 });

@@ -69,11 +69,7 @@ export default Object.freeze({
   'settings.sections.delegation': 'Sub-Agent limits',
   'settings.agentShortcut.hint':
     'The chat Model, Thinking, and Compaction are configured in',
-
   'settings.specializedModels.resetOptions': 'Reset options',
-  'settings.categories.sessions': 'Sessions & Memory',
-  'settings.groups.personal': 'Personal',
-  'settings.agentShortcut.nav': 'Model & Thinking',
   'settings.search.resultCount': 'Matching topics: {count}',
   'settings.agentShortcut.search':
     'Agents → Shared defaults · Model, Thinking, fallbacks and Compaction',
@@ -82,26 +78,12 @@ export default Object.freeze({
   'settings.loadError': 'Settings could not be loaded.',
   'settings.saveError': 'Settings could not be saved.',
   'settings.sections': 'Settings sections',
-  'settings.groups.connect': 'Connect',
-  'settings.groups.general': 'General',
-  'settings.groups.capabilities': 'Capabilities',
-  'settings.groups.integrations': 'Integrations',
   'settings.preferences.title': 'Region & setup',
-  'settings.preferences.subtitle': 'Time zone and getting started.',
   'settings.search.results': 'Search results',
-  'settings.search.guidance': 'Choose a topic to open its settings.',
-  'settings.voice.modelsLink': 'Choose speech Models',
-  'settings.groups.models': 'Models',
-  'settings.groups.conversation': 'Conversation',
-  'settings.groups.behavior': 'Behavior',
-  'settings.groups.system': 'System',
   'settings.search.placeholder': 'Search settings…',
   'settings.search.label': 'Search settings',
-  'settings.search.matches': 'Matches: {count}',
   'settings.search.noMatches': 'No settings match your search.',
   'settings.desktop.connection.title': 'Connection',
-  'settings.desktop.connection.subtitle':
-    'Choose which vBot server this Desktop app connects to.',
   'settings.desktop.connection.savedTitle': 'Saved servers',
   'settings.desktop.connection.savedDescription':
     'The active server supplies this WebUI. Switching reloads the Desktop app without moving Sessions or Runs.',
@@ -132,8 +114,6 @@ export default Object.freeze({
   'settings.desktop.connection.removeError': 'Server could not be removed.',
   'settings.desktop.switchModalTitle': 'Switch server',
   'settings.general.title': 'Server info',
-  'settings.general.subtitle':
-    'Server address, data directory, and connected clients.',
   'settings.general.serverHost': 'Server host',
   'settings.general.serverHostDescription':
     'Address and port the vBot server listens on.',
@@ -164,9 +144,6 @@ export default Object.freeze({
   'settings.general.clients.accessor.desktop': 'Desktop',
   'settings.general.clients.accessor.unknown': 'Unknown',
   'settings.general.clients.status.connected': 'Connected',
-  'settings.defaults.title': 'Agent defaults',
-  'settings.defaults.subtitle':
-    'Model, temperature, and thinking effort used when an agent or project leaves them unset — shown there as "Inherited: … (global default)".',
   'settings.defaults.model': 'Model',
   'settings.defaults.modelDescription': 'Used when an agent model is empty.',
   'settings.defaults.fallbackModels': 'Fallback models',
@@ -183,8 +160,6 @@ export default Object.freeze({
   'settings.defaults.providerThinkingEffortDefault': '— (provider default)',
   'settings.defaults.noModelDefault': '— (no default)',
   'settings.defaults.noFallbackModelDefault': '— (no default)',
-  'settings.skills.title': 'Skills',
-  'settings.skills.subtitle': 'Manage skill files and skill scan directories.',
   'settings.skills.defaultDirectory': 'Default skill directory',
   'settings.skills.defaultDirectoryDescription':
     'Always scanned from the vBot data directory and kept read-only here.',
@@ -197,22 +172,12 @@ export default Object.freeze({
   'settings.skills.emptyDirectories':
     'No additional skill directories configured.',
   'settings.skills.saveSuccess': 'Skill directories updated.',
-  'settings.skills.manageLabel': 'Manage skills',
-  'settings.skills.manageDescription':
-    'View, create, edit, and delete skills in your global library or an agent’s private home.',
-  'settings.skills.scopeLabel': 'Skill scope',
   'settings.skills.scopeGlobal': 'Global skills',
   'settings.skills.scopeAgent': '{name} (private)',
-  'settings.skills.loadError': 'Skills could not be loaded.',
-  'settings.skills.empty': 'No skills in this scope yet.',
   'settings.skills.newSkill': 'New skill',
-  'settings.skills.newSkillHelp':
-    'A skill is a Markdown playbook: a header with a name and a short description, followed by the instructions.\n\nThe description matters most — it is what the agent reads to decide when to apply the skill, so state clearly what task it is for.',
   'settings.skills.nameLabel': 'Skill name',
   'settings.skills.contentLabel': 'SKILL.md content',
   'settings.skills.namePlaceholder': 'skill-name',
-  'settings.skills.contentPlaceholder':
-    '---\nname: skill-name\ndescription: When to use this skill.\n---\n\n# Overview',
   'settings.skills.create': 'Create skill',
   'settings.skills.created': 'Skill created.',
   'settings.skills.createError': 'Skill could not be created.',
@@ -221,11 +186,6 @@ export default Object.freeze({
   'settings.skills.deleted': 'Skill deleted.',
   'settings.skills.deleteError': 'Skill could not be deleted.',
   'settings.skills.deleteConfirmTitle': 'Delete skill',
-  'settings.skills.deleteConfirm':
-    'Delete skill “{name}” permanently? The skill file is removed from disk.',
-  'settings.subagents.title': 'Sub-Agents',
-  'settings.subagents.subtitle':
-    'Depth, fan-out, and timeout limits for spawned agent sessions.',
   'settings.subagents.maxDepth': 'Max sub-agent depth',
   'settings.subagents.maxDepthDescription':
     'Maximum nesting level allowed when sub-agents spawn their own sub-agents.',
@@ -237,8 +197,6 @@ export default Object.freeze({
     'Maximum wait time for foreground sub-agent calls before they fail.',
   'settings.subagents.saveSuccess': 'Sub-agent settings updated.',
   'settings.reflection.title': 'Reflection',
-  'settings.reflection.subtitle':
-    'Automatic background self-review that saves durable memory and skill updates from finished conversations.',
   'settings.reflection.enabled': 'Enable background reflection',
   'settings.reflection.enabledDescription':
     'After a run finishes, the agent periodically reviews the conversation in a forked session and saves durable memory and skill updates. The original conversation is never touched.',
@@ -250,24 +208,8 @@ export default Object.freeze({
     'A skill review becomes due after this many completed Model request/response pairs in a conversation.',
   'settings.reflection.saveSuccess': 'Reflection settings updated.',
   'settings.compaction.title': 'Compaction',
-  'settings.compaction.subtitle':
-    'Choose when Context is compacted and how the next checkpoint is assembled.',
-  'settings.compaction.auto': 'Auto-compact',
-  'settings.compaction.autoDescription':
-    'When the conversation reaches the threshold, older messages are automatically summarized; the summary plus the most recent messages stay in context.',
-  'settings.compaction.threshold': 'Threshold',
-  'settings.compaction.thresholdDescription':
-    'Fraction of the context window that triggers compaction, between 0 and 1 — e.g. 0.8 compacts when the context is 80% full.',
-  'settings.compaction.tailTokens': 'Tail tokens',
-  'settings.compaction.tailTokensDescription':
-    'Amount of recent conversation that is always kept word-for-word instead of summarized, measured in tokens.',
-  'settings.compaction.summaryModel': 'Summary model',
   'settings.compaction.summaryModelPlaceholder': 'Active agent model',
-  'settings.compaction.summaryModelDescription':
-    'Model used for summarization. Leave blank to use the active agent model. This binding is independent of agent and project defaults.',
   'settings.compaction.saved': 'Compaction settings saved.',
-  'settings.recall.title': 'Recall',
-  'settings.recall.subtitle': 'How agents search past conversations.',
   'settings.recall.backend': 'Recall backend',
   'settings.recall.backendDescription':
     'How the session search looks through stored conversations.',
@@ -297,11 +239,8 @@ export default Object.freeze({
     'Set this variable in the .env file in the vBot data directory.',
   'settings.webFetch.pricing': 'Service pricing',
   'settings.webFetch.title': 'Web Fetch',
-  'settings.webFetch.subtitle':
-    'Page reading and optional extraction services.',
   'settings.webFetch.saveSuccess': 'Web fetch settings updated.',
   'settings.webSearch.title': 'Web search',
-  'settings.webSearch.subtitle': 'Provider used by the web_search tool.',
   'settings.webSearch.provider': 'Search provider',
   'settings.webSearch.providerDescription':
     'Provider used whenever an agent calls web_search.',
@@ -334,7 +273,6 @@ export default Object.freeze({
   'settings.webSearch.perplexityKeyHint':
     'Perplexity requires an API key: set PERPLEXITY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
-  'settings.specializedModels.title': 'Specialized Models',
   'settings.localSpeech.memoryTitle': 'Local speech memory',
   'settings.localSpeech.memoryLoaded': 'Loaded in memory',
   'settings.localSpeech.memoryEmpty': 'Not loaded',
@@ -428,8 +366,6 @@ export default Object.freeze({
   'settings.localSpeech.options.prompt.help':
     'Optional names or terminology to help recognize your recording.',
   'settings.localSpeech.choices.auto': 'Automatic',
-  'settings.specializedModels.subtitle':
-    'Task-specific model bindings for speech, live voice, images, video, music, embeddings, and decisions. These bindings are independent of agent and project defaults.',
   'settings.specializedModels.loading': 'Loading specialized model targets…',
   'settings.specializedModels.loadError':
     'Specialized model targets could not be loaded.',
@@ -465,7 +401,6 @@ export default Object.freeze({
   'settings.specializedModels.customTarget': 'Custom target: {target}',
   'settings.specializedModels.noOptions':
     'This target has no configurable options.',
-  'settings.specializedModels.optionsAria': 'Options for {task}',
   'settings.specializedModels.jsonPlaceholder':
     'e.g. [{"text":"hello","bbox":[[0,0],[1,0],[1,1],[0,1]]}]',
   'settings.specializedModels.jsonInvalid': 'Invalid JSON: {error}',
@@ -473,7 +408,6 @@ export default Object.freeze({
   'settings.specializedModels.decisionDescription':
     'Structured judgments for the evaluate Tool and Jev experiments.',
   'settings.providers.title': 'Providers',
-  'settings.providers.subtitle': 'Connected providers and their credentials.',
   'settings.providers.noneConnected':
     'No providers connected yet. Add one to make its models available.',
   'settings.providers.description.credentialKey':
@@ -726,7 +660,6 @@ export default Object.freeze({
   'settings.providers.custom.deleteBody':
     'The Provider and its stored data-directory API keys are removed. Existing Model references are kept and become unavailable.',
   'settings.channels.title': 'Channels',
-  'settings.channels.subtitle': 'Manage channel routing and runtime status.',
   'settings.providers.connectedCount': '{count} connected',
   'settings.channels.add': 'Add channel',
   'settings.channels.count': '{count} configured',
@@ -815,8 +748,6 @@ export default Object.freeze({
   'settings.channels.whatsapp.repair': 'Link again with a new QR code',
   'settings.extensions.title': 'Extensions',
   'settings.extensions.count': '{count} discovered',
-  'settings.extensions.subtitle':
-    'Loaded extensions and their capabilities. Toggles take effect immediately.',
   'settings.extensions.empty': 'No extensions discovered.',
   'settings.extensions.statusLoaded': 'Loaded',
   'settings.extensions.statusFailed': 'Failed',
@@ -858,7 +789,6 @@ export default Object.freeze({
   'settings.extensions.reloadHelp':
     'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
   'settings.appearance.title': 'Appearance',
-  'settings.appearance.subtitle': 'Language and Chat presentation.',
   'settings.appearance.language': 'Language',
   'settings.appearance.languageDescription': 'Interface language.',
   'settings.appearance.chatWidth.label': 'Chat width',
