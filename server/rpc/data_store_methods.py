@@ -30,12 +30,8 @@ _SNAPSHOT_REASONS = frozenset({"manual", "rpc", "update", "recovery"})
 
 
 def _runtime(state: Any) -> tuple[Any, Path]:
-    runtime = getattr(state, "runtime", None)
-    storage = getattr(runtime, "storage", None)
-    data_dir = getattr(storage, "data_dir", None)
-    if runtime is None or data_dir is None:
-        raise DatabaseUnavailableError("data-store health is unavailable")
-    return runtime, Path(data_dir)
+    runtime = state.runtime
+    return runtime, Path(runtime.storage.data_dir)
 
 
 def _status(runtime: Any, data_dir: Path) -> JsonObject:

@@ -192,12 +192,9 @@ def _ensure_no_bootstrap_session_reference(
     project_id: str | None,
     session_id: str,
 ) -> None:
-    service = getattr(state.runtime, "bootstrap_service", None)
-    if service is None:
-        return
     references = sorted(
         f"bootstrap:{job.id}"
-        for job in service.list_jobs()
+        for job in state.runtime.bootstrap_service.list_jobs()
         if (
             job.agent_id == agent_id
             and job.project_id == project_id
@@ -318,7 +315,7 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
             required_address=required_address,
         )
         sessions = [dict(session) for session in page.sessions]
-        run_manager = getattr(state.runtime, "chat_run_manager", None)
+        run_manager = state.runtime.chat_run_manager
         for session in sessions:
             session_id = session.get("id")
             session_agent_id = session.pop("agent_id", None)
@@ -329,7 +326,7 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
                 session_agent_id,
                 session_project_id if isinstance(session_project_id, str) else None,
             )
-            if isinstance(session_id, str) and run_manager is not None:
+            if isinstance(session_id, str):
                 active = run_manager.active_run(
                     agent_id=session_agent_id,
                     session_id=session_id,

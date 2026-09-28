@@ -125,6 +125,9 @@ class _Speech:
         self.transcribe_calls = 0
         self.synthesize_calls = 0
 
+    def preload_configured(self) -> None:
+        return None
+
     async def transcribe(
         self,
         _audio: bytes,

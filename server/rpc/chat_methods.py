@@ -548,10 +548,8 @@ async def _mark_current_session(state: Any, agent_id: str, session_id: str) -> N
     every message would emit a redundant ``resource_changed(kind="agents")``
     signal that tears down the chat view in every connected window.
     """
-    runtime = getattr(state, "runtime", None)
-    agents = getattr(runtime, "agents", None)
-    if runtime is None or agents is None:
-        return
+    runtime = state.runtime
+    agents = runtime.agents
     # Agent reads verify, and updates validate, the pointer against Sessions.
     chat_sessions = runtime.chat_sessions
     try:

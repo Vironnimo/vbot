@@ -9,7 +9,6 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from core.runs import ChatRunManager
-from core.statistics import StatisticsIndex
 from core.storage.layout import DataDirectoryLayout
 from core.utils.log_viewer import LogViewer
 from server._bind import ServerBindState
@@ -43,14 +42,6 @@ JsonObject = dict[str, Any]
 
 # Bounds ending Live calls at shutdown; each call also bounds its own close.
 LIVE_CALLS_SHUTDOWN_TIMEOUT_SECONDS = 10.0
-
-# The Session methods a Statistics index warmup reads through.
-_STATISTICS_SESSION_METHODS = (
-    "list_summaries",
-    "list_owned_session_summaries",
-    "list_history_versions",
-    "get",
-)
 
 
 def _initialize_app_state(
@@ -121,31 +112,14 @@ def _register_run_event_bridge(state: Any) -> Any:
     )
 
 
-def _start_statistics_warmup(state: Any) -> asyncio.Task[None] | None:
-    """Reconcile the Statistics index in the background when the runtime serves it."""
-    runtime = state.runtime
-    sessions = getattr(runtime, "chat_sessions", None)
-    agents = getattr(runtime, "agents", None)
-    projects = getattr(runtime, "projects", None)
-    models = getattr(runtime, "models", None)
-    if not (
-        isinstance(getattr(runtime, "statistics_index", None), StatisticsIndex)
-        and all(callable(getattr(sessions, name, None)) for name in _STATISTICS_SESSION_METHODS)
-        and callable(getattr(agents, "list", None))
-        and callable(getattr(projects, "list", None))
-        and callable(getattr(projects, "session_owning_agents", None))
-        and callable(getattr(models, "pricing_for", None))
-    ):
-        return None
-    service = statistics_service(state)
-    return asyncio.create_task(_warm_statistics_index(service))
+def _start_statistics_warmup(state: Any) -> asyncio.Task[None]:
+    """Reconcile the Statistics index in the background."""
+    return asyncio.create_task(_warm_statistics_index(statistics_service(state)))
 
 
 def _start_speech_preload(runtime: Any) -> None:
     """Start loading a local STT model whose binding asks to be loaded at startup."""
-    preload = getattr(getattr(runtime, "speech", None), "preload_configured", None)
-    if callable(preload):
-        preload()
+    runtime.speech.preload_configured()
 
 
 async def _warm_statistics_index(service: Any) -> None:
@@ -166,11 +140,7 @@ def _unregister_run_event_bridge(state: Any) -> None:
 
 
 def _register_session_title_bridge(state: Any) -> Any:
-    sessions = getattr(state.runtime, "chat_sessions", None)
-    add_callback = getattr(sessions, "add_title_changed_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(
+    return state.runtime.chat_sessions.add_title_changed_callback(
         lambda address: publish_session_changed(
             state, address.project_id, address.agent_id, address.session_id
         )
@@ -185,13 +155,9 @@ def _unregister_session_title_bridge(state: Any) -> None:
 
 
 def _register_session_completion_read_bridge(state: Any) -> Any:
-    sessions = getattr(state.runtime, "chat_sessions", None)
-    add_callback = getattr(sessions, "add_completion_read_callback", None)
-    if not callable(add_callback):
-        return None
     # The acknowledged Run id lets other windows clear their unread marker
     # without re-reading activity when they already know that completion.
-    return add_callback(
+    return state.runtime.chat_sessions.add_completion_read_callback(
         lambda address, run_id: publish_session_changed(
             state,
             address.project_id,
@@ -210,11 +176,9 @@ def _unregister_session_completion_read_bridge(state: Any) -> None:
 
 
 def _register_cron_change_bridge(state: Any) -> Any:
-    cron_service = getattr(state.runtime, "cron_service", None)
-    add_callback = getattr(cron_service, "add_changed_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(lambda: publish_resource_changed(state, RESOURCE_KIND_CRON))
+    return state.runtime.cron_service.add_changed_callback(
+        lambda: publish_resource_changed(state, RESOURCE_KIND_CRON)
+    )
 
 
 def _unregister_cron_change_bridge(state: Any) -> None:
@@ -225,11 +189,9 @@ def _unregister_cron_change_bridge(state: Any) -> None:
 
 
 def _register_calendar_change_bridge(state: Any) -> Any:
-    calendar_service = getattr(state.runtime, "calendar_service", None)
-    add_callback = getattr(calendar_service, "add_changed_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(lambda: publish_resource_changed(state, RESOURCE_KIND_CALENDAR))
+    return state.runtime.calendar_service.add_changed_callback(
+        lambda: publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
+    )
 
 
 def _unregister_calendar_change_bridge(state: Any) -> None:
@@ -240,11 +202,7 @@ def _unregister_calendar_change_bridge(state: Any) -> None:
 
 
 def _register_terminal_change_bridge(state: Any) -> Any:
-    manager = getattr(state.runtime, "terminal_manager", None)
-    add_callback = getattr(manager, "add_changed_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(
+    return state.runtime.terminal_manager.add_changed_callback(
         lambda terminal_id: publish_resource_changed(
             state,
             RESOURCE_KIND_TERMINALS,
@@ -261,11 +219,7 @@ def _unregister_terminal_change_bridge(state: Any) -> None:
 
 
 def _register_bash_process_change_bridge(state: Any) -> Any:
-    manager = getattr(state.runtime, "process_manager", None)
-    add_callback = getattr(manager, "add_terminal_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(
+    return state.runtime.process_manager.add_terminal_callback(
         lambda notification: publish_bash_process_status_changed(state, notification)
     )
 

@@ -279,10 +279,7 @@ def _optional_arguments(params: JsonObject) -> list[str]:
 
 
 def _terminal_manager(state: Any) -> Any:
-    manager = getattr(state.runtime, "terminal_manager", None)
-    if manager is None:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Interactive terminals are unavailable")
-    return manager
+    return state.runtime.terminal_manager
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

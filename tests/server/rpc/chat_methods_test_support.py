@@ -138,6 +138,20 @@ class _NoCommandDispatcher:
         return None
 
 
+class CurrentSessionAgents:
+    """Agent store double that records current-session pointer updates."""
+
+    def __init__(self, current_session_id: str = "") -> None:
+        self.current_session_id = current_session_id
+        self.updates: list[tuple[str, str]] = []
+
+    def get(self, agent_id: str) -> SimpleNamespace:
+        return SimpleNamespace(current_session_id=self.current_session_id)
+
+    def update(self, agent_id: str, **changes: Any) -> None:
+        self.updates.append((agent_id, changes["current_session_id"]))
+
+
 def chat_state(
     loop: _RecordingLoop | None = None,
     *,
@@ -146,6 +160,7 @@ def chat_state(
 ) -> SimpleNamespace:
     """Minimal server state for chat RPCs: recording loops, real Runs and event bus."""
     chat_loop = loop or _RecordingLoop()
+    runtime.setdefault("agents", CurrentSessionAgents())
     return SimpleNamespace(
         chat_loop=chat_loop,
         streaming_chat_loop=streaming_loop or chat_loop,

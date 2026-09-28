@@ -23,6 +23,7 @@ from core.sessions import SessionAddress
 from core.tools import FileReadState, register_read_tool, tool_success
 from server.app import create_app
 from tests.server.rpc.chat_methods_test_support import (
+    CurrentSessionAgents,
     _RecordingLoop,
     bridged_run_ids,
     call,
@@ -202,18 +203,6 @@ async def test_send_snapshots_mentioned_files_into_the_content(tmp_path: Path) -
     assert file_state.check_stale("s1", (workspace / "notes.md").resolve()) is None
 
 
-class _CurrentSessionAgents:
-    def __init__(self, current_session_id: str) -> None:
-        self.current_session_id = current_session_id
-        self.updates: list[tuple[str, str]] = []
-
-    def get(self, agent_id: str) -> SimpleNamespace:
-        return SimpleNamespace(current_session_id=self.current_session_id)
-
-    def update(self, agent_id: str, **changes: Any) -> None:
-        self.updates.append((agent_id, changes["current_session_id"]))
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "agent_id", "current_session_id", "busy", "marked"),
@@ -231,7 +220,7 @@ async def test_user_message_makes_the_identity_session_current(
     # A restart re-opens the Session the user last wrote to, even when the
     # message was queued. Re-marking an already current Session would tear down
     # the chat view in every window, and project agents have no pointer.
-    agents = _CurrentSessionAgents(current_session_id)
+    agents = CurrentSessionAgents(current_session_id)
     state = chat_state(_RecordingLoop(busy=busy), agents=agents)
     params: JsonObject = {"agent_id": agent_id, "session_id": "s1", "content": "hi"}
     if method == "chat.edit":

@@ -174,6 +174,8 @@ def _make_state(
         terminal_manager=_FakeTerminalManager(),
         cron_service=cron_service,
         bootstrap_service=bootstrap_service,
+        calendar_service=SimpleNamespace(actions=SimpleNamespace(list_actions=lambda: [])),
+        skills=SimpleNamespace(list_all=lambda: []),
         # ``project.set_override``'s model gate reads ``runtime.models`` only for a pinned
         # ``::connection`` suffix (never in these tests), but expose it so a plain
         # model override never trips an AttributeError.

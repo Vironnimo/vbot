@@ -196,10 +196,7 @@ def _provider_connection(runtime: Any, provider_id: str, connection_id: str) -> 
 
 
 def _runtime_token_store(runtime: Any) -> Any:
-    token_store = getattr(runtime, "token_store", None)
-    if token_store is None:
-        raise ConfigError("Runtime OAuth token store is not available")
-    return token_store
+    return runtime.token_store
 
 
 def _device_flow_engine(state: Any) -> DeviceFlowEngine:
