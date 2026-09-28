@@ -691,9 +691,7 @@ class CompactionRunCoordinator:
         }
         if context_usage is not None:
             payload["context_usage"] = context_usage
-        duration_ms = checkpoint_usage.get("compaction_duration_ms")
-        if duration_ms is not None:
-            payload["duration_ms"] = duration_ms
+        payload["duration_ms"] = checkpoint_usage["compaction_duration_ms"]
         run.emit(
             COMPACTION_COMPLETED_EVENT,
             payload,
