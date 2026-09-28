@@ -15,7 +15,6 @@ from ._terminal_state import (
     TERMINAL_NOTICE_MESSAGE_CAP_CHARS,
     TERMINAL_STATUS_DEFAULT_LINES,
     TerminalAttention,
-    TerminalCursorError,
     TerminalSession,
     TerminalStreamEvent,
     _attention_data,
@@ -74,13 +73,10 @@ class TerminalEvents:
         (Hermes ``read_terminal`` contract); omit it for the newest page.
         """
         async with session.lock:
-            try:
-                if start_line is not None:
-                    scrollback = session.renderer.page_from(start_line, lines)
-                else:
-                    scrollback = session.renderer.page(before=None, limit=lines)
-            except ValueError as error:
-                raise TerminalCursorError(str(error)) from error
+            if start_line is not None:
+                scrollback = session.renderer.page_from(start_line, lines)
+            else:
+                scrollback = session.renderer.page(limit=lines)
             data = _snapshot_data(session, scrollback)
             if include_name:
                 data["name"] = session.name
@@ -91,7 +87,7 @@ class TerminalEvents:
         return {
             "terminal": self._catalog._operator_summary(session),
             "screen": session.renderer.screen_text(),
-            "scrollback": session.renderer.page(before=None, limit=30),
+            "scrollback": session.renderer.page(limit=30),
             "bracketed_paste": session.renderer.bracketed_paste_enabled,
         }
 

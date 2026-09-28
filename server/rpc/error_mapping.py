@@ -28,7 +28,6 @@ from core.sessions import SessionPageCursorError
 from core.tools.terminal_manager import (
     TerminalCapacityError,
     TerminalClosedError,
-    TerminalCursorError,
     TerminalLaunchError,
     TerminalNotFoundError,
     TerminalProgramNotRunningError,
@@ -108,7 +107,6 @@ def _map_expected_error(error: Exception) -> RpcError:
         (
             TerminalCapacityError,
             TerminalClosedError,
-            TerminalCursorError,
             TerminalLaunchError,
             TerminalStaleScreenError,
         ),
