@@ -183,11 +183,22 @@ def test_long_stall_warnings_are_rate_limited_and_count_suppressions(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     service = PerformanceService(tmp_path / "performance")
+    library = code_path(asyncio.events.__file__)
+    project = code_path(__file__)
+    stack = (
+        f"{code_path(threading.__file__)}:359 Condition.wait",
+        f"{library}:88 Handle._run",
+        f"{project}:12 blocking_helper",
+        f"{library}:90 Handle._run",
+        f"{project}:40 caller",
+        f"{project}:41 outer_caller",
+        f"{project}:42 outermost_caller",
+    )
     stall = StallRecord(
         started_perf=time.perf_counter(),
         started_at=datetime.now(UTC),
         duration_ms=1500.0,
-        samples=((3, ("core/chat/x.py:10 work", "asyncio/events.py:88 Handle._run")),),
+        samples=((3, stack),),
         gc_ms=1200.0,
     )
     short = StallRecord(stall.started_perf, stall.started_at, 400.0, ())
@@ -204,7 +215,12 @@ def test_long_stall_warnings_are_rate_limited_and_count_suppressions(
     warnings = [record.getMessage() for record in caplog.records]
     assert len(warnings) == 2
     assert "stalled for 1500 ms (gc_ms=1200 samples=3" in warnings[0]
-    assert "core/chat/x.py:10 work <- asyncio/events.py:88 Handle._run" in warnings[0]
+    assert f"top frames: {' <- '.join(stack[:5])};" in warnings[0]
+    # The innermost vBot frames skip library code, however deep it sits.
+    assert warnings[0].endswith(
+        f"innermost vBot frames: {project}:12 blocking_helper <- {project}:40 caller"
+        f" <- {project}:41 outer_caller"
+    )
     assert "suppressed_warnings=0" in warnings[0]
     assert "suppressed_warnings=1" in warnings[1]
 

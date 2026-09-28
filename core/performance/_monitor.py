@@ -287,7 +287,10 @@ def render_stack(frame: FrameType | None) -> tuple[str, ...]:
     return tuple(rendered)
 
 
+_PATH_CACHE_LIMIT = 4096
 _PATH_CACHE: dict[str, str] = {}
+# Rendered paths of vBot's own files, collected as frames are rendered.
+_PROJECT_PATHS: set[str] = set()
 _LIBRARY_ROOTS = tuple(
     sorted(
         {
@@ -306,22 +309,29 @@ def code_path(filename: str) -> str:
     cached = _PATH_CACHE.get(filename)
     if cached is not None:
         return cached
-    rendered = _render_code_path(filename)
-    if len(_PATH_CACHE) < 4096:
+    rendered, owned = _render_code_path(filename)
+    if len(_PATH_CACHE) < _PATH_CACHE_LIMIT:
         _PATH_CACHE[filename] = rendered
+        if owned:
+            _PROJECT_PATHS.add(rendered)
     return rendered
 
 
-def _render_code_path(filename: str) -> str:
+def is_project_frame(frame: str) -> bool:
+    """Return whether a rendered frame lies in vBot's own source tree."""
+    return frame.partition(" ")[0].rpartition(":")[0] in _PROJECT_PATHS
+
+
+def _render_code_path(filename: str) -> tuple[str, bool]:
     if filename.startswith("<"):
-        return filename
+        return filename, False
     try:
         path = Path(filename).resolve()
     except (OSError, ValueError):
-        return filename.replace("\\", "/")
+        return filename.replace("\\", "/"), False
     for root in _LIBRARY_ROOTS:
         if path.is_relative_to(root):
-            return path.relative_to(root).as_posix()
+            return path.relative_to(root).as_posix(), False
     if path.is_relative_to(_PROJECT_ROOT):
-        return path.relative_to(_PROJECT_ROOT).as_posix()
-    return path.as_posix()
+        return path.relative_to(_PROJECT_ROOT).as_posix(), True
+    return path.as_posix(), False

@@ -27,7 +27,7 @@ from time import perf_counter
 from typing import Any
 
 from core.performance._metrics import MetricRegistry
-from core.performance._monitor import LoopMonitor, StallRecord
+from core.performance._monitor import LoopMonitor, StallRecord, is_project_frame
 from core.performance._recording import (
     STOPPED_MAX_SECONDS,
     STOPPED_REQUESTED,
@@ -54,6 +54,7 @@ EVENT_LOOP_LAG_METRIC = "event_loop.lag"
 _STALL_WARNING_MS = 1000.0
 _STALL_WARNING_INTERVAL_S = 30.0
 _STALL_WARNING_FRAMES = 5
+_STALL_WARNING_PROJECT_FRAMES = 3
 _GC_SPAN_MIN_MS = 1.0
 
 
@@ -487,15 +488,19 @@ class PerformanceService:
             suppressed = self._suppressed_stall_warnings
             self._suppressed_stall_warnings = 0
             self._last_stall_warning = now
-        frames = stall.samples[0][1][:_STALL_WARNING_FRAMES] if stall.samples else ()
+        stack = stall.samples[0][1] if stall.samples else ()
+        # The innermost frames are usually asyncio or library code; the
+        # innermost vBot frames name the code that owns the blocking call.
+        project_frames = [frame for frame in stack if is_project_frame(frame)]
         _LOGGER.warning(
             "Event Loop stalled for %d ms (gc_ms=%d samples=%d suppressed_warnings=%d); "
-            "top frames: %s",
+            "top frames: %s; innermost vBot frames: %s",
             round(stall.duration_ms),
             round(stall.gc_ms),
             sum(count for count, _stack in stall.samples),
             suppressed,
-            " <- ".join(frames) or "-",
+            " <- ".join(stack[:_STALL_WARNING_FRAMES]) or "-",
+            " <- ".join(project_frames[:_STALL_WARNING_PROJECT_FRAMES]) or "-",
         )
 
 

@@ -64,7 +64,7 @@ Durations are milliseconds. Names are dotted lowercase words with low cardinalit
 - The sink is the documented exception to constructor injection (`.vorch/PROJECT.md` -> Conventions): it holds only measurements, never state other code reads to decide behavior. The service, monitor and files stay Runtime-owned.
 - Metric names, span names and args never carry content: no prompts, messages, Tool arguments, paths from requests or credentials. Ids and counts are allowed as span args only, never in metric names. Only code-defined or registry-validated names may become metric names (for example registered RPC methods, dispatched Tool names).
 - More than 1000 distinct histogram or gauge names are rejected: the observation is dropped, `performance.dropped_metrics` counts it, and one WARNING is logged.
-- Recording start/stop and a shutdown discard log one INFO event; a stall >= 1 s logs a WARNING with `gc_ms` and its top frames, at most once per 30 s (suppressed count reported). Sampler failures warn once per gauge.
+- Recording start/stop and a shutdown discard log one INFO event; a stall >= 1 s logs a WARNING with `gc_ms`, its five innermost frames and its three innermost vBot frames (files in the vBot source tree, bundled Extensions included), at most once per 30 s (suppressed count reported). Sampler failures warn once per gauge.
 - Measure at the owner's boundary with `measure` or `record_span`; use `min_span_ms` for high-frequency short waits so they stay histogram-only in traces.
 
 ## Constraints & Gotchas
