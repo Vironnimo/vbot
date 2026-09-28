@@ -95,6 +95,14 @@ actor key `extension:<owner>`, never under its synthetic participant Agent id; s
 - An Extension database handle dies with its registration: shutdown handlers may still use it, but code that keeps running after shutdown (background tasks, cached handles in module globals) gets a closed handle. Open again from the next startup's owner host instead of caching across reloads.
 - Secret clients submit the schema field key, never an arbitrary environment key. The server resolves the declared `env_key`, writes or removes the data-dir credential, reloads credential state, and returns only whether it is set.
 
+## Agent-facing text
+
+Rows cover only the bundled-page UI text paragraph of the `vbot-cli` Skill reference (`resources/skills/vbot-cli/references/extensions.md`); its older wording has no recorded reasons yet.
+
+| Text | Reason |
+|---|---|
+| `A bundled page keeps its English UI text in its own catalog: ...` | The WebUI English catalog is the only source of page text and `t()` takes no English fallback (`webui.md`). Without the paragraph, an Agent authoring a bundled page hard-codes English text or calls `t()` for keys no catalog holds, which render as raw keys; a key that collides with the WebUI catalog makes `registerCatalog` throw before the page mounts. Preventive; no Session evidence yet (2026-09). |
+
 ## References
 
 Read these only when your task matches - not by default.
