@@ -100,7 +100,11 @@ async def test_failed_tool_call_persists_its_failure_and_the_run_continues(
         assert '"value" must be a string' in persisted["error"]["message"]
     else:
         assert persisted == failure
-    [event] = [event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT]
+    [event] = [
+        event
+        for event in await runtime.timelines.events(run)
+        if event.type == TOOL_CALL_RESULT_EVENT
+    ]
     assert event.payload["tool_call"] == {"id": "call_1", "index": 0, "name": "probe"}
     assert event.payload["result"] == persisted
     assert event.payload["timing"]["duration_ms"] >= 0

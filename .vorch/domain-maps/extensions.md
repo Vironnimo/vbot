@@ -42,6 +42,7 @@ Runtime callback dispatch uses `invoke_extension_handler`: synchronous lifecycle
 
 - `ExtensionAPI` is the declaration facade. `api.config` is the register-time snapshot for structural choices; `api.get_config()` and `api.resolve_credential()` are live per-call reads for values that can change without rebuilding code.
 - `ExtensionRegistry` is the sole owner of records, hook dispatch tables, interaction-prefix routing, capability application, diagnostics, startup/shutdown, and deactivation primitives. `CommandDispatcher` remains the sole owner of Command validation, recognition, scheduling, execution, and neutral outcomes after the registry applies declarations.
+- Page declarations resolve once per registration at load; an entry outside its Extension root becomes a capability diagnostic, not a page. `current_page(identity, page_id)` answers page-scoped validation from memory: another or retired epoch, an owner no longer loaded, or an undeclared page yields `None`, and the entry file is not consulted. `page_declarations()` also requires the entry file on disk, so its callers (page listing, asset delivery) run it off the Event Loop (`tests/core/extensions/test_registration.py`, `test_runtime.py`).
 - Ordinary Hook, Command, lifecycle, and interaction handlers may be synchronous or asynchronous. Their dispatch isolates failures. Session-owning Extensions instead use the explicit required Session runtime contract; failed delivery propagates to the owned Run. Completion notifications run after the durable outcome is committed; failures remain observable in logs and the terminal `completion_notification_errors` field without undoing that commit.
 - Capability collisions never override an existing owner. Built-ins and earlier-loaded Extensions win; skipped capabilities are diagnosed on the affected records.
 - Configuration values are live, but declaration structure is registration-bound. Config-only saves require no reload; enabling or explicit reload rebuilds the layer; disabling a loaded Extension removes its live effects and fires shutdown under the same runtime lock.
@@ -97,11 +98,12 @@ actor key `extension:<owner>`, never under its synthetic participant Agent id; s
 
 ## Agent-facing text
 
-Rows cover only the bundled-page UI text paragraph of the `vbot-cli` Skill reference (`resources/skills/vbot-cli/references/extensions.md`); its older wording has no recorded reasons yet.
+Rows cover only the bundled-page paragraphs of the `vbot-cli` Skill reference (`resources/skills/vbot-cli/references/extensions.md`) listed below; its older wording has no recorded reasons yet.
 
 | Text | Reason |
 |---|---|
 | `A bundled page keeps its English UI text in its own catalog: ...` | The WebUI English catalog is the only source of page text and `t()` takes no English fallback (`webui.md`). Without the paragraph, an Agent authoring a bundled page hard-codes English text or calls `t()` for keys no catalog holds, which render as raw keys; a key that collides with the WebUI catalog makes `registerCatalog` throw before the page mounts. Preventive; no Session evidence yet (2026-09). |
+| `An invalidation callback receives {reason, change}: ...` | Scoped page invalidation (2026-09-28): `publish_change` forwards `{resource, ids, revision}` only to the owning Extension's open page, and `null` marks a full refresh (descriptor reload, reconnect, Run-stream recovery). Without the sentence, an Agent authoring a page reloads every read model on each change; the Swarm page did exactly that under a 23-Agent load (~3.5 operations/s plus a descriptor reload per change). |
 
 ## References
 

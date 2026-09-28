@@ -118,7 +118,9 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
     assert [m["content"] for m in sent if m["role"] == "user"][-2:] == ["Steer one", "Steer two"]
     assert len([m for m in history if m.role == "run_summary"]) == 1
     assert [
-        e.payload.get("queue_item_id") for e in run.events if e.type == "user_message_persisted"
+        e.payload.get("queue_item_id")
+        for e in await runtime.timelines.events(run)
+        if e.type == "user_message_persisted"
     ] == [None, items[0].item_id, items[1].item_id]
 
 
@@ -169,7 +171,7 @@ async def test_each_steered_step_gets_a_fresh_recovery_budget(
     assert len(adapter.requests) == 18
     retries = [
         event.payload["attempt"]
-        for event in run.events
+        for event in await runtime.timelines.events(run)
         if event.type == PROVIDER_REQUEST_STATUS_EVENT
         and event.payload.get("state") == "retrying"
         and "attempt" in event.payload

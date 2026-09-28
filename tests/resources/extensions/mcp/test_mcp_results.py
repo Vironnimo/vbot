@@ -14,6 +14,7 @@ from resources.extensions.mcp.content import (
     READ_TOO_LARGE,
     RESULT_DENIED,
     RESULT_MISSING,
+    RESULT_READ_ENTRIES,
     RESULT_TEXT_CHARACTERS,
     RESULT_VIEW_CHARACTERS,
     ContentStore,
@@ -118,6 +119,7 @@ async def test_result_reader_filters_rows_and_paginates_without_losing_values(ho
     )
     second = store.read_result(document, first["next"])
 
+    assert len(first["entries"]) == RESULT_READ_ENTRIES
     assert [entry["value"] for entry in first["entries"] + second["entries"]] == [
         {"id": index} for index in range(31)
     ]
@@ -191,7 +193,7 @@ async def test_large_error_keeps_full_payload_and_bounded_receipt(
 
     assert not result["ok"]
     assert message.startswith("The MCP tool inspect reported an error:\nstart failure")
-    assert "NameError: final line\n\nIt may have changed the application" in message
+    assert "NameError: final line\n\nWhether the tool inspect changed the application" in message
     assert '"pointer":"/content/0/text","offset":1000' in message
     assert len(message) < 4000
     assert saved["payload"] == payload
@@ -200,6 +202,31 @@ async def test_large_error_keeps_full_payload_and_bounded_receipt(
 
 def payload_id(message: str) -> str:
     return message.split('"result_id":"', 1)[1].split('"', 1)[0]
+
+
+@pytest.mark.asyncio
+async def test_text_read_over_the_maximum_says_what_it_applied_and_continues_with_it(
+    context_service, host, monkeypatch
+):
+    service, registry, runner, calls = context_service
+    text = "".join(f"{index:05d}" for index in range(4000))
+    payload = {"content": [{"type": "text", "text": text}]}
+    receipt = await _call_returning(payload, context_service, host, monkeypatch)
+    identifier = receipt["data"]["result_id"]
+    call = {"action": "read", "result_id": identifier, "pointer": "/content/0/text"}
+
+    capped = await dispatch(registry, host, {**call, "offset": 3000, "limit": 10000})
+    continued = await dispatch(registry, host, capped["data"]["next"])
+
+    assert model_text(capped) == (
+        f"result_id: {identifier}\npointer: /content/0/text\noffset: 3000\ntotal: 20000\n"
+        "limit: 10000 was reduced to 4000 characters, the maximum for text\n"
+        f'next: {{"action":"read","result_id":"{identifier}","pointer":"/content/0/text",'
+        '"offset":7000,"limit":4000}\n\n' + text[3000:7000]
+    )
+    assert "limit" not in continued["data"]
+    assert continued["data"]["content"] == text[7000:11000]
+    assert continued["data"]["next"]["limit"] == 4000
 
 
 @pytest.mark.asyncio
@@ -214,9 +241,13 @@ async def test_tool_error_reads_as_the_servers_own_report(context_service, host,
     assert model_text(result) == (
         "Error (mcp_tool_error): The MCP tool inspect reported an error:\n"
         "Traceback:\nNameError: name 'scene' is undefined\n\n"
-        "It may have changed the application before failing. Fix what the error describes, "
-        "then call it again; an unchanged repeat helps only when the error says the problem "
-        "is temporary."
+        "Whether the tool inspect changed the application before it failed is unknown. If the "
+        "error concerns this call, for example an argument or an item it names, fix the call and "
+        "send it again. If the error concerns the setup, for example the application not "
+        "running, a program not found or a missing key or setting, tell the user what the "
+        "error says. The user configures this connection in Settings -> Integrations -> "
+        "Extensions -> MCP connections. Repeat the unchanged call only when the error says "
+        "the problem is temporary."
     )
     assert payloads(host).rows == {}
 

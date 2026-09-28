@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
+import weakref
 from typing import Any
 
 import pytest
 
-from core.runs import ChatRunManager, Run, RunCancelledError, RunInterruptedError
+from core.runs import (
+    ChatRunManager,
+    Run,
+    RunCancelledError,
+    RunInterruptedError,
+    RunStatus,
+)
 from core.utils.errors import VBotError
 from tests.core.runs.runs_test_support import SESSION, assert_timing_payload
 
@@ -151,3 +159,62 @@ async def test_run_completed_carries_the_result_usage_when_present(
     assert event.payload["status"] == "completed"
     assert event.payload.get("usage") == usage
     assert_timing_payload(event.payload)
+
+
+class _Resource:
+    def close(self) -> None:
+        return None
+
+
+def _register_resource(run: Run) -> weakref.ref[_Resource]:
+    """Hand one resource to every Run callback registry; return only a weak handle."""
+    resource = _Resource()
+
+    async def observe(_status: RunStatus) -> None:
+        resource.close()
+
+    run.add_cancel_callback(resource.close)
+    run.add_completion_observer(observe)
+    run.begin_tool_call("call-active")
+    run.register_tool_cancel("call-active", resource.close)
+    run.register_tool_background("call-active", lambda: resource is not None)
+    run.register_tool_cancel("call-cancelled", resource.close)
+    run.cancel_tool_call("call-cancelled")
+    return weakref.ref(resource)
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed", "cancelled"])
+async def test_finished_run_releases_execution_callbacks(outcome: str) -> None:
+    manager = ChatRunManager()
+    handles: list[weakref.ref[_Resource]] = []
+    registered = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        handles.append(_register_resource(run))
+        registered.set()
+        if outcome == "failed":
+            raise RuntimeError("boom")
+        if outcome == "cancelled":
+            await asyncio.Event().wait()
+        return "done"
+
+    run = await manager.start(SESSION, execute)
+    await registered.wait()
+    if outcome == "cancelled":
+        run.request_cancel()
+    expected_error = {"failed": RuntimeError, "cancelled": RunCancelledError}.get(outcome)
+    if expected_error is None:
+        assert await run.wait() == "done"
+    else:
+        with pytest.raises(expected_error):
+            await run.wait()
+    # A registration after the terminal state is not retained either.
+    handles.append(_register_resource(run))
+    gc.collect()
+
+    assert run.status == RunStatus(outcome)
+    assert [handle() for handle in handles] == [None, None]
+    # The per-call cancel outcome stays observable; nothing is left to cancel.
+    assert run.tool_call_cancelled("call-cancelled")
+    assert not run.cancel_tool_call("call-active")
+    assert run.controls()["background_tool_call_ids"] == []

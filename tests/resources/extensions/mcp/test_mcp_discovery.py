@@ -145,12 +145,20 @@ async def test_guidance_and_prompts_lead_only_the_unfiltered_first_page(context_
 
 
 @pytest.mark.asyncio
-async def test_no_match_provides_a_working_capability_browse(context_service, host):
+@pytest.mark.parametrize(
+    "kind,searched", [(None, "tools, resources, templates or prompts"), ("prompt", "prompts")]
+)
+async def test_no_match_provides_a_working_capability_browse(context_service, host, kind, searched):
     service, registry, runner, calls = context_service
-    result = await dispatch(registry, host, {"action": "search", "query": "rendern"})
+    arguments = {"action": "search", "query": "rendern"} | ({"kind": kind} if kind else {})
+    result = await dispatch(registry, host, arguments)
     assert result["data"]["matches"] == "none"
     assert result["data"]["available"] == "1 tool"
-    assert "does not establish that the task is unsupported" in result["data"]["note"]
+    assert result["data"]["note"] == (
+        f"No {searched} matched these words. This does not establish that the task is "
+        "unsupported. Browse the available tools and inspect general-purpose capabilities "
+        "before deciding."
+    )
     fallback = await dispatch(registry, host, result["data"]["next"])
     assert [target.split(":")[1] for target in targets(fallback)] == ["inspect"]
 
@@ -177,6 +185,84 @@ async def test_search_ranks_partial_matches_and_paginates(context_service, host)
     names = [target.split(":")[1] for target in targets(result) + targets(following)]
     assert len(set(names)) == 14
     assert "next" not in following["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested", [80, "80", 80.0])
+async def test_search_honors_limit_up_to_its_maximum_and_says_when_it_applied_less(
+    context_service, host, requested
+):
+    service, registry, runner, calls = context_service
+    # Long names and descriptions: a page of the largest limit still shows every entry.
+    runner.catalog["tools"] = [
+        {
+            "name": f"tool_with_a_long_name_{index:02d}",
+            "description": "scene " * 60,
+            "inputSchema": {"type": "object"},
+        }
+        for index in range(60)
+    ]
+    service._publish(runner, runner.catalog)
+
+    within = await dispatch(registry, host, {"action": "search", "limit": 30})
+    capped = await dispatch(registry, host, {"action": "search", "limit": requested})
+    rest = await dispatch(registry, host, capped["data"]["next"])
+
+    assert within["data"]["matches"] == "1-30 of 60"
+    assert "limit" not in within["data"]
+    assert within["data"]["next"] == {"action": "search", "limit": 30, "offset": 30}
+    assert len(targets(capped)) == 50
+    assert model_text(capped).startswith(
+        "connection: example\n"
+        "available: 60 tools\n"
+        "matches: 1-50 of 60\n"
+        "limit: 80 was reduced to 50, the maximum for search\n"
+        'next: {"action":"search","limit":50,"offset":50}\n'
+    )
+    assert rest["data"]["matches"] == "51-60 of 60"
+    assert {"limit", "next"}.isdisjoint(rest["data"])
+
+
+@pytest.mark.asyncio
+async def test_search_without_kind_covers_application_items_and_points_to_operations(
+    context_service, host
+):
+    service, registry, runner, calls = context_service
+    runner.catalog["tools"] = [
+        {"name": f"tool_{index:02d}", "description": "scene", "inputSchema": {"type": "object"}}
+        for index in range(12)
+    ]
+    runner.catalog["resources"] = [{"uri": "test://scene", "name": "scene"}]
+    runner.catalog["resource_templates"] = [{"uriTemplate": "test://items/{name}", "name": "item"}]
+    runner.catalog["prompts"] = [{"name": "workflow", "description": "scene workflow"}]
+    service._publish(runner, runner.catalog)
+
+    browse = await dispatch(registry, host, {"action": "search"})
+    following = await dispatch(registry, host, browse["data"]["next"])
+    operations = await dispatch(registry, host, {"action": "search", "kind": "operation"})
+    connection = await dispatch(registry, host, {"action": "search", "kind": "connection"})
+    subscription = await dispatch(registry, host, {"action": "search", "query": "subscription"})
+
+    # The first page also summarizes the prompt that the second page lists.
+    listed = set(targets(browse) + targets(following))
+    assert browse["data"]["matches"] == "1-10 of 15"
+    assert following["data"]["matches"] == "11-15 of 15"
+    assert "next" not in following["data"]
+    assert len(listed) == 15
+    assert not [target for target in listed if target.startswith(("operation:", "connection"))]
+    assert browse["data"]["operations"] == (
+        "resource subscriptions, events, logging, tasks and more: "
+        '{"action":"search","kind":"operation"}'
+    )
+    assert "operations" not in following["data"]
+    assert operations["data"]["matches"] == "1-10 of 13"
+    assert all(target.startswith("operation:") for target in targets(operations))
+    assert connection["data"]["matches"] == "1-1 of 1"
+    assert subscription["data"]["matches"] == "none"
+    assert subscription["data"]["operations"] == (
+        '1 matches these words: {"action":"search","kind":"operation","query":"subscription"}'
+    )
+    assert calls == []
 
 
 @pytest.mark.asyncio

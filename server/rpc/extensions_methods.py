@@ -315,13 +315,15 @@ async def _extension_operation(state: Any, params: JsonObject) -> JsonObject:
     try:
         page = params.get("page")
         if page is not None:
-            await _validate_page_context(state.runtime, registry, name, page)
+            _validate_page_context(state.runtime, registry, name, page)
         management = registry.management(name)
         if operation == "describe":
             return {"operations": management.describe()}
         result = dict(await management.invoke(operation, arguments))
+        # A reload or disable during the call retired the page: it must refresh
+        # instead of receiving a result from the replaced registration.
         if page is not None:
-            await _validate_page_context(state.runtime, registry, name, page)
+            _validate_page_context(state.runtime, registry, name, page)
         return result
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
@@ -366,7 +368,7 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
     if registry is None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
     try:
-        await _validate_page_context(state.runtime, registry, name, params.get("page"))
+        _validate_page_context(state.runtime, registry, name, params.get("page"))
         page = params["page"]
         identity = ExtensionRegistrationIdentity(name, page["epoch"])
         host = registry.host_for(identity)
@@ -376,18 +378,13 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
         inspection = await temporary_agents.owned_run(group_id, run_id)
         if inspection.run is None:
             return {"stream": None}
-        if state.runtime.extensions is not registry or not registry.is_registration_current(
-            identity
-        ):
-            raise ValueError("Extension page is unavailable; refresh the page")
         # The durable inspection stays valid while the same registration and page own it.
-        await _validate_page_context(state.runtime, registry, name, page)
+        _validate_page_context(state.runtime, registry, name, page)
         if registry.host_for(identity).temporary_agents is None:
             raise ValueError("Extension page is unavailable; refresh the page")
         # Read the live replay watermark after the ownership was re-verified.
-        replay = inspection.run.events
         return {
-            "replay_through_sequence": replay[-1].sequence if replay else 0,
+            "replay_through_sequence": inspection.run.last_sequence,
             "participant_id": inspection.record.owner.participant_id,
             "stream": state.file_delivery.open_extension_run(
                 extension=name,
@@ -419,7 +416,7 @@ async def _extension_page_cancel_tool(state: Any, params: JsonObject) -> JsonObj
     if registry is None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
     try:
-        await _validate_page_context(state.runtime, registry, name, params.get("page"))
+        _validate_page_context(state.runtime, registry, name, params.get("page"))
         identity = ExtensionRegistrationIdentity(name, params["page"]["epoch"])
         temporary_agents = registry.host_for(identity).temporary_agents
         if temporary_agents is None:
@@ -455,7 +452,7 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
     if registry is None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
     try:
-        await _validate_page_context(state.runtime, registry, name, params.get("page"))
+        _validate_page_context(state.runtime, registry, name, params.get("page"))
         page = params["page"]
         identity = ExtensionRegistrationIdentity(name, page["epoch"])
         host = registry.host_for(identity)
@@ -466,11 +463,7 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
         projection = await _HISTORY_WORKERS.run(
             _temporary_history_projection, snapshot, state.file_delivery
         )
-        if state.runtime.extensions is not registry or not registry.is_registration_current(
-            identity
-        ):
-            raise ValueError("Extension page is unavailable; refresh the page")
-        await _validate_page_context(state.runtime, registry, name, page)
+        _validate_page_context(state.runtime, registry, name, page)
         return projection
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
@@ -506,7 +499,12 @@ def _temporary_history_projection(snapshot: Any, delivery: Any) -> JsonObject:
     return response
 
 
-async def _validate_page_context(runtime: Any, registry: Any, name: str, page: Any) -> None:
+def _validate_page_context(runtime: Any, registry: Any, name: str, page: Any) -> None:
+    """Require a page the installed registry's current registration declared.
+
+    Reads only registry memory, so a check and the code after it see the same
+    registration without an intervening await.
+    """
     if not isinstance(page, dict):
         raise ValueError("page must be an object")
     page_id = page.get("id")
@@ -514,15 +512,7 @@ async def _validate_page_context(runtime: Any, registry: Any, name: str, page: A
     if not isinstance(page_id, str) or not isinstance(epoch, str):
         raise ValueError("page requires id and epoch strings")
     identity = ExtensionRegistrationIdentity(name, epoch)
-    if runtime.extensions is not registry or not registry.is_registration_current(identity):
-        raise ValueError("Extension page is unavailable; refresh the page")
-    declarations = await FILE_PREVIEW_WORKERS.run(registry.page_declarations)
-    if not registry.is_registration_current(identity):
-        raise ValueError("Extension page is unavailable; refresh the page")
-    if not any(
-        candidate == identity and declaration.page_id == page_id
-        for candidate, declaration, _entry in declarations
-    ):
+    if runtime.extensions is not registry or registry.current_page(identity, page_id) is None:
         raise ValueError("Extension page is unavailable; refresh the page")
 
 

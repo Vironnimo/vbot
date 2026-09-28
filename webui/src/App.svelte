@@ -109,8 +109,10 @@
     debugStatus,
     acknowledgeDataStoreIncident,
     getDataStoreStatus,
+    reportClientMetrics,
     showProject,
   } from '$lib/api.js';
+  import { startClientMetrics } from '$lib/clientMetrics.js';
   import {
     createAutosaveCoordinator,
     provideAutosaveContext,
@@ -459,6 +461,7 @@
     onAgentIdChanged: selection.remapIdentityAgentId,
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
+    onExtensionPageChange: extensions.publishPageChange,
     onLoadDataStoreStatus: loadDataStoreStatus,
     onSetOnboardingAside: setup.dismissOnboarding,
   });
@@ -466,6 +469,9 @@
   onMount(() => {
     let cancelled = false;
 
+    const stopClientMetrics = startClientMetrics({
+      report: reportClientMetrics,
+    });
     appController.initializeNavigationHistory();
     connectServerEvents();
 
@@ -504,6 +510,7 @@
       selection.destroy();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       appController.destroy();
+      stopClientMetrics();
     };
   });
   function protectPendingEdits(event) {
@@ -628,13 +635,7 @@
           theme={{ ...extensions.extensionPageTheme }}
           locale={setup.settings?.appearance?.language ?? 'en'}
           timezone={dateTimePrefs.timeZone}
-          invalidation={page
-            ? {
-                owner: page.extension,
-                page: page.page,
-                revision: extensions.extensionPageInvalidationRevision,
-              }
-            : null}
+          subscribeInvalidations={extensions.subscribePageInvalidations}
           onRouteChange={(route) => {
             extensions.extensionPageRoute = route;
           }}

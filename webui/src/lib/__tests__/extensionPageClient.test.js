@@ -182,6 +182,33 @@ describe('extension page client', () => {
     await expect(current).resolves.toEqual({ current: true });
   });
 
+  it('passes the reason and the changed records of each invalidation to listeners', () => {
+    const target = parent();
+    const invalidations = vi.fn();
+    client = createExtensionPageClient({ target });
+    client.onInvalidation(invalidations);
+    initialize(target);
+    const invalidate = (fields) =>
+      dispatchFrom(target, {
+        type: 'vbot.extension.invalidate',
+        version: 1,
+        nonce: 'nonce-a',
+        epoch: 'epoch-a',
+        descriptor,
+        ...fields,
+      });
+    const change = { resource: 'swarms', ids: ['swarm-one'], revision: 3 };
+    invalidate({ revision: 4, change });
+    invalidate({ reason: 'run_stream_recovered' });
+    // A malformed change is dropped, so the page refreshes everything.
+    invalidate({ change: { ...change, ids: 'swarm-one' } });
+    expect(invalidations.mock.calls.map(([value]) => value)).toEqual([
+      { reason: null, change },
+      { reason: 'run_stream_recovered', change: null },
+      { reason: null, change: null },
+    ]);
+  });
+
   it('cleans up pending work and listeners when the page is disposed', async () => {
     const target = parent();
     const invalidations = vi.fn();

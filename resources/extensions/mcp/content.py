@@ -56,6 +56,8 @@ READ_INVALID = (
     "read was not run: {options} apply to {applies}, but {selection} is {kind}. Send {call}."
 )
 
+READ_LIMIT = "{requested} was reduced to {applied} characters, the maximum for text"
+
 READ_TOO_LARGE = (
     "This selection is too large to show. Read a deeper pointer, fewer fields, or a smaller limit."
 )
@@ -282,9 +284,16 @@ class ContentStore:
             raise ValueError(_inapplicable(arguments, value, ("fields",), "objects and lists"))
         response: dict[str, Any] = {"result_id": identifier, "pointer": pointer}
         if isinstance(value, str):
-            limit = min(limit, RESULT_READ_CHARACTERS)
+            capped = None
+            if limit > RESULT_READ_CHARACTERS:
+                capped = READ_LIMIT.format(requested=limit, applied=RESULT_READ_CHARACTERS)
+                limit = RESULT_READ_CHARACTERS
+                # The continuation asks for the applied limit, not the refused excess.
+                arguments = {**arguments, "limit": limit}
             while True:
                 page = {**response, "offset": offset, "total": len(value)}
+                if capped:
+                    page["limit"] = capped
                 end = min(offset + limit, len(value))
                 if end < len(value):
                     page["next"] = {**arguments, "offset": end}

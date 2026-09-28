@@ -45,6 +45,8 @@ async def test_activity_streams_assistant_and_safe_tool_summary_without_duplicat
     assert activity is not None
     run = Run(run_id="child-run", agent_id="worker", session_id="child-session")
     activity.attach(run)
+    # The follower subscribes on its first step, while the child Run still works.
+    await asyncio.sleep(0)
 
     run.emit(USER_MESSAGE_EVENT, {"message": {"content": "private user prompt"}})
     run.emit(REASONING_EVENT, {"message": {"reasoning": "hidden chain"}})
@@ -99,6 +101,7 @@ async def test_activity_copies_non_streaming_assistant_output_and_failed_tool_st
     assert activity is not None
     run = Run(run_id="child-run", agent_id="worker", session_id="child-session")
     activity.attach(run)
+    await asyncio.sleep(0)
     run.emit(
         ASSISTANT_OUTPUT_EVENT,
         {"message": ChatMessage.assistant(model="test", content="One-shot answer").to_dict()},

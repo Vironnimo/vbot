@@ -70,7 +70,7 @@ class ProcessTerminationError(ProcessManagerError):
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class OutputChunk:
     """One stdout or stderr byte chunk stored with absolute buffer offsets."""
 
@@ -88,7 +88,10 @@ class TrackedProcess:
     agent_id: str
     project_id: str | None
     scope_key: str
-    proc: Process
+    # The live asyncio process. Once the process has finished, it is released
+    # together with its reader tasks, decoders and kill targets; status, exit
+    # code, the output buffer and the log file remain for later reads.
+    proc: Process | None
     combined_buffer: bytearray
     truncated: bool
     status: ProcessStatus
@@ -418,6 +421,8 @@ class ProcessManager:
             end_offset = tracked.buffer_start_offset + len(tracked.combined_buffer)
             chunks = _chunks_between(tracked.output_chunks, start_offset, end_offset)
             tracked.poll_offset = end_offset
+            # Chunks exist only for poll, and this poll returned all of them.
+            tracked.output_chunks.clear()
             return {
                 "status": tracked.status,
                 "chunks": [
@@ -601,7 +606,10 @@ class ProcessManager:
             tracked.log_file = tracked.spool.path
 
     async def _read_stream(self, tracked: TrackedProcess, stream_name: OutputStreamName) -> None:
-        stream = tracked.proc.stdout if stream_name == "stdout" else tracked.proc.stderr
+        proc = tracked.proc
+        if proc is None:
+            return
+        stream = proc.stdout if stream_name == "stdout" else proc.stderr
         if stream is None:
             return
 
@@ -636,9 +644,12 @@ class ProcessManager:
         # Process.wait() may wait for pipe EOF even after OS exit. A descendant
         # can inherit those pipes (for example a browser CLI's daemon), so observe
         # the child exit independently before imposing the output-drain budget.
-        while tracked.proc.returncode is None:
+        proc = tracked.proc
+        if proc is None:
+            return
+        while proc.returncode is None:
             await asyncio.sleep(0.05)
-        return_code = tracked.proc.returncode
+        return_code = proc.returncode
         await self._await_reader_tasks(tracked)
         self._release_process_pipe_references(tracked)
         await self._close_log_file(tracked)
@@ -650,6 +661,7 @@ class ProcessManager:
                 tracked.status = "completed" if return_code == 0 else "failed"
             tracked.finished_at = _utc_now()
         self._notify_terminal(tracked)
+        self._release_execution_resources(tracked)
 
     def _notify_terminal(self, tracked: TrackedProcess) -> None:
         """Publish one terminal notification for a handed-off process."""
@@ -754,11 +766,13 @@ class ProcessManager:
         cancelled_by_user: bool = False,
     ) -> None:
         async with tracked.kill_lock:
-            if tracked.status != "running":
+            proc = tracked.proc
+            # A running process always still holds its asyncio process.
+            if tracked.status != "running" or proc is None:
                 return
-            if tracked.proc.returncode is None or tracked.termination_failed:
+            if proc.returncode is None or tracked.termination_failed:
                 try:
-                    await kill_process_tree_async(tracked.proc, targets=tracked.termination_targets)
+                    await kill_process_tree_async(proc, targets=tracked.termination_targets)
                 except ProcessLookupError:
                     if tracked.termination_failed:
                         self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
@@ -772,6 +786,7 @@ class ProcessManager:
             await self._close_log_file(tracked)
             tracked.finished_at = _utc_now()
             self._notify_terminal(tracked)
+            self._release_execution_resources(tracked)
 
     def _kill_process_now(
         self,
@@ -780,13 +795,14 @@ class ProcessManager:
         cancelled_by_user: bool = False,
     ) -> None:
         """Kill synchronously; only for shutdown paths off the event loop."""
-        if tracked.status != "running":
+        proc = tracked.proc
+        if tracked.status != "running" or proc is None:
             return
 
-        if tracked.proc.returncode is not None and not tracked.termination_failed:
+        if proc.returncode is not None and not tracked.termination_failed:
             return
         try:
-            self._kill_process_tree(tracked.proc, targets=tracked.termination_targets)
+            self._kill_process_tree(proc, targets=tracked.termination_targets)
         except ProcessLookupError:
             if tracked.termination_failed:
                 self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
@@ -802,6 +818,7 @@ class ProcessManager:
             tracked.finished_at = _utc_now()
             # A settled manager finalizer has already drained and closed its spool.
             self._notify_terminal(tracked)
+            self._release_execution_resources(tracked)
 
     def _begin_kill(self, tracked: TrackedProcess, *, cancelled_by_user: bool) -> None:
         tracked.cancelled_by_user = cancelled_by_user
@@ -895,6 +912,26 @@ class ProcessManager:
     @staticmethod
     def _kill_process_tree(proc: Process, *, targets: list[Any] | None = None) -> None:
         kill_process_tree(proc, targets=targets)
+
+    @staticmethod
+    def _release_execution_resources(tracked: TrackedProcess) -> None:
+        """Drop what only a running process needs once it has finished.
+
+        Finished processes stay listed until the TTL sweep, and their output
+        must stay readable. The asyncio process with its transport, pipes and
+        stream readers, the finished reader tasks, the per-pipe decoders and
+        the tree-kill targets would otherwise stay reachable just as long.
+        The process has exited and its readers are drained, so closing the
+        transport only marks it closed; it never kills anything.
+        """
+        transport = getattr(tracked.proc, "_transport", None)
+        if transport is not None:
+            transport.close()
+        tracked.proc = None
+        tracked.stdout_task = None
+        tracked.stderr_task = None
+        tracked.output_decoders.clear()
+        tracked.termination_targets.clear()
 
     @staticmethod
     def _release_process_pipe_references(tracked: TrackedProcess) -> None:

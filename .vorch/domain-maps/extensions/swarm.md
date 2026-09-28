@@ -623,9 +623,15 @@ Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.j
 
 Background invalidations are coalesced by the Swarm-internal `ui/pageRefresh.js`:
 each mounted page/panel has one refresh in flight and at most one pending pass,
-with a fixed scheduling window that continuous traffic cannot postpone. The
-overview reloads Board, Usage, or audit data only for the visible tab; selecting
-a tab loads its current data independently of hidden reports. Activity retains
+with a fixed scheduling window that continuous traffic cannot postpone. A pass
+receives the union of the changes it covers (resource -> ids), or `null` once any
+invalidation in it named none. The Extension publishes `swarms` with the changed
+Swarm id and `profiles` with the changed profile id. The overview then reloads
+profiles only for `profiles`, the Run list for any `swarms` change, and the
+selected Swarm (`swarms.get`) with its visible tab only when its id is among them;
+`null` or another resource reloads everything (`SwarmPage.test.js`,
+`test_swarm_operations.py`). The overview reloads Board or Usage data only for the
+visible tab; selecting a tab loads its current data independently of hidden reports. Activity retains
 the existing History and live subscription while its participant's Run identity
 and active state are unchanged. A new Run or terminal state reconciles History through the generation/sequence append cursor, preserving older loaded pages;
 subscription failures remain retryable on a later invalidation. Coverage:
@@ -634,7 +640,7 @@ and `SwarmPage.wiki.test.js`.
 
 WikiPanel.svelte shows each page's number in the list and page header and opens
 `#wiki/w3` links by number. List rows show only number and title (no excerpt);
-their tooltip names the latest revision and its author. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
+their tooltip names the latest revision and its author. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations, and changes naming only other Swarms or profiles skip the Wiki refresh. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
 
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are
@@ -662,9 +668,11 @@ all Swarm participants and marks the selected Session with a pressed state.
 
 The human page omits the Delivery audit tab; internal events and canonical receipts
 remain available for diagnosis. Usage requests one combined group report, including
-participant breakdowns, and shares an in-flight request across refreshes. It retains
-the last report while refreshing silently, without transient progress text. Evidence:
-`SwarmPage.usage.test.js`.
+participant breakdowns, and shares an in-flight request across tab changes. Background
+changes reload a visible report at most every 10 seconds (`USAGE_REFRESH_INTERVAL_MS`
+in `pageModel.svelte.js`), with one trailing reload after the last change; opening the
+tab or selecting a Swarm loads at once. It retains the last report while refreshing
+silently, without transient progress text. Evidence: `SwarmPage.usage.test.js`.
 
 Pending Board reads, automatic delivery, and participant counts use the partial
 `recipients_pending_participant` index, so delivered history does not dominate

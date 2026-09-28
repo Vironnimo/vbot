@@ -282,7 +282,10 @@ def test_target_profiles_are_safe_deterministic_request_only_transforms(
     assert first == second
     assert first[1]["tool_call_id"] == normalized_id
     assert messages == original
-    assert first[0] is not messages[0]
+    # Copy on write: a new list that copies only the messages whose IDs change.
+    assert first is not messages
+    assert (first[0] is not messages[0]) is expected_change
+    assert (first[1] is not messages[1]) is expected_change
     _assert_profile_shape(normalized_id, profile)
 
 

@@ -100,6 +100,9 @@ class ExtensionRegistry:
         self._quiesced: set[str] = set()
         self._epoch = uuid.uuid4().hex
         self._registration_retired = False
+        # Pages resolved once per registration, keyed by (Extension, page id).
+        # Replaced as a whole, never mutated: worker threads iterate it.
+        self._pages: dict[tuple[str, str], tuple[ExtensionRecord, PageDeclaration, Path]] = {}
 
     def registration_identity(self, name: str) -> ExtensionRegistrationIdentity:
         """Return the current loaded identity for an Extension declaration owner."""
@@ -119,33 +122,67 @@ class ExtensionRegistry:
             )
         )
 
+    def current_page(
+        self, identity: ExtensionRegistrationIdentity, page_id: str
+    ) -> tuple[PageDeclaration, Path] | None:
+        """Return one current registration's declared page and its resolved entry.
+
+        Reads only memory, so page-scoped requests validate on the Event Loop.
+        ``None`` for another or retired epoch, an Extension that is no longer
+        loaded, or a page it did not declare. Whether the entry file exists is an
+        asset fact that :meth:`page_declarations` and asset delivery check.
+        """
+        page = self._pages.get((identity.name, page_id))
+        if page is None or not self.is_registration_current(identity):
+            return None
+        _record, declaration, entry = page
+        return declaration, entry
+
     def page_declarations(
         self,
     ) -> list[tuple[ExtensionRegistrationIdentity, PageDeclaration, Path]]:
-        """Return loaded page declarations with their checked Extension roots."""
+        """Return current pages whose entry file exists, in load order.
+
+        Checks every entry on disk, so callers run it off the Event Loop.
+        """
         pages: list[tuple[ExtensionRegistrationIdentity, PageDeclaration, Path]] = []
         if self._registration_retired:
             return pages
+        for record, declaration, entry in self._pages.values():
+            if record.status != "loaded":
+                continue
+            if not entry.is_file():
+                _diagnose_capability(
+                    record, f"page {declaration.page_id!r} skipped: entry is missing"
+                )
+                continue
+            pages.append(
+                (ExtensionRegistrationIdentity(record.name, self._epoch), declaration, entry)
+            )
+        return pages
+
+    def _resolve_pages(self) -> None:
+        """Resolve every loaded page entry once for this registration.
+
+        An entry outside its Extension root is diagnosed here and never becomes
+        a page of this registration.
+        """
+        pages: dict[tuple[str, str], tuple[ExtensionRecord, PageDeclaration, Path]] = {}
         for record in self._records:
             if record.status != "loaded":
                 continue
-            identity = ExtensionRegistrationIdentity(record.name, self._epoch)
+            root = record.root_path.resolve()
             for declaration in record.declarations.pages:
                 entry = (record.root_path / declaration.entry).resolve()
                 try:
-                    entry.relative_to(record.root_path.resolve())
+                    entry.relative_to(root)
                 except ValueError:
                     _diagnose_capability(
                         record, f"page {declaration.page_id!r} skipped: entry escapes root"
                     )
                     continue
-                if not entry.is_file():
-                    _diagnose_capability(
-                        record, f"page {declaration.page_id!r} skipped: entry is missing"
-                    )
-                    continue
-                pages.append((identity, declaration, entry))
-        return pages
+                pages[(record.name, declaration.page_id)] = (record, declaration, entry)
+        self._pages = pages
 
     def retire_registration(self) -> None:
         """Invalidate owner capabilities before their declarations are removed.
@@ -192,6 +229,7 @@ class ExtensionRegistry:
         _await_pending_registers(pending)
         registry._apply_declarations()
         registry._apply_interaction_handlers()
+        registry._resolve_pages()
         return registry
 
     @classmethod
@@ -226,6 +264,7 @@ class ExtensionRegistry:
         await _await_pending_registers_async(pending)
         registry._apply_declarations()
         registry._apply_interaction_handlers()
+        registry._resolve_pages()
         return registry
 
     @classmethod
@@ -622,6 +661,7 @@ class ExtensionRegistry:
 
         record.status = "disabled"
         record.declarations = ExtensionDeclarations()
+        self._pages = {key: page for key, page in self._pages.items() if key[0] != name}
         self._retire_owner_host(name)
         _LOGGER.info("Extension %r deactivated live (no restart)", name)
         return True
@@ -821,12 +861,18 @@ class ExtensionRegistry:
 
         Threads the list through every handler in load order: a handler returning
         a list makes it the current list (the next handler sees it); any other
-        return leaves the running list unchanged. Returns the final list. Chat
-        passes a shallow per-message copy in, so this is safe to use as the
-        request messages.
+        return leaves the running list unchanged. Returns the final list.
+
+        Handlers get a new list of shallow per-message copies, so replacing or
+        mutating a top-level message dict stays request-local and the caller's
+        messages remain intact; nested objects stay shared. Without a context
+        handler, the caller's list is returned as it is and nothing is copied.
         """
-        current = messages
-        for extension_name, handler in self._handlers.get("context", []):
+        handlers = self._handlers.get("context", [])
+        if not handlers:
+            return messages
+        current = [dict(message) for message in messages]
+        for extension_name, handler in handlers:
             payload = {"messages": current}
             result = await self._invoke("context", extension_name, handler, ctx, payload)
             if result is _HANDLER_FAILED:

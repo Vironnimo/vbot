@@ -34,6 +34,14 @@ if TYPE_CHECKING:
 
 @dataclass
 class _CodexWebSocketContinuation:
+    """Connection-local state for chaining the next request to the last response.
+
+    ``last_request_payload`` is the caller's payload itself, not a copy: the
+    adapter builds a fresh payload for every request, and neither it nor this
+    socket writes to one after it is sent. Continuation requests are built as
+    new dicts that share the retained input items.
+    """
+
     route: CodexWebSocketRoute
     last_request_payload: dict[str, Any]
     last_response_id: str
@@ -149,7 +157,7 @@ class CodexWebSocket:
                     retried_missing_continuation = True
                     self._codex_websocket_continuation = None
                     await self.aclose()
-                    request_payload = copy.deepcopy(payload)
+                    request_payload = payload
                     continue
                 except BaseException:
                     self._codex_websocket_continuation = None
@@ -307,26 +315,27 @@ class CodexWebSocket:
         continuation = self._codex_websocket_continuation
         if continuation is None or continuation.route != route:
             self._codex_websocket_continuation = None
-            return copy.deepcopy(payload)
+            return payload
         if not _codex_payloads_match_except_input(
             payload,
             continuation.last_request_payload,
         ):
             self._codex_websocket_continuation = None
-            return copy.deepcopy(payload)
+            return payload
         current_input = payload.get("input")
         previous_input = continuation.last_request_payload.get("input")
         if not isinstance(current_input, list) or not isinstance(previous_input, list):
             self._codex_websocket_continuation = None
-            return copy.deepcopy(payload)
+            return payload
         baseline = [*previous_input, *continuation.last_response_items]
         if len(current_input) < len(baseline) or current_input[: len(baseline)] != baseline:
             self._codex_websocket_continuation = None
-            return copy.deepcopy(payload)
-        request_payload = copy.deepcopy(payload)
-        request_payload["previous_response_id"] = continuation.last_response_id
-        request_payload["input"] = copy.deepcopy(current_input[len(baseline) :])
-        return request_payload
+            return payload
+        return {
+            **payload,
+            "previous_response_id": continuation.last_response_id,
+            "input": current_input[len(baseline) :],
+        }
 
     def _remember_codex_websocket_continuation(
         self,
@@ -350,7 +359,7 @@ class CodexWebSocket:
             return
         self._codex_websocket_continuation = _CodexWebSocketContinuation(
             route=route,
-            last_request_payload=copy.deepcopy(payload),
+            last_request_payload=payload,
             last_response_id=response_id,
             last_response_items=[
                 copy.deepcopy(item) for item in response_items if isinstance(item, dict)

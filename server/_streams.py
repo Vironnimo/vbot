@@ -9,6 +9,7 @@ from contextlib import aclosing, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from core.performance import count
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
 from server._app_lifecycle import _app_chat_runs
 from server._http_dependencies import Request, WebSocket
@@ -19,7 +20,11 @@ from server.events import (
 from server.file_delivery import FileDelivery
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
-from server.rpc.payloads import projected_file_urls, remove_opaque_provider_metadata
+from server.rpc.payloads import (
+    file_url_candidates,
+    remove_opaque_provider_metadata,
+    verified_file_urls,
+)
 
 if TYPE_CHECKING:
     from core.sessions import SessionAddress
@@ -27,6 +32,9 @@ if TYPE_CHECKING:
 JsonObject = dict[str, Any]
 
 SSE_HEARTBEAT_INTERVAL_SECONDS = 10.0
+
+# Run events sent over SSE, all streams together; heartbeats are not counted.
+SSE_EVENTS_METRIC = "events.sse"
 
 WS_HEARTBEAT_INTERVAL_SECONDS = 25.0
 
@@ -216,7 +224,7 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
             "started_at": run.created_at,
             "iteration_count": run.iteration_count,
             "controls": run.controls(),
-            "controls_sequence": run.events[-1].sequence if run.events else 0,
+            "controls_sequence": run.last_sequence,
             "sse_url": f"/api/runs/{run.id}/events",
         }
         if not getattr(run, "contributes_to_agent_activity", True):
@@ -296,9 +304,17 @@ async def _sse_run_events(
                     file_delivery=file_delivery,
                 )
                 if include_file_urls:
-                    data["file_urls"] = await FILE_PREVIEW_WORKERS.run(
-                        projected_file_urls, data, file_delivery
+                    # Most events (every text delta) carry no file URL; only a
+                    # candidate needs the filesystem verification off the loop.
+                    candidates = file_url_candidates(data)
+                    data["file_urls"] = (
+                        await FILE_PREVIEW_WORKERS.run(
+                            verified_file_urls, candidates, file_delivery
+                        )
+                        if candidates
+                        else []
                     )
+                count(SSE_EVENTS_METRIC)
                 yield (
                     f"id: {event.sequence}\n"
                     f"event: {event.type}\n"

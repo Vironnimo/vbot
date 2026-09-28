@@ -132,9 +132,21 @@ async def test_context_handlers_chain_the_message_list_and_skip_failures() -> No
         {"role": "user", "content": "first"},
         {"role": "user", "content": "second"},
     ]
+
+    def mutates(ctx: HookContext, *, messages: list) -> None:
+        messages[0]["role"] = "assistant"
+        messages.append({"role": "user", "content": "added"})
+
     original = [{"role": "user"}]
-    unchanged = _registry("context", returns_none, returns_dict)
-    assert await unchanged.dispatch_context(_ctx(), messages=original) is original
+    isolated = _registry("context", mutates, returns_none, returns_dict)
+    # Handlers edit shallow per-message copies: in-place changes stay request-local.
+    assert await isolated.dispatch_context(_ctx(), messages=original) == [
+        {"role": "assistant"},
+        {"role": "user", "content": "added"},
+    ]
+    assert original == [{"role": "user"}]
+    # Without a context handler the caller's list passes through uncopied.
+    assert await ExtensionRegistry().dispatch_context(_ctx(), messages=original) is original
 
 
 @pytest.mark.asyncio

@@ -99,11 +99,12 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     )
 
     run = last_run(runtime)
+    events = await runtime.timelines.events(run)
     messages = history(runtime)
     assert assistant.content == "Hello world"
     assert assistant.reasoning == "Think"
     assert persisted_roles(messages) == ["user", "assistant"]
-    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
+    assert [event.type for event in events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         REASONING_DELTA_EVENT,
@@ -113,27 +114,27 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
         MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
-    assert next(event for event in run.events if event.type == "reasoning_delta").payload == {
+    assert next(event for event in events if event.type == "reasoning_delta").payload == {
         "reasoning_delta": "Think"
     }
-    assert next(
-        event for event in run.events if event.type == "assistant_output_delta"
-    ).payload == {"content_delta": "Hello world"}
+    assert next(event for event in events if event.type == "assistant_output_delta").payload == {
+        "content_delta": "Hello world"
+    }
     assert (
-        next(event for event in run.events if event.type == "assistant_output").payload["message"][
+        next(event for event in events if event.type == "assistant_output").payload["message"][
             "content"
         ]
         == "Hello world"
     )
     assert (
         "reasoning_meta"
-        not in next(event for event in run.events if event.type == "assistant_output").payload[
+        not in next(event for event in events if event.type == "assistant_output").payload[
             "message"
         ]
     )
     assert (
         "reasoning_scope"
-        not in next(event for event in run.events if event.type == "assistant_output").payload[
+        not in next(event for event in events if event.type == "assistant_output").payload[
             "message"
         ]
     )
@@ -166,7 +167,8 @@ async def test_streaming_mode_emits_provider_heartbeat_without_model_output(
     )
 
     run = last_run(runtime)
-    heartbeat = next(event for event in run.events if event.type == PROVIDER_HEARTBEAT_EVENT)
+    events = await runtime.timelines.events(run)
+    heartbeat = next(event for event in events if event.type == PROVIDER_HEARTBEAT_EVENT)
     assert heartbeat.payload["state"] == "waiting_for_model_delta"
     assert heartbeat.payload["idle_seconds"] >= 0
     assert persisted_roles(history(runtime)) == [
@@ -222,6 +224,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     )
 
     run = last_run(runtime)
+    events = await runtime.timelines.events(run)
     persisted = [message.to_dict() for message in history(runtime)]
     assert assistant.content == "Sunny"
     assert persisted_dict_roles(persisted) == ["user", "assistant", "tool", "assistant"]
@@ -233,19 +236,19 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     assert adapter.stream_requests[1]["messages"][2]["reasoning_meta"] == {"signature": "opaque"}
     assert [
         event.type
-        for event in run.events
+        for event in events
         if event.type in {TOOL_CALL_DELTA_EVENT, TOOL_CALL_STARTED_EVENT}
     ] == [
         TOOL_CALL_DELTA_EVENT,
         TOOL_CALL_STARTED_EVENT,
     ]
-    tool_delta = next(event for event in run.events if event.type == TOOL_CALL_DELTA_EVENT)
+    tool_delta = next(event for event in events if event.type == TOOL_CALL_DELTA_EVENT)
     assert tool_delta.payload == {
         "tool_call_id": "call_abc",
         "name_delta": "get_weather",
         "arguments_delta": '{"city":"Berlin"}',
     }
-    tool_started = next(event for event in run.events if event.type == TOOL_CALL_STARTED_EVENT)
+    tool_started = next(event for event in events if event.type == TOOL_CALL_STARTED_EVENT)
     assert tool_started.payload["tool_call"]["arguments"] == {"city": "Berlin"}
     assert tool_started.payload["display"] == {
         "version": 1,
@@ -271,7 +274,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
         "name": "get_weather",
         "arguments": {"city": "Berlin"},
     }
-    tool_result = next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT)
+    tool_result = next(event for event in events if event.type == TOOL_CALL_RESULT_EVENT)
     assert tool_result.payload["tool_call"] == {
         "id": "call_abc",
         "index": 0,
@@ -282,7 +285,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     assert all(
         "reasoning_meta" not in event.payload.get("message", {})
         and "reasoning_scope" not in event.payload.get("message", {})
-        for event in run.events
+        for event in events
         if isinstance(event.payload, dict)
     )
 

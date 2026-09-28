@@ -9,15 +9,19 @@ follow live publishes, which may come from any thread.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 import uuid
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import aclosing, contextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.performance import PerformanceService
+from core.performance.performance import reset_for_tests
 from server.events import (
     ALLOWED_RESOURCE_KINDS,
     ALLOWED_SERVER_EVENT_TYPES,
@@ -88,6 +92,42 @@ def test_publish_accepts_every_contract_event_type_and_rejects_unknown_ones() ->
         (event_type, {"sentinel": event_type}) for event_type in event_types
     ]
     assert {APP_ERROR_EVENT, RESOURCE_CHANGED_EVENT} <= ALLOWED_SERVER_EVENT_TYPES
+
+
+@pytest.mark.asyncio
+async def test_publish_counts_events_and_marks_invalidations_in_a_recording(
+    tmp_path: Path,
+) -> None:
+    reset_for_tests()
+    service = PerformanceService(tmp_path / "performance")
+    bus = ServerEventBus()
+    try:
+        service.start_recording()
+        bus.publish(RESOURCE_CHANGED_EVENT, {"kind": "agents"})
+        bus.publish(RESOURCE_CHANGED_EVENT, {"kind": "agents"})
+        bus.publish(RESOURCE_CHANGED_EVENT, {"kind": "not-a-kind"})
+        bus.publish(RUN_STARTED_SERVER_EVENT, {"id": "a"})
+        result = await service.stop_recording()
+        counters = (await service.snapshot())["counters"]
+    finally:
+        await service.aclose()
+        reset_for_tests()
+
+    assert counters["events.resource_changed"] == 3
+    assert counters["events.resource_changed.agents"] == 2
+    assert counters["events.run_started"] == 1
+    # Only contract kinds become metric names.
+    assert not any("not-a-kind" in name for name in counters)
+    assert result["summary"]["counters"]["events.resource_changed.agents"] == 2
+    trace = json.loads(Path(result["trace_path"]).read_text(encoding="utf-8"))["traceEvents"]
+    events_pid = next(
+        event["pid"]
+        for event in trace
+        if event["name"] == "process_name" and event["args"]["name"] == "events"
+    )
+    instants = [event for event in trace if event["ph"] == "i" and event["pid"] == events_pid]
+    assert [event["name"] for event in instants] == ["events.resource_changed.agents"] * 2
+    assert instants[0]["args"] == {"subscribers": 0}
 
 
 def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:

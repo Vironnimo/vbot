@@ -21,8 +21,16 @@ _FILE_URL_PATTERN = re.compile(r"/api/files/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 
 def projected_file_urls(value: Any, delivery: Any) -> list[str]:
     """List verified file capabilities in an already-sanitized public payload."""
-    urls: list[str] = []
-    seen: set[str] = set()
+    return verified_file_urls(file_url_candidates(value), delivery)
+
+
+def file_url_candidates(value: Any) -> list[str]:
+    """List distinct file capability URLs in a public payload, unverified.
+
+    Pure text scanning without filesystem access, so the Event Loop can decide
+    whether a payload needs :func:`verified_file_urls` at all.
+    """
+    urls: dict[str, None] = {}
 
     def visit(item: Any) -> None:
         if isinstance(item, dict):
@@ -33,13 +41,20 @@ def projected_file_urls(value: Any, delivery: Any) -> list[str]:
                 visit(child)
         elif isinstance(item, str):
             for url in _FILE_URL_PATTERN.findall(item):
-                token = url.removeprefix("/api/files/")
-                if url not in seen and delivery.resolve_token(token) is not None:
-                    seen.add(url)
-                    urls.append(url)
+                urls[url] = None
 
     visit(value)
-    return urls
+    return list(urls)
+
+
+def verified_file_urls(urls: list[str], delivery: Any) -> list[str]:
+    """Keep the URLs whose capability resolves to a current original file.
+
+    Verification reads the filesystem, so async callers run it on a worker pool.
+    """
+    return [
+        url for url in urls if delivery.resolve_token(url.removeprefix("/api/files/")) is not None
+    ]
 
 
 def _run_response(
@@ -49,6 +64,7 @@ def _run_response(
     sse_url: str | None = None,
     file_delivery: Any | None = None,
 ) -> JsonObject:
+    events = run.events
     response: JsonObject = {
         "run_id": run.id,
         "agent_id": run.agent_id,
@@ -58,10 +74,10 @@ def _run_response(
         "started_at": run.created_at,
         "iteration_count": run.iteration_count,
         "controls": run.controls(),
-        "controls_sequence": run.events[-1].sequence if run.events else 0,
+        "controls_sequence": run.last_sequence,
         "events": [
             remove_opaque_provider_metadata(event.to_dict(), file_delivery=file_delivery)
-            for event in run.events
+            for event in events
         ],
     }
     if final_message is not None:

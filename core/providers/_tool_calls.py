@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import string
@@ -389,25 +388,28 @@ def normalize_tool_call_ids(
     messages: list[JsonObject],
     profile: ToolCallIdProfile,
 ) -> list[JsonObject]:
-    """Return a target-wire copy with paired Tool call/result IDs normalized.
+    """Return a target-wire request view with paired Tool call/result IDs normalized.
 
     Canonical Session messages are Provider-origin evidence and must stay
-    immutable. This transform therefore deep-copies the complete request view,
-    allocates collision-free IDs across the outgoing request, and scopes result
-    correlation to the immediately preceding Assistant Tool batch. Reusing one
-    original ID in a later batch creates a fresh wire ID rather than aliasing
-    two logical calls.
+    immutable. This transform therefore copies on write: it returns a new list,
+    replaces each message whose IDs change with a copy (copying only the changed
+    Tool calls and Responses output items inside it), and shares every unchanged
+    message with the caller, so callers treat the result as read-only like the
+    input. It allocates collision-free IDs across the outgoing request and
+    scopes result correlation to the immediately preceding Assistant Tool
+    batch. Reusing one original ID in a later batch creates a fresh wire ID
+    rather than aliasing two logical calls.
     """
 
-    request_messages = copy.deepcopy(messages)
-    reserved_valid_ids = _reserved_valid_tool_call_ids(request_messages, profile)
+    request_messages = list(messages)
+    reserved_valid_ids = _reserved_valid_tool_call_ids(messages, profile)
     used_wire_ids: set[str] = set()
     active_result_ids: dict[str, list[str]] = {}
 
-    for message_index, message in enumerate(request_messages):
+    for message_index, message in enumerate(messages):
         role = message.get("role")
         if role == "assistant":
-            active_result_ids = _normalize_assistant_tool_call_ids(
+            request_messages[message_index], active_result_ids = _normalize_assistant_tool_call_ids(
                 message,
                 profile,
                 used_wire_ids=used_wire_ids,
@@ -420,7 +422,9 @@ def normalize_tool_call_ids(
             if isinstance(original_id, str):
                 mapped_ids = active_result_ids.get(original_id)
                 if mapped_ids:
-                    message["tool_call_id"] = mapped_ids.pop(0)
+                    wire_id = mapped_ids.pop(0)
+                    if wire_id != original_id:
+                        request_messages[message_index] = {**message, "tool_call_id": wire_id}
             continue
         active_result_ids = {}
 
@@ -454,13 +458,13 @@ def _normalize_assistant_tool_call_ids(
     used_wire_ids: set[str],
     reserved_valid_ids: set[str],
     message_index: int,
-) -> dict[str, list[str]]:
+) -> tuple[JsonObject, dict[str, list[str]]]:
     tool_calls = message.get("tool_calls")
     if not isinstance(tool_calls, list):
-        return {}
+        return message, {}
 
     result_ids: dict[str, list[str]] = {}
-    response_item_ids: dict[str, list[str]] = {}
+    wire_tool_calls: list[Any] | None = None
     for tool_call_index, tool_call in enumerate(tool_calls):
         if not isinstance(tool_call, dict):
             continue
@@ -474,13 +478,18 @@ def _normalize_assistant_tool_call_ids(
             reserved_valid_ids=reserved_valid_ids,
             occurrence=f"{message_index}:{tool_call_index}",
         )
-        tool_call["id"] = wire_id
         result_ids.setdefault(original_id, []).append(wire_id)
-        response_item_ids.setdefault(original_id, []).append(wire_id)
+        if wire_id != original_id:
+            if wire_tool_calls is None:
+                wire_tool_calls = list(tool_calls)
+            wire_tool_calls[tool_call_index] = {**tool_call, "id": wire_id}
 
+    wire_message = message
+    if wire_tool_calls is not None:
+        wire_message = {**message, "tool_calls": wire_tool_calls}
     if profile.rewrite_responses_output_items:
-        _rewrite_responses_output_tool_call_ids(message, response_item_ids)
-    return result_ids
+        wire_message = _rewrite_responses_output_tool_call_ids(wire_message, result_ids)
+    return wire_message, result_ids
 
 
 def _allocate_tool_call_id(
@@ -547,16 +556,17 @@ def _derive_tool_call_id(
 def _rewrite_responses_output_tool_call_ids(
     message: JsonObject,
     mapped_ids: dict[str, list[str]],
-) -> None:
+) -> JsonObject:
     reasoning_meta = message.get("reasoning_meta")
     if not isinstance(reasoning_meta, dict):
-        return
+        return message
     response_output = reasoning_meta.get(_RESPONSES_OUTPUT_META_KEY)
     if not isinstance(response_output, list):
-        return
+        return message
 
     remaining_ids = {original_id: list(wire_ids) for original_id, wire_ids in mapped_ids.items()}
-    for item in response_output:
+    wire_output: list[Any] | None = None
+    for item_index, item in enumerate(response_output):
         if not isinstance(item, dict) or item.get("type") != "function_call":
             continue
         original_id = item.get("call_id")
@@ -570,8 +580,18 @@ def _rewrite_responses_output_tool_call_ids(
         wire_id = wire_ids.pop(0)
         if wire_id == original_id:
             continue
-        item["call_id"] = wire_id
         # A Responses output item id is Provider-owned pairing state, separate
         # from ``call_id``. Replaying it after changing the call identity can
         # falsely pair a foreign function item with opaque reasoning.
-        item.pop("id", None)
+        wire_item = {key: value for key, value in item.items() if key != "id"}
+        wire_item["call_id"] = wire_id
+        if wire_output is None:
+            wire_output = list(response_output)
+        wire_output[item_index] = wire_item
+
+    if wire_output is None:
+        return message
+    return {
+        **message,
+        "reasoning_meta": {**reasoning_meta, _RESPONSES_OUTPUT_META_KEY: wire_output},
+    }

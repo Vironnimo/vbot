@@ -23,6 +23,7 @@ _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
     {
         "model.refresh_db",
         "performance.recording_stop",
+        "performance.heap",
         "data_store.snapshot_create",
         "skill.install",
     }

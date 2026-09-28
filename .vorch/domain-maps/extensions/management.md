@@ -39,7 +39,7 @@ The disabled set and config are persisted together under Settings, but their run
 - Any newly enabled name: perform one full `reload_extensions()` after persistence. A mixed enable/disable save needs no second disable pass because the rebuild reads the final persisted set.
 - Explicit reload: rebuild the whole layer even when the disabled set did not change, so disk edits/additions/deletions and repaired failures become visible.
 
-Successful explicit reload and Settings mutations that reload/enable/disable Extensions publish `resource_changed(kind="commands")` after the structural work. Config-only saves do not publish it because per-call values change without altering the Command catalog.
+Successful explicit reload and Settings mutations that reload/enable/disable Extensions publish `resource_changed(kind="commands")` and then an unscoped `resource_changed(kind="extensions")` (page descriptors) after the structural work. Config-only saves publish neither because per-call values change without altering the Command catalog or page registrations.
 
 ## Full reload sequence
 

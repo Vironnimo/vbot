@@ -1,4 +1,5 @@
 import { formatAgentAddress } from './agentAddress.js';
+import { noteInvalidation } from './clientMetrics.js';
 import {
   CONNECTION_REPLAY_STATUS_EPOCH_CHANGED,
   CONNECTION_REPLAY_STATUS_GAP,
@@ -175,6 +176,7 @@ export function createAppController({
   onAgentIdChanged = () => {},
   onReloadAgents,
   onReloadExtensionPages = async () => {},
+  onExtensionPageChange = () => {},
   onLoadDataStoreStatus = async () => {},
   onSetOnboardingAside,
   browserHistory = globalThis.history,
@@ -592,8 +594,16 @@ export function createAppController({
     }
 
     const kind = event.payload?.kind;
+    noteInvalidation(kind);
     if (kind === 'extensions') {
-      await onReloadExtensionPages();
+      // An owner-scoped change names data behind that Extension's page; an
+      // unscoped one follows a reload, whose page descriptors may differ.
+      const scope = event.payload?.scope;
+      if (typeof scope?.owner === 'string' && scope.owner) {
+        onExtensionPageChange(scope);
+      } else {
+        await onReloadExtensionPages();
+      }
     }
     if (kind === RESOURCE_KIND_DATA_STORE) {
       await onLoadDataStoreStatus();

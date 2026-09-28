@@ -103,9 +103,10 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     assert "usage" not in continuation[2]
     assert "timing" not in continuation[3]
     run = runtime.chat_runs.get(persisted[4]["run_id"])
-    [tool_result_event] = [event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT]
+    events = await runtime.timelines.events(run)
+    [tool_result_event] = [event for event in events if event.type == TOOL_CALL_RESULT_EVENT]
     assert tool_result_event.payload["timing"]["duration_ms"] >= 0
-    usage_events = [event for event in run.events if event.type == MODEL_STEP_USAGE_EVENT]
+    usage_events = [event for event in events if event.type == MODEL_STEP_USAGE_EVENT]
     assistant_turns = [message for message in persisted if message["role"] == "assistant"]
     assert [event.payload["usage"] for event in usage_events] == [
         message["usage"] for message in assistant_turns
@@ -173,14 +174,13 @@ async def test_sibling_calls_run_concurrently_and_persist_in_call_order_as_one_b
 
     messages = history(runtime)
     run = runtime.chat_runs.get(messages[-1].run_id)
+    events = await runtime.timelines.events(run)
     assert assistant.content == "Done"
     assert first_can_finish.is_set()
     assert [batch for batch in batches if "tool" in batch] == [["tool", "tool"]]
     assert [result["data"]["id"] for result in tool_results(messages)] == ["call_1", "call_2"]
     assert [
-        event.payload["tool_call"]["id"]
-        for event in run.events
-        if event.type == TOOL_CALL_RESULT_EVENT
+        event.payload["tool_call"]["id"] for event in events if event.type == TOOL_CALL_RESULT_EVENT
     ] == ["call_2", "call_1"]
 
 

@@ -217,3 +217,4 @@ export {
   sendLiveUiResult,
   openLiveCallSocket,
 } from './api/live.js';
+export { reportClientMetrics } from './api/performance.js';

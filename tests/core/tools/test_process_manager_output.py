@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import time
+import weakref
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -49,13 +51,20 @@ async def test_spawn_captures_stdout_and_stderr_as_separate_streams(manager) -> 
 
 
 @pytest.mark.asyncio
-async def test_stdin_is_closed_at_start_and_pipes_are_released_at_exit(manager) -> None:
+async def test_stdin_is_closed_at_start_and_execution_resources_are_released_at_exit(
+    manager,
+) -> None:
     reads = "sys.stdin.read(), sys.stdin.readline(), sys.stdin.buffer.read()"
     process_id = await spawn(manager, f"import sys; assert not any(({reads})); print('eof')")
     tracked = manager.get_process(process_id, AGENT_A)
-    assert tracked.proc.stdin is None
+    assert tracked.proc is not None and tracked.proc.stdin is None
+    process = weakref.ref(tracked.proc)
+    transport = getattr(tracked.proc, "_transport", None)
 
-    await finish(manager, process_id)
+    # Output no poll consumed before the exit stays readable afterwards, once.
+    polled = await finish(manager, process_id)
+    assert stream_text(polled, "stdout").strip() == "eof"
+    assert (await manager.poll(process_id, AGENT_A))["chunks"] == []
 
     result = await manager.snapshot(process_id, AGENT_A)
     assert result["status"] == "completed"
@@ -63,9 +72,18 @@ async def test_stdin_is_closed_at_start_and_pipes_are_released_at_exit(manager) 
     assert str(result["output"]).strip() == "eof"
     assert "stdin_open" not in result
     assert "waiting_for_input" not in result
-    pipes = getattr(getattr(tracked.proc, "_transport", None), "_pipes", None)
-    if isinstance(pipes, dict):
-        assert pipes == {}
+    assert str((await manager.log(process_id, AGENT_A))["output"]).strip() == "eof"
+    # The finished process keeps its results, but not what only a running
+    # process needs: the asyncio process, its pipes and readers become garbage.
+    assert tracked.proc is None
+    assert tracked.stdout_task is None and tracked.stderr_task is None
+    assert not tracked.output_decoders and not tracked.output_chunks
+    if transport is not None:
+        assert transport.is_closing()
+        assert getattr(transport, "_pipes", {}) == {}
+    del transport
+    gc.collect()
+    assert process() is None
 
 
 @pytest.mark.asyncio

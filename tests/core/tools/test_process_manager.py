@@ -107,7 +107,7 @@ async def test_closing_kills_running_and_pending_launches_and_closes_admission(
         for process_id in (running_id, launched_id):
             tracked = manager.get_process(process_id, AGENT_A)
             assert tracked.status == "killed"
-            assert tracked.proc.returncode is not None
+            assert tracked.exit_code is not None
             assert tracked.wait_task is not None and tracked.wait_task.done()
         with pytest.raises(ProcessManagerError):
             await spawn(manager)
@@ -157,7 +157,7 @@ async def test_synchronous_stop_kills_running_processes_and_retires_a_late_launc
         for process_id in (running_id, launched_id):
             tracked = manager.get_process(process_id, AGENT_A)
             assert tracked.status == "killed"
-            assert tracked.proc.returncode is not None
+            assert tracked.exit_code is not None
         with pytest.raises(ProcessManagerError):
             await spawn(manager)
     finally:
@@ -249,7 +249,7 @@ async def test_kill_stops_the_process_and_records_whether_the_user_asked(manager
 
     tracked = manager.get_process(process_id, AGENT_A)
     assert tracked.status == "killed"
-    assert tracked.proc.returncode is not None
+    assert tracked.exit_code is not None
     assert tracked.finished_at is not None
     assert tracked.cancelled_by_user is by_user
 
@@ -332,14 +332,14 @@ async def test_kill_failure_keeps_process_retryable(manager, monkeypatch, shutdo
             else:
                 await manager.cancel_scope_async(SCOPE_A)
         assert tracked.status == "running"
-        assert tracked.proc.returncode is None
+        assert tracked.proc is not None and tracked.proc.returncode is None
         assert tracked.finished_at is None
     if shutdown:
         await manager.aclose()
     else:
         await manager.cancel_scope_async(SCOPE_A)
     assert tracked.status == "killed"
-    assert tracked.proc.returncode is not None
+    assert tracked.exit_code is not None
 
 
 @pytest.mark.asyncio
@@ -377,7 +377,7 @@ async def test_kill_during_reader_drain_preserves_real_exit(manager, monkeypatch
     process_id = await spawn(manager, f"raise SystemExit({code})")
     tracked = manager.get_process(process_id, AGENT_A)
     await asyncio.wait_for(draining.wait(), 5)
-    assert tracked.proc.returncode == code
+    assert tracked.proc is not None and tracked.proc.returncode == code
     assert tracked.status == "running"
     kill = None
     try:

@@ -29,7 +29,7 @@ from core.settings.normalizers import normalize_model_task_settings
 from core.settings.settings import available_timezone_names, effective_timezone_name
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
-from server.events import RESOURCE_KIND_COMMANDS
+from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS
 from server.rpc._mutations import serialized_mutation
 from server.rpc.connection_methods import custom_provider_items
 from server.rpc.dispatcher import RpcMethodHandler
@@ -164,7 +164,7 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
     if changed_paths:
         _LOGGER.info("Settings paths updated (paths=%s)", ",".join(changed_paths))
     if commands_changed:
-        publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
+        _publish_extension_layer_changed(state)
     return {
         "changed": list(changed_paths),
         "changes": changes,
@@ -240,8 +240,18 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             details,
         )
     if commands_changed:
-        publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
+        _publish_extension_layer_changed(state)
     return response
+
+
+def _publish_extension_layer_changed(state: Any) -> None:
+    """Invalidate what a reloaded, enabled or disabled Extension changed.
+
+    Its Commands and page registrations (descriptors, epochs) differ, like
+    after an explicit ``extensions.reload``.
+    """
+    publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
+    publish_resource_changed(state, RESOURCE_KIND_EXTENSIONS)
 
 
 def _validate_public_settings_candidate(

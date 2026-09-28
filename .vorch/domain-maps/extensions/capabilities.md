@@ -20,7 +20,7 @@ The hook set is closed: `run_start`, `context`, `tool_call`, `tool_result`, and 
 
 Chat owns exact fire-points, `Replace` validation, Tool lifecycle events, and how decisions become model-visible results. Changes therefore require reading `chat/run-execution.md` and the relevant tests as well as this reference.
 
-Chat passes `context` a shallow copy of each top-level message dict. Replacing or mutating those dicts is request-local, but mutating nested objects can still affect shared values. The public `tool_call_started` lifecycle event is emitted after the `tool_call` decision pipeline so its arguments reflect any accepted `Modify`.
+`dispatch_context` hands the handlers a new list with a shallow copy of each top-level message dict, made only when a `context` handler is registered (otherwise Chat's own request list passes through uncopied). Replacing or mutating those dicts is request-local, but mutating nested objects can still affect shared values (`tests/core/extensions/test_dispatch.py`). The public `tool_call_started` lifecycle event is emitted after the `tool_call` decision pipeline so its arguments reflect any accepted `Modify`.
 
 ## Slash Commands
 

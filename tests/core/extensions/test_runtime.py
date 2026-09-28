@@ -130,6 +130,7 @@ async def test_reload_retires_and_detaches_the_old_layer_before_installing_the_n
     identity = old.registration_identity("owned")
     old.host_for(identity)
     assert old.page_declarations() != []
+    assert old.current_page(identity, "board") is not None
     old_module = sys.modules["vbot_ext.owned"]
     real_aload = ExtensionRegistry.aload
     loading, finish_loading = asyncio.Event(), asyncio.Event()
@@ -164,6 +165,7 @@ async def test_reload_retires_and_detaches_the_old_layer_before_installing_the_n
         with pytest.raises(ValueError):
             old.management("owned")
         assert old.page_declarations() == []
+        assert old.current_page(identity, "board") is None
         # Only the Tools it registered are detached; its record is left as it was.
         assert [tool.name for tool in tools.list_tools()] == ["read"]
         assert tools.get("read").handler is builtin_read

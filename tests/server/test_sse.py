@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,7 +13,9 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
-from core.runs import ASSISTANT_OUTPUT_EVENT, Run
+from core.performance import PerformanceService
+from core.performance.performance import reset_for_tests
+from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT, ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import SessionAddress
 from core.tools import FileReadState, register_read_tool
 from server._streams import _sse_run_events
@@ -45,6 +47,7 @@ EXPECTED_SSE_EVENT_NAMES = [
 def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_path: Path) -> None:
     runtime, workspace = _read_tool_runtime(tmp_path)
     app = create_app(runtime=cast(Any, runtime))
+    cast(_GatedStubAdapter, runtime.adapter).gate = lambda: _until_sse_follows(app)
 
     with TestClient(app) as client:
         response = client.get(_stream_chat(client)["sse_url"])
@@ -180,34 +183,69 @@ def test_streaming_chat_projects_completed_path_line_in_stable_event(tmp_path: P
     ]
 
 
-def test_sse_endpoint_replays_after_the_requested_sequence(tmp_path: Path) -> None:
-    runtime, _workspace = _read_tool_runtime(tmp_path)
+def test_sse_endpoint_replays_a_finished_run_ending_after_the_requested_sequence(
+    tmp_path: Path,
+) -> None:
+    runtime = StubRuntime(tmp_path, StubAdapter())
     app = create_app(runtime=cast(Any, runtime))
 
+    async def execute(run: Run) -> str:
+        run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "Hel"})
+        run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "lo"})
+        for index in range(4):
+            run.emit("visible", {"index": index})
+        return "done"
+
+    async def finished_run() -> Run:
+        address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+        run = await app.state.chat_runs.start(address, execute)
+        await run.wait()
+        return cast(Run, run)
+
     with TestClient(app) as client:
-        sse_url = _stream_chat(client)["sse_url"]
-        # (query, Last-Event-ID header) -> number of skipped timeline events.
+        assert client.portal is not None
+        client.post(
+            "/api/rpc",
+            json={
+                "method": "session.create",
+                "params": {"agent_id": "coder", "session_id": "session-one"},
+            },
+        )
+        sse_url = f"/api/runs/{client.portal.call(finished_run).id}/events"
+        # (query, Last-Event-ID header) -> replayed sequences. The finished Run
+        # retains its ending from sequence 4: run_started and the deltas left.
         controls = [
-            ("?after_sequence=3", None, 3),
-            ("", "4", 4),
+            ("", None, [4, 5, 6, 7, 8]),
+            ("?after_sequence=5", None, [6, 7, 8]),
+            ("", "6", [7, 8]),
             # An explicit after_sequence wins over the reconnect header.
-            ("?after_sequence=2", "5", 2),
-            # Malformed or negative cursors clamp to a full replay.
-            ("?after_sequence=bad", None, 0),
-            ("", "-8", 0),
+            ("?after_sequence=5", "7", [6, 7, 8]),
+            # Malformed or negative cursors clamp to the whole retained ending.
+            ("?after_sequence=bad", None, [4, 5, 6, 7, 8]),
+            ("", "-8", [4, 5, 6, 7, 8]),
+            # Nothing is left after the terminal event; the stream just closes.
+            ("?after_sequence=8", None, []),
         ]
         replays = [
-            _event_names(
+            _parse_sse(
                 client.get(
                     f"{sse_url}{query}",
                     headers=None if last_event_id is None else {"Last-Event-ID": last_event_id},
                 ).text
             )
-            for query, last_event_id, _skipped in controls
+            for query, last_event_id, _expected in controls
         ]
         missing_run = client.get("/api/runs/missing/events")
 
-    assert replays == [EXPECTED_SSE_EVENT_NAMES[skipped:] for _query, _header, skipped in controls]
+    assert [[event["data"]["sequence"] for event in replay] for replay in replays] == [
+        expected for _query, _header, expected in controls
+    ]
+    assert all(
+        (event["id"], event["event"]) == (str(event["data"]["sequence"]), event["data"]["type"])
+        for replay in replays
+        for event in replay
+    )
+    assert [event["event"] for event in replays[0]] == ["visible"] * 4 + ["run_completed"]
     assert missing_run.status_code == 404
 
 
@@ -237,14 +275,23 @@ async def test_sse_stream_close_removes_run_subscriber() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sse_stream_emits_heartbeat_while_run_is_quiet() -> None:
+async def test_sse_stream_emits_heartbeat_while_run_is_quiet(tmp_path: Path) -> None:
+    reset_for_tests()
     run = Run(run_id="run-heartbeat", agent_id="coder", session_id="session-one")
     stream = _sse_run_events(run, heartbeat_interval_seconds=0.001)
 
     heartbeat = await asyncio.wait_for(anext(stream), timeout=1)
+    run.emit("visible", {"content": "hello"})
+    while "event: visible" not in await asyncio.wait_for(anext(stream), timeout=1):
+        pass
 
     assert heartbeat == "event: heartbeat\ndata: {}\n\n"
     assert run.subscriber_count == 1
+    # Only Run events count as sent SSE events; heartbeats are transport-only.
+    service = PerformanceService(tmp_path / "performance")
+    assert (await service.snapshot())["counters"]["events.sse"] == 1
+    await service.aclose()
+    reset_for_tests()
 
     await stream.aclose()
 
@@ -293,9 +340,33 @@ async def _read_next_sse_event(stream: AsyncIterator[str]) -> str:
     return await anext(stream)
 
 
+async def _until_sse_follows(app: Any) -> None:
+    """Wait until an SSE client follows the running Run live.
+
+    The server's WebSocket bridge follows every Run, so a second subscriber is
+    the SSE client. A finished Run only replays its ending, so tests asserting a
+    complete streamed timeline hold the first Model answer until then.
+    """
+    while not any(run.subscriber_count > 1 for run in app.state.chat_runs.active_runs()):
+        await asyncio.sleep(0.001)
+
+
+class _GatedStubAdapter(StubAdapter):
+    """StubAdapter whose first stream waits for an optional ``gate``."""
+
+    gate: Callable[[], Awaitable[None]] | None = None
+
+    async def stream(self, messages: list[Any], *, model_id: str, **kwargs: Any) -> Any:
+        gate, self.gate = self.gate, None
+        if gate is not None:
+            await gate()
+        async for delta in super().stream(messages, model_id=model_id, **kwargs):
+            yield delta
+
+
 def _read_tool_runtime(tmp_path: Path) -> tuple[StubRuntime, Path]:
     """A runtime whose two-turn stream reads ``note.txt`` and then answers."""
-    runtime = StubRuntime(tmp_path, StubAdapter(stream_deltas=_test_stream_turns()))
+    runtime = StubRuntime(tmp_path, _GatedStubAdapter(stream_deltas=_test_stream_turns()))
     register_read_tool(
         runtime.tools,
         attachment_store=None,
@@ -329,14 +400,6 @@ def _stream_chat(
         },
     )
     return cast(dict[str, Any], response.json()["result"])
-
-
-def _event_names(body: str) -> list[str]:
-    events = _parse_sse(body)
-    event_names = [event["event"] for event in events]
-    assert [event["id"] for event in events] == [str(event["data"]["sequence"]) for event in events]
-    assert event_names == [event["data"]["type"] for event in events]
-    return event_names
 
 
 def _parse_sse(body: str) -> list[dict[str, Any]]:

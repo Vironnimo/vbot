@@ -7,7 +7,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 
 import pytest
 
@@ -51,7 +51,7 @@ def make_tracked() -> tuple[TrackedProcess, dict[int, PipeTransport]]:
         stdout=stdout,
         stderr=stderr,
         returncode=None,
-        _transport=SimpleNamespace(get_pipe_transport=pipes.get),
+        _transport=SimpleNamespace(get_pipe_transport=pipes.get, close=lambda: None),
     )
     tracked = TrackedProcess(
         process_id="proc_test",
@@ -130,8 +130,11 @@ async def test_slow_spool_bounds_readers_and_drains_paused_pipes_after_exit(
     pipes[2].reader.feed_data(stderr)
     assert pipes[1].paused and pipes[2].paused
     pipes[1].pending = b"pending\xe2"
-    tracked.stdout_task = asyncio.create_task(manager._read_stream(tracked, "stdout"))
-    tracked.stderr_task = asyncio.create_task(manager._read_stream(tracked, "stderr"))
+    readers = (
+        asyncio.create_task(manager._read_stream(tracked, "stdout")),
+        asyncio.create_task(manager._read_stream(tracked, "stderr")),
+    )
+    tracked.stdout_task, tracked.stderr_task = readers
     monkeypatch.setattr(process_module, "PROCESS_OUTPUT_DRAIN_SECONDS", 0.01)
     # _release_process_pipe_references normally closes the real subprocess
     # transport as well; this fake already records its two pipe closes above.
@@ -148,7 +151,7 @@ async def test_slow_spool_bounds_readers_and_drains_paused_pipes_after_exit(
         # public API deliberately has no queued-byte count.
         assert len(pipes[1].reader._buffer) == len(stdout) - 4096  # type: ignore[attr-defined]
         assert len(pipes[2].reader._buffer) == len(stderr) - 4096  # type: ignore[attr-defined]
-        tracked.proc.returncode = 7  # type: ignore[misc]
+        cast(Any, tracked.proc).returncode = 7
         tracked.wait_task = asyncio.create_task(manager._watch_process(tracked))
         await asyncio.wait_for(pipes[1].closed.wait(), 2)
         await asyncio.wait_for(pipes[2].closed.wait(), 2)
@@ -186,7 +189,7 @@ async def test_slow_spool_bounds_readers_and_drains_paused_pipes_after_exit(
         for pipe in pipes.values():
             if not pipe.closed.is_set():
                 pipe.close()
-        await asyncio.gather(tracked.stdout_task, tracked.stderr_task, return_exceptions=True)
+        await asyncio.gather(*readers, return_exceptions=True)
         if tracked.wait_task is not None:
             await asyncio.gather(tracked.wait_task, return_exceptions=True)
         if finishing is not None:

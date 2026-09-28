@@ -41,6 +41,8 @@ from cli.debug_management import (
 from cli.log_management import log_read
 from cli.memory_management import memory_add, memory_list, memory_remove, memory_replace
 from cli.performance_management import (
+    performance_heap,
+    performance_history,
     performance_record_start,
     performance_record_stop,
     performance_recordings,
@@ -474,6 +476,10 @@ def dispatch_performance_command(
         return performance_record_stop(instance)
     if args.command == "recordings":
         return performance_recordings(instance, args.limit)
+    if args.command == "heap":
+        return performance_heap(instance, args.top)
+    if args.command == "history":
+        return performance_history(instance, args.hours, args.at, args.metric)
     raise ValueError(f"Unsupported performance command: {args.command}")
 
 

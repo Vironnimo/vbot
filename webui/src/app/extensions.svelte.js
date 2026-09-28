@@ -1,5 +1,5 @@
 import { listExtensionPages } from '$lib/api.js';
-import { onMount } from 'svelte';
+import { onMount, tick } from 'svelte';
 
 export function createAppExtensions(context) {
   const EXTENSION_THEME_TOKENS = Object.freeze({
@@ -18,7 +18,10 @@ export function createAppExtensions(context) {
 
   let extensionPagesRefreshQueued = false;
 
-  let extensionPageInvalidationRevision = $state(0);
+  // The open Extension page subscribes here (`ExtensionPage.svelte`).
+  const invalidationListeners = [];
+
+  let invalidationRevision = 0;
 
   let extensionPageRoute = $state('');
 
@@ -48,6 +51,36 @@ export function createAppExtensions(context) {
     })),
   ]);
 
+  // `owner` null asks whichever page is open to refresh everything; an owner
+  // limits the invalidation to that Extension's page and `change` names the
+  // records it changed.
+  function invalidatePages(owner, change = null) {
+    const invalidation = Object.freeze({
+      owner,
+      change,
+      revision: ++invalidationRevision,
+    });
+    for (const listener of [...invalidationListeners]) listener(invalidation);
+  }
+
+  function subscribePageInvalidations(listener) {
+    invalidationListeners.push(listener);
+    return () => {
+      const index = invalidationListeners.indexOf(listener);
+      if (index >= 0) invalidationListeners.splice(index, 1);
+    };
+  }
+
+  // A scoped Extension change: data behind the owner's page changed, while
+  // its descriptors did not, so they are not fetched again.
+  function publishPageChange(scope) {
+    invalidatePages(scope.owner, {
+      resource: scope.resource,
+      ids: scope.ids,
+      revision: scope.revision,
+    });
+  }
+
   // Page descriptors may change after an Extension reload or reconnect. At
   // most one request runs at once, with one follow-up request coalescing any
   // burst. This fetches descriptors only; it never repeats page mutations.
@@ -63,9 +96,12 @@ export function createAppExtensions(context) {
         try {
           const result = await listExtensionPages();
           extensionPages = Array.isArray(result?.pages) ? result.pages : [];
-          extensionPageInvalidationRevision += 1;
           updated = true;
           context.onPagesLoaded?.();
+          // A replaced descriptor reloads its page first; only a page that
+          // stays open is asked to refresh.
+          await tick();
+          invalidatePages(null);
         } catch {
           // Keep the last valid descriptors while a transient RPC error clears.
         }
@@ -120,9 +156,8 @@ export function createAppExtensions(context) {
     get extensionPages() {
       return extensionPages;
     },
-    get extensionPageInvalidationRevision() {
-      return extensionPageInvalidationRevision;
-    },
+    subscribePageInvalidations,
+    publishPageChange,
     get extensionPageRoute() {
       return extensionPageRoute;
     },

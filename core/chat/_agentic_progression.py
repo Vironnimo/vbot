@@ -298,7 +298,12 @@ class AgenticProgression:
             if pending_notes:
                 messages.extend(_notes_to_request_messages(pending_notes))
             extension_registry = self._dependencies.get_extension_registry()
-            messages_for_request = [dict(message) for message in messages]
+            # The request shares the live message dicts read-only: context hooks
+            # receive their own copies, image limiting copies on write, and
+            # Provider adapters never mutate the messages they are sent. Image
+            # limiting always returns a new list, so later in-place updates of
+            # the live list leave this request view unchanged.
+            messages_for_request = messages
             if extension_registry is not None:
                 session.begin_defer_notes()
                 extension_ctx = HookContext(
@@ -310,7 +315,7 @@ class AgenticProgression:
                 try:
                     messages_for_request = await extension_registry.dispatch_context(
                         extension_ctx,
-                        messages=messages_for_request,
+                        messages=messages,
                     )
                 finally:
                     async with self._dependencies.sessions.write_lock(session_address):
