@@ -218,10 +218,10 @@ export function createChatController({
       if (preferred) {
         selectAgent(chatState, preferred);
       }
-      selectedAgentId = setAgents(chatState, result?.agents ?? [], {
+      selectedAgentId = setAgents(chatState, result.agents, {
         preserveSessionSelection,
       });
-      onAgentsChanged(result?.agents ?? []);
+      onAgentsChanged(result.agents);
       if (selectedAgentId) {
         onAgentSelected(selectedAgentId);
       }
@@ -500,8 +500,7 @@ export function createChatController({
       if (requestVersion !== commandsLoadVersion) {
         return false;
       }
-      const items = Array.isArray(result?.items) ? result.items : [];
-      chatState.availableSkills = items
+      chatState.availableSkills = result.items
         .filter(
           (item) => typeof item?.name === 'string' && item.name.length > 0,
         )
