@@ -479,8 +479,10 @@ class _PageRegistry:
     def is_registration_current(self, identity: Any) -> bool:
         return self.current and identity == self.identity
 
-    def page_declarations(self) -> list[tuple[Any, Any, Path]]:
-        return [(self.identity, SimpleNamespace(page_id="main"), Path("/page/index.html"))]
+    def current_page(self, identity: Any, page_id: str) -> tuple[Any, Path] | None:
+        if not self.is_registration_current(identity) or page_id != "main":
+            return None
+        return SimpleNamespace(page_id="main"), Path("/page/index.html")
 
     def host_for(self, identity: Any) -> Any:
         if not self.is_registration_current(identity):
@@ -750,11 +752,11 @@ async def test_extension_page_run_reports_verified_replay_watermark(scenario: st
             )
 
     class Registry(_PageRegistry):
-        def page_declarations(self) -> list[tuple[Any, Any, Path]]:
+        def current_page(self, identity: Any, page_id: str) -> tuple[Any, Path] | None:
             # Events the Run emits while ownership is re-verified belong to replay.
             if groups.reads:
                 run.last_sequence = 14
-            return super().page_declarations()
+            return super().current_page(identity, page_id)
 
     class Delivery:
         def open_extension_run(self, **kwargs: Any) -> Any:

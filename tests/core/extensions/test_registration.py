@@ -338,8 +338,15 @@ def test_page_declarations_are_checked_and_scoped_to_the_live_registry_epoch(
     assert (identity.name, page.page_id, path) == ("page_owner", "board", entry.resolve())
     assert registry.is_registration_current(identity)
     assert registry.registration_identity("page_owner") == identity
+    assert registry.current_page(identity, "board") == (page, path)
+    assert registry.current_page(identity, "other") is None
+    # The declaration is registration-bound; only listings require the entry file.
+    entry.unlink()
+    assert registry.page_declarations() == []
+    assert registry.current_page(identity, "board") == (page, path)
     replacement = ExtensionRegistry.load(tmp_path / "extensions")
     assert not replacement.is_registration_current(identity)
+    assert replacement.current_page(identity, "board") is None
 
     api = ExtensionAPI("example", ExtensionDeclarations(), config={}, logger=None)
     for unsafe_entry in ("../index.html", "/index.html", "index.js"):

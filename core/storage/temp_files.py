@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import stat
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -28,7 +29,7 @@ TEMPORARY_FILE_RETENTION: Mapping[str, timedelta] = {
 TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS = 60.0
 _SUFFIX_PATTERN = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")
 _CATEGORY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-# A sweep lists and stats every retained file; on a busy disk that takes seconds,
+# A sweep lists every retained file (more than ten thousand on a busy install),
 # so background sweeps never run on the Event Loop.
 _SWEEP_WORKERS = BoundedWorkerPool(name="temporary-files", max_workers=1)
 
@@ -141,12 +142,14 @@ class TemporaryFileManager:
     def _sweep(self, stopping: Event | None) -> None:
         cutoff_epoch = time.time()
         with self._lock:
-            active = set(self._active)
+            # Compared like ``Path`` equality: case-insensitive on Windows.
+            active = {os.path.normcase(path) for path in self._active}
 
         for category, retention in self._retention.items():
             category_dir = self.root / category
             try:
-                candidates = list(category_dir.iterdir())
+                with os.scandir(category_dir) as listing:
+                    entries = list(listing)
             except FileNotFoundError:
                 continue
             except OSError as error:
@@ -158,18 +161,25 @@ class TemporaryFileManager:
                 continue
 
             expires_before = cutoff_epoch - retention.total_seconds()
-            for candidate in candidates:
+            for entry in entries:
                 if stopping is not None and stopping.is_set():
                     return
-                if candidate in active:
+                if os.path.normcase(entry.path) in active:
                     continue
                 try:
-                    if candidate.is_file() and candidate.stat().st_mtime < expires_before:
+                    # Listing data preselects without a per-file system call on
+                    # Windows (one stat elsewhere); it can lag behind a file
+                    # still open elsewhere, so a fresh stat confirms each removal.
+                    if not entry.is_file() or entry.stat().st_mtime >= expires_before:
+                        continue
+                    candidate = Path(entry.path)
+                    current = candidate.stat()
+                    if stat.S_ISREG(current.st_mode) and current.st_mtime < expires_before:
                         candidate.unlink()
                 except OSError as error:
                     _LOGGER.warning(
                         "Temporary-file cleanup failed path=%s: %s",
-                        candidate,
+                        entry.path,
                         error,
                     )
 

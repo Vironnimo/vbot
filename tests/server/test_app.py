@@ -291,8 +291,10 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
         def is_registration_current(self, candidate: Any) -> bool:
             return self.current and candidate == identity
 
-        def page_declarations(self) -> list[tuple[Any, Any, Path]]:
-            return [(identity, SimpleNamespace(page_id="main"), tmp_path / "index.html")]
+        def current_page(self, candidate: Any, page_id: str) -> tuple[Any, Path] | None:
+            if not self.is_registration_current(candidate) or page_id != "main":
+                return None
+            return SimpleNamespace(page_id="main"), tmp_path / "index.html"
 
         def host_for(self, candidate: Any) -> Any:
             if not self.is_registration_current(candidate):

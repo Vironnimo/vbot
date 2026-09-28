@@ -8,6 +8,7 @@ import threading
 import time
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -166,15 +167,15 @@ async def test_background_sweep_keeps_the_event_loop_responsive(
     category_dir = lease.path.parent
     entered = threading.Event()
     release = threading.Event()
-    original_iterdir = Path.iterdir
+    original_scandir = os.scandir
 
-    def slow_iterdir(path: Path):
+    def slow_scandir(path: Any = ".") -> Any:
         if path == category_dir:
             entered.set()
             release.wait(timeout=5)
-        return original_iterdir(path)
+        return original_scandir(path)
 
-    monkeypatch.setattr(Path, "iterdir", slow_iterdir)
+    monkeypatch.setattr(os, "scandir", slow_scandir)
 
     manager.start()
     try:
