@@ -41,6 +41,7 @@ from core.providers.adapter import (
     TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD,
     TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
     TOOL_CALL_REJECTION_FIELD,
+    neutralize_system_reminder_tags,
     normalize_tool_call_ids,
     tool_result_content_blocks,
     tool_result_text,
@@ -188,9 +189,10 @@ def _assistant_message_to_input_items(message: dict[str, Any]) -> list[dict[str,
     response_output = _response_output_from_meta(message.get("reasoning_meta"))
     if response_output:
         # Stateless Responses continuation is an item protocol, not a message
-        # reconstruction protocol. Preserve every output item verbatim so opaque
+        # reconstruction protocol. Preserve every output item so opaque
         # reasoning, assistant phase, program items, and future item kinds keep
-        # their original ordering and identifiers.
+        # their original ordering and identifiers; only readable text is
+        # neutralized (``_replay_item``).
         return _safe_response_output_items(response_output, message.get("tool_calls"))
 
     input_items: list[dict[str, Any]] = []
@@ -217,13 +219,13 @@ def _safe_response_output_items(
         or TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD in tool_call
         for tool_call in tool_calls
     ):
-        return [dict(item) for item in response_output]
+        return [_replay_item(item) for item in response_output]
 
     safe_items: list[dict[str, Any]] = []
     tool_call_index = 0
     for item in response_output:
         if item.get("type") != "function_call" or tool_call_index >= len(tool_calls):
-            safe_items.append(dict(item))
+            safe_items.append(_replay_item(item))
             continue
         tool_call = tool_calls[tool_call_index]
         argument_sequence = _argument_sequence_at(tool_calls, tool_call_index)
@@ -241,6 +243,44 @@ def _safe_response_output_items(
         _tool_call_to_function_call(tool_call) for tool_call in tool_calls[tool_call_index:]
     )
     return safe_items
+
+
+# The readable text blocks of replayed output items, by item type and field.
+_READABLE_REPLAY_BLOCKS: dict[str, tuple[tuple[str, str], ...]] = {
+    "message": (("content", "output_text"),),
+    "reasoning": (("summary", "summary_text"), ("content", "reasoning_text")),
+}
+
+
+def _replay_item(item: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a stored output item for replay with its readable text neutralized.
+
+    Assistant ``output_text`` and readable Reasoning (``summary_text``,
+    ``reasoning_text``) get look-alike System Reminder tags neutralized, as
+    Chat does for the Assistant text it replays itself; encrypted content,
+    identifiers and every other item kind replay verbatim. The rewrite is
+    deterministic, so replayed history keeps its prompt-cache prefix.
+    """
+
+    replayed = dict(item)
+    for field, block_type in _READABLE_REPLAY_BLOCKS.get(str(item.get("type")), ()):
+        blocks = item.get(field)
+        if not isinstance(blocks, list):
+            continue
+        neutralized = [_neutralized_block(block, block_type) for block in blocks]
+        if any(new is not old for new, old in zip(neutralized, blocks, strict=True)):
+            replayed[field] = neutralized
+    return replayed
+
+
+def _neutralized_block(block: Any, block_type: str) -> Any:
+    if not isinstance(block, Mapping) or block.get("type") != block_type:
+        return block
+    text = block.get("text")
+    if not isinstance(text, str):
+        return block
+    neutralized = neutralize_system_reminder_tags(text)
+    return block if neutralized == text else {**block, "text": neutralized}
 
 
 def _argument_sequence_at(
@@ -412,7 +452,7 @@ def _reasoning_meta_input_items(reasoning_meta: Any) -> list[dict[str, Any]]:
     for key in _REASONING_META_KEYS:
         items = reasoning_meta.get(key)
         if isinstance(items, list):
-            return [dict(item) for item in items if _is_reasoning_item(item)]
+            return [_replay_item(item) for item in items if _is_reasoning_item(item)]
     return []
 
 

@@ -18,6 +18,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_TOOL_CALLS,
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
+    neutralize_system_reminder_tags,
     normalize_tool_call_candidates,
     tool_result_content_blocks,
     tool_result_function_response,
@@ -27,13 +28,29 @@ from core.providers.errors import (
 )
 
 
+def _replay_part(part: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a stored Gemini part for replay with its readable unsigned text neutralized.
+
+    A signed part (``thoughtSignature``) replays verbatim; the text of any other
+    part gets look-alike System Reminder tags neutralized, as Chat does for the
+    Assistant text it replays itself. The rewrite is deterministic, so replayed
+    history keeps its prompt-cache prefix.
+    """
+
+    replayed = copy.deepcopy(dict(part))
+    text = replayed.get("text")
+    if isinstance(text, str) and not ({"thoughtSignature", "thought_signature"} & replayed.keys()):
+        replayed["text"] = neutralize_system_reminder_tags(text)
+    return replayed
+
+
 def _to_gemini_content(message: Mapping[str, Any]) -> tuple[dict[str, Any] | None, int]:
     role = message.get("role")
     if role == "assistant":
         replay = message.get("reasoning_meta")
         if isinstance(replay, Mapping) and isinstance(replay.get("gemini_parts"), list):
             replay_parts = [
-                copy.deepcopy(part) for part in replay["gemini_parts"] if isinstance(part, Mapping)
+                _replay_part(part) for part in replay["gemini_parts"] if isinstance(part, Mapping)
             ]
             if replay_parts:
                 return {"role": "model", "parts": replay_parts}, 0

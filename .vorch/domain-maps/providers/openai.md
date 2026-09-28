@@ -43,7 +43,7 @@ Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenA
 ### Platform Responses (`api-key` connection, selected Models)
 
 - A Model whose `metadata.openai.wire_policies.api-key.protocol` is `responses` uses public `POST /responses`; durable profiles cover GPT-5.5, the `gpt-5.6` alias, GPT-5.6 Sol/Terra/Luna, and GPT-6 Sol/Luna. Unprofiled Platform Models remain on Chat Completions.
-- Requests use the shared Responses item protocol with `store: false`. Assistant history replays each original output item verbatim from `reasoning_meta.response_output`, preserving encrypted reasoning, ids, Tool items, ordering, and assistant `phase`; reconstruction exists only for legacy Sessions that predate item capture.
+- Requests use the shared Responses item protocol with `store: false`. Assistant history replays each original output item from `reasoning_meta.response_output`, preserving encrypted reasoning, ids, Tool items, ordering, and assistant `phase`, with look-alike System Reminder tags neutralized only in readable `output_text`, `summary_text` and `reasoning_text` (`chat/request-building.md`); reconstruction exists only for legacy Sessions that predate item capture.
 - Structured `error`, `response.error`, and `response.failed` events use the shared Responses error classifier. Retryable failures may restart only before visible output; `response.incomplete` instead completes with a safe non-Tool terminal outcome.
 - Public Responses may send native PDF `input_file` parts. Its optional request-parameter set is distinct from the private subscription wire.
 
