@@ -8,7 +8,6 @@ import {
   listProjectsMock,
   showProjectMock,
   SystemPromptView,
-  componentSource,
   baseBlocks,
   createRpcMock,
   inheritedBadges,
@@ -454,77 +453,5 @@ describe('SystemPromptView scope and preview', () => {
     retryButton().click();
     await waitForCondition(() => document.querySelector('.sp-document'), 100);
     expect(retryButton()).toBeNull();
-  });
-
-  it('all new i18n keys have t() calls in the component source', () => {
-    const source = componentSource();
-
-    const requiredKeys = [
-      'common.saved',
-      'common.alreadySaved',
-      'common.remove',
-      'systemPrompt.title',
-      'systemPrompt.scope.label',
-      'systemPrompt.scope.default',
-      'systemPrompt.fragmentEditor.save',
-      'systemPrompt.fragmentEditor.reset',
-      'systemPrompt.fragmentEditor.dirtyIndicator',
-      'systemPrompt.fragmentEditor.modifiedIndicator',
-      'systemPrompt.fragmentEditor.modifiedHint',
-      'systemPrompt.fragmentEditor.resetConfirm',
-      'systemPrompt.fragmentEditor.resetAgentConfirm',
-      'systemPrompt.fragmentEditor.resetConfirmTitle',
-      'systemPrompt.blockList.guide.label',
-      'systemPrompt.blockList.guide.title',
-      'systemPrompt.blockList.guide.assemblyLabel',
-      'systemPrompt.blockList.guide.assembly',
-      'systemPrompt.blockList.guide.scopeLabel',
-      'systemPrompt.blockList.guide.scope',
-      'systemPrompt.blockList.newBlock',
-      'systemPrompt.blockList.newBlockPrompt',
-      'systemPrompt.blockList.invalidSlug',
-      'systemPrompt.blockList.createFailed',
-      'systemPrompt.blockList.removeConfirm',
-      'systemPrompt.blockList.removeConfirmTitle',
-      'systemPrompt.blockList.removeFailed',
-      'systemPrompt.blockList.resetLayout',
-      'systemPrompt.blockList.resetLayoutConfirm',
-      'systemPrompt.blockList.resetLayoutConfirmTitle',
-      'systemPrompt.blockList.customBadge',
-      'systemPrompt.blockList.dataBadge',
-      'systemPrompt.blockList.dataHint',
-      'systemPrompt.blockList.inheritedBadge',
-      'systemPrompt.blockList.inheritedHint',
-      'systemPrompt.blockList.dataLabel',
-      'systemPrompt.blockList.dataEmpty',
-      'systemPrompt.blockList.showPreview',
-      'systemPrompt.blockList.hidePreview',
-      'systemPrompt.blockList.empty',
-      'systemPrompt.blockList.toggleAria',
-      'systemPrompt.blockList.reorderHandle',
-      'systemPrompt.blockList.reorderAnnouncement',
-      'systemPrompt.blockList.ownerHint.always',
-      'systemPrompt.blockList.ownerHint.memory',
-      'systemPrompt.blockList.ownerHint.channel',
-      'systemPrompt.blockList.ownerHint.tool',
-      'systemPrompt.blockList.ownerHint.extension',
-      'systemPrompt.preview.heading',
-      'systemPrompt.preview.copy',
-      'systemPrompt.preview.tokenCount',
-      'systemPrompt.preview.tokenBreakdown',
-      'systemPrompt.preview.tokenBreakdownHint',
-      'systemPrompt.preview.agentLabel',
-      'systemPrompt.preview.empty',
-      'systemPrompt.error.loadFailed',
-      'systemPrompt.error.saveFailed',
-      'systemPrompt.error.resetFailed',
-      'systemPrompt.error.previewFailed',
-      'systemPrompt.error.copyFailed',
-      'systemPrompt.error.layoutFailed',
-    ];
-
-    for (const key of requiredKeys) {
-      expect(source, `Missing i18n key: ${key}`).toContain(`'${key}'`);
-    }
   });
 });

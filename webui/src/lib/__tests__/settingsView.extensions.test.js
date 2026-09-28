@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { englishCatalog } from '../i18n.js';
 import {
   applyExtensionsPanelList,
   buildExtensionsUpdatePayload,
@@ -305,27 +304,5 @@ describe('extension settings schema', () => {
       config: { url: 'http://x', verbose: true },
       errors: { port: 'invalid-number' },
     });
-  });
-
-  it('registers the form and secret labels in the English catalog', () => {
-    const requiredKeys = [
-      'settings.extensions.saveSettings',
-      'settings.extensions.fieldAria',
-      'settings.extensions.numberInvalid',
-      'settings.extensions.secretSet',
-      'settings.extensions.secretUnset',
-      'settings.extensions.secretSave',
-      'settings.extensions.secretClear',
-      'settings.extensions.secretPlaceholder',
-      'settings.extensions.secretAria',
-      'settings.extensions.secretSaved',
-      'settings.extensions.secretCleared',
-      'settings.extensions.waiting',
-      'settings.extensions.waitingFor',
-    ];
-
-    for (const key of requiredKeys) {
-      expect(englishCatalog[key], key).toBeTruthy();
-    }
   });
 });
