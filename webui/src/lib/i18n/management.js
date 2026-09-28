@@ -178,7 +178,7 @@ export default Object.freeze({
   'agents.form.customSystemPrompt': 'Custom system prompt',
   'agents.form.memoryPromptMode': 'Memory',
   'agents.form.memoryModeHelp':
-    'Which memory files are pinned into the System Prompt. Tool access is independent: blocking the memory Tool keeps these notes visible but makes Memory read-only.',
+    'Which memory files are pinned into the System Prompt. Off also removes the memory Tool; while Memory is on, turning the memory Tool off in Tool access keeps these notes visible but makes Memory read-only.',
   'agents.form.fallbackModelsHelp':
     'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
   'agents.form.fallbackModelInherit': 'Inherit global default',
