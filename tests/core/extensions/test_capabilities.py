@@ -388,7 +388,8 @@ def test_prompt_blocks_become_definitions_from_loaded_extensions_only(tmp_path: 
         "def register(api):\n"
         "    api.register_prompt_block('static', default_text='Hello.')\n"
         "    api.register_prompt_block('dynamic', render=lambda ctx: 'Rendered.')\n"
-        "    api.register_prompt_block('shared', default_text='A wins.')\n",
+        "    api.register_prompt_block('shared', default_text='A wins.')\n"
+        "    api.register_prompt_block('family', default_text='Guide.', requires_tool='fam_*')\n",
     )
     write_extension(
         root,
@@ -411,7 +412,14 @@ def test_prompt_blocks_become_definitions_from_loaded_extensions_only(tmp_path: 
 
     definitions = {definition.id: definition for definition in registry.prompt_block_declarations()}
 
-    assert set(definitions) == {"extension:static", "extension:dynamic", "extension:shared"}
+    assert set(definitions) == {
+        "extension:static",
+        "extension:dynamic",
+        "extension:shared",
+        "extension:family",
+    }
+    # requires_tool swaps the loaded-extension owner for the Tool-list gate.
+    assert definitions["extension:family"].owner == "tool:fam_*"
     static, dynamic = definitions["extension:static"], definitions["extension:dynamic"]
     assert (static.owner, static.default_text, static.editable) == (
         "extension:ext_a",
@@ -437,3 +445,6 @@ def test_prompt_blocks_become_definitions_from_loaded_extensions_only(tmp_path: 
         api.register_prompt_block("both", default_text="x", render=lambda ctx: "y")
     with pytest.raises(ValueError, match="exactly one"):
         api.register_prompt_block("neither")
+    for pattern in ("", "mcp_*x", "1mcp", "mcp:x"):
+        with pytest.raises(ValueError, match="requires_tool"):
+            api.register_prompt_block("gated", default_text="x", requires_tool=pattern)

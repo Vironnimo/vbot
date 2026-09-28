@@ -227,18 +227,36 @@ def test_extension_blocks_render_only_for_loaded_extensions_and_isolate_failures
 
 def test_tool_block_gated_on_tool_allowlist(workspace: Path, tmp_path: Path) -> None:
     # A tool-owned block (id/owner tool:<name>) renders only when the tool is on the
-    # agent's effective allowlist (gate 2 reuses the prompt tool list).
-    block = BlockDefinition(
-        id="tool:read_file",
-        owner="tool:read_file",
-        default_text="Read-file guidance.",
-    )
-    manager = _manager(tmp_path, block_definitions=[block])
+    # agent's effective allowlist (gate 2 reuses the prompt tool list); a trailing *
+    # matches any listed Tool with that name prefix.
+    blocks = [
+        BlockDefinition(
+            id="tool:read_file",
+            owner="tool:read_file",
+            default_text="Read-file guidance.",
+        ),
+        BlockDefinition(
+            id="extension:read_family",
+            owner="tool:read_*",
+            default_text="Read-family guidance.",
+        ),
+    ]
+    manager = _manager(tmp_path, block_definitions=blocks)
     allowed = _agent(workspace, allowed_tools=["read_file"])
     denied = _agent(workspace, allowed_tools=["shell"])
 
-    assert "Read-file guidance." in manager.build_system_prompt(allowed)
-    assert "Read-file guidance." not in manager.build_system_prompt(denied)
+    allowed_prompt = manager.build_system_prompt(allowed)
+    denied_prompt = manager.build_system_prompt(denied)
+    assert "Read-file guidance." in allowed_prompt
+    assert "Read-family guidance." in allowed_prompt
+    assert "Read-file guidance." not in denied_prompt
+    assert "Read-family guidance." not in denied_prompt
+    # With the request's Tool list given, gate 2 reads only that list.
+    pinned = manager.build_system_prompt(
+        denied, effective_tool_definitions=[{"name": "read_notes"}]
+    )
+    assert "Read-family guidance." in pinned
+    assert "Read-file guidance." not in pinned
 
 
 def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(

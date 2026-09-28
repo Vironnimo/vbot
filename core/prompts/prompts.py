@@ -788,7 +788,8 @@ class SystemPromptManager:
         - ``identity`` → the Agent has an Identity/Memory Workspace.
         - ``memory`` → the memory tool is enabled for the agent.
         - ``tool:<name>`` → ``<name>`` is among *effective_tool_names* when given,
-          else in the agent's effective allowed tools.
+          else in the agent's effective allowed tools. A trailing ``*`` matches
+          any listed Tool whose name starts with the text before it.
         - ``channel`` → the agent has at least one enabled Channel config.
         - ``extension:<name>`` → the extension is in the loaded-extension set the
           runtime rebuilds and injects on every extension (re)load.
@@ -829,12 +830,23 @@ class SystemPromptManager:
         With *effective_tool_names* (the Tools the request lists) this is plain
         membership. Otherwise it reuses the same prompt-definition path the tools
         block uses (allowlist + derived ``memory`` visibility), so gate 2 cannot
-        drift from what the tool list actually shows.
+        drift from what the tool list actually shows. A *tool_name* ending in
+        ``*`` is a prefix: any listed name starting with the rest matches.
         """
+        if tool_name.endswith("*"):
+            prefix = tool_name[:-1]
+
+            def matches(name: object) -> bool:
+                return isinstance(name, str) and name.startswith(prefix)
+        else:
+
+            def matches(name: object) -> bool:
+                return name == tool_name
+
         if effective_tool_names is not None:
-            return tool_name in effective_tool_names
+            return any(matches(name) for name in effective_tool_names)
         definitions = self._prompt_definitions_for_agent(agent, session_tool_grants)
-        return any(definition.get("name") == tool_name for definition in definitions)
+        return any(matches(definition.get("name")) for definition in definitions)
 
     def _provider_definitions_for_agent(
         self,

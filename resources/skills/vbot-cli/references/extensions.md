@@ -78,7 +78,7 @@ The `api` object (`ExtensionAPI`) offers:
 | `api.register_tool(name, description, parameters, handler, *, internal=False, catalog_visible=True, requires_opt_in=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, unadvertised_parameters=None, family=None)` | an agent tool |
 | `api.register_page(page_id, title, entry, *, icon="network")` | an Extension-owned HTML page declaration |
 | `api.register_recall_backend(name, factory)` | a session-recall backend |
-| `api.register_prompt_block(slug, *, default_text=None, render=None)` | a System Prompt block |
+| `api.register_prompt_block(slug, *, default_text=None, render=None, requires_tool=None)` | a System Prompt block |
 | `api.register_interaction_handler(prefix, handler)` | a channel button-tap handler (see [Channel interaction handlers](#channel-interaction-handlers)) |
 | `api.register_settings(fields)` | a settings schema (see [Settings schema](#settings-schema)) |
 | `api.on_startup(handler)` / `api.on_shutdown(handler)` | a lifecycle callback (sync or async, no args) |
@@ -395,7 +395,10 @@ def register(api):
 ```
 
 Your block's id is `extension:<slug>` and its owner is `extension:<name>`, so it
-renders **only while your extension is loaded**. Declare several blocks by using
+renders **only while your extension is loaded**. To show a block only when the
+Agent's Tool list contains one of your Tools, pass `requires_tool` with a Tool
+name, or a name prefix ending in `*` such as `"weather_*"`; declare
+`"api_version": 9` in `extension.json`. Declare several blocks by using
 distinct slugs. A slug that collides with another extension's block is resolved
 first-loaded-wins with a non-fatal diagnostic (same policy as tool names). The
 block list refreshes whenever extensions reload — no per-request cost.
