@@ -23,7 +23,11 @@ from core.compaction import (
     CompactionSettings,
     is_compacted_tool_result_content,
 )
-from core.compaction.compaction import COMPACTION_TRIGGER_AUTO, CompactionPlan
+from core.compaction.compaction import (
+    COMPACTION_TRIGGER_AUTO,
+    CompactionPlan,
+    carry_notes_into_checkpoint,
+)
 from core.sessions import is_tool_change_note
 from core.sessions.history import _skill_context_note_content
 from core.tools import tool_success
@@ -34,6 +38,7 @@ from tests.core.compaction.compaction_test_support import (
     assistant,
     checkpoint,
     compact,
+    message,
     provider_request,
     tool_step,
     user,
@@ -318,6 +323,59 @@ async def test_compaction_drops_the_tool_change_notes_of_the_ending_epoch() -> N
     effective = effective_compaction_messages(history)
     assert [item.id for item in effective if item.role != "note"] == ["u1", "a1"]
     assert not any(is_tool_change_note(item) for item in effective)
+
+
+def _plain_note(note_id: str) -> ChatMessage:
+    return message(note_id, "note", f"Background result {note_id}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("appended", "carried_ids"),
+    [
+        pytest.param([], [], id="nothing-appended"),
+        pytest.param([_plain_note("n1")], ["n1"], id="one-note"),
+        pytest.param([_plain_note("n1"), _plain_note("n2")], ["n1", "n2"], id="notes-in-order"),
+        pytest.param([user("u2", "Late input")], None, id="user-message"),
+        pytest.param([assistant("a2", "Late answer")], None, id="assistant-message"),
+        pytest.param(tool_step("late", "output"), None, id="tool-cycle"),
+        pytest.param([checkpoint([user("u9", "Elsewhere")])], None, id="checkpoint"),
+        pytest.param([_skill_note("alpha")], None, id="skill-context-note"),
+        pytest.param(
+            [ChatMessage.note(ToolChange("removed", "probe", "epoch-1").note_content())],
+            None,
+            id="tool-change-note",
+        ),
+        pytest.param(
+            [message("n3", "note", f"{COMPACTION_SKILL_NOTE_PREFIX}[]")],
+            None,
+            id="compaction-skills-note",
+        ),
+        pytest.param([_plain_note("n1"), user("u2", "Late input")], None, id="note-then-user"),
+    ],
+)
+async def test_checkpoint_carries_only_plain_notes_appended_after_its_snapshot(
+    appended: list[ChatMessage], carried_ids: list[str] | None
+) -> None:
+    # The Summary Model call runs outside the Session lock: a plain note appended
+    # meanwhile follows the Tail in the checkpoint; anything else makes it stale.
+    history = [user("u1", "First task"), assistant("a1", "Done")]
+    prepared = await compact(
+        history,
+        service=CompactionService(RetainContextStrategy()),
+        settings=CompactionSettings(strategy="retain-context"),
+    )
+
+    carried = carry_notes_into_checkpoint(prepared, appended)
+
+    if carried_ids is None:
+        assert carried is None
+        return
+    assert carried is not None
+    uncarried_context = effective_compaction_messages([*history, prepared])
+    context = effective_compaction_messages([*history, *appended, carried])
+    assert context[: len(uncarried_context)] == uncarried_context
+    assert [item.id for item in context[len(uncarried_context) :]] == carried_ids
 
 
 @pytest.mark.asyncio

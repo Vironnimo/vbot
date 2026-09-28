@@ -10,12 +10,15 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatMessage
+from core.chat._message_history import effective_compaction_messages
 from core.chat._run_state import RequestBuildInputs, _RequestState
 from core.compaction import CompactionError, CompactionService
+from core.compaction.run_coordination import AUTO_COMPACTION_COMMIT_ATTEMPTS
 from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT, pinned_skill_catalog
 from core.providers.errors import NetworkError
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
+    COMPACTION_COMPLETED_EVENT,
     COMPACTION_STARTED_EVENT,
     RunCancelledError,
     RunStatus,
@@ -25,7 +28,7 @@ from tests.core.chat.chat_loop_compaction_test_support import (
     WAIT_SECONDS,
     CompactionPromptStorage,
     CompactOnceService,
-    append_note_while_compacting,
+    append_while_compacting,
     auto_compact,
     compaction_runtime,
     seed_tail,
@@ -257,10 +260,37 @@ async def test_projected_request_failure_does_not_persist_the_checkpoint(
     )
 
 
+# The Model call runs outside the Session lock, so other writers may commit meanwhile.
+# A concurrent note is folded into the checkpoint and stays in the live Context;
+# any other entry makes the result stale, so nothing is written.
+_CONCURRENT_ENTRIES = [
+    pytest.param(ChatMessage.note("Background completed"), True, id="note-carried"),
+    pytest.param(ChatMessage.user("Late input"), False, id="user-message-stale"),
+]
+_COMPACTION_OUTCOMES = {
+    COMPACTION_STARTED_EVENT,
+    COMPACTION_COMPLETED_EVENT,
+    COMPACTION_ABORTED_EVENT,
+}
+
+
+def _outcomes(events: list[Any]) -> list[str]:
+    return [event.type for event in events if event.type in _COMPACTION_OUTCOMES]
+
+
+def _live_context_notes(messages: list[ChatMessage]) -> list[str]:
+    return [
+        str(message.content)
+        for message in effective_compaction_messages(messages)
+        if message.role == "note"
+    ]
+
+
 @pytest.mark.asyncio
-async def test_stale_final_answer_compaction_yields_to_a_concurrent_note(tmp_path: Path) -> None:
-    # The Model call runs outside the Session lock; a note committed meanwhile
-    # makes the result stale, so nothing is written and the note stays.
+@pytest.mark.parametrize(("concurrent", "carried"), _CONCURRENT_ENTRIES)
+async def test_final_answer_compaction_meets_a_concurrent_entry(
+    tmp_path: Path, concurrent: ChatMessage, carried: bool
+) -> None:
     runtime = compaction_runtime(
         tmp_path,
         agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[]),
@@ -281,22 +311,27 @@ async def test_stale_final_answer_compaction_yields_to_a_concurrent_note(tmp_pat
     run = await build_chat_loop(runtime, compaction_service=cast(Any, service)).start_run(
         "coder", "Finish", session_id="session-one"
     )
-    await append_note_while_compacting(runtime, service, address, "Background completed")
+    await append_while_compacting(runtime, service, address, concurrent)
     result = await asyncio.wait_for(run.wait(), WAIT_SECONDS)
 
     messages = runtime.chat_sessions.get(address).load()
-    assert result.content == "Finished"
-    assert persisted_roles(messages) == ["user", "assistant", "note"]
-    assert messages[-2].content == "Background completed"
     events = await runtime.timelines.events(run)
-    assert _lifecycle(events) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
-    aborted = next(event for event in events if event.type == COMPACTION_ABORTED_EVENT)
-    assert aborted.payload == {"reason": "stale_context"}
+    assert result.content == "Finished"
+    if carried:
+        assert persisted_roles(messages) == ["user", "assistant", "note", "compaction_checkpoint"]
+        assert _outcomes(events) == [COMPACTION_STARTED_EVENT, COMPACTION_COMPLETED_EVENT]
+        assert _live_context_notes(messages)[-1] == "Background completed"
+    else:
+        assert persisted_roles(messages) == ["user", "assistant", "user"]
+        assert _outcomes(events) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
+        aborted = next(event for event in events if event.type == COMPACTION_ABORTED_EVENT)
+        assert aborted.payload == {"reason": "stale_context"}
 
 
 @pytest.mark.asyncio
-async def test_stale_mid_tool_compaction_rebuilds_the_request_with_the_concurrent_note(
-    tmp_path: Path,
+@pytest.mark.parametrize(("concurrent", "carried"), _CONCURRENT_ENTRIES)
+async def test_mid_tool_compaction_meets_a_concurrent_entry_and_rebuilds_the_request(
+    tmp_path: Path, concurrent: ChatMessage, carried: bool
 ) -> None:
     tools = ToolRegistry()
     tools.register(
@@ -333,7 +368,7 @@ async def test_stale_mid_tool_compaction_rebuilds_the_request_with_the_concurren
     run = await build_chat_loop(runtime, compaction_service=cast(Any, service)).start_run(
         "coder", "Weather?", session_id="session-one"
     )
-    await append_note_while_compacting(runtime, service, address, "Background completed")
+    await append_while_compacting(runtime, service, address, concurrent)
     result = await asyncio.wait_for(run.wait(), WAIT_SECONDS)
 
     second_request = "\n".join(
@@ -344,14 +379,67 @@ async def test_stale_mid_tool_compaction_rebuilds_the_request_with_the_concurren
         "user",
         "assistant",
         "tool",
-        "note",
+        concurrent.role,
+        *(["compaction_checkpoint"] if carried else []),
         "assistant",
     ]
-    assert "<system-reminder>\nBackground completed\n</system-reminder>" in second_request
-    assert _lifecycle(await runtime.timelines.events(run)) == [
+    if concurrent.role == "note":
+        assert "<system-reminder>\nBackground completed\n</system-reminder>" in second_request
+    else:
+        assert "Late input" in second_request
+    assert _outcomes(await runtime.timelines.events(run)) == [
         COMPACTION_STARTED_EVENT,
-        COMPACTION_ABORTED_EVENT,
+        COMPACTION_COMPLETED_EVENT if carried else COMPACTION_ABORTED_EVENT,
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("landing_notes", "committed"),
+    [
+        pytest.param(AUTO_COMPACTION_COMMIT_ATTEMPTS - 1, True, id="settles-within-the-bound"),
+        pytest.param(AUTO_COMPACTION_COMMIT_ATTEMPTS, False, id="outruns-the-bound"),
+    ],
+)
+async def test_automatic_compaction_absorbs_notes_landing_during_projection_up_to_a_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, landing_notes: int, committed: bool
+) -> None:
+    # Each note lands while one attempt projects the post-Compaction request, so
+    # that attempt's commit fails and the next one absorbs the note.
+    runtime = compaction_runtime(tmp_path)
+    agent = runtime.agents.get("coder")
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    request = await build_request_messages(loop, agent, session)
+    build_request_state = loop._requests.build_request_state
+    landed: list[str] = []
+
+    async def build_while_a_note_lands(*args: Any, **kwargs: Any) -> _RequestState:
+        if len(landed) < landing_notes:
+            landed.append(f"Note {len(landed) + 1}")
+            async with runtime.chat_sessions.write_lock(session.address):
+                await runtime.chat_sessions.get(session.address).add_note_async(landed[-1])
+        return cast(_RequestState, await build_request_state(*args, **kwargs))
+
+    monkeypatch.setattr(loop._requests, "build_request_state", build_while_a_note_lands)
+
+    probe = await auto_compact(loop, agent, session, usage={"input_tokens": 90}, request=request)
+
+    messages = session.load()
+    assert len(service.compact_calls) == 1
+    if committed:
+        assert persisted_roles(messages) == [
+            "user",
+            "assistant",
+            *["note"] * landing_notes,
+            "compaction_checkpoint",
+        ]
+        assert _live_context_notes(messages)[-landing_notes:] == landed
+        assert _outcomes(probe.run.events) == [COMPACTION_STARTED_EVENT, COMPACTION_COMPLETED_EVENT]
+    else:
+        assert persisted_roles(messages) == ["user", "assistant", *["note"] * landing_notes]
+        assert _outcomes(probe.run.events) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
 
 
 @pytest.mark.asyncio

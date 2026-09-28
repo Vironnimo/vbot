@@ -177,17 +177,23 @@ class CompactOnceService:
         )
 
 
-async def append_note_while_compacting(
-    runtime: Any, service: CompactOnceService, address: SessionAddress, text: str
+async def append_while_compacting(
+    runtime: Any, service: CompactOnceService, address: SessionAddress, message: ChatMessage
 ) -> None:
-    """Commit a Session note while the blocked attempt holds its snapshot, then release it."""
+    """Commit *message* while the blocked attempt holds its snapshot, then release the attempt."""
     await asyncio.wait_for(service.started.wait(), WAIT_SECONDS)
     try:
         async with asyncio.timeout(WAIT_SECONDS):
             async with runtime.chat_sessions.write_lock(address):
-                await runtime.chat_sessions.get(address).add_note_async(text)
+                await runtime.chat_sessions.get(address).append_async(message)
     finally:
         service.release.set()
+
+
+async def append_note_while_compacting(
+    runtime: Any, service: CompactOnceService, address: SessionAddress, text: str
+) -> None:
+    await append_while_compacting(runtime, service, address, ChatMessage.note(text))
 
 
 @dataclass(frozen=True)
