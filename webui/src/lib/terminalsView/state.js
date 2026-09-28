@@ -17,11 +17,11 @@ const TERMINAL_STATES_FINISHED = new Set(['exited', 'error']);
 // this window, so a small tile produces a legal minimum grid instead of a
 // rejected request that would leave the tile rendering at a size the PTY
 // never confirmed.
-export const TERMINAL_MIN_COLUMNS = 40;
+const TERMINAL_MIN_COLUMNS = 40;
 
 export const TERMINAL_MAX_COLUMNS = 240;
 
-export const TERMINAL_MIN_ROWS = 10;
+const TERMINAL_MIN_ROWS = 10;
 
 export const TERMINAL_MAX_ROWS = 80;
 
@@ -100,13 +100,6 @@ export function visibleTerminals(state) {
   }
   return state.terminals.filter(
     (terminal) => terminal?.group_id === state.selectedGroupId,
-  );
-}
-
-export function selectedGroup(state) {
-  return (
-    state.groups.find((group) => group.group_id === state.selectedGroupId) ??
-    null
   );
 }
 
