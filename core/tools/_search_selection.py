@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import os
 import sqlite3
 import stat
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from functools import lru_cache
 from pathlib import Path
 
@@ -134,8 +135,15 @@ class FileSelection:
         self.observed = 0
         self.skipped = 0
         self.complete = True
+        self._readers: list[Generator[tuple[Path, bool], None, None]] = []
 
     def close(self) -> None:
+        # A suspended reader keeps the connection, and with it the spool file, open
+        # past close(), and a traceback can keep a reader alive long after its
+        # search failed. The spool releases its readers before the connection.
+        for reader in self._readers:
+            reader.close()
+        self._readers.clear()
         self.db.close()
 
     def populate(self, kind: str, types: dict[str, list[str]]) -> None:
@@ -331,6 +339,12 @@ class FileSelection:
         yield from visit(root, 0, "" if root_is_directory else root.name)
 
     def entries(self, *, action: str) -> Iterator[tuple[Path, bool]]:
+        """Stream the spooled candidates in search order until exhausted or closed."""
+        reader = self._read_entries(action)
+        self._readers.append(reader)
+        return reader
+
+    def _read_entries(self, action: str) -> Generator[tuple[Path, bool], None, None]:
         order, reverse = self.options.ordering or (
             ("path", False) if action == "content" else ("modified", True)
         )
@@ -345,5 +359,6 @@ class FileSelection:
         query = (
             f"SELECT path, directory FROM entries ORDER BY {columns[order]} {direction}, path ASC"
         )
-        for path, directory in self.db.execute(query):
-            yield Path(path), bool(directory)
+        with contextlib.closing(self.db.execute(query)) as rows:
+            for path, directory in rows:
+                yield Path(path), bool(directory)
