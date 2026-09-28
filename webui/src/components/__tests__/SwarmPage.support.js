@@ -7,6 +7,10 @@ vi.mock(
   async () => import('../../../node_modules/svelte/src/index-client.js'),
 );
 
+const { registerCatalog } = await import('../../lib/i18n.js');
+const { default: swarmCatalog } =
+  await import('../../../../resources/extensions/swarm/ui/i18n.js');
+registerCatalog(swarmCatalog);
 const { default: SwarmPage } =
   await import('../../../../resources/extensions/swarm/ui/SwarmPage.svelte');
 

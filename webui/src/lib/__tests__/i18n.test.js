@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { englishCatalog, init, t, tOr } from '../i18n.js';
+import { englishCatalog, init, registerCatalog, t, tOr } from '../i18n.js';
 import { REQUIRED_CATALOG_KEYS, RETIRED_CATALOG_KEYS } from './i18n.support.js';
 
 describe('i18n t()', () => {
@@ -34,6 +34,28 @@ describe('i18n tOr()', () => {
     expect(
       tOr('statistics.skills.origin.x', 'x: {detail}', { detail: 'y' }),
     ).toBe('x: y');
+  });
+});
+
+describe('i18n registerCatalog()', () => {
+  it('adds Extension text and rejects keys that are already defined', () => {
+    registerCatalog({ 'test.page.greeting': 'Hello {name}' });
+
+    expect(t('test.page.greeting', undefined, { name: 'Ada' })).toBe(
+      'Hello Ada',
+    );
+    expect(() => registerCatalog({ 'navigation.chat': 'Talk' })).toThrow(
+      'Duplicate i18n keys: navigation.chat',
+    );
+    expect(() =>
+      registerCatalog({
+        'test.page.other': 'Other',
+        'test.page.greeting': 'Hi',
+      }),
+    ).toThrow('Duplicate i18n keys: test.page.greeting');
+    expect(t('navigation.chat')).toBe('Chat');
+    expect(t('test.page.other')).toBe('test.page.other');
+    expect(englishCatalog['test.page.greeting']).toBeUndefined();
   });
 });
 

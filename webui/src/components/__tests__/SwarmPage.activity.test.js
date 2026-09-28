@@ -17,7 +17,7 @@ import {
 import { t } from '../../lib/i18n.js';
 
 const RESUME_PARTICIPANT = t('swarm.resumeParticipant', 'Resume participant');
-const LOAD_OLDER = t('chat.loadOlderMessages', 'Load older messages');
+const LOAD_OLDER = t('swarm.loadOlderMessages', 'Load older messages');
 
 describe('Swarm participant Activity', () => {
   it('opens participant Activity from the Board and detaches its Run silently when leaving', async () => {

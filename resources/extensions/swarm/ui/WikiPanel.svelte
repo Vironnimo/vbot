@@ -396,7 +396,7 @@
             {t('swarm.wiki.empty', 'No pages found.')}
           </p>{/if}
         {#if next}<Button variant="tertiary" onClick={() => refresh(next)}
-            >{t('common.loadMore', 'Load more')}</Button
+            >{t('swarm.wiki.loadMore', 'Load more')}</Button
           >{/if}
       </aside>
       <article class="wiki-content">
@@ -491,7 +491,7 @@
               {#if historyNext}<Button
                   variant="tertiary"
                   onClick={() => loadHistory(historyNext)}
-                  >{t('common.loadMore', 'Load more')}</Button
+                  >{t('swarm.wiki.loadMore', 'Load more')}</Button
                 >{/if}
             </div>{/if}
           {#if selected.deleted}<Banner

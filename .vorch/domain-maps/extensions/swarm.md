@@ -41,6 +41,9 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   Swarm database owner.
 - `ui/SwarmPage.svelte` and `ui/ProfileEditor.svelte` own the domain page. The app
   shell and page bridge remain generic; built assets live in generated `web/`.
+  `ui/i18n.js` holds the page's `swarm.*` English text; `ui/main.js` registers it
+  with the WebUI catalog before mounting, and `SwarmPage.support.js` does the same
+  for the page tests.
 - Retained-list refreshes read profiles and Swarms. Model, Tool, Skill and
   Project choices load when opening a profile editor; the Run form also loads
   the catalog to resolve a selected Project default, not on display context

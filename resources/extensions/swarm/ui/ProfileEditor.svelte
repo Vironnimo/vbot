@@ -333,7 +333,7 @@
     if (profile && !hasChanges()) {
       if (reason === 'manual')
         bridgeClient.toast(
-          t('settings.alreadySaved', 'Already saved'),
+          t('common.alreadySaved', 'Already saved'),
           'success',
         );
       return true;

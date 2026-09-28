@@ -1,5 +1,14 @@
 export default Object.freeze({
   'extensions.pageUnavailable': 'This Extension page is unavailable.',
+  'extensions.inputWaiting': '{count} Extension requests need your response.',
+  'extensions.reviewInput': 'Review request',
+  'extensions.inputTitle': 'Request from {name}',
+  'extensions.signInHelp':
+    'Open the sign-in page. After signing in, paste the complete redirected address below.',
+  'extensions.openRequest': 'Open requested page',
+  'extensions.redirectUrl': 'Redirected address',
+  'extensions.sendResponse': 'Send response',
+  'extensions.declineInput': 'Decline',
   'settings.providers.opencode.sharedKey':
     'This Account key is shared by OpenCode Go and Zen. Replacing or removing it affects both. Each connection can be enabled separately.',
   'settings.providers.opencode.go':
@@ -171,6 +180,9 @@ export default Object.freeze({
     'Used when an agent thinking effort is unset.',
   'settings.defaults.noThinkingEffort': '— (no default)',
   'settings.defaults.saveSuccess': 'Agent defaults updated.',
+  'settings.defaults.providerThinkingEffortDefault': '— (provider default)',
+  'settings.defaults.noModelDefault': '— (no default)',
+  'settings.defaults.noFallbackModelDefault': '— (no default)',
   'settings.skills.title': 'Skills',
   'settings.skills.subtitle': 'Manage skill files and skill scan directories.',
   'settings.skills.defaultDirectory': 'Default skill directory',
@@ -457,6 +469,9 @@ export default Object.freeze({
   'settings.specializedModels.jsonPlaceholder':
     'e.g. [{"text":"hello","bbox":[[0,0],[1,0],[1,1],[0,1]]}]',
   'settings.specializedModels.jsonInvalid': 'Invalid JSON: {error}',
+  'settings.specializedModels.decision': 'Decision model',
+  'settings.specializedModels.decisionDescription':
+    'Structured judgments for the evaluate Tool and Jev experiments.',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle': 'Connected providers and their credentials.',
   'settings.providers.noneConnected':
@@ -624,6 +639,16 @@ export default Object.freeze({
   'settings.providers.add.keyError': 'API key could not be saved.',
   'settings.providers.add.oauthIntro':
     'Click Connect to begin. vBot then shows a code to enter at {provider} in your browser.',
+  'settings.providers.add.localUnreachable':
+    '{provider} was added, but is not reachable.',
+  'settings.providers.add.localSuccess': '{provider} added successfully.',
+  'settings.providers.add.localError': 'Provider could not be added.',
+  'settings.providers.add.methodLocal': 'Local',
+  'settings.providers.add.methodLocalDescription':
+    'Connect to the local endpoint without credentials.',
+  'settings.providers.add.localIntro':
+    'Add the local endpoint. Models are discovered now and loaded only when used.',
+  'settings.providers.add.localSubmit': 'Add provider',
   'settings.providers.custom.addButton': 'Add custom',
   'settings.providers.custom.addTitle': 'Add Custom Provider',
   'settings.providers.custom.editTitle': 'Edit Custom Provider',
@@ -715,6 +740,7 @@ export default Object.freeze({
   'settings.channels.agent': 'Agent',
   'settings.channels.agent.placeholder': 'Select agent',
   'settings.channels.agent.none': 'No agents available',
+  'settings.channels.agent.required': 'Select an agent before saving.',
   'settings.channels.dm_scope': 'DM scope',
   'settings.channels.dm_scope.per_conversation': 'Per conversation',
   'settings.channels.dm_scope.main': 'Main',
@@ -763,6 +789,30 @@ export default Object.freeze({
   'settings.channels.access.makeMember': 'Make member',
   'settings.channels.access.makeAdminAria': 'Make {name} an admin',
   'settings.channels.access.makeMemberAria': 'Make {name} a member',
+  'settings.channels.denied.allowSuccess': 'Chat allowed.',
+  'settings.channels.denied.group': 'Group',
+  'settings.channels.denied.direct': 'Direct',
+  'settings.channels.denied.title':
+    'Recent requests from chats not on the allowlist',
+  'settings.channels.denied.allowAria': 'Allow chat {id}',
+  'settings.channels.denied.allow': 'Allow',
+  'settings.channels.app_token_env': 'App token environment variable',
+  'settings.channels.app_token_help':
+    'Slack needs a second token for Socket Mode. Enter the name of the variable holding the xapp token with connections:write permission.',
+  'settings.channels.server_url': 'Mattermost server URL',
+  'settings.channels.whatsapp.help':
+    'Link your existing WhatsApp account and talk to vBot in your self chat. Other conversations cannot trigger Runs. This uses an unofficial connection; WhatsApp may restrict the account. Node.js 22 or newer is required on the vBot server.',
+  'settings.channels.whatsapp.installing': 'Installing WhatsApp support…',
+  'settings.channels.whatsapp.install': 'Install WhatsApp support',
+  'settings.channels.whatsapp.connected':
+    'WhatsApp connected. Send a message to yourself to talk to your Agent.',
+  'settings.channels.whatsapp.scan':
+    'In WhatsApp, open Settings → Linked devices → Link a device, then scan this QR code.',
+  'settings.channels.whatsapp.qr': 'WhatsApp device linking QR code',
+  'settings.channels.whatsapp.waiting':
+    'Connect to show a QR code or restore your linked device.',
+  'settings.channels.whatsapp.connect': 'Connect WhatsApp',
+  'settings.channels.whatsapp.repair': 'Link again with a new QR code',
   'settings.extensions.title': 'Extensions',
   'settings.extensions.count': '{count} discovered',
   'settings.extensions.subtitle':
@@ -997,5 +1047,40 @@ export default Object.freeze({
     'The Voice pipeline stopped unexpectedly. Retry listening or restart the Desktop app.',
   'settings.voice.error.recordingInterrupted':
     'The recording was interrupted. Say the wake phrase again.',
+  'settings.voice.error.unknown':
+    'Voice stopped unexpectedly. Retry listening or restart the Desktop app.',
+  'settings.voice.error.noServer':
+    'Voice has no active server. Connect the Desktop app to a server and try again.',
+  'settings.voice.error.engine':
+    'The on-device wakeword model could not start. Restart the Desktop app and try again.',
+  'settings.voice.error.modelUnavailable':
+    'The selected wakeword model is no longer available. Choose another model or import it again.',
+  'settings.voice.error.modelInvalid':
+    'The wakeword model is not a compatible pyopen-wakeword TFLite model.',
+  'settings.voice.error.microphone':
+    'No compatible microphone is available. Connect a microphone or choose another input device, then retry.',
+  'settings.voice.error.microphoneRead':
+    'The microphone stopped responding. Check the device connection and retry.',
+  'settings.voice.error.detection':
+    'Wakeword detection stopped unexpectedly. Retry listening.',
+  'settings.voice.error.send':
+    'The spoken command could not be sent. Check the server connection and retry.',
+  'settings.voice.error.stackUnavailable':
+    'The Desktop Voice components are unavailable. Install the desktop Voice dependencies and restart vBot.',
   'settings.voice.microphoneDisconnectedTitle': 'Microphone disconnected',
+  'settings.voice.errorTitle': 'Voice needs attention',
+  'settings.voice.retryFailed': 'Voice could not restart.',
+  'settings.voice.enabledAria': 'Enable wakeword listening',
+  'settings.voice.retry': 'Retry listening',
+  'settings.sessionTitles.title': 'Session titles',
+  'settings.sessionTitles.saveSuccess': 'Session title settings updated.',
+  'settings.sessionTitles.enabled': 'Automatic Session titles',
+  'settings.sessionTitles.enabledDescription':
+    'Creates one additional Model request from a bounded excerpt of the first message in each new Session. When off, the first 40 normalized characters remain as the local title.',
+  'settings.sessionTitles.model': 'Title model',
+  'settings.sessionTitles.modelDescription':
+    'Uses the active Agent Model when no separate Model is selected. A failed request keeps the local title and never triggers another paid Model request.',
+  'settings.sessionTitles.agentModel': 'Agent Model (default)',
+  'settings.content': 'Settings content',
+  'settings.models.loadError': 'Model catalog could not be loaded.',
 });

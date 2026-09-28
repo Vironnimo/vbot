@@ -45,6 +45,7 @@ export default Object.freeze({
   'logs.stream.reconnecting': 'Reconnecting…',
   'logs.stream.error': 'Live update error',
   'logs.stream.idle': 'Idle',
+  'logs.streamErrorUnknown': 'Connection closed unexpectedly.',
   'debug.limitInvalid': 'Enter a whole number from 1 to 500.',
   'debug.captureEnabled': 'Capture enabled',
   'debug.captureDisabled': 'Capture disabled',
@@ -127,6 +128,11 @@ export default Object.freeze({
   'debug.emptyHeader': 'No traces captured yet',
   'debug.expandRow': 'Expand row',
   'debug.collapseRow': 'Collapse row',
+  'debug.statusFilter': 'Status filter',
+  'debug.enabledDescription':
+    'Capture provider requests and responses for inspection.',
+  'debug.traceLimitDescription':
+    'Maximum number of traces to keep. Older traces are removed when the limit is reached.',
   'statistics.range.label': 'Time range',
   'statistics.range.short.7d': '7 days',
   'statistics.range.short.30d': '30 days',

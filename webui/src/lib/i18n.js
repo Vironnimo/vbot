@@ -25,8 +25,11 @@ for (const catalog of [
 }
 export const englishCatalog = Object.freeze(mergedEnglish);
 
+// The core catalog plus the catalogs Extension pages register at startup.
+const englishText = { ...englishCatalog };
+
 const catalogs = Object.freeze({
-  [DEFAULT_LOCALE]: englishCatalog,
+  [DEFAULT_LOCALE]: englishText,
 });
 
 let activeLocale = DEFAULT_LOCALE;
@@ -68,6 +71,19 @@ export function tOr(key, fallback, values) {
   const translation = catalog[key] ?? catalogs[DEFAULT_LOCALE][key];
 
   return interpolate(hasText(translation) ? translation : fallback, values);
+}
+
+// Adds an Extension page's own English text. Keys the core catalog or an
+// earlier registration already defines are rejected, so a page cannot replace
+// existing text.
+export function registerCatalog(entries) {
+  const duplicates = Object.keys(entries).filter((key) =>
+    Object.hasOwn(englishText, key),
+  );
+  if (duplicates.length > 0) {
+    throw new Error(`Duplicate i18n keys: ${duplicates.join(', ')}`);
+  }
+  Object.assign(englishText, entries);
 }
 
 export function init(locale = DEFAULT_LOCALE) {

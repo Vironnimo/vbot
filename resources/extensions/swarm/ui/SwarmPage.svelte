@@ -277,9 +277,14 @@
                 variant="secondary"
                 onClick={() => (model.profileSnapshotOpen = true)}
                 icon
-                ariaLabel={t('swarm.profileSnapshot', 'Inspect Swarm snapshot')}
-                tooltip={t('swarm.profileSnapshot', 'Inspect Swarm snapshot')}
-                >{@render actionIcon('document')}</Button
+                ariaLabel={t(
+                  'swarm.inspectProfileSnapshot',
+                  'Inspect Swarm snapshot',
+                )}
+                tooltip={t(
+                  'swarm.inspectProfileSnapshot',
+                  'Inspect Swarm snapshot',
+                )}>{@render actionIcon('document')}</Button
               ><Button
                 variant="tertiary"
                 icon
@@ -601,7 +606,7 @@
                       disabled={activity.historyLoading}
                       onClick={activity.loadEarlierActivity}
                     >
-                      {t('chat.loadOlderMessages', 'Load older messages')}
+                      {t('swarm.loadOlderMessages', 'Load older messages')}
                     </Button>
                   {/if}
                   {#each activity.activityTimeline as item (item.id)}
