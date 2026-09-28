@@ -362,8 +362,8 @@ describe('send and edit admission', () => {
 });
 
 describe('Queue', () => {
-  it('steers the exact active Run and reconciles a consumed item without starting another Run', async () => {
-    const steerQueueItem = vi.fn().mockResolvedValue({ run_id: 'r' });
+  it('steers into the active Run and reconciles a consumed item without starting another Run', async () => {
+    const steerQueueItem = vi.fn().mockResolvedValue({});
     const listQueue = vi.fn().mockResolvedValue({ items: [] });
     const { chatState, controller, runStream } = setupController({
       operationOverrides: { steerQueueItem, listQueue },
@@ -372,12 +372,7 @@ describe('Queue', () => {
     session.currentRun = { runId: 'r', status: 'running' };
     session.queue = [{ id: 'q', content: 'Correction', steerable: true }];
     expect(await controller.steerQueued(session, 'q')).toBe(true);
-    expect(steerQueueItem).toHaveBeenCalledWith(
-      'coder@project',
-      'one',
-      'q',
-      'r',
-    );
+    expect(steerQueueItem).toHaveBeenCalledWith('coder@project', 'one', 'q');
     expect(session.queue).toEqual([]);
     expect(session.currentRun.runId).toBe('r');
     expect(runStream.attachRunStream).not.toHaveBeenCalled();

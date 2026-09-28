@@ -1,4 +1,4 @@
-"""Run queue admission, waiting-work limits, mutation, FIFO draining and steering delivery."""
+"""Run queue admission, waiting-work limits, mutation, draining order and steering delivery."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
     RunAdmission,
+    RunExecutionOwner,
     RunStatus,
     WaitingWorkLimitError,
 )
@@ -544,15 +545,14 @@ async def test_steering_append_failure_retains_input_and_blocks_mid_append_edits
     release = asyncio.Event()
     address = SessionAddress(project_id=None, agent_id="coder", session_id="one")
 
-    async def execute(run: Run) -> str:
-        run.accepts_steering = True
+    async def execute(_run: Run) -> str:
         await release.wait()
         return "done"
 
     run = await manager.start(address, execute)
     await asyncio.sleep(0)
     item = await manager.enqueue(address, execute, steerable=True, editable=True)
-    manager.steer_queued("coder", "one", item.item_id, project_id=None, run_id=run.id)
+    manager.steer_queued("coder", "one", item.item_id, project_id=None)
 
     async def fail_append(_item: QueuedRunItem) -> None:
         assert not manager.remove_queued("coder", "one", item.item_id, project_id=None)
@@ -576,8 +576,7 @@ async def test_removing_second_steer_during_first_append_does_not_deliver_it() -
     release = asyncio.Event()
     address = SessionAddress(project_id=None, agent_id="coder", session_id="one")
 
-    async def execute(run: Run) -> str:
-        run.accepts_steering = True
+    async def execute(_run: Run) -> str:
         await release.wait()
         return "done"
 
@@ -586,7 +585,7 @@ async def test_removing_second_steer_during_first_append_does_not_deliver_it() -
     first = await manager.enqueue(address, execute, steerable=True)
     second = await manager.enqueue(address, execute, steerable=True)
     for item in [first, second]:
-        manager.steer_queued("coder", "one", item.item_id, project_id=None, run_id=run.id)
+        manager.steer_queued("coder", "one", item.item_id, project_id=None)
     delivered = []
 
     async def append(item: QueuedRunItem) -> None:
@@ -599,5 +598,49 @@ async def test_removing_second_steer_during_first_append_does_not_deliver_it() -
         assert delivered == [first.item_id]
         assert first.future.result() is run
         assert second.future.cancelled()
+    finally:
+        await manager.aclose()
+
+
+async def test_selected_input_no_run_took_starts_first_in_queue_order() -> None:
+    manager = ChatRunManager()
+    active_execute, active_release = held("active")
+    active_run = await manager.start(SESSION, active_execute)
+    ordinary, first, second = [
+        await manager.enqueue(SESSION, held(label)[0], steerable=True, display_content=label)
+        for label in ["ordinary", "first", "second"]
+    ]
+    for item in [second, first]:
+        manager.steer_queued("coder", "session-one", item.item_id, project_id=None)
+
+    try:
+        active_release.set()
+        assert await active_run.wait() == "active"
+        successor = await asyncio.wait_for(first.future, timeout=1)
+        queued = manager.list_queued("coder", "session-one", project_id=None)
+        assert [item.display_content for item in queued] == ["second", "ordinary"]
+        assert manager.pending_steering(successor) == [second]
+        assert not ordinary.steering
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.parametrize(
+    "admission",
+    [
+        RunAdmission(owner=RunExecutionOwner("swarm", "group", "member", "gen", "epoch")),
+        RunAdmission(working_project_id="other"),
+    ],
+    ids=["extension-owned-run", "other-working-project"],
+)
+async def test_input_an_active_run_cannot_take_stays_selected(admission: RunAdmission) -> None:
+    manager = ChatRunManager()
+    execute, _release = held()
+    run = await manager.start(SESSION, execute, admission=admission)
+    item = await manager.enqueue(SESSION, execute, steerable=True)
+    manager.steer_queued("coder", "session-one", item.item_id, project_id=None)
+    try:
+        assert manager.pending_steering(run) == []
+        assert item.steering
     finally:
         await manager.aclose()

@@ -594,7 +594,7 @@ class ChatRunManager:
         for item in queue:
             if item.item_id != item_id:
                 continue
-            if item.steering_run_id is not None:
+            if item.steering:
                 return False
             item.executor = new_executor
             item.display_content = new_display_content
@@ -610,36 +610,42 @@ class ChatRunManager:
         item_id: str,
         *,
         project_id: str | None,
-        run_id: str,
     ) -> QueuedRunItem:
-        """Bind a queued input to the exact active Run without removing it yet."""
-        run = self.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
-        if run is None or run.id != run_id or not run.accepts_steering or run.cancel_requested:
-            raise ActiveRunError("the selected Run no longer accepts steering")
+        """Select queued input for the Session's next Model request.
+
+        Whichever Run is active takes it at its next safe boundary; input no Run
+        takes before the active one ends starts the next Run ahead of the Queue.
+        """
         for item in self.list_queued(agent_id, session_id, project_id=project_id):
             if item.item_id != item_id:
                 continue
-            if (
-                not item.steerable
-                or item.internal
-                or item.admission.owner is not None
-                or run.execution_owner is not None
-            ):
+            if not item.steerable or item.internal or item.admission.owner is not None:
                 raise ActiveRunError("this queued input cannot steer a Run")
-            if item.admission.working_project_id != run.working_project_id:
-                raise ActiveRunError("queued input has a different working Project")
-            if item.steering_run_id != run.id:
-                item.steering_run_id = run.id
-                _LOGGER.info("Queue steering requested (run=%s item=%s)", run.id, item.item_id)
+            if not item.steering:
+                item.steering = True
+                _LOGGER.info(
+                    "Queue steering requested (agent=%s session=%s item=%s)",
+                    agent_id,
+                    session_id,
+                    item.item_id,
+                )
             return item
         raise RunNotFoundError(f"queued item not found: {item_id}")
 
     def pending_steering(self, run: Run) -> list[QueuedRunItem]:
-        """Snapshot requested input in Queue order at a safe executor boundary."""
+        """Snapshot selected input this Run can take, in Queue order.
+
+        An Extension-owned Run keeps its input to its owner, and input admitted
+        for another working Project needs its own cwd; both start next instead.
+        """
+        if run.execution_owner is not None:
+            return []
         return [
             item
             for item in self.list_queued(run.agent_id, run.session_id, project_id=run.project_id)
-            if item.steering_run_id == run.id and not item.future.cancelled()
+            if item.steering
+            and not item.future.cancelled()
+            and item.admission.working_project_id == run.working_project_id
         ]
 
     async def deliver_steering(
@@ -982,8 +988,12 @@ class ChatRunManager:
                 self._queues.pop(address, None)
                 return
 
-            for pending in queue:
-                pending.steering_run_id = None
+            if any(pending.steering for pending in queue):
+                # Selected input no Run took starts first; the stable sort keeps
+                # Queue order within both groups, and the rest of the selection
+                # reaches the new Run at its first Model request.
+                queue = deque(sorted(queue, key=lambda pending: not pending.steering))
+                self._queues[address] = queue
             while queue:
                 item = queue.popleft()
                 # The cancellation callback normally removes an abandoned item

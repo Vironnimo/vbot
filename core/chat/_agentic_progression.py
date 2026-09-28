@@ -188,7 +188,6 @@ class AgenticProgression:
                 # User input, the persisted final answer remains the Run result.
                 if self._dependencies.run_manager.pending_steering(run):
                     continue
-                run.accepts_steering = False
                 break
             awaiting_steering = False
             if delivered:
@@ -677,8 +676,7 @@ class AgenticProgression:
                     if self._dependencies.run_manager.pending_steering(run):
                         awaiting_steering = True
                         continue
-                    # Seal admission synchronously with the last pending-input check.
-                    run.accepts_steering = False
+                    # Input selected after this check starts the next Run.
                     break
 
                 finalization_violation = context.tool_progress.finalization_reason is not None

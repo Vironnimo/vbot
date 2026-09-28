@@ -412,18 +412,11 @@ export function updateQueueItem(
   return rpc('chat.queue_update', params, requestOptions);
 }
 
-export function steerQueueItem(
-  agentId,
-  sessionId,
-  itemId,
-  runId,
-  options = {},
-) {
+export function steerQueueItem(agentId, sessionId, itemId, options = {}) {
   for (const [name, value] of Object.entries({
     agent_id: agentId,
     session_id: sessionId,
     item_id: itemId,
-    run_id: runId,
   })) {
     requireNonEmptyString(
       value,
@@ -437,7 +430,6 @@ export function steerQueueItem(
       agent_id: agentId,
       session_id: sessionId,
       item_id: itemId,
-      run_id: runId,
     },
     options,
   );
