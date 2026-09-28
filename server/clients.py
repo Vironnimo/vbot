@@ -1,11 +1,12 @@
-"""In-memory presence registry of connected app-window clients.
+"""In-memory presence registry of connected app clients.
 
-Only ``/ws`` window connections register here — browser tabs and the Desktop
-shell. The CLI holds no persistent ``/ws`` window (it is request/response RPC)
-and channels (Telegram/Discord) are not windows, so neither appears: the roster
-answers "which app windows are open", not "every way in". The roster itself is
-momentary in-memory state; logical presence boundaries go through structured
-logging, while the registry stores no client history.
+Only ``/ws`` connections register here — browser tabs, the Desktop shell and
+the Windows tray. The CLI holds no persistent ``/ws`` connection (it is
+request/response RPC) and channels (Telegram/Discord) are not app clients, so
+neither appears: the roster answers "which app clients are connected", not
+"every way in". The roster itself is momentary in-memory state; logical
+presence boundaries go through structured logging, while the registry stores no
+client history.
 """
 
 from __future__ import annotations
@@ -23,8 +24,9 @@ LOGGER_NAME = "vbot.server.clients"
 
 ACCESSOR_BROWSER = "browser"
 ACCESSOR_DESKTOP = "desktop"
+ACCESSOR_TRAY = "tray"
 ACCESSOR_UNKNOWN = "unknown"
-_ALLOWED_ACCESSORS = frozenset({ACCESSOR_BROWSER, ACCESSOR_DESKTOP})
+_ALLOWED_ACCESSORS = frozenset({ACCESSOR_BROWSER, ACCESSOR_DESKTOP, ACCESSOR_TRAY})
 
 UNKNOWN_LABEL = "Unknown"
 CLIENT_LOG_ID_LENGTH = 8
@@ -40,7 +42,7 @@ CLIENT_STATUS_CONNECTED = "connected"
 
 @dataclass(frozen=True)
 class ClientEntry:
-    """One open app-window connection in the presence roster."""
+    """One open app-client connection in the presence roster."""
 
     id: str
     connection_id: str
@@ -63,7 +65,7 @@ class ClientEntry:
 
 @dataclass
 class _ClientPresence:
-    """One logical app-window presence across overlapping reconnect sockets."""
+    """One logical app-client presence across overlapping reconnect sockets."""
 
     entry: ClientEntry
     connected_at: datetime
@@ -71,7 +73,7 @@ class _ClientPresence:
 
 
 class ClientRegistry:
-    """In-memory roster of open ``/ws`` app-window connections."""
+    """In-memory roster of open ``/ws`` app-client connections."""
 
     def __init__(
         self,
@@ -173,6 +175,8 @@ def _accessor_label(accessor: str) -> str:
         return "Browser"
     if accessor == ACCESSOR_DESKTOP:
         return "Desktop"
+    if accessor == ACCESSOR_TRAY:
+        return "Tray"
     return UNKNOWN_LABEL
 
 

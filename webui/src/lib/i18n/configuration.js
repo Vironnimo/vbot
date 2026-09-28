@@ -133,15 +133,16 @@ export default Object.freeze({
   'settings.general.setupGuideAction': 'Open setup guide',
   'settings.general.clients.title': 'Connected clients',
   'settings.general.clients.description':
-    'App windows currently connected to this server (browser tabs and the Desktop app).',
+    'Apps currently connected to this server (browser tabs, the Desktop app and the vBot tray).',
   'settings.general.clients.loading': 'Loading connected clients…',
-  'settings.general.clients.empty': 'No app windows connected.',
+  'settings.general.clients.empty': 'No apps connected.',
   'settings.general.clients.loadError':
     'Connected clients could not be loaded.',
   'settings.general.clients.thisWindow': 'This window',
   'settings.general.clients.connectedAt': 'Connected {time}',
   'settings.general.clients.accessor.browser': 'Browser',
   'settings.general.clients.accessor.desktop': 'Desktop',
+  'settings.general.clients.accessor.tray': 'vBot tray',
   'settings.general.clients.accessor.unknown': 'Unknown',
   'settings.general.clients.status.connected': 'Connected',
   'settings.defaults.model': 'Model',

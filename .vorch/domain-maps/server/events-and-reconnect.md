@@ -1,6 +1,6 @@
 # Server Events and Reconnect
 
-Task-gated reference for the shared `/ws` event bus, Run bridging, `resource_changed`, window presence, SSE replay, and reconnect handshakes. Read this when changing server-push, invalidation, replay/catch-up, or active-Run recovery; it is not required for ordinary RPC handler work.
+Task-gated reference for the shared `/ws` event bus, Run bridging, `resource_changed`, client presence, SSE replay, and reconnect handshakes. Read this when changing server-push, invalidation, replay/catch-up, or active-Run recovery; it is not required for ordinary RPC handler work.
 
 ## Server Event Bus
 
@@ -24,13 +24,13 @@ The client may reconnect with `epoch` and `after_sequence`. A matching epoch plu
 
 The shared socket explicitly closes its bus subscription on every exit, including send failure and cancellation after an event was consumed; cleanup never depends on async-generator finalization (`tests/server/test_websocket_handshake.py`).
 
-## Window presence
+## Client presence
 
-`server/clients.py::ClientRegistry` is a momentary in-memory roster of open browser/Desktop `/ws` windows. CLI calls and Channels do not register. Each entry has a server-minted unregister `id`, client-minted `connection_id`, normalized accessor, coarse browser/OS labels, UTC `connected_at`, and constant `connected` status.
+`server/clients.py::ClientRegistry` is a momentary in-memory roster of open `/ws` app clients: browser tabs, Desktop windows and the Windows tray. Every `/ws` connection registers; CLI calls and Channels hold no `/ws` connection and do not appear. Each entry has a server-minted unregister `id`, client-minted `connection_id`, the accessor from the `accessor` query parameter (`browser`, `desktop` or `tray`; any other value becomes `unknown`), coarse browser/OS labels derived from the User-Agent, UTC `connected_at`, and constant `connected` status. `client.list` returns the roster; the WebUI's Settings clients list labels `tray` as "vBot tray" (`tests/server/test_clients.py`, `SettingsGeneralPanel.test.js`).
 
 Connect registers and publishes `resource_changed(kind="clients")` before the hello high-water mark is read. Therefore the connecting window's own presence event is at or below its live-only floor while other windows receive it. After the hello, the shared socket races its outgoing event stream against inbound disconnect detection, so an otherwise idle closed window unregisters immediately instead of waiting for another server event; the handler's `finally` cleans up every exit path and publishes another clients invalidation.
 
-The registry emits one `INFO` log at each logical app-window presence boundary: the first active registration for a client-minted `connection_id` logs connect, and removal of its last active registration logs disconnect with the elapsed duration. Overlapping old/new sockets during a reconnect therefore remain one logged presence cycle even though both momentary socket entries may briefly exist in the roster. Log rows use only the normalized accessor/browser/OS labels and the first eight characters of the client id; they never include the raw User-Agent. Connections without a client-minted id are treated as independent registrations.
+The registry emits one `INFO` log at each logical app-client presence boundary: the first active registration for a client-minted `connection_id` logs connect, and removal of its last active registration logs disconnect with the elapsed duration. Overlapping old/new sockets during a reconnect therefore remain one logged presence cycle even though both momentary socket entries may briefly exist in the roster. Log rows use only the normalized accessor/browser/OS labels and the first eight characters of the client id; they never include the raw User-Agent. Connections without a client-minted id are treated as independent registrations.
 
 ## Run bridge
 
