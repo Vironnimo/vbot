@@ -67,6 +67,30 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     pending.clear();
   }
 
+  // `change` names the records the page's own Extension changed; without it
+  // the page refreshes everything it shows (reload, reconnect, recovery).
+  function invalidation(data) {
+    const change = data.change;
+    const valid =
+      isPlainObject(change) &&
+      typeof change.resource === 'string' &&
+      change.resource.length > 0 &&
+      Array.isArray(change.ids) &&
+      change.ids.every((id) => typeof id === 'string' && id.length > 0) &&
+      Number.isInteger(change.revision) &&
+      change.revision >= 0;
+    return Object.freeze({
+      reason: typeof data.reason === 'string' ? data.reason : null,
+      change: valid
+        ? Object.freeze({
+            resource: change.resource,
+            ids: Object.freeze([...change.ids]),
+            revision: change.revision,
+          })
+        : null,
+    });
+  }
+
   const onMessage = (event) => {
     if (
       event.source !== target ||
@@ -145,7 +169,8 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       return;
     }
     if (data.type === 'vbot.extension.invalidate') {
-      for (const listener of invalidationListeners) listener(data);
+      const value = invalidation(data);
+      for (const listener of invalidationListeners) listener(value);
       return;
     }
     if (
@@ -264,6 +289,8 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       contextListeners.add(listener);
       return () => contextListeners.delete(listener);
     },
+    // Listeners receive `{reason, change}`; `change` is `{resource, ids,
+    // revision}` from the Extension's `publish_change`, or null.
     onInvalidation(listener) {
       invalidationListeners.add(listener);
       return () => invalidationListeners.delete(listener);

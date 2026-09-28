@@ -171,16 +171,6 @@ describe('ExtensionPage frame bridge', () => {
         theme: { mode: 'light' },
       }),
     );
-    component.update({
-      invalidation: { owner: 'other', page: 'main', revision: 1 },
-    });
-    flushSync();
-    expect(page.posted()).not.toContainEqual(
-      expect.objectContaining({
-        type: 'vbot.extension.invalidate',
-        revision: 1,
-      }),
-    );
     component.update({ descriptor: { ...descriptor, epoch: 'epoch-b' } });
     flushSync();
     expect(page.posted()).toContainEqual(
@@ -190,6 +180,34 @@ describe('ExtensionPage frame bridge', () => {
         nonce: page.init.nonce,
       }),
     );
+  });
+
+  it("forwards an Extension's changes only to its own page", () => {
+    const page = openPage();
+    const invalidations = () =>
+      page.posted().filter((data) => data.type === 'vbot.extension.invalidate');
+    const change = { resource: 'swarms', ids: ['swarm-one'], revision: 4 };
+    component.invalidate({ owner: 'other', change, revision: 1 });
+    expect(invalidations()).toEqual([]);
+    component.invalidate({ owner: 'alpha', change, revision: 2 });
+    // After an Extension reload every open page refreshes everything.
+    component.invalidate({ owner: null, change: null, revision: 3 });
+    // A change the bridge cannot carry still refreshes the page.
+    component.invalidate({
+      owner: 'alpha',
+      change: { resource: 'swarms', ids: [7], revision: 5 },
+      revision: 4,
+    });
+    expect(invalidations()).toEqual([
+      expect.objectContaining({
+        nonce: page.init.nonce,
+        epoch: 'epoch-a',
+        revision: 2,
+        change,
+      }),
+      expect.not.objectContaining({ change: expect.anything() }),
+      expect.not.objectContaining({ change: expect.anything() }),
+    ]);
   });
 
   it.each([
