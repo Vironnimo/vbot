@@ -82,25 +82,38 @@ describe('computePanelPosition', () => {
 });
 
 describe('optionDecorations', () => {
-  it('accepts known status dots, count badges and accessible names only', () => {
+  it('accepts known status dots, count badges, accessible names and tooltips only', () => {
     expect(
       optionDecorations({
         statusDot: 'unread',
         badge: 3,
         ariaLabel: 'Gamma: 3 unread results',
+        tooltip: { title: 'Gamma', rows: [] },
       }),
     ).toEqual({
       statusDot: 'unread',
       badge: '3',
       ariaLabel: 'Gamma: 3 unread results',
+      tooltip: { title: 'Gamma', rows: [], placement: 'right' },
     });
     expect(
-      optionDecorations({ statusDot: 'blinking', badge: '', ariaLabel: 7 }),
-    ).toEqual({ statusDot: '', badge: '', ariaLabel: '' });
+      optionDecorations({
+        statusDot: 'blinking',
+        badge: '',
+        ariaLabel: 7,
+        tooltip: 'Gamma',
+      }),
+    ).toEqual({
+      statusDot: '',
+      badge: '',
+      ariaLabel: '',
+      tooltip: { text: 'Gamma', placement: 'right' },
+    });
     expect(optionDecorations(null)).toEqual({
       statusDot: '',
       badge: '',
       ariaLabel: '',
+      tooltip: '',
     });
   });
 });

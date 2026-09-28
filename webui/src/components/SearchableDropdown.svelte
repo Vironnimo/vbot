@@ -436,6 +436,7 @@
               disabled={option.disabled}
               aria-label={option.ariaLabel || undefined}
               aria-selected={option.value === value}
+              use:tooltip={option.tooltip}
               class:active={option.value === activeOptionValue}
               onclick={() => selectOption(option)}
             >

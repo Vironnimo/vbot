@@ -17,13 +17,17 @@ const STATUS_DOTS = new Set(['idle', 'running', 'unread']);
  * Optional per-option decorations shared by both Dropdown variants:
  * `statusDot` ('idle' | 'running' | 'unread') renders the app's status dot
  * before the label (also on the trigger for the selected option), `badge` a
- * compact count pill after it, and `ariaLabel` replaces the option's
- * accessible name when the visible label alone omits that status.
+ * compact count pill after it, `ariaLabel` replaces the option's
+ * accessible name when the visible label alone omits that status, and
+ * `tooltip` (quick-tooltip content, lib/tooltip.js) describes the option on
+ * hover. Option tooltips open beside the list so they never cover the
+ * neighbouring options.
  */
 export function optionDecorations(option) {
   const statusDot = option?.statusDot;
   const badge = option?.badge;
   const ariaLabel = option?.ariaLabel;
+  const tooltip = option?.tooltip;
   return {
     statusDot: STATUS_DOTS.has(statusDot) ? statusDot : '',
     badge:
@@ -31,7 +35,18 @@ export function optionDecorations(option) {
         ? String(badge)
         : '',
     ariaLabel: typeof ariaLabel === 'string' ? ariaLabel : '',
+    tooltip: sideTooltip(tooltip),
   };
+}
+
+function sideTooltip(content) {
+  if (typeof content === 'string') {
+    return content ? { text: content, placement: 'right' } : '';
+  }
+  if (content !== null && typeof content === 'object') {
+    return { placement: 'right', ...content };
+  }
+  return '';
 }
 
 /**

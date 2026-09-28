@@ -687,7 +687,10 @@
                     })}
             {@const memberActivityTooltip = agentActivityTooltip(
               memberActivityLabel,
-              member.effective?.model?.value,
+              {
+                model: member.effective?.model?.value,
+                thinkingEffort: member.effective?.thinking_effort?.value,
+              },
             )}
             <button
               type="button"

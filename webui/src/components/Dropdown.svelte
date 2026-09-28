@@ -423,6 +423,7 @@
           disabled={option.disabled}
           aria-label={option.ariaLabel || undefined}
           aria-selected={option.value === value}
+          use:tooltip={option.tooltip}
           onclick={() => selectOption(option)}
         >
           {#if option.statusDot}

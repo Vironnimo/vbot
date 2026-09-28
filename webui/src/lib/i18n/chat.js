@@ -135,6 +135,8 @@ export default Object.freeze({
   'chat.runStatus.interrupted': 'Interrupted',
   'chat.agentActivity.idle': '{name}: Idle',
   'chat.agentActivity.model': 'Model',
+  'chat.agentActivity.thinkingEffort': 'Thinking effort',
+  'chat.agentActivity.thinkingEffortDefault': 'Provider default',
   'chat.agentActivity.running': '{name}: Running',
   'chat.agentActivity.unread': '{name}: Unread result',
   'chat.agentActivity.unreadOne': '{name}: 1 unread result',

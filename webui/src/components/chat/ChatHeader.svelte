@@ -68,6 +68,7 @@
       statusDot: entry.status,
       badge: entry.unreadCount > 0 ? entry.unreadCount : '',
       ariaLabel: entry.label,
+      tooltip: entry.tooltip,
     })),
   );
   // Chips for every other Agent with activity: unread results first (newest
@@ -129,7 +130,10 @@
       latestUnreadAt: Number(activity.latestUnreadAt) || 0,
       index,
       label,
-      tooltip: agentActivityTooltip(label, agent.model),
+      tooltip: agentActivityTooltip(label, {
+        model: agent.model,
+        thinkingEffort: agent.thinking_effort,
+      }),
     };
   }
 

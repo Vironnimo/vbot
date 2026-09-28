@@ -223,7 +223,7 @@ describe('ChatView Projects', () => {
       },
     );
 
-    it('shows each Agent effective provider/model in the activity hover', async () => {
+    it('shows each Agent effective provider/model and thinking effort in the activity hover', async () => {
       rpcMock.mockImplementation(createChatRpcMock());
       showProjectMock.mockResolvedValue({
         project: { project_id: 'vbot', default_agent: 'builder' },
@@ -238,6 +238,7 @@ describe('ChatView Projects', () => {
                   value: 'openai/gpt-5.2::subscription',
                   source: 'override',
                 },
+                thinking_effort: { value: 'medium', source: 'agent' },
               },
             },
           ],
@@ -262,10 +263,10 @@ describe('ChatView Projects', () => {
 
       vi.useFakeTimers();
       expect(await hoveredTooltipText(agentPickerTrigger())).toBe(
-        'Alpha: Idle\nModel: openrouter/anthropic/claude-sonnet-4',
+        'Alpha: Idle\nModel: openrouter/anthropic/claude-sonnet-4\nThinking effort: Provider default',
       );
       expect(await hoveredTooltipText(teamTab('Builder'))).toBe(
-        'Builder: Idle\nModel: openai/gpt-5.2',
+        'Builder: Idle\nModel: openai/gpt-5.2\nThinking effort: medium',
       );
     });
 

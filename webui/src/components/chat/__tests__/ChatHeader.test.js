@@ -14,7 +14,12 @@ const { default: ChatHeader } = await import('../ChatHeader.svelte');
 
 const AGENTS = [
   { id: 'alpha', name: 'Alpha', model: 'openai/gpt-5.2::api-key:work' },
-  { id: 'beta', name: 'Beta', model: 'anthropic/claude-sonnet-4' },
+  {
+    id: 'beta',
+    name: 'Beta',
+    model: 'anthropic/claude-sonnet-4',
+    thinking_effort: 'high',
+  },
   { id: 'gamma', name: 'Gamma' },
   { id: 'delta', name: 'Delta' },
   { id: 'epsilon', name: 'Epsilon' },
@@ -100,6 +105,17 @@ describe('ChatHeader', () => {
     flushSync();
   }
 
+  function tooltipDetails() {
+    const tooltipElement = document.getElementById('app-tooltip');
+    return {
+      title: tooltipElement.querySelector('.app-tooltip__title')?.textContent,
+      rows: Array.from(tooltipElement.querySelectorAll('dt'), (term) => [
+        term.textContent,
+        term.nextElementSibling.textContent,
+      ]),
+    };
+  }
+
   it('shows the selected Agent with its status on the picker trigger', async () => {
     mountHeader({ selectedAgentId: 'beta' });
 
@@ -113,16 +129,35 @@ describe('ChatHeader', () => {
     vi.useFakeTimers();
     trigger.dispatchEvent(new Event('pointerenter'));
     await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
-    const tooltipElement = document.getElementById('app-tooltip');
-    expect(
-      tooltipElement.querySelector('.app-tooltip__title').textContent,
-    ).toBe(running('Beta'));
-    expect(tooltipElement.querySelector('dt').textContent).toBe(
-      t('chat.agentActivity.model'),
+    expect(tooltipDetails()).toEqual({
+      title: running('Beta'),
+      rows: [
+        [t('chat.agentActivity.model'), 'anthropic/claude-sonnet-4'],
+        [t('chat.agentActivity.thinkingEffort'), 'high'],
+      ],
+    });
+  });
+
+  it('describes every Agent on its picker option', async () => {
+    mountHeader({ selectedAgentId: 'beta' });
+    const options = await openPicker();
+    const alpha = options.find(
+      (option) => option.getAttribute('aria-label') === idle('Alpha'),
     );
-    expect(tooltipElement.querySelector('dd').textContent).toBe(
-      'anthropic/claude-sonnet-4',
-    );
+
+    vi.useFakeTimers();
+    alpha.dispatchEvent(new Event('pointerenter'));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    expect(tooltipDetails()).toEqual({
+      title: idle('Alpha'),
+      rows: [
+        [t('chat.agentActivity.model'), 'openai/gpt-5.2'],
+        [
+          t('chat.agentActivity.thinkingEffort'),
+          t('chat.agentActivity.thinkingEffortDefault'),
+        ],
+      ],
+    });
   });
 
   it('orders the picker running first, then unread by newest result, then the roster', async () => {
