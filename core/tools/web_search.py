@@ -49,7 +49,7 @@ from core.tools._web_search_providers import (
 from core.tools._web_search_transport import (
     _ResponseTooLargeError,
 )
-from core.tools.arguments import ToolArgumentError, optional_int
+from core.tools.arguments import optional_int
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
@@ -290,8 +290,6 @@ def _window_for(days: float) -> str | None:
 def _result_age(arguments: JsonObject) -> tuple[str, str, str | None]:
     """Resolve recency, days and date_after into one window, a note, or an error."""
     recency = arguments.get("recency")
-    if recency is not None and (not isinstance(recency, str) or recency not in RECENCY_VALUES):
-        return "", "", f"recency must be one of: {', '.join(RECENCY_VALUES)}"
     periods: list[tuple[str, float]] = []
     days = arguments.get("days")
     if days is not None:
@@ -455,23 +453,20 @@ async def web_search_handler(
     if settings_error is not None or settings is None:
         return _configuration_failure(settings_error or "they could not be resolved")
 
-    try:
-        count = optional_int(
-            arguments.get("count"),
-            field_name="count",
-            default=settings["default_count"],
-            minimum=MIN_WEB_SEARCH_COUNT,
-            maximum=MAX_WEB_SEARCH_COUNT,
-        )
-        page = optional_int(
-            arguments.get("page"),
-            field_name="page",
-            default=1,
-            minimum=1,
-            maximum=MAX_WEB_SEARCH_PAGE,
-        )
-    except ToolArgumentError as error:
-        return _invalid(str(error))
+    count = optional_int(
+        arguments.get("count"),
+        field_name="count",
+        default=settings["default_count"],
+        minimum=MIN_WEB_SEARCH_COUNT,
+        maximum=MAX_WEB_SEARCH_COUNT,
+    )
+    page = optional_int(
+        arguments.get("page"),
+        field_name="page",
+        default=1,
+        minimum=1,
+        maximum=MAX_WEB_SEARCH_PAGE,
+    )
 
     recency, age_note, age_error = _result_age(arguments)
     if age_error is not None:
