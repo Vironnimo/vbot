@@ -341,11 +341,21 @@ class RequestBuilder:
         pin = None if inputs.fresh_tool_epoch else await self._read_tool_epoch_pin(session)
         catalog: LiveToolCatalog | None = None
         if pin is None or inputs.temporary_binding is not None:
+            # Measured on the Run's primary route, like every Tool announcement,
+            # even while a fallback target serves this request.
             catalog = await self._live_tool_catalog(
                 agent,
                 session_tool_grants=live_tool_grants,
-                input_modalities=effective_input_modalities,
-                wire_media_types=inputs.wire_media_types,
+                input_modalities=(
+                    effective_input_modalities
+                    if inputs.tool_route_input_modalities is None
+                    else inputs.tool_route_input_modalities
+                ),
+                wire_media_types=(
+                    inputs.wire_media_types
+                    if inputs.tool_route_wire_media_types is None
+                    else inputs.tool_route_wire_media_types
+                ),
             )
         if pin is None:
             assert catalog is not None

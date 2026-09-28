@@ -262,11 +262,11 @@ async def run_context(
     return context
 
 
-async def compact_context(loop: ChatLoop, context: Any) -> Any:
-    """Run the automatic boundary for ``context`` with usage above the trigger."""
+async def compact_context(loop: ChatLoop, context: Any, target: Any | None = None) -> Any:
+    """Run the automatic boundary for ``context`` on *target* (default: the primary route)."""
     return cast(
         Any,
         await loop._compaction_runs.maybe_auto_compact_state(
-            context, context.primary_target, {"input_tokens": 90}
+            context, target or context.primary_target, {"input_tokens": 90}
         ),
     )

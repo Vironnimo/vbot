@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,6 +14,7 @@ from core.chat._run_state import RequestBuildInputs, _RunRequest
 from core.chat._tool_epoch import ToolEpochPin
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
+from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.prompts.pinned_context import (
     PINNED_MEMORY_FILES_SLOT,
     PINNED_SKILL_CATALOG_SLOT,
@@ -24,7 +26,7 @@ from core.prompts.pinned_context import (
     pinned_soul_context,
 )
 from core.runs import Run, RunExecutionOwner
-from core.tools import ToolRegistry, tool_success
+from core.tools import ANALYZE_IMAGE_TOOL_NAME, ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_compaction_test_support import (
     auto_compact,
@@ -119,16 +121,25 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("refresh_fails", [False, True], ids=["refreshed", "refresh-failed"])
+@pytest.mark.parametrize(
+    ("refresh_fails", "on_fallback"),
+    [(False, False), (True, False), (False, True)],
+    ids=["refreshed", "refresh-failed", "on-fallback"],
+)
 async def test_compaction_pins_the_current_tools_for_the_new_epoch(
-    tmp_path: Path, refresh_fails: bool
+    tmp_path: Path, refresh_fails: bool, on_fallback: bool
 ) -> None:
     # The checkpoint drops the notes that announced Tool changes, so the new epoch's
-    # Tool pin lists the Tools of now, even when the rest of the refresh failed.
+    # Tool pin lists the Tools of now, even when the rest of the refresh failed. It
+    # applies the route gates of the Run's primary route, also while a fallback serves
+    # the Run: the text-only primary offers analyze_image, the image-viewing fallback
+    # would not.
     tools = ToolRegistry()
-    for name in ("kept", "dropped"):
+    for name in ("kept", "dropped", ANALYZE_IMAGE_TOOL_NAME):
         tools.register(name, "Probe.", {"type": "object"}, lambda *_args: tool_success({}))
-    runtime = compaction_runtime(tmp_path, tools=tools)
+    runtime = compaction_runtime(
+        tmp_path, tools=tools, available_task_models={TASK_IMAGE_UNDERSTANDING}
+    )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
@@ -144,15 +155,20 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
             raise RuntimeError("scan failed")
 
         runtime.refresh_skills_for = fail_refresh
+    fallback = replace(
+        context.primary_target,
+        input_modalities=frozenset({"text", "image"}),
+        wire_media_types=frozenset({"image/png"}),
+    )
 
-    rebuilt = await compact_context(loop, context)
+    rebuilt = await compact_context(loop, context, fallback if on_fallback else None)
 
     pin = ToolEpochPin.from_payload(
         runtime.chat_sessions.prompt_pin(session.address, PINNED_TOOL_DEFINITIONS_SLOT)
     )
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
     assert pin is not None and pin.epoch != old_epoch
-    assert pin.names == ("get_weather", "added", "kept")
+    assert pin.names == ("get_weather", "added", ANALYZE_IMAGE_TOOL_NAME, "kept")
     assert rebuilt.tools == list(pin.definitions)
     assert rebuilt.tool_epoch.pin == pin
 

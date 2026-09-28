@@ -443,6 +443,11 @@ class RequestBuildInputs:
     input_modalities: frozenset[str] | None = None
     wire_media_types: frozenset[str] = frozenset()
     max_image_bytes: int | None = None
+    # The Run's primary route, whose gates decide the Tools a new Tool pin
+    # offers, also while a fallback target serves this request. ``None`` uses
+    # this request's own route.
+    tool_route_input_modalities: frozenset[str] | None = None
+    tool_route_wire_media_types: frozenset[str] | None = None
     # Pinned prompt-epoch state; replaced wholesale by a Compaction refresh.
     agent_body: str = ""
     project_context: ProjectPromptContext | None = None
@@ -469,13 +474,19 @@ class RequestBuildInputs:
         context: _RunExecutionContext,
         target: _ModelTarget,
     ) -> RequestBuildInputs:
-        """Collect the context's pinned epoch plus one target's wire inputs."""
+        """Collect the context's pinned epoch plus one target's wire inputs.
+
+        Tools are always measured on the Run's primary route, so a Compaction
+        on a fallback target pins what the primary route offers.
+        """
         return cls(
             replay_policy=target.replay_policy,
             reasoning_scope_model=target.model_reference,
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
             max_image_bytes=target.max_image_bytes,
+            tool_route_input_modalities=context.primary_target.input_modalities,
+            tool_route_wire_media_types=context.primary_target.wire_media_types,
             agent_body=context.agent_body,
             project_context=context.project_prompt_context,
             working_project_context=context.working_project_context,
