@@ -12,7 +12,7 @@ originates from the repository, its source file):
   this instance. The detector never judges the model and this module has **no**
   access to the model/provider registry, so it does *not* decide this itself.
   The later resolver builder, which has the model context, appends these via
-  :func:`ScanReport.with_model_findings`. The finding *type* and the insertion
+  :func:`ScanReport.with_findings`. The finding *type* and the insertion
   seam live here so the resolver builds on a stable contract.
 - ``SLUG_COLLISION`` — two source files resolve to the same ``agent_id``. The
   deterministic winner is on the Team; every loser is a finding.
@@ -20,12 +20,12 @@ originates from the repository, its source file):
   ``agent_id``.
 - ``ORPHAN`` — a default-agent pointer (or, supplied by callers, a session
   pointer) names an ``agent_id`` that the current scan did not produce. Surfaced
-  via :func:`ScanReport.with_pointer_findings` because the pointers
+  via :func:`ScanReport.with_findings` because the pointers
   (project default-agent, existing session owners) come from the project anchor,
   not from the scan input.
 - ``UNAVAILABLE_TOOL`` — a persisted Project Tool Whitelist entry is not a
   currently registered Project tool. The server appends these through
-  :func:`ScanReport.with_tool_findings`, because tool registration belongs to the
+  :func:`ScanReport.with_findings`, because tool registration belongs to the
   runtime rather than the repository scanner. The entry remains stored so a
   temporarily disabled Extension regains its permission when enabled again.
 
@@ -79,8 +79,8 @@ class ScanFinding:
 class ScanReport:
     """Everything unclean under what the scan found — empty when all is clean.
 
-    Immutable: the model-finding and pointer-finding seams return a *new* report
-    with the extra findings appended, so the resolver and the anchor-aware caller
+    Immutable: :meth:`with_findings` returns a *new* report with the extra
+    findings appended, so the resolver, the anchor-aware caller and the server
     can each contribute their findings without this module reaching into their
     domains.
     """
@@ -96,35 +96,15 @@ class ScanReport:
         """Return the findings of one type, preserving order."""
         return tuple(finding for finding in self.findings if finding.type == finding_type)
 
-    def with_model_findings(self, model_findings: list[ScanFinding]) -> ScanReport:
-        """Return a new report with the resolver's bad-model findings appended.
+    def with_findings(self, findings: list[ScanFinding]) -> ScanReport:
+        """Return a new report with findings from outside the scan appended.
 
-        The resolver builder owns the "model exists/configured in this instance?"
-        check (it has the model/provider context this module deliberately does
-        not). It builds :class:`ScanFinding` of type :attr:`FindingType.BAD_MODEL`
-        and merges them through here, keeping the finding type and merge point on
-        one contract.
+        The scan has no model/provider context, no Project Anchor and no live
+        Tool Registry, so the resolver (``BAD_MODEL``), the anchor-aware caller
+        (``ORPHAN`` pointers) and the server-facing Project preview
+        (``UNAVAILABLE_TOOL``) contribute those findings through this seam.
         """
-        return ScanReport(findings=(*self.findings, *model_findings))
-
-    def with_pointer_findings(self, pointer_findings: list[ScanFinding]) -> ScanReport:
-        """Return a new report with orphan/pointer findings appended.
-
-        Default-agent and session pointers come from the project anchor, not from
-        the scan input, so the anchor-aware caller supplies these orphan findings
-        through this seam rather than this module reading the anchor.
-        """
-        return ScanReport(findings=(*self.findings, *pointer_findings))
-
-    def with_tool_findings(self, tool_findings: list[ScanFinding]) -> ScanReport:
-        """Return a new report with runtime Project-tool findings appended.
-
-        The repository scanner has no access to the live Tool Registry. The
-        server-facing Project preview supplies unavailable persisted whitelist
-        entries through this seam so they remain warnings rather than making a
-        Project unloadable when an Extension is temporarily disabled.
-        """
-        return ScanReport(findings=(*self.findings, *tool_findings))
+        return ScanReport(findings=(*self.findings, *findings))
 
 
 @dataclass(frozen=True)

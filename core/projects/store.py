@@ -43,7 +43,7 @@ from core.projects.projects import (
 )
 from core.settings import (
     DEFAULT_PROJECT_SOURCE_FORMAT,
-    PROJECT_ID_PATTERN,
+    is_valid_project_id,
 )
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
@@ -68,7 +68,7 @@ def _validate_project_id(project_id: str) -> str:
     rejects crafted input — and it does so at the path-building choke point every store
     and session-path call funnels through, not only at config validation.
     """
-    if not isinstance(project_id, str) or PROJECT_ID_PATTERN.fullmatch(project_id) is None:
+    if not is_valid_project_id(project_id):
         raise ProjectError(f"Invalid project id: {project_id!r}")
     return project_id
 
