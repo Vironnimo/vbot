@@ -1,13 +1,30 @@
+// A pass starts this long after the first change it covers.
+const WINDOW_MS = 100;
+
+// Under sustained changes, a pass of named changes starts no earlier than this
+// long after the previous pass started.
+const SUSTAINED_INTERVAL_MS = 1000;
+
 // Coalesce Swarm invalidations without postponing refresh forever under load.
 // Each mounted owner keeps at most one refresh in flight and one pending pass.
 // A pass receives what changed since the previous pass began: `null` when
 // everything may have changed, otherwise a Map from each changed resource to
 // the Set of changed ids.
+//
+// A quiet page refreshes WINDOW_MS after a change. While changes keep coming,
+// passes start at most once per SUSTAINED_INTERVAL_MS, so their reads do not
+// grow with the Swarm's activity; changes arriving meanwhile join the waiting
+// pass. A pass that must reload everything (see `everythingChanged`) and
+// `run()` never wait for that interval.
 export function createPageRefresh(refresh) {
   let timer = null;
+  // When the armed timer fires.
+  let due = Infinity;
   let running = null;
   // undefined: nothing pending; null: everything; Map: resource -> ids.
   let pending = undefined;
+  // When the previous scheduled pass started, on the monotonic clock.
+  let lastStart = -Infinity;
   let disposed = false;
 
   function collect(change) {
@@ -22,12 +39,23 @@ export function createPageRefresh(refresh) {
     pending.set(change.resource, ids);
   }
 
+  // Arms the pending pass, or moves it earlier when it now reloads everything.
+  // A later change never postpones an armed pass.
   function arm() {
-    if (disposed || running || timer !== null || pending === undefined) return;
+    if (disposed || running || pending === undefined) return;
+    const now = performance.now();
+    const next = everythingChanged(pending)
+      ? now + WINDOW_MS
+      : Math.max(now + WINDOW_MS, lastStart + SUSTAINED_INTERVAL_MS);
+    if (timer !== null && due <= next) return;
+    clearTimeout(timer);
+    due = next;
     timer = setTimeout(() => {
       timer = null;
+      due = Infinity;
+      lastStart = performance.now();
       void start();
-    }, 100);
+    }, next - now);
   }
 
   // `change` is an invalidation's `{resource, ids}`, or null for everything.
@@ -40,6 +68,7 @@ export function createPageRefresh(refresh) {
   function start() {
     clearTimeout(timer);
     timer = null;
+    due = Infinity;
     const changes = pending;
     pending = undefined;
     // The owner handles errors and rejects stale selection replies.

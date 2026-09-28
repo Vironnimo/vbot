@@ -643,9 +643,17 @@ Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.j
 
 Background invalidations are coalesced by the Swarm-internal `ui/pageRefresh.js`:
 each mounted page/panel has one refresh in flight and at most one pending pass,
-with a fixed scheduling window that continuous traffic cannot postpone. A pass
-receives the union of the changes it covers (resource -> ids), or `null` once any
-invalidation in it named none. Each published change names what changed:
+which later changes join but never postpone. A pass receives the union of the
+changes it covers (resource -> ids), or `null` once any invalidation in it named
+none. A pass starts 100 ms after the first change it covers; a pass of named
+changes also starts no earlier than 1 s after the previous scheduled pass started
+(`SUSTAINED_INTERVAL_MS`), so sustained change traffic costs at most one pass per
+second per page/panel, while a page quiet for a second answers within 100 ms
+again. A pending pass that must reload everything (`null` or an unknown resource,
+e.g. a reconnect) is not held by that interval and moves a waiting pass forward;
+the explicit `run()` (mount, Wiki activation) and the full `refresh()` after user
+actions (post, Start, Stop/Resume, delete) bypass the scheduler
+(`pageRefresh.test.js`). Each published change names what changed:
 `profiles` carries a profile id; the other resources carry a Swarm id -
 `swarms` its Swarm list entry (Start, title, settings, Stop, Resume, delete, a
 failed wake, and a changed aggregate state), `participants` their Runs, states and
@@ -661,9 +669,10 @@ the discussion loads its newest page instead). `null` or an unknown resource
 reloads everything, so reconnects, reloads and owner-less invalidations still
 refresh fully (`SwarmPage.test.js`, `SwarmPage.board.test.js`,
 `test_swarm_operations.py`, `test_swarm_board_tool.py`). Under the 3-participant
-`perf_load.py --scenario swarm --ui` load this cut the page's Swarm reads from 364
-to 148 in about two minutes; `swarms.get` stays at about one per pass, bounded
-only by the refresh window (2026-09-28). The overview reloads Board or Usage data only for the
+`perf_load.py --scenario swarm --ui` load (about two minutes) the page's Swarm
+reads per Board post fell from 7.0 (all four reads per change) to 3.1 with named
+changes and incremental Board reads, and to 1.9 with the 1 s interval;
+`swarms.get` runs once per pass (2026-09-28). The overview reloads Board or Usage data only for the
 visible tab; selecting a tab loads its current data independently of hidden reports. Activity retains
 the existing History and live subscription while its participant's Run identity
 and active state are unchanged. A new Run or terminal state reconciles History through the generation/sequence append cursor, preserving older loaded pages;
