@@ -122,9 +122,9 @@ def test_deactivate_stops_every_live_effect_exactly_once(tmp_path: Path) -> None
     assert (live.declarations.tools, live.declarations.hooks) == ([], {})
     assert "live" not in registry.loaded_extension_names()
     # Deactivating again, an unknown name or a boot-disabled one changes nothing.
-    assert asyncio.run(registry.deactivate("live")) is False
-    assert asyncio.run(registry.deactivate("does_not_exist")) is False
-    assert asyncio.run(registry.deactivate("dormant")) is False
+    assert asyncio.run(registry.deactivate("live", tools)) is False
+    assert asyncio.run(registry.deactivate("does_not_exist", tools)) is False
+    assert asyncio.run(registry.deactivate("dormant", tools)) is False
     assert record(registry, "dormant").status == "disabled"
     assert marker_lines(marker) == ["fired", "shutdown"]
 
