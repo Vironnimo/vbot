@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 import uuid
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -41,6 +41,9 @@ from ._definitions import (
     MCP_OPERATION_DESCRIPTIONS,
     MCP_OPERATIONS,
     MCP_PARAMETERS,
+    PUBLISHED_TARGETS_PER_CONNECTION,
+    SEARCH_MAX_LIMIT,
+    SEARCH_PAGE_CHARACTERS,
     SEARCH_PAGE_SIZE,
     SEARCH_SUMMARY_CHARACTERS,
     TARGET_FINGERPRINT_LENGTH,
@@ -50,7 +53,7 @@ from ._definitions import (
 from ._views import argument_problem, compact, schema_summary
 from .client import READ_OPERATIONS, ConnectionRunner, InvocationNotSentError, operation_schema
 from .config import CONNECTION_SCHEMA, ConnectionStore, validate_connection
-from .content import RESULT_VIEW_CHARACTERS, ContentStore, pointer_part
+from .content import ContentStore, pointer_part
 from .interactions import InputRequests
 
 __all__ = [
@@ -73,6 +76,9 @@ __all__ = [
 
 
 _TARGET_KINDS = ("tool", "resource", "template", "prompt", "operation")
+
+# What a search without kind covers: the application's own items.
+_APPLICATION_KINDS = ("tool", "resource", "template", "prompt")
 
 _DETAIL_CHARACTERS = 300
 
@@ -121,6 +127,8 @@ class MCPService:
         self.jobs: dict[str, asyncio.Task[dict[str, Any]]] = {}
         self._lock = asyncio.Lock()
         self._runner_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # Per connection, the targets its results have shown, most recently seen last.
+        self._published: dict[str, OrderedDict[str, None]] = {}
         self._closed = False
         self._startup_error: str | None = None
 
@@ -318,9 +326,10 @@ class MCPService:
                 ("tool", "resource", "template", "prompt", "connection", "operation")
             )
         }
+        kinds = (kind,) if kind else _APPLICATION_KINDS
         scored = []
         for entry in entries:
-            if kind and entry["kind"] != kind:
+            if entry["kind"] not in kinds:
                 continue
             text = (entry["name"] + " " + entry["description"]).casefold()
             score = sum(word in text for word in words)
@@ -431,15 +440,46 @@ class MCPService:
             if f"mcp_{runner.id}" not in allowed:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
         entries = self._entries(runner, allowed)
+        self._remember(runner.id, entries)
         if action == "search":
             return await self._search(runner, context, arguments, entries)
-        entry, note, failure = self._resolve(entries, arguments)
+        entry, note, failure = self._resolve(runner.id, entries, arguments)
         if failure is not None:
             return failure
         assert entry is not None
         if action == "describe":
             return await self._describe(runner, context, entry, note)
-        return await self._call_target(runner, context, entry, arguments, allowed)
+        result = await self._call_target(runner, context, entry, arguments, allowed)
+        return result if note is None else self._noted(result, note)
+
+    def _remember(self, connection: str, entries: list[dict[str, Any]]) -> None:
+        """Record the application targets this connection can show, within a bound.
+
+        A target whose definition changed later is then recognized as stale; one
+        never recorded (invented, or from before a restart) reads as its name.
+        """
+        record = self._published.setdefault(connection, OrderedDict())
+        for entry in entries:
+            if entry["kind"] in _APPLICATION_KINDS:
+                record[entry["target"]] = None
+                record.move_to_end(entry["target"])
+        while len(record) > PUBLISHED_TARGETS_PER_CONNECTION:
+            record.popitem(last=False)
+
+    @staticmethod
+    def _noted(result: dict[str, Any], note: str) -> dict[str, Any]:
+        """Add how the target was read to a call's own result or error."""
+        if not result["ok"]:
+            error = result["error"]
+            return {**result, "error": {**error, "message": f"{error['message']} {note}"}}
+        data = result["data"]
+        earlier = data.get("note")
+        if earlier is not None and not isinstance(earlier, str):
+            # A field of the remote result keeps its name and value.
+            return {**result, "data": {"target_note": note, **data}}
+        combined = f"{note} {earlier}" if earlier else note
+        rest = {key: value for key, value in data.items() if key != "note"}
+        return {**result, "data": {"note": combined, **rest}}
 
     async def _read(
         self,
@@ -481,7 +521,10 @@ class MCPService:
         kind = arguments.get("kind")
         matches = self._search_entries(entries, query, kind)
         offset = arguments.get("offset", 0)
-        limit = min(arguments.get("limit", SEARCH_PAGE_SIZE), SEARCH_PAGE_SIZE)
+        requested = arguments.get("limit")
+        limit = SEARCH_PAGE_SIZE if requested is None else min(requested, SEARCH_MAX_LIMIT)
+        # A continuation repeats the search with the limit that was applied.
+        continued = arguments if requested is None else {**arguments, "limit": limit}
         instructions = runner.catalog.get("instructions") or ""
         prompts = [entry for entry in entries if entry["kind"] == "prompt"]
         available = {
@@ -506,7 +549,7 @@ class MCPService:
             f"{entry['target']}: {_one_line(entry['description'], SEARCH_SUMMARY_CHARACTERS)}"
             for entry in page
         ]
-        while len(lines) > 1 and len("\n".join(lines)) > RESULT_VIEW_CHARACTERS - 2000:
+        while len(lines) > 1 and len("\n".join(lines)) > SEARCH_PAGE_CHARACTERS:
             lines.pop()
             page = page[: len(lines)]
         view: dict[str, Any] = {
@@ -520,13 +563,20 @@ class MCPService:
             view["matches"] = f"{offset + 1}-{offset + len(page)} of {len(matches)}"
         else:
             view["matches"] = f"none after {offset} of {len(matches)}" if matches else "none"
+        if requested is not None and requested > limit:
+            view["limit"] = MCP_MESSAGES["search_limit"].format(requested=requested, applied=limit)
         if offset + len(page) < len(matches):
-            view["next"] = {**arguments, "offset": offset + len(page)}
+            view["next"] = {**continued, "offset": offset + len(page)}
         elif offset and offset >= len(matches):
-            view["next"] = {**arguments, "offset": 0}
+            view["next"] = {**continued, "offset": 0}
         if not matches and query.strip():
-            view["note"] = MCP_MESSAGES["no_matches"]
+            searched = f"{kind}s" if kind else "tools, resources, templates or prompts"
+            view["note"] = MCP_MESSAGES["no_matches"].format(searched=searched)
             view["next"] = {"action": "search", "kind": "tool"}
+        if kind is None and not offset:
+            operations = self._operations_line(entries, query)
+            if operations:
+                view["operations"] = operations
         sections = ["\n".join(lines)] if lines else []
         if not query.strip() and not offset and kind is None:
             if instructions:
@@ -558,14 +608,28 @@ class MCPService:
             view["content"] = "\n\n".join(sections)
         return tool_success(view)
 
+    def _operations_line(self, entries: list[dict[str, Any]], query: str) -> str | None:
+        """Point a search without kind to the protocol operations it leaves out."""
+        if not query.strip():
+            call = compact({"action": "search", "kind": "operation"})
+            return MCP_MESSAGES["operations"].format(call=call)
+        count = len(self._search_entries(entries, query, "operation"))
+        if not count:
+            return None
+        call = compact({"action": "search", "kind": "operation", "query": query.strip()})
+        return MCP_MESSAGES["operations_matching"].format(
+            count=count, verb="matches" if count == 1 else "match", call=call
+        )
+
     def _resolve(
-        self, entries: list[dict[str, Any]], arguments: dict[str, Any]
+        self, connection: str, entries: list[dict[str, Any]], arguments: dict[str, Any]
     ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
         """Find the one target a describe or call names; never choose between several.
 
         A full target from search matches exactly. A name, with or without its
         kind, matches when it names one item (ignoring case and separators).
-        A fingerprint of an earlier definition is not substituted for a call.
+        A fingerprint of an earlier definition this connection showed is not
+        substituted for a call; one it never showed is ignored, with a note.
         """
         target = arguments["target"]
         exact = next((entry for entry in entries if entry["target"] == target), None)
@@ -593,8 +657,14 @@ class MCPService:
             ]
         if len(named) == 1:
             entry = named[0]
-            if fingerprint is None:
+            sent = f"{entry['kind']}:{entry['name']}:{fingerprint}"
+            if fingerprint is None or sent == entry["target"]:
                 return entry, None, None
+            if sent not in self._published.get(connection, {}):
+                note = MCP_MESSAGES["target_unrecognized"].format(
+                    current=entry["target"], sent=target
+                )
+                return entry, note, None
             if arguments["action"] == "describe":
                 return entry, MCP_MESSAGES["target_updated"].format(previous=target), None
             describe = compact({"action": "describe", "target": entry["target"]})
@@ -952,6 +1022,8 @@ class MCPService:
                 raise RuntimeError("MCP store was not initialized")
             await run_tool_worker(self.store.save, records)
             self.connections = records
+            if operation == "remove":
+                self._published.pop(identifier, None)
             if operation in {"disable", "remove"}:
                 await self._stop(identifier)
             elif config["enabled"]:

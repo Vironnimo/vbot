@@ -14,6 +14,7 @@ from tests.resources.extensions.mcp.mcp_test_support import (
     allowed_tools,
     context,
     dispatch,
+    model_text,
     targets,
 )
 
@@ -93,6 +94,27 @@ async def test_direct_remote_dispatch_rechecks_revoked_parent(context_service, h
     )
     assert result["error"]["code"] == "mcp_access_denied"
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_connection_disabled_while_connecting_names_where_the_user_enables_it(
+    context_service, host, monkeypatch
+):
+    service, registry, runner, calls = context_service
+    runner.state = "connecting"
+
+    async def connect(*args):
+        service.connections["example"] = {**service.connections["example"], "enabled": False}
+        runner.state = "connected"
+
+    monkeypatch.setattr(runner, "invoke", connect)
+    result = await dispatch(registry, host, {"action": "search"})
+
+    assert model_text(result) == (
+        "Error (mcp_access_denied): The MCP connection example is disabled, so nothing was "
+        "run. Tell the user to enable it in Settings -> Integrations -> Extensions -> MCP "
+        "connections if it is needed.\nretryable: false"
+    )
 
 
 @pytest.mark.asyncio

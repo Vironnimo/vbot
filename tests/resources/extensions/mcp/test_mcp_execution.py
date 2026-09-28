@@ -13,6 +13,7 @@ from tests.resources.extensions.mcp.mcp_test_support import (
     allowed_tools,
     context,
     dispatch,
+    model_text,
     operation_target,
     tool_target,
 )
@@ -55,7 +56,16 @@ async def test_result_preparation_failure_preserves_completed_call_state(
 
     result = await _call(registry, host, target, arguments)
 
-    assert result["error"]["code"] == "mcp_result_unavailable"
+    detail = {
+        "storage": "OSError: test-owned-storage-failure",
+        "media": "Error: Only base64 data is allowed",
+    }[failure]
+    assert model_text(result) == (
+        "Error (mcp_result_unavailable): The MCP server answered, but vBot could not save or "
+        f"prepare its answer: {detail}. The call ran, and whether it succeeded is unknown. "
+        "Before you repeat a call that changes something, check the application's current "
+        "state. A call that only reads is safe to repeat."
+    )
     assert result["data"] is None
     assert len(calls) == 1
 
