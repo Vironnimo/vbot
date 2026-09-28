@@ -13,9 +13,14 @@ answered from the ``[[perf ...]]`` directive in its latest real User message
 - Requests without Tools or without a directive (Session titles, background
   reflection, other utility calls) get a short plain answer and are recorded as
   ``aux``.
+- Requests that offer ``swarm_board`` come from Swarm participants and follow
+  :mod:`scripts.perf_load_suite.swarm_script`; a participant without a turn to
+  take answers plain text recorded as ``idle``.
 
 Each request is recorded with arrival, first-byte and completion times at
-``GET /_perf/stats``; ``POST /_perf/reset`` clears the records.
+``GET /_perf/stats``; ``GET /_perf/progress`` condenses the Swarm participants'
+completed turns, ``POST /_perf/wind_down`` stops new Swarm turns and
+``POST /_perf/reset`` clears the records and the wind-down.
 """
 
 from __future__ import annotations
@@ -32,12 +37,29 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from core.tools.model_names import model_tool_name
-from scripts.perf_load_suite.directive import DirectiveError, PerfDirective, find_directive
+from scripts.perf_load_suite.directive import (
+    DirectiveError,
+    PerfDirective,
+    find_directive,
+    message_text,
+)
 from scripts.perf_load_suite.fixture import (
     BASH_COMMAND,
     SEARCH_NEEDLE,
     SOURCE_DIRECTORY,
     source_file_paths,
+)
+from scripts.perf_load_suite.swarm_script import (
+    IDLE_RESPONSE_TEXT,
+    SWARM_BOARD_TOOL,
+    SwarmScriptError,
+    goal_read_arguments,
+    is_swarm_tool,
+    participant_for_call_id,
+    split_tool_spec,
+    swarm_arguments,
+    swarm_position,
+    turn_tag,
 )
 
 SERVICE_NAME = "vbot-perf-fake-provider"
@@ -62,7 +84,7 @@ _FILLER_WORDS = (
     "index",
 )
 
-ResponseKind = Literal["tool_calls", "text", "warmup", "aux"]
+ResponseKind = Literal["tool_calls", "text", "warmup", "aux", "idle"]
 
 
 class PlanError(ValueError):
@@ -92,6 +114,7 @@ class PlannedResponse:
     round_index: int = 0
     directive: PerfDirective | None = None
     tool_calls: tuple[ScriptedToolCall, ...] = ()
+    participant: str | None = None
 
 
 @dataclass
@@ -103,6 +126,7 @@ class RequestRecord:
     kind: str = "aux"
     tag: str | None = None
     round: int = 0
+    participant: str | None = None
     stream: bool = False
     body_read: float | None = None
     first_byte: float | None = None
@@ -124,6 +148,7 @@ class RequestLog:
         self._records: list[RequestRecord] = []
         self._counter = itertools.count()
         self._call_counter = itertools.count(1)
+        self.wind_down = False
 
     def begin(self, arrival: float) -> RequestRecord:
         record = RequestRecord(index=next(self._counter), arrival=arrival)
@@ -135,23 +160,34 @@ class RequestLog:
 
     def reset(self) -> None:
         self._records = []
+        self.wind_down = False
 
     def snapshot(self) -> list[dict[str, Any]]:
         return [asdict(record) for record in self._records]
 
-
-def message_text(message: dict[str, Any]) -> str:
-    """Return the plain text of an OpenAI chat message's ``content``."""
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and isinstance(part.get("text"), str)
-        )
-    return ""
+    def progress(self) -> dict[str, Any]:
+        """Per Swarm participant: completed scripted turns, idle answers, open requests."""
+        turns: dict[str, set[str]] = {}
+        participants: dict[str, dict[str, int]] = {}
+        for record in self._records:
+            if record.participant is None:
+                continue
+            entry = participants.setdefault(
+                record.participant, {"turns": 0, "idle": 0, "requests": 0, "in_flight": 0}
+            )
+            done = turns.setdefault(record.participant, set())
+            entry["requests"] += 1
+            if record.completed is None:
+                entry["in_flight"] += 1
+            elif record.disconnected or record.error:
+                continue
+            elif record.kind == "text" and record.tag is not None:
+                done.add(record.tag)
+            elif record.kind == "idle":
+                entry["idle"] += 1
+        for participant, entry in participants.items():
+            entry["turns"] = len(turns[participant])
+        return {"wind_down": self.wind_down, "participants": participants}
 
 
 def offered_tool_schemas(body: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -169,14 +205,22 @@ def plan_response(
     body: dict[str, Any],
     *,
     next_call_id: Callable[[], str],
+    wind_down: bool = False,
 ) -> PlannedResponse:
-    """Decide the scripted answer to one ``/v1/chat/completions`` request."""
+    """Decide the scripted answer to one ``/v1/chat/completions`` request.
+
+    ``wind_down`` makes Swarm participants answer new turns without Tools.
+    """
     messages = body.get("messages")
     if not isinstance(messages, list):
         raise PlanError("request has no messages array")
     schemas = offered_tool_schemas(body)
     if not schemas:
         return PlannedResponse(kind="aux")
+    if model_tool_name(SWARM_BOARD_TOOL) in schemas:
+        return _plan_swarm_response(
+            messages, schemas, next_call_id=next_call_id, wind_down=wind_down
+        )
 
     located = _locate_directive(messages)
     if located is None:
@@ -199,7 +243,9 @@ def plan_response(
             directive=directive,
         )
     calls = tuple(
-        _scripted_call(directive, completed_rounds, call_index, schemas, next_call_id())
+        _scripted_call(
+            directive, directive.tag, completed_rounds, call_index, schemas, next_call_id()
+        )
         for call_index in range(directive.calls)
     )
     return PlannedResponse(
@@ -208,6 +254,59 @@ def plan_response(
         round_index=completed_rounds,
         directive=directive,
         tool_calls=calls,
+    )
+
+
+def _plan_swarm_response(
+    messages: list[Any],
+    schemas: dict[str, dict[str, Any]],
+    *,
+    next_call_id: Callable[[], str],
+    wind_down: bool,
+) -> PlannedResponse:
+    """Script one Swarm participant request (see ``swarm_script``)."""
+    try:
+        position = swarm_position(messages)
+    except DirectiveError as exc:
+        raise PlanError(f"malformed perf directive: {exc}") from exc
+    if position is None:
+        call_id = next_call_id()
+        participant = participant_for_call_id(call_id)
+        board = model_tool_name(SWARM_BOARD_TOOL)
+        arguments = goal_read_arguments(messages)
+        check_arguments(board, arguments, schemas[board])
+        return PlannedResponse(
+            kind="tool_calls",
+            tag=turn_tag(participant or call_id, 1),
+            participant=participant,
+            tool_calls=(ScriptedToolCall(call_id=call_id, name=board, arguments=arguments),),
+        )
+    directive = position.directive
+    if directive.is_warmup:
+        raise PlanError("a warmup directive cannot script Swarm participants")
+    if position.starts_turn and (wind_down or position.budget_spent):
+        return PlannedResponse(kind="idle", participant=position.participant)
+    if position.rounds_in_turn >= directive.tool_rounds:
+        return PlannedResponse(
+            kind="text",
+            tag=position.tag,
+            round_index=position.round_index,
+            directive=directive,
+            participant=position.participant,
+        )
+    calls = tuple(
+        _scripted_call(
+            directive, position.tag, position.rounds_in_turn, call_index, schemas, next_call_id()
+        )
+        for call_index in range(directive.calls)
+    )
+    return PlannedResponse(
+        kind="tool_calls",
+        tag=position.tag,
+        round_index=position.round_index,
+        directive=directive,
+        tool_calls=calls,
+        participant=position.participant,
     )
 
 
@@ -237,24 +336,34 @@ def _locate_directive(messages: list[Any]) -> tuple[PerfDirective, int] | None:
 
 def _scripted_call(
     directive: PerfDirective,
+    tag: str,
     round_index: int,
     call_index: int,
     schemas: dict[str, dict[str, Any]],
     call_id: str,
 ) -> ScriptedToolCall:
     slot = round_index * directive.calls + call_index
-    registry_name = directive.tools[slot % len(directive.tools)]
-    name = model_tool_name(registry_name)
+    spec = directive.tools[slot % len(directive.tools)]
+    name = model_tool_name(split_tool_spec(spec)[0])
     if name not in schemas:
         offered = ", ".join(sorted(schemas))
         raise PlanError(f"Tool {name!r} is not offered in this request (offered: {offered})")
-    arguments = scripted_arguments(registry_name, tag=directive.tag, slot=slot)
+    arguments = scripted_arguments(spec, tag=tag, slot=slot)
     check_arguments(name, arguments, schemas[name])
     return ScriptedToolCall(call_id=call_id, name=name, arguments=arguments)
 
 
 def scripted_arguments(name: str, *, tag: str, slot: int) -> dict[str, Any]:
-    """Return valid arguments for one supported Tool against the fixture Project."""
+    """Return valid arguments for one supported Tool (``name`` or ``name.action``).
+
+    Regular Tools work against the fixture Project; Swarm Tools follow
+    ``swarm_script.swarm_arguments``.
+    """
+    if is_swarm_tool(name):
+        try:
+            return swarm_arguments(name, tag=tag, slot=slot)
+        except SwarmScriptError as exc:
+            raise PlanError(str(exc)) from exc
     if name == "read":
         paths = source_file_paths()
         return {"path": paths[(zlib.crc32(tag.encode("utf-8")) + slot) % len(paths)]}
@@ -278,6 +387,8 @@ def check_arguments(name: str, arguments: dict[str, Any], schema: dict[str, Any]
                 raise PlanError(f"Tool {name!r} property {key!r} expects a string")
             if expected == "array" and not isinstance(value, list):
                 raise PlanError(f"Tool {name!r} property {key!r} expects an array")
+            if expected == "integer" and type(value) is not int:
+                raise PlanError(f"Tool {name!r} property {key!r} expects an integer")
     required = schema.get("required")
     if isinstance(required, list):
         missing = sorted(key for key in required if key not in arguments)
@@ -426,7 +537,7 @@ async def stream_text(
 
 def completion_body(model: str, planned: PlannedResponse, *, prompt_tokens: int) -> dict[str, Any]:
     """Non-streaming answer (utility requests such as Session titles)."""
-    message: dict[str, Any] = {"role": "assistant", "content": AUX_RESPONSE_TEXT}
+    message: dict[str, Any] = {"role": "assistant", "content": _plain_text(planned)}
     finish_reason = "stop"
     completion_tokens = 8
     if planned.kind == "tool_calls":
@@ -460,6 +571,10 @@ def completion_body(model: str, planned: PlannedResponse, *, prompt_tokens: int)
     }
 
 
+def _plain_text(planned: PlannedResponse) -> str:
+    return IDLE_RESPONSE_TEXT if planned.kind == "idle" else AUX_RESPONSE_TEXT
+
+
 # -- ASGI application ---------------------------------------------------------
 
 
@@ -490,6 +605,13 @@ def create_app(log: RequestLog | None = None) -> Any:
         requests.reset()
         return JSONResponse({"ok": True})
 
+    async def progress(_request: Request) -> Response:
+        return JSONResponse(requests.progress())
+
+    async def wind_down(_request: Request) -> Response:
+        requests.wind_down = True
+        return JSONResponse({"ok": True})
+
     async def chat_completions(request: Request) -> Response:
         record = requests.begin(time.time())
         raw = await request.body()
@@ -502,7 +624,9 @@ def create_app(log: RequestLog | None = None) -> Any:
             messages = body.get("messages")
             record.message_count = len(messages) if isinstance(messages, list) else 0
             record.stream = body.get("stream") is True
-            planned = plan_response(body, next_call_id=requests.next_call_id)
+            planned = plan_response(
+                body, next_call_id=requests.next_call_id, wind_down=requests.wind_down
+            )
         except (PlanError, json.JSONDecodeError) as exc:
             record.kind = "error"
             record.error = str(exc)
@@ -515,6 +639,7 @@ def create_app(log: RequestLog | None = None) -> Any:
         record.kind = planned.kind
         record.tag = planned.tag
         record.round = planned.round_index
+        record.participant = planned.participant
         record.tool_names = [call.name for call in planned.tool_calls]
         record.tool_call_ids = [call.call_id for call in planned.tool_calls]
         requested_model = body.get("model")
@@ -537,6 +662,8 @@ def create_app(log: RequestLog | None = None) -> Any:
             Route("/v1/chat/completions", chat_completions, methods=["POST"]),
             Route("/_perf/stats", stats, methods=["GET"]),
             Route("/_perf/reset", reset, methods=["POST"]),
+            Route("/_perf/progress", progress, methods=["GET"]),
+            Route("/_perf/wind_down", wind_down, methods=["POST"]),
         ]
     )
 
@@ -563,7 +690,7 @@ async def _recorded_stream(
         else:
             record.first_byte = time.time()
             yield encode_frame(
-                chunk_payload(model, {"role": "assistant", "content": AUX_RESPONSE_TEXT})
+                chunk_payload(model, {"role": "assistant", "content": _plain_text(planned)})
             )
             yield encode_frame(chunk_payload(model, {}, finish_reason="stop"))
             yield encode_frame(

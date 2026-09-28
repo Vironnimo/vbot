@@ -239,6 +239,16 @@ class FakeProvider:
     def reset(self) -> None:
         self._client.post("/_perf/reset").raise_for_status()
 
+    def progress(self) -> dict[str, Any]:
+        """Swarm participants' completed turns (see ``RequestLog.progress``)."""
+        response = self._client.get("/_perf/progress")
+        response.raise_for_status()
+        return dict(response.json())
+
+    def wind_down(self) -> None:
+        """Stop new Swarm turns; turns already started still finish."""
+        self._client.post("/_perf/wind_down").raise_for_status()
+
     def stats(self) -> list[dict[str, Any]]:
         response = self._client.get("/_perf/stats")
         response.raise_for_status()
