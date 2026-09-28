@@ -113,12 +113,8 @@
         listModels(),
         listConnections(),
       ]);
-      availableModels = Array.isArray(modelsResult?.models)
-        ? modelsResult.models
-        : [];
-      availableConnections = Array.isArray(connectionsResult?.connections)
-        ? connectionsResult.connections
-        : [];
+      availableModels = modelsResult.models;
+      availableConnections = connectionsResult.connections;
     } catch (error) {
       onError(
         `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
