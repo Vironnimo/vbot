@@ -43,7 +43,7 @@ export function dayKeyToUtcDate(key) {
 }
 
 // Monday-first weekday index (0..6) of a calendar day key.
-export function weekdayIndex(key) {
+function weekdayIndex(key) {
   const sundayFirst = dayKeyToUtcDate(key).getUTCDay();
   return (sundayFirst + 6) % 7;
 }
@@ -52,14 +52,14 @@ export function weekStartKey(key) {
   return addDaysToKey(key, -weekdayIndex(key));
 }
 
-export function monthKeyOf(key) {
+function monthKeyOf(key) {
   return key.slice(0, 7);
 }
 
 // The first calendar day of the six-week grid covering a month: the Monday on
 // or before the 1st. Both the rendered grid and the request window derive from
 // this, so the cells shown and the occurrences fetched can never disagree.
-export function monthGridStartKey(anchorKey) {
+function monthGridStartKey(anchorKey) {
   const anchor = dayKeyToUtcDate(anchorKey);
   const firstOfMonth = `${anchor.getUTCFullYear()}-${pad(anchor.getUTCMonth() + 1)}-01`;
   return weekStartKey(firstOfMonth);
@@ -308,7 +308,7 @@ export function eventToFormValues(event, systemTimeZone = 'UTC') {
 // the same shape the recurring path already reads from start_local. The active
 // locale's hour cycle is unsafe for a <input type="time"> value (e.g. "9:00 AM"
 // is not a valid time string), so this is fixed to a canonical 24-hour form.
-export function wallTimeInZone(instantIso, timeZone) {
+function wallTimeInZone(instantIso, timeZone) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone,
     hour: '2-digit',

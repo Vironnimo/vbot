@@ -12,7 +12,6 @@ import {
   cronPresetExpression,
   cronPresetForExpression,
   describeCronExpression,
-  formatTimestamp,
   visibleCronJobs,
 } from '../cronView.js';
 
@@ -91,7 +90,6 @@ describe('cron form payloads and history projection', () => {
 
     expect(state.systemTimezone).toBe('Europe/Berlin');
     expect(normalized.schedule_description).toContain('18:00');
-    expect(formatTimestamp(job.run_at, 'Europe/Berlin')).toContain('18:00');
     expect(form.name).toBe('One-time run');
     expect(form.run_at).toBe('2026-07-18T18:00');
     expect(buildCreateCronPayload(form)).not.toHaveProperty('timezone');

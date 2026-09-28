@@ -93,15 +93,15 @@ export function createProjectsState({ selectedProjectId = '' } = {}) {
 //   finding: { type, detail, agent_id, source_path }
 
 // The scan report's `finding.type` discriminants (server scan_report.py).
-export const FINDING_TYPE_SLUG_COLLISION = 'slug_collision';
+const FINDING_TYPE_SLUG_COLLISION = 'slug_collision';
 
-export const FINDING_TYPE_UNSLUGIFIABLE_NAME = 'unslugifiable_name';
+const FINDING_TYPE_UNSLUGIFIABLE_NAME = 'unslugifiable_name';
 
-export const FINDING_TYPE_BAD_MODEL = 'bad_model';
+const FINDING_TYPE_BAD_MODEL = 'bad_model';
 
-export const FINDING_TYPE_ORPHAN = 'orphan';
+const FINDING_TYPE_ORPHAN = 'orphan';
 
-export const FINDING_TYPE_UNAVAILABLE_TOOL = 'unavailable_tool';
+const FINDING_TYPE_UNAVAILABLE_TOOL = 'unavailable_tool';
 
 // Stable display order for grouped findings, so the report always lists the
 // same finding kinds in the same order regardless of server ordering.
@@ -134,7 +134,7 @@ const NON_CLEARABLE_MANAGE_FIELDS = Object.freeze(new Set(['source_format']));
 // agents and skills come from. Exactly one per project — no mixing.
 export const PROJECT_SOURCE_FORMATS = Object.freeze(['opencode', 'claude']);
 
-export const DEFAULT_PROJECT_SOURCE_FORMAT = 'opencode';
+const DEFAULT_PROJECT_SOURCE_FORMAT = 'opencode';
 
 // The list-valued whitelist fields, diffed by SET (order-insensitive) so a
 // reorder alone never counts as a change. Tool/skill names are unordered membership
@@ -280,7 +280,7 @@ export function buildManageProjectPayload(formValues, project) {
 export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
   const enabled = new Set(normalizeStringList(allowedTools));
   const byName = new Map();
-  for (const tool of Array.isArray(catalog) ? catalog : []) {
+  for (const tool of catalog) {
     const name = asText(tool.name).trim();
     if (
       name.length === 0 ||
@@ -348,7 +348,7 @@ function normalizeSkillPoolEntry(entry) {
   return name ? { name, description: '' } : null;
 }
 
-export function normalizeSkillPool(list) {
+function normalizeSkillPool(list) {
   return (Array.isArray(list) ? list : [])
     .map(normalizeSkillPoolEntry)
     .filter(Boolean);

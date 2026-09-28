@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   backgroundTasks,
-  compactToolValue,
   isSubAgentSpawnTool,
   resolveSubAgentCancelPlan,
   subAgentAgentId,
@@ -17,6 +16,7 @@ import {
   subAgentResultTextFromMessages,
   subAgentShouldFetchResult,
   subAgentToolStatusLabel,
+  toolDetailPresentation,
 } from '../chatTimelinePresentation.js';
 import { t } from '../i18n.js';
 import {
@@ -582,13 +582,13 @@ describe('Sub-Agent results', () => {
 
   it('renders a fetched result the same way a blocking spawn result renders', () => {
     const tool = runningSubAgentTool();
-    const rendered = compactToolValue(
+    const rendered = toolDetailPresentation(
       subAgentDisplayResult(tool, {
         loading: false,
         result: 'Final answer from the worker.',
       }),
       { preferPayload: true, toolName: 'subagent', tool },
-    );
+    ).copyText;
 
     expect(rendered).toContain('result: Final answer from the worker.');
     expect(rendered).toContain('status: completed');

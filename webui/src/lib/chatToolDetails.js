@@ -73,11 +73,6 @@ export function toolDetailImages(
   });
 }
 
-export const compactToolValue = (
-  value,
-  { preferPayload = false, toolName = '', tool = null } = {},
-) => toolDetailPresentation(value, { preferPayload, toolName, tool }).copyText;
-
 export const toolDetailPresentation = (
   value,
   { preferPayload = false, toolName = '', tool = null } = {},

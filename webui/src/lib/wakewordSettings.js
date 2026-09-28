@@ -224,9 +224,9 @@ function effectiveVoiceAction(config, modelId) {
   if (action.type === 'live_voice') return action;
   return {
     type: 'command',
-    agent_id: action.agent_id ?? config.default_agent_id ?? null,
+    agent_id: action.agent_id ?? config.default_agent_id,
     session_behavior:
-      action.session_behavior ?? config.default_session_behavior ?? 'active',
+      action.session_behavior ?? config.default_session_behavior,
   };
 }
 

@@ -4,7 +4,6 @@ import { ensureSessionState } from '../chatState.js';
 import {
   subAgentDotStatus,
   subAgentLastToolName,
-  subAgentRunDurationMs,
   subAgentToolStatusLabel,
 } from '../chatTimelinePresentation.js';
 import { t } from '../i18n.js';
@@ -267,7 +266,10 @@ describe('Sub-Agent rows without a run id', () => {
       });
 
       expect(subAgentDotStatus(row, statuses)).toBe('success');
-      expect(subAgentRunDurationMs(row, statuses)).toBe(4200);
+      // The finished label shows the child run's real runtime.
+      expect(subAgentToolStatusLabel(row, 'success', statuses)).toBe(
+        t('chat.toolDurationSeconds', '', { seconds: '4.2' }),
+      );
       // One key form: the bare twin of a Project address is never written.
       expect(
         Object.keys(statuses).filter((key) => key.startsWith('session')),

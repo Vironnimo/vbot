@@ -48,7 +48,7 @@ const TOOL_DISPLAY_ARGS = {
 
 const TOOL_NO_SUMMARY_NAMES = new Set(['status']);
 
-export const DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS = 64;
+const DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS = 64;
 
 const TOOL_PATH_SEGMENT_LIMIT = 3;
 
@@ -250,12 +250,7 @@ function compactToolPath(value) {
   if (!normalized) {
     return '';
   }
-  const absolute =
-    normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized);
   const segments = normalized.split('/').filter(Boolean);
-  if (!absolute && segments.length <= TOOL_PATH_SEGMENT_LIMIT) {
-    return normalized;
-  }
   if (segments.length <= TOOL_PATH_SEGMENT_LIMIT) {
     return normalized;
   }

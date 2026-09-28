@@ -1,13 +1,12 @@
 <script>
-  // Shared compact allow-list for Project tools and skills. Renders each item as a
-  // toggle chip (the chip itself is the on/off control — raised, bright chip = allowed)
-  // in a wrapping cloud, with an always-present toolbar: a live search filter, an
-  // "on / total" tally, and "Select all" / "Deselect all" bulk actions. The item's
-  // description (plus any not-ready hint or skill warnings) shows on plain hover.
+  // Compact allow-list chip cloud. Renders each item as a toggle chip (the chip
+  // itself is the on/off control — raised, bright chip = allowed) in a wrapping
+  // cloud, with an always-present toolbar: a live search filter, an "on / total"
+  // tally, and "Select all" / "Deselect all" bulk actions. The item's description
+  // (plus any not-ready hint or skill warnings) shows on plain hover.
   //
-  // Used by the Project Tool- and Skill-Whitelist editors and the Agent Skill
-  // editor, so those surfaces scale to large, ever-changing lists (skills can
-  // grow past 100). Tool rows can optionally be grouped by registry family.
+  // Used only by the Swarm Extension profile editor's Skill allow-list, which can
+  // grow past 100 Skills. Rows can optionally be grouped by registry family.
   //
   // Item shape: { name, allowed, family?, description?, ready?, readiness_hint?,
   // extension?, warnings? }. The chip is a plain toggle; wildcard/ceiling

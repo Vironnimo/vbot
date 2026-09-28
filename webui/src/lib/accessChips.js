@@ -6,15 +6,11 @@
  * A blank/whitespace query returns the list unchanged.
  */
 export function filterChipsByQuery(items, query) {
-  const needle = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  const needle = query.trim().toLowerCase();
   if (needle.length === 0) {
     return items;
   }
-  return items.filter((item) =>
-    String(item?.name ?? '')
-      .toLowerCase()
-      .includes(needle),
-  );
+  return items.filter((item) => item.name.toLowerCase().includes(needle));
 }
 
 /** Count how many items are currently allowed (the toolbar "on / total" tally). */

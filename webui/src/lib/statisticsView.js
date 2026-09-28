@@ -588,10 +588,7 @@ export function groupModelsByProvider(models) {
 // Roll the day-granularity series up to week (ISO Monday) or month buckets,
 // summing every numeric field. 'day' returns the series unchanged. Each point
 // must carry a `date` of the shape 'YYYY-MM-DD'.
-function rollupDaily(points, granularity = 'day') {
-  if (!Array.isArray(points)) {
-    return [];
-  }
+function rollupDaily(points, granularity) {
   if (granularity === 'day') {
     return points.map((point) => ({ ...point }));
   }

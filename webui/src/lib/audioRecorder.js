@@ -19,19 +19,12 @@ function chooseAudioMimeType(MediaRecorderClass) {
 }
 
 function audioExtensionFromMimeType(mimeType) {
-  const normalized =
-    typeof mimeType === 'string' ? mimeType.toLowerCase().split(';')[0] : '';
-  if (normalized === 'audio/ogg') {
+  const container = mimeType.split(';')[0];
+  if (container === 'audio/ogg') {
     return 'ogg';
   }
-  if (normalized === 'audio/mp4') {
+  if (container === 'audio/mp4') {
     return 'm4a';
-  }
-  if (normalized === 'audio/mpeg') {
-    return 'mp3';
-  }
-  if (normalized === 'audio/wav') {
-    return 'wav';
   }
   return 'webm';
 }
@@ -66,7 +59,7 @@ export async function createAudioRecorder(options = {}) {
   let mimeType;
   let recorder;
   try {
-    mimeType = options.mimeType ?? chooseAudioMimeType(MediaRecorderClass);
+    mimeType = chooseAudioMimeType(MediaRecorderClass);
     const recorderOptions = mimeType ? { mimeType } : {};
     recorder = new MediaRecorderClass(stream, recorderOptions);
     recorder.addEventListener('dataavailable', (event) => {

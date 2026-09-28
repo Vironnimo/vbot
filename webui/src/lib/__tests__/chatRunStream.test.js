@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  CHAT_STATUS_CANCELLED,
-  CHAT_STATUS_IDLE,
-  CHAT_STATUS_RUNNING,
   agentActivityStatus,
   ensureSessionState,
   resetStaleRun,
@@ -121,7 +118,7 @@ describe('live Run events of the displayed Session', () => {
 
     const sessionState = harness.displayedSession();
     const close = harness.subscriptions[0].close;
-    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.status).toBe('running');
     expect(close).not.toHaveBeenCalled();
     expect(
       visibleTimelineItemsForRender(sessionState)[0].outputs[0].content,
@@ -171,7 +168,7 @@ describe('live Run events of the displayed Session', () => {
       },
     );
 
-    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.status).toBe('running');
     expect(sessionState.runEvents.map((event) => event.sequence)).toEqual([1]);
 
     harness.sse({
@@ -216,7 +213,7 @@ describe('live Run events of the displayed Session', () => {
         visibleTimelineItemsForRender(sessionState)[0].outputs[0].content,
       ).toBe('Still live'),
     );
-    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.status).toBe('running');
   });
 
   describe('Tool output', () => {
@@ -419,7 +416,7 @@ describe('live Run events of the displayed Session', () => {
       };
       startRun(sessionState, {
         run_id: 'run-parent',
-        status: CHAT_STATUS_RUNNING,
+        status: 'running',
         sse_url: '/api/runs/run-parent/events',
       });
       harness.stream.subscribeToRun(
@@ -430,13 +427,13 @@ describe('live Run events of the displayed Session', () => {
       expect(
         harness.stream.mergeRunResponse(sessionState, {
           run_id: 'run-parent',
-          status: CHAT_STATUS_CANCELLED,
+          status: 'cancelled',
           events: [
             {
               ...identity,
               type: 'run_started',
               sequence: 1,
-              payload: { status: CHAT_STATUS_RUNNING },
+              payload: { status: 'running' },
             },
             {
               ...identity,
@@ -459,24 +456,24 @@ describe('live Run events of the displayed Session', () => {
               ...identity,
               type: 'run_cancelled',
               sequence: 3,
-              payload: { status: CHAT_STATUS_CANCELLED },
+              payload: { status: 'cancelled' },
             },
           ],
         }),
       ).toBe(true);
 
       const close = harness.subscriptions[0].close;
-      expect(sessionState.status).toBe(CHAT_STATUS_CANCELLED);
-      expect(sessionState.currentRun?.status).toBe(CHAT_STATUS_CANCELLED);
+      expect(sessionState.status).toBe('cancelled');
+      expect(sessionState.currentRun?.status).toBe('cancelled');
       expect(close).toHaveBeenCalledOnce();
       expect(harness.syncSessionQueue).toHaveBeenCalledOnce();
       expect(
         visibleTimelineItemsForRender(sessionState)[0].tools[0].status,
-      ).toBe(CHAT_STATUS_CANCELLED);
+      ).toBe('cancelled');
 
       harness.stream.mergeRunResponse(sessionState, {
         run_id: 'run-parent',
-        status: CHAT_STATUS_CANCELLED,
+        status: 'cancelled',
         events: [...sessionState.runEvents],
       });
 
@@ -489,29 +486,29 @@ describe('live Run events of the displayed Session', () => {
       const sessionState = harness.displayedSession();
       startRun(sessionState, {
         run_id: 'run-new',
-        status: CHAT_STATUS_RUNNING,
+        status: 'running',
         sse_url: '/api/runs/run-new/events',
       });
 
       expect(
         harness.stream.mergeRunResponse(sessionState, {
           run_id: 'run-old',
-          status: CHAT_STATUS_CANCELLED,
+          status: 'cancelled',
           events: [
             {
               type: 'run_cancelled',
               run_id: 'run-old',
               sequence: 3,
-              payload: { status: CHAT_STATUS_CANCELLED },
+              payload: { status: 'cancelled' },
             },
           ],
         }),
       ).toBe(false);
 
-      expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+      expect(sessionState.status).toBe('running');
       expect(sessionState.currentRun).toMatchObject({
         runId: 'run-new',
-        status: CHAT_STATUS_RUNNING,
+        status: 'running',
       });
       expect(sessionState.runEvents).toEqual([]);
     });
@@ -542,7 +539,7 @@ describe('connection snapshots', () => {
       }),
     ]);
     const sessionState = harness.displayedSession();
-    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.status).toBe('running');
     expect(sessionState.currentRun).toMatchObject({
       runId: 'run-snapshot-1',
       sseUrl: '/api/runs/run-snapshot-1/events',
@@ -628,7 +625,7 @@ describe('connection snapshots', () => {
     expect(harness.subscriptions).toEqual([]);
     expect(sessionState.streamError).toBe('');
     expect(harness.subAgentRunStatuses).toEqual({});
-    expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
+    expect(sessionState.status).toBe('idle');
     expect(sessionState.currentRun).toBeNull();
   });
 
@@ -644,7 +641,7 @@ describe('connection snapshots', () => {
       type: 'connection_ready',
       active_runs: [activeRun('run-before-restart')],
     });
-    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.status).toBe('running');
 
     harness.stream.applyConnectionSnapshot({
       type: 'connection_ready',
@@ -657,7 +654,7 @@ describe('connection snapshots', () => {
         'run-before-restart',
       );
     });
-    expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
+    expect(sessionState.status).toBe('idle');
     expect(sessionState.currentRun).toBeNull();
     expect(harness.subscriptions[0].close).toHaveBeenCalledOnce();
   });
@@ -754,7 +751,7 @@ describe('Runs excluded from Agent activity', () => {
 
     const sessionState = harness.displayedSession();
     expect(harness.subscriptions).toHaveLength(1);
-    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.status).toBe('running');
     expect(sessionState.currentRun?.contributesToAgentActivity).toBe(false);
     expect(agentActivityStatus(harness.chatState, DISPLAYED_AGENT_ID)).toBe(
       'idle',

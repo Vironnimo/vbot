@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHAT_STATUS_COMPLETED,
-  CHAT_STATUS_RUNNING,
   appendRunEvent,
   assistantRunChildProgressKey,
   createChatState,
@@ -128,7 +126,7 @@ describe('streamed drafts', () => {
       expect.objectContaining({
         toolCallId: 'call-one',
         name: 'write',
-        status: CHAT_STATUS_RUNNING,
+        status: 'running',
         streaming: false,
         partialArgumentsText: null,
         previewArguments: null,
@@ -403,7 +401,7 @@ describe('reasoning duration', () => {
     startRun(sessionState, {
       run_id: 'run-reasoning-freeze',
       sse_url: '/api/runs/run-reasoning-freeze/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     appendRunEvent(sessionState, {
       type: 'reasoning_delta',
@@ -496,7 +494,7 @@ describe('reasoning duration', () => {
     startRun(sessionState, {
       run_id: 'run-reasoning-estimate',
       sse_url: '/api/runs/run-reasoning-estimate/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     appendRunEvent(sessionState, {
       type: 'reasoning_delta',
@@ -527,13 +525,13 @@ describe('replay cursor', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
       events: [
         {
           type: 'run_started',
           run_id: 'run-one',
           sequence: 1,
-          payload: { status: CHAT_STATUS_RUNNING },
+          payload: { status: 'running' },
         },
       ],
     });
@@ -584,13 +582,13 @@ describe('replay cursor', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
       events: [
         {
           type: 'run_started',
           run_id: 'run-one',
           sequence: 1,
-          payload: { status: CHAT_STATUS_RUNNING },
+          payload: { status: 'running' },
         },
       ],
     });
@@ -628,24 +626,24 @@ describe('replay cursor', () => {
       type: 'run_started',
       run_id: 'run-old',
       sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       type: 'run_completed',
       run_id: 'run-old',
       sequence: 8,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
     });
     startRun(sessionState, {
       run_id: 'run-new',
       sse_url: '/api/runs/run-new/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
       events: [
         {
           type: 'run_started',
           run_id: 'run-new',
           sequence: 1,
-          payload: { status: CHAT_STATUS_RUNNING },
+          payload: { status: 'running' },
         },
       ],
     });

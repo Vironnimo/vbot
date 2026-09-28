@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  LOGS_SORT_ORDER_NEWEST,
-  LOGS_SORT_ORDER_OLDEST,
   LOGS_STREAM_STATUS_IDLE,
   applyLogCatalog,
   changedFilterSelectionCount,
@@ -80,7 +78,7 @@ describe('logsView state', () => {
     expect(changedFilterSelectionCount(state)).toBe(0);
 
     setLevelFilter(state, 'error');
-    setSortOrder(state, LOGS_SORT_ORDER_OLDEST);
+    setSortOrder(state, 'oldest');
     selectLogFile(state, '2026-05-10');
     expect(changedFilterSelectionCount(state)).toBe(3);
 
@@ -91,7 +89,7 @@ describe('logsView state', () => {
       default_file: '2026-05-12',
     });
     setLevelFilter(state, 'all');
-    setSortOrder(state, LOGS_SORT_ORDER_NEWEST);
+    setSortOrder(state, 'newest');
     expect(changedFilterSelectionCount(state)).toBe(1);
   });
 
@@ -203,16 +201,13 @@ describe('logsView visible entries', () => {
     const visibleMessages = () =>
       visibleLogEntries(state).map((item) => item.message);
 
-    expect(deriveSortOptions()).toEqual([
-      LOGS_SORT_ORDER_NEWEST,
-      LOGS_SORT_ORDER_OLDEST,
-    ]);
+    expect(deriveSortOptions()).toEqual(['newest', 'oldest']);
     expect(visibleMessages()).toEqual(['Third', 'Second', 'First']);
 
-    setSortOrder(state, LOGS_SORT_ORDER_OLDEST);
+    setSortOrder(state, 'oldest');
     expect(visibleMessages()).toEqual(['First', 'Second', 'Third']);
 
-    expect(setSortOrder(state, 'sideways')).toBe(LOGS_SORT_ORDER_NEWEST);
+    expect(setSortOrder(state, 'sideways')).toBe('newest');
     expect(visibleMessages()).toEqual(['Third', 'Second', 'First']);
   });
 });

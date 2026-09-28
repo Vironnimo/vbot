@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  TERMINAL_STREAM_CONNECTED,
-  TERMINAL_STREAM_CONNECTING,
-  TERMINAL_STREAM_RECONNECTING,
-  TERMINAL_STREAM_SNAPSHOT,
   clampTerminalGrid,
   layoutForCount,
   parseTerminalCommandLine,
@@ -158,7 +154,7 @@ describe('terminal catalog', () => {
       launchHistory('codex', { command: 'codex' }),
     ]);
     expect(streams).toHaveLength(2);
-    expect(state.streams['manual-1'].status).toBe(TERMINAL_STREAM_CONNECTING);
+    expect(state.streams['manual-1'].status).toBe('connecting');
   });
 
   it('removes a running terminal at once, stops it in the background, and keeps it hidden from reloads meanwhile', async () => {
@@ -349,8 +345,8 @@ describe('terminal streams', () => {
       ansi: '\u001b[2Jshell restored',
     });
 
-    expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_CONNECTED);
-    expect(state.streams['term-2'].status).toBe(TERMINAL_STREAM_CONNECTED);
+    expect(state.streams['term-1'].status).toBe('connected');
+    expect(state.streams['term-2'].status).toBe('connected');
     expect(snapshots).toEqual([
       ['term-1', '\u001b[2Jready'],
       ['term-2', '\u001b[2Jsecond'],
@@ -379,14 +375,14 @@ describe('terminal streams', () => {
       streams[0].close();
     }
     expect(state.streams['term-1']).toMatchObject({
-      status: TERMINAL_STREAM_RECONNECTING,
+      status: 'reconnecting',
       errorCode,
     });
 
     await vi.runAllTimersAsync();
     expect(streams).toHaveLength(3);
     expect(state.streams['term-2']).toMatchObject({
-      status: TERMINAL_STREAM_CONNECTED,
+      status: 'connected',
       errorCode: '',
     });
   });
@@ -404,7 +400,7 @@ describe('terminal streams', () => {
     await vi.runAllTimersAsync();
 
     expect(streams).toHaveLength(1);
-    expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_SNAPSHOT);
+    expect(state.streams['term-1'].status).toBe('snapshot');
     expect(state.terminals[0].state).toBe('exited');
     expect(state.selectedTerminalId).toBe('term-1');
   });
@@ -418,7 +414,7 @@ describe('terminal streams', () => {
     await vi.advanceTimersByTimeAsync(8_001);
     expect(streams[0].connection.close).toHaveBeenCalled();
     expect(streams).toHaveLength(2);
-    expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_RECONNECTING);
+    expect(state.streams['term-1'].status).toBe('reconnecting');
 
     // A socket that opens within the budget is never force-closed.
     streams[1].connection.socket.readyState = 1;
@@ -427,7 +423,7 @@ describe('terminal streams', () => {
 
     expect(streams[1].connection.close).not.toHaveBeenCalled();
     expect(streams).toHaveLength(2);
-    expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_CONNECTED);
+    expect(state.streams['term-1'].status).toBe('connected');
   });
 
   it('holds a torn escape sequence until its frame completes and passes everything else byte-exact', async () => {
@@ -504,7 +500,7 @@ describe('terminal input', () => {
 
     expect(api.sendTerminalInput.mock.calls).toEqual([['term-1', 'hi']]);
     expect(state.actionError).toBe('');
-    expect(state.streams['term-1'].status).toBe(TERMINAL_STREAM_SNAPSHOT);
+    expect(state.streams['term-1'].status).toBe('snapshot');
   });
 });
 
