@@ -51,7 +51,6 @@
 // <span class="tooltip-anchor">. Focus listeners use focusin/focusout, so such
 // a wrapper also reacts to keyboard focus inside it.
 
-export { positionFloating } from './tooltip/geometry.js';
 export {
   FLOATING_HOVER_CLOSE_DELAY_MS,
   HOVER_CARD_SHOW_DELAY_MS,

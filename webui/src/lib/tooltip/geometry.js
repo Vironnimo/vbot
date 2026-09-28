@@ -57,7 +57,7 @@ function chooseSide(preferred, rect, width, height) {
  * The chosen side is exposed as `data-floating-side` so the entry motion
  * starts from the anchor.
  */
-export function positionFloating(anchor, element, placement = 'top') {
+export function positionFloating(anchor, element, placement) {
   const rect = anchor.getBoundingClientRect();
   const width = element.offsetWidth;
   const height = element.offsetHeight;
