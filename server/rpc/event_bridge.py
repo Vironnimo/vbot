@@ -67,15 +67,11 @@ RUN_SOURCE_SESSION_FIELD = "source_session_id"
 
 
 def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
-    event_bus = getattr(state, "event_bus", None)
-    if event_bus is None:
-        return
-    bridged_run_ids = getattr(state, "run_event_bridge_run_ids", None)
-    if _run_was_already_bridged(state, bridged_run_ids, run.id):
+    if _run_was_already_bridged(state, state.run_event_bridge_run_ids, run.id):
         return
     task = asyncio.create_task(
         _publish_run_events(
-            event_bus,
+            state.event_bus,
             run,
             file_delivery=getattr(state, "file_delivery", None),
         )
@@ -97,7 +93,9 @@ def _on_run_event_bridge_done(task: asyncio.Task[None]) -> None:
         _LOGGER.warning("Run event bridge failed", exc_info=True)
 
 
-def _run_was_already_bridged(state: Any, bridged_run_ids: Any, run_id: str) -> bool:
+def _run_was_already_bridged(
+    state: Any, bridged_run_ids: OrderedDict[str, None], run_id: str
+) -> bool:
     retention_limit = getattr(
         state,
         "run_event_bridge_retention_limit",
@@ -106,23 +104,12 @@ def _run_was_already_bridged(state: Any, bridged_run_ids: Any, run_id: str) -> b
     if not isinstance(retention_limit, int) or retention_limit < 1:
         retention_limit = DEFAULT_BRIDGED_RUN_RETENTION_LIMIT
 
-    if isinstance(bridged_run_ids, OrderedDict):
-        if run_id in bridged_run_ids:
-            bridged_run_ids.move_to_end(run_id)
-            return True
-        bridged_run_ids[run_id] = None
-        while len(bridged_run_ids) > retention_limit:
-            bridged_run_ids.popitem(last=False)
-        return False
-
-    if isinstance(bridged_run_ids, set):
-        if run_id in bridged_run_ids:
-            return True
-        bridged_run_ids.add(run_id)
-        while len(bridged_run_ids) > retention_limit:
-            bridged_run_ids.remove(next(iter(bridged_run_ids)))
-        return False
-
+    if run_id in bridged_run_ids:
+        bridged_run_ids.move_to_end(run_id)
+        return True
+    bridged_run_ids[run_id] = None
+    while len(bridged_run_ids) > retention_limit:
+        bridged_run_ids.popitem(last=False)
     return False
 
 

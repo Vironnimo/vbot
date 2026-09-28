@@ -11,7 +11,7 @@ from typing import Any
 
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
 from server._app_lifecycle import _app_chat_runs
-from server._http_dependencies import HTTPException, Request, WebSocket
+from server._http_dependencies import Request, WebSocket
 from server.events import (
     RESOURCE_KIND_CLIENTS,
     ServerEventBus,
@@ -194,19 +194,11 @@ def _connection_replay_status(
 def _active_runs_snapshot(state: Any) -> list[JsonObject]:
     """Build the active-runs list for the connection_ready hello frame.
 
-    Returns an empty list when the chat run manager is unavailable so the
-    handshake can still complete — the snapshot is connection-specific and
-    the client treats empty ``active_runs`` as authoritative for that scope.
+    The snapshot is connection-specific: the client treats an empty
+    ``active_runs`` list as authoritative for that scope.
     """
-    try:
-        chat_runs = _app_chat_runs(state)
-    except HTTPException:
-        return []
     snapshot: list[JsonObject] = []
-    active_runs = getattr(chat_runs, "active_runs", None)
-    if not callable(active_runs):
-        return snapshot
-    for run in active_runs():
+    for run in _app_chat_runs(state).active_runs():
         if run.status != RunStatus.RUNNING:
             continue
         item: JsonObject = {
@@ -235,11 +227,7 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
 
 def _queues_snapshot(state: Any) -> list[JsonObject]:
     """Build the public Queue snapshot for the connection-ready hello frame."""
-    try:
-        chat_runs = _app_chat_runs(state)
-    except HTTPException:
-        return []
-    all_queued = getattr(chat_runs, "all_queued", None)
+    all_queued = getattr(_app_chat_runs(state), "all_queued", None)
     if not callable(all_queued):
         return []
 

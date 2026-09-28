@@ -138,12 +138,6 @@ class ChannelConversationEngine:
         self._busy_reply_times: OrderedDict[str, float] = OrderedDict()
         self._bound_tap_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
-    def prepare_inbound_route(
-        self, conversation: ConversationFacts
-    ) -> tuple[RouteFacts, ReplyPlanFacts]:
-        """Resolve the active Session and update its Channel metadata."""
-        return self._routing.prepare_inbound_route(conversation)
-
     async def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure an outbound Channel target has its routed Session."""
         return await self._routing.ensure_channel_session(conversation)
@@ -628,8 +622,6 @@ class ChannelConversationEngine:
         queued: _QueuedInboundMessage,
         quoted: QuotedMessageFacts,
     ) -> list[ContentBlock]:
-        if not isinstance(queued.message.content, str):
-            raise AssertionError("queued inbound text message must contain text")
         blocks: list[ContentBlock] = [TextBlock(type="text", text=queued.message.content)]
         if quoted.content is None or quoted.user_id is None:
             blocks.append(TextBlock(type="text", text=_QUOTED_MESSAGE_UNAVAILABLE))
@@ -704,7 +696,7 @@ class ChannelConversationEngine:
         conversation: ConversationFacts,
         sender: MessageSender | None = None,
         internal: bool = False,
-        waiting_work_admission: WaitingWorkAdmission | None = None,
+        waiting_work_admission: WaitingWorkAdmission | None,
     ) -> None:
         tool_restriction, tool_denial_resolver = self._access._tool_access_for(conversation)
         tool_access_kwargs: dict[str, Any] = {}
@@ -717,49 +709,27 @@ class ChannelConversationEngine:
             # An internal run persists the content as a kernel note instead of a
             # visible user message; it never carries a sender.
             if internal:
-                if waiting_work_admission is None:
-                    run = await self._trigger_service.trigger_run(
-                        route.agent_id,
-                        content,
-                        route.session_id,
-                        internal=True,
-                        reply_surface=reply_surface,
-                        run_kind=RunKind.CHANNEL,
-                        **tool_access_kwargs,
-                    )
-                else:
-                    run = await self._trigger_service.trigger_run(
-                        route.agent_id,
-                        content,
-                        route.session_id,
-                        internal=True,
-                        reply_surface=reply_surface,
-                        run_kind=RunKind.CHANNEL,
-                        **tool_access_kwargs,
-                        waiting_work_admission=waiting_work_admission,
-                    )
+                run = await self._trigger_service.trigger_run(
+                    route.agent_id,
+                    content,
+                    route.session_id,
+                    internal=True,
+                    reply_surface=reply_surface,
+                    run_kind=RunKind.CHANNEL,
+                    **tool_access_kwargs,
+                    waiting_work_admission=waiting_work_admission,
+                )
             else:
-                if waiting_work_admission is None:
-                    run = await self._trigger_service.trigger_run(
-                        route.agent_id,
-                        content,
-                        route.session_id,
-                        sender=sender,
-                        reply_surface=reply_surface,
-                        run_kind=RunKind.CHANNEL,
-                        **tool_access_kwargs,
-                    )
-                else:
-                    run = await self._trigger_service.trigger_run(
-                        route.agent_id,
-                        content,
-                        route.session_id,
-                        sender=sender,
-                        reply_surface=reply_surface,
-                        run_kind=RunKind.CHANNEL,
-                        **tool_access_kwargs,
-                        waiting_work_admission=waiting_work_admission,
-                    )
+                run = await self._trigger_service.trigger_run(
+                    route.agent_id,
+                    content,
+                    route.session_id,
+                    sender=sender,
+                    reply_surface=reply_surface,
+                    run_kind=RunKind.CHANNEL,
+                    **tool_access_kwargs,
+                    waiting_work_admission=waiting_work_admission,
+                )
         except RunCancelledError:
             return
         except Exception as error:

@@ -135,6 +135,7 @@ def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleName
                 data_dir=tmp_path,
                 resources_dir=tmp_path / "resources",
                 layout=DataDirectoryLayout(tmp_path),
+                load_custom_providers_settings=dict,
             ),
             models=_ModelRegistry(),
         ),

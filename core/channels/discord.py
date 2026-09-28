@@ -870,7 +870,7 @@ def _classify_discord_send_error(error: Exception) -> ChannelError:
     channel_error = ChannelError(f"Discord send failed: {error}")
     if isinstance(error, ChannelError):
         return error
-    if isinstance(error, (TimeoutError, ConnectionError, OSError)):
+    if isinstance(error, OSError):
         channel_error.retryable = True
         return channel_error
 

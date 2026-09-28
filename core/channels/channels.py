@@ -1007,8 +1007,7 @@ class ChannelService:
                 exc_info=True,
             )
 
-        if self._adapter_stop_tasks.get(channel_id) is asyncio.current_task():
-            self._adapter_stop_tasks.pop(channel_id, None)
+        self._adapter_stop_tasks.pop(channel_id, None)
 
         pending = self._pending_start_requests.pop(channel_id, None)
         if pending is None or not self._started:

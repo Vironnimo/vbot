@@ -6,14 +6,14 @@ import asyncio
 import logging
 from collections import OrderedDict
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from core.runs import ChatRunManager
 from core.statistics import StatisticsIndex
 from core.storage.layout import DataDirectoryLayout
 from core.utils.log_viewer import LogViewer
 from server._bind import ServerBindState
-from server._http_dependencies import FastAPIType, HTTPException
+from server._http_dependencies import FastAPIType
 from server._live_record import LiveCallRecorder
 from server.clients import ClientRegistry
 from server.events import (
@@ -280,10 +280,7 @@ def _unregister_bash_process_change_bridge(state: Any) -> None:
 
 
 def _app_chat_runs(state: Any) -> ChatRunManager:
-    run_manager = getattr(state, "chat_runs", None)
-    if isinstance(run_manager, ChatRunManager):
-        return run_manager
-    raise HTTPException(status_code=503, detail="Chat run manager is unavailable")
+    return cast(ChatRunManager, state.chat_runs)
 
 
 async def _shutdown_local_catalog_refresh(

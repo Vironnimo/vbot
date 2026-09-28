@@ -601,13 +601,11 @@ def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Path) -> 
     # captured the registry at construction (task-model targets for
     # speech/image/embeddings, the status display, the recall backend) hold the
     # same instance, so an in-place swap reaches all of them without re-wiring.
-    reload_options: dict[str, Any] = {
-        "runtime_models_dir": runtime.storage.layout.models,
-    }
-    custom_loader = getattr(runtime.storage, "load_custom_providers_settings", None)
-    if callable(custom_loader):
-        reload_options["custom_providers"] = custom_loader()
-    runtime.models.reload(system_resources_dir, **reload_options)
+    runtime.models.reload(
+        system_resources_dir,
+        runtime_models_dir=runtime.storage.layout.models,
+        custom_providers=runtime.storage.load_custom_providers_settings(),
+    )
 
 
 def _model_count(result: JsonObject) -> int:

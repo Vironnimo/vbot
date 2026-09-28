@@ -47,7 +47,7 @@ class ChannelSessionRouting:
         self._chat_sessions = chat_sessions
         self._pointers = pointers
 
-    def prepare_inbound_route(
+    async def _prepare_inbound_route_async(
         self,
         conversation: ConversationFacts,
     ) -> tuple[RouteFacts, ReplyPlanFacts]:
@@ -56,15 +56,6 @@ class ChannelSessionRouting:
         A known conversation whose channel context is unchanged costs only reads;
         creation and a changed context commit together in one write.
         """
-        route = self._route_facts(conversation)
-        reply_plan = self._reply_plan_for(conversation)
-        self._update_session_metadata(route, conversation, reply_plan, create_missing=True)
-        return route, reply_plan
-
-    async def _prepare_inbound_route_async(
-        self,
-        conversation: ConversationFacts,
-    ) -> tuple[RouteFacts, ReplyPlanFacts]:
         route = await self._pointers.run_async(self._route_facts, conversation)
         reply_plan = self._reply_plan_for(conversation)
         await self._chat_sessions.run_async(

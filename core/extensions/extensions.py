@@ -570,7 +570,7 @@ class ExtensionRegistry:
     async def deactivate(
         self,
         name: str,
-        tool_registry: ToolRegistry | None = None,
+        tool_registry: ToolRegistry,
         command_dispatcher: CommandDispatcher | None = None,
     ) -> bool:
         """Stop a currently-loaded extension's effects live, without a restart.
@@ -610,11 +610,10 @@ class ExtensionRegistry:
             declarations.operations.retire()
         self._remove_handlers(name)
         self._remove_interaction_handlers(name)
-        if tool_registry is not None:
-            self._capabilities._unregister_extension_tools(tool_registry, declarations.tools)
-            self._capabilities._unregister_extension_tool_families(
-                tool_registry, name, declarations.tool_families
-            )
+        self._capabilities._unregister_extension_tools(tool_registry, declarations.tools)
+        self._capabilities._unregister_extension_tool_families(
+            tool_registry, name, declarations.tool_families
+        )
         if command_dispatcher is not None:
             command_dispatcher.unregister_extension_commands(name)
         for handler in declarations.shutdown:
