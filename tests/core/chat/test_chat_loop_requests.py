@@ -29,6 +29,7 @@ from tests.core.chat.chat_loop_support import (
     StubAgent,
     StubRuntime,
     build_chat_loop,
+    build_request_messages,
     event_types,
     history,
     last_run,
@@ -362,14 +363,18 @@ async def test_internal_run_sends_its_prompt_as_a_reminder_after_the_reply_surfa
 ) -> None:
     runtime = _runtime(tmp_path, _answers(1))
     prompt = "Sub-agent batch completed.\n\nResults:\n- worker/sub-session: Done"
+    # A note the request boundary adds joins the reminders the request already ends with.
+    completion = "Background job finished."
+    runtime.deliver_background_completions = lambda _run, session: session.add_note(completion)
+    loop = build_chat_loop(runtime)
 
-    run = await build_chat_loop(runtime).start_run(
+    run = await loop.start_run(
         "coder", prompt, session_id="session-one", internal=True, reply_surface=TELEGRAM
     )
     await run.wait()
 
     messages = history(runtime)
-    assert persisted_roles(messages) == ["note", "note", "assistant"]
+    assert persisted_roles(messages) == ["note", "note", "note", "assistant"]
     assert _surface_notes(messages) == [messages[0]]
     assert messages[1].content == prompt
     assert await event_types(runtime, run) == [
@@ -382,7 +387,13 @@ async def test_internal_run_sends_its_prompt_as_a_reminder_after_the_reply_surfa
     assert [message["role"] for message in request_messages] == ["system", "user"]
     request_content = request_messages[1]["content"]
     assert request_content.index("delivered via Telegram") < request_content.index(prompt)
-    assert request_content.endswith(_reminder(prompt)["content"])
+    assert request_content.endswith(
+        _reminder(prompt)["content"] + "\n" + _reminder(completion)["content"]
+    )
+    # The next request replays these history bytes, followed by the answer.
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
+    replayed = await build_request_messages(loop, runtime.agents.get("coder"), session)
+    assert json.dumps(replayed[1:-1]) == json.dumps(request_messages[1:])
 
 
 @pytest.mark.asyncio

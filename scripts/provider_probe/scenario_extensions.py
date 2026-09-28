@@ -63,13 +63,15 @@ WORD_COUNT_PARAMETERS = _WORD_COUNT_EXAMPLE.WORD_COUNT_PARAMETERS
 
 
 def _mcp_scenario(case_name: str) -> ProbeScenario:
-    from resources.extensions.mcp.extension import MCP_DESCRIPTION, MCP_PARAMETERS
+    from resources.extensions.mcp._catalog import connection_description
+    from resources.extensions.mcp.extension import MCP_PARAMETERS
 
     expected_arguments = MCP_CASE_ARGUMENTS[case_name]
     rendered = json.dumps(expected_arguments, ensure_ascii=False, separators=(",", ":"))
+    description = connection_description("example", "Example", ("inspect", "update"))
     return ProbeScenario(
         "mcp",
-        [{"name": "mcp_example", "description": MCP_DESCRIPTION, "parameters": MCP_PARAMETERS}],
+        [{"name": "mcp_example", "description": description, "parameters": MCP_PARAMETERS}],
         _probe_messages(
             f"Call mcp_example exactly once with exactly these arguments: {rendered}. "
             "Preserve every value and omit all other fields. This is a test-owned fixture."

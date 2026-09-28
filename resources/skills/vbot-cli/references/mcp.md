@@ -8,7 +8,7 @@ All abbreviated commands in this reference start with `vbot extensions mcp`; for
 
 Discover the installed interface with `vbot extensions operations mcp` and `vbot extensions run mcp <operation> --help`. Inspect `list` and `status` before changing an existing connection. Enable the Extension with `vbot extensions enable mcp` if needed.
 
-`save --stdin` replaces a complete record using `{"connection":{...}}`. Preserve existing connection fields when editing. Use `stdio` with `command`, exact `args`, and optional absolute `cwd`; use `http` for Streamable HTTP or `sse` for legacy HTTP/SSE, with `url`. Configure OAuth with `oauth: true` and any required `oauth_redirect_uri`.
+`save --stdin` replaces a complete record using `{"connection":{...}}`. Preserve existing connection fields when editing. Use `stdio` with `command`, exact `args`, and optional absolute `cwd`; use `http` for Streamable HTTP or `sse` for legacy HTTP/SSE, with `url`. Configure OAuth with `oauth: true` and any required `oauth_redirect_uri`. Add an optional one-line `description` of up to 200 characters to tell Agents what the connection is for; without it, Agents see the name the server reports.
 
 `environment` holds non-secret values. `credential_environment` and `credential_headers` map subprocess variables or HTTP headers to named vBot credentials. Set a referenced credential using `credential --stdin` with `id`, `key`, and `value`; an empty value clears it. Never put secrets in arguments, plain environment configuration, URLs, shell history, or reports.
 

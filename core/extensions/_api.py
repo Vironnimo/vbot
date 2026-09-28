@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,9 @@ from core.extensions.interactions import (
 )
 from core.extensions.operations import ExtensionOperations
 from core.extensions.settings_schema import parse_settings_fields
+
+# A Tool name (the Tools-domain name rule), optionally ending in ``*`` for a prefix.
+_REQUIRED_TOOL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}\*?$")
 
 
 class ExtensionAPI:
@@ -311,6 +315,7 @@ class ExtensionAPI:
         *,
         default_text: str | None = None,
         render: Callable[..., str] | None = None,
+        requires_tool: str | None = None,
     ) -> None:
         """Declare a System Prompt block (D6), static **or** dynamic.
 
@@ -320,6 +325,13 @@ class ExtensionAPI:
         its owner is ``extension:<extension-name>`` — so gate 2 renders the block
         only while this extension is loaded, and an extension may declare several
         blocks by using distinct slugs (e.g. a static one and a dynamic one).
+
+        ``requires_tool`` instead makes the owner ``tool:<requires_tool>``: the
+        block renders only while the Agent's Tool list for the request contains
+        that Tool, or with a trailing ``*`` any Tool whose name starts with the
+        text before it (``"mcp_*"``). A block that explains a family of Tools thus
+        appears exactly when the Model sees one of them; the Tools stop being
+        listed when this extension unloads, so the block goes with them.
 
         Pass **exactly one** of ``default_text`` (a static, editable block whose
         text flows through the override cascade) or ``render`` (a dynamic,
@@ -333,8 +345,21 @@ class ExtensionAPI:
         has_render = render is not None
         if has_text == has_render:
             raise ValueError("register_prompt_block requires exactly one of default_text / render")
+        if requires_tool is not None and (
+            not isinstance(requires_tool, str)
+            or _REQUIRED_TOOL_PATTERN.fullmatch(requires_tool) is None
+        ):
+            raise ValueError(
+                "register_prompt_block requires_tool must be a Tool name, "
+                "optionally ending in * to match a name prefix"
+            )
         self._declarations.prompt_blocks.append(
-            PromptBlockDeclaration(slug=slug, default_text=default_text, render=render)
+            PromptBlockDeclaration(
+                slug=slug,
+                default_text=default_text,
+                render=render,
+                requires_tool=requires_tool,
+            )
         )
 
     def on_startup(self, handler: LifecycleHandler) -> None:

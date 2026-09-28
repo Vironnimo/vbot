@@ -15,6 +15,7 @@ from core.sessions._types import (
     SKILL_CONTEXT_NOTE_PREFIX,
     SKILL_TOOL_LOADED_STATUS,
     SKILL_TOOL_MESSAGE_NAME,
+    TOOL_CHANGE_NOTE_PREFIX,
 )
 from core.skills.skills import format_skill_activation_context
 
@@ -193,4 +194,12 @@ def is_skill_available_note(message: ChatMessage) -> bool:
         message.role == "note"
         and isinstance(message.content, str)
         and message.content.startswith(SKILL_AVAILABLE_NOTE_PREFIX)
+    )
+
+
+def is_tool_change_note(message: ChatMessage) -> bool:
+    return (
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith(TOOL_CHANGE_NOTE_PREFIX)
     )

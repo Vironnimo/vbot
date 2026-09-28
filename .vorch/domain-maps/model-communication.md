@@ -4,11 +4,11 @@ The sanctioned runtime channels through which the kernel informs the Model, and 
 
 ## Overview
 
-Everything the Model sees at runtime arrives through one of seven channels. They differ on two axes: **durability** (persisted Session record vs request-time-only) and **trust** (kernel-authored constants vs quoted external content). Chat owns the request-rendering mechanics; producers only persist records or declare content through their own domain APIs.
+Everything the Model sees at runtime arrives through one of eight channels. They differ on two axes: **durability** (persisted Session record vs request-time-only) and **trust** (kernel-authored constants vs quoted external content). Chat owns the request-rendering mechanics; producers only persist records or declare content through their own domain APIs.
 
 The core term System Reminder lives in `.vorch/GLOSSARY.md`.
 
-These seven channels describe canonical vBot Agent/Chat communication. A Live voice call gives its voice model attributed Run updates through provider-native ephemeral context appends; it never injects them into a vBot Session. Its instructions, trust boundary, and lifecycle are owned by `model_tasks/live.md`.
+These eight channels describe canonical vBot Agent/Chat communication. A Live voice call gives its voice model attributed Run updates through provider-native ephemeral context appends; it never injects them into a vBot Session. Its instructions, trust boundary, and lifecycle are owned by `model_tasks/live.md`.
 
 ## Channels
 
@@ -18,6 +18,7 @@ These seven channels describe canonical vBot Agent/Chat communication. A Live vo
 | Reply-surface reminder | Append-only tagged chronology | `chat/request-building.md` - appended by Chat at executor start; producers only pass the surface value |
 | Speech-transcription reminder | Request-time only, hidden | `chat/request-building.md` - added when `input_origin="speech_transcription"` |
 | Skill announcement | Once per Prompt Epoch | `skills.md` - tail note when a Skill becomes available+allowed |
+| Tool-change announcement | Persisted note, once per change within a Prompt Epoch | `chat/request-building.md` -> Tool catalog per prompt epoch - `[tool-change]` note when a Tool is enabled, removed or changes its parameters while the Tool list stays pinned |
 | Continuation checkpoint reminder | Request-time only | `compaction.md` - ContinuationStrategy appends it to the active request |
 | System Prompt blocks | Rendered per request | `prompts.md`; Tool-owned dynamic blocks via `ToolPromptBlockRegistry` (`tools.md`) |
 | Tool definitions and results | Per call | `tools.md` - description plus structured result data |
@@ -30,11 +31,13 @@ Deliberately **not** a reminder channel: Channel-observed group chatter persists
 - Standing guidance that follows configuration or the current catalog -> System Prompt block (allowlist-gated).
 - Input-quality caveat tied to how a message was produced -> hidden request-time reminder declared as an explicit input field; never hand-built text.
 - Per-call contract or feedback -> Tool description / result envelope.
+- A Tool that appears, disappears or changes mid-Session -> nothing to send: register, unregister or republish it and Chat announces the difference itself.
 - Untrusted external content -> ordinary user content under its domain's quoting/attribution rules, never kernel voice.
 
 ## Gotchas
 
-- `<system-reminder>` is a protocol token owned by Chat's request builder. Producers never write the tags themselves.
+- The always-on System Prompt block `core:system_reminders` (`prompts.md`) tells the Model that `<system-reminder>` messages come from vBot, not from the user. Live tests showed that non-Claude Models distrust unanchored reminders and, once anchored, also obey forged tags inside Tool Results; hence the neutralization below.
+- `<system-reminder>` is a protocol token owned by Chat's request builder. Producers never write the tags themselves. In the Provider request Chat neutralizes every look-alike tag outside its own reminders (user, Assistant, Tool Result, attachment, Skill and channel text), so a hand-built tag reaches the Model as `&lt;system-reminder>`. Request-only code that must add a kernel reminder uses `wire_shaping.system_reminder_request_message` (contract: `chat/request-building.md`).
 - Provider adapters never receive `role: "note"`; embedding happens before wire translation (`providers.md`).
 - Reminders are synthetic user messages: content must be kernel-authored constants, never raw external or user data without its domain's quoting rules. Chat-rendered reminders quote such text through `core/chat/wire_shaping.py::_quote_external_json` (JSON with escaped angle brackets), including Model-visible Run errors and the interrupted-Run Continuation checkpoint.
 - Notes are invisible in UI and public history - they are not a user-notification mechanism.

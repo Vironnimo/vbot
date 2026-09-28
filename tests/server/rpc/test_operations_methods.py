@@ -134,6 +134,7 @@ class StubTools:
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        ready_only: bool = True,
         profile_context: Any | None = None,
     ) -> list[JsonObject]:
         return [{"name": "read", "description": "Read a file", "parameters": {"type": "object"}}]
@@ -337,6 +338,7 @@ def test_list_returns_blocks_in_layout_order_with_scopes(tmp_path: Path) -> None
         "core:runtime",
         "core:identity_runtime",
         "core:tools",
+        "core:system_reminders",
         "core:tools_list",
         "core:channels",
         "core:skills",

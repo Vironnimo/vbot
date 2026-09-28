@@ -16,6 +16,7 @@ from core.prompts.pinned_context import (
     PINNED_MEMORY_FILES_SLOT,
     PINNED_SKILL_CATALOG_SLOT,
     PINNED_SOUL_CONTEXT_SLOT,
+    PINNED_TOOL_DEFINITIONS_SLOT,
     PINNED_WORKING_PROJECT_CONTEXT_SLOT,
 )
 from core.runs import RunKind
@@ -74,6 +75,7 @@ _AGENT_RENDERED_PINS = {
     PINNED_SKILL_CATALOG_SLOT: {"catalog_text": "coder Skills"},
     PINNED_SOUL_CONTEXT_SLOT: {"text": "coder SOUL"},
     PINNED_MEMORY_FILES_SLOT: {"text": "coder memory", "mode": "full"},
+    PINNED_TOOL_DEFINITIONS_SLOT: {"v": 2, "epoch": "coder", "definitions": "[]", "sources": {}},
 }
 
 
@@ -97,7 +99,7 @@ def test_agent_rendered_pins_never_reach_another_agent(manager, operation) -> No
     if operation == "same-agent fork":
         assert carried == pins
     else:
-        # The reviewer renders its own Skill catalog, SOUL and memory; only
+        # The reviewer renders its own Skill catalog, SOUL, memory and Tools; only
         # Project-qualified state, which re-renders on its own, may carry over.
         assert carried == {
             **dict.fromkeys(_AGENT_RENDERED_PINS),

@@ -111,6 +111,7 @@ def test_direct_construction_leaves_optional_facts_unset() -> None:
     assert model.capabilities.reasoning.budget_max is None
     assert model.capabilities.supported_parameters == ()
     assert model.capabilities.supported_voices == ()
+    assert model.capabilities.unlisted_tool_calls is True
     assert (model.context_window, model.max_output_tokens) == (None, None)
     assert model.family == ""
     assert model.metadata == {}
@@ -340,6 +341,7 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
                 supported_voices=["af_sky", "af_aoede", "af_bella"],
             )
         ),
+        "unlisted-tool-calls": _record(capabilities=_capabilities(unlisted_tool_calls=False)),
         "null-limits": _record(context_window=None, max_output_tokens=None),
         "absent-limits": {
             key: value
@@ -387,6 +389,10 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
                 output_modalities=("speech",),
                 supported_voices=("af_aoede", "af_bella", "af_sky"),
             ),
+        ),
+        "unlisted-tool-calls": _model(
+            "unlisted-tool-calls",
+            capabilities=replace(_PLAIN_CAPABILITIES, unlisted_tool_calls=False),
         ),
         "null-limits": _model("null-limits", context_window=None, max_output_tokens=None),
         "absent-limits": _model("absent-limits", context_window=None, max_output_tokens=None),

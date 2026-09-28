@@ -289,7 +289,11 @@ class ExtensionCapabilityInstaller:
         """
         slug = declaration.slug
         block_id = f"extension:{slug}"
-        owner = f"extension:{record.name}"
+        owner = (
+            f"tool:{declaration.requires_tool}"
+            if declaration.requires_tool is not None
+            else f"extension:{record.name}"
+        )
         other_declarers = [other for other in declarers[slug] if other != record.name]
         if slug in claimed:
             winner = repr(other_declarers[0]) if other_declarers else "another extension"

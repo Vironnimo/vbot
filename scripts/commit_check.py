@@ -62,7 +62,7 @@ WEBUI_SOURCE_ROOTS = ("webui/src/", "webui/scripts/")
 EXTENSION_UI_PATTERN = re.compile(
     r"^(?:resources/extensions|tests/fixtures/extension-pages)/[^/]+/ui/"
 )
-MYPY_LINE_PATTERN = re.compile(r"^(?P<path>[^:\n]+?):\d+(?::\d+)?: (?:error|note):")
+MYPY_LINE_PATTERN = re.compile(r"^(?P<path>[^:\n]+?):\d+(?::\d+)?: (?P<kind>error|note):")
 PYTEST_SUMMARY_PATTERN = re.compile(r"^(?:FAILED|ERROR) (?P<test>.+?)(?: - .*)?$")
 TESTS_LOCK_NAME = "vbot-commit-tests.lock"
 TESTS_ARGUMENTS_NAME = "vbot-commit-tests.args"
@@ -156,21 +156,26 @@ def split_mypy_output(
 ) -> tuple[list[str], list[str]]:
     """Return mypy lines as ``(blocking, work_in_progress)``.
 
-    A line blocks when its file is staged or has no uncommitted changes; lines
-    for files with unstaged or untracked work belong to work in progress. Lines
-    without a file location (summaries) are dropped.
+    An error blocks when its file is staged or has no uncommitted changes;
+    errors in files with unstaged or untracked work belong to work in progress.
+    A note goes with the error it follows; a note without one (such as
+    ``annotation-unchecked``) reports nothing to fix and is dropped, like lines
+    without a file location (summaries).
     """
     blocking: list[str] = []
     in_progress: list[str] = []
+    group: list[str] | None = None
     for line in output.splitlines():
         match = MYPY_LINE_PATTERN.match(line)
         if match is None:
             continue
+        if match.group("kind") == "note":
+            if group is not None:
+                group.append(line)
+            continue
         path = PurePosixPath(match.group("path").replace("\\", "/")).as_posix()
-        if path in staged or path not in dirty:
-            blocking.append(line)
-        else:
-            in_progress.append(line)
+        group = blocking if path in staged or path not in dirty else in_progress
+        group.append(line)
     return blocking, in_progress
 
 

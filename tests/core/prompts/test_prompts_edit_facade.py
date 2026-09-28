@@ -20,6 +20,7 @@ _BUNDLED_LAYOUT = [
     "core:runtime",
     "core:identity_runtime",
     "core:tools",
+    "core:system_reminders",
     "tool:project",
     "tool:subagent",
     "core:tools_list",

@@ -76,6 +76,9 @@ def test_partially_staged_file_is_left_alone_and_blocks(repo: Path) -> None:
 def test_mypy_errors_block_unless_in_unstaged_work_in_progress() -> None:
     output = "\n".join(
         [
+            # A note without an error, as mypy prints for committed files, never blocks.
+            "tests/committed.py:7: note: By default the bodies of untyped functions are not"
+            " checked, consider using --check-untyped-defs  [annotation-unchecked]",
             "core\\staged.py:3: error: Incompatible return value  [return-value]",
             "core/caller.py:9: error: Missing positional argument  [call-arg]",
             "core/wip.py:1:5: error: Name 'x' is not defined  [name-defined]",

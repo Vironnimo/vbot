@@ -6,7 +6,6 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from core.chat.streaming import StreamingAccumulator, iter_with_chunk_timeout
-from core.chat.wire_shaping import model_facing_request
 from core.compaction.errors import CompactionError
 from core.providers.adapter import TERMINAL_OUTCOME_STOP
 from core.utils.logging import get_logger
@@ -40,6 +39,9 @@ async def _send_streaming_model_request(
 ) -> dict[str, Any]:
     """Consume one canonical stream, accepting only a completed text response.
 
+    ``messages`` and ``request_options["tools"]`` are already the Model-facing
+    projection (``core.chat.wire_shaping.model_facing_request``).
+
     Some providers (observed on OpenRouter's stealth tier) reject large
     non-streaming completions outright while streaming the same payload fine,
     so Compaction always streams. Adapter deltas are already normalized and must
@@ -49,10 +51,6 @@ async def _send_streaming_model_request(
     backoff. Acceptance failures and cancellation are never retried. Every
     attempt records its own Usage.
     """
-    tools = request_options.get("tools")
-    messages, model_tools = model_facing_request(messages, list(tools or []))
-    if tools is not None:
-        request_options = {**request_options, "tools": model_tools}
     model = model_reference or str(request_options.get("model_id") or "unknown")
     attempt = 0
     while True:

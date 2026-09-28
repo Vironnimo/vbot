@@ -24,6 +24,10 @@ CORE_IDENTITY_RUNTIME_BLOCK_ID = "core:identity_runtime"
 
 CORE_TOOLS_BLOCK_ID = "core:tools"
 
+# Tells the Model where <system-reminder> messages come from. Static text, so it
+# stays byte-identical for the whole Session.
+CORE_SYSTEM_REMINDERS_BLOCK_ID = "core:system_reminders"
+
 # Ships disabled: native Provider definitions already carry Tool descriptions.
 CORE_TOOLS_LIST_BLOCK_ID = "core:tools_list"
 
@@ -213,9 +217,10 @@ class ToolPromptRegistry(Protocol):
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        ready_only: bool = True,
         profile_context: ToolDefinitionProfileContext | None = None,
     ) -> list[dict[str, Any]]:
-        """Return provider-ready tool schemas."""
+        """Return provider-ready tool schemas; ``ready_only=False`` keeps not-ready Tools."""
         ...
 
 

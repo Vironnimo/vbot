@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.chat._step_outcomes import _ToolProgress
+from core.chat._tool_epoch import ToolEpochView
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock
 from core.chat.continuation import (
@@ -89,11 +90,20 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class RequestState:
+    """One Provider request of a Run and the Tool state its Tool Calls dispatch with.
+
+    ``tools`` is the request's Tool list; ``allowed_tool_names`` and
+    ``tool_contracts`` follow ``tool_epoch``, the pinned Tools plus the Tool
+    changes announced to the Model (``None`` only for a state assembled without
+    a Session request build).
+    """
+
     messages: list[JsonObject]
     tools: list[JsonObject]
     allowed_tool_names: tuple[str, ...]
     session_tool_grants: tuple[str, ...]
     tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
+    tool_epoch: ToolEpochView | None = None
 
 
 _RequestState = RequestState
@@ -197,6 +207,9 @@ class _ModelTarget:
     wire_media_types: frozenset[str]
     chunk_timeout_seconds: float | None
     max_image_bytes: int | None = None
+    # Whether the route returns calls to Tools outside the request's Tool list
+    # (Model capability ``unlisted_tool_calls``).
+    unlisted_tool_calls: bool = True
 
 
 @dataclass
@@ -430,6 +443,11 @@ class RequestBuildInputs:
     input_modalities: frozenset[str] | None = None
     wire_media_types: frozenset[str] = frozenset()
     max_image_bytes: int | None = None
+    # The Run's primary route, whose gates decide the Tools a new Tool pin
+    # offers, also while a fallback target serves this request. ``None`` uses
+    # this request's own route.
+    tool_route_input_modalities: frozenset[str] | None = None
+    tool_route_wire_media_types: frozenset[str] | None = None
     # Pinned prompt-epoch state; replaced wholesale by a Compaction refresh.
     agent_body: str = ""
     project_context: ProjectPromptContext | None = None
@@ -443,6 +461,12 @@ class RequestBuildInputs:
     session_messages_override: list[ChatMessage] | None = None
     image_budget: RequestImageBudget | None = None
     temporary_binding: TemporarySessionBinding | None = None
+    # Start a new prompt epoch's Tool pin from the current Tools instead of
+    # reading the Session's pin; the caller persists it (Compaction commit).
+    fresh_tool_epoch: bool = False
+    # List announced Tool additions in the request's Tool list: for a route
+    # that drops calls to unlisted Tools, and for every fallback route.
+    list_announced_tools: bool = False
 
     @classmethod
     def from_context(
@@ -450,13 +474,19 @@ class RequestBuildInputs:
         context: _RunExecutionContext,
         target: _ModelTarget,
     ) -> RequestBuildInputs:
-        """Collect the context's pinned epoch plus one target's wire inputs."""
+        """Collect the context's pinned epoch plus one target's wire inputs.
+
+        Tools are always measured on the Run's primary route, so a Compaction
+        on a fallback target pins what the primary route offers.
+        """
         return cls(
             replay_policy=target.replay_policy,
             reasoning_scope_model=target.model_reference,
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
             max_image_bytes=target.max_image_bytes,
+            tool_route_input_modalities=context.primary_target.input_modalities,
+            tool_route_wire_media_types=context.primary_target.wire_media_types,
             agent_body=context.agent_body,
             project_context=context.project_prompt_context,
             working_project_context=context.working_project_context,
@@ -467,6 +497,9 @@ class RequestBuildInputs:
             skill_catalog=context.skill_catalog,
             image_budget=context.image_budget,
             temporary_binding=context.request.temporary_binding,
+            list_announced_tools=(
+                target is not context.primary_target or not target.unlisted_tool_calls
+            ),
         )
 
     def with_session_messages(self, messages: list[ChatMessage]) -> RequestBuildInputs:

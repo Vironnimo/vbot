@@ -33,6 +33,7 @@ from core.providers._tool_calls import (
     tool_result_content_blocks,
 )
 from core.providers._tool_result_text import (
+    neutralize_system_reminder_tags,
     tool_result_function_response,
     tool_result_text,
 )
@@ -79,6 +80,7 @@ __all__ = [
     "ToolCallIdProfile",
     "canonical_tool_result_is_error",
     "estimate_wire_request_input_tokens",
+    "neutralize_system_reminder_tags",
     "normalize_tool_call_candidate",
     "normalize_tool_call_candidates",
     "normalize_tool_call_ids",

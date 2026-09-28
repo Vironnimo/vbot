@@ -40,7 +40,7 @@ Domain-specific vocabulary for skills. The core Skill term lives in `.vorch/GLOS
 
 ### Skill Availability Announcement
 **Definition:** A one-time tail `<system-reminder>` when a Skill becomes available+allowed during a prompt epoch and was not already shown (newly authored, opted into a Project, added globally, or freshly scanned). Run setup diffs current available+allowed against the Session's seen-Skill set (`ChatSessionManager.seen_skills`); a Session without a recorded set (a new Session, or one forked or moved into another Agent or Project) and each successful Compaction seed that set silently.
-**Not:** A removal notice, a replacement for the Prompt-Epoch Catalog, or the live `skill({})` result.
+**Not:** A removal notice, a replacement for the Prompt-Epoch Catalog, or the live `skill({})` result. Tools changed mid-epoch get their own `[tool-change]` announcements, including removals (`chat/request-building.md` -> Tool catalog per prompt epoch).
 
 ## Authoring & Write Scope
 

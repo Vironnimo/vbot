@@ -23,6 +23,7 @@ from core.prompts._types import (
     CORE_SKILL_MAINTENANCE_BLOCK_ID,
     CORE_SKILLS_BLOCK_ID,
     CORE_SOUL_BLOCK_ID,
+    CORE_SYSTEM_REMINDERS_BLOCK_ID,
     CORE_TOOLS_BLOCK_ID,
     CORE_TOOLS_LIST_BLOCK_ID,
     CORE_WORKING_PROJECT_BLOCK_ID,
@@ -327,6 +328,14 @@ class PromptBlockCatalog:
                 id=CORE_TOOLS_BLOCK_ID,
                 owner=BLOCK_OWNER_ALWAYS,
                 default_text=self._read_prompt_fragment(prompt_scope, agent_id, "tools.md"),
+            ),
+            BlockDefinition(
+                id=CORE_SYSTEM_REMINDERS_BLOCK_ID,
+                owner=BLOCK_OWNER_ALWAYS,
+                # Every scope reads the bundled text: the Model needs it to trust
+                # vBot's reminders, and custom-prompt Agent copies predate it.
+                # A scope still edits or disables it like any other block.
+                default_text=self._storage.read_prompt_fragment("system_reminders.md"),
             ),
             BlockDefinition(
                 id=CORE_TOOLS_LIST_BLOCK_ID,

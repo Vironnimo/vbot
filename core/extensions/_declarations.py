@@ -21,7 +21,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 8
+API_VERSION = 9
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
 CommandHandler = Callable[..., Any]
@@ -290,14 +290,17 @@ class PromptBlockDeclaration:
     :meth:`ExtensionRegistry.prompt_block_declarations` accessor (a lazy import, so
     the extensions module stays decoupled from the prompts domain). An extension's
     block is sourced/owned ``extension:<name>`` so gate 2 only renders it while the
-    extension is loaded. Exactly one of ``default_text`` (static, editable via the
-    override cascade) / ``render`` (dynamic, non-editable, build-time function) is
-    set — the same static-vs-dynamic split as a core block.
+    extension is loaded; ``requires_tool`` (a Tool name, or a name prefix ending in
+    ``*``) makes the owner ``tool:<requires_tool>`` instead. Exactly one of
+    ``default_text`` (static, editable via the override cascade) / ``render``
+    (dynamic, non-editable, build-time function) is set — the same
+    static-vs-dynamic split as a core block.
     """
 
     slug: str
     default_text: str | None = None
     render: Callable[..., str] | None = None
+    requires_tool: str | None = None
 
 
 @dataclass

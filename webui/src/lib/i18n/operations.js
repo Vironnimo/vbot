@@ -45,6 +45,9 @@ export default Object.freeze({
   'mcp.credentialSaved': 'Credential saved.',
   'mcp.credentials': 'Credentials',
   'mcp.credentialsFor': 'Credentials for {name}',
+  'mcp.description': 'Description (optional)',
+  'mcp.descriptionHelp':
+    'One line that tells Agents what this connection is for. Without it, Agents see the name the server reports.',
   'mcp.directory': 'Working directory',
   'mcp.disabled': 'Disabled',
   'mcp.disconnected': 'Disconnected',

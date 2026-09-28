@@ -78,7 +78,7 @@ class StubPrompts:
         skill_registry: object = None,
         skill_catalog: object = None,
         read_paths: list[Path] | None = None,
-        effective_tool_names: object = None,
+        effective_tool_definitions: object = None,
         session_tool_grants: object = (),
         request_block_definitions: object = (),
     ) -> str:
@@ -129,11 +129,13 @@ class StubPrompts:
         skill_registry: object = None,
         skill_catalog: object = None,
         session_tool_grants: tuple[str, ...] = (),
+        ready_only: bool = True,
     ) -> list[JsonObject]:
         assert _agent.tool_access is not None
         return self._tools.provider_definitions(
             ["*"] if _agent.tool_access.mode == "all" else list(_agent.tool_access.allowed),
             session_grants=session_tool_grants,
+            ready_only=ready_only,
         )
 
     async def build_system_prompt_async(self, agent: StubAgent, **options: Any) -> str:

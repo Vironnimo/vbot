@@ -191,6 +191,7 @@ def _write_prompt_resources(resources: Path) -> None:
         encoding="utf-8",
     )
     (prompts_dir / "tools.md").write_text("Tools\n{generated:tool_list}", encoding="utf-8")
+    (prompts_dir / "system_reminders.md").write_text("System reminders", encoding="utf-8")
     # Ships disabled by default; must exist because the block definitions read it.
     (prompts_dir / "tools_list.md").write_text("Tool list\n{generated:tool_list}", encoding="utf-8")
     (prompts_dir / "channels.md").write_text("Channels\n{generated:channel_list}", encoding="utf-8")

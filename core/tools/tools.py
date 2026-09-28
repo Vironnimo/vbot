@@ -38,6 +38,7 @@ from core.tools._tool_definitions import (
     InvalidToolResultError,
     SessionToolUnavailableError,
     Tool,
+    ToolDefinitionChangeNote,
     ToolDefinitionProfile,
     ToolDefinitionProfileContext,
     ToolDefinitionProfileResolver,
@@ -182,6 +183,7 @@ class ToolRegistry:
         coerce_arguments: bool = True,
         argument_normalizer: Callable[[Any], Any] | None = None,
         definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
+        definition_change_note: ToolDefinitionChangeNote | None = None,
     ) -> Tool:
         """Register a tool and return its immutable definition.
 
@@ -191,6 +193,8 @@ class ToolRegistry:
         ``readiness_hint`` is optional English text explaining the readiness
         precondition (surfaced by ``tool.list``); ``extension`` names the owning
         extension (``None`` for a built-in), set at extension-tool apply time.
+        ``definition_change_note`` lets a Tool announce a change of its
+        description to a Session that already knows it (see :class:`Tool`).
         """
         family_definition = None
         if family is not None:
@@ -237,6 +241,7 @@ class ToolRegistry:
             coerce_arguments=coerce_arguments,
             argument_normalizer=argument_normalizer,
             definition_profile_resolver=definition_profile_resolver,
+            definition_change_note=definition_change_note,
         )
         self._tools[name] = tool
         self.revision += 1
@@ -985,6 +990,7 @@ __all__ = [
     "ToolNotAllowedError",
     "ToolNotFoundError",
     "ToolPromptBlockRegistry",
+    "ToolDefinitionChangeNote",
     "ToolReadinessPredicate",
     "ToolRegistry",
     "READ_MEDIA_ARTIFACT_KIND",

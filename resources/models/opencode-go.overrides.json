@@ -97,6 +97,9 @@
       }
     },
     "glm-5.3-flash": {
+      "capabilities": {
+        "unlisted_tool_calls": false
+      },
       "metadata": {
         "opencode_go": {
           "protocol": "openai",

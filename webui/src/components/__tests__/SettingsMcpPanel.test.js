@@ -205,6 +205,7 @@ describe('MCP management surface', () => {
     expect(nameInput.pattern).toBe('[a-z][a-z0-9_]{0,31}');
     expect(nameInput.checkValidity()).toBe(true);
     input('Program', 'uvx');
+    input('Description (optional)', ' Blender on the studio workstation ');
     button('Add argument').click();
     flushSync();
     input('Argument 1', 'blender-mcp');
@@ -217,6 +218,7 @@ describe('MCP management surface', () => {
       arguments: {
         connection: expect.objectContaining({
           id: 'blender',
+          description: 'Blender on the studio workstation',
           command: 'uvx',
           args: ['blender-mcp'],
         }),

@@ -15,13 +15,13 @@ from PIL import Image
 from core.attachments import AttachmentStore
 from core.chat._request_builder import RequestBuilder
 from core.chat._request_history import _restore_in_run_tool_result_content
+from core.chat._tool_epoch import tool_change_from_note
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import ProviderAuthError, ProviderRateLimitError
 from core.runs import ERROR_MESSAGE_PERSISTED_EVENT, MODEL_FALLBACK_ACTIVATED_EVENT, RunStatus
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
-    ToolAccess,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -443,31 +443,11 @@ async def test_identical_tool_failures_share_the_circuit_breaker_across_fallback
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("vision_granted", "fallback_vision"),
-    [(False, False), (False, True), (True, False)],
-    ids=["fallback-without-vision", "fallback-with-vision", "granted"],
-)
-async def test_fallback_rebuilds_route_gated_image_tool_visibility(
+async def test_fallback_lists_the_pinned_tools_and_announced_additions_without_new_notes(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    vision_granted: bool,
-    fallback_vision: bool,
 ) -> None:
-    policy = ToolAccess(
-        mode="selected",
-        allowed=(ANALYZE_IMAGE_TOOL_NAME,),
-        granted=(ANALYZE_IMAGE_TOOL_NAME,) if vision_granted else (),
-    )
-    monkeypatch.setattr(StubAgent, "tool_access", property(lambda _self: policy))
-    primary = StubAdapter(
-        [ProviderRateLimitError("primary rate limited")],
-        wire_media_types=frozenset({"image/png"}),
-    )
-    fallback = StubAdapter(
-        [{"content": "Recovered", "tool_calls": None}],
-        wire_media_types=frozenset({"image/png"}) if fallback_vision else frozenset(),
-    )
+    # The fallback route's cache is cold anyway, so it lists every Tool announced as
+    # added; it neither re-pins nor re-applies the route gates of its own Model.
     tools = ToolRegistry()
     tools.register(
         ANALYZE_IMAGE_TOOL_NAME,
@@ -475,33 +455,42 @@ async def test_fallback_rebuilds_route_gated_image_tool_visibility(
         {"type": "object"},
         lambda _context, _arguments: tool_success({"analysis": "ok"}),
     )
+    primary = StubAdapter(
+        [{"content": "First", "tool_calls": None}, ProviderRateLimitError("rate limited")]
+    )
+    fallback = StubAdapter(
+        [{"content": "Recovered", "tool_calls": None}],
+        wire_media_types=frozenset({"image/png"}),
+    )
     runtime = _fallback_runtime(
         tmp_path,
         primary,
         fallback,
-        model="openai/vision-model",
-        fallback_models=["anthropic/text-model::api-key"],
-        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
         tools=tools,
         models=StubModels(
-            {("openai", "vision-model"): 128_000, ("anthropic", "text-model"): 128_000},
-            input_modalities={
-                ("openai", "vision-model"): ("text", "image"),
-                ("anthropic", "text-model"): ("text", "image") if fallback_vision else ("text",),
-            },
+            {("openai", "gpt-5.2"): 128_000, ("anthropic", "claude-sonnet-4"): 128_000},
+            input_modalities={("anthropic", "claude-sonnet-4"): ("text", "image")},
         ),
         available_task_models={TASK_IMAGE_UNDERSTANDING},
     )
+    loop = build_chat_loop(runtime)
 
-    await build_chat_loop(runtime).send("coder", "Inspect it", session_id="s1")
+    await loop.send("coder", "First", session_id="session-one")
+    tools.register(
+        "extra",
+        "Extra Tool.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({}),
+    )
+    await loop.send("coder", "Second", session_id="session-one")
 
-    def offered(adapter: StubAdapter) -> bool:
-        return ANALYZE_IMAGE_TOOL_NAME in {
-            t["name"] for t in adapter.requests[0]["kwargs"]["tools"]
-        }
-
-    assert offered(primary) is vision_granted
-    assert offered(fallback) is (vision_granted or not fallback_vision)
+    pinned = primary.requests[0]["kwargs"]["tools"]
+    extra = {"name": "extra", "description": "Extra Tool.", "parameters": {"type": "object"}}
+    assert ANALYZE_IMAGE_TOOL_NAME in {tool["name"] for tool in pinned}
+    assert primary.requests[1]["kwargs"]["tools"] == pinned
+    assert fallback.requests[0]["kwargs"]["tools"] == [*pinned, extra]
+    notes = [message for message in history(runtime) if message.role == "note"]
+    assert [change.tool for m in notes if (change := tool_change_from_note(m))] == ["extra"]
 
 
 @pytest.mark.asyncio

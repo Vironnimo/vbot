@@ -14,6 +14,7 @@
   import { t } from '$lib/i18n.js';
   import {
     createMcpSettings,
+    MCP_DESCRIPTION_MAX_LENGTH,
     mcpDraft,
     mcpCredentialNames,
   } from '$lib/mcpSettings.js';
@@ -467,6 +468,20 @@
               />{/snippet}
           </FormField>
         </div>
+        <FormField
+          controlId={`${componentId}-description`}
+          label={t('mcp.description')}
+          help={t('mcp.descriptionHelp')}
+        >
+          {#snippet children(field)}<TextField
+              id={field.controlId}
+              aria-describedby={field.describedBy}
+              value={draft.description}
+              disabled={state.busy}
+              maxlength={MCP_DESCRIPTION_MAX_LENGTH}
+              onInput={(value) => set('description', value)}
+            />{/snippet}
+        </FormField>
         {#if draft.transport === 'stdio'}
           <FormField
             controlId={`${componentId}-command`}

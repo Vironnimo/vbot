@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
+from core.chat._tool_epoch import tool_change_from_note
 from core.extensions.operations import ExtensionOperations
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.tools import (
@@ -42,16 +43,19 @@ from tests.core.chat.chat_loop_tools_test_support import (
 )
 
 
-def _name_recording_tools(*names: str) -> tuple[ToolRegistry, list[str]]:
-    dispatched: list[str] = []
-
+def _recording_handler(dispatched: list[str]) -> Any:
     def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
         dispatched.append(context.tool_name)
         return tool_success({"id": context.tool_call_id})
 
+    return probe
+
+
+def _name_recording_tools(*names: str) -> tuple[ToolRegistry, list[str]]:
+    dispatched: list[str] = []
     tools = ToolRegistry()
     for name in names:
-        tools.register(name, "Probe Tool.", {"type": "object"}, probe)
+        tools.register(name, "Probe Tool.", {"type": "object"}, _recording_handler(dispatched))
     return tools, dispatched
 
 
@@ -177,44 +181,261 @@ async def test_nested_run_receives_non_handoff_bash_definition(tmp_path: Path) -
     }
 
 
+def _tools_sent(runtime: Any) -> list[list[JsonObject]]:
+    return [request["kwargs"]["tools"] for request in runtime.adapter.requests]
+
+
+def _announced(runtime: Any, session_id: str = "session-one") -> list[tuple[str, str]]:
+    changes = [tool_change_from_note(message) for message in history(runtime, session_id)]
+    return [(change.change, change.tool) for change in changes if change is not None]
+
+
+def _reminders(request: JsonObject) -> str:
+    return "\n".join(
+        str(message["content"])
+        for message in request["messages"]
+        if message["role"] == "user" and "<system-reminder>" in str(message["content"])
+    )
+
+
+_PATH_PARAMETERS = {
+    "type": "object",
+    "properties": {"path": {"type": "string"}},
+    "required": ["path"],
+    "additionalProperties": False,
+}
+# Keys in the author's order, which is not alphabetical at any level.
+_ORDERED_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "zeta": {"type": "string", "description": "Listed first."},
+        "alpha": {"type": "integer"},
+    },
+    "required": ["zeta"],
+    "additionalProperties": False,
+}
+
+
 @pytest.mark.asyncio
-async def test_live_catalog_publication_refreshes_next_provider_cycle(tmp_path: Path) -> None:
+async def test_a_tool_enabled_mid_run_is_announced_while_the_tool_list_stays_pinned(
+    tmp_path: Path,
+) -> None:
     tools = ToolRegistry()
     operations = ExtensionOperations("test")
     operations.bind(tools)
-    calls: list[str] = []
+    calls: list[JsonObject] = []
 
-    async def installed(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
-        calls.append("installed-called")
+    async def installed(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        calls.append(arguments)
         return tool_success({"sentinel": True})
 
     async def install(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
-        parameters = {"type": "object", "properties": {}, "additionalProperties": False}
         operations.replace_tools(
             "connection",
             [
                 {
                     "name": "installed",
-                    "description": "test-sentinel",
-                    "parameters": parameters,
+                    "description": "Installed Tool.",
+                    "parameters": _PATH_PARAMETERS,
                     "handler": installed,
                 }
             ],
         )
         return tool_success({"installed": True})
 
-    tools.register("install", "test-sentinel", {"type": "object"}, install)
+    tools.register("install", "Install a Tool.", _ORDERED_PARAMETERS, install)
     runtime = tool_runtime(
         tmp_path,
         tools,
-        [tool_turn(("install", "install")), tool_turn(("use", "installed")), final("finished")],
+        [
+            tool_turn(("install", "install", {"zeta": "now"})),
+            # Another harness's spelling resolves to the announced Tool.
+            tool_turn(("use", "functions.installed", {"path": "a"})),
+            final("finished"),
+            final("again"),
+            final("after restart"),
+        ],
     )
 
     await build_chat_loop(runtime).send("coder", "install and use", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "once more", session_id="session-one")
+    # A restarted runtime on the same storage reads the pinned bytes back.
+    runtime.chat_sessions.close()
+    runtime = tool_runtime(tmp_path, tools, [], adapter=runtime.adapter)
+    await build_chat_loop(runtime).send("coder", "and again", session_id="session-one")
 
-    assert calls == ["installed-called"]
-    assert "installed" not in _offered(runtime.adapter.requests[0])
-    assert "installed" in _offered(runtime.adapter.requests[1])
+    first, after_install = runtime.adapter.requests[:2]
+    assert calls == [{"path": "a"}]
+    assert "installed" not in _offered(first)
+    # Byte-identical from the pinning request on, across Runs and the restart,
+    # with every definition's keys in the order its author wrote them.
+    pinned_bytes = json.dumps(first["kwargs"]["tools"])
+    assert [json.dumps(sent) for sent in _tools_sent(runtime)] == [pinned_bytes] * 5
+    install_definition = next(t for t in first["kwargs"]["tools"] if t["name"] == "install")
+    assert json.dumps(install_definition["parameters"]) == json.dumps(_ORDERED_PARAMETERS)
+    # The announcement follows the Tool Result that caused it, and only once.
+    assert [message["role"] for message in after_install["messages"]] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+    ]
+    assert "The Tool installed was enabled for you in this Session." in _reminders(after_install)
+    assert _announced(runtime) == [("added", "installed")]
+
+
+@pytest.mark.asyncio
+async def test_an_announced_tool_removed_again_fails_as_removed_under_its_own_name(
+    tmp_path: Path,
+) -> None:
+    tools, dispatched = _name_recording_tools("web_fetch")
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [
+            final("ready"),
+            final("added"),
+            tool_turn(("gone", "fetch")),
+            final("done"),
+            final("back"),
+        ],
+    )
+    loop = build_chat_loop(runtime)
+    handler = tools.get("web_fetch").handler
+
+    await loop.send("coder", "Start", session_id="session-one")
+    tools.register("fetch", "Probe Tool.", {"type": "object"}, handler)
+    await loop.send("coder", "Added", session_id="session-one")
+    tools.unregister("fetch")
+    await loop.send("coder", "Fetch it", session_id="session-one")
+    tools.register("fetch", "Probe Tool.", {"type": "object"}, handler)
+    await loop.send("coder", "Back", session_id="session-one")
+
+    # "fetch" is no longer registered, yet it never maps to the listed web_fetch.
+    assert dispatched == []
+    assert _call_names(history(runtime)) == ["fetch"]
+    assert tool_results(history(runtime))[0]["error"]["code"] == "tool_removed"
+    assert _announced(runtime) == [("added", "fetch"), ("removed", "fetch"), ("added", "fetch")]
+    assert "The Tool fetch was removed from your Tools in this Session." in _reminders(
+        runtime.adapter.requests[2]
+    )
+    assert _tools_sent(runtime) == [_tools_sent(runtime)[0]] * 5
+
+
+@pytest.mark.asyncio
+async def test_readiness_never_removes_a_listed_tool_and_a_tool_ready_later_is_announced(
+    tmp_path: Path,
+) -> None:
+    ready = {"probe": True, "late": False}
+    tools, dispatched = _name_recording_tools()
+    for name in ready:
+
+        def is_ready(name: str = name) -> bool:
+            return ready[name]
+
+        tools.register(
+            name,
+            "Probe Tool.",
+            {"type": "object"},
+            _recording_handler(dispatched),
+            ready=is_ready,
+        )
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [final("ready"), tool_turn(("first", "probe"), ("second", "late")), final("done")],
+    )
+    loop = build_chat_loop(runtime)
+
+    await loop.send("coder", "Start", session_id="session-one")
+    ready.update(probe=False, late=True)
+    await loop.send("coder", "Use both", session_id="session-one")
+
+    assert dispatched == ["late"]
+    assert [result["ok"] for result in tool_results(history(runtime))] == [False, True]
+    assert tool_results(history(runtime))[0]["error"]["code"] == "tool_not_ready"
+    assert _announced(runtime) == [("added", "late")]
+    assert "late" not in _offered(runtime.adapter.requests[0])
+    assert _tools_sent(runtime) == [_tools_sent(runtime)[0]] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_changed_tool_schema_is_announced_and_validates_calls(tmp_path: Path) -> None:
+    tools, dispatched = _name_recording_tools()
+
+    def register_probe(parameters: JsonObject, **options: Any) -> None:
+        tools.register(
+            "probe",
+            "Probe Tool.",
+            parameters,
+            _recording_handler(dispatched),
+            **options,
+        )
+
+    register_probe(_PATH_PARAMETERS)
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [
+            final("ready"),
+            tool_turn(("old", "probe", {"path": "a"}), ("new", "probe", {"count": 1})),
+            final("done"),
+        ],
+    )
+    loop = build_chat_loop(runtime)
+
+    await loop.send("coder", "Start", session_id="session-one")
+    tools.unregister("probe")
+    register_probe(
+        {
+            "type": "object",
+            "properties": {"count": {"type": "integer"}},
+            "required": ["count"],
+            "additionalProperties": False,
+        },
+        # The Tool's own account of the change rides along with the announcement.
+        definition_change_note=lambda _old, _new: "Probe now counts.",
+    )
+    await loop.send("coder", "Use it", session_id="session-one")
+
+    assert dispatched == ["probe"]
+    assert [result["ok"] for result in tool_results(history(runtime))] == [False, True]
+    assert _announced(runtime) == [("changed", "probe")]
+    reminders = _reminders(runtime.adapter.requests[1])
+    assert "The Tool probe changed in this Session." in reminders
+    assert "\nChange: Probe now counts.\nDescription: Probe Tool.\n" in reminders
+    assert _tools_sent(runtime) == [_tools_sent(runtime)[0]] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_route_that_drops_unlisted_tool_calls_lists_announced_tools(
+    tmp_path: Path,
+) -> None:
+    tools, dispatched = _name_recording_tools("probe")
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [final("ready"), tool_turn(("call", "extra")), final("done")],
+        models=StubModels(
+            {("openai", "gpt-5.2"): 128_000},
+            unlisted_tool_calls={("openai", "gpt-5.2"): False},
+        ),
+    )
+    loop = build_chat_loop(runtime)
+
+    await loop.send("coder", "Start", session_id="session-one")
+    tools.register("extra", "Extra Tool.", {"type": "object"}, tools.get("probe").handler)
+    await loop.send("coder", "Use it", session_id="session-one")
+
+    pinned = _tools_sent(runtime)[0]
+    extra = {"name": "extra", "description": "Extra Tool.", "parameters": {"type": "object"}}
+    assert dispatched == ["extra"]
+    assert _tools_sent(runtime)[1:] == [[*pinned, extra]] * 2
+    assert (
+        "The Tool extra was enabled for you in this Session and now appears in your Tool list."
+        in _reminders(runtime.adapter.requests[1])
+    )
 
 
 def _analyze_image_runtime(
@@ -290,6 +511,39 @@ async def test_analyze_image_is_offered_only_when_the_route_cannot_view_images_i
     assert (ANALYZE_IMAGE_TOOL_NAME in _offered(runtime.adapter.requests[0])) is visible
     effective_names = runtime.system_prompts.effective_tool_name_calls[-1]
     assert (ANALYZE_IMAGE_TOOL_NAME in effective_names) is visible
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend_withdrawn", [True, False], ids=["backend-gone", "route-views"])
+async def test_a_listed_analyze_image_is_removed_only_when_its_backend_is_withdrawn(
+    tmp_path: Path, backend_withdrawn: bool
+) -> None:
+    runtime = _analyze_image_runtime(
+        tmp_path,
+        model="openai/route-model",
+        image_input=False,
+        wire_images=False,
+        task_available=True,
+    )
+    first_adapter = runtime.adapter
+    await build_chat_loop(runtime).send("coder", "First", session_id="s1")
+    if backend_withdrawn:
+        runtime.available_task_models.clear()
+    else:
+        # The Session moves to a route that views images itself.
+        runtime.models = StubModels(
+            {("openai", "route-model"): 128_000},
+            input_modalities={("openai", "route-model"): ("text", "image")},
+        )
+    runtime.adapter = StubAdapter([final("done")], wire_media_types=frozenset({"image/png"}))
+    await build_chat_loop(runtime).send("coder", "Second", session_id="s1")
+
+    first_tools = first_adapter.requests[0]["kwargs"]["tools"]
+    assert ANALYZE_IMAGE_TOOL_NAME in {tool["name"] for tool in first_tools}
+    assert runtime.adapter.requests[0]["kwargs"]["tools"] == first_tools
+    assert _announced(runtime, "s1") == (
+        [("removed", ANALYZE_IMAGE_TOOL_NAME)] if backend_withdrawn else []
+    )
 
 
 @pytest.mark.asyncio

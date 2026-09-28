@@ -447,7 +447,7 @@ class ExtensionHostFactory:
             project_context=context,
             agent_project_id=project_id,
             skill_registry=self.skills_for(project_id, None),
-            effective_tool_names=[item["name"] for item in definitions],
+            effective_tool_definitions=definitions,
             session_tool_grants=grants,
             block_details=blocks,
         )

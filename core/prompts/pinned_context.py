@@ -37,6 +37,11 @@ PINNED_WORKING_PROJECT_CONTEXT_SLOT = "pinned_working_project_context"
 # Compaction replaces all three snapshots when the new epoch starts.
 PINNED_SOUL_CONTEXT_SLOT = "pinned_soul_context"
 PINNED_MEMORY_FILES_SLOT = "pinned_memory_files"
+# The Provider Tool definitions the Session's first request of an epoch sent, in
+# order, plus their epoch key. Chat resolves and reads this pin
+# (``core.chat._tool_epoch``); later Tool changes reach the Model as
+# ``[tool-change]`` notes until a successful Compaction replaces it.
+PINNED_TOOL_DEFINITIONS_SLOT = "pinned_tool_definitions"
 # Qualifies the Project-dependent snapshots (Working Project Context and Skill
 # catalog) with the Project they were rendered for. The working Project is
 # re-resolved at every Run admission (a Rooted Identity Agent may be re-rooted

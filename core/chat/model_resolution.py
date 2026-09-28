@@ -170,6 +170,25 @@ def _model_input_modalities_for_target(
     return frozenset(str(modality) for modality in modalities)
 
 
+def _model_accepts_unlisted_tool_calls(
+    dependencies: ModelResolutionDependencies,
+    provider_id: str,
+    model_id: str,
+) -> bool:
+    """Return whether one Provider/Model target returns calls to unlisted Tools.
+
+    An unknown Model counts as capable, like a Model entry without the
+    capability.
+    """
+
+    try:
+        model = dependencies.models.get(provider_id, model_id)
+    except (AttributeError, ChatError, KeyError):
+        return True
+    capabilities = getattr(model, "capabilities", None)
+    return getattr(capabilities, "unlisted_tool_calls", True) is not False
+
+
 def _resolve_agent_connection(
     dependencies: ModelResolutionDependencies, agent: Any
 ) -> tuple[str, str]:

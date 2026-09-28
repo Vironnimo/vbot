@@ -7,11 +7,17 @@ output such as code, logs and diffs, and the envelope's fixed keys cost tokens
 without telling the Model anything. The rendering is deterministic, so replayed
 history keeps its prompt-cache prefix. Content that is not an envelope, such as
 legacy text or a compacted digest, passes through unchanged.
+
+Only vBot's own System Reminders may reach the Model as real
+``<system-reminder>`` tags. Tool output is external text, so the rendering
+neutralizes look-alike tags; Chat applies the same rule to the other readable
+request text (``core.chat.wire_shaping.model_facing_request``).
 """
 
 from __future__ import annotations
 
 import json
+import re
 import textwrap
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -23,6 +29,24 @@ _ENVELOPE_KEYS = frozenset({"ok", "error", "data", "artifacts"})
 _BODY_FIELDS = ("content", "output")
 
 _EMPTY_SUCCESS_TEXT = "ok"
+
+# An opening or closing System Reminder tag in any spelling a Model may still
+# read as one: any case, whitespace inside the tag or around the slash, and
+# attributes. Longer names such as ``system-reminders`` are other tags.
+_SYSTEM_REMINDER_TAG_START = re.compile(r"<(?=[\s/]*system-reminder(?![\w-]))", re.IGNORECASE)
+
+_NEUTRALIZED_TAG_START = "&lt;"
+
+
+def neutralize_system_reminder_tags(text: str) -> str:
+    """Return text whose look-alike System Reminder tags read as plain text.
+
+    The ``<`` of every such tag becomes ``&lt;``. The rewrite is deterministic
+    and idempotent, so replayed history keeps its prompt-cache prefix. Text
+    without a look-alike tag is returned as the same object.
+    """
+
+    return _SYSTEM_REMINDER_TAG_START.sub(_NEUTRALIZED_TAG_START, text)
 
 
 def tool_result_envelope(content: Any) -> Mapping[str, Any] | None:
@@ -56,11 +80,12 @@ def tool_result_text(content: Any, *, content_blocks: Sequence[Mapping[str, Any]
 
     Render exactly once at the final wire boundary: a literal body may itself
     look like an envelope. Supplemental text follows the rendered body.
+    Look-alike System Reminder tags in the returned text are neutralized.
     """
 
     envelope = tool_result_envelope(content)
     text = content if envelope is None else render_tool_result_envelope(envelope)
-    return _append_text(text, _supplemental_text(content_blocks))
+    return _neutralized(_append_text(text, _supplemental_text(content_blocks)))
 
 
 def tool_result_function_response(
@@ -70,15 +95,21 @@ def tool_result_function_response(
 
     Envelopes render to ``{"output": text}`` or, for a failure, ``{"error": text}``.
     Other content keeps a JSON object as-is and wraps anything else as output.
+    Look-alike System Reminder tags in every string of the object, keys
+    included, are neutralized.
     """
 
     envelope = tool_result_envelope(content)
     supplemental_text = _supplemental_text(content_blocks)
     if envelope is not None:
         key = "output" if envelope["ok"] else "error"
-        return {key: _append_text(render_tool_result_envelope(envelope), supplemental_text)}
+        return {
+            key: _neutralized(
+                _append_text(render_tool_result_envelope(envelope), supplemental_text)
+            )
+        }
     if supplemental_text:
-        return {"output": _append_text(content, supplemental_text)}
+        return {"output": _neutralized(_append_text(content, supplemental_text))}
     if isinstance(content, str):
         try:
             parsed = json.loads(content)
@@ -86,7 +117,20 @@ def tool_result_function_response(
             parsed = content
     else:
         parsed = content
-    return dict(parsed) if isinstance(parsed, Mapping) else {"output": parsed}
+    response = dict(parsed) if isinstance(parsed, Mapping) else {"output": parsed}
+    return {_neutralized(key): _neutralized(value) for key, value in response.items()}
+
+
+def _neutralized(value: Any) -> Any:
+    """Neutralize look-alike System Reminder tags in every string of a JSON value."""
+
+    if isinstance(value, str):
+        return neutralize_system_reminder_tags(value)
+    if isinstance(value, Mapping):
+        return {_neutralized(key): _neutralized(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_neutralized(item) for item in value]
+    return value
 
 
 def _supplemental_text(content_blocks: Sequence[Mapping[str, Any]]) -> list[str]:

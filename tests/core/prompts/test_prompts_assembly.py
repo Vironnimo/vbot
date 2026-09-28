@@ -57,8 +57,9 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     )
     manager = _manager(tmp_path, tools=tools, skills=skills, channels=channels)
     agent = _agent(workspace, allowed_tools=["read_file"], allowed_skills=["agent-cli"])
+    details: list[dict[str, object]] = []
 
-    prompt = manager.build_system_prompt(agent)
+    prompt = manager.build_system_prompt(agent, block_details=details)
 
     # Runtime-owned values are expanded and preserved without pinning their prose labels.
     assert "test-host" in prompt
@@ -106,6 +107,12 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     ]
     positions = [prompt.index(section) for section in order]
     assert positions == sorted(positions)
+    # The System Reminder anchor follows the Tool guidance in every build.
+    included = [block["id"] for block in details if block["included"]]
+    assert included[included.index("core:tools") + 1] == "core:system_reminders"
+    anchor = next(block for block in details if block["id"] == "core:system_reminders")
+    assert "<system-reminder>" in str(anchor["text"])
+    assert str(anchor["text"]).strip() in prompt
     # Same agent allowlist drives prompt tools and gate 2's memory-tool check.
     assert tools.prompt_allowlist_calls[0] == ["read_file", "memory"]
     assert skills.allowlist == ["agent-cli"]

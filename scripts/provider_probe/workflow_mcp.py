@@ -33,7 +33,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
     from core.utils.ids import new_id
     from resources.extensions.mcp.client import ConnectionRunner
     from resources.extensions.mcp.config import validate_connection
-    from resources.extensions.mcp.extension import MCPService
+    from resources.extensions.mcp.extension import MCP_GUIDANCE, MCPService
 
     observed: list[str] = []
     rendered = False
@@ -134,7 +134,13 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             service.connections["blender"], host, service.inputs, service._publish
         )
         service.runners[runner.id] = runner
-        service._publish(runner, {"tools": []})
+        # Connected first, as a Session finds a known connection: the connection Tool's
+        # description lists the application's Tools.
+        try:
+            await runner.invoke("catalog", {})
+        except BaseException:
+            await service.close()
+            raise
         context = ToolContext(
             agent_id="probe",
             session_id="probe",
@@ -170,7 +176,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
                 "role": "system",
                 "content": (
                     "Complete the user's task using the available tools. "
-                    "Report only verified results."
+                    "Report only verified results.\n\n" + MCP_GUIDANCE
                 ),
             },
             {"role": "user", "content": prompt},

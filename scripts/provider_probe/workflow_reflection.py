@@ -27,7 +27,8 @@ async def _probe_reflection_case(
     stay in the observer. Chat fork/cadence integration is tested separately.
     """
     from core.automation.reflection import REFLECT_FRAGMENT_NAMES, REFLECTION_TOOL_RESTRICTIONS
-    from core.memory.memory import MemoryService, memory_block_definition
+    from core.chat.wire_shaping import system_reminder_request_message
+    from core.memory.memory import MemoryScope, MemoryService, memory_block_definition
     from core.prompts.prompts import _format_skill_catalog
     from core.skills import SkillAuthoringService, SkillRegistry
     from core.tools.memory import register_memory_tool
@@ -91,14 +92,16 @@ async def _probe_reflection_case(
         messages = [
             {"role": "system", "content": system},
             *case["history"],
-            {"role": "user", "content": "<system-reminder>\n" + brief + "\n</system-reminder>"},
+            system_reminder_request_message(brief),
         ]
+
+        memory_scopes: tuple[MemoryScope, ...] = ("user", "agent")
 
         def snapshot() -> dict[str, Any]:
             return {
                 "memory": {
                     scope_name: [entry.content for entry in memory.list_entries(root, scope_name)]
-                    for scope_name in ("user", "agent")
+                    for scope_name in memory_scopes
                 },
                 "files": {
                     path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")

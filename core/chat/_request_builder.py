@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -18,6 +18,13 @@ from core.chat._request_history import (
     _restore_in_run_tool_result_content,
 )
 from core.chat._run_state import RequestBuildInputs, _ModelTarget, _RequestState
+from core.chat._tool_epoch import (
+    LiveToolCatalog,
+    ToolEpochPin,
+    ToolEpochView,
+    definition_source,
+    without_other_epoch_tool_changes,
+)
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock, content_block_to_dict
@@ -30,6 +37,7 @@ from core.chat.messages import (
 )
 from core.chat.model_resolution import (
     _first_usable_connection_id,
+    _model_accepts_unlisted_tool_calls,
     _model_connection_allowlist,
     _model_input_modalities,
     _model_input_modalities_for_target,
@@ -42,7 +50,7 @@ from core.chat.wire_shaping import _restore_in_run_assistant_reasoning, limit_re
 from core.extensions import invoke_extension_handler
 from core.projects import ProjectError
 from core.prompts import BLOCK_KIND_DATA, BlockDefinition
-from core.prompts.pinned_context import stamp_prompt_files_read
+from core.prompts.pinned_context import PINNED_TOOL_DEFINITIONS_SLOT, stamp_prompt_files_read
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.providers import resolve_effective_context_window
@@ -56,8 +64,13 @@ from core.sessions import (
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     HISTORY_TOOL_NAME,
+    Tool,
     ToolAccess,
+    ToolContract,
+    ToolDefinitionChangeNote,
+    ToolNotFoundError,
     project_bash_tool_definitions,
+    tool_is_ready,
 )
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -102,6 +115,31 @@ def _resolved_model_reference(
 def _resolve_image_size_limit(adapter: Any, model_id: str) -> int | None:
     value = adapter.image_size_limit(model_id)
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _live_session_tool_grants(
+    session_messages: Sequence[ChatMessage], session_capability: Any | None
+) -> tuple[str, ...]:
+    """Return the session-scoped Tools the Session grants now."""
+    history_grants: tuple[str, ...] = (
+        (HISTORY_TOOL_NAME,) if history_available(list(session_messages)) else ()
+    )
+    return history_grants + (
+        tuple(session_capability.tool_names) if session_capability is not None else ()
+    )
+
+
+def _fold_tool_epoch(
+    pin: ToolEpochPin, session_messages: list[ChatMessage]
+) -> tuple[ToolEpochView, list[ChatMessage]]:
+    """Return what the Model knows in *pin*'s epoch and the history without other epochs' notes.
+
+    Both walk the whole Session, so they run on a Chat worker.
+    """
+    return (
+        ToolEpochView.fold(pin, session_messages),
+        without_other_epoch_tool_changes(session_messages, pin.epoch),
+    )
 
 
 SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
@@ -193,6 +231,11 @@ class RequestBuilder:
             wire_media_types=adapter.wire_media_support(model_id),
             chunk_timeout_seconds=self._wire_requests.resolve_chunk_timeout(connection),
             max_image_bytes=self._image_size_limit(adapter, model_id),
+            unlisted_tool_calls=_model_accepts_unlisted_tool_calls(
+                self._dependencies,
+                provider_id,
+                model_id,
+            ),
         )
 
     def _image_size_limit(self, adapter: Any, model_id: str) -> int | None:
@@ -284,72 +327,77 @@ class RequestBuilder:
         # snapshot the skills block renders from, so only Compaction replaces it. The
         # ``working_project_context`` / ``soul_context`` / ``memory_files_context``
         # prompt-epoch snapshots behave the same way.
+        #
+        # The Tool list is the prompt epoch's pin: the Session's first request
+        # pins the Tools it offers, and every later request sends the same
+        # definitions (plus announced additions on routes that must list them).
+        # Tool changes since the pin reach the Model as ``[tool-change]`` notes,
+        # which the Run announces at its request boundaries; dispatch follows
+        # what they told the Model.
         session_messages = (
             await session.load_active_async()
             if inputs.session_messages_override is None
             else list(inputs.session_messages_override)
         )
         system_prompts = self._dependencies.get_system_prompts()
-        base_tools = await system_prompts.provider_tool_definitions_async(agent)
-        history_grants: tuple[str, ...] = (
-            (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
-        )
         session_capability = None
         extension_registry = self._dependencies.get_extension_registry()
         if inputs.temporary_binding is not None and extension_registry is not None:
             session_capability = extension_registry.session_capability(
                 inputs.temporary_binding, self._dependencies.tools
             )
-        session_tool_grants = history_grants + (
-            session_capability.tool_names if session_capability is not None else ()
-        )
+        live_tool_grants = _live_session_tool_grants(session_messages, session_capability)
         effective_input_modalities = (
             inputs.input_modalities
             if inputs.input_modalities is not None
             else _model_input_modalities(self._dependencies, agent)
         )
-        tools = (
-            await system_prompts.provider_tool_definitions_async(
+        pin = None if inputs.fresh_tool_epoch else await self._read_tool_epoch_pin(session)
+        catalog: LiveToolCatalog | None = None
+        if pin is None or inputs.temporary_binding is not None:
+            # Measured on the Run's primary route, like every Tool announcement,
+            # even while a fallback target serves this request.
+            catalog = await self._live_tool_catalog(
                 agent,
-                session_tool_grants=session_tool_grants,
+                session_tool_grants=live_tool_grants,
+                input_modalities=(
+                    effective_input_modalities
+                    if inputs.tool_route_input_modalities is None
+                    else inputs.tool_route_input_modalities
+                ),
+                wire_media_types=(
+                    inputs.wire_media_types
+                    if inputs.tool_route_wire_media_types is None
+                    else inputs.tool_route_wire_media_types
+                ),
             )
-            if session_tool_grants
-            else base_tools
+        if pin is None:
+            assert catalog is not None
+            pin = await _CHAT_TRANSFORM_WORKERS.run(ToolEpochPin.start, catalog)
+            if not inputs.fresh_tool_epoch:
+                pin = await self._ensure_tool_epoch_pin(session, pin)
+        tool_epoch, session_messages = await _CHAT_TRANSFORM_WORKERS.run(
+            _fold_tool_epoch, pin, session_messages
         )
-        tools = await self._route_tool_definitions(
-            tools,
-            tool_access=agent.tool_access,
-            input_modalities=effective_input_modalities,
-            wire_media_types=inputs.wire_media_types,
-        )
-        allowed_tool_names = tuple(
-            str(definition["name"])
-            for definition in tools
-            if isinstance(definition.get("name"), str)
-        )
-        allowed_tool_name_set = set(allowed_tool_names)
-        session_tool_grants = tuple(
-            name for name in session_tool_grants if name in allowed_tool_name_set
-        )
+        # A temporary Session's capability Tools must be offered now; the first
+        # request boundary announces any the Model does not know yet.
         if inputs.temporary_binding is not None and (
             session_capability is None
-            or not set(session_capability.tool_names).issubset(session_tool_grants)
+            or catalog is None
+            or not set(session_capability.tool_names).issubset(catalog.offered_by_name)
         ):
             raise ChatError(
                 "This Session has an invalid configuration. "
                 "Ask the user to check it through its Extension."
             )
-        tool_contracts = await _CHAT_TRANSFORM_WORKERS.run(
-            self._dependencies.tools.contracts_for_provider_definitions,
-            tools,
+        tools, allowed_tool_names, session_tool_grants, tool_contracts = await self._tool_fields(
+            tool_epoch,
+            live_tool_grants,
+            list_announced=inputs.list_announced_tools,
         )
         request_block_definitions: tuple[BlockDefinition, ...] = ()
-        if (
-            session_capability is not None
-            and inputs.temporary_binding is not None
-            and set(session_capability.tool_names).issubset(session_tool_grants)
-        ):
-            assert extension_registry is not None
+        if session_capability is not None and inputs.temporary_binding is not None:
+            assert extension_registry is not None and catalog is not None
             rendered_blocks: list[BlockDefinition] = []
             for declaration in session_capability.prompt_blocks:
                 try:
@@ -382,7 +430,7 @@ class RequestBuilder:
             if (
                 current_capability is None
                 or current_capability.identity != session_capability.identity
-                or not set(current_capability.tool_names).issubset(session_tool_grants)
+                or not set(current_capability.tool_names).issubset(catalog.offered_by_name)
             ):
                 raise ChatError(
                     "This Session has an invalid configuration. "
@@ -402,8 +450,9 @@ class RequestBuilder:
             skill_registry=inputs.skill_registry,
             skill_catalog=inputs.skill_catalog,
             read_paths=prompt_read_paths,
-            effective_tool_names=allowed_tool_names,
-            session_tool_grants=session_tool_grants,
+            # The System Prompt describes the pinned Tool list, so it stays
+            # unchanged for the whole prompt epoch too.
+            effective_tool_definitions=pin.definitions,
             request_block_definitions=request_block_definitions,
         )
         # Auto-injected prompt files (SOUL, pinned memory, project auto-load files,
@@ -437,6 +486,7 @@ class RequestBuilder:
                 allowed_tool_names,
                 session_tool_grants,
                 tool_contracts,
+                tool_epoch,
             )
 
         current_user_message, read_media_outputs = await _CHAT_TRANSFORM_WORKERS.run(
@@ -470,6 +520,7 @@ class RequestBuilder:
             allowed_tool_names,
             session_tool_grants,
             tool_contracts,
+            tool_epoch,
         )
 
     async def rebuild_live_request_state(
@@ -504,6 +555,178 @@ class RequestBuilder:
         if continuation_reminder is not None:
             messages = inject_continuation_reminder(messages, continuation_reminder)
         return replace(state, messages=messages)
+
+    async def live_tool_catalog(
+        self,
+        context: _RunExecutionContext,
+        *,
+        known: Collection[str] = (),
+    ) -> LiveToolCatalog:
+        """Measure the Tools the Run's Agent may use now, on the Run's primary route.
+
+        *known* names the Tools the Model may call now; only for these does a
+        withdrawn image-understanding backend count as a removal.
+        """
+        capability = None
+        extension_registry = self._dependencies.get_extension_registry()
+        if context.request.temporary_binding is not None and extension_registry is not None:
+            capability = extension_registry.session_capability(
+                context.request.temporary_binding, self._dependencies.tools
+            )
+        target = context.primary_target
+        return await self._live_tool_catalog(
+            context.agent,
+            session_tool_grants=_live_session_tool_grants(
+                context.session_snapshot.active_messages, capability
+            ),
+            input_modalities=target.input_modalities,
+            wire_media_types=target.wire_media_types,
+            known=known,
+        )
+
+    async def announce_tool_changes(
+        self,
+        state: _RequestState,
+        catalog: LiveToolCatalog,
+        session: ChatSession,
+        *,
+        unlisted_tool_calls: bool,
+        list_announced: bool,
+    ) -> _RequestState:
+        """Add a note for each Tool change since *state*'s Tool epoch and adopt it.
+
+        Returns *state* with the dispatch allowlist, contracts and request Tools
+        of the announced knowledge; unchanged when nothing changed.
+        """
+        tool_epoch = state.tool_epoch
+        if tool_epoch is None:
+            return state
+        changes = tool_epoch.plan(catalog, unlisted_tool_calls=unlisted_tool_calls)
+        if not changes:
+            return state
+        for change in changes:
+            session.add_note(change.note_content())
+        tool_epoch = tool_epoch.with_changes(changes)
+        tools, allowed_tool_names, session_tool_grants, tool_contracts = await self._tool_fields(
+            tool_epoch,
+            catalog.session_tool_grants,
+            list_announced=list_announced,
+        )
+        return replace(
+            state,
+            tools=tools,
+            allowed_tool_names=allowed_tool_names,
+            session_tool_grants=session_tool_grants,
+            tool_contracts=tool_contracts,
+            tool_epoch=tool_epoch,
+        )
+
+    async def _tool_fields(
+        self,
+        tool_epoch: ToolEpochView,
+        live_tool_grants: Sequence[str],
+        *,
+        list_announced: bool,
+    ) -> tuple[list[JsonObject], tuple[str, ...], tuple[str, ...], Mapping[str, ToolContract]]:
+        """Return request Tools, allowlist, grants and contracts of *tool_epoch*."""
+        allowed_tool_names = tool_epoch.allowed_names
+        allowed = set(allowed_tool_names)
+        tool_contracts = await _CHAT_TRANSFORM_WORKERS.run(
+            self._dependencies.tools.contracts_for_provider_definitions,
+            tool_epoch.definitions(),
+        )
+        return (
+            tool_epoch.request_tools(list_announced=list_announced),
+            allowed_tool_names,
+            tuple(name for name in live_tool_grants if name in allowed),
+            tool_contracts,
+        )
+
+    async def _live_tool_catalog(
+        self,
+        agent: Any,
+        *,
+        session_tool_grants: Sequence[str],
+        input_modalities: frozenset[str],
+        wire_media_types: frozenset[str],
+        known: Collection[str] = (),
+    ) -> LiveToolCatalog:
+        definitions = await self._dependencies.get_system_prompts().provider_tool_definitions_async(
+            agent,
+            session_tool_grants=session_tool_grants,
+            ready_only=False,
+        )
+        ready, sources, change_notes = await _CHAT_TRANSFORM_WORKERS.run(
+            self._measure_tool_definitions, definitions
+        )
+        offered = await self._route_tool_definitions(
+            ready,
+            tool_access=agent.tool_access,
+            input_modalities=input_modalities,
+            wire_media_types=wire_media_types,
+        )
+        usable = {str(definition["name"]) for definition in definitions}
+        if (
+            ANALYZE_IMAGE_TOOL_NAME in usable
+            and ANALYZE_IMAGE_TOOL_NAME in known
+            and all(definition.get("name") != ANALYZE_IMAGE_TOOL_NAME for definition in offered)
+            and not await self._dependencies.image_understanding_available()
+        ):
+            usable.discard(ANALYZE_IMAGE_TOOL_NAME)
+        return LiveToolCatalog(
+            usable=frozenset(usable),
+            offered=tuple(offered),
+            sources=sources,
+            session_tool_grants=tuple(session_tool_grants),
+            change_notes={name: note for name, note in change_notes.items() if name in usable},
+        )
+
+    def _measure_tool_definitions(
+        self, definitions: Sequence[JsonObject]
+    ) -> tuple[list[JsonObject], dict[str, str], dict[str, ToolDefinitionChangeNote]]:
+        """Return the ready *definitions*, every fingerprint and change-note hook.
+
+        Runs on a Chat worker: readiness checks and fingerprints cost time per Tool.
+        """
+        ready: list[JsonObject] = []
+        sources: dict[str, str] = {}
+        change_notes: dict[str, ToolDefinitionChangeNote] = {}
+        for definition in definitions:
+            name = str(definition["name"])
+            tool = self._registered_tool(name)
+            if tool is None or tool_is_ready(tool):
+                ready.append(definition)
+            sources[name] = definition_source(definition)
+            if tool is not None and tool.definition_change_note is not None:
+                change_notes[name] = tool.definition_change_note
+        return ready, sources, change_notes
+
+    def _registered_tool(self, name: str) -> Tool | None:
+        try:
+            return self._dependencies.tools.get(name)
+        except ToolNotFoundError:
+            return None
+
+    async def _read_tool_epoch_pin(self, session: ChatSession) -> ToolEpochPin | None:
+        return await _CHAT_TRANSFORM_WORKERS.run(self._stored_tool_epoch_pin, session.address)
+
+    def _stored_tool_epoch_pin(self, address: SessionAddress) -> ToolEpochPin | None:
+        return ToolEpochPin.from_payload(
+            self._dependencies.sessions.prompt_pin(address, PINNED_TOOL_DEFINITIONS_SLOT)
+        )
+
+    async def _ensure_tool_epoch_pin(self, session: ChatSession, pin: ToolEpochPin) -> ToolEpochPin:
+        """Pin *pin* unless a concurrent first request pinned a readable one meanwhile."""
+        return await _CHAT_TRANSFORM_WORKERS.run(self._pin_tool_epoch, session.address, pin)
+
+    def _pin_tool_epoch(self, address: SessionAddress, pin: ToolEpochPin) -> ToolEpochPin:
+        pinned = self._dependencies.sessions.ensure_prompt_pin(
+            address,
+            PINNED_TOOL_DEFINITIONS_SLOT,
+            pin.to_payload(),
+            lambda current: ToolEpochPin.from_payload(current) is not None,
+        )
+        return ToolEpochPin.from_payload(pinned) or pin
 
     async def _route_tool_definitions(
         self,

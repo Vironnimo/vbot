@@ -122,11 +122,17 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
     }
 )
 # Prompt pin slots rendered from the Session's Agent: its Skill catalog, SOUL
-# block and pinned-memory text. A fork or move into another scope drops them,
-# together with the seen Skills, and starts a new prompt-cache affinity, so the
-# destination renders its own Agent's snapshots instead of the source's.
+# block, pinned-memory text and Tool definitions. A fork or move into another
+# scope drops them, together with the seen Skills, and starts a new prompt-cache
+# affinity, so the destination renders its own Agent's snapshots instead of the
+# source's.
 AGENT_BOUND_PROMPT_PIN_SLOTS = frozenset(
-    {"pinned_skill_catalog", "pinned_soul_context", "pinned_memory_files"}
+    {
+        "pinned_skill_catalog",
+        "pinned_soul_context",
+        "pinned_memory_files",
+        "pinned_tool_definitions",
+    }
 )
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 SKILL_TOOL_MESSAGE_NAME = "skill"
@@ -135,6 +141,9 @@ PROJECT_TOOL_MESSAGE_NAME = "project"
 PROJECT_TOOL_LOADED_STATUS = "loaded"
 CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
 SKILL_AVAILABLE_NOTE_PREFIX = "[skill-available] "
+# A Tool that became available, was removed or changed after the Session pinned
+# its Tool definitions; the JSON payload follows the prefix (``core.chat._tool_epoch``).
+TOOL_CHANGE_NOTE_PREFIX = "[tool-change] "
 _CHAT_HISTORY_CURSOR_PREFIX = "vh1."
 
 

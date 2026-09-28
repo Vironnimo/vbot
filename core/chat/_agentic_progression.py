@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from core.chat._boundaries import _finish_visible_boundary
 from core.chat._queued_input import persist_steering_input, rebuild_after_steering
-from core.chat._run_state import _AssistantStep, _RequestState
+from core.chat._run_state import _AssistantStep
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     MAX_TOOL_FINALIZATION_VIOLATIONS,
@@ -49,6 +49,7 @@ from core.chat.wire_shaping import (
     _assistant_continuation_dict,
     _message_to_request_dict,
     _notes_to_request_messages,
+    extend_request_with_notes,
     limit_request_images,
 )
 from core.debug import DebugContext
@@ -160,7 +161,9 @@ class AgenticProgression:
             run.terminal_payload_extras["session_usage"] = session_usage
         interruption_chain = context.interruption_chain
         emitted_change_stats: dict[str, object] | None = None
-        tool_catalog_revision = -1
+        # The Tool registry revision and prompt epoch whose Tool changes were
+        # last announced; ``None`` evaluates at the next request boundary.
+        evaluated_tool_key: tuple[int, str] | None = None
         # Set when a final answer is followed by selected steering input.
         awaiting_steering = False
         track = session_track(run.agent_id, run.session_id, project_id)
@@ -194,34 +197,21 @@ class AgenticProgression:
                 state = context.request_state
                 messages = state.messages
                 tools = state.tools
-                tool_catalog_revision = -1
+                evaluated_tool_key = None
             run.raise_if_cancelled()
-            registry = self._dependencies.tools
-            if (
-                context.tool_progress.finalization_reason is None
-                and registry.revision != tool_catalog_revision
-            ):
-                tool_catalog_revision = registry.revision
-                system_prompts = self._dependencies.get_system_prompts()
-                refreshed = await system_prompts.provider_tool_definitions_async(
-                    agent,
-                    session_tool_grants=state.session_tool_grants,
-                )
-                tools = await self._requests._route_tool_definitions(
-                    refreshed,
-                    tool_access=agent.tool_access,
-                    input_modalities=target.input_modalities,
-                    wire_media_types=target.wire_media_types,
-                )
-                allowed_names = tuple(str(tool["name"]) for tool in tools)
-                contracts = await _CHAT_TRANSFORM_WORKERS.run(
-                    registry.contracts_for_provider_definitions,
-                    tools,
-                )
-                state = _RequestState(
-                    messages, tools, allowed_names, state.session_tool_grants, contracts
-                )
-                context.request_state = state
+            # Tool changes are measured once per Run, after steering, and when
+            # the Tool registry changed; the notes announcing them join this
+            # request's boundary below, so the Tool list itself stays pinned.
+            tool_catalog = None
+            tool_epoch = state.tool_epoch
+            if context.tool_progress.finalization_reason is None and tool_epoch is not None:
+                tool_key = (self._dependencies.tools.revision, tool_epoch.pin.epoch)
+                if tool_key != evaluated_tool_key:
+                    evaluated_tool_key = tool_key
+                    tool_catalog = await self._requests.live_tool_catalog(
+                        context, known=tool_epoch.allowed_names
+                    )
+            boundary_notes: list[ChatMessage] = []
             async with self._dependencies.sessions.write_lock(session_address):
                 session.begin_defer_notes()
                 binding = context.request.temporary_binding
@@ -266,7 +256,7 @@ class AgenticProgression:
                                 ],
                             )
                             if previous_delivery is None:
-                                messages.extend(_notes_to_request_messages([delivery_note]))
+                                boundary_notes.append(delivery_note)
                             await extension_registry.acknowledge_session_delivery(
                                 binding,
                                 self._dependencies.tools,
@@ -283,18 +273,39 @@ class AgenticProgression:
                     await session.flush_deferred_notes_async()
                     raise
                 try:
-                    self._dependencies.deliver_background_completions(run, session)
-                except Exception:
-                    _LOGGER.warning(
-                        "Background completion injection failed for run %s",
-                        run.id,
-                        exc_info=True,
-                    )
+                    try:
+                        self._dependencies.deliver_background_completions(run, session)
+                    except Exception:
+                        _LOGGER.warning(
+                            "Background completion injection failed for run %s",
+                            run.id,
+                            exc_info=True,
+                        )
+                    if tool_catalog is not None:
+                        state = await self._requests.announce_tool_changes(
+                            state,
+                            tool_catalog,
+                            session,
+                            unlisted_tool_calls=context.primary_target.unlisted_tool_calls,
+                            list_announced=(
+                                target is not context.primary_target
+                                or not target.unlisted_tool_calls
+                            ),
+                        )
+                        context.request_state = state
+                        tools = state.tools
                 finally:
                     await context.session_snapshot.flush_deferred_notes(session)
-                pending_notes = session.drain_pending_notes()
-            if pending_notes:
-                messages.extend(_notes_to_request_messages(pending_notes))
+                boundary_notes.extend(session.drain_pending_notes())
+            # Rendered as the next request replays them, grouped with the notes
+            # this request already ends with, so the history bytes stay stable.
+            extend_request_with_notes(
+                messages,
+                boundary_notes,
+                context.session_snapshot.active_messages,
+                replay_policy=target.replay_policy,
+                agent_model=target.model_reference,
+            )
             extension_registry = self._dependencies.get_extension_registry()
             # The request shares the live message dicts read-only: context hooks
             # receive their own copies, image limiting copies on write, and
@@ -349,6 +360,13 @@ class AgenticProgression:
                 len(messages_for_request),
             )
             request_tools = [] if context.tool_progress.finalization_reason is not None else tools
+            # Calls resolve against the listed Tools plus those announced as
+            # enabled; a Tool announced as removed keeps its own name.
+            offered_tool_names = [str(tool.get("name")) for tool in request_tools]
+            removed_tool_names: frozenset[str] = frozenset()
+            if state.tool_epoch is not None:
+                offered_tool_names.extend(state.tool_epoch.announced_names)
+                removed_tool_names = state.tool_epoch.removed_names
             step_started_perf = time.perf_counter()
             record_span(
                 "chat.request_build",
@@ -463,6 +481,8 @@ class AgenticProgression:
                 request_context_usage: JsonObject = request_context_usage,
                 assistant_step: _AssistantStep = assistant_step,
                 request_tools: list[JsonObject] = request_tools,
+                offered_tool_names: list[str] = offered_tool_names,
+                removed_tool_names: frozenset[str] = removed_tool_names,
             ) -> tuple[ChatMessage, JsonObject, list[JsonObject], JsonObject]:
                 if (
                     not assistant_message.interrupted
@@ -476,8 +496,9 @@ class AgenticProgression:
                     )
                 assistant_message = _with_offered_tool_names(
                     assistant_message,
-                    [str(tool.get("name")) for tool in request_tools],
+                    offered_tool_names,
                     self._dependencies.tools,
+                    removed=removed_tool_names,
                 )
                 assistant_message = await _CHAT_TRANSFORM_WORKERS.run(
                     _prepare_completed_assistant,
@@ -688,6 +709,11 @@ class AgenticProgression:
                         base_allowed_tools=state.allowed_tool_names,
                         session_tool_grants=state.session_tool_grants,
                         tool_contracts=state.tool_contracts,
+                        removed_tool_names=(
+                            state.tool_epoch.removed_names
+                            if state.tool_epoch is not None
+                            else frozenset()
+                        ),
                         change_tracker=self._dependencies.change_tracker,
                         allow_owned_effects=context.request.temporary_binding is not None,
                     )

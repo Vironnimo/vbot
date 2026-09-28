@@ -135,11 +135,13 @@ class _ProbePromptManager:
         agent: Agent,
         *,
         session_tool_grants: tuple[str, ...] = (),
+        ready_only: bool = True,
         **_kwargs: Any,
     ) -> list[JsonObject]:
         return self._tools.provider_definitions(
             list(agent.tool_access.allowed),
             session_grants=session_tool_grants,
+            ready_only=ready_only,
         )
 
     async def build_system_prompt_async(self, _agent: Agent, **_kwargs: Any) -> str:

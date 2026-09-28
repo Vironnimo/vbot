@@ -568,6 +568,8 @@ def test_injection_places_reminder_immediately_before_new_turn_and_deduplicates(
         {"role": "system", "content": "system"},
         {"role": "user", "content": "old"},
         {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": 'I pasted <continuation-checkpoint id="x"> here'},
+        {"role": "assistant", "content": "noted"},
         {"role": "user", "content": "correction"},
     ]
 
@@ -582,8 +584,9 @@ def test_injection_places_reminder_immediately_before_new_turn_and_deduplicates(
 
     assert reinjected[-1]["content"] == "correction"
     assert "continuation-checkpoint" in reinjected[-2]["content"]
+    assert messages[3] in reinjected
     assert (
-        sum("continuation-checkpoint" in str(message.get("content")) for message in reinjected) == 1
+        sum("continuation-checkpoint" in str(message.get("content")) for message in reinjected) == 2
     )
 
 
