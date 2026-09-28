@@ -87,6 +87,51 @@ describe('App controller', () => {
       subAgent: false,
     });
   });
+  it.each([
+    [
+      '?accessor=desktop&open_agent=builder%40project&open_session=s-1&desktop_session=a%2Bb',
+      { agentId: 'builder@project', sessionId: 's-1' },
+      '/app/?accessor=desktop&desktop_session=a%2Bb#chat',
+    ],
+    [
+      '?open_session=s-1&open_agent=builder',
+      { agentId: 'builder', sessionId: 's-1' },
+      '/app/#chat',
+    ],
+    [
+      '?open_agent=builder&accessor=desktop',
+      null,
+      '/app/?accessor=desktop#chat',
+    ],
+    ['?open_agent=&open_session=s-1', null, '/app/#chat'],
+  ])(
+    'takes the startup Session link %s out of the address bar',
+    (search, target, url) => {
+      const { browserHistory, browserWindow, controller } = setup();
+      browserWindow.location = { pathname: '/app/', search, hash: '#chat' };
+      browserHistory.state = { marker: 'kept' };
+
+      expect(controller.takeSessionLink()).toEqual(target);
+      expect(browserHistory.replaceState).toHaveBeenCalledExactlyOnceWith(
+        { marker: 'kept' },
+        '',
+        url,
+      );
+    },
+  );
+
+  it('leaves an address without a Session link alone', () => {
+    const { browserHistory, browserWindow, controller } = setup();
+    browserWindow.location = {
+      pathname: '/',
+      search: '?accessor=desktop',
+      hash: '#chat',
+    };
+
+    expect(controller.takeSessionLink()).toBeNull();
+    expect(browserHistory.replaceState).not.toHaveBeenCalled();
+  });
+
   it('owns view navigation and its browser-history entry', () => {
     const onSetOnboardingAside = vi.fn();
     const { browserHistory, controller, state } = setup({

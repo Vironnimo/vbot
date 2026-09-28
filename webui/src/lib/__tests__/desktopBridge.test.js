@@ -30,6 +30,7 @@ import {
   playVoiceCue,
   waitForDesktopBridge,
   onDesktopLiveRequest,
+  onDesktopOpenSession,
   getDesktopLiveHotkey,
   setDesktopLiveHotkey,
 } from '../desktopBridge.js';
@@ -829,5 +830,37 @@ describe('desktop Live voice integration', () => {
       expect(handler).toHaveBeenCalledOnce();
       cleanup();
     });
+  });
+});
+
+describe('pushed Session requests', () => {
+  it('hands valid requests to the handler, acknowledges them, and ignores malformed ones', () => {
+    const page = eventWindow();
+    const handler = vi.fn();
+    const cleanup = onDesktopOpenSession(handler);
+    // True when the page handled the request (cancelled the event).
+    const dispatch = (detail) =>
+      !page.dispatchEvent(
+        new CustomEvent('vbot-desktop-open-session', {
+          cancelable: true,
+          detail,
+        }),
+      );
+
+    expect(dispatch({ agent: 'builder@project', session: 'session-1' })).toBe(
+      true,
+    );
+    expect(dispatch({ agent: '', session: 'session-1' })).toBe(false);
+    expect(dispatch({ agent: 'builder', session: 7 })).toBe(false);
+    expect(dispatch(null)).toBe(false);
+    expect(handler.mock.calls).toEqual([
+      [{ agentId: 'builder@project', sessionId: 'session-1' }],
+    ]);
+
+    handler.mockReturnValueOnce(false);
+    expect(dispatch({ agent: 'builder', session: 'session-2' })).toBe(false);
+    cleanup();
+    expect(dispatch({ agent: 'builder', session: 'session-3' })).toBe(false);
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 });
