@@ -667,11 +667,7 @@ def create_app(
             registry = request.app.state.runtime.extensions
             if registry is None:
                 raise ValueError("Extension Run is unavailable")
-            identity, page = await FILE_PREVIEW_WORKERS.run(
-                _current_extension_page,
-                registry,
-                claims,
-            )
+            identity, page = _current_extension_page(registry, claims)
             if identity is None or page is None:
                 raise ValueError("Extension Run is unavailable")
             host = registry.host_for(identity)
@@ -684,11 +680,7 @@ def create_app(
             # durable inspection stays valid while that registration still owns it.
             if request.app.state.runtime.extensions is not registry:
                 raise ValueError("Extension Run is unavailable")
-            verified_identity, page = await FILE_PREVIEW_WORKERS.run(
-                _current_extension_page,
-                registry,
-                claims,
-            )
+            verified_identity, page = _current_extension_page(registry, claims)
             if (
                 verified_identity != identity
                 or page is None
@@ -988,7 +980,10 @@ def _is_reserved_server_path(path: str) -> bool:
 
 
 def _current_extension_page(registry: Any, claims: JsonObject) -> tuple[Any | None, Any | None]:
-    """Resolve the exact current page identity carried by a Run capability."""
+    """Resolve the exact current page identity carried by a Run capability.
+
+    Reads only registry memory, so it runs on the Event Loop.
+    """
     from core.extensions import ExtensionRegistrationIdentity
 
     extension = claims.get("extension")
@@ -997,12 +992,10 @@ def _current_extension_page(registry: Any, claims: JsonObject) -> tuple[Any | No
     if not all(isinstance(value, str) and value for value in (extension, page, epoch)):
         return None, None
     identity = ExtensionRegistrationIdentity(cast(str, extension), cast(str, epoch))
-    if not registry.is_registration_current(identity):
+    current = registry.current_page(identity, cast(str, page))
+    if current is None:
         return None, None
-    for candidate, declaration, _entry in registry.page_declarations():
-        if candidate == identity and declaration.page_id == page:
-            return identity, declaration
-    return None, None
+    return identity, current[0]
 
 
 def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | None:

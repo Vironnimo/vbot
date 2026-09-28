@@ -19,7 +19,11 @@ from server.events import (
 from server.file_delivery import FileDelivery
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
-from server.rpc.payloads import projected_file_urls, remove_opaque_provider_metadata
+from server.rpc.payloads import (
+    file_url_candidates,
+    remove_opaque_provider_metadata,
+    verified_file_urls,
+)
 
 if TYPE_CHECKING:
     from core.sessions import SessionAddress
@@ -296,8 +300,15 @@ async def _sse_run_events(
                     file_delivery=file_delivery,
                 )
                 if include_file_urls:
-                    data["file_urls"] = await FILE_PREVIEW_WORKERS.run(
-                        projected_file_urls, data, file_delivery
+                    # Most events (every text delta) carry no file URL; only a
+                    # candidate needs the filesystem verification off the loop.
+                    candidates = file_url_candidates(data)
+                    data["file_urls"] = (
+                        await FILE_PREVIEW_WORKERS.run(
+                            verified_file_urls, candidates, file_delivery
+                        )
+                        if candidates
+                        else []
                     )
                 yield (
                     f"id: {event.sequence}\n"
