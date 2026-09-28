@@ -332,10 +332,9 @@ class ProviderRuntime:
         database_refresh: ModelDatabaseRefresh,
     ) -> dict[str, dict[str, Any]]:
         """Validate and commit a staged Model DB; return the overlays to reload with."""
-        refresh_resources_dir = database_refresh.resources_dir
-        ModelRegistry.invalidate(refresh_resources_dir)
-        ModelRegistry.load(refresh_resources_dir)
-        ModelRegistry.invalidate(refresh_resources_dir)
+        # The live reload after publication logs what Load ignores; validating
+        # silently here keeps each entry to one log line per sweep.
+        ModelRegistry.validate(database_refresh.resources_dir)
         database_refresh.commit()
         return self._storage.load_custom_providers_settings()
 

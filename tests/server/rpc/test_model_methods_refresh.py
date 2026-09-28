@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from shutil import copy2
 from types import SimpleNamespace
@@ -120,16 +121,17 @@ def _multi_connection_openai() -> SimpleNamespace:
 @pytest.mark.usefixtures("fake_discovery")
 @pytest.mark.parametrize("target", ["runtime", "system"])
 async def test_model_refresh_uses_started_runtime_storage_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, target: str
 ) -> None:
     """A runtime refresh copies the complete system DB (overrides included) into
-    the runtime root; a system refresh writes only the serving checkout."""
+    the runtime root; a system refresh writes only the serving checkout. Both
+    count the entries Load ignores and log each of them once."""
 
     resources_dir = tmp_path / "configured-resources"
     (resources_dir / "providers").mkdir(parents=True)
     copy2(_REPO_RESOURCES / "providers/openrouter.json", resources_dir / "providers")
     (resources_dir / "models").mkdir()
-    override_text = '{"models": {}}\n'
+    override_text = '{"models": {"retired-model": {"name": "Retired"}}}\n'
     (resources_dir / "models/openrouter.overrides.json").write_text(override_text, encoding="utf-8")
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -145,8 +147,22 @@ async def test_model_refresh_uses_started_runtime_storage_paths(
         if target == "system":
             params["expected_resources_dir"] = str(resources_dir)
 
-        await rpc_result(state, "model.refresh_db", **params)
+        # The started Runtime's LogManager stops propagation to the root logger.
+        models_logger = logging.getLogger("vbot.models")
+        models_logger.addHandler(caplog.handler)
+        caplog.clear()
+        try:
+            with caplog.at_level(logging.WARNING, logger=models_logger.name):
+                result = await rpc_result(state, "model.refresh_db", **params)
+        finally:
+            models_logger.removeHandler(caplog.handler)
 
+        assert result["invalid_entry_count"] == 1
+        assert [
+            "openrouter/retired-model" in record.getMessage()
+            for record in caplog.records
+            if record.name == models_logger.name
+        ] == [True]
         assert runtime.models is registry
         assert registry.get("openrouter", "fresh-model").name == "Fresh Model"
         destination = (

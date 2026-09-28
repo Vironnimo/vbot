@@ -368,9 +368,9 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
             scope = "all"
             provider_count = int(result.get("refreshed_count", 0))
             model_count = int(result.get("model_count", 0))
-        ModelRegistry.invalidate(refresh_resources_dir)
-        ModelRegistry.load(refresh_resources_dir)
-        ModelRegistry.invalidate(refresh_resources_dir)
+        # Validation collects instead of logging: the live reload below logs
+        # each entry Load ignores, so the refresh reports it once.
+        invalid_entry_count = len(ModelRegistry.validate(refresh_resources_dir))
         database_refresh.commit()
         _reload_runtime_model_registry(runtime, system_resources_dir)
     except Exception as exc:
@@ -386,13 +386,17 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
     publish_resource_changed(state, RESOURCE_KIND_MODELS)
     errors = result.get("errors")
     error_count = len(errors) if isinstance(errors, list) else 0
+    if invalid_entry_count:
+        result["invalid_entry_count"] = invalid_entry_count
     _LOGGER.info(
-        "Model database refreshed (scope=%s target=%s providers=%s models=%s errors=%s)",
+        "Model database refreshed "
+        "(scope=%s target=%s providers=%s models=%s errors=%s invalid_entries=%s)",
         scope,
         target,
         provider_count,
         model_count,
         error_count,
+        invalid_entry_count,
     )
     return result
 

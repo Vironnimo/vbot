@@ -154,11 +154,11 @@ async def test_local_catalog_refresh_keeps_the_published_database_when_staging_i
     async def fake_refresh(provider: Any, credential: str, resources_dir: Any, **kwargs: Any):
         return {"provider_id": provider.id, "model_count": 1}
 
-    def fail_validation(cls: type, resources_dir: Any, **kwargs: Any) -> None:
+    def fail_validation(cls: type, resources_dir: Any) -> list[str]:
         raise ValueError("invalid staged Model DB")
 
     monkeypatch.setattr(discovery_module, "refresh_models", fake_refresh)
-    monkeypatch.setattr(ModelRegistry, "load", classmethod(fail_validation))
+    monkeypatch.setattr(ModelRegistry, "validate", classmethod(fail_validation))
     reloads = _record_reloads(runtime, monkeypatch)
 
     await runtime.maybe_refresh_local_catalogs()

@@ -502,6 +502,11 @@ def test_invalid_recommended_sampling_is_ignored_without_hiding_the_model(
             ["models.json"],
             id="corrupt-canonical-file",
         ),
+        pytest.param(
+            {"healthy.overrides.json": {"models": {"retired": {"name": "Retired"}}}},
+            ["healthy/retired", "missing required field 'capabilities'", "Override-only"],
+            id="override-only-entry-missing-a-required-field",
+        ),
     ],
 )
 def test_invalid_model_db_files_are_skipped_with_a_warning(
@@ -515,6 +520,9 @@ def test_invalid_model_db_files_are_skipped_with_a_warning(
         _write_json(tmp_path / "models" / name, payload)
 
     with caplog.at_level(logging.WARNING, logger="vbot.models"):
+        # Staged-refresh validation collects what Load ignores without logging it.
+        issues = ModelRegistry.validate(tmp_path)
+        assert caplog.records == []
         registry = ModelRegistry.load(tmp_path)
 
     assert [
@@ -524,6 +532,7 @@ def test_invalid_model_db_files_are_skipped_with_a_warning(
     assert registry.provider_reasoning_replay("healthy") is None
     for warning in warnings:
         assert warning in caplog.text
+    assert issues == [record.getMessage() for record in caplog.records]
 
 
 def test_model_directory_scan_failure_does_not_raise(

@@ -13,7 +13,6 @@ lookup.
 from __future__ import annotations
 
 import json
-import logging
 import math
 import threading
 from collections.abc import Iterable, Mapping
@@ -25,8 +24,10 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from core.models.assembly import (
     CANONICAL_FILE_NAME,
     CANONICAL_OVERRIDES_FILE_NAME,
+    ModelDataIssueReport,
     assemble_provider_model,
     load_canonical_layer,
+    log_model_data_issue,
 )
 from core.models.database import (
     MODEL_DATABASE_MANIFEST_FILE_NAME,
@@ -38,7 +39,6 @@ from core.utils.workers import BoundedWorkerPool
 if TYPE_CHECKING:
     from core.models.query import ModelQuery
 
-_LOGGER = logging.getLogger("vbot.models")
 _MODEL_DATA_ERRORS = (AttributeError, KeyError, OSError, TypeError, UnicodeError, ValueError)
 # ``reload_async`` reads and assembles the catalog files here, off the Event Loop.
 _RELOAD_WORKERS = BoundedWorkerPool(name="model-registry", max_workers=1)
@@ -452,6 +452,27 @@ class ModelRegistry:
         cls._cache[cache_key] = registry
         return registry
 
+    @classmethod
+    def validate(cls, resources_dir: Path) -> list[str]:
+        """Assemble the Model DB under ``resources_dir`` and return what Load would ignore.
+
+        Validates a staged complete database before it is published: the root is
+        assembled exactly like :meth:`load` without a runtime root or Custom
+        Providers, but nothing is cached or logged. Each returned message names
+        one invalid file, entry or value that Load omits; the live reload after
+        publication logs them, so a refresh reports each issue once.
+        """
+
+        resolved = resources_dir.resolve()
+        issues: list[str] = []
+        cls._assemble_models(
+            select_model_database_dir(resolved, None),
+            resolved / "models",
+            {},
+            issues.append,
+        )
+        return issues
+
     def reload(
         self,
         resources_dir: Path,
@@ -540,17 +561,20 @@ class ModelRegistry:
         models_dir: Path,
         bundled_models_dir: Path,
         custom_providers: Mapping[str, Mapping[str, Any]],
+        report: ModelDataIssueReport = log_model_data_issue,
     ) -> tuple[dict[tuple[str, str], Model], dict[str, str]]:
         """Assemble every effective model from the on-disk layers (no cache).
 
         ``models_dir`` is the selected generated catalog root and
         ``bundled_models_dir`` owns the authoritative hand-maintained overrides.
-        Shared by ``load`` and ``reload`` so both paths assemble identically.
+        Shared by ``load``, ``reload`` and ``validate`` so every path assembles
+        identically; ``report`` receives each ignored file, entry or value.
         """
 
         canonical_layer = load_canonical_layer(
             models_dir,
             overrides_models_dir=bundled_models_dir,
+            report=report,
         )
         models: dict[tuple[str, str], Model] = {}
         provider_layers: dict[str, dict[str, Any]] = {}
@@ -562,7 +586,7 @@ class ModelRegistry:
         try:
             provider_files = sorted(models_dir.glob("*.json"))
         except OSError as exc:
-            _LOGGER.warning("Could not scan Model DB provider files in '%s': %s", models_dir, exc)
+            report(f"Could not scan Model DB provider files in '{models_dir}': {exc}")
             provider_files = []
 
         for json_file in provider_files:
@@ -572,11 +596,7 @@ class ModelRegistry:
             try:
                 provider_id, provider_models = cls._read_provider_file(json_file)
             except _MODEL_DATA_ERRORS as exc:
-                _LOGGER.warning(
-                    "Ignoring invalid Model DB provider file '%s': %s",
-                    json_file,
-                    exc,
-                )
+                report(f"Ignoring invalid Model DB provider file '{json_file}': {exc}")
                 continue
             provider_layers[provider_id] = provider_models
             provider_sources[provider_id] = json_file
@@ -588,11 +608,7 @@ class ModelRegistry:
         try:
             override_files = sorted(bundled_models_dir.glob(f"*{OVERRIDES_FILE_SUFFIX}"))
         except OSError as exc:
-            _LOGGER.warning(
-                "Could not scan Model DB override files in '%s': %s",
-                bundled_models_dir,
-                exc,
-            )
+            report(f"Could not scan Model DB override files in '{bundled_models_dir}': {exc}")
             override_files = []
 
         for overrides_file in override_files:
@@ -603,11 +619,7 @@ class ModelRegistry:
                     overrides_file
                 )
             except _MODEL_DATA_ERRORS as exc:
-                _LOGGER.warning(
-                    "Ignoring invalid Model DB override file '%s': %s",
-                    overrides_file,
-                    exc,
-                )
+                report(f"Ignoring invalid Model DB override file '{overrides_file}': {exc}")
                 continue
             override_layers[provider_id] = override_models
             override_sources[provider_id] = overrides_file
@@ -623,22 +635,18 @@ class ModelRegistry:
                 provider_model = provider_models.get(wire_id, {})
                 override_model = override_models.get(wire_id)
                 if provider_entry_present and not isinstance(provider_model, Mapping):
-                    _LOGGER.warning(
-                        "Ignoring invalid Model DB provider entry '%s/%s' in '%s': "
-                        "record must be an object",
-                        provider_id,
-                        wire_id,
-                        provider_sources.get(provider_id, models_dir),
+                    report(
+                        f"Ignoring invalid Model DB provider entry '{provider_id}/{wire_id}' "
+                        f"in '{provider_sources.get(provider_id, models_dir)}': "
+                        "record must be an object"
                     )
                     provider_entry_present = False
                     provider_model = {}
                 if override_model is not None and not isinstance(override_model, Mapping):
-                    _LOGGER.warning(
-                        "Ignoring invalid Model DB override entry '%s/%s' in '%s': "
-                        "record must be an object",
-                        provider_id,
-                        wire_id,
-                        override_sources.get(provider_id, models_dir),
+                    report(
+                        f"Ignoring invalid Model DB override entry '{provider_id}/{wire_id}' "
+                        f"in '{override_sources.get(provider_id, models_dir)}': "
+                        "record must be an object"
                     )
                     override_model = None
                 if not provider_entry_present and override_model is None:
@@ -651,22 +659,31 @@ class ModelRegistry:
                         override_model,
                         canonical_layer,
                     )
-                    models[(provider_id, wire_id)] = _model_from_record(wire_id, record)
+                    models[(provider_id, wire_id)] = _model_from_record(wire_id, record, report)
                 except _MODEL_DATA_ERRORS as exc:
-                    sources = [
-                        str(source)
-                        for source in (
+                    layer_sources: tuple[Path | None, ...]
+                    if provider_entry_present:
+                        layer_sources = (
                             provider_sources.get(provider_id),
                             override_sources.get(provider_id),
                         )
-                        if source is not None
-                    ]
-                    _LOGGER.warning(
-                        "Ignoring invalid Model DB model '%s/%s' from '%s': %s",
-                        provider_id,
-                        wire_id,
-                        "', '".join(sources),
-                        exc,
+                        origin = ""
+                    else:
+                        # Assembly had only the hand layer (plus any canonical
+                        # join), so the Override entry is what lacks the data.
+                        layer_sources = (override_sources.get(provider_id),)
+                        origin = (
+                            "; it is an Override-only entry the Provider catalog no longer lists"
+                            if provider_id in provider_sources
+                            else "; it is an Override-only entry and the Provider has no "
+                            "generated catalog"
+                        )
+                    sources = "', '".join(
+                        str(source) for source in layer_sources if source is not None
+                    )
+                    report(
+                        f"Ignoring invalid Model DB model '{provider_id}/{wire_id}' "
+                        f"from '{sources}': {_describe_model_data_error(exc)}{origin}"
                     )
 
         for provider_id, provider in custom_providers.items():
@@ -675,13 +692,12 @@ class ModelRegistry:
                     models[(provider_id, model_id)] = _model_from_record(
                         model_id,
                         cls._custom_model_record(custom_model),
+                        report,
                     )
                 except _MODEL_DATA_ERRORS as exc:
-                    _LOGGER.warning(
-                        "Ignoring invalid custom Model '%s/%s' from Settings: %s",
-                        provider_id,
-                        model_id,
-                        exc,
+                    report(
+                        f"Ignoring invalid custom Model '{provider_id}/{model_id}' from "
+                        f"Settings: {_describe_model_data_error(exc)}"
                     )
 
         return models, provider_reasoning_replay
@@ -816,15 +832,20 @@ class ModelRegistry:
         return sorted(matches, key=lambda item: (item[0], item[1].model_id))
 
 
-def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
+def _model_from_record(
+    model_id: str,
+    record: Mapping[str, Any],
+    report: ModelDataIssueReport = log_model_data_issue,
+) -> Model:
     """Construct a typed ``Model`` from an assembled effective-model record.
 
     The record is the field-level merge of the canonical, provider, and override
     layers (see :mod:`core.models.assembly`) with the internal ``canonical``
     pointer already stripped. It must carry the loader's required fields; a layer
     set that fails to supply one (e.g. a model missing ``name`` or
-    ``capabilities``) surfaces as a ``KeyError`` here, which is the correct "the
-    data is incomplete" signal.
+    ``capabilities``) surfaces as a ``KeyError`` naming the missing field, which
+    is the correct "the data is incomplete" signal. ``report`` receives optional
+    values that are ignored without dropping the Model.
 
     ``context_window`` and ``max_output_tokens`` are the deliberate exceptions:
     an absent value is the honest "this fact is unknown" signal, not a load
@@ -833,18 +854,18 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
     see :func:`core.providers.providers.resolve_context_window`).
     """
 
-    caps = record["capabilities"]
-    reasoning_data = caps["reasoning"]
+    caps = _required_field(record, "capabilities")
+    reasoning_data = _required_field(record, "capabilities", "reasoning")
     reasoning = ReasoningCapabilities(
-        supported=reasoning_data["supported"],
+        supported=_required_field(record, "capabilities", "reasoning", "supported"),
         control=reasoning_data.get("control"),
         levels=tuple(reasoning_data.get("levels", ())),
         budget_max=reasoning_data.get("budget_max"),
     )
     capabilities = Capabilities(
-        vision=caps["vision"],
-        tools=caps["tools"],
-        json_mode=caps["json_mode"],
+        vision=_required_field(record, "capabilities", "vision"),
+        tools=_required_field(record, "capabilities", "tools"),
+        json_mode=_required_field(record, "capabilities", "json_mode"),
         reasoning=reasoning,
         input_modalities=tuple(caps.get("input_modalities", ())),
         output_modalities=tuple(caps.get("output_modalities", ())),
@@ -855,7 +876,7 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
     )
     return Model(
         model_id=model_id,
-        name=record["name"],
+        name=_required_field(record, "name"),
         capabilities=capabilities,
         context_window=record.get("context_window"),
         max_output_tokens=record.get("max_output_tokens"),
@@ -864,12 +885,34 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
         connections=tuple(record.get("connections", ())),
         connection_context_windows=record.get("connection_context_windows", {}),
         recommended_temperature=_coerce_recommended_temperature(
-            record.get("recommended_temperature")
+            record.get("recommended_temperature"),
+            report,
         ),
-        recommended_top_p=_coerce_recommended_top_p(record.get("recommended_top_p")),
+        recommended_top_p=_coerce_recommended_top_p(record.get("recommended_top_p"), report),
         reasoning_replay=_coerce_reasoning_replay(record.get("reasoning_replay")),
         pricing=TokenPricing.from_dict(record.get("pricing")),
     )
+
+
+def _required_field(record: Mapping[str, Any], *keys: str) -> Any:
+    """Return the nested required value at ``keys``; a missing one raises ``KeyError(path)``."""
+
+    value: Any = record
+    for depth, key in enumerate(keys):
+        if not isinstance(value, Mapping):
+            raise ValueError(f"field '{'.'.join(keys[:depth])}' must be an object")
+        if key not in value:
+            raise KeyError(".".join(keys[: depth + 1]))
+        value = value[key]
+    return value
+
+
+def _describe_model_data_error(exc: Exception) -> str:
+    """Render a caught Model data error; a bare ``KeyError`` names its missing field."""
+
+    if type(exc) is KeyError and exc.args:
+        return f"missing required field '{exc.args[0]}'"
+    return str(exc)
 
 
 def _freeze_connection_context_windows(value: Any) -> Mapping[str, int]:
@@ -902,7 +945,7 @@ def _coerce_reasoning_replay(value: Any) -> str | None:
     raise ValueError(f"reasoning_replay must be one of: {allowed}")
 
 
-def _coerce_recommended_temperature(value: Any) -> float | None:
+def _coerce_recommended_temperature(value: Any, report: ModelDataIssueReport) -> float | None:
     """Coerce a ``recommended_temperature`` record value into a valid float or None.
 
     Like ``context_window`` and ``max_output_tokens``, this is an optional
@@ -915,18 +958,18 @@ def _coerce_recommended_temperature(value: Any) -> float | None:
     if isinstance(value, bool | int | float) and not isinstance(value, bool):
         temperature = float(value)
     else:
-        _LOGGER.warning("recommended_temperature is not a number (%r); ignoring", value)
+        report(f"recommended_temperature is not a number ({value!r}); ignoring")
         return None
     if not math.isfinite(temperature):
-        _LOGGER.warning("recommended_temperature is not finite (%r); ignoring", value)
+        report(f"recommended_temperature is not finite ({value!r}); ignoring")
         return None
     if temperature < 0.0 or temperature > 2.0:
-        _LOGGER.warning("recommended_temperature %g is outside [0.0, 2.0]; ignoring", temperature)
+        report(f"recommended_temperature {temperature:g} is outside [0.0, 2.0]; ignoring")
         return None
     return temperature
 
 
-def _coerce_recommended_top_p(value: Any) -> float | None:
+def _coerce_recommended_top_p(value: Any, report: ModelDataIssueReport) -> float | None:
     """Coerce a ``recommended_top_p`` record value into a valid float or None.
 
     Like ``recommended_temperature``, this is an optional model fact that stays
@@ -939,13 +982,13 @@ def _coerce_recommended_top_p(value: Any) -> float | None:
     if isinstance(value, bool | int | float) and not isinstance(value, bool):
         top_p = float(value)
     else:
-        _LOGGER.warning("recommended_top_p is not a number (%r); ignoring", value)
+        report(f"recommended_top_p is not a number ({value!r}); ignoring")
         return None
     if not math.isfinite(top_p):
-        _LOGGER.warning("recommended_top_p is not finite (%r); ignoring", value)
+        report(f"recommended_top_p is not finite ({value!r}); ignoring")
         return None
     if top_p < 0.0 or top_p > 1.0:
-        _LOGGER.warning("recommended_top_p %g is outside [0.0, 1.0]; ignoring", top_p)
+        report(f"recommended_top_p {top_p:g} is outside [0.0, 1.0]; ignoring")
         return None
     return top_p
 

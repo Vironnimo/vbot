@@ -82,9 +82,10 @@ def test_a_provider_model_without_a_canonical_join_loads(registry: ModelRegistry
     assert registry.get("opencode-go", "deepseek-v4-pro").capabilities.reasoning.supported is True
 
 
-def test_every_bundled_provider_override_loads(registry: ModelRegistry) -> None:
-    """A refreshed catalog must not leave silently omitted partial overrides."""
+def test_the_bundled_root_loads_without_dropping_records(registry: ModelRegistry) -> None:
+    """A refreshed catalog must not leave omitted records or partial overrides."""
 
+    assert ModelRegistry.validate(RESOURCES_DIR) == []
     for path in sorted((RESOURCES_DIR / "models").glob("*.overrides.json")):
         provider_id = path.name.removesuffix(".overrides.json")
         if provider_id == "models":
