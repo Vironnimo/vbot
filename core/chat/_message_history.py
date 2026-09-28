@@ -197,18 +197,6 @@ def _append_reply_surface_note(
         session.add_note(surface.to_note_content())
 
 
-def _last_user_message_with_content_blocks(
-    messages: list[_records.ChatMessage],
-) -> _records.ChatMessage | None:
-    for message in reversed(messages):
-        if message.role != "user":
-            continue
-        if isinstance(message.content, list):
-            return message
-        return None
-    return None
-
-
 def _last_user_message(messages: list[_records.ChatMessage]) -> _records.ChatMessage | None:
     """Return the most recently appended user message regardless of content type."""
     for message in reversed(messages):

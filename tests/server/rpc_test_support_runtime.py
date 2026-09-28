@@ -27,6 +27,7 @@ from core.providers.accounts import (
     derive_credential_key,
     split_connection_id,
 )
+from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
 from core.runs import ChatRunManager
 from core.runtime.runtime import Runtime
 from core.storage import StorageManager
@@ -227,6 +228,12 @@ class StubAdapter:
     ) -> JsonObject:
         return response
 
+    def reasoning_replay_policy(self, _model_id: str) -> ReasoningReplayPolicy:
+        return DEFAULT_REASONING_REPLAY_POLICY
+
+    def wire_media_support(self, _model_id: str) -> frozenset[str]:
+        return frozenset()
+
     async def stream(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> Any:
         self.stream_requests.append(
             {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
@@ -255,10 +262,6 @@ class StubProcessManager:
 class RecordingCompactionService:
     def __init__(self) -> None:
         self.calls = 0
-
-    @staticmethod
-    def estimate_messages_tokens(_messages: list[JsonObject]) -> int:
-        return 12_345
 
     async def compact(self, *args: Any, **kwargs: Any) -> ChatMessage:
         self.calls += 1

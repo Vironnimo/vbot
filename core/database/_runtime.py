@@ -106,9 +106,7 @@ class ConnectionRuntime:
     def label(self) -> str:
         return f"{self.name} ({self.path.name})"
 
-    def open_writer(
-        self, verify: Callable[[sqlite3.Connection], None] | None = None
-    ) -> sqlite3.Connection:
+    def open_writer(self, verify: Callable[[sqlite3.Connection], None]) -> sqlite3.Connection:
         """Open, verify and configure the writer; close it on every failure.
 
         ``verify`` inspects the file before the journal policy may change it, so
@@ -134,8 +132,7 @@ class ConnectionRuntime:
                 connection.execute("PRAGMA foreign_keys=ON")
                 connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
                 connection.execute(f"PRAGMA cache_size=-{WRITER_CACHE_KIB}")
-                if verify is not None:
-                    verify(connection)
+                verify(connection)
                 self._wal_active = apply_wal_with_fallback(connection, db_label=self.label) == "wal"
                 connection.execute(f"PRAGMA synchronous={self._synchronous}")
                 connection.execute("PRAGMA wal_autocheckpoint=1000")

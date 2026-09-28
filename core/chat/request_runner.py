@@ -177,9 +177,9 @@ def _resolve_request_context_kwargs(
 ) -> dict[str, Any]:
     """Resolve per-request conversation-context kwargs for one request build.
 
-    Mirrors ``_resolve_reasoning_replay_policy``: adapters and test doubles that
-    do not expose the hook contribute nothing, so the provider call is unchanged
-    for every adapter that has no use for the conversation identity.
+    Adapters and test doubles that do not expose the hook contribute nothing,
+    so the provider call is unchanged for every adapter that has no use for the
+    conversation identity.
     """
     if hasattr(adapter, "request_context_kwargs"):
         return dict(

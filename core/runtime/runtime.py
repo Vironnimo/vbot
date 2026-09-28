@@ -228,8 +228,7 @@ class Runtime:
     def _host_operations(self) -> ExtensionHostFactory:
         self._ensure_started()
         if self._extension_host_factory is None:
-            if self._temporary_agents is None:
-                raise RuntimeError("temporary execution is unavailable")
+            assert self._temporary_agents is not None
             self._extension_host_factory = ExtensionHostFactory(
                 host=ExtensionHost(
                     data_dir=self.storage.data_dir,

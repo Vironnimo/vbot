@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from core.attachments.images import ImageConversionError, ImageConverter
 from core.chat._message_history import (
     _last_user_message,
-    _last_user_message_with_content_blocks,
     _session_has_any_content_blocks,
     effective_compaction_messages,
 )
@@ -72,9 +71,7 @@ def _request_content_resolution_inputs(
     """Find attachment boundaries and Run-local media without loop-bound scans."""
     current_user_message: ChatMessage | None = None
     if _session_has_any_content_blocks(effective_messages):
-        current_user_message = _last_user_message_with_content_blocks(
-            effective_messages
-        ) or _last_user_message(effective_messages)
+        current_user_message = _last_user_message(effective_messages)
     return current_user_message, _current_run_read_media_outputs(session_messages)
 
 

@@ -21,7 +21,6 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -70,31 +69,6 @@ class PromptError(VBotError, ValueError):
 BlockKind = Literal["text", "data"]
 BLOCK_KIND_TEXT: Literal["text"] = "text"
 BLOCK_KIND_DATA: Literal["data"] = "data"
-
-
-class BlockSource(StrEnum):
-    """The canonical source namespaces, named for typed comparison.
-
-    A block id's source is the text before its first ``:`` and is kept as a plain
-    string (see :func:`parse_block_source`), because contributors may legitimately
-    use a domain prefix beyond the common four — the memory block ships as
-    ``memory:guidance`` (D6 lists ``core``/``tool``/``extension``/``user`` as the
-    common ones, while the phase examples also use ``memory:``). These members
-    exist so code can compare against a well-known source without a string
-    literal; they do **not** form a closed allow-list.
-
-    The source is distinct from the block's :class:`owner <BlockDefinition.owner>`,
-    even though both vocabularies reuse ``tool:``/``extension:``. The source says
-    *who shipped* the block; the owner drives gate 2 (is the owner active). The
-    layout persists the source per entry (D3) so an unknown-but-remembered entry
-    can still be ranked.
-    """
-
-    CORE = "core"
-    TOOL = "tool"
-    EXTENSION = "extension"
-    USER = "user"
-    MEMORY = "memory"
 
 
 def parse_block_source(block_id: str) -> str:
@@ -819,7 +793,6 @@ __all__ = [
     "BlockProducer",
     "BlockRenderContext",
     "BlockRenderer",
-    "BlockSource",
     "BlockStore",
     "CallableOwnerActivity",
     "EmptyBlockStore",

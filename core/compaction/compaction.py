@@ -583,10 +583,6 @@ class CompactionService:
             activation_result_names=activation_result_names,
         )
 
-    def estimate_messages_tokens(self, messages: list[dict]) -> int:
-        estimated_tokens, _ = estimate_request_input_tokens(messages)
-        return estimated_tokens
-
 
 def _prepare_compaction_model_messages(
     plan: CompactionPlan,

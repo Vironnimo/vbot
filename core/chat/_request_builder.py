@@ -6,7 +6,7 @@ import inspect
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from core.attachments.images import ImageConverter
 from core.chat._message_history import (
@@ -36,7 +36,6 @@ from core.chat.model_resolution import (
     _model_input_modalities_for_target,
     _resolve_agent_connection,
     _split_agent_model,
-    parse_bare_model,
     parse_model_with_connection,
 )
 from core.chat.usage import latest_session_context_usage
@@ -48,10 +47,6 @@ from core.prompts.pinned_context import stamp_prompt_files_read
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.providers import resolve_effective_context_window
-from core.providers.reasoning import (
-    DEFAULT_REASONING_REPLAY_POLICY,
-    ReasoningReplayPolicy,
-)
 from core.runs import Run
 from core.sessions import (
     SKILL_AVAILABLE_NOTE_PREFIX,
@@ -100,29 +95,6 @@ def _finalize_compaction_checkpoint(
 ) -> ChatMessage:
     ordinal = sum(message.role == "compaction_checkpoint" for message in session_messages) + 1
     return finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
-
-
-def _resolve_reasoning_replay_policy(adapter: Any, model_id: str) -> ReasoningReplayPolicy:
-    """Resolve the adapter's reasoning replay policy for one request build.
-
-    Mirrors the ``set_debug_context`` probe: adapters and test doubles that do
-    not expose the hook receive the system ``full_history`` default.
-    """
-    if hasattr(adapter, "reasoning_replay_policy"):
-        return cast(ReasoningReplayPolicy, adapter.reasoning_replay_policy(model_id))
-    return DEFAULT_REASONING_REPLAY_POLICY
-
-
-def _resolve_wire_media_support(adapter: Any, model_id: str) -> frozenset[str]:
-    """Resolve the media types the adapter's wire can carry for one request build.
-
-    Mirrors ``_resolve_reasoning_replay_policy``: adapters and test doubles that
-    do not expose the hook carry nothing, so the resolver degrades every
-    attachment rather than emitting media the wire cannot encode.
-    """
-    if hasattr(adapter, "wire_media_support"):
-        return frozenset(adapter.wire_media_support(model_id))
-    return frozenset()
 
 
 def _resolved_model_reference(
@@ -232,13 +204,13 @@ class RequestBuilder:
             ),
             public_model=public_model,
             adapter=adapter,
-            replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+            replay_policy=adapter.reasoning_replay_policy(model_id),
             input_modalities=_model_input_modalities_for_target(
                 self._dependencies,
                 provider_id,
                 model_id,
             ),
-            wire_media_types=_resolve_wire_media_support(adapter, model_id),
+            wire_media_types=adapter.wire_media_support(model_id),
             chunk_timeout_seconds=self._wire_requests.resolve_chunk_timeout(connection),
             max_image_bytes=self._image_size_limit(adapter, model_id),
         )
@@ -705,38 +677,21 @@ class RequestBuilder:
             if isinstance(resolved_content, list):
                 tool_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = local_content + resolved_content
 
-    def resolve_context_window(
-        self,
-        agent: Any,
-        target: _ModelTarget | None = None,
-    ) -> int | None:
+    def resolve_context_window(self, agent: Any, target: _ModelTarget) -> int | None:
         """Resolve the usable context window for the current Model target.
 
-        Returns ``None`` only when the model string is unusable (no
-        ``provider/model`` form). Otherwise the value always resolves through the
-        shared effective chain (user-set/capped window for flagged-local models,
-        else model window → provider-config default → global floor, see
+        Returns ``None`` only when the Model catalog has no entry for the target.
+        Otherwise the value always resolves through the shared effective chain
+        (user-set/capped window for flagged-local models, else model window →
+        provider-config default → global floor, see
         :func:`resolve_effective_context_window`), so a model whose window is
         ``None`` still gets a usable budget and auto-compaction keeps working
         instead of silently disabling itself.
         """
-        if target is None:
-            bare_model = parse_bare_model(agent.model)
-            if "/" not in bare_model:
-                return None
-            provider_id, _, resolved_model_id = bare_model.partition("/")
-            if not provider_id or not resolved_model_id:
-                return None
-            try:
-                _resolved_provider_id, connection_id = _resolve_agent_connection(
-                    self._dependencies, agent
-                )
-            except (AttributeError, ChatError, ConfigError, KeyError):
-                connection_id = None
-        else:
-            provider_id = target.provider_id
-            resolved_model_id = target.model_id
-            connection_id = target.connection_id
+        del agent  # The target carries the resolved Model and Connection.
+        provider_id = target.provider_id
+        resolved_model_id = target.model_id
+        connection_id = target.connection_id
 
         try:
             model_entry = self._dependencies.models.get(provider_id, resolved_model_id)

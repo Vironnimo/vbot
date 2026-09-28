@@ -190,7 +190,7 @@ _MODEL_SCOPED_FATAL_MARKERS = (
 )
 
 
-def should_advance_model_fallback_chain(error: Exception) -> bool:
+def should_advance_model_fallback_chain(error: ProviderError | RunInterruptedError) -> bool:
     """Whether a failed attempt should advance to the next fallback-chain candidate.
 
     Advances on retryable ``ProviderError`` failures (transient and
@@ -208,8 +208,6 @@ def should_advance_model_fallback_chain(error: Exception) -> bool:
     """
     if isinstance(error, RunInterruptedError):
         return error.cause in {"provider", "network", "timeout"}
-    if not isinstance(error, ProviderError):
-        return False
     if isinstance(error, (ProviderAuthError, ProviderStreamingUnsupportedError)):
         return False
     if error.retryable:
