@@ -224,8 +224,9 @@ async def test_tool_error_reads_as_the_servers_own_report(context_service, host,
         "concerns this call, for example an argument or an item it names, fix the call and "
         "send it again. If the error concerns the setup, for example the application not "
         "running, a program not found or a missing key or setting, tell the user what the "
-        "error says. The user configures this connection in Settings -> Extensions. Repeat "
-        "the unchanged call only when the error says the problem is temporary."
+        "error says. The user configures this connection in Settings -> Integrations -> "
+        "Extensions -> MCP connections. Repeat the unchanged call only when the error says "
+        "the problem is temporary."
     )
     assert payloads(host).rows == {}
 

@@ -12,6 +12,10 @@ SEARCH_MAX_LIMIT = 50
 # A full page of the largest limit stays within this many characters of lines.
 SEARCH_PAGE_CHARACTERS = 12000
 
+# The WebUI labels a user follows to the MCP connections: navigation item, Settings page,
+# section heading and sub-heading (webui/src/lib/i18n English catalog).
+SETTINGS_LOCATION = "Settings -> Integrations -> Extensions -> MCP connections"
+
 MCP_DESCRIPTION = (
     "Discover and use this MCP connection's tools, resources, and prompts. "
     "Start with search without a query to see what it offers and the server's guidance. "
@@ -156,7 +160,7 @@ MCP_MESSAGES = {
     ),
     "disabled": (
         "The MCP connection {connection} is disabled, so nothing was run. Tell the user to "
-        "enable it in Settings -> Extensions if it is needed."
+        f"enable it in {SETTINGS_LOCATION} if it is needed."
     ),
     "unreachable": (
         "The MCP connection {connection} is not available ({detail}), so nothing was run. "
@@ -193,7 +197,7 @@ MCP_MESSAGES = {
         "argument or an item it names, fix the call and send it again. If the error concerns "
         "the setup, for example the application not running, a program not found or a "
         "missing key or setting, tell the user what the error says. The user configures this "
-        "connection in Settings -> Extensions. Repeat the unchanged call only when the error "
+        f"connection in {SETTINGS_LOCATION}. Repeat the unchanged call only when the error "
         "says the problem is temporary."
     ),
     "tool_changed": (
