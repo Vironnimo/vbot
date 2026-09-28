@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  AGENT_TARGET_GROUP_IDENTITY,
-  AGENT_TARGET_GROUP_PROJECT,
   buildAgentTargetDropdownOptions,
   buildAgentTargetOptions,
   createAgentTargetCatalogLoader,
@@ -24,14 +22,14 @@ describe('buildAgentTargetOptions', () => {
         value: 'researcher',
         label: 'Researcher',
         secondaryLabel: 'researcher',
-        group: AGENT_TARGET_GROUP_IDENTITY,
+        group: 'identity',
         projectId: null,
       },
       {
         value: 'builder@vbot',
         label: 'builder@vbot',
         secondaryLabel: 'Builder',
-        group: AGENT_TARGET_GROUP_PROJECT,
+        group: 'project',
         projectId: 'vbot',
       },
     ]);

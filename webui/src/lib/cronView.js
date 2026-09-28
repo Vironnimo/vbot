@@ -320,7 +320,7 @@ function deriveScheduleDescription(
   systemTimezone,
 ) {
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
-    return cronExpression ?? '';
+    return cronExpression;
   }
   if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
     return formatInterval(intervalSeconds);
@@ -329,7 +329,7 @@ function deriveScheduleDescription(
   return formatTimestamp(runAt, systemTimezone);
 }
 
-export function toDateTimeLocalInput(value, timezone = 'UTC') {
+function toDateTimeLocalInput(value, timezone = 'UTC') {
   if (!value) {
     return '';
   }
@@ -400,16 +400,12 @@ function cronJobTarget(job) {
 
 // The combined identity + project agent dropdown lives in the shared
 // `agentTargetOptions` module now that System Prompt previews reuse it. Cron
-// keeps its historical export names so callers and tests are unchanged: the
-// option VALUE is still the `agent@projekt` address (bare id for identity), so
-// saving sends it straight through as the `cron.create/update` `agent_id`.
+// keeps its historical builder names for its callers: the option VALUE is
+// still the `agent@projekt` address (bare id for identity), so saving sends it
+// straight through as the `cron.create/update` `agent_id`.
 export {
   buildAgentTargetOptions as buildCronAgentOptions,
   buildAgentTargetDropdownOptions as buildCronAgentDropdownOptions,
-  projectTeamEntry,
-  projectIdsFromList,
-  AGENT_TARGET_GROUP_IDENTITY as CRON_AGENT_GROUP_IDENTITY,
-  AGENT_TARGET_GROUP_PROJECT as CRON_AGENT_GROUP_PROJECT,
 } from './agentTargetOptions.js';
 
 function normalizeScheduleType(value) {

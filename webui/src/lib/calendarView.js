@@ -147,7 +147,7 @@ export function weekdayLabels(locale = activeLocaleTag()) {
 // in the server's IANA zone.
 // ---------------------------------------------------------------------------
 
-export function dayKeyInZone(instantIso, timeZone) {
+function dayKeyInZone(instantIso, timeZone) {
   if (!instantIso) {
     return '';
   }
@@ -204,7 +204,7 @@ export function windowForView(view, anchorKey) {
   return { from: anchorKey, to: addDaysToKey(anchorKey, AGENDA_DAYS - 1) };
 }
 
-export function navigateAnchor(view, anchorKey, direction) {
+function navigateAnchor(view, anchorKey, direction) {
   if (view === 'month') {
     const anchor = dayKeyToUtcDate(anchorKey);
     const next = new Date(
@@ -315,38 +315,6 @@ export function wallTimeInZone(instantIso, timeZone) {
     minute: '2-digit',
     hourCycle: 'h23',
   }).format(new Date(instantIso));
-}
-
-// Build the create/update RPC payload from form values. Recurrence "none"
-// clears the rule; weekly recurrence carries the selected weekdays.
-export function formValuesToPayload(values) {
-  const payload = {
-    title: values.title,
-    notes: values.notes || null,
-    all_day: values.all_day,
-  };
-  if (values.all_day) {
-    payload.start = values.start_date;
-    payload.duration_days = Number(values.duration_days) || 1;
-  } else {
-    payload.start = `${values.start_date}T${values.start_time || '09:00'}:00`;
-    payload.duration_minutes = Number(values.duration_minutes) || 60;
-  }
-  if (values.freq !== 'none') {
-    const rrule = { freq: values.freq, interval: Number(values.interval) || 1 };
-    if (values.freq === 'weekly') {
-      rrule.by_weekday = values.by_weekday?.length ? values.by_weekday : ['mo'];
-    }
-    if (values.end_mode === 'count') {
-      rrule.count = Number(values.end_count) || 10;
-    } else if (values.end_mode === 'until') {
-      rrule.until = values.end_until || undefined;
-    }
-    payload.rrule = rrule;
-  } else {
-    payload.rrule = null;
-  }
-  return payload;
 }
 
 // ---------------------------------------------------------------------------
