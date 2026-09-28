@@ -47,7 +47,7 @@ _EOF_WARNING = (
     "where they are."
 )
 _WITHIN_LINE_NOTE = "The - line is part of line {line}; only that part of the line was replaced."
-_UNMARKED_ADVICE = "Start every added line with +."
+_UNMARKED_ADVICE = "in later patches, start every added line with +."
 _FIRST_AFTER_HINT_NOTE = (
     "The lines to replace occur {occurrences} times after {hint!r}; the first, at line "
     "{line}, was changed."
@@ -123,7 +123,7 @@ def _part_of_lines(content: str, old: str) -> JsonObject | None:
         text = wanted.strip()
         if not text or _loose(wanted) in whole:
             continue
-        numbers = [number for number, line in enumerate(file_lines, 1) if text in line]
+        numbers = [number for number, line in enumerate(file_lines, 1) if _cut_from(text, line)]
         if not numbers:
             return None
         excerpts = [
@@ -146,6 +146,35 @@ def _part_of_lines(content: str, old: str) -> JsonObject | None:
             "excerpts": excerpts,
         }
     return None
+
+
+def _cut_from(text: str, line: str) -> bool:
+    """Tell whether ``text`` reads as a piece copied out of ``line``, not a chance match.
+
+    The piece holds at least 3 letters or digits, does not split a word of the
+    line, and starts or ends the line or is at least 8 characters long. Short
+    text such as ``}``, ``1,`` or ``pass`` occurs by chance inside unrelated lines.
+    """
+    if sum(character.isalnum() for character in text) < 3:
+        return False
+    stripped = line.strip()
+    if len(text) < 8 and not (stripped.startswith(text) or stripped.endswith(text)):
+        return False
+    start = line.find(text)
+    while start >= 0:
+        end = start + len(text)
+        if not (
+            _joins_word(line[start - 1 : start], text[0])
+            or _joins_word(text[-1], line[end : end + 1])
+        ):
+            return True
+        start = line.find(text, start + 1)
+    return False
+
+
+def _joins_word(left: str, right: str) -> bool:
+    """Tell whether the characters ``left`` and ``right`` belong to one word."""
+    return bool(left and right) and all(ch.isalnum() or ch == "_" for ch in left + right)
 
 
 def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]) -> JsonObject:
@@ -553,14 +582,26 @@ def _unmarked_note(texts: list[str]) -> str:
         subject = f"The patch line {quoted}" if shown else "A blank patch line"
         return (
             f"{subject} between + lines has no + prefix, but the file does not have it "
-            f"there, so it was added as a + line. {_UNMARKED_ADVICE}"
+            "there, so it was added as a + line. Nothing more is needed for that line; "
+            f"{_UNMARKED_ADVICE}"
         )
     subject = f"{len(texts)} patch lines" if shown else f"{len(texts)} blank patch lines"
     example = f"; for example {quoted}" if shown else ""
     return (
         f"{subject} between + lines have no + prefix, but the file does not have them "
-        f"there, so they were added as + lines{example}. {_UNMARKED_ADVICE}"
+        f"there, so they were added as + lines{example}. Nothing more is needed for those "
+        f"lines; {_UNMARKED_ADVICE}"
     )
+
+
+def _beside_additions(lines: list[tuple[str, str]], index: int) -> bool:
+    """Tell whether the unchanged line at ``index`` can be an added line missing its +.
+
+    It can when it sits between + lines or right next to one.
+    """
+    if any(index in run for run in _unmarked_runs(lines)):
+        return True
+    return any(0 <= i < len(lines) and lines[i][0] == "+" for i in (index - 1, index + 1))
 
 
 def _hint_text(hint: str) -> str:
@@ -943,24 +984,28 @@ def _apply_hunk(
         if difference:
             # Number the hunk's unchanged and removed lines as the report counts them.
             numbered = [i for i, (prefix, _) in enumerate(hunk.lines) if prefix in " -"]
-            unmarked = {i for run in _unmarked_runs(hunk.lines) for i in run}
             position = difference["copy_line"] - 1
-            if position < len(numbered) and numbered[position] in unmarked:
-                difference["unprefixed"] = True
+            if position < len(numbered) and hunk.lines[numbered[position]][0] == " ":
+                difference["unprefixed"] = _beside_additions(hunk.lines, numbered[position])
         elif not details["candidates"] and "part_of" not in details:
             # Nothing resembles the lines as a whole; a line the file has nowhere
             # is then the one to fix, often a new line written without +.
             present = {_loose(line) for line in split_text_lines(content)}
             absent = next(
                 (
-                    (prefix, text)
-                    for prefix, text in hunk.lines
+                    i
+                    for i, (prefix, text) in enumerate(hunk.lines)
                     if prefix in " -" and text.strip() and _loose(text) not in present
                 ),
                 None,
             )
             if absent is not None:
-                details["absent"] = {"text": absent[1].strip(), "removed": absent[0] == "-"}
+                prefix, text = hunk.lines[absent]
+                details["absent"] = {
+                    "text": text.strip(),
+                    "removed": prefix == "-",
+                    "beside_additions": prefix == " " and _beside_additions(hunk.lines, absent),
+                }
         raise _PatchError("text_not_found", path=path, label=hunk.label, details=details)
     if [t for p, t in hunk.lines if p in " -"] == [t for p, t in hunk.lines if p in " +"]:
         return content, warnings

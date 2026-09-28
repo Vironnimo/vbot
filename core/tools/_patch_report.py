@@ -292,16 +292,16 @@ def failure_text(error: JsonObject) -> str:
         elif error.get("absent"):
             absent = error["absent"]
             text = absent["text"] if len(absent["text"]) <= 80 else absent["text"][:77] + "..."
-            lines.append(
-                f"The patch line {text!r} is not in the file. "
-                + (
-                    "A - line names a line to remove, so it must match a line of the file."
-                    if absent["removed"]
-                    else "That patch line has no + prefix, so it must already be in the "
-                    "file; if it is new, start it with +."
+            if absent["removed"]:
+                cause = "A - line names a line to remove, so it must match a line of the file."
+            elif absent.get("beside_additions"):
+                cause = (
+                    "That patch line has no + prefix, so it must already be in the file; "
+                    "if it is new, start it with +."
                 )
-                + _read_hint(error)
-            )
+            else:
+                cause = "A line without + or - is unchanged, so it must match a line of the file."
+            lines.append(f"The patch line {text!r} is not in the file. {cause}{_read_hint(error)}")
         elif error.get("path_label"):
             lines.append(f"No similar text is in the file;{_read_hint(error)}")
         present = error.get("already_present")

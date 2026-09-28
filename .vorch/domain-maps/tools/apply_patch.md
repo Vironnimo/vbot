@@ -217,12 +217,19 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   line) is named before similarity candidates when it sits in at most 3 lines:
   `The patch line '...' is only part of line(s) N. Each patch line is a whole
   line, so copy all of line N:` plus those lines (`part_of`, `_part_of_lines`).
+  A file line counts only when the text reads as cut from it (`_cut_from`): at
+  least 3 letters or digits, no word of the line split, and at the line's start
+  or end or at least 8 characters long. Evidence: of 18 such reports over three
+  days, 4 named a line that held `}`, `pass` or `1,` by chance; the others met
+  this rule (Sessions, 2026-09).
   Otherwise the closest-text candidates show. Without candidates, the report
   names the hunk's first unchanged or removed line that no file line matches
   (ignoring spacing, `absent`): `The patch line '...' is not in the file.` plus,
-  for an unchanged line, that without `+` it must already be in the file and a
-  new line starts with `+`, or, for a `-` line, that it must match a line of the
-  file. `No similar text` remains only when every such line occurs somewhere.
+  for a `-` line, that it must match a line of the file; for an unchanged line
+  between or right next to `+` lines (`beside_additions`), that without `+` it
+  must already be in the file and a new line starts with `+`; for another
+  unchanged line, `A line without + or - is unchanged, so it must match a line
+  of the file.` `No similar text` remains only when every such line occurs somewhere.
   Evidence: in one Swarm run, 6 failures said only `No similar text`; each held
   a line the file lacked (new lines after the last `+` line written without `+`,
   a misremembered or output-copied context line), and 4 were followed by a
@@ -397,15 +404,20 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   those lines one space deeper. Evidence: in a replay of one Swarm's last 18
   minutes, 2 of 5 such hunks applied with duplicated lines before this check
   (Sessions, 2026-09). Success adds a
-  note naming the lines and asking for `+` on every added line. Runs at a hunk
+  note naming the lines, saying `Nothing more is needed for those lines` (or
+  `that line`), and asking for `+` on every added line in later patches.
+  Evidence: after the note without that sentence, the next call read the same
+  file again in 28 of 94 cases, against 5% after other successes (Sessions,
+  2026-09). Runs at a hunk
   edge are never re-read: a typo in edge context would otherwise duplicate the
   line. Evidence: one Model family often left the `+` off statement continuation
   lines; in 16 of its 34 failed calls with such runs, the first difference was
   one of those lines (Sessions, 2026-09). When no reading applies and the
-  reported first difference is such a line, the report adds `That patch line has
-  no + prefix, so it must already be in the file there; if it is new, start it
-  with +.` (difference key `unprefixed`), since identical retries followed the
-  bare difference.
+  reported first difference is such a line or an unchanged line right next to a
+  `+` line, the report adds `That patch line has no + prefix, so it must already
+  be in the file there; if it is new, start it with +.` (difference key
+  `unprefixed`), since identical retries followed the bare difference. Session
+  shape for the edge: a new last line after the `+` lines written without `+`.
 - Context-only blocks before another `@@` become ordered precise locator hints
   for that next hunk, including multiline context. Missing anchors fail without
   falling back to a different location, and repeated anchors follow the hint

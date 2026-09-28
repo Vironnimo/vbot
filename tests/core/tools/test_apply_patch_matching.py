@@ -757,8 +757,8 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
     )
     assert text(result).endswith(
         "Note: 2 patch lines between + lines have no + prefix, but the file does not have "
-        f"them there, so they were added as + lines; for example {example!r}. "
-        "Start every added line with +."
+        f"them there, so they were added as + lines; for example {example!r}. Nothing more is "
+        "needed for those lines; in later patches, start every added line with +."
     )
 
 
@@ -770,7 +770,7 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             "@@\n start\n+one\nkeep\n+two\n    three\n+four\n end",
             b"start\none\nkeep\ntwo\n    three\nfour\nend\n",
             "The patch line 'three' between + lines has no + prefix, but the file does not "
-            "have it there, so it was added as a + line.",
+            "have it there, so it was added as a + line. Nothing more is needed for that line;",
         ),
         # Session shape: the line after a replaced one stays unchanged while
         # blank lines without + follow in the added block.
@@ -781,7 +781,8 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             b'__all__ = [\n    "a", "b",\n]\n\n\n'
             b"def b():\n    x = 1\n\n    y = 2\n\n    return x\n",
             "2 blank patch lines between + lines have no + prefix, but the file does not "
-            "have them there, so they were added as + lines.",
+            "have them there, so they were added as + lines. Nothing more is needed for those "
+            "lines;",
         ),
         # Session shape: a blank line without + after the last unchanged line is
         # added too, so the file's own blank line after that line stays.
@@ -791,7 +792,8 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             b"def f():\n    start()\n    if x:\n        new()\n    done()\n\n    more()\n\n"
             b"def g():\n    pass\n",
             "2 patch lines between + lines have no + prefix, but the file does not have them "
-            "there, so they were added as + lines; for example 'new()'.",
+            "there, so they were added as + lines; for example 'new()'. Nothing more is needed "
+            "for those lines;",
         ),
         # After the last unchanged line, unprefixed lines new there are added too.
         (
@@ -811,7 +813,7 @@ def test_unprefixed_lines_the_file_lacks_there_are_added(tmp_path, before, body,
     assert result["ok"], text(result)
     assert path.read_bytes() == after
     if note is not None:
-        assert f"\nNote: {note} Start every added line with +." in text(result)
+        assert f"\nNote: {note} in later patches, start every added line with +." in text(result)
 
 
 @pytest.mark.parametrize(
