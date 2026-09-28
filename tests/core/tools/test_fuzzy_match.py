@@ -133,6 +133,26 @@ def test_line_trimmed_matches_different_indent_and_reindents(content: str, expec
             "  alpha\u2028  BETA",
             "def f():\n    alpha\u2028  BETA\n",
         ),
+        # Most lines already have the file's indentation: the one line off is a typo,
+        # so the replacement is kept as written.
+        (
+            "def f(conn):\n    if x:\n        seen = get(conn)\n        if seen is None:\n"
+            "            seen = conn.s = set()\n        return seen\n",
+            "            seen = get(conn)\n        if seen is None:\n"
+            "            seen = conn.s = set()\n        return seen",
+            "        seen = get(conn)\n        if seen is None:\n"
+            "            seen = conn.s = set()\n            log(seen)\n        return seen",
+            "def f(conn):\n    if x:\n        seen = get(conn)\n        if seen is None:\n"
+            "            seen = conn.s = set()\n            log(seen)\n        return seen\n",
+        ),
+        # A one-space indent is an offset, not a level: new lines keep their offset
+        # instead of scaling every space to a whole level.
+        (
+            "class A:\n    def f(self):\n        a = 1\n        b = 2\n",
+            " a = 1\n b = 2",
+            " a = 1\n if a:\n   b = 3",
+            "class A:\n    def f(self):\n        a = 1\n        if a:\n          b = 3\n",
+        ),
     ],
 )
 def test_reindent_writes_new_lines_in_the_files_indentation(

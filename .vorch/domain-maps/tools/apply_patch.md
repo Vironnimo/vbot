@@ -329,7 +329,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   indent, and other indents (new deeper lines) convert level by level between
   the model's and the file's unit (tabs or N spaces, learned from the whole
   file), including a dropped outer level. Mixed tab/space output from a
-  spaces-for-tabs model is a defect.
+  spaces-for-tabs model is a defect. When most indented matched lines already
+  have the file's indentation, the replacement is written as sent: the other
+  lines are typos, and mapping them re-indented new lines wrongly (Session: a
+  `-` line one level too deep put the new block one level too shallow). One
+  space is never a level unit; when no wider unit explains the indents, new
+  lines keep their offset instead of every space becoming a file level.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.
@@ -358,16 +363,30 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   recoveries and `copy_match` all miss, `_unmarked_readings` re-reads such runs as
   `+` lines: first only runs holding a nonblank line the file lacks, then also
   blank runs, then all runs, so a run the file has stays context while that
-  places the hunk. `_unmarked_texts` adds each line as written (whitespace-only
-  becomes blank). A run written with a space prefix whose indentation matches
-  the nearest nonblank lines around it only without that space loses it: the
-  Model wrote the prefix of unchanged lines instead of `+`. Evidence: in one
-  Swarm run, 2 of 55 re-reads applied wrongly, one adding a real context line
-  `]` a second time after the block because two blank runs kept it from
-  placing the hunk without it, one indenting two statements one space too deep.
-  All 11 of that run's 128 re-readable runs that the indentation rule strips
-  were written with the space prefix of unchanged lines (Sessions, 2026-09).
-  A reading needs at
+  places the hunk. A blank run stays context only between context/removal lines
+  that stay (`_with_edge_blanks`): beyond them, the file's own blank line there
+  would place it and move into the added block, so the blank line after the
+  block would go missing. `_unmarked_texts` adds each line as written
+  (whitespace-only becomes blank). A Model that wrote the space prefix of
+  unchanged lines instead of `+` indents such a line one space too deep, so
+  `_meant_line` decides line by line: a line keeps its indentation when the
+  nearest new-text line above or below has it, or when the line above aligns
+  continuations to that column (just after a bracket it leaves open, or where
+  the last item inside it starts; `_alignment_columns`). Otherwise it loses its
+  first space when the indentation then fits those lines, or when that space
+  makes the indent width odd both from the line start and beyond the line
+  above's indent. Evidence: in one Swarm run, 2 of 55 re-reads applied
+  wrongly, one adding a real context line `]` a second time after the block
+  because two blank runs kept it from placing the hunk without it, one
+  indenting two statements one space too deep. All 11 of that run's 128
+  re-readable runs that the indentation rule strips were written with the space
+  prefix of unchanged lines (Sessions, 2026-09). In the next Swarm run, some
+  runs mixed lines with and without that prefix, which a rule for the whole run
+  left one space off, and 4 re-reads moved a blank line of the file into the
+  added block. Over that run's 90 re-readable calls, the line rules changed only
+  lines that were off; a plain odd-width rule without the alignment columns and
+  the relative check misaligned hanging and aligned continuation lines
+  (Sessions, 2026-09). A reading needs at
   least one remaining context/removal line and applies only through precise
   matching (`precise_only`), so the file must hold the surrounding lines
   adjacent; a failing reading falls back to the original error. A re-read run

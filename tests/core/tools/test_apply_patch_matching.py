@@ -720,6 +720,31 @@ def test_part_of_a_line_is_not_replaced_when_the_place_or_meaning_is_open(tmp_pa
             b"            count(row)\n        seen.add(row)\n",
             "log(row)",
         ),
+        # Session shape: one line written with the space prefix, the next without it.
+        (
+            "@@\n         check(row)\n+        if row in seen:\n             seen.discard(row)\n"
+            "            log(row)\n+        seen.add(row)\n     return rows",
+            b"        if row in seen:\n            seen.discard(row)\n            log(row)\n"
+            b"        seen.add(row)\n",
+            "seen.discard(row)",
+        ),
+        # Session shapes: continuation lines aligned to an odd column after an open
+        # bracket, or to the start of the last item inside it, stay aligned.
+        (
+            "@@\n         check(row)\n+        res = call(ky,\n                   alpha,\n"
+            "                   beta)\n+        done(res)\n     return rows",
+            b"        res = call(ky,\n                   alpha,\n                   beta)\n"
+            b"        done(res)\n",
+            "alpha,",
+        ),
+        (
+            "@@\n         check(row)\n+        res = call(ky, alpha +\n"
+            "                       beta +\n                       gamma)\n"
+            "+        done(res)\n     return rows",
+            b"        res = call(ky, alpha +\n                       beta +\n"
+            b"                       gamma)\n        done(res)\n",
+            "beta +",
+        ),
     ],
 )
 def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body, added, example):
@@ -757,6 +782,16 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             b"def b():\n    x = 1\n\n    y = 2\n\n    return x\n",
             "2 blank patch lines between + lines have no + prefix, but the file does not "
             "have them there, so they were added as + lines.",
+        ),
+        # Session shape: a blank line without + after the last unchanged line is
+        # added too, so the file's own blank line after that line stays.
+        (
+            b"def f():\n    start()\n\ndef g():\n    pass\n",
+            "@@\n     start()\n+    if x:\n        new()\n+    done()\n\n+    more()",
+            b"def f():\n    start()\n    if x:\n        new()\n    done()\n\n    more()\n\n"
+            b"def g():\n    pass\n",
+            "2 patch lines between + lines have no + prefix, but the file does not have them "
+            "there, so they were added as + lines; for example 'new()'.",
         ),
         # After the last unchanged line, unprefixed lines new there are added too.
         (

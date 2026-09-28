@@ -358,8 +358,10 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]
     hunk with the lines of some such runs added (``_unmarked_texts``), paired
     with their positions: first the runs holding a line the file lacks, then
     also the blank runs, then all runs. A run whose lines the file has stays
-    unchanged while a reading without it places the hunk. A reading keeps at
-    least one unchanged or removed line to place it.
+    unchanged while a reading without it places the hunk. A blank run stays
+    unchanged only between unchanged or removed lines that stay: beyond them,
+    the file's own blank line there would place it and move into the added
+    block. A reading keeps at least one unchanged or removed line to place it.
     """
     lines = hunk.lines
     if len(hunk.written) != len(lines):
@@ -374,7 +376,10 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]
         return 0 if any(_loose(text) not in present for text in texts) else 2
 
     ranks = {run: rank(run) for run in runs}
-    choices = (tuple(run for run in runs if ranks[run] <= most) for most in range(3))
+    choices = (
+        _with_edge_blanks(lines, runs, [run for run in runs if ranks[run] <= most], ranks)
+        for most in range(3)
+    )
     readings = []
     for chosen in dict.fromkeys(choices):
         if not chosen:
@@ -387,26 +392,112 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]
     return readings
 
 
+def _with_edge_blanks(
+    lines: list[tuple[str, str]], runs: list[range], chosen: list[range], ranks: dict[range, int]
+) -> tuple[range, ...]:
+    """Add to ``chosen`` each blank run that staying unchanged lines do not enclose."""
+    if not chosen:
+        return ()
+    chosen = list(chosen)
+    while True:
+        taken = {i for run in chosen for i in run}
+        edge = [
+            run
+            for run in runs
+            if ranks[run] == 1 and run not in chosen and not _enclosed(lines, run, taken)
+        ]
+        if not edge:
+            return tuple(sorted(chosen, key=lambda run: run.start))
+        chosen.extend(edge)
+
+
+def _enclosed(lines: list[tuple[str, str]], run: range, taken: set[int]) -> bool:
+    """Tell whether unchanged or removed lines outside ``run`` and ``taken`` surround it."""
+    kept = [
+        i
+        for i, (prefix, _) in enumerate(lines)
+        if prefix in " -" and i not in taken and i not in run
+    ]
+    return any(i < run.start for i in kept) and any(i >= run.stop for i in kept)
+
+
 def _unmarked_texts(hunk: _Hunk, run: range) -> dict[int, str]:
     """Return the text each line of an unprefixed run adds, by position in ``hunk``.
 
     A line the patch wrote without a prefix adds itself as written; one with only
     whitespace adds a blank line. A Model that wrote the space prefix of unchanged
-    lines instead of + indents the run one space deeper than the nearest lines
-    around it. When only the run without that space matches their indentation,
-    each line adds its text without it.
+    lines instead of + indents such a line one space deeper than meant. Each line
+    keeps its written indentation when that is the indentation of the nearest
+    lines around it or a column the line above aligns continuations to.
+    Otherwise it loses its first space when the indentation then fits them, or
+    when that space makes the number of indenting spaces odd, both counted from
+    the line start and beyond the line above's indentation.
     """
-    texts = {i: hunk.written[i] if hunk.written[i].strip() else "" for i in run}
-    first = next((text for text in texts.values() if text), "")
-    if not first or not all(text.startswith(" ") for text in texts.values() if text):
-        return texts
-    before = (text for _, text in reversed(hunk.lines[: run.start]) if text.strip())
-    after = (text for _, text in hunk.lines[run.stop :] if text.strip())
-    around = {_leading(text) for text in (next(before, None), next(after, None)) if text}
-    indent = _leading(first)
-    if indent not in around and indent[1:] in around:
-        return {i: text[1:] for i, text in texts.items()}
+    new_text = [(i, text) for i, (prefix, text) in enumerate(hunk.lines) if prefix in " +"]
+    after = next((text for i, text in new_text if i >= run.stop and text.strip()), None)
+    above = next((text for i, text in reversed(new_text) if i < run.start and text.strip()), None)
+    texts: dict[int, str] = {}
+    for i in run:
+        text = hunk.written[i]
+        if not text.strip():
+            texts[i] = ""
+            continue
+        texts[i] = text = _meant_line(text, above, after)
+        above = text
     return texts
+
+
+def _meant_line(text: str, above: str | None, after: str | None) -> str:
+    """Return ``text`` as written, or without its first space when that is a stray prefix."""
+    if not text.startswith(" "):
+        return text
+    stripped = text[1:]
+    indents = {_leading(line) for line in (above, after) if line is not None}
+    columns = _alignment_columns(above) if above is not None else set()
+
+    def fits(line: str) -> bool:
+        indent = _leading(line)
+        return indent in indents or (not indent.strip(" ") and len(indent) in columns)
+
+    if fits(text):
+        return text
+    if fits(stripped):
+        return stripped
+    written, base = _leading(text), _leading(above or "")
+    if not (written + base).strip(" ") and len(written) % 2 and (len(written) - len(base)) % 2:
+        return stripped
+    return text
+
+
+def _alignment_columns(line: str) -> set[int]:
+    """Return the columns a continuation of ``line`` aligns to.
+
+    For each bracket ``line`` leaves open, outside quotes: the column just after
+    it, and where the last item inside it starts.
+    """
+    open_items: list[list[int]] = []  # [column after the bracket, current item start]
+    quote = ""
+    escaped = False
+    for column, character in enumerate(line):
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = ""
+            continue
+        if open_items and open_items[-1][1] < 0 and not character.isspace():
+            open_items[-1][1] = column
+        if character in "\"'":
+            quote = character
+        elif character in "([{":
+            open_items.append([column + 1, -1])
+        elif character in ")]}" and open_items:
+            open_items.pop()
+        elif character == "," and open_items:
+            open_items[-1][1] = -1
+    return {column for item in open_items for column in item if column >= 0}
 
 
 def _leading(text: str) -> str:
