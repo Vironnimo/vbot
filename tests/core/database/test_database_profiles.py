@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 import threading
 from collections.abc import Callable
@@ -101,12 +102,21 @@ def _garbage(path: Path) -> int:
 
 
 @pytest.mark.parametrize(
-    "change",
-    [_new_projection_version, _foreign, _newer_generation, _garbage],
+    ("change", "log_level"),
+    [
+        # A new projection version is the designed rebuild path, not damage.
+        (_new_projection_version, logging.INFO),
+        (_foreign, logging.WARNING),
+        (_newer_generation, logging.WARNING),
+        (_garbage, logging.WARNING),
+    ],
     ids=["projection-version", "foreign", "newer", "garbage"],
 )
 def test_an_outdated_foreign_newer_or_damaged_projection_is_discarded_and_rebuilt(
-    tmp_path: Path, change: Callable[[Path], int]
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    change: Callable[[Path], int],
+    log_level: int,
 ) -> None:
     path = tmp_path / "index.db"
     database = open_database(projection_spec(path))
@@ -115,12 +125,16 @@ def test_an_outdated_foreign_newer_or_damaged_projection_is_discarded_and_rebuil
     Path(f"{path}-journal").write_bytes(b"")
     projection_version = change(path)
 
-    rebuilt = open_database(projection_spec(path, projection_version=projection_version))
+    with caplog.at_level(logging.INFO, logger="vbot.database"):
+        rebuilt = open_database(projection_spec(path, projection_version=projection_version))
     try:
         assert note_bodies(rebuilt) == []
         assert rebuilt.database_id != database.database_id
     finally:
         rebuilt.close()
+    assert [record.levelno for record in caplog.records if record.name == "vbot.database"] == [
+        log_level
+    ]
     with closing(sqlite3.connect(path)) as connection:
         identity = dict(connection.execute("SELECT key, value FROM kernel_meta").fetchall())
     assert identity["projection_version"] == str(projection_version)

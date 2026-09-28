@@ -32,6 +32,7 @@ from core.runs import (
     COMPACTION_STARTED_EVENT,
 )
 from core.sessions import SessionAddress
+from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -557,12 +558,29 @@ class CompactionRunCoordinator:
                     exc,
                 )
                 return current_state
-            except Exception:
+            except Exception as exc:
                 run.emit(
                     COMPACTION_ABORTED_EVENT,
                     {"reason": "failed"},
                 )
-                _LOGGER.warning("Compaction failed; continuing without compaction", exc_info=True)
+                cause = _expected_failure_cause(exc)
+                if cause is None:
+                    _LOGGER.error(
+                        "Auto-compaction failed unexpectedly; continuing without compaction "
+                        "(run=%s session=%s)",
+                        run.id,
+                        run.session_id,
+                        exc_info=True,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Auto-compaction failed; continuing without compaction "
+                        "(run=%s session=%s model=%s cause=%s)",
+                        run.id,
+                        run.session_id,
+                        cast(CompactionError, exc).model,
+                        cause,
+                    )
                 return current_state
             finally:
                 if close_summary_adapter:
@@ -732,3 +750,20 @@ class CompactionRunCoordinator:
             tail_tokens=int(strategy.get("tail_tokens", 15_000)),
             summary_model=strategy.get("summary_model"),
         )
+
+
+def _expected_failure_cause(error: Exception) -> str | None:
+    """Describe an expected Compaction failure; ``None`` marks an unexpected one.
+
+    A failure is expected when Compaction raised it itself, for example for a
+    rejected summary, or wrapped a vBot error such as a Provider or network
+    failure. Any other exception is a defect whose traceback belongs in the log.
+    """
+    if not isinstance(error, CompactionError):
+        return None
+    cause = error.__cause__
+    if cause is None:
+        return str(error)
+    if isinstance(cause, VBotError):
+        return f"{type(cause).__name__}: {cause}"
+    return None

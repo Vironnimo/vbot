@@ -289,9 +289,8 @@ async def test_failed_refresh_raises_and_writes_no_projection(
     ):
         await refresh_models(simple_compatible_config(adapter=adapter), API_KEY, resources_dir)
 
-    (failure,) = [r for r in caplog.records if "Model catalog refresh failed" in r.getMessage()]
-    assert "simple" in failure.getMessage()
-    assert failure.exc_info is None
+    # The error names the Provider; callers log what they catch, discovery does not.
+    assert [record for record in caplog.records if record.name == "vbot.models.discovery"] == []
     assert route.call_count == expected_calls
     assert (resources_dir / "models" / "simple.raw.json").exists() is raw_dump_kept
     assert not (resources_dir / "models" / "simple.json").exists()

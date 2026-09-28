@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,8 +11,9 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat._run_state import RequestBuildInputs, _RequestState
-from core.compaction import CompactionService
+from core.compaction import CompactionError, CompactionService
 from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT, pinned_skill_catalog
+from core.providers.errors import NetworkError
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_STARTED_EVENT,
@@ -85,16 +87,21 @@ async def test_unusable_summary_model_falls_back_to_the_active_target(
 
 
 @pytest.mark.asyncio
-async def test_failed_compaction_warns_and_keeps_the_request(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("provider_failure", [True, False], ids=["provider-failure", "defect"])
+async def test_failed_compaction_logs_and_keeps_the_request(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, provider_failure: bool
 ) -> None:
     runtime = compaction_runtime(tmp_path)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Hello"))
-    service = StubCompactionService(should_auto=True, compact_error=RuntimeError("broke"))
+    error: Exception = RuntimeError("broke")
+    if provider_failure:
+        error = CompactionError("Compaction failed: stream dropped", model="openai/summary")
+        error.__cause__ = NetworkError("stream dropped")
+    service = StubCompactionService(should_auto=True, compact_error=error)
 
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("WARNING", logger="vbot.compaction.coordination"):
         probe = await auto_compact(
             build_chat_loop(runtime, compaction_service=cast(Any, service)),
             runtime.agents.get("coder"),
@@ -104,10 +111,18 @@ async def test_failed_compaction_warns_and_keeps_the_request(
 
     assert probe.rebuilt == probe.request
     assert persisted_roles(session.load()) == ["user", "assistant"]
-    assert any(
-        "Compaction failed; continuing without compaction" in record.message
-        for record in caplog.records
-    )
+    # An expected Provider failure is one traceback-free WARNING naming its
+    # context and cause; a defect keeps its traceback at ERROR.
+    [record] = [
+        record for record in caplog.records if record.name == "vbot.compaction.coordination"
+    ]
+    if provider_failure:
+        assert (record.levelno, record.exc_info) == (logging.WARNING, None)
+        fields = ("run=run-1", "session=session-one", "model=openai/summary", "NetworkError")
+        assert all(field in record.getMessage() for field in fields)
+    else:
+        assert record.levelno == logging.ERROR
+        assert record.exc_info is not None
     assert _lifecycle(probe.run) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
     assert probe.run.events[-1].payload == {"reason": "failed"}
 

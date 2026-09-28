@@ -185,7 +185,7 @@ async def retry_async(
                 _LOGGER.warning(
                     "Retryable error on attempt %d/%d (%s: %s); retrying in %.2fs%s",
                     attempt + 1,
-                    max_retries,
+                    max_retries + 1,
                     type(error).__name__,
                     error,
                     delay,
@@ -197,10 +197,12 @@ async def retry_async(
 
     # Should be unreachable when max_retries >= 0, but satisfies type checkers.
     assert last_error is not None
-    _LOGGER.warning(
-        "Retries exhausted after %d attempts (%s: %s); raising last error",
-        max_retries + 1,
-        type(last_error).__name__,
-        last_error,
-    )
+    if max_retries > 0:
+        # A single attempt retried nothing; its caller logs what it catches.
+        _LOGGER.warning(
+            "Retries exhausted after %d attempts (%s: %s); raising last error",
+            max_retries + 1,
+            type(last_error).__name__,
+            last_error,
+        )
     raise last_error

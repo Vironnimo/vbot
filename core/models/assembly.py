@@ -112,19 +112,31 @@ Rules (:func:`merge_layers`):
 
 The merged record is then stripped of ``"canonical"`` and handed to the typed
 ``Model`` construction in ``models.py``. It MUST satisfy the loader's required
-fields (``name``, ``capabilities`` incl. ``reasoning.supported``,
-``context_window``, ``max_output_tokens``).
+fields (``name`` and ``capabilities`` with ``vision``, ``tools``, ``json_mode``
+and ``reasoning.supported``); ``context_window`` and ``max_output_tokens`` stay
+optional because absence means "unknown".
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 _LOGGER = logging.getLogger("vbot.models")
+
+# Receives one message per Model DB file, entry or value that Load ignores. Load
+# logs them; staged validation collects them so a refresh logs each issue once.
+ModelDataIssueReport = Callable[[str], None]
+
+
+def log_model_data_issue(message: str) -> None:
+    """Default :data:`ModelDataIssueReport`: log the ignored data as a warning."""
+
+    _LOGGER.warning("%s", message)
+
 
 # The JSON key that points a provider/override model entry at its canonical id.
 # Internal join key only — stripped from the assembled record, never a Model
@@ -146,6 +158,7 @@ def load_canonical_layer(
     models_dir: Path,
     *,
     overrides_models_dir: Path | None = None,
+    report: ModelDataIssueReport = log_model_data_issue,
 ) -> dict[str, dict[str, Any]]:
     """Load and merge the canonical base + canonical overrides, keyed by canonical id.
 
@@ -161,6 +174,7 @@ def load_canonical_layer(
         overrides_models_dir: The authoritative directory containing
             ``models.overrides.json``. Defaults to ``models_dir`` for standalone
             assembly and validation callers.
+        report: Receives each ignored invalid file or entry.
 
     Returns:
         A mapping ``canonical_id -> canonical record`` (plain dicts). Empty when
@@ -168,8 +182,8 @@ def load_canonical_layer(
     """
 
     overrides_dir = overrides_models_dir or models_dir
-    base = _read_models_map(models_dir / CANONICAL_FILE_NAME)
-    overrides = _read_models_map(overrides_dir / CANONICAL_OVERRIDES_FILE_NAME)
+    base = _read_models_map(models_dir / CANONICAL_FILE_NAME, report)
+    overrides = _read_models_map(overrides_dir / CANONICAL_OVERRIDES_FILE_NAME, report)
 
     canonical: dict[str, dict[str, Any]] = {
         canonical_id: dict(record) for canonical_id, record in base.items()
@@ -314,7 +328,7 @@ def _merge_two(low: Mapping[str, Any], high: Mapping[str, Any]) -> dict[str, Any
     return result
 
 
-def _read_models_map(path: Path) -> dict[str, Any]:
+def _read_models_map(path: Path, report: ModelDataIssueReport) -> dict[str, Any]:
     """Return the ``models`` map of a canonical file, or ``{}`` when absent.
 
     A missing file is the expected case before Phase 3 generates the canonical
@@ -331,7 +345,7 @@ def _read_models_map(path: Path) -> dict[str, Any]:
         if not isinstance(models, dict):
             raise ValueError("'models' must be an object")
     except (OSError, UnicodeError, ValueError) as exc:
-        _LOGGER.warning("Ignoring invalid Model DB canonical file '%s': %s", path, exc)
+        report(f"Ignoring invalid Model DB canonical file '{path}': {exc}")
         return {}
 
     valid_models: dict[str, Any] = {}
@@ -339,10 +353,9 @@ def _read_models_map(path: Path) -> dict[str, Any]:
         if isinstance(record, Mapping):
             valid_models[canonical_id] = record
             continue
-        _LOGGER.warning(
-            "Ignoring invalid Model DB canonical entry '%s' in '%s': record must be an object",
-            canonical_id,
-            path,
+        report(
+            f"Ignoring invalid Model DB canonical entry '{canonical_id}' in '{path}': "
+            "record must be an object"
         )
     return valid_models
 

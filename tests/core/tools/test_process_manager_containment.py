@@ -279,10 +279,20 @@ def test_posix_tree_kill_signals_the_group_and_never_falls_back_to_the_parent(
         assert sent_signals == [(12345, 9)]
 
 
+def process_log_lines(caplog: pytest.LogCaptureFixture) -> list[tuple[int, str]]:
+    return [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "vbot.processes"
+    ]
+
+
 @pytest.mark.parametrize("survives", [False, True])
-def test_windows_tree_fallback_kills_and_verifies_captured_descendants(monkeypatch, survives):
+def test_windows_tree_fallback_kills_and_verifies_captured_descendants(
+    monkeypatch, caplog, survives
+):
     killed = []
-    child = SimpleNamespace(kill=lambda: killed.append("child"))
+    child = SimpleNamespace(pid=12346, kill=lambda: killed.append("child"))
     root = SimpleNamespace(
         is_running=lambda: True,
         children=lambda recursive: [child],
@@ -298,8 +308,15 @@ def test_windows_tree_fallback_kills_and_verifies_captured_descendants(monkeypat
         raise subprocess.TimeoutExpired("taskkill", 5)
 
     monkeypatch.setattr(subprocess, "run", timeout)
-    assert process_utils.windows_taskkill_tree(12345) is (not survives)
+    with caplog.at_level(logging.DEBUG, logger="vbot.processes"):
+        assert process_utils.windows_taskkill_tree(12345) is (not survives)
     assert set(killed) == {"child", "root"}
+    # A failed taskkill is DEBUG detail while the direct kill ends the tree; only
+    # survivors warn, with their count and the cause.
+    [(level, message)] = process_log_lines(caplog)
+    assert level == (logging.WARNING if survives else logging.DEBUG)
+    assert "taskkill timed out after 5 s" in message
+    assert ("1 of 2 captured processes survive" in message) is survives
 
 
 def test_windows_process_tree_kill_runs_taskkill_windowless(
@@ -340,7 +357,7 @@ def test_windows_process_tree_kill_runs_taskkill_windowless(
     assert fallback_kills == 0
 
 
-def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch):
+def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch, caplog):
     root_alive = True
     child_alive = True
     deny_child = True
@@ -355,7 +372,7 @@ def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch):
             raise psutil.AccessDenied(2)
         child_alive = False
 
-    child = SimpleNamespace(kill=kill_child)
+    child = SimpleNamespace(pid=2, kill=kill_child)
     root = SimpleNamespace(
         is_running=lambda: root_alive, children=lambda recursive: [child], kill=kill_root
     )
@@ -363,18 +380,40 @@ def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch):
     monkeypatch.setattr(
         psutil, "wait_procs", lambda processes, timeout: ([], [child] if child_alive else [])
     )
-    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=1))
+    taskkill_runs: list[list[str]] = []
+
+    def failing_taskkill(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        taskkill_runs.append(args)
+        stderr = b"\r\nERROR: The process with PID 2 could not be terminated.\r\nReason: denied\r\n"
+        return subprocess.CompletedProcess(args, 128, stderr=stderr)
+
+    monkeypatch.setattr(subprocess, "run", failing_taskkill)
     targets: list[Any] = []
-    assert not process_utils.windows_taskkill_tree(1, targets=targets)
-    assert not root_alive and child_alive
-    deny_child = False
-    assert process_utils.windows_taskkill_tree(1, targets=targets)
+    with caplog.at_level(logging.DEBUG, logger="vbot.processes"):
+        assert not process_utils.windows_taskkill_tree(1, targets=targets)
+        assert not root_alive and child_alive
+        [(level, message)] = process_log_lines(caplog)
+        assert level == logging.WARNING
+        assert "1 of 2 captured processes survive" in message
+        # The exit code and the first stderr line name the taskkill failure.
+        assert "taskkill exit code 128: ERROR: The process with PID 2 could not be" in message
+        assert "Reason" not in message
+        assert "killing pid=2 failed" in message
+        caplog.clear()
+
+        deny_child = False
+        assert process_utils.windows_taskkill_tree(1, targets=targets)
     assert not child_alive
+    # With the root gone, the retry kills the retained identities without taskkill.
+    assert len(taskkill_runs) == 1
+    [(level, message)] = process_log_lines(caplog)
+    assert level == logging.DEBUG
+    assert "root already exited" in message and "taskkill exit" not in message
 
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "win32", reason="taskkill fallback path is Windows-only")
-async def test_kill_logs_warning_when_taskkill_fails(
+async def test_kill_terminates_the_tree_directly_without_a_warning_when_taskkill_fails(
     manager: ProcessManager, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     process_id = await spawn(manager)
@@ -384,11 +423,11 @@ async def test_kill_logs_warning_when_taskkill_fails(
 
     monkeypatch.setattr(subprocess, "run", failing_taskkill)
 
-    with caplog.at_level(logging.WARNING, logger="vbot.tools.process_manager"):
+    with caplog.at_level(logging.DEBUG, logger="vbot.processes"):
         await manager.kill(process_id, AGENT_A)
 
-    assert any("taskkill failed" in record.getMessage() for record in caplog.records)
     assert manager.get_process(process_id, AGENT_A).status == "killed"
+    assert [level for level, _message in process_log_lines(caplog)] == [logging.DEBUG]
 
 
 @pytest.mark.asyncio

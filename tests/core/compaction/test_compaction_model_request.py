@@ -17,9 +17,11 @@ from core.chat.streaming import (
 from core.compaction import CompactionError, CompactionService, CompactionSettings
 from core.compaction._model_request import _send_streaming_model_request
 from core.providers.anthropic import AnthropicAdapter
+from core.providers.errors import NetworkError
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.sessions import SessionAddress
+from core.utils.errors import ProviderError
 from tests.core.chat.usage_recorder_support import RecordingUsageRecorder
 from tests.core.compaction.compaction_test_support import (
     StubAdapter,
@@ -192,27 +194,78 @@ async def test_compaction_attempt_records_usage_before_checkpoint_acceptance(rej
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancelled", [False, True], ids=["truncated", "cancelled"])
-async def test_compaction_incomplete_attempt_retains_partial_usage(cancelled):
-    class IncompleteAdapter:
+@pytest.mark.parametrize(
+    ("outcomes", "statuses"),
+    [
+        (["output_truncated"], ["failed"]),
+        (["cancelled"], ["cancelled"]),
+        (["rejected"], ["failed"]),
+        (["dropped", "stop"], ["failed", "completed"]),
+        (["dropped", "dropped"], ["failed", "failed"]),
+    ],
+    ids=["truncated", "cancelled", "fatal-provider-error", "dropped-once", "dropped-twice"],
+)
+async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_once(
+    monkeypatch: pytest.MonkeyPatch, outcomes: list[str], statuses: list[str]
+) -> None:
+    remaining = list(outcomes)
+    waits: list[float] = []
+
+    async def record_wait(delay: float) -> None:
+        waits.append(delay)
+
+    class FlakyAdapter(StubAdapter):
         async def stream(self, messages, **kwargs):
             yield {"type": "usage", "input_tokens": 75}
-            if cancelled:
+            outcome = remaining.pop(0)
+            if outcome == "cancelled":
                 raise asyncio.CancelledError
-            yield {"type": "finish", "reason": "output_truncated"}
+            if outcome == "rejected":
+                raise ProviderError("bad request", retryable=False)
+            if outcome == "dropped":
+                # A connection lost mid-stream surfaces as a retryable error.
+                raise NetworkError("stream dropped")
+            yield {"type": "content_delta", "text": "Summary"}
+            yield {"type": "finish", "reason": outcome}
 
+    monkeypatch.setattr("core.compaction._model_request._sleep", record_wait)
     recorder = RecordingUsageRecorder()
-    with pytest.raises(asyncio.CancelledError if cancelled else CompactionError):
-        await _send_streaming_model_request(
-            IncompleteAdapter(),
-            [],
-            {"model_id": "summary"},
-            model_reference="openai/summary",
-            usage_recorder=cast(Any, recorder),
-        )
-    [call] = recorder.calls
-    assert call["status"] == ("cancelled" if cancelled else "failed")
-    assert call["usage"] == {"input_tokens": 75, "usage_call_id": call["id"]}
+    adapter = FlakyAdapter()
+    messages = [user("u1", "Request"), assistant("a1", "Answer")]
+    operation = compact(
+        messages,
+        service=CompactionService(usage_recorder=cast(Any, recorder)),
+        summary_adapter=adapter,
+        summary_model_id="summary",
+        active_adapter=adapter,
+        active_model_id="active",
+        active_model_reference="openai/active",
+        settings=CompactionSettings(strategy="continuation"),
+        request_messages=provider_request(messages),
+    )
+    if outcomes[-1] == "stop":
+        checkpoint = await operation
+        assert checkpoint.usage is not None
+        assert checkpoint.usage["model_call"]["usage"]["usage_call_id"] == recorder.calls[-1]["id"]
+    elif outcomes[-1] == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await operation
+    else:
+        with pytest.raises(CompactionError) as failure:
+            await operation
+        # The failure names the Model whose call failed for the caller's log.
+        assert failure.value.model == "openai/active"
+
+    assert remaining == []
+    # Every attempt, failed or not, keeps its own Usage row.
+    assert [call["status"] for call in recorder.calls] == statuses
+    assert all(
+        call["usage"] == {"input_tokens": 75, "usage_call_id": call["id"]}
+        for call in recorder.calls
+    )
+    # Only a retryable Provider failure waits the shared backoff and retries once.
+    assert len(waits) == (1 if outcomes[0] == "dropped" else 0)
+    assert all(1.0 <= wait <= 1.5 for wait in waits)
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from shutil import copy2
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from core.providers.providers import ProviderRegistry
 from core.providers.token_store import OAuthToken
 from core.runtime import Runtime
 from core.utils.config import Config
+from core.utils.retry import MAX_RETRIES, retry_async
 from server.events import ServerEventBus
 from server.rpc import model_methods
 from tests.server.rpc.oauth_provider_test_support import (
@@ -120,16 +122,17 @@ def _multi_connection_openai() -> SimpleNamespace:
 @pytest.mark.usefixtures("fake_discovery")
 @pytest.mark.parametrize("target", ["runtime", "system"])
 async def test_model_refresh_uses_started_runtime_storage_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, target: str
 ) -> None:
     """A runtime refresh copies the complete system DB (overrides included) into
-    the runtime root; a system refresh writes only the serving checkout."""
+    the runtime root; a system refresh writes only the serving checkout. Both
+    count the entries Load ignores and log each of them once."""
 
     resources_dir = tmp_path / "configured-resources"
     (resources_dir / "providers").mkdir(parents=True)
     copy2(_REPO_RESOURCES / "providers/openrouter.json", resources_dir / "providers")
     (resources_dir / "models").mkdir()
-    override_text = '{"models": {}}\n'
+    override_text = '{"models": {"retired-model": {"name": "Retired"}}}\n'
     (resources_dir / "models/openrouter.overrides.json").write_text(override_text, encoding="utf-8")
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -145,8 +148,22 @@ async def test_model_refresh_uses_started_runtime_storage_paths(
         if target == "system":
             params["expected_resources_dir"] = str(resources_dir)
 
-        await rpc_result(state, "model.refresh_db", **params)
+        # The started Runtime's LogManager stops propagation to the root logger.
+        models_logger = logging.getLogger("vbot.models")
+        models_logger.addHandler(caplog.handler)
+        caplog.clear()
+        try:
+            with caplog.at_level(logging.WARNING, logger=models_logger.name):
+                result = await rpc_result(state, "model.refresh_db", **params)
+        finally:
+            models_logger.removeHandler(caplog.handler)
 
+        assert result["invalid_entry_count"] == 1
+        assert [
+            "openrouter/retired-model" in record.getMessage()
+            for record in caplog.records
+            if record.name == models_logger.name
+        ] == [True]
         assert runtime.models is registry
         assert registry.get("openrouter", "fresh-model").name == "Fresh Model"
         destination = (
@@ -358,22 +375,45 @@ async def test_public_catalogs_refresh_without_credentials(tmp_path: Path) -> No
 
 def _openai_with_failing_connections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: set[str]
-) -> Any:
+) -> tuple[Any, dict[str, int]]:
+    """OpenAI whose ``failing`` Connections are unreachable; ``secondary`` auto-refreshes.
+
+    Returns the state and the discovery attempts each failing Connection made.
+    """
+
+    attempts: dict[str, int] = {}
+
     async def selective_refresh_models(
         provider_config: Any, credential_value: str, resources_dir: Path, **kwargs: Any
     ) -> JsonObject:
         connection_id = kwargs["credential_connection"].id
         if connection_id in failing:
-            raise ModelDiscoveryError(f"Model discovery failed for {connection_id}: 401")
+            # Like discovery, probe through the shared transient-failure retry.
+            async def probe() -> None:
+                attempts[connection_id] = attempts.get(connection_id, 0) + 1
+                raise NetworkError("connection refused")
+
+            try:
+                await retry_async(probe)
+            except NetworkError as error:
+                raise ModelDiscoveryError(
+                    f"Model discovery failed for {connection_id}: {error}"
+                ) from error
         return await fake_refresh_models(provider_config, credential_value, resources_dir, **kwargs)
+
+    async def skip_backoff(_delay: float) -> None:
+        return None
 
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
     monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
     monkeypatch.delenv("OPENAI_MISSING_KEY", raising=False)
     monkeypatch.setattr(model_methods, "refresh_models", selective_refresh_models)
+    monkeypatch.setattr("core.utils.retry._sleep", skip_backoff)
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.providers.add(_multi_connection_openai())
-    return state
+    provider = _multi_connection_openai()
+    provider.connections[1].auto_refresh = True
+    state.runtime.providers.add(provider)
+    return state, attempts
 
 
 @pytest.mark.asyncio
@@ -381,7 +421,7 @@ async def test_provider_refresh_reports_a_failed_connection_beside_healthy_ones(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = _openai_with_failing_connections(tmp_path, monkeypatch, {"secondary"})
+    state, _attempts = _openai_with_failing_connections(tmp_path, monkeypatch, {"secondary"})
 
     result = await rpc_result(state, "model.refresh_db", provider_id="openai")
 
@@ -391,7 +431,7 @@ async def test_provider_refresh_reports_a_failed_connection_beside_healthy_ones(
         {
             "provider_id": "openai",
             "connection_id": "openai:secondary",
-            "error": "Model discovery failed for secondary: 401",
+            "error": "Model discovery failed for secondary: connection refused",
         }
     ]
     assert state.runtime.models.get("openai", "fresh-model").name == "Fresh Model"
@@ -402,12 +442,19 @@ async def test_provider_refresh_fails_with_the_first_error_when_every_connection
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = _openai_with_failing_connections(tmp_path, monkeypatch, {"api-key", "secondary"})
+    state, attempts = _openai_with_failing_connections(
+        tmp_path, monkeypatch, {"api-key", "secondary"}
+    )
 
     error = await rpc_error(state, "model.refresh_db", provider_id="openai")
 
-    assert error == {"code": "domain_error", "message": "Model discovery failed for api-key: 401"}
+    assert error == {
+        "code": "domain_error",
+        "message": "Model discovery failed for api-key: connection refused",
+    }
     assert resource_changes(state) == []
+    # An auto-refresh (local) Connection is probed once; others keep their retries.
+    assert attempts == {"api-key": MAX_RETRIES + 1, "secondary": 1}
 
 
 @pytest.mark.asyncio

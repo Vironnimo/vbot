@@ -411,11 +411,8 @@ async def refresh_models(
         OSError,
         ValueError,
     ) as exc:
-        _LOGGER.warning(
-            "Model catalog refresh failed for provider %s: %s",
-            provider_config.id,
-            exc,
-        )
+        # Callers log what they catch: the manual refresh warns per Connection,
+        # the automatic local sweep warns only on a reachability transition.
         raise ModelDiscoveryError(
             f"Model discovery failed for provider '{provider_config.id}': {exc}"
         ) from exc
