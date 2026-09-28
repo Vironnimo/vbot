@@ -6,12 +6,15 @@ import asyncio
 import base64
 import contextlib
 import os
-import signal
 import sys
 import time
 
 from core.utils.logging import get_logger
-from core.utils.processes import subprocess_creation_flags, windows_taskkill_tree
+from core.utils.processes import (
+    HARD_KILL_SIGNAL,
+    subprocess_creation_flags,
+    windows_taskkill_tree,
+)
 
 SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
 SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS = 1.0
@@ -33,7 +36,6 @@ _WINDOWS_ENV_PROBE_SCRIPT = (
 # TTL bounds staleness automatically; an explicit invalidation is exposed for
 # the runtime and for the spawn-failure safety-net.
 SHELL_ENV_CACHE_TTL_SECONDS = 300.0
-HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 _cached_shell_env: dict[str, str] | None = None
 _shell_env_cache_time: float = 0.0
 _shell_env_probe_task: asyncio.Task[dict[str, str]] | None = None

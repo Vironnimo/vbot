@@ -238,7 +238,7 @@ def test_unicode_snapshot_preserves_screen_and_cursor(text: str, alternate: bool
     viewer = TerminalRenderer(40, 10, scrollback_lines=20)
     viewer.feed(source.ansi_snapshot())
     assert viewer.screen_text() == source.screen_text()
-    assert viewer.page(before=None, limit=20) == source.page(before=None, limit=20)
+    assert viewer.page(limit=20) == source.page(limit=20)
     assert (viewer._screen.cursor.x, viewer._screen.cursor.y) == (
         source._screen.cursor.x,
         source._screen.cursor.y,
@@ -288,7 +288,7 @@ def test_ansi_snapshot_rebuilds_bounded_scrollback_for_a_late_viewer() -> None:
     late_viewer = TerminalRenderer(12, 3, scrollback_lines=20)
     late_viewer.feed(source.ansi_snapshot())
 
-    assert late_viewer.page(before=None, limit=20) == source.page(before=None, limit=20)
+    assert late_viewer.page(limit=20) == source.page(limit=20)
     assert late_viewer.screen_text() == source.screen_text()
 
 
@@ -326,7 +326,7 @@ def test_cursor_page_carries_absolute_buffer_metrics() -> None:
     renderer = TerminalRenderer(12, 3, scrollback_lines=20)
     renderer.feed("".join(f"line-{index}\r\n" for index in range(6)))
 
-    page = renderer.page(before=None, limit=2)
+    page = renderer.page(limit=2)
 
     assert page["text"] == "line-2\nline-3"
     assert page["total_lines"] == 6

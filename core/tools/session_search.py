@@ -526,10 +526,6 @@ def _validate_session_search_fields(arguments: JsonObject, zone: _Zone = _UTC_ZO
         if key in arguments:
             _required_string(arguments, key)
     if "period" in arguments:
-        if arguments["period"] is None:
-            raise _SessionSearchError(
-                "invalid_arguments", "period must be an ISO-8601 start/end interval"
-            )
         _parse_period(arguments["period"], zone)
     if "include_subagents" in arguments and not isinstance(arguments["include_subagents"], bool):
         raise _SessionSearchError("invalid_arguments", "include_subagents must be a boolean")

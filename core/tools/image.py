@@ -145,10 +145,7 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
 
 def _image_generation_text_only_parameters() -> JsonObject:
     parameters = copy.deepcopy(IMAGE_GENERATION_TOOL_PARAMETERS)
-    properties = parameters.get("properties")
-    if not isinstance(properties, dict):
-        raise ValueError("image_generation canonical properties must be an object")
-    properties.pop("source_images", None)
+    parameters["properties"].pop("source_images", None)
     return parameters
 
 

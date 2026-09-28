@@ -168,10 +168,6 @@ class TerminalProgramNotRunningError(TerminalManagerError):
     """Raised when input expected a program that does not run in the Terminal."""
 
 
-class TerminalCursorError(TerminalManagerError):
-    """Raised when a scrollback cursor is malformed or no longer available."""
-
-
 @dataclass(frozen=True, slots=True)
 class TerminalOwner:
     """Exact vBot Session address used by Terminal lifecycle and attachment scopes."""

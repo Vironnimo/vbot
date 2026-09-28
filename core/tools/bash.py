@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from core.tools._bash_environment import (
-    HARD_KILL_SIGNAL,
     SHELL_ENV_CACHE_TTL_SECONDS,
     SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS,
     SHELL_ENV_PROBE_TIMEOUT_SECONDS,
@@ -830,17 +829,9 @@ def _register_user_cancel_callback(
 
 
 def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
-    command = arguments.get("command")
-    if not isinstance(command, str) or not command:
-        return "command must be a non-empty string"
-
+    command = arguments["command"]
     mode = arguments.get("mode", DEFAULT_EXECUTION_MODE)
-    if not isinstance(mode, str) or mode not in BASH_EXECUTION_MODES:
-        return "mode must be foreground or background"
-
     env = arguments.get("env")
-    if env is not None and not isinstance(env, dict):
-        return "env must be an object of variable names and values"
     try:
         workdir = optional_string(arguments.get("workdir"), field_name="workdir")
         optional_string(arguments.get("description"), field_name="description")
@@ -970,7 +961,7 @@ async def _run_foreground_phase(
 
     while True:
         poll_result = await process_manager.poll(
-            process_id, context.agent_id, timeout_ms=0, project_id=context.project_id
+            process_id, context.agent_id, project_id=context.project_id
         )
         await _emit_output_chunks(context, process_id, poll_result)
 
@@ -1069,7 +1060,6 @@ __all__ = [
     "SHELL_ENV_PROBE_TIMEOUT_SECONDS",
     "SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS",
     "SHELL_ENV_CACHE_TTL_SECONDS",
-    "HARD_KILL_SIGNAL",
     "reset_shell_env_cache",
     "get_shell_env",
     "BASH_COMPLETION_STATUS_PREFIX",

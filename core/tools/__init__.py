@@ -47,7 +47,6 @@ from core.tools.history import (
     HISTORY_TOOL_DESCRIPTION,
     HISTORY_TOOL_NAME,
     HISTORY_TOOL_PARAMETERS,
-    make_history_handler,
     register_history_tool,
 )
 from core.tools.image import (
@@ -57,8 +56,6 @@ from core.tools.image import (
     IMAGE_GENERATION_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_NAME,
     IMAGE_GENERATION_TOOL_PARAMETERS,
-    make_analyze_image_handler,
-    make_image_generation_handler,
     register_analyze_image_tool,
     register_image_generation_tool,
 )
@@ -67,8 +64,6 @@ from core.tools.media_generation import (
     GENERATE_MUSIC_TOOL_NAME,
     GENERATE_VIDEO_PARAMETERS,
     GENERATE_VIDEO_TOOL_NAME,
-    make_generate_music_handler,
-    make_generate_video_handler,
     register_generate_music_tool,
     register_generate_video_tool,
 )
@@ -76,7 +71,6 @@ from core.tools.memory import (
     MEMORY_TOOL_DESCRIPTION,
     MEMORY_TOOL_NAME,
     MEMORY_TOOL_PARAMETERS,
-    make_memory_handler,
     memory_handler,
     register_memory_tool,
 )
@@ -85,7 +79,6 @@ from core.tools.process import (
     PROCESS_TOOL_DESCRIPTION,
     PROCESS_TOOL_NAME,
     PROCESS_TOOL_PARAMETERS,
-    make_process_handler,
     register_process_tool,
 )
 from core.tools.project import (
@@ -93,14 +86,12 @@ from core.tools.project import (
     PROJECT_TOOL_DESCRIPTION,
     PROJECT_TOOL_NAME,
     PROJECT_TOOL_PARAMETERS,
-    make_project_handler,
     register_project_tool,
 )
 from core.tools.read import (
     READ_TOOL_DESCRIPTION,
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
-    make_read_handler,
     register_read_tool,
 )
 from core.tools.search_files import (
@@ -114,7 +105,6 @@ from core.tools.session_search import (
     SESSION_SEARCH_TOOL_DESCRIPTION,
     SESSION_SEARCH_TOOL_NAME,
     SESSION_SEARCH_TOOL_PARAMETERS,
-    make_session_search_handler,
     register_session_search_tool,
     session_search_handler,
 )
@@ -122,28 +112,24 @@ from core.tools.skill import (
     SKILL_TOOL_DESCRIPTION,
     SKILL_TOOL_NAME,
     SKILL_TOOL_PARAMETERS,
-    make_skill_handler,
     register_skill_tool,
 )
 from core.tools.skill_manage import (
     SKILL_MANAGE_TOOL_DESCRIPTION,
     SKILL_MANAGE_TOOL_NAME,
     SKILL_MANAGE_TOOL_PARAMETERS,
-    make_skill_manage_handler,
     register_skill_manage_tool,
 )
 from core.tools.speech import (
     TEXT_TO_SPEECH_TOOL_DESCRIPTION,
     TEXT_TO_SPEECH_TOOL_NAME,
     TEXT_TO_SPEECH_TOOL_PARAMETERS,
-    make_text_to_speech_handler,
     register_text_to_speech_tool,
 )
 from core.tools.terminal import (
     TERMINAL_TOOL_DESCRIPTION,
     TERMINAL_TOOL_NAME,
     TERMINAL_TOOL_PARAMETERS,
-    make_terminal_handler,
     register_terminal_tool,
 )
 from core.tools.tools import (
@@ -189,7 +175,6 @@ from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
     WEB_FETCH_TOOL_PARAMETERS,
-    make_web_fetch_handler,
     register_web_fetch_tool,
 )
 from core.tools.web_search import (
@@ -327,23 +312,8 @@ __all__ = [
     "UpdateHandoffs",
     "READ_MEDIA_ARTIFACT_KIND",
     "is_tool_result_envelope",
-    "make_history_handler",
-    "make_generate_music_handler",
-    "make_generate_video_handler",
-    "make_analyze_image_handler",
     "read_media_artifact",
     "result_count_fact_builder",
-    "make_memory_handler",
-    "make_process_handler",
-    "make_project_handler",
-    "make_skill_handler",
-    "make_skill_manage_handler",
-    "make_text_to_speech_handler",
-    "make_terminal_handler",
-    "make_image_generation_handler",
-    "make_read_handler",
-    "make_session_search_handler",
-    "make_web_fetch_handler",
     "register_analyze_image_tool",
     "register_bash_tool",
     "register_cron_tool",

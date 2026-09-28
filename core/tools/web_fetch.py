@@ -24,9 +24,6 @@ from core.tools._web_fetch_arguments import (
     normalize_web_fetch_arguments,
 )
 from core.tools._web_fetch_html import (
-    extract_content as extract_content,
-)
-from core.tools._web_fetch_html import (
     extract_views,
 )
 from core.tools._web_fetch_pages import (
@@ -750,7 +747,6 @@ __all__ = [
     "WEB_FETCH_TOOL_DESCRIPTION",
     "WEB_FETCH_TOOL_NAME",
     "WEB_FETCH_TOOL_PARAMETERS",
-    "extract_content",
     "make_web_fetch_handler",
     "register_web_fetch_tool",
 ]

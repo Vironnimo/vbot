@@ -121,7 +121,6 @@ async def test_shell_env_probe_timeout_terminates_and_reaps_probe(
         return probe
 
     monkeypatch.setattr(bash_module.sys, "platform", "linux")
-    monkeypatch.setattr(bash_environment.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(bash_environment, "SHELL_ENV_PROBE_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(bash_module.asyncio, "create_subprocess_exec", create_probe)
     monkeypatch.setattr(

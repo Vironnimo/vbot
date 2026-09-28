@@ -40,7 +40,6 @@ from core.tools.terminal_manager import (
     TerminalAlreadyAttachedError,
     TerminalCapacityError,
     TerminalClosedError,
-    TerminalCursorError,
     TerminalLaunchError,
     TerminalManager,
     TerminalNotAttachedError,
@@ -246,13 +245,7 @@ async def _handle_terminal(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    action = arguments.get("action")
-    if not isinstance(action, str) or action not in TERMINAL_ACTIONS:
-        return tool_failure(
-            "invalid_arguments",
-            f"action must be one of: {', '.join(TERMINAL_ACTIONS)}",
-            retryable=False,
-        )
+    action = arguments["action"]
     terminal_id = arguments.get("terminal_id")
     if action not in {"start", "list"} and (
         not isinstance(terminal_id, str) or not terminal_id.strip()
@@ -303,8 +296,6 @@ async def _handle_terminal(
         return tool_failure("terminal_capacity", str(error), retryable=True)
     except TerminalStaleScreenError as error:
         return tool_failure("stale_screen", str(error), retryable=True)
-    except TerminalCursorError as error:
-        return tool_failure("invalid_cursor", str(error), retryable=False)
     except ProjectNotFoundError as error:
         return tool_failure("project_not_found", str(error), retryable=False)
     except _ProjectWorkdirUnavailableError as error:
@@ -394,8 +385,6 @@ async def _handle_start(
         name = name.strip()
         if not name:
             raise ValueError("name must not be blank")
-        if len(name) > 80:
-            raise ValueError("name must be at most 80 characters")
     owner = _owner(context)
     group_id = None
     raw_group = arguments.get("group")

@@ -154,8 +154,6 @@ class SubAgentActivity:
                             _close_section(handle)
                             assistant_open = False
                         _write_status(handle, event.timestamp, terminal_status, run_id=run.id)
-        except asyncio.CancelledError:
-            raise
         except Exception as error:
             _LOGGER.warning(
                 "Sub-agent activity watcher stopped path=%s run=%s: %s",

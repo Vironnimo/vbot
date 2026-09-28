@@ -108,7 +108,10 @@ def ensure_document_input_size(size_bytes: int) -> int:
 
 
 def extract_document_text(data: bytes, kind: str) -> str:
-    """Render document bytes of the given kind as plain text."""
+    """Render document bytes as plain text.
+
+    ``kind`` is one that ``detect_extractable_document`` returned for the file.
+    """
     budget = _ExtractionBudget()
     if kind == "pdf":
         budget.consume(len(data))
@@ -118,9 +121,7 @@ def extract_document_text(data: bytes, kind: str) -> str:
         return _extract_ipynb(data)
     if kind == "docx":
         return _extract_docx(data, budget)
-    if kind == "xlsx":
-        return _extract_xlsx(data, budget)
-    raise ExtractionError(f"unknown document kind: {kind}")
+    return _extract_xlsx(data, budget)
 
 
 def _extract_pdf(data: bytes, budget: _ExtractionBudget) -> str:

@@ -207,13 +207,7 @@ def make_history_handler(sessions: ChatSessionManager):
 
     def history_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         started = time.perf_counter()
-        raw_action = arguments.get("action")
-        if not isinstance(raw_action, str) or raw_action not in HISTORY_ACTIONS:
-            return tool_failure(
-                "invalid_arguments",
-                f"action must be one of: {', '.join(HISTORY_ACTIONS)}",
-            )
-        action = raw_action
+        action = arguments["action"]
         try:
             notes = _validate_history_action_arguments(arguments, action)
         except _HistoryError as error:

@@ -420,13 +420,8 @@ class TerminalRenderer:
         )
         return "".join(parts)
 
-    def page(self, *, before: int | None, limit: int) -> dict[str, Any]:
+    def page(self, *, limit: int) -> dict[str, Any]:
         available = list(self._scrollback)
-        if before is not None:
-            oldest = available[0].sequence if available else self._next_sequence
-            if before < oldest:
-                raise ValueError("Terminal scrollback cursor has expired")
-            available = [line for line in available if line.sequence < before]
         selected = available[-limit:]
         has_more = bool(selected) and any(
             line.sequence < selected[0].sequence for line in self._scrollback

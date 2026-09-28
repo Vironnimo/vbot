@@ -51,18 +51,9 @@ def _normalize_domains(raw: Any, field: str = "domains") -> tuple[list[str], str
     if raw is None:
         return [], None
 
-    if not isinstance(raw, list):
-        return [], f'{field} must be a list of site names such as ["example.com"]'
-    if not raw:
-        return [], f"{field} must contain at least one site name when provided"
-    if len(raw) > _MAX_DOMAIN_FILTERS:
-        return [], f"{field} can contain at most {_MAX_DOMAIN_FILTERS} site names"
-
     normalized: list[str] = []
     seen: set[str] = set()
     for index, raw_domain in enumerate(raw):
-        if not isinstance(raw_domain, str):
-            return [], f"{field}[{index}] must be a string"
         domain, error = _canonicalize_domain(raw_domain)
         if error is not None or domain is None:
             return [], f"{field}[{index}] {error or 'must be a valid domain'}"

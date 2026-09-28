@@ -164,23 +164,11 @@ def _past_line_end(position: ReadPosition, limit: int | None) -> tuple[str, int,
 
 
 def parse_read_position(offset: object) -> ReadPosition:
-    """Parse a line offset or an in-line continuation address such as 12:34."""
-    if isinstance(offset, str) and ":" in offset:
-        parts = offset.split(":")
-        if len(parts) != 2:
-            raise ValueError("offset must be a line number or line:character address")
-        if not parts[0].isdigit():
-            raise ValueError("offset line must be an integer")
-        if not parts[1].isdigit():
-            raise ValueError("offset character must be an integer")
-        line = int(parts[0])
-        character = int(parts[1])
-        if line < 1:
-            raise ValueError("offset line must be >= 1")
-        if character < 1:
-            raise ValueError("offset character must be >= 1")
-        return ReadPosition(line, character)
+    """Parse a line offset; a negative line counts back from the end.
 
+    The read argument normalizer turns a ``line:character`` string into ``offset``
+    and ``character`` before a call reaches this parser.
+    """
     number = optional_int(offset, field_name="offset")
     if number == 0:
         raise ValueError("offset 0 is not a line; lines count from 1")

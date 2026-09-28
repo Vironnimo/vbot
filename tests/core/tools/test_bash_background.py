@@ -393,7 +393,9 @@ async def test_background_completion_reaches_the_session_that_started_it(
         assert "Hint: " not in body
     # Watching for the completion does not consume what Process shows.
     poll = await manager.poll(result["data"]["process_id"], AGENT_ID, project_id="acme")
-    assert "result-marker" in str(poll["output"])
+    chunks = poll["chunks"]
+    assert isinstance(chunks, list)
+    assert "result-marker" in "".join(chunk["data"] for chunk in chunks)
 
 
 @pytest.mark.asyncio

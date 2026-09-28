@@ -347,11 +347,6 @@ class SkillAuthoringService:
             body=body,
             parse_warnings=[*document_warnings, *parse_warnings],
         )
-        if not result.valid:
-            raise SkillAuthoringError(
-                "Skill metadata is invalid.",
-                diagnostics=result.warnings,
-            )
         declared_name = str(fields.get("name", "")).strip()
         if declared_name != skill_name:
             raise SkillAuthoringError(

@@ -41,10 +41,6 @@ from core.subagents.tracker import (
     SubAgentBatchTracker,
     _SubAgentEntry,
 )
-from core.tools.arguments import (
-    ToolArgumentError,
-    required_string,
-)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -182,10 +178,7 @@ async def _handle_subagent_cancel(
     """Cancel one exact owned child through its stable public work id."""
     if "id" not in arguments:
         return _cancel_without_id_failure(context, batch_tracker)
-    try:
-        work_id = required_string(arguments.get("id"), field_name="id")
-    except ToolArgumentError as error:
-        return tool_failure("invalid_arguments", str(error))
+    work_id = arguments["id"].strip()
 
     owned = batch_tracker.owned_entry(
         context.agent_id,
@@ -420,10 +413,7 @@ async def _handle_subagent_status(
             listing["note"] = SUBAGENT_STATUS_LIST_NOTE
         return tool_success(listing)
 
-    try:
-        work_id = required_string(arguments.get("id"), field_name="id")
-    except ToolArgumentError as error:
-        return tool_failure("invalid_arguments", str(error))
+    work_id = arguments["id"].strip()
 
     owned = batch_tracker.owned_entry(
         context.agent_id,

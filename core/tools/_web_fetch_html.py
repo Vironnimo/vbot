@@ -232,9 +232,3 @@ def extract_views(
             "Main content shown; find also searches the other saved sections of the page."
         )
     return main, page, metadata, warnings
-
-
-def extract_content(html: str, url: str, include_links: bool = True) -> tuple[str, dict[str, str]]:
-    """Compatibility entry point returning the complete cleaned page."""
-    _, page, metadata, _ = extract_views(html, url, include_links)
-    return page, metadata
