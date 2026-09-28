@@ -136,6 +136,21 @@ describe('ChatView Runs', () => {
     );
     expect(subAgentDot('running')).not.toBeNull();
     expect(subAgentDot('done')).toBeNull();
+    return source;
+  }
+
+  // A new parent-Run event re-renders the Timeline, which reconciles every
+  // sub-agent row again.
+  function rerenderTimeline(source, callId) {
+    source.emit('tool_call_started', {
+      tool_call: {
+        id: callId,
+        index: 0,
+        name: 'read',
+        arguments: { path: 'notes.md' },
+      },
+    });
+    flushSync();
   }
 
   // A background sub-agent spawn queued behind a busy child Session: its
@@ -579,13 +594,8 @@ describe('ChatView Runs', () => {
       '%s and checks each child Run once',
       async (_case, history, dot, time) => {
         serveSubAgentHistory(history);
-        await mountRunningSubAgent();
+        const source = await mountRunningSubAgent();
 
-        await chat.mountedComponent.verifySubAgentStatus(
-          'alpha',
-          'sub-session-1',
-          'child-run',
-        );
         await settle(3);
         expect(subAgentDot(dot)).not.toBeNull();
         expect(subAgentRow().querySelectorAll('.te-dot')).toHaveLength(1);
@@ -595,11 +605,7 @@ describe('ChatView Runs', () => {
         const checks = statusChecks();
         expect(checks).toBeGreaterThanOrEqual(1);
 
-        await chat.mountedComponent.verifySubAgentStatus(
-          'alpha',
-          'sub-session-1',
-          'child-run',
-        );
+        rerenderTimeline(source, 'call-read');
         await settle(3);
         expect(statusChecks()).toBe(checks);
       },
@@ -607,18 +613,14 @@ describe('ChatView Runs', () => {
 
     it('keeps the dot running after a failed status check and checks again', async () => {
       serveSubAgentHistory(new Error('History unavailable'));
-      await mountRunningSubAgent();
+      const source = await mountRunningSubAgent();
       // The row's own automatic check fails first.
       await settle();
       expect(statusChecks()).toBe(1);
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const checks = statusChecks();
-        await chat.mountedComponent.verifySubAgentStatus(
-          'alpha',
-          'sub-session-1',
-          'child-run',
-        );
+        rerenderTimeline(source, `call-read-${attempt}`);
         await settle();
         expect(statusChecks()).toBe(checks + 1);
         expect(subAgentDot('running')).not.toBeNull();

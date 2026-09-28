@@ -151,7 +151,6 @@ export function createChatController({
     cancelBackgroundProcess,
     cancelSubAgent,
     reconcileSubAgentRows,
-    verifySubAgentStatus,
     applyBackgroundBashStatusEvents,
   } = childTasks;
   const activity = createChatActivity({ chatState, operations, errorMessage });
@@ -1014,7 +1013,6 @@ export function createChatController({
     syncAgentActivity,
     syncSessionQueue,
     updateQueued,
-    verifySubAgentStatus,
   };
 }
 

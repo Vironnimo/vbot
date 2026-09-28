@@ -47,7 +47,7 @@
     composerAvailable = true,
     preserveSessionSelection = false,
     initialSessionFilters = null,
-    onSessionFiltersChange = () => {},
+    onSessionFiltersChange,
     onDisplayedSession = () => {},
     sharedAgents = [],
     sharedSelectedAgentId = '',
@@ -553,29 +553,6 @@
     chatController.loadCommands(agentAddress);
 
   const loadAgents = (options = {}) => chatController.loadAgents(options);
-
-  // Exposed for focused controller-boundary tests. Normal rows are reconciled
-  // in one batch from the displayed Timeline below.
-  export async function verifySubAgentStatus(
-    agentId,
-    sessionId,
-    runId,
-    queueItemId = '',
-  ) {
-    await chatController.verifySubAgentStatus({
-      agentId,
-      sessionId,
-      runId,
-      queueItemId,
-      projectId: target.displayedSessionProjectId(),
-    });
-  }
-
-  // Exposed for tests (mirrors `verifySubAgentStatus`): drives the per-row
-  // sub-agent cancel exactly as the timeline button's callback does.
-  export async function cancelSubAgent(tool) {
-    await actions.handleCancelSubAgent({ tool });
-  }
 
   let chatController;
   const runStream = createChatRunStream({

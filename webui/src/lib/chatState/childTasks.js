@@ -516,7 +516,6 @@ export function createChatChildTasks({
     cancelBackgroundProcess,
     cancelSubAgent,
     reconcileSubAgentRows,
-    verifySubAgentStatus,
     applyBackgroundBashStatusEvents,
     dispose() {
       subAgentStatusInflightKeys.clear();
