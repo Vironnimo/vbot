@@ -19,19 +19,25 @@ Syntax (whitespace-separated ``key=value`` pairs, ``id`` required)::
 - ``tools`` / ``calls``: the Tool names rotated through the Tool rounds and how
   many parallel calls each round carries.
 - ``warmup_tokens``: a single large text response used to grow Session history.
+- ``turns``: turn budget of one Swarm participant (``0`` = unbounded); see
+  :mod:`scripts.perf_load_suite.swarm_script`.
+
+A Tool name may carry an action suffix (``swarm_board.read``) that selects
+the scripted arguments of a Tool with several actions.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 DIRECTIVE_PATTERN = re.compile(r"\[\[perf\s+([^\[\]]*)\]\]")
 DEFAULT_TOOLS: tuple[str, ...] = ("read", "search_files", "bash")
 MAX_CALLS_PER_ROUND = 8
 _TAG_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
-_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_INTEGER_FIELDS = ("steps", "tokens", "think_ms", "calls", "warmup_tokens")
+_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}(\.[a-z_]{1,32})?$")
+_INTEGER_FIELDS = ("steps", "tokens", "think_ms", "calls", "warmup_tokens", "turns")
 _KNOWN_KEYS = frozenset({"id", "rate", "tools", *_INTEGER_FIELDS})
 
 
@@ -51,14 +57,15 @@ class PerfDirective:
     tools: tuple[str, ...] = field(default=DEFAULT_TOOLS)
     calls: int = 1
     warmup_tokens: int = 0
+    turns: int = 0
 
     def __post_init__(self) -> None:
         if not _TAG_PATTERN.match(self.tag):
             raise DirectiveError(f"invalid directive id {self.tag!r}")
         if self.steps < 1:
             raise DirectiveError("steps must be at least 1")
-        if self.tokens < 0 or self.think_ms < 0 or self.warmup_tokens < 0:
-            raise DirectiveError("tokens, think_ms and warmup_tokens must not be negative")
+        if self.tokens < 0 or self.think_ms < 0 or self.warmup_tokens < 0 or self.turns < 0:
+            raise DirectiveError("tokens, think_ms, warmup_tokens and turns must not be negative")
         if self.rate < 0:
             raise DirectiveError("rate must not be negative")
         if not 1 <= self.calls <= MAX_CALLS_PER_ROUND:
@@ -100,6 +107,8 @@ class PerfDirective:
                     f"calls={self.calls}",
                 ]
             )
+            if self.turns:
+                parts.append(f"turns={self.turns}")
         parts.append(f"rate={_format_rate(self.rate)}")
         parts.append(f"think_ms={self.think_ms}")
         return f"[[perf {' '.join(parts)}]]"
@@ -116,6 +125,20 @@ def find_directive(text: str) -> PerfDirective | None:
     if match is None:
         return None
     return parse_directive_body(match.group(1))
+
+
+def message_text(message: dict[str, Any]) -> str:
+    """Return the plain text of an OpenAI chat message's ``content``."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    return ""
 
 
 def parse_directive_body(body: str) -> PerfDirective:

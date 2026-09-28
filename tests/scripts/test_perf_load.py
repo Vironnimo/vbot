@@ -11,8 +11,24 @@ import pytest
 import scripts.perf_load as perf_load
 
 
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (
+            ["--agents", "2", "--turns", "1"],
+            {"scenario": "sessions", "levels": (2,), "turns": 1, "duration_minutes": None},
+        ),
+        (
+            ["--scenario", "swarm", "--agents", "3", "--duration", "2"],
+            {"scenario": "swarm", "levels": (3,), "duration_minutes": 2.0},
+        ),
+    ],
+)
 def test_a_run_hands_its_configuration_to_the_load_runner_and_reports_the_outcome(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    argv: list[str],
+    expected: dict[str, Any],
 ) -> None:
     configs: list[Any] = []
 
@@ -23,5 +39,5 @@ def test_a_run_hands_its_configuration_to_the_load_runner_and_reports_the_outcom
     monkeypatch.setattr(perf_load, "activate_process_containment", lambda: None)
     monkeypatch.setattr(perf_load, "run_load", run_load)
 
-    assert perf_load.main(["--agents", "2", "--turns", "1"]) == 0
-    assert (configs[0].levels, configs[0].turns) == ((2,), 1)
+    assert perf_load.main(argv) == 0
+    assert {key: getattr(configs[0], key) for key in expected} == expected

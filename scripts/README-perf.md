@@ -5,7 +5,7 @@ This document explains how to find out where vBot spends time and how to prove t
 | Part | Question it answers | Entry point |
 |---|---|---|
 | In-app measurement | What is slow in *this* running server, right now or since start? | `vbot performance ...` (RPC `performance.*`) |
-| Load test | How does vBot behave with 1, 10, 20, 30 concurrent Agents? | `python scripts/perf_load.py` |
+| Load test | How does vBot behave with 1, 10, 20, 30 concurrent Agents or Swarm participants, and over longer runs? | `python scripts/perf_load.py` |
 | Microbenchmarks | How expensive is one known hot path, and did a change make it cheaper? | `python scripts/perf_bench.py` |
 | Profilers | *Why* is a measured phase slow? | py-spy, Perfetto, browser DevTools |
 
@@ -56,6 +56,8 @@ python scripts/perf_load.py                              # baseline: 1, 10, 20, 
 python scripts/perf_load.py --agents 1,10 --history-tokens 40000   # long histories
 python scripts/perf_load.py --profile                    # + py-spy flamegraph at the highest level
 python scripts/perf_load.py --ui                         # + headless browser watching one streaming Session
+python scripts/perf_load.py --scenario swarm --agents 3 --turns 2 --ui   # one Swarm, 3 participants, Swarm page open
+python scripts/perf_load.py --agents 10 --duration 30 --ui              # 30 minutes of turns: memory, Tasks, gen2 over time
 python scripts/perf_load.py --compare perf-results/load-<old>/result.json
 python scripts/perf_load.py compare old/result.json new/result.json
 ```
@@ -82,9 +84,31 @@ Because the fake Provider's own timing is known, the report can separate vBot's 
 | Run duration / ideal | Measured Run time against the pure scripted Provider time |
 | Server-side rows | Event Loop lag/utilization, stalls, SQLite, request build, persist, Tool rounds, worker pools — from the recording |
 
-Output: `perf-results/load-<UTC>/` with `report.md`, `result.json` and one `level-NN/` folder per level (`runs.json`, `provider-requests.json`, `recording-summary.json`, the Perfetto trace, server logs, and with the options `flamegraph.svg` / `ui-probe.log`).
+Output: `perf-results/load-<UTC>/` with `report.md`, `result.json` and one `level-NN/` folder per level (`runs.json`, `provider-requests.json`, `recording-summary.json`, the Perfetto trace, server logs, the server's `performance-history/` windows, and depending on the options `participants.json`, `heap.json`, `flamegraph.svg` / `ui-probe.log`).
 
-`--ui` needs Node.js, `npm ci` in `tests/e2e` (it reuses the E2E Playwright install) and a built WebUI. It reports Long Tasks and frame gaps in the browser while the load runs.
+The report also lists the recording's **counters** (`events.*`, `webui.*`, top 25; all of them are in `result.json`). They show the push traffic behind the load: how many `/ws` events, SSE events and invalidations per kind the level caused.
+
+`--ui` needs Node.js, `npm ci` in `tests/e2e` (it reuses the E2E Playwright install) and a built WebUI. It reports Long Tasks and frame gaps in the browser while the load runs, and counts every `/api/rpc` request the browser makes, per method, including those of Extension page frames (`extensions.operation` is split into `extensions.operation:<extension>/<operation>`). The table *UI RPC calls by method* shows calls, total and maximum browser-side time and failures. A method called about every two seconds while nothing changes is polling; a burst after every Run event is a reload wave, which the server counters `webui.invalidation_rpcs.<kind>.<method>` attribute to the invalidation kind that caused it.
+
+### Swarm scenario
+
+`--scenario swarm` measures the bundled Swarm Extension instead of plain Sessions. Each level starts one Swarm with N participants on a fresh server:
+
+- The harness saves a Swarm profile (all participants on the fake Provider's model, the directive's Tools within the fixture Project's Tool ceiling) and starts the Swarm with a goal that carries the directive. Participants read the goal from the Board through `swarm_board`; the fake Provider takes the directive from that Tool result.
+- Each participant turn is scripted like a Session turn: Tool-call rounds, then a streamed text answer. `--tools` may name a Swarm Tool action; the default `swarm_board.post,read,swarm_board.read` posts a short progress note, reads a file and reads the Board. Scripted actions are `swarm_board.post`, `swarm_board.read`, `swarm_wiki.create`, `swarm_wiki.list` and `swarm_state`.
+- Board posts wake the other participants, which starts their next turn. `--turns` is a budget per participant, counted from its own history: once spent, the participant answers a short plain text without Tools, which ends its chain of wake-ups.
+- A post that reaches a participant inside its running Run does not wake it again afterwards, so when all participants run at once, the Swarm can fall idle before every budget is spent. The harness then posts a user check-in to the Board (a *kick*, which wakes every participant). The report counts kicks; many kicks mean lost wake-ups, not slowness.
+- The level ends when every budget is spent and the Swarm is idle (no Run active, no Provider request in flight); then the harness stops the Swarm. It fails when a participant fails or the Swarm needs attention, after five kicks without progress, or at the timeout (`--run-timeout` per turn; with `--duration`, the duration plus one `--run-timeout`), and it fails unless every participant completed exactly its budget with successful Tool results. `participants.json` lists each participant's turns, Runs and Tool calls.
+
+Extra report rows: participants and participant Runs, scripted and idle turns, Board posts (total, by participants, kicks), *Start->1st request* (from `swarms.start` to the first Provider request), and *turn duration* (first Provider request of a turn to its completed text answer) against the ideal scripted time. The Session-only rows (TTFT, delta latency, Run duration) are left out. With `--ui`, the browser opens the Swarm page, selects the running Swarm and reports frame gaps of the WebUI and of the page frame separately.
+
+### Long runs
+
+`--duration MINUTES` replaces `--turns` and shows what grows over time. Sessions (or Swarm participants) keep receiving turns until the time is up; turns already running finish. In the Swarm scenario, the budget is unlimited and, once the time is up, every new turn answers with the short idle text.
+
+- Every `--snapshot-interval` seconds (default 60) the harness reads `performance.snapshot`: RSS, asyncio Tasks, Python threads, active Runs, `gc.gen2` collections with maximum and total pause, Event Loop lag p99 and the counter total. The report shows this time series and first/last/max rows. Lag and `gc.gen2` figures are cumulative since the server started.
+- A heap census (`performance.heap`) at the start and end of the load phase lists the types and modules that grew most. Its object counts exclude the objects the server freezes after startup. Servers without the RPC skip the census with a note.
+- The server's recording stops after at most an hour; a longer run keeps sampling and notes that the recording covers only the first hour. The time series and the copied `performance-history/` windows cover the whole run.
 
 ## Microbenchmarks
 

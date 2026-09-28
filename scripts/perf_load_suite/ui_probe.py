@@ -21,6 +21,9 @@ PROBE_SCRIPT = E2E_ROOT / "perf" / "ui-probe.mjs"
 PLAYWRIGHT_PACKAGE = E2E_ROOT / "node_modules" / "@playwright" / "test"
 READY_TIMEOUT_SECONDS = 90.0
 RESULT_TIMEOUT_SECONDS = 60.0
+SELECT_TIMEOUT_SECONDS = 60.0
+CHAT_VIEW = "chat"
+TOP_RPC_METHODS = 12
 
 
 class UiProbeError(RuntimeError):
@@ -39,13 +42,22 @@ def ui_probe_unavailable_reason() -> str | None:
 
 
 def summarize_probe(result: dict[str, Any]) -> dict[str, Any]:
-    """Reduce the probe's raw arrays to distributions for the report."""
+    """Reduce the probe's raw arrays to distributions for the report.
+
+    ``rpc_calls`` keeps every ``/api/rpc`` method the browser called while
+    measuring (``extensions.operation`` split by ``name/operation``) with its
+    count, summed and maximum response time; ``rpc`` totals them.
+    """
     long_tasks = [float(value) for value in result.get("long_tasks_ms") or []]
     frame_gaps = [float(value) for value in result.get("frame_gaps_ms") or []]
-    return {
+    page_gaps = [float(value) for value in result.get("page_frame_gaps_ms") or []]
+    rpc_calls = _rpc_calls(result.get("rpc_calls"))
+    duration_ms = _round(result.get("duration_ms"))
+    rpc_count = sum(entry["count"] for entry in rpc_calls.values())
+    summary: dict[str, Any] = {
         "status": "ok",
         "stop_reason": result.get("stop_reason"),
-        "duration_ms": _round(result.get("duration_ms")),
+        "duration_ms": duration_ms,
         "frames": result.get("frames"),
         "mutations": result.get("mutations"),
         "long_tasks": {
@@ -63,7 +75,45 @@ def summarize_probe(result: dict[str, Any]) -> dict[str, Any]:
         ),
         "heap_used_mb": _round(result.get("heap_used_mb")),
         "dom_nodes": result.get("dom_nodes"),
+        "rpc": {
+            "count": rpc_count,
+            "per_second": round(rpc_count / (duration_ms / 1000.0), 2) if duration_ms else None,
+            "total_ms": round(sum(entry["total_ms"] for entry in rpc_calls.values()), 1),
+            "failed": sum(entry["failed"] for entry in rpc_calls.values()),
+        },
+        "rpc_calls": rpc_calls,
     }
+    if result.get("measured_frames", 1) > 1:
+        summary["page_frame_gaps"] = {
+            "count": len(page_gaps),
+            "max_ms": round(max(page_gaps), 1) if page_gaps else None,
+            "p95_ms": distribution(page_gaps)["p95"],
+        }
+        summary["page_dom_nodes"] = result.get("page_dom_nodes")
+        summary["page_mutations"] = result.get("page_mutations")
+    return summary
+
+
+def top_rpc_methods(rpc_calls: dict[str, Any], limit: int = TOP_RPC_METHODS) -> list[str]:
+    """Method names, most called first."""
+    return sorted(
+        rpc_calls,
+        key=lambda name: (-int(rpc_calls[name].get("count") or 0), name),
+    )[:limit]
+
+
+def _rpc_calls(raw: Any) -> dict[str, dict[str, Any]]:
+    calls: dict[str, dict[str, Any]] = {}
+    for method, entry in (raw if isinstance(raw, dict) else {}).items():
+        if not isinstance(entry, dict):
+            continue
+        calls[str(method)] = {
+            "count": int(entry.get("count") or 0),
+            "total_ms": round(float(entry.get("total_ms") or 0.0), 1),
+            "max_ms": round(float(entry.get("max_ms") or 0.0), 1),
+            "failed": int(entry.get("failed") or 0),
+        }
+    return {method: calls[method] for method in top_rpc_methods(calls, limit=len(calls))}
 
 
 def _round(value: Any) -> float | None:
@@ -71,16 +121,29 @@ def _round(value: Any) -> float | None:
 
 
 class UiProbe:
-    """One headless browser watching one Session during the load phase."""
+    """One headless browser watching one WebUI view during the load phase.
 
-    def __init__(self, *, base_url: str, agent_id: str, log_path: Path, max_seconds: float) -> None:
+    ``view`` is ``chat`` (``agent_id``'s current Session) or an Extension page
+    route such as ``extension:swarm:swarms``.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        view: str = CHAT_VIEW,
+        agent_id: str | None = None,
+        log_path: Path,
+        max_seconds: float,
+    ) -> None:
         self._argv = [
             str(shutil.which("node") or "node"),
             str(PROBE_SCRIPT),
             "--url",
             base_url,
-            "--agent",
-            agent_id,
+            "--view",
+            view,
+            *(["--agent", agent_id] if agent_id else []),
             "--max-seconds",
             str(int(max_seconds)),
         ]
@@ -111,6 +174,18 @@ class UiProbe:
         if message.get("event") != "ready":
             self.close()
             raise UiProbeError(f"UI probe did not start: {message}")
+
+    def select_run(self) -> str | None:
+        """Select the newest run on the Swarm page; return why that failed, if it did."""
+        process = self._process
+        if process is None or process.stdin is None:
+            return "UI probe is not running"
+        process.stdin.write("select-run\n")
+        process.stdin.flush()
+        message = self._next_message(SELECT_TIMEOUT_SECONDS)
+        if message.get("event") == "selected":
+            return None
+        return str(message.get("message") or message)
 
     def stop(self) -> dict[str, Any]:
         """Ask the probe to finish and return its summarized measurements."""

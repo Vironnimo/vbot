@@ -17,6 +17,7 @@ from scripts.perf_load_suite.directive import PerfDirective
 from scripts.perf_load_suite.fake_provider import MARKER_PATTERN
 
 MAX_REPORTED_ERRORS = 10
+SCRIPTED_KINDS = frozenset({"tool_calls", "text"})
 
 
 def percentile(values: Sequence[float], quantile: float) -> float | None:
@@ -146,7 +147,7 @@ def step_gaps(
     by_tag: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for request in requests:
         tag = request.get("tag")
-        if isinstance(tag, str) and request.get("kind") in {"tool_calls", "text"}:
+        if isinstance(tag, str) and request.get("kind") in SCRIPTED_KINDS:
             by_tag[tag].append(request)
     gaps: list[StepGap] = []
     for tag, tagged in by_tag.items():
@@ -174,7 +175,7 @@ def retried_requests(requests: Sequence[Mapping[str, Any]]) -> int:
     seen: dict[tuple[str, int], int] = defaultdict(int)
     for request in requests:
         tag = request.get("tag")
-        if isinstance(tag, str) and request.get("kind") in {"tool_calls", "text"}:
+        if isinstance(tag, str) and request.get("kind") in SCRIPTED_KINDS:
             seen[(tag, int(request.get("round", 0)))] += 1
     return sum(count - 1 for count in seen.values() if count > 1)
 
@@ -188,17 +189,13 @@ def analyze_level(
     first_arrival: dict[str, float] = {}
     for request in requests:
         tag = request.get("tag")
-        if isinstance(tag, str) and request.get("kind") in {"tool_calls", "text"}:
+        if isinstance(tag, str) and request.get("kind") in SCRIPTED_KINDS:
             arrival = float(request["arrival"])
             first_arrival[tag] = min(arrival, first_arrival.get(tag, arrival))
 
     tool_durations = {
         timing.call_id: timing.duration_ms for run in runs for timing in run.tool_timings
     }
-    gaps = step_gaps(requests, tool_durations)
-    gaps_by_tool: dict[str, list[StepGap]] = defaultdict(list)
-    for gap in gaps:
-        gaps_by_tool["+".join(gap.tools) or "?"].append(gap)
 
     ttft = [
         (run.first_delta_at - run.sent_at) * 1000.0
@@ -230,7 +227,6 @@ def analyze_level(
     for run in runs:
         status_counts[run.status] += 1
 
-    scripted = [request for request in requests if request.get("kind") in {"tool_calls", "text"}]
     run_errors = sorted({f"{run.status}: {run.error}" for run in runs if not run.ok})
     return {
         "runs": {
@@ -244,6 +240,30 @@ def analyze_level(
         "ttft_ms": distribution(ttft),
         "ttft_overhead_ms": distribution(ttft_overhead),
         "admission_ms": distribution(admission),
+        **step_overhead(requests, tool_durations),
+        "errors": run_errors[:MAX_REPORTED_ERRORS],
+        "delta_latency_ms": distribution(
+            latency for run in runs for latency in run.delta_latencies_ms
+        ),
+        "delta_events_per_run": distribution(float(run.delta_events) for run in ok_runs),
+        "run_duration_ms": distribution(durations),
+        "run_ideal_ms": distribution(run.directive.scripted_text_ms() for run in ok_runs),
+        "run_excess_ms": distribution(excess),
+        "run_duration_ratio": distribution(ratio),
+        "provider": provider_summary(requests),
+    }
+
+
+def step_overhead(
+    requests: Sequence[Mapping[str, Any]],
+    tool_durations: Mapping[str, float | None],
+) -> dict[str, Any]:
+    """Step overhead overall, without Tool execution, and per Tool round."""
+    gaps = step_gaps(requests, tool_durations)
+    gaps_by_tool: dict[str, list[StepGap]] = defaultdict(list)
+    for gap in gaps:
+        gaps_by_tool["+".join(gap.tools) or "?"].append(gap)
+    return {
         "step_overhead_ms": distribution(gap.gap_ms for gap in gaps),
         "step_overhead_excl_tool_ms": distribution(
             gap.gap_ms - gap.tool_exec_ms for gap in gaps if gap.tool_exec_ms is not None
@@ -257,32 +277,91 @@ def analyze_level(
             }
             for tools, tool_gaps in sorted(gaps_by_tool.items())
         },
-        "errors": run_errors[:MAX_REPORTED_ERRORS],
-        "delta_latency_ms": distribution(
-            latency for run in runs for latency in run.delta_latencies_ms
+    }
+
+
+def provider_summary(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Request counts by kind, retries, errors and the fake Provider's own lag."""
+    scripted = [request for request in requests if request.get("kind") in SCRIPTED_KINDS]
+    return {
+        "requests": len(requests),
+        "scripted_requests": len(scripted),
+        "aux_requests": sum(1 for request in requests if request.get("kind") == "aux"),
+        "idle_requests": sum(1 for request in requests if request.get("kind") == "idle"),
+        "error_requests": sum(1 for request in requests if request.get("kind") == "error"),
+        "disconnected": sum(1 for request in requests if request.get("disconnected")),
+        "retried_requests": retried_requests(requests),
+        "max_emit_lag_ms": _round(
+            max(
+                (float(request.get("max_emit_lag_ms") or 0.0) for request in requests),
+                default=0.0,
+            )
         ),
-        "delta_events_per_run": distribution(float(run.delta_events) for run in ok_runs),
-        "run_duration_ms": distribution(durations),
-        "run_ideal_ms": distribution(run.directive.scripted_text_ms() for run in ok_runs),
-        "run_excess_ms": distribution(excess),
-        "run_duration_ratio": distribution(ratio),
-        "provider": {
-            "requests": len(requests),
-            "scripted_requests": len(scripted),
-            "aux_requests": sum(1 for request in requests if request.get("kind") == "aux"),
-            "error_requests": sum(1 for request in requests if request.get("kind") == "error"),
-            "disconnected": sum(1 for request in requests if request.get("disconnected")),
-            "retried_requests": retried_requests(requests),
-            "max_emit_lag_ms": _round(
-                max(
-                    (float(request.get("max_emit_lag_ms") or 0.0) for request in requests),
-                    default=0.0,
-                )
-            ),
-            "errors": sorted(
-                {str(request["error"]) for request in requests if request.get("error")}
-            )[:MAX_REPORTED_ERRORS],
+        "errors": sorted({str(request["error"]) for request in requests if request.get("error")})[
+            :MAX_REPORTED_ERRORS
+        ],
+    }
+
+
+def analyze_swarm_level(
+    *,
+    run_statuses: Sequence[str],
+    tool_calls: int,
+    tool_errors: int,
+    tool_durations: Mapping[str, float | None],
+    requests: Sequence[Mapping[str, Any]],
+    ideal_turn_ms: float,
+    started_at: float,
+) -> dict[str, Any]:
+    """Aggregate one Swarm level from participant histories and Provider records.
+
+    Participant Runs are woken by the Swarm, not sent by the harness, so turn
+    timing comes from the fake Provider: a turn lasts from its first request's
+    arrival to the completion of its final text, and *turn excess* subtracts
+    the scripted text time. *Start to first request* measures from
+    ``swarms.start`` to each participant's first Model request.
+    """
+    status_counts: dict[str, int] = defaultdict(int)
+    for status in run_statuses:
+        status_counts[status] += 1
+    ok = status_counts.get("completed", 0)
+    first_arrival: dict[str, float] = {}
+    by_tag: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for request in requests:
+        participant = request.get("participant")
+        arrival = float(request["arrival"])
+        if isinstance(participant, str):
+            first_arrival[participant] = min(arrival, first_arrival.get(participant, arrival))
+        tag = request.get("tag")
+        if isinstance(tag, str) and request.get("kind") in SCRIPTED_KINDS:
+            by_tag[tag].append(request)
+    durations = []
+    for tagged in by_tag.values():
+        texts = [
+            float(request["completed"])
+            for request in tagged
+            if request.get("kind") == "text" and request.get("completed") is not None
+        ]
+        if texts:
+            start = min(float(request["arrival"]) for request in tagged)
+            durations.append((max(texts) - start) * 1000.0)
+    return {
+        "runs": {
+            "total": len(run_statuses),
+            "ok": ok,
+            "failed": len(run_statuses) - ok,
+            "by_status": dict(sorted(status_counts.items())),
+            "tool_calls": tool_calls,
+            "tool_errors": tool_errors,
         },
+        "start_to_first_request_ms": distribution(
+            (arrival - started_at) * 1000.0 for arrival in first_arrival.values()
+        ),
+        **step_overhead(requests, tool_durations),
+        "turn_duration_ms": distribution(durations),
+        "turn_ideal_ms": _round(ideal_turn_ms),
+        "turn_excess_ms": distribution(duration - ideal_turn_ms for duration in durations),
+        "provider": provider_summary(requests),
     }
 
 
