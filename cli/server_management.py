@@ -45,7 +45,10 @@ from core.utils.server_control import (
     read_server_control,
 )
 
-DEFAULT_STARTUP_TIMEOUT_SECONDS = 10.0
+# Readiness covers a cold Runtime start (imports, databases, Extensions, WebUI
+# assets). A loaded machine can exceed 10 s, and a timeout kills the child that
+# was about to become ready, so the budget matches the other start paths.
+DEFAULT_STARTUP_TIMEOUT_SECONDS = 60.0
 
 
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
@@ -222,7 +225,8 @@ def start_server(
         logger.info("Starting CLI-managed background server at %s", instance.url)
         process = start_server_process(instance)
         logger.info("Started CLI-managed background server process %s", process.pid)
-        deadline = time.monotonic() + startup_timeout_seconds
+        started_at = time.monotonic()
+        deadline = started_at + startup_timeout_seconds
         health = initial_health
         result: CommandResult | None = None
         while time.monotonic() < deadline:
@@ -269,7 +273,13 @@ def start_server(
             time.sleep(probe_interval_seconds)
 
         if result is None:
-            logger.error("CLI-managed background server readiness timed out at %s", instance.url)
+            logger.error(
+                "CLI-managed background server process %s readiness timed out at %s "
+                "after %.1f s; stopping it",
+                process.pid,
+                instance.url,
+                time.monotonic() - started_at,
+            )
             result = CommandResult(
                 ok=False,
                 message="server readiness timed out",

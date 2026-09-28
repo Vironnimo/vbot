@@ -282,6 +282,10 @@ def test_start_server_cleans_up_a_child_that_never_became_ready(
     assert result.instance is instance
     assert result.log_path == instance.log_path
     assert process.calls == calls
+    if message == "server readiness timed out":
+        # The failure names the child it stops, so the log shows which process ended.
+        log_lines = instance.log_path.read_text(encoding="utf-8").splitlines()
+        assert any("[ERROR]" in line and "process 654 " in line for line in log_lines)
 
 
 @pytest.mark.parametrize("host", ["192.0.2.40", "remote.example"])
