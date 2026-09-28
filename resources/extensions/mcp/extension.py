@@ -18,7 +18,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import best_match
 
 from core.extensions import ExtensionAPI
-from core.extensions.operations import ExtensionHost
+from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
 from core.projects.address import parse_agent_address
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools.availability import resolve_tool_access
@@ -123,7 +123,8 @@ class MCPService:
         self.content: ContentStore | None = None
         self.connections: dict[str, dict[str, Any]] = {}
         self.runners: dict[str, ConnectionRunner] = {}
-        self.inputs = InputRequests()
+        self.inputs = InputRequests(on_change=self._inputs_changed)
+        self._inputs_revision = 0
         self.jobs: dict[str, asyncio.Task[dict[str, Any]]] = {}
         self._lock = asyncio.Lock()
         self._runner_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -160,6 +161,19 @@ class MCPService:
         await asyncio.gather(*self.jobs.values(), return_exceptions=True)
         await asyncio.gather(*(runner.close() for runner in self.runners.values()))
         self.runners.clear()
+
+    def _inputs_changed(self, request_id: str) -> None:
+        """Tell accessors that the pending inputs gained or lost *request_id*."""
+        host = self.host
+        if self._closed or host is None or host.publish_change is None:
+            return
+        self._inputs_revision += 1
+        try:
+            host.publish_change(PENDING_INPUTS_RESOURCE, [request_id], self._inputs_revision)
+        except ValueError:
+            # The registration retired for a reload or disable, which
+            # invalidates every Extension surface itself.
+            self.api.logger.debug("Pending input change not published: registration retired")
 
     def _host(self) -> ExtensionHost:
         if self.host is None or self._closed:

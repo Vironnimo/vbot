@@ -224,6 +224,7 @@ class ComputerUseService:
         self._interrupted: object | None = None
         self._active_driver: CuaDriver | None = None
         self._active_context: ToolContext | None = None
+        self._control_revision = 0
         self._hotkey = EmergencyHotkey(lambda owner: self.stop(owner, source="double_escape"))
 
     async def start(self, host: ExtensionHost) -> None:
@@ -256,6 +257,23 @@ class ComputerUseService:
                 context.run_id if context is not None else None,
                 context.tool_call_id if context is not None else None,
             )
+            self._control_changed(self._active)
+
+    def _control_changed(self, call_id: str) -> None:
+        """Tell accessors that ``control`` status changed for the call *call_id*.
+
+        Called with ``_control_lock`` held, so revisions follow the changes.
+        """
+        host = self.host
+        if self._closed or host is None or host.publish_change is None:
+            return
+        self._control_revision += 1
+        try:
+            host.publish_change("control", [call_id], self._control_revision)
+        except ValueError:
+            # The registration retired for a reload or disable, which
+            # invalidates every Extension surface itself.
+            self.api.logger.debug("Computer Use change not published: registration retired")
 
     async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
         action = arguments.get("action", "status")
@@ -905,6 +923,7 @@ class ComputerUseService:
                     self._wake.clear()
                     if args["action"] not in {"status", "close"}:
                         self._hotkey.set_armed(owner)
+                    self._control_changed(owner)
                 context.on_cancel(lambda: self.stop(owner, source="tool_cancel"))
                 self._check_access(context)
                 client.connect()
@@ -984,6 +1003,7 @@ class ComputerUseService:
                             self._interrupted = None
                             self._active_driver = None
                             self._active_context = None
+                            self._control_changed(owner)
 
     def _close_sessions(self, run_id: str | None = None) -> None:
         if self._driver is not None and self._driver.broken:

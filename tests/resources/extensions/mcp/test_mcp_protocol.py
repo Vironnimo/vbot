@@ -6,16 +6,18 @@ import asyncio
 import json
 import socket
 import sys
+from dataclasses import replace
 
 import mcp_types as types
 import pytest
 import uvicorn
 from mcp.server import Server
 
+from core.extensions.operations import PENDING_INPUTS_RESOURCE
 from resources.extensions.mcp.client import ConnectionRunner, sampling_messages
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import InputRequests
-from tests.resources.extensions.mcp.mcp_test_support import context, runner_for
+from tests.resources.extensions.mcp.mcp_test_support import context, runner_for, start_service
 
 # A minimal stdio server: it answers the handshake, one plain Tool and one Tool that
 # requires the task protocol, whose result it hands out through tasks/result.
@@ -239,8 +241,17 @@ async def test_legacy_server_sampling_and_roots(host, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_input_response_is_validated_and_not_retained():
-    inputs = InputRequests()
+@pytest.mark.parametrize("retired", [False, True])
+async def test_input_response_is_validated_and_not_retained(host, retired):
+    changes = []
+
+    def publish(*change):
+        if retired:
+            raise ValueError("extension change is unavailable")
+        changes.append(change)
+
+    service, _ = await start_service(replace(host, publish_change=publish))
+    inputs = service.inputs
     task = asyncio.create_task(
         inputs.request(
             "example",
@@ -262,6 +273,11 @@ async def test_input_response_is_validated_and_not_retained():
     inputs.respond(pending["id"], {"action": "accept", "content": {"name": "answer"}})
     assert (await task)["content"] == {"name": "answer"}
     assert inputs.list() == []
+    # Accessors read the pending inputs again when one is added and when it leaves;
+    # a retired registration publishes nothing and still answers.
+    expected = [(PENDING_INPUTS_RESOURCE, [pending["id"]], revision) for revision in (1, 2)]
+    assert changes == ([] if retired else expected)
+    await service.close()
 
 
 def test_sampling_rejects_unknown_content_instead_of_losing_it():
