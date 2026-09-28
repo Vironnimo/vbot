@@ -336,13 +336,13 @@ class StubPrompts:
         skill_registry: Any = None,
         skill_catalog: Any = None,
         read_paths: list[Path] | None = None,
-        effective_tool_names: Any = None,
+        effective_tool_definitions: Any = None,
         session_tool_grants: Any = (),
         request_block_definitions: Any = (),
     ) -> str:
         del agent_project_id
         self.effective_tool_name_calls.append(
-            tuple(str(name) for name in (effective_tool_names or ()))
+            tuple(str(definition["name"]) for definition in (effective_tool_definitions or ()))
         )
         self.build_calls.append((agent.id, agent_body, project_context))
         self.build_pin_calls.append(

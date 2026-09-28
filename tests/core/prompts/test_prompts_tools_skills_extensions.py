@@ -400,14 +400,13 @@ def test_session_grant_drives_provider_and_enabled_live_tool_list(
         agent,
         session_tool_grants=(HISTORY_TOOL_NAME,),
     )
-    live_names = [str(definition["name"]) for definition in live_definitions]
     live_prompt = manager.build_system_prompt(
         agent,
-        effective_tool_names=live_names,
+        effective_tool_definitions=live_definitions,
         session_tool_grants=(HISTORY_TOOL_NAME,),
     )
 
     assert preview_definitions == []
     assert HISTORY_TOOL_NAME not in preview_prompt
-    assert live_names == [HISTORY_TOOL_NAME]
+    assert [definition["name"] for definition in live_definitions] == [HISTORY_TOOL_NAME]
     assert "- history: Verify original Session records." in live_prompt

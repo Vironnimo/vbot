@@ -412,7 +412,6 @@ class RequestBuilder:
                 )
             request_block_definitions = tuple(rendered_blocks)
         prompt_read_paths: list[Path] = []
-        pinned_tool_names = set(pin.names)
         system_prompt = await system_prompts.build_system_prompt_async(
             agent,
             agent_body=inputs.agent_body,
@@ -425,10 +424,9 @@ class RequestBuilder:
             skill_registry=inputs.skill_registry,
             skill_catalog=inputs.skill_catalog,
             read_paths=prompt_read_paths,
-            effective_tool_names=pin.names,
-            session_tool_grants=tuple(
-                name for name in live_tool_grants if name in pinned_tool_names
-            ),
+            # The System Prompt describes the pinned Tool list, so it stays
+            # unchanged for the whole prompt epoch too.
+            effective_tool_definitions=pin.definitions,
             request_block_definitions=request_block_definitions,
         )
         # Auto-injected prompt files (SOUL, pinned memory, project auto-load files,

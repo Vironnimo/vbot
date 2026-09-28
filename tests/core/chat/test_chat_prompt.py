@@ -307,6 +307,57 @@ async def test_soul_memory_and_skill_catalog_are_pinned_per_session(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_describes_the_pinned_tools_for_the_whole_epoch(
+    tmp_path: Path,
+) -> None:
+    # Tool-owned blocks and the opt-in tools list follow the prompt epoch's pinned Tool
+    # list: a pinned Tool that stops being ready keeps its guidance, and a Tool enabled
+    # mid-epoch gets none until Compaction, so the System Prompt stays byte-identical.
+    from core.prompts.blocks import BlockDefinition, LayoutEntry
+    from tests.core.prompts.prompts_test_support import StubBlockStore, _agent, _manager
+
+    ready = {"probe": True}
+    tools = ToolRegistry()
+    tools.register(
+        "probe",
+        "Probe Tool.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({}),
+        ready=lambda: ready["probe"],
+    )
+    agent = _agent(tmp_path / "workspace")
+    adapter = StubAdapter([{"content": text, "tool_calls": None} for text in ("One", "Two")])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=cast(Any, agent), adapter=adapter, tools=tools
+    )
+    runtime.system_prompts = _manager(
+        tmp_path,
+        tools=tools,
+        block_store=StubBlockStore(
+            layouts={"default": [LayoutEntry(id="core:tools_list", enabled=True, source="core")]}
+        ),
+        block_definitions=[
+            BlockDefinition(id="tool:probe", owner="tool:probe", default_text="Probe guidance."),
+            BlockDefinition(id="tool:late", owner="tool:late", default_text="Late guidance."),
+        ],
+    )
+    runtime.chat_sessions.create(agent.id, session_id="s1")
+    loop = build_chat_loop(runtime)
+
+    await loop.send(agent.id, "First", session_id="s1")
+    ready["probe"] = False
+    tools.register(
+        "late", "Late Tool.", {"type": "object"}, lambda _context, _arguments: tool_success({})
+    )
+    await loop.send(agent.id, "Second", session_id="s1")
+
+    first, second = (str(request["messages"][0]["content"]) for request in adapter.requests)
+    assert first == second
+    assert "Probe guidance." in first and "- probe: Probe Tool." in first
+    assert "Late guidance." not in first and "- late:" not in first
+
+
+@pytest.mark.asyncio
 async def test_config_agent_session_pins_working_project_across_runs(tmp_path: Path) -> None:
     from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_SLOT
 
