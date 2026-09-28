@@ -15,6 +15,7 @@ from core.chat._tool_epoch import (
     definition_source,
     without_other_epoch_tool_changes,
 )
+from core.tools import ToolDefinitionChangeNote
 
 JsonObject = dict[str, Any]
 
@@ -27,11 +28,16 @@ def _definition(name: str, description: str = "Probe.", **properties: Any) -> Js
     }
 
 
-def _catalog(*offered: JsonObject, usable: tuple[str, ...] = ()) -> LiveToolCatalog:
+def _catalog(
+    *offered: JsonObject,
+    usable: tuple[str, ...] = (),
+    change_notes: dict[str, ToolDefinitionChangeNote] | None = None,
+) -> LiveToolCatalog:
     return LiveToolCatalog(
         usable=frozenset({*usable, *(str(definition["name"]) for definition in offered)}),
         offered=offered,
         sources={str(definition["name"]): definition_source(definition) for definition in offered},
+        change_notes=change_notes or {},
     )
 
 
@@ -127,3 +133,45 @@ def test_a_pinned_tool_enabled_again_keeps_its_last_announced_definition(unliste
     view = view.with_changes(view.plan(_catalog(changed), unlisted_tool_calls=unlisted))
     assert view.definitions() == [changed]
     assert view.request_tools(list_announced=True) == [probe]
+
+
+def _describe_change(old: JsonObject, new: JsonObject) -> str | None:
+    if (old["description"], new["description"]) != ("Lists a and b.", "Lists a, b and c."):
+        return "unexpected definitions"
+    return " Remote Tool c was added. "
+
+
+def _failing_change_note(_old: JsonObject, _new: JsonObject) -> str | None:
+    raise RuntimeError("broken")
+
+
+@pytest.mark.parametrize(
+    ("change_note", "detail"),
+    [
+        (None, None),
+        (lambda _old, _new: None, None),
+        (lambda _old, _new: "  ", None),
+        (_failing_change_note, None),
+        (_describe_change, "Remote Tool c was added."),
+    ],
+    ids=["no-note", "silent", "blank", "failing", "described"],
+)
+def test_a_change_that_keeps_the_parameters_is_announced_only_with_the_tools_text(
+    change_note: ToolDefinitionChangeNote | None, detail: str | None
+) -> None:
+    view = ToolEpochView(pin=_pin(_definition("probe", "Lists a and b.")))
+    notes = {} if change_note is None else {"probe": change_note}
+    described = _catalog(_definition("probe", "Lists a, b and c."), change_notes=notes)
+    reshaped = _catalog(
+        _definition("probe", "Lists a, b and c.", count={"type": "integer"}), change_notes=notes
+    )
+
+    def planned(catalog: LiveToolCatalog) -> list[tuple[str, str | None]]:
+        return [
+            (change.change, change.detail)
+            for change in view.plan(catalog, unlisted_tool_calls=True)
+        ]
+
+    assert planned(described) == ([] if detail is None else [("changed", detail)])
+    # A schema change is announced either way; the Tool's text rides along.
+    assert planned(reshaped) == [("changed", detail)]

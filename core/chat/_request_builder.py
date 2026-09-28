@@ -64,6 +64,7 @@ from core.sessions import (
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     HISTORY_TOOL_NAME,
+    Tool,
     ToolAccess,
     ToolContract,
     ToolNotFoundError,
@@ -655,14 +656,23 @@ class RequestBuilder:
                 str(definition["name"]): definition_source(definition) for definition in definitions
             },
             session_tool_grants=tuple(session_tool_grants),
+            change_notes={
+                name: tool.definition_change_note
+                for name in usable
+                if (tool := self._registered_tool(name)) is not None
+                and tool.definition_change_note is not None
+            },
         )
 
     def _definition_ready(self, name: str) -> bool:
+        tool = self._registered_tool(name)
+        return tool is None or tool_is_ready(tool)
+
+    def _registered_tool(self, name: str) -> Tool | None:
         try:
-            tool = self._dependencies.tools.get(name)
+            return self._dependencies.tools.get(name)
         except ToolNotFoundError:
-            return True
-        return tool_is_ready(tool)
+            return None
 
     async def _read_tool_epoch_pin(self, session: ChatSession) -> ToolEpochPin | None:
         payload = await _CHAT_TRANSFORM_WORKERS.run(

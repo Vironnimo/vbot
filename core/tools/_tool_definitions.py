@@ -22,6 +22,11 @@ from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools")
 ToolReadinessPredicate = Callable[[], bool]
+# Called with the definition the Model was last told about and the current one
+# (``{name, description, parameters}``) when a Tool's registered definition
+# changed; returns short English text telling the Model what changed, or
+# ``None`` to stay silent about a change that leaves the parameters as they are.
+ToolDefinitionChangeNote = Callable[[JsonObject, JsonObject], str | None]
 
 
 class ToolError(VBotError):
@@ -174,10 +179,21 @@ class Tool:
         repr=False,
         compare=False,
     )
+    # Optional, cheap and I/O-free. Chat keeps a Session's Tool list unchanged
+    # until Compaction and announces a changed parameter schema by itself; a
+    # change of the description alone reaches the Model only when this returns
+    # text, which the announcement carries.
+    definition_change_note: ToolDefinitionChangeNote | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if self.argument_normalizer is not None and not callable(self.argument_normalizer):
             raise ValueError("argument_normalizer must be callable")
+        if self.definition_change_note is not None and not callable(self.definition_change_note):
+            raise ValueError("definition_change_note must be callable")
         if self.activation not in TOOL_ACTIVATION_KINDS:
             raise ValueError(f"Unsupported Tool activation: {self.activation}")
         if not isinstance(self.requires_opt_in, bool):

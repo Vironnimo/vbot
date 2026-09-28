@@ -80,6 +80,7 @@ def _file_tools() -> ToolRegistry:
         ({"handler": None}, "Tool handler must be callable"),
         ({"display": object()}, "Tool display must be a ToolDisplay instance"),
         ({"ready": "nope"}, "Tool ready predicate must be callable"),
+        ({"definition_change_note": "nope"}, "definition_change_note must be callable"),
         ({"activation": "mystery"}, "Unsupported Tool activation: mystery"),
         ({"activation": "follows"}, "A followed Tool requires activation_source"),
         ({"activation_source": "read"}, "activation_source is only valid for a followed Tool"),

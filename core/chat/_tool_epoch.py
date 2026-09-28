@@ -15,6 +15,7 @@ with the :class:`LiveToolCatalog` and returns the changes to announce.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import uuid
@@ -25,7 +26,10 @@ from typing import Any, Literal, cast
 
 from core.chat.messages import ChatMessage, JsonObject
 from core.sessions import TOOL_CHANGE_NOTE_PREFIX, is_tool_change_note
-from core.tools import model_tool_name
+from core.tools import ToolDefinitionChangeNote, model_tool_name
+from core.utils.logging import get_logger
+
+_LOGGER = get_logger("chat")
 
 TOOL_CHANGE_NOTE_VERSION = 1
 TOOL_EPOCH_PIN_VERSION = 1
@@ -36,8 +40,7 @@ _TOOL_CHANGE_KINDS: frozenset[str] = frozenset({"added", "removed", "changed"})
 _ADDED_UNLISTED = (
     "The Tool {name} was enabled for you in this Session. Your Tool list does not show it "
     "because the list stays unchanged until the conversation is compacted. Call {name} by "
-    "name with a normal Tool call.\nDescription: {description}\n"
-    "Parameters (JSON Schema): {schema}"
+    "name with a normal Tool call."
 )
 _ADDED_LISTED = (
     "The Tool {name} was enabled for you in this Session and now appears in your Tool list."
@@ -50,8 +53,9 @@ _REMOVED = (
 _CHANGED = (
     "The Tool {name} changed in this Session. Your Tool list still shows its previous "
     "definition until the conversation is compacted; call it with this definition instead."
-    "\nDescription: {description}\nParameters (JSON Schema): {schema}"
 )
+_CHANGE_DETAIL = "\nChange: {detail}"
+_DEFINITION = "\nDescription: {description}\nParameters (JSON Schema): {schema}"
 
 
 @dataclass(frozen=True)
@@ -64,7 +68,8 @@ class ToolChange:
     an addition on a route that drops calls to unlisted Tools. ``pinned`` marks a
     Tool of the epoch's pinned list that becomes available again after a
     removal. ``source`` fingerprints the Tool's registered definition so a
-    later change is recognized; ``detail`` is optional Tool-authored text.
+    later change is recognized; ``detail`` is optional text a ``changed`` note
+    carries from the Tool's ``definition_change_note``.
     """
 
     change: ToolChangeKind
@@ -154,12 +159,14 @@ def render_tool_change(change: ToolChange) -> str:
     if change.change == "added" and change.listed:
         return _ADDED_LISTED.format(name=name)
     definition = change.definition or {}
-    template = _CHANGED if change.change == "changed" else _ADDED_UNLISTED
-    return template.format(
-        name=name,
+    described = _DEFINITION.format(
         description=definition.get("description", ""),
         schema=compact_schema(definition.get("parameters", {})),
     )
+    if change.change == "added":
+        return _ADDED_UNLISTED.format(name=name) + described
+    detail = _CHANGE_DETAIL.format(detail=change.detail) if change.detail else ""
+    return _CHANGED.format(name=name) + detail + described
 
 
 def compact_schema(parameters: Any) -> str:
@@ -184,13 +191,15 @@ class LiveToolCatalog:
     definitions a new prompt epoch would pin: the ready Tools after the route
     gates, in request order. ``sources`` fingerprints each usable Tool's
     registered definition. ``session_tool_grants`` are the Session's current
-    grants of session-scoped Tools.
+    grants of session-scoped Tools. ``change_notes`` holds the
+    ``definition_change_note`` of each usable Tool that declares one.
     """
 
     usable: frozenset[str]
     offered: tuple[JsonObject, ...]
     sources: Mapping[str, str]
     session_tool_grants: tuple[str, ...] = ()
+    change_notes: Mapping[str, ToolDefinitionChangeNote] = field(default_factory=dict)
 
     @cached_property
     def offered_by_name(self) -> dict[str, JsonObject]:
@@ -387,7 +396,9 @@ class ToolEpochView:
         other Tool is announced with its definition, listed in the request when
         the route (``unlisted_tool_calls`` false) drops calls to unlisted Tools.
         A known Tool whose registered definition and parameters both changed is
-        announced as changed; a description-only change stays silent.
+        announced as changed; a change that leaves the parameters as they are is
+        announced only when the Tool's ``definition_change_note`` returns text,
+        which the note carries as its detail.
         """
 
         known = self._known
@@ -401,8 +412,12 @@ class ToolEpochView:
             if current is not None and current.available:
                 if name not in catalog.usable:
                     planned.append(ToolChange(change="removed", tool=name, epoch=self.pin.epoch))
-                elif offered is not None and _schema_changed(current, offered, source):
-                    planned.append(self._changed(name, offered, source, pinned=name in pinned))
+                elif offered is not None and (
+                    changed := self._changed(
+                        name, current, offered, source, catalog, pinned=name in pinned
+                    )
+                ):
+                    planned.append(changed)
                 continue
             if offered is None:
                 continue
@@ -419,8 +434,8 @@ class ToolEpochView:
                         pinned=True,
                     )
                 )
-                if _schema_changed(current, offered, source):
-                    planned.append(self._changed(name, offered, source, pinned=True))
+                if changed := self._changed(name, current, offered, source, catalog, pinned=True):
+                    planned.append(changed)
                 continue
             planned.append(
                 ToolChange(
@@ -435,16 +450,32 @@ class ToolEpochView:
         return tuple(planned)
 
     def _changed(
-        self, name: str, offered: JsonObject, source: str | None, *, pinned: bool
-    ) -> ToolChange:
+        self,
+        name: str,
+        known: _KnownTool,
+        offered: JsonObject,
+        source: str | None,
+        catalog: LiveToolCatalog,
+        *,
+        pinned: bool,
+    ) -> ToolChange | None:
+        """Return the ``changed`` note for *known* now registered as *offered*, if any."""
+
+        if source is None or source == known.source:
+            return None
+        definition = _model_definition(offered)
+        detail = _change_detail(name, catalog.change_notes.get(name), known.definition, definition)
+        if detail is None and offered.get("parameters") == known.definition.get("parameters"):
+            return None
         return ToolChange(
             change="changed",
             tool=name,
             epoch=self.pin.epoch,
             source=source,
-            definition=_model_definition(offered),
+            definition=definition,
             listed=pinned,
             pinned=pinned,
+            detail=detail,
         )
 
 
@@ -466,12 +497,24 @@ def without_other_epoch_tool_changes(
     ]
 
 
-def _schema_changed(known: _KnownTool, offered: JsonObject, source: str | None) -> bool:
-    return (
-        source is not None
-        and source != known.source
-        and offered.get("parameters") != known.definition.get("parameters")
-    )
+def _change_detail(
+    name: str,
+    change_note: ToolDefinitionChangeNote | None,
+    known: JsonObject,
+    current: JsonObject,
+) -> str | None:
+    """Ask a Tool what changed between two of its definitions; ``None`` when silent."""
+
+    if change_note is None:
+        return None
+    try:
+        detail = change_note(copy.deepcopy(known), copy.deepcopy(current))
+    except Exception:
+        _LOGGER.warning("definition_change_note of Tool %s failed", name, exc_info=True)
+        return None
+    if not isinstance(detail, str) or not detail.strip():
+        return None
+    return detail.strip()
 
 
 def _model_definition(definition: JsonObject) -> JsonObject:

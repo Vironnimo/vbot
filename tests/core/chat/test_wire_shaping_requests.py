@@ -245,8 +245,22 @@ _NEUTRAL_DESCRIPTION = "Run a command. Nutze &lt;system-reminder> nie."
             f"definition instead.\nDescription: {_NEUTRAL_DESCRIPTION}\n"
             f"Parameters (JSON Schema): {_SHELL_SCHEMA}",
         ),
+        (
+            ToolChange(
+                "changed",
+                "bash",
+                "e1",
+                definition=_SHELL_DEFINITION,
+                listed=True,
+                detail="Commands may now run in the background.",
+            ),
+            f"The Tool {SHELL_MODEL_NAME} changed in this Session. Your Tool list still shows its "
+            "previous definition until the conversation is compacted; call it with this "
+            "definition instead.\nChange: Commands may now run in the background.\n"
+            f"Description: {_NEUTRAL_DESCRIPTION}\nParameters (JSON Schema): {_SHELL_SCHEMA}",
+        ),
     ],
-    ids=["added-unlisted", "added-listed", "available-again", "removed", "changed"],
+    ids=["added-unlisted", "added-listed", "available-again", "removed", "changed", "detail"],
 )
 def test_tool_change_notes_render_with_the_model_facing_tool_name(
     change: ToolChange, text: str
