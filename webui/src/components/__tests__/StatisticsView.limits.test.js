@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { t } from '../../lib/i18n.js';
 import {
   flushSync,
   mount,
@@ -8,19 +9,18 @@ import {
   StatisticsView,
   makeReport,
   makeUsageReport,
-  makeUsageHistoryReport,
-  makeRunActivityReport,
   routedRpc,
   openLimitsTab,
   waitForCondition,
   waitForOverview,
+  buttonNamed,
   setupStatisticsViewSuite,
 } from './StatisticsView.support.js';
 
 describe('StatisticsView', () => {
   const suite = setupStatisticsViewSuite();
 
-  it('lazily loads provider usage when the Limits sub-view opens', async () => {
+  it('lazily loads provider usage and its history when the Limits sub-view opens', async () => {
     rpcMock.mockImplementation(routedRpc(makeUsageReport()));
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
@@ -41,10 +41,18 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('HTTP 401');
     expect(
       [...document.querySelectorAll('.stats-view button')].some(
-        (button) => button.textContent.trim() === 'Refresh',
+        (button) => button.textContent.trim() === t('common.refresh'),
       ),
     ).toBe(false);
     expect(document.querySelector('.stats-view__generated')).toBeNull();
+    // The hourly history (owned by LimitHistory) loads beside the live cards.
+    await waitForCondition(() =>
+      document.querySelector('.limit-history > .empty-state'),
+    );
+    expect(rpcMock).toHaveBeenCalledWith(
+      'provider.usage_history',
+      expect.anything(),
+    );
   });
 
   it('shows Ollama Cloud quota percentages and labels request counts as observed', async () => {
@@ -103,89 +111,6 @@ describe('StatisticsView', () => {
     expect(document.querySelector('.stats-limit-window__reset')).toBeNull();
   });
 
-  it('renders hourly limit history and correlated vBot Runs', async () => {
-    rpcMock.mockImplementation((method) => {
-      if (method === 'provider.usage') {
-        return Promise.resolve(makeUsageReport());
-      }
-      if (method === 'provider.usage_history') {
-        return Promise.resolve(makeUsageHistoryReport());
-      }
-      if (method === 'statistics.run_activity') {
-        return Promise.resolve(makeRunActivityReport());
-      }
-      return Promise.resolve(makeReport());
-    });
-
-    suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForOverview();
-    openLimitsTab();
-    await waitForCondition(() => document.querySelector('.limit-trace__line'));
-    await waitForCondition(() => document.querySelector('.limit-run__tokens'));
-
-    expect(document.body.textContent).toContain('+28.5 pp');
-    expect(document.querySelector('.limit-run__tokens').textContent).toContain(
-      '120',
-    );
-    expect(
-      rpcMock.mock.calls.some(
-        ([method, params]) =>
-          method === 'statistics.run_activity' &&
-          params.since === '2026-06-16T10:00:00+00:00' &&
-          params.until === '2026-06-16T11:00:00+00:00',
-      ),
-    ).toBe(true);
-  });
-
-  it('clears hourly limit history only after confirmation', async () => {
-    rpcMock.mockImplementation((method) => {
-      if (method === 'provider.usage') {
-        return Promise.resolve(makeUsageReport());
-      }
-      if (method === 'provider.usage_history') {
-        return Promise.resolve(makeUsageHistoryReport());
-      }
-      if (method === 'statistics.run_activity') {
-        return Promise.resolve(makeRunActivityReport());
-      }
-      if (method === 'provider.usage_history.clear') {
-        return Promise.resolve({ deleted_samples: 2 });
-      }
-      return Promise.resolve(makeReport());
-    });
-
-    suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForOverview();
-    openLimitsTab();
-    await waitForCondition(() => document.querySelector('.limit-trace__line'));
-
-    const deleteButton = [...document.querySelectorAll('button')].find(
-      (button) => button.textContent.trim() === 'Delete history',
-    );
-    deleteButton.click();
-    flushSync();
-    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
-
-    const confirmButton = [...document.querySelectorAll('button')]
-      .filter((button) => button.textContent.trim() === 'Delete history')
-      .at(-1);
-    confirmButton.click();
-    await waitForCondition(() =>
-      rpcMock.mock.calls.some(
-        ([method]) => method === 'provider.usage_history.clear',
-      ),
-    );
-
-    expect(
-      rpcMock.mock.calls.some(
-        ([method]) => method === 'provider.usage_history.clear',
-      ),
-    ).toBe(true);
-    await waitForCondition(() =>
-      document.querySelector('.limit-history > .empty-state'),
-    );
-  });
-
   it('refreshes provider usage every ten seconds only while Limits is visible', async () => {
     vi.useFakeTimers();
     rpcMock.mockImplementation(routedRpc(makeUsageReport()));
@@ -205,47 +130,13 @@ describe('StatisticsView', () => {
       rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
     ).toHaveLength(2);
 
-    const overviewTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Overview',
-    );
-    overviewTab.click();
+    buttonNamed('statistics.subview.overview').click();
     flushSync();
     await vi.advanceTimersByTimeAsync(20_000);
 
     expect(
       rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
     ).toHaveLength(2);
-  });
-
-  it('does not overlap provider usage requests', async () => {
-    vi.useFakeTimers();
-    let resolveFirstUsage;
-    let usageCalls = 0;
-    rpcMock.mockImplementation((method) => {
-      if (method !== 'provider.usage') {
-        return Promise.resolve(makeReport());
-      }
-      usageCalls += 1;
-      if (usageCalls === 1) {
-        return new Promise((resolve) => {
-          resolveFirstUsage = resolve;
-        });
-      }
-      return Promise.resolve(makeUsageReport());
-    });
-
-    suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForOverview();
-    openLimitsTab();
-    await waitForCondition(() => usageCalls === 1);
-
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(usageCalls).toBe(1);
-
-    resolveFirstUsage(makeUsageReport());
-    await waitForCondition(() => document.body.textContent.includes('OpenAI'));
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(usageCalls).toBe(2);
   });
 
   it('pauses provider usage while the page is hidden and refreshes on return', async () => {
@@ -304,7 +195,7 @@ describe('StatisticsView', () => {
 
     const retryButton = [
       ...document.querySelectorAll('.stats-panel button'),
-    ].find((button) => button.textContent.trim() === 'Retry');
+    ].find((button) => button.textContent.trim() === t('common.retry'));
     retryButton.click();
     await waitForCondition(() => document.body.textContent.includes('OpenAI'));
 
@@ -359,43 +250,47 @@ describe('StatisticsView', () => {
         expect(
           document.querySelector('[role="tab"][aria-selected="true"]')
             .textContent,
-        ).toContain('Limits');
+        ).toContain(t('statistics.subview.limits'));
       }
     },
   );
 
-  it('keeps one pending Limits request across tab changes and stops after teardown', async () => {
+  it('never overlaps provider usage requests, across tab changes and after teardown', async () => {
     vi.useFakeTimers();
-    let finishUsage;
+    const pending = [];
     const route = routedRpc(makeUsageReport());
     rpcMock.mockImplementation((method, params) =>
       method === 'provider.usage'
-        ? new Promise((resolve) => {
-            finishUsage = resolve;
-          })
+        ? new Promise((resolve) => pending.push(resolve))
         : route(method, params),
     );
+    const usageCalls = () =>
+      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage')
+        .length;
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
     openLimitsTab();
-    await waitForCondition(() => finishUsage);
-    const overview = [...document.querySelectorAll('[role="tab"]')].find(
-      (tab) => tab.textContent.trim() === 'Overview',
-    );
-    overview.click();
+    await waitForCondition(() => pending.length === 1);
+
+    // Polling and reopening Limits wait for the pending request.
+    buttonNamed('statistics.subview.overview').click();
     flushSync();
     openLimitsTab();
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(
-      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
-    ).toHaveLength(1);
+    expect(usageCalls()).toBe(1);
+
+    // Once it resolves, polling resumes on its regular interval.
+    pending[0](makeUsageReport());
+    await waitForCondition(() => document.querySelector('.stats-limit-card'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(usageCalls()).toBe(2);
+
+    // A request that finishes after teardown neither renders nor polls.
     await unmount(suite.mountedComponent);
     suite.mountedComponent = null;
-    finishUsage(makeUsageReport());
+    pending[1](makeUsageReport());
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(
-      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
-    ).toHaveLength(1);
+    expect(usageCalls()).toBe(2);
     expect(document.querySelector('.stats-limit-card')).toBeNull();
   });
 });

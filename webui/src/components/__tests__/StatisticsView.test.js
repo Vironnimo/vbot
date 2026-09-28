@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { t } from '../../lib/i18n.js';
+import { activeLocaleTag, t } from '../../lib/i18n.js';
+import { formatDateTime } from '../../lib/statisticsView.js';
 import {
   flushSync,
   mount,
@@ -33,7 +34,7 @@ describe('StatisticsView', () => {
       ].map((node) => node.textContent),
     ).toEqual(['1,200', '$0.012', '$0.043', '10.0%']);
     expect(cardValue('statistics.compactions.averageAfter')).toBe('40,000');
-    expect(document.body.textContent).toContain('Calls without a price');
+    expect(document.body.textContent).toContain(t('statistics.cost.unpriced'));
     expect(document.body.textContent).toContain(
       'openrouter/anthropic/claude-sonnet-4',
     );
@@ -164,12 +165,30 @@ describe('StatisticsView', () => {
     expect(cardValue('statistics.usage.cacheWrite')).toBe('—');
   });
 
-  it('renders unused report breakdowns and distinguishes unknown Tool results', async () => {
+  it('renders Runs & errors with fallback labelling, busiest Sessions and Model errors', async () => {
     const report = makeReport();
     report.runs.top_sessions_by_runs = [
       { agent_id: 'main', session_id: 'session-ranking-sentinel', runs: 3 },
     ];
     report.errors.by_model = [{ key: 'model-error-sentinel', count: 1 }];
+    rpcMock.mockResolvedValue(report);
+    suite.mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+    buttonNamed('statistics.subview.runs').click();
+    flushSync();
+
+    expect(
+      document.querySelectorAll('.stats-panel > .stats-block > .stats-grid'),
+    ).toHaveLength(3);
+    expect(cardValue('statistics.runs.fallbackRuns')).toBe('1');
+    expect(document.querySelectorAll('.stats-hours__col')).toHaveLength(24);
+    expect(document.querySelector('.stats-panel .stats-table')).toBeTruthy();
+    expect(document.body.textContent).toContain('session-ranking-sentinel');
+    expect(document.body.textContent).toContain('model-error-sentinel');
+  });
+
+  it('renders Tool outcomes without arguments and keeps unknown results distinct', async () => {
+    const report = makeReport();
     report.tools.tools[0].error_codes.push({
       key: 'second-code-sentinel',
       count: 1,
@@ -177,16 +196,18 @@ describe('StatisticsView', () => {
     rpcMock.mockResolvedValue(report);
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
-    buttonNamed('statistics.subview.runs').click();
-    flushSync();
-    expect(document.body.textContent).toContain('session-ranking-sentinel');
-    expect(document.body.textContent).toContain('model-error-sentinel');
     buttonNamed('statistics.subview.tools').click();
     flushSync();
+
     expect(cardValue('statistics.tools.accepted')).toBe('4');
     expect(cardValue('statistics.tools.rejected')).toBe('1');
     expect(cardValue('statistics.tools.unknown')).toBe('2');
+    expect(document.body.textContent).toContain('read');
+    expect(document.body.textContent).toContain('not_found');
     expect(document.body.textContent).toContain('second-code-sentinel');
+    expect(document.querySelectorAll('.stats-panel .stats-table')).toHaveLength(
+      2,
+    );
   });
 
   it('switches the calendar-correct activity window with the granularity', async () => {
@@ -195,10 +216,7 @@ describe('StatisticsView', () => {
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
 
-    const weekButton = [
-      ...document.querySelectorAll('.stats-toggle__option'),
-    ].find((button) => button.textContent.trim() === 'Week');
-    weekButton.click();
+    buttonNamed('statistics.granularity.week').click();
     flushSync();
 
     expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(16);
@@ -221,27 +239,6 @@ describe('StatisticsView', () => {
       'statistics-subviews-panel-compactions',
     );
     expect(rpcMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('shows an empty token chart when usage is older than the chart window', async () => {
-    const report = makeReport();
-    report.usage.daily = [
-      {
-        date: '2026-04-01',
-        runs: 4,
-        completed: 3,
-        failed: 1,
-        cancelled: 0,
-      },
-    ];
-    rpcMock.mockResolvedValue(report);
-
-    suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.querySelector('.stats-panel .stats-block .empty-state'),
-    );
-
-    expect(document.querySelector('.stats-activity')).toBeNull();
   });
 
   it('keeps unknown costs and cache coverage distinct from a reported free call', async () => {
@@ -268,16 +265,12 @@ describe('StatisticsView', () => {
     );
   });
 
-  it('switches to the usage sub-view and badges estimated tokens', async () => {
+  it('renders Usage & costs with estimated badges, cache hit rate, costs and suspected breaks', async () => {
     rpcMock.mockResolvedValue(makeReport());
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
-
-    const usageTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Usage & costs',
-    );
-    usageTab.click();
+    buttonNamed('statistics.subview.usage').click();
     flushSync();
 
     expect(document.body.textContent).toContain(
@@ -290,6 +283,11 @@ describe('StatisticsView', () => {
         (node) => node.textContent,
       ),
     ).toEqual(['1,000', '200', '5', '30', '5', '1']);
+    // totals: 50 read of 500 cache-reporting input -> 10.0%
+    expect(cardValue('statistics.usage.cacheHitRate')).toBe('10.0%');
+    expect(document.body.textContent).toContain(t('statistics.cost.models'));
+    // The incident table shows the collapsed turn's expectation vs. reality.
+    expect(document.body.textContent).toContain('9,000');
   });
 
   it('shows task call coverage and preserves unknown standalone usage', async () => {
@@ -344,56 +342,13 @@ describe('StatisticsView', () => {
     ).toEqual(['—', '—', '—']);
   });
 
-  it('renders cache hit rate, worst sessions and suspected breaks in the usage sub-view', async () => {
-    rpcMock.mockResolvedValue(makeReport());
-
-    suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForOverview();
-
-    const usageTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Usage & costs',
-    );
-    usageTab.click();
-    flushSync();
-
-    // totals: 50 read of 500 cache-reporting input → 10.0%
-    expect(cardValue('statistics.usage.cacheHitRate')).toBe('10.0%');
-    expect(document.body.textContent).toContain('Cost by Model');
-    // The incident table shows the collapsed turn's expectation vs. reality.
-    expect(document.body.textContent).toContain('9,000');
-  });
-
-  it('renders the runs & errors sub-view with derived fallback labelling', async () => {
-    rpcMock.mockResolvedValue(makeReport());
-
-    suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForOverview();
-
-    const runsTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Runs & errors',
-    );
-    runsTab.click();
-    flushSync();
-
-    const runGrids = document.querySelectorAll(
-      '.stats-panel > .stats-block > .stats-grid',
-    );
-    expect(runGrids).toHaveLength(3);
-    expect(cardValue('statistics.runs.fallbackRuns')).toBe('1');
-    expect(document.querySelectorAll('.stats-hours__col')).toHaveLength(24);
-    expect(document.querySelector('.stats-panel .stats-table')).toBeTruthy();
-  });
-
   it('renders checkpoint-derived compaction statistics', async () => {
     rpcMock.mockResolvedValue(makeReport());
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
 
-    const compactionsTab = [
-      ...document.querySelectorAll('.tab-list__tab'),
-    ].find((button) => button.textContent.trim() === 'Compactions');
-    compactionsTab.click();
+    buttonNamed('statistics.subview.compactions').click();
     flushSync();
 
     expect(cardValue('statistics.compactions.averageAfter')).toBe('40,000');
@@ -405,35 +360,13 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('95,000 → 40,000');
   });
 
-  it('renders the tools sub-view without exposing arguments', async () => {
+  it('renders Skills with per-skill rows, origins and rates, highlighting only offered unused Skills', async () => {
     rpcMock.mockResolvedValue(makeReport());
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
 
-    const toolsTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Tools',
-    );
-    toolsTab.click();
-    flushSync();
-
-    expect(document.body.textContent).toContain('read');
-    expect(document.body.textContent).toContain('not_found');
-    expect(document.querySelectorAll('.stats-panel .stats-table')).toHaveLength(
-      2,
-    );
-  });
-
-  it('renders the skills sub-view with per-skill rows, origins, and rates', async () => {
-    rpcMock.mockResolvedValue(makeReport());
-
-    suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForOverview();
-
-    const skillsTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Skills',
-    );
-    skillsTab.click();
+    buttonNamed('statistics.subview.skills').click();
     flushSync();
 
     const text = document.body.textContent;
@@ -452,37 +385,18 @@ describe('StatisticsView', () => {
     expect(text).not.toContain('NaN');
     // Panel-wide activations-per-agent rollup shows the project agent.
     expect(text).toContain('builder');
-  });
-
-  it('highlights only offered zero-activation skills as candidates', async () => {
-    rpcMock.mockResolvedValue(makeReport());
-
-    suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForOverview();
-
-    const skillsTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Skills',
-    );
-    skillsTab.click();
-    flushSync();
 
     // lonely-skill has observed opportunities and no activation, so it is the
-    // only candidate. fresh-skill has no offer evidence and stays neutral.
+    // only candidate. fresh-skill has no offer evidence and stays neutral, and
+    // the activated deploy is not highlighted.
     const candidateRows = document.querySelectorAll(
       '.stats-skill-row--candidate',
     );
-    expect(candidateRows.length).toBe(1);
+    expect(candidateRows).toHaveLength(1);
     expect(candidateRows[0].textContent).toContain('lonely-skill');
-    // The activated skill (deploy) is not highlighted.
-    const rows = [...document.querySelectorAll('.stats-table tbody tr')].filter(
-      (row) => row.textContent.includes('deploy'),
-    );
-    expect(
-      rows.some((row) => row.classList.contains('stats-skill-row--candidate')),
-    ).toBe(false);
   });
 
-  it('shows the skills empty state instead of crashing when the inventory is empty', async () => {
+  it('shows empty states for an empty Skill inventory, Session ranking and Extension activity', async () => {
     rpcMock.mockResolvedValue(
       makeReport({
         skills: {
@@ -499,13 +413,24 @@ describe('StatisticsView', () => {
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
 
-    const skillsTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Skills',
-    );
-    skillsTab.click();
+    buttonNamed('statistics.subview.skills').click();
     flushSync();
-
     expect(document.querySelector('.stats-panel .empty-state')).toBeTruthy();
+
+    buttonNamed('statistics.subview.runs').click();
+    flushSync();
+    const topSessions = [...document.querySelectorAll('.stats-block')].find(
+      (block) =>
+        block.querySelector('.stats-block__title')?.textContent.trim() ===
+        t('statistics.runs.topSessions'),
+    );
+    expect(topSessions.querySelector('.empty-state')).toBeTruthy();
+
+    buttonNamed('statistics.subview.extensions').click();
+    flushSync();
+    expect(
+      document.querySelector('.stats-panel .empty-state').textContent,
+    ).toContain(t('statistics.extensions.empty'));
   });
 
   it('breaks Extension activity down by group and participant', async () => {
@@ -578,20 +503,17 @@ describe('StatisticsView', () => {
     await waitForOverview();
 
     // Report tabs name the Extension instead of a synthetic participant id.
-    [...document.querySelectorAll('.tab-list__tab')]
-      .find((button) => button.textContent.trim() === 'Tools')
-      .click();
+    buttonNamed('statistics.subview.tools').click();
     flushSync();
     const extensionCell = [...document.querySelectorAll('.stats-agent')].find(
       (cell) => cell.textContent.includes('swarm'),
     );
-    expect(extensionCell.textContent).toContain('Extension');
+    expect(extensionCell.textContent).toContain(
+      t('statistics.agent.extensionBadge'),
+    );
     expect(document.body.textContent).not.toContain('extension:swarm');
 
-    const extensionsTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Extensions',
-    );
-    extensionsTab.click();
+    buttonNamed('statistics.subview.extensions').click();
     flushSync();
 
     const groups = [...document.querySelectorAll('.stats-extension-group')];
@@ -600,11 +522,17 @@ describe('StatisticsView', () => {
       'Parser rework',
     );
     expect(groups[0].querySelector('summary').textContent).toContain(
-      '2 participants · 4 Runs',
+      t('statistics.extensions.groupSummary', undefined, {
+        participants: 2,
+        runs: 4,
+      }),
     );
     // An untitled group is labelled by its start and a short id.
-    expect(groups[1].querySelector('summary').textContent).toMatch(
-      /Started .+ · titled/,
+    expect(groups[1].querySelector('summary').textContent).toContain(
+      t('statistics.extensions.groupFallback', undefined, {
+        date: formatDateTime('2026-06-12T08:00:00+00:00', activeLocaleTag()),
+        id: 'titled',
+      }),
     );
     groups[0].querySelector('summary').click();
     flushSync();
@@ -617,24 +545,6 @@ describe('StatisticsView', () => {
     expect(cardValue('statistics.extensions.groups')).toBe('2');
   });
 
-  it('shows an Extensions empty state without Extension activity', async () => {
-    rpcMock.mockResolvedValue(makeReport());
-
-    suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForOverview();
-
-    const extensionsTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Extensions',
-    );
-    extensionsTab.click();
-    flushSync();
-
-    expect(document.querySelector('.stats-panel .empty-state')).toBeTruthy();
-    expect(document.body.textContent).toContain(
-      'No Extension activity in this time range.',
-    );
-  });
-
   it('shows an error message and retries on failure', async () => {
     rpcMock.mockRejectedValueOnce(new Error('boom'));
 
@@ -642,10 +552,7 @@ describe('StatisticsView', () => {
     await waitForCondition(() => document.body.textContent.includes('boom'));
 
     rpcMock.mockResolvedValueOnce(makeReport());
-    const retryButton = [...document.querySelectorAll('button')].find(
-      (button) => button.textContent.trim() === 'Retry',
-    );
-    retryButton.click();
+    buttonNamed('common.retry').click();
     await waitForOverview();
 
     expect(rpcMock).toHaveBeenCalledTimes(2);

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
-import { init } from '$lib/i18n.js';
+import { init, t } from '$lib/i18n.js';
 import { fileURLToPath } from 'node:url';
 import { readStyleSheet } from '../../../__tests__/styles.support.js';
 
@@ -60,7 +60,8 @@ it('shows the workspace under the real shell cascade and opens a saved example',
     'flex',
   );
   const button = [...document.querySelectorAll('button')].find(
-    (node) => node.textContent.trim() === 'Support triage',
+    (node) =>
+      node.textContent.trim() === t('jev.example.triage', 'Support triage'),
   );
   button.click();
   await settle();
