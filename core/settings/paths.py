@@ -41,6 +41,7 @@ from core.settings.normalizers import (
     normalize_extensions_settings,
     normalize_local_models_settings,
     normalize_model_task_settings,
+    normalize_notification_settings,
     normalize_providers_settings,
     normalize_recall_settings,
     normalize_reflection_settings,
@@ -184,6 +185,7 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
         "session_titles": normalize_session_title_settings(raw_settings.get("session_titles")),
         "local_models": normalize_local_models_settings(raw_settings.get("local_models")),
         "model_tasks": normalize_model_task_settings(raw_settings.get("model_tasks")),
+        "notifications": normalize_notification_settings(raw_settings.get("notifications")),
     }
 
 

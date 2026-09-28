@@ -286,6 +286,7 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                     }
                 },
                 "session_titles": {"enabled": False, "model": ""},
+                "notifications": {"run_completed": False, "server_stopped": True},
                 "local_models": {"context_windows": {"ollama/m": 16384}},
                 "debug": {"enabled": True, "trace_limit": 500},
                 # Custom Provider records hold secret-free Model facts.
@@ -506,6 +507,14 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
         ),
         pytest.param(
             {"keep_awake": "yes"}, [("error", "$.keep_awake", "must be a boolean")], id="keep-awake"
+        ),
+        pytest.param(
+            {"notifications": {"run_failed": "yes", "sound": True}},
+            [
+                ("warning", "$.notifications.sound", "unknown notifications field: sound"),
+                ("error", "$.notifications.run_failed", "must be a boolean"),
+            ],
+            id="notifications",
         ),
         pytest.param(
             {"timezone": "Berlin"},

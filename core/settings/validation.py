@@ -69,6 +69,7 @@ from core.settings.normalizers import (
 )
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
+    NOTIFICATION_FIELDS,
     OPENROUTER_ROUTING_FIELDS,
     OPENROUTER_ROUTING_POLICY_FIELDS,
     RECALL_BACKEND_PATTERN,
@@ -101,6 +102,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "max_subagent_depth",
         "max_subagents_per_turn",
         "model_tasks",
+        "notifications",
         "port",
         "providers",
         "recall",
@@ -132,6 +134,7 @@ WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
 MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
 DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
 SESSION_TITLE_FIELDS = frozenset({"enabled", "model"})
+NOTIFICATION_FIELD_SET = frozenset(NOTIFICATION_FIELDS)
 SPEECH_FIELDS = frozenset({"transcription_audio"})
 TRANSCRIPTION_AUDIO_FIELDS = frozenset({"profile", "format", "sample_rate_hz"})
 MAX_TRACE_LIMIT = 500
@@ -180,6 +183,7 @@ SETTINGS_SHAPE: JsonShape = json_document(
         "defaults": json_object(DEFAULTS_SECTIONS, {"agent": json_object(AGENT_DEFAULT_FIELDS)}),
         "extensions": json_object(EXTENSIONS_FIELDS, {"config": json_map(OPAQUE)}),
         "local_models": json_object(LOCAL_MODELS_FIELDS),
+        "notifications": json_object(NOTIFICATION_FIELD_SET),
         "model_tasks": json_object(
             SUPPORTED_TASK_TYPES,
             {
@@ -442,7 +446,23 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_local_models(diagnostics, data.get("local_models"))
     _validate_providers(diagnostics, data.get("providers"))
     _validate_session_titles(diagnostics, data.get("session_titles"))
+    _validate_notifications(diagnostics, data.get("notifications"))
     return diagnostics
+
+
+def _validate_notifications(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.notifications", "must be an object")
+        return
+
+    _warn_unknown_keys(
+        diagnostics, "$.notifications", value, NOTIFICATION_FIELD_SET, "notifications field"
+    )
+    for field in NOTIFICATION_FIELDS:
+        if field in value and not isinstance(value[field], bool):
+            _error(diagnostics, f"$.notifications.{field}", "must be a boolean")
 
 
 def _validate_speech(diagnostics: list[JsonDiagnostic], value: Any) -> None:
