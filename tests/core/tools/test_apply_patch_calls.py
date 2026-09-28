@@ -139,6 +139,23 @@ async def test_one_replacement_in_any_shape(tmp_path, arguments):
 
 
 @pytest.mark.asyncio
+async def test_old_string_alone_beside_a_patch_is_ignored(tmp_path):
+    # Session shape: the lines the patch changes, copied into old_text as well.
+    (tmp_path / "a.py").write_bytes(b"x = 1\ny = 2\n")
+
+    result = await call(
+        tmp_path, {"patch": "*** Update File: a.py\n@@\n-x = 1\n+x = 3", "old_text": "x = 1"}
+    )
+
+    assert result["data"] == {
+        "status": "applied",
+        "content": "Updated a.py:\n1| x = 3\n2| y = 2\n"
+        "old_string was ignored because patch describes the change.",
+    }
+    assert (tmp_path / "a.py").read_bytes() == b"x = 3\ny = 2\n"
+
+
+@pytest.mark.asyncio
 async def test_text_editor_insert_after_a_line(tmp_path):
     (tmp_path / "a.txt").write_bytes(b"one\ntwo\n")
     result = await call(

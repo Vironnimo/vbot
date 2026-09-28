@@ -186,6 +186,12 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(tmp_p
             "That patch line has no + prefix, so it must already be in the file; if it is new, "
             "start it with +.",
         ),
+        # An unchanged line away from + lines is not a new line missing its +.
+        (
+            "@@\n gamma delta epsilon zeta eta theta iota kappa\n-beta\n+changed",
+            "The patch line 'gamma delta epsilon zeta eta theta iota kappa' is not in the file. "
+            "A line without + or - is unchanged, so it must match a line of the file.",
+        ),
     ],
 )
 def test_missing_hunk_without_close_candidate_names_a_line_the_file_lacks(tmp_path, body, report):
@@ -324,6 +330,17 @@ def test_context_failure_returns_candidates_without_substituting_target(
             "@@\n-x = compute(1)\n+y",
             "The closest texts in the file:\n1| a_x = compute(1)\n",
         ),
+        # Session shapes: short text inside an unrelated line occurs there by chance.
+        (
+            "start = 0\nnote = 'a false-pass shape'\n",
+            "@@\n start = 0\n-pass\n+return",
+            "The patch line 'pass' is not in the file.",
+        ),
+        (
+            "start = 0\nA, B, C = 0, 1, 2\n",
+            "@@\n start = 0\n-1,\n+3,",
+            "First difference, line 2: the file has 'A, B, C = 0, 1, 2' where the patch has '1,'.",
+        ),
     ],
 )
 def test_patch_line_inside_longer_lines_names_those_lines(tmp_path, before, body, listed):
@@ -344,6 +361,14 @@ FIRST_DIFFERENCE_CASES = {
         "     for value in values:\n         result += value\n     return result_value",
         "First difference, line 3: the file has '    for value in values:' where the patch "
         "has '           \"values must not be empty\")'.\n"
+        "That patch line has no + prefix, so it must already be in the file there; "
+        "if it is new, start it with +.\n",
+    ),
+    # Session shape: the last line, right after the + lines, was written without +.
+    "trailing": (
+        "def f():\n    return 1\n\n\ndef g():\n    pass\n",
+        "@@\n def f():\n     return 1\n+\n+# first note line\n# second note line",
+        "First difference, line 3: the file has '' where the patch has '# second note line'.\n"
         "That patch line has no + prefix, so it must already be in the file there; "
         "if it is new, start it with +.\n",
     ),

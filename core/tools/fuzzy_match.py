@@ -781,6 +781,11 @@ def _reindent_replacement(
         if len(old_indents) == len(file_indents)
         else [(old_indents[0], file_indents[0])]
     )
+    # Most indented lines as the file has them: the model wrote in the file's
+    # indentation, and the other lines are typos, not a different style.
+    indented = [(model, file) for model, file in pairs if model or file]
+    if 2 * sum(model == file for model, file in indented) > len(indented):
+        return replacement_text
     seen: dict[str, str] = {}
     for model_indent, file_indent in pairs:
         seen.setdefault(model_indent, file_indent)
@@ -904,7 +909,8 @@ def _unit_candidates(shown: str | None, indents: list[str]) -> list[str]:
     if widths:
         candidates.append(" " * math.gcd(*widths))
     candidates.extend(" " * width for width in _LEVEL_WIDTHS)
-    return list(dict.fromkeys(candidates))
+    # One space is alignment, not a level: as a unit it multiplies every indent.
+    return [unit for unit in dict.fromkeys(candidates) if unit != " "]
 
 
 def _level_offset(

@@ -44,7 +44,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Two kinds of change in one call, a `path` that
   contradicts the patch's file, incomplete old/new pairs and Cursor `code_edit`
   (placeholder comments leave the change open; the error shows a patch skeleton
-  with the call's real path) fail before any effect.
+  with the call's real path) fail before any effect. An `old_string` alone beside
+  a nonempty patch (no `new_string` or `insert_line`) is a copy of the lines the
+  patch changes: the patch runs and the result adds `old_string was ignored
+  because patch describes the change.` (`patch_ignores_old_string`). Evidence: 3
+  such calls in one Swarm run, all `old_text` beside a complete patch, were
+  refused as two kinds of change (Sessions, 2026-09).
   `old_string` replacements match precisely, else as a copy with errors
   (`copy_match`, below; never with `replace_all` or an expected count); an empty
   `old_string` creates a file or fills an empty one and fails with `file_exists`
@@ -166,11 +171,17 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   `_Batch.change_ends`, `replace_fuzzy(first=True)`), and fails with
   `ambiguous_match` when none follows. A note names the count and the changed
   line. Without a hint or an earlier change of that Update, and for `copy_match`
-  passages, several occurrences stay `ambiguous_match`. Evidence (Sessions since
+  passages, several occurrences stay `ambiguous_match`, unless as many hunks of
+  that Update without a hint name the same lines as the file holds them
+  (`_Hunk.twins`, counted in `_parse`): then the first is changed and the later
+  ones follow as above. As in Codex, where each hunk searches after the previous
+  one, only that order lets every hunk find its occurrence. Evidence (Sessions since
   2026-09-01, 89 ambiguous hunks): the Agent's later successful edit targeted the
   first occurrence after the hint in 16 of 16 and after the previous hunk in 44
   of 45; bare first hunks meant the file's first occurrence only 11 of 15 times,
-  too few to choose silently. Numeric unified-diff headers are advisory;
+  too few to choose silently. In one Swarm run, both refused bare first hunks
+  with as many identical hunks as occurrences meant them in order (Sessions,
+  2026-09). Numeric unified-diff headers are advisory;
   content remains authoritative. `*** End of File` restricts matching to EOF;
   when a hunk with context or removed lines fails there, it is retried without
   the marker and, if that places it, applied with a warning naming the marker.
@@ -217,12 +228,19 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   line) is named before similarity candidates when it sits in at most 3 lines:
   `The patch line '...' is only part of line(s) N. Each patch line is a whole
   line, so copy all of line N:` plus those lines (`part_of`, `_part_of_lines`).
+  A file line counts only when the text reads as cut from it (`_cut_from`): at
+  least 3 letters or digits, no word of the line split, and at the line's start
+  or end or at least 8 characters long. Evidence: of 18 such reports over three
+  days, 4 named a line that held `}`, `pass` or `1,` by chance; the others met
+  this rule (Sessions, 2026-09).
   Otherwise the closest-text candidates show. Without candidates, the report
   names the hunk's first unchanged or removed line that no file line matches
   (ignoring spacing, `absent`): `The patch line '...' is not in the file.` plus,
-  for an unchanged line, that without `+` it must already be in the file and a
-  new line starts with `+`, or, for a `-` line, that it must match a line of the
-  file. `No similar text` remains only when every such line occurs somewhere.
+  for a `-` line, that it must match a line of the file; for an unchanged line
+  between or right next to `+` lines (`beside_additions`), that without `+` it
+  must already be in the file and a new line starts with `+`; for another
+  unchanged line, `A line without + or - is unchanged, so it must match a line
+  of the file.` `No similar text` remains only when every such line occurs somewhere.
   Evidence: in one Swarm run, 6 failures said only `No similar text`; each held
   a line the file lacked (new lines after the last `+` line written without `+`,
   a misremembered or output-copied context line), and 4 were followed by a
@@ -329,7 +347,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   indent, and other indents (new deeper lines) convert level by level between
   the model's and the file's unit (tabs or N spaces, learned from the whole
   file), including a dropped outer level. Mixed tab/space output from a
-  spaces-for-tabs model is a defect.
+  spaces-for-tabs model is a defect. When most indented matched lines already
+  have the file's indentation, the replacement is written as sent: the other
+  lines are typos, and mapping them re-indented new lines wrongly (Session: a
+  `-` line one level too deep put the new block one level too shallow). One
+  space is never a level unit; when no wider unit explains the indents, new
+  lines keep their offset instead of every space becoming a file level.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.
@@ -358,16 +381,30 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   recoveries and `copy_match` all miss, `_unmarked_readings` re-reads such runs as
   `+` lines: first only runs holding a nonblank line the file lacks, then also
   blank runs, then all runs, so a run the file has stays context while that
-  places the hunk. `_unmarked_texts` adds each line as written (whitespace-only
-  becomes blank). A run written with a space prefix whose indentation matches
-  the nearest nonblank lines around it only without that space loses it: the
-  Model wrote the prefix of unchanged lines instead of `+`. Evidence: in one
-  Swarm run, 2 of 55 re-reads applied wrongly, one adding a real context line
-  `]` a second time after the block because two blank runs kept it from
-  placing the hunk without it, one indenting two statements one space too deep.
-  All 11 of that run's 128 re-readable runs that the indentation rule strips
-  were written with the space prefix of unchanged lines (Sessions, 2026-09).
-  A reading needs at
+  places the hunk. A blank run stays context only between context/removal lines
+  that stay (`_with_edge_blanks`): beyond them, the file's own blank line there
+  would place it and move into the added block, so the blank line after the
+  block would go missing. `_unmarked_texts` adds each line as written
+  (whitespace-only becomes blank). A Model that wrote the space prefix of
+  unchanged lines instead of `+` indents such a line one space too deep, so
+  `_meant_line` decides line by line: a line keeps its indentation when the
+  nearest new-text line above or below has it, or when the line above aligns
+  continuations to that column (just after a bracket it leaves open, or where
+  the last item inside it starts; `_alignment_columns`). Otherwise it loses its
+  first space when the indentation then fits those lines, or when that space
+  makes the indent width odd both from the line start and beyond the line
+  above's indent. Evidence: in one Swarm run, 2 of 55 re-reads applied
+  wrongly, one adding a real context line `]` a second time after the block
+  because two blank runs kept it from placing the hunk without it, one
+  indenting two statements one space too deep. All 11 of that run's 128
+  re-readable runs that the indentation rule strips were written with the space
+  prefix of unchanged lines (Sessions, 2026-09). In the next Swarm run, some
+  runs mixed lines with and without that prefix, which a rule for the whole run
+  left one space off, and 4 re-reads moved a blank line of the file into the
+  added block. Over that run's 90 re-readable calls, the line rules changed only
+  lines that were off; a plain odd-width rule without the alignment columns and
+  the relative check misaligned hanging and aligned continuation lines
+  (Sessions, 2026-09). A reading needs at
   least one remaining context/removal line and applies only through precise
   matching (`precise_only`), so the file must hold the surrounding lines
   adjacent; a failing reading falls back to the original error. A re-read run
@@ -378,15 +415,20 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   those lines one space deeper. Evidence: in a replay of one Swarm's last 18
   minutes, 2 of 5 such hunks applied with duplicated lines before this check
   (Sessions, 2026-09). Success adds a
-  note naming the lines and asking for `+` on every added line. Runs at a hunk
+  note naming the lines, saying `Nothing more is needed for those lines` (or
+  `that line`), and asking for `+` on every added line in later patches.
+  Evidence: after the note without that sentence, the next call read the same
+  file again in 28 of 94 cases, against 5% after other successes (Sessions,
+  2026-09). Runs at a hunk
   edge are never re-read: a typo in edge context would otherwise duplicate the
   line. Evidence: one Model family often left the `+` off statement continuation
   lines; in 16 of its 34 failed calls with such runs, the first difference was
   one of those lines (Sessions, 2026-09). When no reading applies and the
-  reported first difference is such a line, the report adds `That patch line has
-  no + prefix, so it must already be in the file there; if it is new, start it
-  with +.` (difference key `unprefixed`), since identical retries followed the
-  bare difference.
+  reported first difference is such a line or an unchanged line right next to a
+  `+` line, the report adds `That patch line has no + prefix, so it must already
+  be in the file there; if it is new, start it with +.` (difference key
+  `unprefixed`), since identical retries followed the bare difference. Session
+  shape for the edge: a new last line after the `+` lines written without `+`.
 - Context-only blocks before another `@@` become ordered precise locator hints
   for that next hunk, including multiline context. Missing anchors fail without
   falling back to a different location, and repeated anchors follow the hint

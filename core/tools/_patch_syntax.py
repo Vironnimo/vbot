@@ -220,6 +220,10 @@ class _Hunk:
     # parsed hunk: an unprefixed line and a space-prefixed one parse alike, but
     # read as added text they differ by that space. Empty for other forms.
     written: list[str] = field(default_factory=list, compare=False, repr=False)
+    # How many hunks of the Update, this one included, name the same lines to
+    # change without an @@ line. As in Codex, where each hunk searches after the
+    # previous one, that many occurrences are changed in order.
+    twins: int = field(default=1, compare=False, repr=False)
 
     def changes_text(self) -> bool:
         if self.replacement is not None:
@@ -369,7 +373,22 @@ def _parse(patch: str, default_path: str | None = None) -> list[_Operation]:
                     other=operation.path,
                 )
     _check_operations(operations, len(lines))
+    for operation in operations:
+        _count_twins(operation.hunks)
     return operations
+
+
+def _count_twins(hunks: list[_Hunk]) -> None:
+    """Count, for each hunk without an @@ line, the hunks that name the same lines."""
+    keys = [
+        tuple(text for prefix, text in hunk.lines if prefix in " -")
+        if not hunk.hints and hunk.replacement is None and hunk.insert_line is None
+        else ()
+        for hunk in hunks
+    ]
+    for hunk, key in zip(hunks, keys, strict=True):
+        if key:
+            hunk.twins = keys.count(key)
 
 
 def _check_operations(operations: list[_Operation], line_count: int) -> None:

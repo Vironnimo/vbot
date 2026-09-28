@@ -47,7 +47,7 @@ _EOF_WARNING = (
     "where they are."
 )
 _WITHIN_LINE_NOTE = "The - line is part of line {line}; only that part of the line was replaced."
-_UNMARKED_ADVICE = "Start every added line with +."
+_UNMARKED_ADVICE = "in later patches, start every added line with +."
 _FIRST_AFTER_HINT_NOTE = (
     "The lines to replace occur {occurrences} times after {hint!r}; the first, at line "
     "{line}, was changed."
@@ -55,6 +55,10 @@ _FIRST_AFTER_HINT_NOTE = (
 _FIRST_AFTER_PREVIOUS_NOTE = (
     "The lines to replace occur {occurrences} times; the first after the previous change "
     "in this file, at line {line}, was changed."
+)
+_FIRST_OF_TWINS_NOTE = (
+    "The lines to replace occur {occurrences} times, as many times as hunks of this patch "
+    "name them; the hunks change them in order, so the first, at line {line}, was changed."
 )
 # A line this similar to the file's line is a copy of it with a typo, not new text.
 _NEAR_COPY = 0.8
@@ -123,7 +127,7 @@ def _part_of_lines(content: str, old: str) -> JsonObject | None:
         text = wanted.strip()
         if not text or _loose(wanted) in whole:
             continue
-        numbers = [number for number, line in enumerate(file_lines, 1) if text in line]
+        numbers = [number for number, line in enumerate(file_lines, 1) if _cut_from(text, line)]
         if not numbers:
             return None
         excerpts = [
@@ -146,6 +150,35 @@ def _part_of_lines(content: str, old: str) -> JsonObject | None:
             "excerpts": excerpts,
         }
     return None
+
+
+def _cut_from(text: str, line: str) -> bool:
+    """Tell whether ``text`` reads as a piece copied out of ``line``, not a chance match.
+
+    The piece holds at least 3 letters or digits, does not split a word of the
+    line, and starts or ends the line or is at least 8 characters long. Short
+    text such as ``}``, ``1,`` or ``pass`` occurs by chance inside unrelated lines.
+    """
+    if sum(character.isalnum() for character in text) < 3:
+        return False
+    stripped = line.strip()
+    if len(text) < 8 and not (stripped.startswith(text) or stripped.endswith(text)):
+        return False
+    start = line.find(text)
+    while start >= 0:
+        end = start + len(text)
+        if not (
+            _joins_word(line[start - 1 : start], text[0])
+            or _joins_word(text[-1], line[end : end + 1])
+        ):
+            return True
+        start = line.find(text, start + 1)
+    return False
+
+
+def _joins_word(left: str, right: str) -> bool:
+    """Tell whether the characters ``left`` and ``right`` belong to one word."""
+    return bool(left and right) and all(ch.isalnum() or ch == "_" for ch in left + right)
 
 
 def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]) -> JsonObject:
@@ -358,8 +391,10 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]
     hunk with the lines of some such runs added (``_unmarked_texts``), paired
     with their positions: first the runs holding a line the file lacks, then
     also the blank runs, then all runs. A run whose lines the file has stays
-    unchanged while a reading without it places the hunk. A reading keeps at
-    least one unchanged or removed line to place it.
+    unchanged while a reading without it places the hunk. A blank run stays
+    unchanged only between unchanged or removed lines that stay: beyond them,
+    the file's own blank line there would place it and move into the added
+    block. A reading keeps at least one unchanged or removed line to place it.
     """
     lines = hunk.lines
     if len(hunk.written) != len(lines):
@@ -374,7 +409,10 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]
         return 0 if any(_loose(text) not in present for text in texts) else 2
 
     ranks = {run: rank(run) for run in runs}
-    choices = (tuple(run for run in runs if ranks[run] <= most) for most in range(3))
+    choices = (
+        _with_edge_blanks(lines, runs, [run for run in runs if ranks[run] <= most], ranks)
+        for most in range(3)
+    )
     readings = []
     for chosen in dict.fromkeys(choices):
         if not chosen:
@@ -387,26 +425,112 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]
     return readings
 
 
+def _with_edge_blanks(
+    lines: list[tuple[str, str]], runs: list[range], chosen: list[range], ranks: dict[range, int]
+) -> tuple[range, ...]:
+    """Add to ``chosen`` each blank run that staying unchanged lines do not enclose."""
+    if not chosen:
+        return ()
+    chosen = list(chosen)
+    while True:
+        taken = {i for run in chosen for i in run}
+        edge = [
+            run
+            for run in runs
+            if ranks[run] == 1 and run not in chosen and not _enclosed(lines, run, taken)
+        ]
+        if not edge:
+            return tuple(sorted(chosen, key=lambda run: run.start))
+        chosen.extend(edge)
+
+
+def _enclosed(lines: list[tuple[str, str]], run: range, taken: set[int]) -> bool:
+    """Tell whether unchanged or removed lines outside ``run`` and ``taken`` surround it."""
+    kept = [
+        i
+        for i, (prefix, _) in enumerate(lines)
+        if prefix in " -" and i not in taken and i not in run
+    ]
+    return any(i < run.start for i in kept) and any(i >= run.stop for i in kept)
+
+
 def _unmarked_texts(hunk: _Hunk, run: range) -> dict[int, str]:
     """Return the text each line of an unprefixed run adds, by position in ``hunk``.
 
     A line the patch wrote without a prefix adds itself as written; one with only
     whitespace adds a blank line. A Model that wrote the space prefix of unchanged
-    lines instead of + indents the run one space deeper than the nearest lines
-    around it. When only the run without that space matches their indentation,
-    each line adds its text without it.
+    lines instead of + indents such a line one space deeper than meant. Each line
+    keeps its written indentation when that is the indentation of the nearest
+    lines around it or a column the line above aligns continuations to.
+    Otherwise it loses its first space when the indentation then fits them, or
+    when that space makes the number of indenting spaces odd, both counted from
+    the line start and beyond the line above's indentation.
     """
-    texts = {i: hunk.written[i] if hunk.written[i].strip() else "" for i in run}
-    first = next((text for text in texts.values() if text), "")
-    if not first or not all(text.startswith(" ") for text in texts.values() if text):
-        return texts
-    before = (text for _, text in reversed(hunk.lines[: run.start]) if text.strip())
-    after = (text for _, text in hunk.lines[run.stop :] if text.strip())
-    around = {_leading(text) for text in (next(before, None), next(after, None)) if text}
-    indent = _leading(first)
-    if indent not in around and indent[1:] in around:
-        return {i: text[1:] for i, text in texts.items()}
+    new_text = [(i, text) for i, (prefix, text) in enumerate(hunk.lines) if prefix in " +"]
+    after = next((text for i, text in new_text if i >= run.stop and text.strip()), None)
+    above = next((text for i, text in reversed(new_text) if i < run.start and text.strip()), None)
+    texts: dict[int, str] = {}
+    for i in run:
+        text = hunk.written[i]
+        if not text.strip():
+            texts[i] = ""
+            continue
+        texts[i] = text = _meant_line(text, above, after)
+        above = text
     return texts
+
+
+def _meant_line(text: str, above: str | None, after: str | None) -> str:
+    """Return ``text`` as written, or without its first space when that is a stray prefix."""
+    if not text.startswith(" "):
+        return text
+    stripped = text[1:]
+    indents = {_leading(line) for line in (above, after) if line is not None}
+    columns = _alignment_columns(above) if above is not None else set()
+
+    def fits(line: str) -> bool:
+        indent = _leading(line)
+        return indent in indents or (not indent.strip(" ") and len(indent) in columns)
+
+    if fits(text):
+        return text
+    if fits(stripped):
+        return stripped
+    written, base = _leading(text), _leading(above or "")
+    if not (written + base).strip(" ") and len(written) % 2 and (len(written) - len(base)) % 2:
+        return stripped
+    return text
+
+
+def _alignment_columns(line: str) -> set[int]:
+    """Return the columns a continuation of ``line`` aligns to.
+
+    For each bracket ``line`` leaves open, outside quotes: the column just after
+    it, and where the last item inside it starts.
+    """
+    open_items: list[list[int]] = []  # [column after the bracket, current item start]
+    quote = ""
+    escaped = False
+    for column, character in enumerate(line):
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = ""
+            continue
+        if open_items and open_items[-1][1] < 0 and not character.isspace():
+            open_items[-1][1] = column
+        if character in "\"'":
+            quote = character
+        elif character in "([{":
+            open_items.append([column + 1, -1])
+        elif character in ")]}" and open_items:
+            open_items.pop()
+        elif character == "," and open_items:
+            open_items[-1][1] = -1
+    return {column for item in open_items for column in item if column >= 0}
 
 
 def _leading(text: str) -> str:
@@ -462,14 +586,26 @@ def _unmarked_note(texts: list[str]) -> str:
         subject = f"The patch line {quoted}" if shown else "A blank patch line"
         return (
             f"{subject} between + lines has no + prefix, but the file does not have it "
-            f"there, so it was added as a + line. {_UNMARKED_ADVICE}"
+            "there, so it was added as a + line. Nothing more is needed for that line; "
+            f"{_UNMARKED_ADVICE}"
         )
     subject = f"{len(texts)} patch lines" if shown else f"{len(texts)} blank patch lines"
     example = f"; for example {quoted}" if shown else ""
     return (
         f"{subject} between + lines have no + prefix, but the file does not have them "
-        f"there, so they were added as + lines{example}. {_UNMARKED_ADVICE}"
+        f"there, so they were added as + lines{example}. Nothing more is needed for those "
+        f"lines; {_UNMARKED_ADVICE}"
     )
+
+
+def _beside_additions(lines: list[tuple[str, str]], index: int) -> bool:
+    """Tell whether the unchanged line at ``index`` can be an added line missing its +.
+
+    It can when it sits between + lines or right next to one.
+    """
+    if any(index in run for run in _unmarked_runs(lines)):
+        return True
+    return any(0 <= i < len(lines) and lines[i][0] == "+" for i in (index - 1, index + 1))
 
 
 def _hint_text(hint: str) -> str:
@@ -791,8 +927,12 @@ def _apply_hunk(
     if isinstance(found, AmbiguousFuzzyMatch):
         # As in Codex, an @@ line or the file's previous change orders the
         # occurrences, and the first after it is meant (Sessions: 60 of 61 such
-        # hunks). A hunk with neither, or a copy with errors, must match once.
+        # hunks). So is the first when as many hunks name the lines as the file
+        # holds them. Any other hunk, or a copy with errors, must match once.
         start = offset if hunk.hints else previous
+        in_order = start is None and hunk.twins == found.occurrences
+        if in_order:
+            start = 0
         first = (
             _match(content[start:], old, new, eof=hunk.eof, first=True)
             if start is not None and not copied
@@ -816,7 +956,9 @@ def _apply_hunk(
                 line=line,
             )
             if hunk.hints
-            else _FIRST_AFTER_PREVIOUS_NOTE.format(occurrences=found.occurrences, line=line)
+            else (_FIRST_OF_TWINS_NOTE if in_order else _FIRST_AFTER_PREVIOUS_NOTE).format(
+                occurrences=found.occurrences, line=line
+            )
         )
         offset, window, found = start, content[start:], first
     if found is None:
@@ -852,24 +994,28 @@ def _apply_hunk(
         if difference:
             # Number the hunk's unchanged and removed lines as the report counts them.
             numbered = [i for i, (prefix, _) in enumerate(hunk.lines) if prefix in " -"]
-            unmarked = {i for run in _unmarked_runs(hunk.lines) for i in run}
             position = difference["copy_line"] - 1
-            if position < len(numbered) and numbered[position] in unmarked:
-                difference["unprefixed"] = True
+            if position < len(numbered) and hunk.lines[numbered[position]][0] == " ":
+                difference["unprefixed"] = _beside_additions(hunk.lines, numbered[position])
         elif not details["candidates"] and "part_of" not in details:
             # Nothing resembles the lines as a whole; a line the file has nowhere
             # is then the one to fix, often a new line written without +.
             present = {_loose(line) for line in split_text_lines(content)}
             absent = next(
                 (
-                    (prefix, text)
-                    for prefix, text in hunk.lines
+                    i
+                    for i, (prefix, text) in enumerate(hunk.lines)
                     if prefix in " -" and text.strip() and _loose(text) not in present
                 ),
                 None,
             )
             if absent is not None:
-                details["absent"] = {"text": absent[1].strip(), "removed": absent[0] == "-"}
+                prefix, text = hunk.lines[absent]
+                details["absent"] = {
+                    "text": text.strip(),
+                    "removed": prefix == "-",
+                    "beside_additions": prefix == " " and _beside_additions(hunk.lines, absent),
+                }
         raise _PatchError("text_not_found", path=path, label=hunk.label, details=details)
     if [t for p, t in hunk.lines if p in " -"] == [t for p, t in hunk.lines if p in " +"]:
         return content, warnings

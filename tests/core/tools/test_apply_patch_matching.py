@@ -646,6 +646,30 @@ def test_previous_change_orders_only_later_occurrences_of_the_same_update(tmp_pa
     assert path.read_bytes().count(b"x=0") == 2
 
 
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        # Session shape: as many identical hunks as the file holds their lines.
+        (b"x=0\nmid\nx=0\n", b"x=1\nmid\nx=2\n"),
+        # With more occurrences than hunks, which ones are meant stays open.
+        (b"x=0\nmid\nx=0\nx=0\n", None),
+    ],
+)
+def test_identical_hunks_change_as_many_occurrences_in_order(tmp_path, before, after):
+    path = tmp_path / "file.txt"
+    path.write_bytes(before)
+    result = apply(tmp_path, update("@@\n-x=0\n+x=1\n@@\n-x=0\n+x=2"))
+    if after is None:
+        assert "the lines to replace occur 3 times (lines 1, 3, 4)" in text(result)
+        assert path.read_bytes() == before
+    else:
+        assert path.read_bytes() == after
+        assert text(result).endswith(
+            "Note: The lines to replace occur 2 times, as many times as hunks of this patch "
+            "name them; the hunks change them in order, so the first, at line 1, was changed."
+        )
+
+
 def test_context_anchor_does_not_leak_to_next_file_or_edit(tmp_path):
     (tmp_path / "file.txt").write_bytes(b"before=1\nsection\nafter=1\n")
     (tmp_path / "other.txt").write_bytes(b"old\n")
@@ -720,6 +744,31 @@ def test_part_of_a_line_is_not_replaced_when_the_place_or_meaning_is_open(tmp_pa
             b"            count(row)\n        seen.add(row)\n",
             "log(row)",
         ),
+        # Session shape: one line written with the space prefix, the next without it.
+        (
+            "@@\n         check(row)\n+        if row in seen:\n             seen.discard(row)\n"
+            "            log(row)\n+        seen.add(row)\n     return rows",
+            b"        if row in seen:\n            seen.discard(row)\n            log(row)\n"
+            b"        seen.add(row)\n",
+            "seen.discard(row)",
+        ),
+        # Session shapes: continuation lines aligned to an odd column after an open
+        # bracket, or to the start of the last item inside it, stay aligned.
+        (
+            "@@\n         check(row)\n+        res = call(ky,\n                   alpha,\n"
+            "                   beta)\n+        done(res)\n     return rows",
+            b"        res = call(ky,\n                   alpha,\n                   beta)\n"
+            b"        done(res)\n",
+            "alpha,",
+        ),
+        (
+            "@@\n         check(row)\n+        res = call(ky, alpha +\n"
+            "                       beta +\n                       gamma)\n"
+            "+        done(res)\n     return rows",
+            b"        res = call(ky, alpha +\n                       beta +\n"
+            b"                       gamma)\n        done(res)\n",
+            "beta +",
+        ),
     ],
 )
 def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body, added, example):
@@ -732,8 +781,8 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
     )
     assert text(result).endswith(
         "Note: 2 patch lines between + lines have no + prefix, but the file does not have "
-        f"them there, so they were added as + lines; for example {example!r}. "
-        "Start every added line with +."
+        f"them there, so they were added as + lines; for example {example!r}. Nothing more is "
+        "needed for those lines; in later patches, start every added line with +."
     )
 
 
@@ -745,7 +794,7 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             "@@\n start\n+one\nkeep\n+two\n    three\n+four\n end",
             b"start\none\nkeep\ntwo\n    three\nfour\nend\n",
             "The patch line 'three' between + lines has no + prefix, but the file does not "
-            "have it there, so it was added as a + line.",
+            "have it there, so it was added as a + line. Nothing more is needed for that line;",
         ),
         # Session shape: the line after a replaced one stays unchanged while
         # blank lines without + follow in the added block.
@@ -756,7 +805,19 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             b'__all__ = [\n    "a", "b",\n]\n\n\n'
             b"def b():\n    x = 1\n\n    y = 2\n\n    return x\n",
             "2 blank patch lines between + lines have no + prefix, but the file does not "
-            "have them there, so they were added as + lines.",
+            "have them there, so they were added as + lines. Nothing more is needed for those "
+            "lines;",
+        ),
+        # Session shape: a blank line without + after the last unchanged line is
+        # added too, so the file's own blank line after that line stays.
+        (
+            b"def f():\n    start()\n\ndef g():\n    pass\n",
+            "@@\n     start()\n+    if x:\n        new()\n+    done()\n\n+    more()",
+            b"def f():\n    start()\n    if x:\n        new()\n    done()\n\n    more()\n\n"
+            b"def g():\n    pass\n",
+            "2 patch lines between + lines have no + prefix, but the file does not have them "
+            "there, so they were added as + lines; for example 'new()'. Nothing more is needed "
+            "for those lines;",
         ),
         # After the last unchanged line, unprefixed lines new there are added too.
         (
@@ -776,7 +837,7 @@ def test_unprefixed_lines_the_file_lacks_there_are_added(tmp_path, before, body,
     assert result["ok"], text(result)
     assert path.read_bytes() == after
     if note is not None:
-        assert f"\nNote: {note} Start every added line with +." in text(result)
+        assert f"\nNote: {note} in later patches, start every added line with +." in text(result)
 
 
 @pytest.mark.parametrize(
