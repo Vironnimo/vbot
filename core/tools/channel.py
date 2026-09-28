@@ -819,21 +819,17 @@ def _platform_target_from_channel_config(channel_config: ChannelConfig) -> str |
 
 
 def _build_file_data(
-    value: object,
+    value: list[str] | None,
     *,
     context: ToolContext,
     max_size_bytes: int,
 ) -> list[FileData]:
     if value is None:
         return []
-    if not isinstance(value, list):
-        raise ValueError("file_paths must be an array of strings")
-    if not value:
-        raise ValueError("file_paths must contain at least one file path")
 
     files: list[FileData] = []
     for index, raw_path in enumerate(value):
-        if not isinstance(raw_path, str) or not raw_path.strip():
+        if not raw_path.strip():
             raise ValueError(f"file_paths[{index}] must be a non-empty string")
         path_text = raw_path.strip()
         if path_text.lower().startswith("file://"):
@@ -895,47 +891,30 @@ def _size_text(size_bytes: int) -> str:
     return f"{size_bytes} bytes"
 
 
-def _build_buttons(value: object) -> list[list[InteractionButton]] | None:
+def _build_buttons(
+    value: list[list[dict[str, str]]] | None,
+) -> list[list[InteractionButton]] | None:
     """Parse the tool's ``buttons`` payload into neutral inline-keyboard rows.
 
-    Returns ``None`` when omitted. Raises ``ValueError`` (mapped to a clean
-    ``invalid_arguments`` tool failure) on a malformed structure; the callback
-    data's byte-length and platform support are enforced downstream by the
-    channel service and adapter.
+    Returns ``None`` when omitted. The input schema guarantees non-empty rows of
+    buttons with non-empty ``label`` and ``data``; since it leaves button objects
+    open, another field raises ``ValueError`` (mapped to a clean
+    ``invalid_arguments`` tool failure). The callback data's byte-length and
+    platform support are enforced downstream by the channel service and adapter.
     """
     if value is None:
         return None
-    if not isinstance(value, list):
-        raise ValueError("buttons must be an array of button rows")
-    if not value:
-        raise ValueError("buttons must contain at least one button row")
 
     rows: list[list[InteractionButton]] = []
     for row_index, row in enumerate(value):
-        if not isinstance(row, list):
-            raise ValueError(f"buttons[{row_index}] must be an array of buttons")
-        if not row:
-            raise ValueError(f"buttons[{row_index}] must contain at least one button")
         buttons: list[InteractionButton] = []
         for button_index, button in enumerate(row):
-            if not isinstance(button, dict):
-                raise ValueError(f"buttons[{row_index}][{button_index}] must be an object")
             unknown_fields = sorted(set(button) - _INTERACTION_BUTTON_ARGUMENTS)
             if unknown_fields:
                 names = ", ".join(unknown_fields)
                 raise ValueError(
                     f"buttons[{row_index}][{button_index}] has unknown field(s): {names}"
                 )
-            label = button.get("label")
-            data = button.get("data")
-            if not isinstance(label, str) or not label:
-                raise ValueError(
-                    f"buttons[{row_index}][{button_index}].label must be a non-empty string"
-                )
-            if not isinstance(data, str) or not data:
-                raise ValueError(
-                    f"buttons[{row_index}][{button_index}].data must be a non-empty string"
-                )
-            buttons.append(InteractionButton(label=label, data=data))
+            buttons.append(InteractionButton(label=button["label"], data=button["data"]))
         rows.append(buttons)
-    return rows or None
+    return rows
