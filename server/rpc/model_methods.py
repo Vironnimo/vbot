@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AbstractContextManager, nullcontext
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from core.models.query import ModelQuery
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import NetworkError, ProviderError
 from core.utils.errors import ConfigError
+from core.utils.retry import caller_owns_retries
 from server.events import RESOURCE_KIND_MODELS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -574,13 +576,14 @@ async def _refresh_provider_connections(
                 discovery_connection,
                 credential_value,
             ):
-                result = await refresh_models(
-                    provider,
-                    credential_value,
-                    resources_dir,
-                    credential_connection=discovery_connection,
-                    models_dev_catalog=models_dev_catalog,
-                )
+                with _single_attempt_if(getattr(connection, "auto_refresh", False)):
+                    result = await refresh_models(
+                        provider,
+                        credential_value,
+                        resources_dir,
+                        credential_connection=discovery_connection,
+                        models_dev_catalog=models_dev_catalog,
+                    )
         except (ConfigError, RpcError, ModelDiscoveryError, ProviderError, NetworkError) as exc:
             _LOGGER.warning(
                 "Model refresh failed for provider '%s' connection '%s': %s",
@@ -598,6 +601,16 @@ async def _refresh_provider_connections(
             continue
         successes.append(result)
     return successes, errors
+
+
+def _single_attempt_if(auto_refresh: bool) -> AbstractContextManager[None]:
+    """Probe an auto-refresh (local) Connection once instead of with backoff.
+
+    Such a Connection is usually a local server that is simply not running;
+    retrying only delays the refresh, and the automatic sweep re-probes it.
+    """
+
+    return caller_owns_retries() if auto_refresh else nullcontext()
 
 
 def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Path) -> None:

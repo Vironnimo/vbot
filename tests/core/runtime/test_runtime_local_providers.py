@@ -15,10 +15,12 @@ import core.providers.runtime as provider_runtime_module
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers.accounts import ConnectionRef
+from core.providers.errors import NetworkError
 from core.providers.ollama import OllamaAdapter
 from core.providers.token_getter import StaticTokenGetter
 from core.runtime.runtime import Runtime
 from core.storage.layout import DataDirectoryLayout
+from core.utils.retry import retry_async
 
 LOCAL = ConnectionRef("ollama", "ollama:local")
 
@@ -95,14 +97,26 @@ async def test_local_catalog_refresh_throttles_probes_and_logs_reachability_tran
     monkeypatch.setattr(
         provider_runtime_module, "time", SimpleNamespace(monotonic=lambda: clock[0])
     )
+    ttl = provider_runtime_module.LOCAL_CATALOG_REFRESH_TTL_SECONDS
+    sweep_seconds: list[float] = []
     outcomes: list[Exception | None] = []
     calls: list[str] = []
+    probe_attempts: list[str] = []
 
     async def fake_refresh(provider: Any, credential: str, resources_dir: Any, **kwargs: Any):
         calls.append(provider.id)
+        clock[0] += sweep_seconds.pop(0) if sweep_seconds else 0.0
         outcome = outcomes.pop(0) if outcomes else None
         if outcome is not None:
-            raise outcome
+            # Like discovery, probe through the shared transient-failure retry.
+            async def probe() -> None:
+                probe_attempts.append(provider.id)
+                raise outcome
+
+            try:
+                await retry_async(probe)
+            except NetworkError as error:
+                raise ModelDiscoveryError(str(error)) from error
         return {"provider_id": provider.id, "model_count": 1}
 
     monkeypatch.setattr(discovery_module, "refresh_models", fake_refresh)
@@ -116,6 +130,9 @@ async def test_local_catalog_refresh_throttles_probes_and_logs_reachability_tran
     assert runtime.connection_reachability("ollama:local") is None
 
     runtime.storage.set_provider_connection_enabled("ollama:local", True)
+    # The TTL runs from the end of a sweep, so one slower than the TTL does not
+    # let the next caller start another sweep at once.
+    sweep_seconds.append(ttl + 5)
     await runtime.maybe_refresh_local_catalogs()
     await runtime.maybe_refresh_local_catalogs()
     # One sweep inside the TTL, one in-place registry reload, a reachable server.
@@ -124,19 +141,21 @@ async def test_local_catalog_refresh_throttles_probes_and_logs_reachability_tran
     assert runtime.connection_reachability("ollama:local") is True
 
     # ``force`` re-probes inside the TTL (used right after an enable).
-    outcomes.append(ModelDiscoveryError("connection refused"))
+    outcomes.append(NetworkError("connection refused"))
     await runtime.maybe_refresh_local_catalogs(force=True)
     assert calls == ["ollama", "ollama"]
     assert runtime.connection_reachability("ollama:local") is False
     # A failing server keeps the stale catalog.
     assert len(reloads) == 1
 
-    clock[0] += provider_runtime_module.LOCAL_CATALOG_REFRESH_TTL_SECONDS + 1
-    outcomes.append(ModelDiscoveryError("connection refused"))
+    clock[0] += ttl + 1
+    outcomes.append(NetworkError("connection refused"))
     await runtime.maybe_refresh_local_catalogs()
     await runtime.maybe_refresh_local_catalogs(force=True)
     assert calls == ["ollama"] * 4
     assert len(reloads) == 2
+    # Each failed sweep probed once: the TTL, not a backoff series, is its retry.
+    assert probe_attempts == ["ollama", "ollama"]
 
     # Only the transitions are logged: one unreachable warning, one recovery.
     assert logger.warning.call_count == 1

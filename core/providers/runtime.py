@@ -48,8 +48,12 @@ from core.providers.token_store import TokenStore
 from core.providers.xai import XAIAdapter
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
+from core.utils.retry import caller_owns_retries
 from core.utils.workers import BoundedWorkerPool
 
+# Minimum pause between automatic local sweeps, measured from the end of the
+# previous sweep. It is also the probes' retry policy: each sweep makes one
+# discovery attempt per Connection.
 LOCAL_CATALOG_REFRESH_TTL_SECONDS = 30.0
 # Automatic local catalog refreshes stage, validate, publish, and discard the
 # complete Model DB copy here, never on the Event Loop.
@@ -245,7 +249,6 @@ class ProviderRuntime:
             targets = self._auto_refresh_targets()
             if not targets:
                 return
-            self.refresh_at = now
 
             from core.models.discovery import ModelDiscoveryError, refresh_models
 
@@ -277,12 +280,13 @@ class ProviderRuntime:
                         )
                         continue
                     try:
-                        await refresh_models(
-                            provider,
-                            credential_value,
-                            refresh_resources_dir,
-                            credential_connection=connection,
-                        )
+                        with caller_owns_retries():
+                            await refresh_models(
+                                provider,
+                                credential_value,
+                                refresh_resources_dir,
+                                credential_connection=connection,
+                            )
                     except ModelDiscoveryError as error:
                         previous = self._connection_reachability.get(connection_id)
                         self._connection_reachability[connection_id] = False
@@ -324,6 +328,9 @@ class ProviderRuntime:
             except Exception as error:
                 self._logger.warning("Local catalog refresh could not be published: %s", error)
             finally:
+                # Throttle from completion, failures included: a sweep slower
+                # than the TTL must not let the next caller start another one.
+                self.refresh_at = time.monotonic()
                 for staged_refresh in staged:
                     await _LOCAL_CATALOG_WORKERS.run(_discard_staged_refresh, staged_refresh)
 

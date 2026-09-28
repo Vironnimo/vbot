@@ -6,6 +6,7 @@ server Retry-After hints, retry logging, retry observers and caller-owned retrie
 
 import asyncio
 import logging
+from contextlib import nullcontext
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -142,21 +143,46 @@ async def test_retry_retries_a_retryable_error_and_logs_the_retry(
 
 
 @pytest.mark.asyncio
-async def test_retry_gives_up_after_max_retries_with_exponential_backoff(
-    sleeps: list[float], caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("caller_owned", "attempts"),
+    [(False, MAX_RETRIES + 1), (True, 1)],
+    ids=["standalone", "caller-owned"],
+)
+async def test_retry_gives_up_after_its_attempts_with_exponential_backoff(
+    sleeps: list[float],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    caller_owned: bool,
+    attempts: int,
 ):
     monkeypatch.setattr(retry_module.random, "uniform", lambda *_args: 0.0)
     caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
     operation = AsyncMock(side_effect=ProviderRateLimitError("Rate limited"))
 
-    with pytest.raises(ProviderRateLimitError, match="Rate limited") as raised:
+    with (
+        caller_owns_retries() if caller_owned else nullcontext(),
+        pytest.raises(ProviderRateLimitError, match="Rate limited") as raised,
+    ):
         await retry_async(operation)
 
-    assert operation.call_count == MAX_RETRIES + 1
-    assert raised.value.attempts_made == MAX_RETRIES + 1
-    assert sleeps == [INITIAL_DELAY_SECONDS * BACKOFF_FACTOR**attempt for attempt in range(3)]
-    [message] = _retry_log(caplog, "Retries exhausted")
-    assert "ProviderRateLimitError" in message
+    assert operation.call_count == attempts
+    assert raised.value.attempts_made == attempts
+    assert sleeps == [
+        INITIAL_DELAY_SECONDS * BACKOFF_FACTOR**attempt for attempt in range(attempts - 1)
+    ]
+    # Every retry line counts against the same total the exhaustion line reports.
+    retries = _retry_log(caplog, "Retryable error")
+    assert [f"attempt {number}/{attempts} " in line for number, line in enumerate(retries, 1)] == [
+        True
+    ] * (attempts - 1)
+    exhausted = _retry_log(caplog, "Retries exhausted")
+    if caller_owned:
+        # One attempt retried nothing; the caller logs the error it catches.
+        assert exhausted == []
+    else:
+        [message] = exhausted
+        assert f"after {attempts} attempts" in message
+        assert "ProviderRateLimitError" in message
 
 
 @pytest.mark.asyncio
