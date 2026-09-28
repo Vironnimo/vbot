@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing, suppress
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
 from server._app_lifecycle import _app_chat_runs
@@ -20,6 +20,9 @@ from server.file_delivery import FileDelivery
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
 from server.rpc.payloads import projected_file_urls, remove_opaque_provider_metadata
+
+if TYPE_CHECKING:
+    from core.sessions import SessionAddress
 
 JsonObject = dict[str, Any]
 
@@ -231,22 +234,26 @@ def _queues_snapshot(state: Any) -> list[JsonObject]:
     if not callable(all_queued):
         return []
 
-    grouped: dict[tuple[str | None, str, str], list[JsonObject]] = {}
-    for session_key, item in all_queued():
+    grouped: dict[SessionAddress, list[JsonObject]] = {}
+    for address, item in all_queued():
         if item.internal:
             continue
-        grouped.setdefault(session_key, []).append(item.to_dict())
+        grouped.setdefault(address, []).append(item.to_dict())
 
     return [
         {
-            "project_id": project_id,
-            "agent_id": agent_id,
-            "session_id": session_id,
-            "items": grouped[(project_id, agent_id, session_id)],
+            "project_id": address.project_id,
+            "agent_id": address.agent_id,
+            "session_id": address.session_id,
+            "items": items,
         }
-        for project_id, agent_id, session_id in sorted(
-            grouped,
-            key=lambda key: (key[0] or "", key[1], key[2]),
+        for address, items in sorted(
+            grouped.items(),
+            key=lambda entry: (
+                entry[0].project_id or "",
+                entry[0].agent_id,
+                entry[0].session_id,
+            ),
         )
     ]
 
