@@ -16,10 +16,37 @@ RESULT_SCHEMA = 1
 DEFAULT_SCENARIO = "sessions"
 TOP_REPORTED_RPC_METHODS = 12
 TOP_REPORTED_COUNTERS = 25
+SCROLL_PAGE_GROUPS = 5
 
 
 def _p50_p99_max(prefix: str) -> tuple[str, str, str]:
     return (f"{prefix}.p50", f"{prefix}.p99", f"{prefix}.max")
+
+
+def _browser_rows(label: str, prefix: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """The browser's own counters of one UI phase (see ``ui_probe``)."""
+    return (
+        (
+            f"{label} task / script ms",
+            (f"{prefix}.browser.task_ms", f"{prefix}.browser.script_ms"),
+        ),
+        (
+            f"{label} layout / style ms",
+            (f"{prefix}.browser.layout_ms", f"{prefix}.browser.recalc_style_ms"),
+        ),
+        (
+            f"{label} layouts / style recalcs",
+            (f"{prefix}.browser.layout_count", f"{prefix}.browser.recalc_style_count"),
+        ),
+        (
+            f"{label} DOM nodes / layout objects / JS heap MB",
+            (
+                f"{prefix}.browser.nodes",
+                f"{prefix}.browser.layout_objects",
+                f"{prefix}.browser.js_heap_mb",
+            ),
+        ),
+    )
 
 
 # (label, dotted paths into one level). Several paths render as "a / b / c".
@@ -97,6 +124,37 @@ TABLE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("ui.dom_marker_latency_ms.p50", "ui.dom_marker_latency_ms.p95"),
     ),
     ("UI RPC calls / per s", ("ui.rpc.count", "ui.rpc.per_second")),
+    *_browser_rows("UI", "ui"),
+    ("UI history turns / seeding s", ("ui_history.turns", "ui_history.seed_seconds")),
+    (
+        "UI scroll: pages / timeline items / ms",
+        (
+            "ui.scroll_through.pages",
+            "ui.scroll_through.timeline_items",
+            "ui.scroll_through.duration_ms",
+        ),
+    ),
+    (
+        "UI scroll: page p50 / p95 / max ms",
+        (
+            "ui.scroll_through.page_ms.p50",
+            "ui.scroll_through.page_ms.p95",
+            "ui.scroll_through.page_ms.max",
+        ),
+    ),
+    (
+        "UI scroll: page RPC p50 / max ms",
+        ("ui.scroll_through.rpc_ms.p50", "ui.scroll_through.rpc_ms.max"),
+    ),
+    (
+        "UI scroll: long tasks count / max ms",
+        ("ui.scroll_through.long_tasks.count", "ui.scroll_through.long_tasks.max_ms"),
+    ),
+    (
+        "UI scroll: frame gaps >50ms count / max",
+        ("ui.scroll_through.frame_gaps.count", "ui.scroll_through.frame_gaps.max_ms"),
+    ),
+    *_browser_rows("UI scroll:", "ui.scroll_through"),
     (
         "RSS first / last / max MB",
         (
@@ -163,6 +221,24 @@ COMPARE_KEYS: tuple[str, ...] = (
     "ui.frame_gaps.count",
     "ui.frame_gaps.max_ms",
     "ui.rpc.count",
+    "ui.browser.task_ms",
+    "ui.browser.script_ms",
+    "ui.browser.layout_ms",
+    "ui.browser.recalc_style_ms",
+    "ui.browser.nodes",
+    "ui.browser.js_heap_mb",
+    "ui.scroll_through.page_ms.p50",
+    "ui.scroll_through.page_ms.p95",
+    "ui.scroll_through.page_ms.max",
+    "ui.scroll_through.long_tasks.count",
+    "ui.scroll_through.long_tasks.max_ms",
+    "ui.scroll_through.frame_gaps.max_ms",
+    "ui.scroll_through.browser.task_ms",
+    "ui.scroll_through.browser.script_ms",
+    "ui.scroll_through.browser.layout_ms",
+    "ui.scroll_through.browser.recalc_style_ms",
+    "ui.scroll_through.browser.nodes",
+    "ui.scroll_through.browser.js_heap_mb",
     "client.turn_duration_ms.p50",
     "client.turn_excess_ms.p50",
     "client.turn_excess_ms.p95",
@@ -280,7 +356,12 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         f"- Scenario: {scenario}, {shape}, steps={config.get('steps')}, "
         f"tokens={config.get('tokens')}, rate={config.get('rate')}/s, "
         f"think_ms={config.get('think_ms')}, tools={','.join(config.get('tools') or [])}, "
-        f"calls={config.get('calls')}, history_tokens={config.get('history_tokens')}",
+        f"calls={config.get('calls')}, history_tokens={config.get('history_tokens')}"
+        + (
+            f", ui_history_turns={config.get('ui_history_turns')}"
+            if config.get("ui_history_turns") is not None
+            else ""
+        ),
         "",
         "Definitions: *TTFT* is send -> first `assistant_output_delta`; *TTFT overhead* subtracts "
         "`think_ms` and therefore still contains every Tool round of the turn. *Step overhead* "
@@ -309,7 +390,21 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         lines.extend(
             [
                 "UI: *RPC calls* are the `/api/rpc` requests the browser made while measuring, "
-                "including Extension page frames; *page frame gaps* come from Extension frames.",
+                "including Extension page frames; *page frame gaps* come from Extension frames. "
+                "*Task / script / layout / style* are the browser's own busy times over the "
+                "phase (CDP `Performance.getMetrics`); *DOM nodes*, *layout objects* and *JS "
+                "heap* are read after a forced garbage collection at the phase end.",
+                "",
+            ]
+        )
+    if any(get_path(level, "ui.scroll_through") for level in levels):
+        lines.extend(
+            [
+                "UI scroll: before the load phase, the browser scrolled the watched Session's "
+                "timeline to the top until no older History remained. *Page* runs from the "
+                "scroll to the second frame after the older page's items appeared (it includes "
+                "the page's `chat.history` request, *page RPC*); the other UI rows then cover "
+                "the load phase at the bottom of that timeline.",
                 "",
             ]
         )
@@ -406,6 +501,7 @@ def _level_details(level: Mapping[str, Any]) -> list[str]:
             _markdown_table(["Metric", "Count", "Total ms", "p50 ms", "p99 ms", "Max ms"], rows)
         )
     lines.extend(_swarm_details(level))
+    lines.extend(_scroll_details(level))
     lines.extend(_rpc_details(level))
     lines.extend(_counter_details(level))
     lines.extend(_timeline_details(level))
@@ -448,6 +544,37 @@ def _swarm_details(level: Mapping[str, Any]) -> list[str]:
     lines = ["", "Participant Tool calls:", ""]
     rows = [[name, format_value(count)] for name, count in by_name.items()]
     lines.extend(_markdown_table(["Tool", "Calls"], rows))
+    return lines
+
+
+def _scroll_details(level: Mapping[str, Any]) -> list[str]:
+    """Scroll-through pages in consecutive groups: how page cost grows with the timeline."""
+    samples = [
+        sample
+        for sample in get_path(level, "ui.scroll_through.page_samples") or []
+        if isinstance(sample, Mapping)
+    ]
+    if not samples:
+        return []
+    size = -(-len(samples) // SCROLL_PAGE_GROUPS)
+    rows = []
+    for start in range(0, len(samples), size):
+        group = samples[start : start + size]
+        page_ms = [s["page_ms"] for s in group if isinstance(s.get("page_ms"), int | float)]
+        rpc_ms = [s["rpc_ms"] for s in group if isinstance(s.get("rpc_ms"), int | float)]
+        rows.append(
+            [
+                f"{start + 1}-{start + len(group)}",
+                format_value(group[-1].get("items")),
+                format_value(sum(page_ms) / len(page_ms) if page_ms else None),
+                format_value(max(page_ms) if page_ms else None),
+                format_value(sum(rpc_ms) / len(rpc_ms) if rpc_ms else None),
+            ]
+        )
+    lines = ["", "UI scroll-through pages (timeline items after the group):", ""]
+    lines.extend(
+        _markdown_table(["Pages", "Items", "Page mean ms", "Page max ms", "RPC mean ms"], rows)
+    )
     return lines
 
 

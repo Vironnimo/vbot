@@ -8,7 +8,9 @@ Two scenarios share the measurement (recording, process sampling, profiler,
 UI probe, and for duration runs the snapshot series and heap census):
 
 - ``sessions``: N Sessions receive the same scripted turns through
-  ``chat.stream``.
+  ``chat.stream``. With ``ui_history_turns`` the Session the UI probe watches
+  first gets that many completed turns, and the probe scrolls through all of
+  them before the load phase.
 - ``swarm``: one Swarm of the bundled Swarm Extension with N participants
   whose turns the fake Provider scripts (see ``swarm_driver``).
 """
@@ -85,6 +87,11 @@ DEFAULT_LEVELS: tuple[int, ...] = (1, 10, 20, 30)
 QUICK_LEVELS: tuple[int, ...] = (1, 5)
 SCENARIOS: tuple[str, ...] = ("sessions", "swarm")
 WARMUP_CHUNK_TOKENS = 20_000
+# Shape of one seeded turn in the watched Session's History (ui_history_turns):
+# three Tool rounds and a Markdown answer, streamed unpaced.
+UI_HISTORY_STEPS = 4
+UI_HISTORY_TOKENS = 300
+UI_HISTORY_PROGRESS_TURNS = 50
 PROBE_MARGIN_SECONDS = 300
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "perf-results"
 T = TypeVar("T")
@@ -122,6 +129,7 @@ class LoadConfig:
     profile_gil: bool = False
     ui: bool = False
     ui_profile: bool = False
+    ui_history_turns: int | None = None
     keep: bool = False
     output_root: Path = field(default=DEFAULT_OUTPUT_ROOT)
 
@@ -149,6 +157,13 @@ class LoadConfig:
             raise ValueError("history tokens must not be negative")
         if self.scenario == "swarm" and self.history_tokens:
             raise ValueError("history tokens apply to the sessions scenario only")
+        if self.ui_history_turns is not None:
+            if self.ui_history_turns < 0:
+                raise ValueError("UI history turns must not be negative")
+            if self.scenario == "swarm":
+                raise ValueError("UI history turns apply to the sessions scenario only")
+            if not self.ui:
+                raise ValueError("UI history turns need the UI probe")
         # Validates steps/tokens/rate/think_ms/tools/calls once, up front.
         self.turn_directive(self.levels[0], 0, 0)
         self.swarm_directive(self.levels[0])
@@ -190,6 +205,17 @@ class LoadConfig:
             tag=f"L{level}-s{session_index:03d}-w{warmup_index + 1}",
             warmup_tokens=min(WARMUP_CHUNK_TOKENS, remaining),
             rate=0,
+        )
+
+    def ui_history_directive(self, level: int, turn_index: int) -> PerfDirective:
+        """One seeded turn of the watched Session's History (``ui_history_turns``)."""
+        return PerfDirective(
+            tag=f"L{level}-ui-h{turn_index + 1:04d}",
+            steps=UI_HISTORY_STEPS,
+            tokens=UI_HISTORY_TOKENS,
+            rate=0,
+            tools=DEFAULT_TOOLS,
+            markdown=True,
         )
 
     def recording_seconds(self) -> tuple[int, bool]:
@@ -338,7 +364,12 @@ def run_level(
     level_dir.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     server = VbotServer(
-        data_dir=data_dir, log_dir=level_dir, provider_api_base_url=fake.api_base_url
+        data_dir=data_dir,
+        log_dir=level_dir,
+        provider_api_base_url=fake.api_base_url,
+        # A seeded long History must not be compacted: every N keeps the same
+        # timeline shape, and no Compaction falls into the measured phase.
+        auto_compaction=config.ui_history_turns is None,
     )
     try:
         log(f"[{agents} agent(s)] starting vBot on {server.base_url}")
@@ -415,6 +446,9 @@ def run_sessions_level(context: LevelContext, level: dict[str, Any]) -> None:
     if config.history_tokens:
         context.log(f"[{agents} agent(s)] warming up {config.history_tokens} history tokens")
         warm_up(config, agents, server, workload)
+    ui_session = workload.ui_session if config.ui_history_turns is not None else None
+    if ui_session is not None:
+        level["ui_history"] = seed_ui_history(context, ui_session)
     context.fake.reset()
     shape = (
         f"{config.duration_minutes} min"
@@ -445,12 +479,17 @@ def run_sessions_level(context: LevelContext, level: dict[str, Any]) -> None:
             log_path=context.level_dir / "ui-probe.log",
             max_seconds=config.probe_seconds(),
             profile_path=context.level_dir / PROFILE_FILE if config.ui_profile else None,
+            scroll_history=ui_session is not None,
         )
         if context.ui_enabled
         else None
     )
+    if ui_session is not None:
+        context.log(f"[{agents} agent(s)] UI probe: scrolling through the watched Session")
     measured, requests, runs = measure_load(context, probe=probe, phase=phase)
     _merge_measured(level, measured)
+    if ui_session is not None:
+        _check_scroll_through(context, level, earlier_turns=config.warmup_turns())
     _write_json(context.level_dir / "runs.json", [run.to_dict() for run in runs])
     level["files"]["runs"] = _relative(context.level_dir / "runs.json", context.level_dir.parent)
     level["client"] = client = analyze_level(runs, requests)
@@ -641,20 +680,100 @@ def warm_up(config: LoadConfig, agents: int, server: VbotServer, workload: Workl
     def directive_for(target: SessionTarget, turn_index: int) -> PerfDirective:
         return config.warmup_directive(agents, target.index, turn_index)
 
+    drive_setup_turns(
+        config,
+        server,
+        workload.sessions,
+        directive_for,
+        turns=config.warmup_turns(),
+        label="warmup",
+    )
+
+
+def seed_ui_history(context: LevelContext, target: SessionTarget) -> dict[str, Any]:
+    """Give the watched Session ``ui_history_turns`` completed turns before measuring.
+
+    The turns go through the real pipeline (``chat.stream``, fake Provider,
+    real Tools) unpaced, so the stored History has the shape real turns have.
+    """
+    config, agents = context.config, context.agents
+    total = config.ui_history_turns or 0
+    started = time.monotonic()
+    done = 0
+    while done < total:
+        batch = min(UI_HISTORY_PROGRESS_TURNS, total - done)
+
+        def directive_for(
+            _target: SessionTarget, turn_index: int, offset: int = done
+        ) -> PerfDirective:
+            return config.ui_history_directive(agents, offset + turn_index)
+
+        drive_setup_turns(
+            config, context.server, (target,), directive_for, turns=batch, label="UI history"
+        )
+        done += batch
+        context.log(
+            f"[{agents} agent(s)] UI history: {done}/{total} turns "
+            f"({time.monotonic() - started:.0f} s)"
+        )
+    return {"turns": total, "seed_seconds": round(time.monotonic() - started, 1)}
+
+
+def drive_setup_turns(
+    config: LoadConfig,
+    server: VbotServer,
+    targets: Sequence[SessionTarget],
+    directive_for: Callable[[SessionTarget, int], PerfDirective],
+    *,
+    turns: int,
+    label: str,
+) -> None:
+    """Run unmeasured turns; fail the level unless each completed with its Tool results."""
     runs = asyncio.run(
         drive_turns(
             server.base_url,
-            workload.sessions,
+            targets,
             directive_for,
-            turns=config.warmup_turns(),
+            turns=turns,
             timeout_seconds=config.run_timeout_seconds,
         )
     )
-    failed = [run for run in runs if not run.ok]
+    failed = [
+        run
+        for run in runs
+        if not run.ok
+        or run.tool_errors
+        or len(run.tool_timings) != run.directive.tool_rounds * run.directive.calls
+    ]
     if failed:
-        raise LevelError(
-            f"{len(failed)} warmup Run(s) failed, first: {failed[0].status}: {failed[0].error}"
+        first = failed[0]
+        reason = first.error or (
+            f"{len(first.tool_timings)} Tool results, {first.tool_errors} Tool errors"
         )
+        raise LevelError(f"{len(failed)} {label} Run(s) failed, first: {first.status}: {reason}")
+
+
+def _check_scroll_through(
+    context: LevelContext, level: dict[str, Any], *, earlier_turns: int
+) -> None:
+    """Note an incomplete scroll-through and log what it measured."""
+    scroll = (level.get("ui") or {}).get("scroll_through")
+    if not isinstance(scroll, dict):
+        return
+    expected = (context.config.ui_history_turns or 0) + earlier_turns
+    if scroll.get("status") != "ok":
+        level["notes"].append(f"the UI scroll-through failed: {scroll.get('error')}")
+    elif scroll.get("user_messages") != expected:
+        level["notes"].append(
+            f"the UI scroll-through showed {scroll.get('user_messages')} of {expected} "
+            "earlier User messages"
+        )
+    page_ms = scroll.get("page_ms") or {}
+    context.log(
+        f"[{context.agents} agent(s)] UI scroll-through: {scroll.get('pages')} older pages, "
+        f"{scroll.get('timeline_items')} timeline items, page p50 {page_ms.get('p50')} ms, "
+        f"max {page_ms.get('max')} ms"
+    )
 
 
 @dataclass(frozen=True)

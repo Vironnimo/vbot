@@ -100,12 +100,17 @@ def child_environment(source: dict[str, str] | None = None) -> dict[str, str]:
     return environment
 
 
-def provider_settings(provider_base_url: str) -> dict[str, Any]:
-    """``settings.json`` registering the fake Provider as the default Agent Model."""
+def provider_settings(provider_base_url: str, *, auto_compaction: bool = True) -> dict[str, Any]:
+    """``settings.json`` registering the fake Provider as the default Agent Model.
+
+    ``auto_compaction=False`` also turns off automatic Compaction.
+    """
+    compaction = {} if auto_compaction else {"compaction": {"enabled": False}}
     return {
         "format_version": 1,
         "defaults": {"agent": {"model": AGENT_MODEL}},
         "reflection": {"enabled": False},
+        **compaction,
         "providers": {
             "connections": {f"{FAKE_PROVIDER_ID}:default": True},
             "custom": {
@@ -272,8 +277,16 @@ class FakeProvider:
 class VbotServer:
     """One disposable vBot server with a fresh data directory."""
 
-    def __init__(self, *, data_dir: Path, log_dir: Path, provider_api_base_url: str) -> None:
+    def __init__(
+        self,
+        *,
+        data_dir: Path,
+        log_dir: Path,
+        provider_api_base_url: str,
+        auto_compaction: bool = True,
+    ) -> None:
         self.data_dir = data_dir
+        self._auto_compaction = auto_compaction
         self.port = free_port()
         self.base_url = f"http://{LOOPBACK}:{self.port}"
         self.console_log = log_dir / "server-console.log"
@@ -295,7 +308,13 @@ class VbotServer:
     def start(self) -> None:
         initialize_data_directory(self.data_dir)
         (self.data_dir / "settings.json").write_text(
-            json.dumps(provider_settings(self._provider_api_base_url), indent=2) + "\n",
+            json.dumps(
+                provider_settings(
+                    self._provider_api_base_url, auto_compaction=self._auto_compaction
+                ),
+                indent=2,
+            )
+            + "\n",
             encoding="utf-8",
         )
         argv = [

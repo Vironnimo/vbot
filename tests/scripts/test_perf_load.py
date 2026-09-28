@@ -29,6 +29,10 @@ import scripts.perf_load as perf_load
             ["--scenario", "swarm", "--agents", "3", "--duration", "2"],
             {"scenario": "swarm", "levels": (3,), "duration_minutes": 2.0},
         ),
+        (
+            ["--agents", "1", "--turns", "2", "--ui-history-turns", "300"],
+            {"levels": (1,), "ui": True, "ui_profile": False, "ui_history_turns": 300},
+        ),
     ],
 )
 def test_a_run_hands_its_configuration_to_the_load_runner_and_reports_the_outcome(

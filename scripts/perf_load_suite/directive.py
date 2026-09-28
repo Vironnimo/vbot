@@ -10,6 +10,8 @@ Syntax (whitespace-separated ``key=value`` pairs, ``id`` required)::
     [[perf id=L10-s003-t1 steps=4 tokens=400 rate=80 think_ms=600
       tools=read,search_files,bash calls=1]]
     [[perf id=L10-s003-w1 warmup_tokens=20000 rate=0]]
+    [[perf id=L1-ui-h0001 steps=4 tokens=300 tools=read,search_files,bash calls=1
+      markdown=1 rate=0 think_ms=0]]
 
 - ``steps``: Model requests per turn. The first ``steps - 1`` responses are
   Tool calls, the last one streams text.
@@ -18,6 +20,9 @@ Syntax (whitespace-separated ``key=value`` pairs, ``id`` required)::
   ``rate`` tokens per second (``rate=0`` streams unpaced).
 - ``tools`` / ``calls``: the Tool names rotated through the Tool rounds and how
   many parallel calls each round carries.
+- ``markdown``: ``1`` makes the final text a Markdown answer of about ``tokens``
+  words (headings, lists, code, a table) instead of filler words. It carries no
+  timing markers.
 - ``warmup_tokens``: a single large text response used to grow Session history.
 - ``turns``: turn budget of one Swarm participant (``0`` = unbounded); see
   :mod:`scripts.perf_load_suite.swarm_script`.
@@ -38,7 +43,8 @@ MAX_CALLS_PER_ROUND = 8
 _TAG_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}(\.[a-z_]{1,32})?$")
 _INTEGER_FIELDS = ("steps", "tokens", "think_ms", "calls", "warmup_tokens", "turns")
-_KNOWN_KEYS = frozenset({"id", "rate", "tools", *_INTEGER_FIELDS})
+_FLAG_FIELDS = ("markdown",)
+_KNOWN_KEYS = frozenset({"id", "rate", "tools", *_INTEGER_FIELDS, *_FLAG_FIELDS})
 
 
 class DirectiveError(ValueError):
@@ -58,6 +64,7 @@ class PerfDirective:
     calls: int = 1
     warmup_tokens: int = 0
     turns: int = 0
+    markdown: bool = False
 
     def __post_init__(self) -> None:
         if not _TAG_PATTERN.match(self.tag):
@@ -109,6 +116,8 @@ class PerfDirective:
             )
             if self.turns:
                 parts.append(f"turns={self.turns}")
+            if self.markdown:
+                parts.append("markdown=1")
         parts.append(f"rate={_format_rate(self.rate)}")
         parts.append(f"think_ms={self.think_ms}")
         return f"[[perf {' '.join(parts)}]]"
@@ -157,12 +166,13 @@ def parse_directive_body(body: str) -> PerfDirective:
         raise DirectiveError("directive requires id=<tag>")
 
     integers = {key: _parse_int(key, values[key]) for key in _INTEGER_FIELDS if key in values}
+    flags = {key: _parse_flag(key, values[key]) for key in _FLAG_FIELDS if key in values}
     rate = _parse_float("rate", values["rate"]) if "rate" in values else None
     tools = (
         tuple(name for name in values["tools"].split(",") if name) if "tools" in values else None
     )
 
-    directive_fields: dict[str, object] = {"tag": values["id"], **integers}
+    directive_fields: dict[str, object] = {"tag": values["id"], **integers, **flags}
     if rate is not None:
         directive_fields["rate"] = rate
     if tools is not None:
@@ -175,6 +185,12 @@ def _parse_int(key: str, value: str) -> int:
         return int(value)
     except ValueError as exc:
         raise DirectiveError(f"{key} must be an integer, got {value!r}") from exc
+
+
+def _parse_flag(key: str, value: str) -> bool:
+    if value not in {"0", "1"}:
+        raise DirectiveError(f"{key} must be 0 or 1, got {value!r}")
+    return value == "1"
 
 
 def _parse_float(key: str, value: str) -> float:

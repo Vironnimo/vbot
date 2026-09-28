@@ -25,6 +25,7 @@ Examples::
     python scripts/perf_load.py --scenario swarm --agents 3 --turns 2 --ui
     python scripts/perf_load.py --agents 10 --duration 30 --ui
     python scripts/perf_load.py --agents 3 --duration 2 --ui-profile
+    python scripts/perf_load.py --agents 1 --turns 15 --ui-history-turns 300
     python scripts/perf_load.py --compare perf-results/load-<old>/result.json
     python scripts/perf_load.py compare old/result.json new/result.json
 """
@@ -79,6 +80,16 @@ def _positive_int_list(text: str) -> tuple[int, ...]:
     if not values or any(value < 1 for value in values) or len(set(values)) != len(values):
         raise argparse.ArgumentTypeError("expected distinct positive integers, e.g. 1,10,20,30")
     return values
+
+
+def _non_negative_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {text!r}") from exc
+    if value < 0:
+        raise argparse.ArgumentTypeError("expected a non-negative integer")
+    return value
 
 
 def _name_list(text: str) -> tuple[str, ...]:
@@ -224,6 +235,15 @@ def build_run_parser() -> argparse.ArgumentParser:
         help="like --ui, and record a CPU profile of the WebUI page's JavaScript into each "
         "level folder (ui-profile.cpuprofile)",
     )
+    measure.add_argument(
+        "--ui-history-turns",
+        type=_non_negative_int,
+        metavar="N",
+        help="like --ui, but first give the watched Session N completed turns (Tool rounds "
+        "and a Markdown answer) and measure the WebUI twice: scrolling up through its whole "
+        "History, then streaming the load phase at the bottom of that long timeline "
+        "(sessions scenario)",
+    )
     output = parser.add_argument_group("output")
     output.add_argument(
         "--output",
@@ -277,8 +297,9 @@ def config_from_args(args: argparse.Namespace) -> LoadConfig:
         snapshot_interval_seconds=args.snapshot_interval,
         profile=args.profile or args.profile_gil,
         profile_gil=args.profile_gil,
-        ui=args.ui or args.ui_profile,
+        ui=args.ui or args.ui_profile or args.ui_history_turns is not None,
         ui_profile=args.ui_profile,
+        ui_history_turns=args.ui_history_turns,
         keep=args.keep,
         output_root=args.output if args.output is not None else DEFAULT_OUTPUT_ROOT,
     )
