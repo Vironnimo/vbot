@@ -67,6 +67,7 @@ from core.tools import (
     Tool,
     ToolAccess,
     ToolContract,
+    ToolDefinitionChangeNote,
     ToolNotFoundError,
     project_bash_tool_definitions,
     tool_is_ready,
@@ -125,6 +126,19 @@ def _live_session_tool_grants(
     )
     return history_grants + (
         tuple(session_capability.tool_names) if session_capability is not None else ()
+    )
+
+
+def _fold_tool_epoch(
+    pin: ToolEpochPin, session_messages: list[ChatMessage]
+) -> tuple[ToolEpochView, list[ChatMessage]]:
+    """Return what the Model knows in *pin*'s epoch and the history without other epochs' notes.
+
+    Both walk the whole Session, so they run on a Chat worker.
+    """
+    return (
+        ToolEpochView.fold(pin, session_messages),
+        without_other_epoch_tool_changes(session_messages, pin.epoch),
     )
 
 
@@ -359,11 +373,12 @@ class RequestBuilder:
             )
         if pin is None:
             assert catalog is not None
-            pin = ToolEpochPin.start(catalog)
+            pin = await _CHAT_TRANSFORM_WORKERS.run(ToolEpochPin.start, catalog)
             if not inputs.fresh_tool_epoch:
                 pin = await self._ensure_tool_epoch_pin(session, pin)
-        tool_epoch = ToolEpochView.fold(pin, session_messages)
-        session_messages = without_other_epoch_tool_changes(session_messages, pin.epoch)
+        tool_epoch, session_messages = await _CHAT_TRANSFORM_WORKERS.run(
+            _fold_tool_epoch, pin, session_messages
+        )
         # A temporary Session's capability Tools must be offered now; the first
         # request boundary announces any the Model does not know yet.
         if inputs.temporary_binding is not None and (
@@ -641,12 +656,11 @@ class RequestBuilder:
             session_tool_grants=session_tool_grants,
             ready_only=False,
         )
+        ready, sources, change_notes = await _CHAT_TRANSFORM_WORKERS.run(
+            self._measure_tool_definitions, definitions
+        )
         offered = await self._route_tool_definitions(
-            [
-                definition
-                for definition in definitions
-                if self._definition_ready(str(definition["name"]))
-            ],
+            ready,
             tool_access=agent.tool_access,
             input_modalities=input_modalities,
             wire_media_types=wire_media_types,
@@ -662,21 +676,30 @@ class RequestBuilder:
         return LiveToolCatalog(
             usable=frozenset(usable),
             offered=tuple(offered),
-            sources={
-                str(definition["name"]): definition_source(definition) for definition in definitions
-            },
+            sources=sources,
             session_tool_grants=tuple(session_tool_grants),
-            change_notes={
-                name: tool.definition_change_note
-                for name in usable
-                if (tool := self._registered_tool(name)) is not None
-                and tool.definition_change_note is not None
-            },
+            change_notes={name: note for name, note in change_notes.items() if name in usable},
         )
 
-    def _definition_ready(self, name: str) -> bool:
-        tool = self._registered_tool(name)
-        return tool is None or tool_is_ready(tool)
+    def _measure_tool_definitions(
+        self, definitions: Sequence[JsonObject]
+    ) -> tuple[list[JsonObject], dict[str, str], dict[str, ToolDefinitionChangeNote]]:
+        """Return the ready *definitions*, every fingerprint and change-note hook.
+
+        Runs on a Chat worker: readiness checks and fingerprints cost time per Tool.
+        """
+        ready: list[JsonObject] = []
+        sources: dict[str, str] = {}
+        change_notes: dict[str, ToolDefinitionChangeNote] = {}
+        for definition in definitions:
+            name = str(definition["name"])
+            tool = self._registered_tool(name)
+            if tool is None or tool_is_ready(tool):
+                ready.append(definition)
+            sources[name] = definition_source(definition)
+            if tool is not None and tool.definition_change_note is not None:
+                change_notes[name] = tool.definition_change_note
+        return ready, sources, change_notes
 
     def _registered_tool(self, name: str) -> Tool | None:
         try:
@@ -685,18 +708,20 @@ class RequestBuilder:
             return None
 
     async def _read_tool_epoch_pin(self, session: ChatSession) -> ToolEpochPin | None:
-        payload = await _CHAT_TRANSFORM_WORKERS.run(
-            self._dependencies.sessions.prompt_pin,
-            session.address,
-            PINNED_TOOL_DEFINITIONS_SLOT,
+        return await _CHAT_TRANSFORM_WORKERS.run(self._stored_tool_epoch_pin, session.address)
+
+    def _stored_tool_epoch_pin(self, address: SessionAddress) -> ToolEpochPin | None:
+        return ToolEpochPin.from_payload(
+            self._dependencies.sessions.prompt_pin(address, PINNED_TOOL_DEFINITIONS_SLOT)
         )
-        return ToolEpochPin.from_payload(payload)
 
     async def _ensure_tool_epoch_pin(self, session: ChatSession, pin: ToolEpochPin) -> ToolEpochPin:
         """Pin *pin* unless a concurrent first request pinned a readable one meanwhile."""
-        pinned = await _CHAT_TRANSFORM_WORKERS.run(
-            self._dependencies.sessions.ensure_prompt_pin,
-            session.address,
+        return await _CHAT_TRANSFORM_WORKERS.run(self._pin_tool_epoch, session.address, pin)
+
+    def _pin_tool_epoch(self, address: SessionAddress, pin: ToolEpochPin) -> ToolEpochPin:
+        pinned = self._dependencies.sessions.ensure_prompt_pin(
+            address,
             PINNED_TOOL_DEFINITIONS_SLOT,
             pin.to_payload(),
             lambda current: ToolEpochPin.from_payload(current) is not None,
