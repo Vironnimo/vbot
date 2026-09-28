@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing, suppress
 from pathlib import Path
+from typing import Any, Literal
 
 import pytest
 from watchfiles import Change
@@ -348,6 +350,86 @@ async def test_subscribe_pushes_catalog_changes_for_other_log_files(
     }
 
 
+class _InlineWorkers:
+    """Runs worker-pool callables on the Event Loop, so a test controls every interleaving."""
+
+    async def run(self, function: Callable[..., Any], *arguments: Any, **keywords: Any) -> Any:
+        return function(*arguments, **keywords)
+
+
+class _ObservedLock(asyncio.Lock):
+    """Counts acquire attempts, so a test can order the tasks that queue on the lock."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    async def acquire(self) -> Literal[True]:
+        self.attempts += 1
+        return await super().acquire()
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    async with asyncio.timeout(5):
+        while not condition():
+            await asyncio.sleep(0)
+
+
+async def _next_event(stream: AsyncGenerator[dict[str, Any], None]) -> dict[str, Any]:
+    return await stream.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_subscribe_joins_a_live_watcher_when_the_last_subscriber_leaves_meanwhile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    ready = "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n"
+    log_file.write_text(ready, encoding="utf-8")
+    changes: asyncio.Queue[set[tuple[Change, str]]] = asyncio.Queue()
+
+    async def fake_awatch(*_args: object, **_kwargs: object):
+        while True:
+            yield await changes.get()
+
+    monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
+    monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
+    viewer = LogViewer(tmp_path)
+    lock = _ObservedLock()
+    viewer._watch_lock = lock
+    leaving = asyncio.create_task(_next_event(viewer.subscribe(log_file.name)))
+    joining: asyncio.Task[dict[str, Any]] | None = None
+    try:
+        await _until(lambda: viewer.subscriber_count(log_file.name) == 1)
+
+        # The watcher is busy re-reading a large log while the Logs view reconnects: the
+        # new socket queues for the lock before the old one is closed.
+        await lock.acquire()
+        attempts = lock.attempts
+        joining = asyncio.create_task(_next_event(viewer.subscribe(log_file.name)))
+        await _until(lambda: lock.attempts > attempts)
+        leaving.cancel()
+        await _until(lambda: lock.attempts > attempts + 1)
+        lock.release()
+        await _until(leaving.done)
+
+        assert viewer.subscriber_count(log_file.name) == 1
+        log_file.write_text(
+            ready + "2026-05-11 09:00:01 [INFO] vbot.core - Updated\n", encoding="utf-8"
+        )
+        changes.put_nowait({(Change.modified, str(log_file))})
+        event = await asyncio.wait_for(joining, timeout=1)
+        assert [entry["message"] for entry in event["entries"]] == ["Updated"]
+    finally:
+        tasks = [task for task in (leaving, joining) if task is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await viewer.aclose()
+
+
 @pytest.mark.asyncio
 async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_changes(
     tmp_path: Path,
@@ -534,7 +616,8 @@ async def test_ensure_watcher_attaches_crash_logging_done_callback(
     viewer._watch_file = explode  # type: ignore[method-assign,assignment]
 
     caplog.set_level(logging.ERROR, logger="vbot.log_viewer")
-    watcher = await viewer._ensure_watcher("2026-05-11")
+    async with viewer._watch_lock:
+        watcher = await viewer._ensure_watcher("2026-05-11")
     assert watcher.task is not None
     with suppress(RuntimeError):
         await watcher.task

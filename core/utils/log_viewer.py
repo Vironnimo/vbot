@@ -193,13 +193,16 @@ class LogViewer:
     ) -> AsyncGenerator[JsonObject, None]:
         file_path = await _LOG_WORKERS.run(self._resolve_existing_file, file_name)
         handoff_snapshot = self._take_read_handoff(file_path.name, cursor)
-        watcher = await self._ensure_watcher(file_path.name)
         queue: asyncio.Queue[JsonObject] = asyncio.Queue()
         pending_event: JsonObject | None = None
         catch_up_event: JsonObject | None = None
         catch_up_subscribers: list[asyncio.Queue[JsonObject]] = []
 
+        # Finding or starting the watcher and registering the queue are one step under
+        # the lock that also retires watchers. Split, the last other subscriber could
+        # leave in between, evict the watcher and leave this queue on a dead one.
         async with self._watch_lock:
+            watcher = await self._ensure_watcher(file_path.name)
             next_snapshot = await _LOG_WORKERS.run(self._read_snapshot, file_path)
             previous_snapshot = watcher.snapshot
             catch_up_event = _build_snapshot_event(file_path.name, previous_snapshot, next_snapshot)
@@ -256,28 +259,29 @@ class LogViewer:
         return len(watcher.subscribers)
 
     async def _ensure_watcher(self, file_name: str) -> _WatcherState:
-        async with self._watch_lock:
-            watcher = self._watchers.get(file_name)
-            if watcher is not None:
-                return watcher
+        """Return the file's watcher, starting it on first use; the caller holds the lock."""
 
-            directory_modified_ns, catalog, snapshot = await _LOG_WORKERS.run(
-                self._read_watch_start, self._logs_dir / file_name
-            )
-            watcher = _WatcherState(
-                file_name=file_name,
-                snapshot=snapshot,
-                catalog=catalog,
-                directory_modified_ns=directory_modified_ns,
-            )
-            watcher.task = asyncio.create_task(self._watch_file(watcher))
-
-            def on_done(task: asyncio.Task[None], file_name: str = file_name) -> None:
-                _log_watcher_task_result(file_name, task)
-
-            watcher.task.add_done_callback(on_done)
-            self._watchers[file_name] = watcher
+        watcher = self._watchers.get(file_name)
+        if watcher is not None:
             return watcher
+
+        directory_modified_ns, catalog, snapshot = await _LOG_WORKERS.run(
+            self._read_watch_start, self._logs_dir / file_name
+        )
+        watcher = _WatcherState(
+            file_name=file_name,
+            snapshot=snapshot,
+            catalog=catalog,
+            directory_modified_ns=directory_modified_ns,
+        )
+        watcher.task = asyncio.create_task(self._watch_file(watcher))
+
+        def on_done(task: asyncio.Task[None], file_name: str = file_name) -> None:
+            _log_watcher_task_result(file_name, task)
+
+        watcher.task.add_done_callback(on_done)
+        self._watchers[file_name] = watcher
+        return watcher
 
     async def _remove_subscriber(
         self,
