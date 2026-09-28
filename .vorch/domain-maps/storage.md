@@ -42,7 +42,7 @@ Block persistence: each scope persists ordered `layout.json` plus thin text over
 
 ## Conventions
 
-- Settings writes are UTF-8 sorted indented JSON with trailing newline. Atomic writes go through shared helpers staging under `artifacts/temp/atomic/` with fsync + `os.replace` (+ POSIX directory fsync).
+- Settings writes are UTF-8 sorted indented JSON with trailing newline. Atomic writes go through shared helpers staging under `artifacts/temp/atomic/` with fsync + `os.replace` (+ POSIX directory fsync). On Windows, a replace that fails with a sharing-type error (WinError 5, 32, 33: an antivirus scanner or indexer briefly holding the target or temp file open) is retried within a fixed ~0.4 s budget before the original error surfaces; a read-only or directory target is never retried, and the waits go through the module-local `_sleep` seam (`core/utils/atomic.py`, `test_atomic.py`).
 - Runtime Settings/credential read-modify-write serializes per-process only - not cross-process locks. The installer is a separate boundary: its explicit-port update of an existing `settings.json` uses a cross-process sidecar lock plus same-directory atomic replace so parallel setup processes cannot lose unrelated changes or expose partial JSON.
 - Fragment names and Agent IDs allowlist before path construction; traversal and absolute fragment paths are invalid storage data, never sanitized inputs.
 - New code routing: section validation/normalization -> settings domain; fragment/block file access -> the two stores; categorized temp leases -> `TemporaryFileManager`; atomic staging -> `core/utils/atomic.py`. `StorageManager` composes and orchestrates - no new normalization or path logic there.
