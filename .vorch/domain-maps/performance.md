@@ -77,6 +77,7 @@ Durations are milliseconds. Names are dotted lowercase words with low cardinalit
 - Stack sampling uses `sys._current_frames()`; frames are rendered relative to the vBot root or the Python library root.
 - The garbage collection callback runs inside the collector on whatever thread allocated, possibly while that thread holds a lock such as the metric registry's. It must stay lock-free (timestamps, a float total and a bounded deque); histograms and spans are recorded later on the Event Loop.
 - The server process freezes its startup heap once the app is ready (`server.md`), so full collections skip modules, classes and Runtime services; `gc.gen2` then reflects the objects created while serving.
+- A `gc.gen2` pause grows with the number of tracked objects created since the freeze, and full collections come more often the more container objects survive into the old generation. Long-retained dict/list graphs therefore drive the pauses: finished Runs keep only their settled ending (`runs.md`), finished processes drop their asyncio internals (`tools/process.md`), and Model requests share the live request view instead of copying it per step (`chat.md`). Keep new per-Run or per-step data out of long-lived containers, or bound it.
 - `measure()` costs about 0.7 us per call without a Recording and about 2.4 us with a track while recording (Python 3.14, Windows); keep it out of per-token or per-byte loops.
 
 ## Tests
