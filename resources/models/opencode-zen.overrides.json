@@ -1,6 +1,15 @@
 {
-  "_comment": "Space Bunny was verified on Zen Chat Completions on 2026-09-24. The gateway rejects reasoning_effort none and accepts low; reasoning_content is the readable reasoning carrier.",
+  "_comment": "Verified Zen Chat profiles: Space Bunny minimum effort (2026-09-24), Qwen3.8 Max binary thinking control (2026-09-28). Both return readable reasoning_content.",
   "models": {
+    "qwen3.8-max": {
+      "metadata": {
+        "opencode_zen": {
+          "protocol": "chat_completions",
+          "reasoning_response_field": "reasoning_content",
+          "thinking_control": "toggle"
+        }
+      }
+    },
     "space-bunny-free": {
       "name": "Space Bunny Free",
       "metadata": {

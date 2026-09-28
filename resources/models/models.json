@@ -129,6 +129,33 @@
       "release_date": "2025-07-28",
       "temperature": true
     },
+    "alibaba/qwen-image-2.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8192,
+      "family": "qwen",
+      "last_updated": "2026-09-21",
+      "max_output_tokens": 0,
+      "name": "Qwen-Image-2.1",
+      "release_date": "2026-09-14",
+      "temperature": true
+    },
     "alibaba/qwen-max": {
       "capabilities": {
         "input_modalities": [
@@ -1137,6 +1164,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 81920,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -1150,6 +1179,15 @@
       "last_updated": "2026-02-23",
       "max_output_tokens": 65536,
       "name": "Qwen3.5 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "cache_write": 0.125,
+          "input": 0.1,
+          "output": 0.4
+        },
+        "source": "models.dev:alibaba/qwen3.5-flash"
+      },
       "release_date": "2026-02-23",
       "temperature": true
     },
@@ -1402,6 +1440,8 @@
           "text"
         ],
         "reasoning": {
+          "budget_max": 262144,
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -1413,8 +1453,39 @@
       "context_window": 1000000,
       "family": "qwen",
       "last_updated": "2026-07-15",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 131072,
       "name": "Qwen3.7 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.003,
+          "cache_write": 0.0375,
+          "input": 0.03,
+          "output": 0.13,
+          "tiers": [
+            {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "input": 0.1,
+              "output": 0.4,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            },
+            {
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "input": 0.2,
+              "output": 0.8,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:alibaba/qwen3.7-flash"
+      },
       "release_date": "2026-07-15",
       "temperature": true
     },
@@ -1483,16 +1554,16 @@
       "name": "Qwen3.7 Plus",
       "pricing": {
         "rates": {
-          "cache_read": 0.05,
-          "cache_write": 0.625,
-          "input": 0.5,
-          "output": 3.0,
+          "cache_read": 0.04,
+          "cache_write": 0.5,
+          "input": 0.4,
+          "output": 1.6,
           "tiers": [
             {
-              "cache_read": 0.2,
-              "cache_write": 2.5,
-              "input": 2.0,
-              "output": 6.0,
+              "cache_read": 0.12,
+              "cache_write": 1.5,
+              "input": 1.2,
+              "output": 4.8,
               "tier": {
                 "size": 256000,
                 "type": "context"
@@ -1763,11 +1834,18 @@
           "audio",
           "video"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "xhigh"
+          ],
           "supported": true
         },
         "tools": true,
@@ -1778,6 +1856,14 @@
       "last_updated": "2026-09-17",
       "max_output_tokens": 131072,
       "name": "Qwen3.8 Omni Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.016,
+          "input": 0.15,
+          "output": 0.47
+        },
+        "source": "models.dev:alibaba/qwen3.8-omni-flash"
+      },
       "release_date": "2026-09-17"
     },
     "alibaba/qwq-32b": {
@@ -6408,6 +6494,33 @@
       "release_date": "2026-06-30",
       "temperature": true
     },
+    "meituan/longcat-2.5-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "longcat",
+      "last_updated": "2026-09-25",
+      "max_output_tokens": 131072,
+      "name": "LongCat-2.5-Preview",
+      "release_date": "2026-09-25",
+      "temperature": true
+    },
     "meta/llama-3.1-70b-instruct": {
       "capabilities": {
         "input_modalities": [
@@ -7177,6 +7290,34 @@
         "source": "models.dev:minimax/MiniMax-M3"
       },
       "release_date": "2026-06-01",
+      "temperature": true
+    },
+    "minimax/MiniMax-M3.1-Flash-Preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "minimax",
+      "last_updated": "2026-09-27",
+      "max_output_tokens": 512000,
+      "name": "MiniMax-M3.1-Flash-Preview",
+      "release_date": "2026-09-27",
       "temperature": true
     },
     "minimax/image-01": {
@@ -10478,6 +10619,31 @@
         "source": "models.dev:openai/gpt-5.5-pro"
       },
       "release_date": "2026-04-23",
+      "temperature": false
+    },
+    "openai/gpt-5.6-cyber": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 400000,
+      "family": "gpt",
+      "knowledge": "2026-02-16",
+      "last_updated": "2026-08-07",
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Cyber",
+      "release_date": "2026-08-07",
       "temperature": false
     },
     "openai/gpt-5.6-luna": {

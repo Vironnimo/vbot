@@ -46,6 +46,7 @@
   "models_dev_id": "opencode",
   "catalog_exclusions": [
     "big-pickle",
+    "longcat-2.5-preview-free",
     "mimo-v2.6-flash-free",
     "mimo-v2.5-free",
     "laguna-s-2.1-free",

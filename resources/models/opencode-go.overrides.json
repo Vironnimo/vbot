@@ -68,14 +68,6 @@
         }
       }
     },
-    "glm-5.1": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
     "glm-5.2": {
       "reasoning_replay": "full_history",
       "capabilities": {
@@ -158,22 +150,6 @@
         }
       }
     },
-    "kimi-k2.6": {
-      "capabilities": {
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        }
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning",
-          "thinking_control": "toggle",
-          "thinking_keep": "all"
-        }
-      }
-    },
     "kimi-k2.7-code": {
       "metadata": {
         "opencode_go": {
@@ -208,6 +184,16 @@
         "opencode_go": {
           "protocol": "openai",
           "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "longcat-2.5-preview-free": {
+      "name": "LongCat 2.5 Preview Free",
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_response_field": "reasoning_content",
+          "thinking_control": "toggle"
         }
       }
     },
@@ -263,13 +249,6 @@
         }
       }
     },
-    "minimax-m2.5": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "anthropic"
-        }
-      }
-    },
     "minimax-m2.7": {
       "metadata": {
         "opencode_go": {
@@ -295,20 +274,6 @@
       "metadata": {
         "opencode_go": {
           "protocol": "responses"
-        }
-      }
-    },
-    "qwen3.6-plus": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "anthropic"
-        }
-      }
-    },
-    "qwen3.7-max": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "anthropic"
         }
       }
     },

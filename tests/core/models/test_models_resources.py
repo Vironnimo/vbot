@@ -117,10 +117,9 @@ def test_ollama_cloud_catalog_is_separate_and_entirely_remote(registry: ModelReg
 # - current_run: in-run replayed reasoning is billed, cross-run is stripped.
 # - none: the carrier is stripped in both scopes (zero delta, positive control).
 _OLLAMA_CLOUD_REPLAY = {
-    "deepseek-v4-flash:0731": None,
+    "deepseek-v4.1-flash": None,
     "deepseek-v4-pro:0813": None,
     "gemma4:31b": "none",
-    "glm-5.1": None,
     "glm-5.2": None,
     "glm-5.3": None,
     "glm-5.3-flash": None,
@@ -134,7 +133,6 @@ _OLLAMA_CLOUD_REPLAY = {
     "nemotron-3-nano:30b": "none",
     "nemotron-3-super": "none",
     "nemotron-3-ultra": "none",
-    "qwen3.5:397b": "none",
 }
 
 
@@ -162,7 +160,6 @@ def test_ollama_cloud_models_emit_reasoning_as_their_response_carrier(
 
 def test_ollama_cloud_gateway_output_limits(registry: ModelRegistry) -> None:
     limits = {
-        "deepseek-v4-flash:0731": 65_536,
         "deepseek-v4-pro:0813": 65_536,
         "glm-5.2": 131_072,
         "kimi-k2.7-code": 262_144,
@@ -171,7 +168,6 @@ def test_ollama_cloud_gateway_output_limits(registry: ModelRegistry) -> None:
         "nemotron-3-nano:30b": 131_072,
         "nemotron-3-super": 65_536,
         "nemotron-3-ultra": 65_536,
-        "qwen3.5:397b": 65_536,
     }
 
     assert {
@@ -184,7 +180,7 @@ def test_ollama_cloud_reasoning_controls(registry: ModelRegistry) -> None:
     # switch. MiniMax ignores both documented off-control shapes: no control.
     ladder = (True, "levels", ("low", "high", "max"))
     expected = {
-        "deepseek-v4-flash:0731": ladder,
+        "deepseek-v4.1-flash": ladder,
         "deepseek-v4-pro:0813": ladder,
         "glm-5.3": ladder,
         "minimax-m2.7": (True, None, ()),
@@ -201,17 +197,16 @@ def test_ollama_cloud_deepseek_v41_verified_profile(registry: ModelRegistry) -> 
     """Pin the Cloud profile verified on 2026-09-11, including its larger output cap."""
 
     model = registry.get("ollama-cloud", "deepseek-v4.1-flash")
-    previous = registry.get("ollama-cloud", "deepseek-v4-flash:0731")
 
     assert model.model_id == "deepseek-v4.1-flash"
     assert model.connections == ("api-key",)
     assert model.context_window == 1_048_576
     assert model.capabilities.vision is True
     assert model.capabilities.tools is True
-    assert model.capabilities.reasoning == previous.capabilities.reasoning
+    assert _profile(model, "reasoning")["reasoning"] == (True, "levels", ("low", "high", "max"))
     assert model.max_output_tokens == 393_216
-    assert model.recommended_temperature == previous.recommended_temperature == 1.0
-    assert model.recommended_top_p == previous.recommended_top_p == 0.95
+    assert model.recommended_temperature == 1.0
+    assert model.recommended_top_p == 0.95
     assert model.metadata["ollama"]["remote"] is True
     assert model.metadata["ollama_cloud"]["reasoning_response_field"] == "reasoning"
     assert model.reasoning_replay is None
@@ -238,11 +233,10 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "glm-5.3-flash",
             "glm-5.3",
             "glm-5.2",
-            "glm-5.1",
             "kimi-k3",
             "kimi-k2.7-code",
-            "kimi-k2.6",
             "longcat-2.0",
+            "longcat-2.5-preview-free",
             "deepseek-flash",
             "deepseek-v4.1-flash",
             "deepseek-v4-pro",
@@ -259,12 +253,9 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         "anthropic": (
             "minimax-m3",
             "minimax-m2.7",
-            "minimax-m2.5",
             "qwen3.8-max",
             "qwen3.8-flash",
-            "qwen3.7-max",
             "qwen3.7-plus",
-            "qwen3.6-plus",
         ),
     }
     expected = {
@@ -272,15 +263,13 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         for protocol, model_ids in expected_by_protocol.items()
         for model_id in model_ids
     }
-    assert len(expected) == 34
+    assert len(expected) == 30
 
     assert {
         model_id: registry.get("opencode-go", model_id).metadata["opencode_go"]["protocol"]
         for model_id in expected
     } == expected
-    assert {model.model_id for model in registry.list_for_provider("opencode-go")} == set(
-        expected
-    ) | {"omen-alpha"}
+    assert {model.model_id for model in registry.list_for_provider("opencode-go")} == set(expected)
 
 
 def test_opencode_go_response_fields_are_not_history_field_guesses(
@@ -289,7 +278,7 @@ def test_opencode_go_response_fields_are_not_history_field_guesses(
     """Profiles describe inbound response carriers, not outbound replay."""
 
     expected = {
-        **dict.fromkeys(("kimi-k2.6", "kimi-k3", "hy3", "hy4-preview"), "reasoning"),
+        **dict.fromkeys(("kimi-k3", "hy3", "hy4-preview"), "reasoning"),
         **dict.fromkeys(
             ("mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-flash", "mimo-v2.6-pro"),
             "reasoning_content",
@@ -327,6 +316,21 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
             },
             {**_GO_GLM, "minimum_reasoning_effort": "low"},
             id="space-bunny-free",
+        ),
+        pytest.param(
+            "longcat-2.5-preview-free",
+            {
+                "name": "LongCat 2.5 Preview Free",
+                "context_window": 1_000_000,
+                "max_output_tokens": 131_072,
+                "tools": True,
+                "vision": True,
+                "input_modalities": ("text", "image"),
+                "reasoning": (True, "on_off", ()),
+                "reasoning_replay": None,
+            },
+            _GO_TOGGLE,
+            id="longcat-2.5-preview-free",
         ),
         *(
             pytest.param(
@@ -495,7 +499,6 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
 ) -> None:
     model = registry.get("openai", model_id)
 
-    assert model.name == "GPT-6 " + model_id.rsplit("-", 1)[1].title()
     assert model.connections == ("api-key", "subscription")
     assert model.context_window_for("api-key") == 1_050_000
     assert model.context_window_for("subscription") == 272_000

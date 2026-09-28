@@ -1,53 +1,6 @@
 {
-  "fetched_at": "2026-09-24T09:13:36.835105+00:00",
+  "fetched_at": "2026-09-28T10:08:56.605656+00:00",
   "models": {
-    "deepseek-v4-flash:0731": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "high",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "family": "deepseek-flash",
-      "max_output_tokens": 1048576,
-      "metadata": {
-        "ollama": {
-          "remote": true
-        }
-      },
-      "name": "deepseek-v4-flash:0731",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.007,
-          "input": 0.22,
-          "output": 0.66
-        },
-        "source": "models.dev:ollama-cloud/deepseek-v4-flash:0731"
-      }
-    },
     "deepseek-v4-pro:0813": {
       "capabilities": {
         "input_modalities": [
@@ -193,52 +146,6 @@
           "output": 0.4
         },
         "source": "models.dev:ollama-cloud/gemma4:31b"
-      }
-    },
-    "glm-5.1": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 202752,
-      "family": "glm",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "ollama": {
-          "remote": true
-        },
-        "ollama_cloud": {
-          "reasoning_response_field": "reasoning_content"
-        }
-      },
-      "name": "glm-5.1",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.2,
-          "input": 1.0,
-          "output": 3.2
-        },
-        "source": "models.dev:ollama-cloud/glm-5.1"
       }
     },
     "glm-5.2": {
@@ -903,54 +810,6 @@
           "output": 3.0
         },
         "source": "models.dev:ollama-cloud/nemotron-3-ultra"
-      }
-    },
-    "qwen3.5:397b": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "qwen",
-      "max_output_tokens": 65536,
-      "metadata": {
-        "ollama": {
-          "remote": true
-        },
-        "ollama_cloud": {
-          "reasoning_response_field": "reasoning_details"
-        }
-      },
-      "name": "qwen3.5:397b",
-      "pricing": {
-        "rates": {
-          "input": 0.6,
-          "output": 3.6
-        },
-        "source": "models.dev:ollama-cloud/qwen3.5:397b"
       }
     }
   },

@@ -13,6 +13,20 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Co
 
 The 2026-09-22 refresh adds `openai/gpt-6-sol` and `openai/gpt-6-luna` plus OpenRouter's Pro and batch variants. The base ids are selectable through the existing Chat Completions route. Synthetic live calls through the actual Adapter returned one Tool Call for each base id both at Provider-default reasoning and with explicit `none`; this does not establish the same result for Pro or batch variants.
 
+## Catalog follow-up (2026-09-28)
+
+The complete refresh contains 630 OpenRouter Models, including eleven new ids. Four are decision-only (`jaredpalmer/kev-4b` and the three `respan/span-01` variants), two are transcription entries (`fish-audio/transcribe-1-pro`, `google/gemini-3.5-transcribe`), one generates speech (`bytedance-seed/seed-audio-1-0`), and four are Chat entries (`mistralai/devstral-2512`, `mistralai/mistral-large-2512`, `perceptron/perceptron-mk1.5`, `typesafe/jev-router`). These are newly discovered gateway ids, not a claim that every underlying Model was newly released. Existing task/modality normalization handles them without manual capability Overrides. The Jev Router feed declares no Tools.
+
+Synthetic `openrouter:api-key` probes used the actual Chat Adapter and the exact [Devstral](https://openrouter.ai/api/v1/models/mistralai/devstral-2512/endpoints), [Mistral Large](https://openrouter.ai/api/v1/models/mistralai/mistral-large-2512/endpoints), and [Perceptron](https://openrouter.ai/api/v1/models/perceptron/perceptron-mk1.5/endpoints) endpoint catalogs (read 2026-09-28). No routing preferences were changed. Each successful Tool response was accumulated, saved to disposable SQLite, reopened, shaped through Chat, and continued with a correlated synthetic Result; no Tool was dispatched.
+
+| Exact Model | Streamed Tool Call input/output | Persisted continuation input/output | Result |
+| --- | --- | --- | --- |
+| mistralai/devstral-2512 | 93/13 | 115/49 | One valid Call, correct answer from Result, terminal Usage/cost |
+| perceptron/perceptron-mk1.5 | 208/18 | 247/16 | One valid Call, correct answer from Result, terminal Usage/cost |
+| mistralai/mistral-large-2512 | Not available | Not available | Repeated HTTP 429 upstream shared-pool rate limit; no capability conclusion |
+
+The two successful probes selected `none` and returned no Reasoning state. They establish basic Tool-loop compatibility, not Reasoning replay, multimodal accuracy, sampling quality, or maximum capacities. The other newly discovered task routes were not inference-tested in this refresh.
+
 ## Usage cost normalization (2026-09-20)
 
 OpenRouter `usage.cost` becomes canonical `reported_cost_usd` on both Chat Completions and Responses, streaming and non-streaming. Only finite non-negative numeric values are accepted; explicit zero is preserved. `cost_details.upstream_inference_cost` is not the amount charged to the OpenRouter account and is never substituted. Optional `prompt_tokens_details.cache_write_tokens` / `input_tokens_details.cache_write_tokens` is retained separately from cache reads. No request or routing policy changed.

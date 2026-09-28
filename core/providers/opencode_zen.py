@@ -67,6 +67,8 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
+    REASONING_INTENT_OFF,
+    REASONING_INTENT_ON,
     ReasoningIntent,
     closest_supported_effort,
     model_reasoning_levels,
@@ -362,6 +364,12 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         model_id: str,
     ) -> None:
         selected = request_kwargs.get("thinking_effort") or request_kwargs.get("reasoning_effort")
+        if self._profile_value(model_id, "thinking_control") == "toggle":
+            request_kwargs.pop("thinking_effort", None)
+            request_kwargs.pop("reasoning_effort", None)
+            enabled = normalize_thinking_effort(selected) != "none"
+            payload["thinking"] = {"type": "enabled" if enabled else "disabled"}
+            return
         if normalize_thinking_effort(selected) == "none":
             minimum = self._profile_value(model_id, "minimum_reasoning_effort")
             if minimum in {"minimal", "low", "medium", "high", "xhigh", "max"}:
@@ -377,18 +385,25 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         effort: str | None,
         provider_config: ProviderConfig | None = None,
     ) -> ReasoningIntent:
-        if normalize_thinking_effort(effort) == "none" and model_lookup is not None:
+        if model_lookup is not None:
             for candidate in _model_lookup_candidates(model_id):
                 model = model_lookup(candidate)
                 if model is None:
                     continue
                 profile = model.metadata.get(OPENCODE_ZEN_METADATA_KEY)
+                if isinstance(profile, Mapping) and profile.get("thinking_control") == "toggle":
+                    enabled = normalize_thinking_effort(effort) != "none"
+                    return ReasoningIntent(REASONING_INTENT_ON if enabled else REASONING_INTENT_OFF)
                 minimum = (
                     profile.get("minimum_reasoning_effort")
                     if isinstance(profile, Mapping)
                     else None
                 )
-                if isinstance(minimum, str) and minimum in model.capabilities.reasoning.levels:
+                if (
+                    normalize_thinking_effort(effort) == "none"
+                    and isinstance(minimum, str)
+                    and minimum in model.capabilities.reasoning.levels
+                ):
                     return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=minimum)
                 break
         return super().describe_reasoning_render(
