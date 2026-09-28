@@ -1,18 +1,16 @@
-// Pure helpers for the shared access chip list (tools/skills allow-lists).
-// Kept out of the Svelte component so the filter and count logic is unit-tested
-// independently of rendering.
+// Pure filter and count helpers of the shared allow-list chip cloud
+// (components/ui/ToggleChipList.svelte), tested through that component.
 
 /**
  * Filter chip items by a case-insensitive substring match on their `name`.
  * A blank/whitespace query returns the list unchanged.
  */
 export function filterChipsByQuery(items, query) {
-  const list = Array.isArray(items) ? items : [];
   const needle = typeof query === 'string' ? query.trim().toLowerCase() : '';
   if (needle.length === 0) {
-    return list;
+    return items;
   }
-  return list.filter((item) =>
+  return items.filter((item) =>
     String(item?.name ?? '')
       .toLowerCase()
       .includes(needle),
@@ -21,6 +19,5 @@ export function filterChipsByQuery(items, query) {
 
 /** Count how many items are currently allowed (the toolbar "on / total" tally). */
 export function countAllowed(items) {
-  const list = Array.isArray(items) ? items : [];
-  return list.reduce((total, item) => total + (item?.allowed ? 1 : 0), 0);
+  return items.reduce((total, item) => total + (item?.allowed ? 1 : 0), 0);
 }
