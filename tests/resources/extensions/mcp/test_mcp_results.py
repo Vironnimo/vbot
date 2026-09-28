@@ -193,7 +193,7 @@ async def test_large_error_keeps_full_payload_and_bounded_receipt(
 
     assert not result["ok"]
     assert message.startswith("The MCP tool inspect reported an error:\nstart failure")
-    assert "NameError: final line\n\nThe tool inspect could have changed the application" in message
+    assert "NameError: final line\n\nWhether the tool inspect changed the application" in message
     assert '"pointer":"/content/0/text","offset":1000' in message
     assert len(message) < 4000
     assert saved["payload"] == payload
@@ -241,8 +241,8 @@ async def test_tool_error_reads_as_the_servers_own_report(context_service, host,
     assert model_text(result) == (
         "Error (mcp_tool_error): The MCP tool inspect reported an error:\n"
         "Traceback:\nNameError: name 'scene' is undefined\n\n"
-        "The tool inspect could have changed the application before it failed. If the error "
-        "concerns this call, for example an argument or an item it names, fix the call and "
+        "Whether the tool inspect changed the application before it failed is unknown. If the "
+        "error concerns this call, for example an argument or an item it names, fix the call and "
         "send it again. If the error concerns the setup, for example the application not "
         "running, a program not found or a missing key or setting, tell the user what the "
         "error says. The user configures this connection in Settings -> Integrations -> "

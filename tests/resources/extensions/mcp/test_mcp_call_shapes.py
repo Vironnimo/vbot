@@ -428,22 +428,29 @@ async def test_a_refused_queued_call_reports_the_access_rule(context_service, ho
     assert "nothing was run" in result["error"]["message"]
 
 
+UNKNOWN_OUTCOME = (
+    "No result came back, so whether the call changed the application is unknown. Before you "
+    "repeat a call that changes something, check the application's current state. A call "
+    "that only reads is safe to repeat."
+)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "operation,arguments,retryable,expected",
+    "operation,arguments,expected",
     [
-        ("ping", {}, True, "This read returned no result and changed nothing"),
         (
-            "logging/setLevel",
-            {"level": "debug"},
-            None,
-            "may already have changed the application",
+            "ping",
+            {},
+            "This read returned no result and changed nothing; try it once more, and tell the "
+            "user if it keeps failing.\nretryable: true",
         ),
-        ("tools/call", {"value": "sentinel"}, None, "may already have changed the application"),
+        ("logging/setLevel", {"level": "debug"}, UNKNOWN_OUTCOME),
+        ("tools/call", {"value": "sentinel"}, UNKNOWN_OUTCOME),
     ],
 )
 async def test_unconfirmed_calls_are_not_repeated_and_say_whether_repeating_is_safe(
-    context_service, host, monkeypatch, operation, arguments, retryable, expected
+    context_service, host, monkeypatch, operation, arguments, expected
 ):
     service, registry, runner, calls = context_service
     target = (
@@ -461,10 +468,7 @@ async def test_unconfirmed_calls_are_not_repeated_and_say_whether_repeating_is_s
         registry, host, {"action": "call", "target": target, "arguments": arguments}
     )
 
-    assert result["error"]["code"] == "mcp_call_unconfirmed"
-    assert result["error"]["message"].startswith("test-owned-timeout. ")
-    assert expected in result["error"]["message"]
-    assert result["error"].get("retryable") is retryable
+    assert model_text(result) == f"Error (mcp_call_unconfirmed): test-owned-timeout. {expected}"
     assert len(calls) == 1
 
 

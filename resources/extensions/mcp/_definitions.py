@@ -137,9 +137,10 @@ MCP_MESSAGES = {
         "{describe} shows the full schema."
     ),
     "result_unavailable": (
-        "The MCP server returned a result, but vBot could not save or prepare it: {detail}. "
-        "The operation may already have completed. Inspect the remote application "
-        "before repeating a modifying call."
+        "The MCP server answered, but vBot could not save or prepare its answer: {detail}. "
+        "The call ran, and whether it succeeded is unknown. Before you repeat a call that "
+        "changes something, check the application's current state. A call that only reads "
+        "is safe to repeat."
     ),
     "target_ambiguous": (
         "Nothing was run: {name} names several items: {targets}. Repeat the call with the "
@@ -183,17 +184,17 @@ MCP_MESSAGES = {
         "Read the remaining server guidance before relying on it; the preview is incomplete."
     ),
     "unconfirmed": (
-        "{detail}. The call did not return a confirmed result and may already have changed "
-        "the application. Check its state before repeating a call that changes something; "
-        "repeating a call that only reads is safe."
+        "{detail}. No result came back, so whether the call changed the application is "
+        "unknown. Before you repeat a call that changes something, check the application's "
+        "current state. A call that only reads is safe to repeat."
     ),
     "read_unconfirmed": (
         "{detail}. This read returned no result and changed nothing; try it once more, and "
         "tell the user if it keeps failing."
     ),
     "tool_error": (
-        "The MCP {item} reported an error:\n{text}\n\nThe {item} could have changed the "
-        "application before it failed. If the error concerns this call, for example an "
+        "The MCP {item} reported an error:\n{text}\n\nWhether the {item} changed the "
+        "application before it failed is unknown. If the error concerns this call, for example an "
         "argument or an item it names, fix the call and send it again. If the error concerns "
         "the setup, for example the application not running, a program not found or a "
         "missing key or setting, tell the user what the error says. The user configures this "
