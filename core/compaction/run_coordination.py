@@ -142,6 +142,7 @@ class CompactionRunHost(Protocol):
         *,
         since: SessionReadCursor,
         prompt_refresh: object | None,
+        request_state: RequestState,
     ) -> bool: ...
 
     async def commit_automatic_checkpoint(
@@ -150,6 +151,7 @@ class CompactionRunHost(Protocol):
         checkpoint: ChatMessage,
         *,
         prompt_refresh: object | None,
+        request_state: RequestState,
     ) -> bool: ...
 
     async def project_post_compaction_request(
@@ -337,7 +339,7 @@ class CompactionRunCoordinator:
                     run.session_id,
                     exc_info=True,
                 )
-            checkpoint, _ = await self._host.project_post_compaction_request(
+            checkpoint, projected_state = await self._host.project_post_compaction_request(
                 agent=agent,
                 session=session,
                 session_messages=messages,
@@ -353,6 +355,7 @@ class CompactionRunCoordinator:
                 checkpoint,
                 since=snapshot_cursor,
                 prompt_refresh=prompt_refresh,
+                request_state=projected_state,
             ):
                 raise CompactionError("Session context changed during Compaction. Please retry.")
             messages.append(checkpoint)
@@ -644,6 +647,7 @@ class CompactionRunCoordinator:
                 context,
                 checkpoint,
                 prompt_refresh=prompt_refresh,
+                request_state=rebuilt_state,
             )
             if not checkpoint_committed:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "stale_context"})

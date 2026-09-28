@@ -11,6 +11,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat._message_history import effective_compaction_messages
+from core.chat._tool_epoch import ToolChange
 from core.chat.messages import COMPACTION_SKILL_NOTE_PREFIX
 from core.chat.wire_shaping import _embed_notes_into_request
 from core.compaction import (
@@ -23,6 +24,7 @@ from core.compaction import (
     is_compacted_tool_result_content,
 )
 from core.compaction.compaction import COMPACTION_TRIGGER_AUTO, CompactionPlan
+from core.sessions import is_tool_change_note
 from core.sessions.history import _skill_context_note_content
 from core.tools import tool_success
 from tests.core.compaction.compaction_test_support import (
@@ -297,6 +299,25 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
         assert _reported_skill_epochs(effective) == ([] if skill is None else [[skill]])
         assert all(" instructions</skill_content>" not in str(item.content) for item in effective)
         assert COMPACTION_SKILL_NOTE_PREFIX not in json.dumps(_embed_notes_into_request(effective))
+
+
+@pytest.mark.asyncio
+async def test_compaction_drops_the_tool_change_notes_of_the_ending_epoch() -> None:
+    # The next prompt epoch pins every Tool these notes announced.
+    note = ChatMessage.note(ToolChange("removed", "probe", "epoch-1").note_content())
+    history = [user("u1", "First task"), note, assistant("a1", "Done")]
+
+    history.append(
+        await compact(
+            history,
+            service=CompactionService(RetainContextStrategy()),
+            settings=CompactionSettings(strategy="retain-context"),
+        )
+    )
+
+    effective = effective_compaction_messages(history)
+    assert [item.id for item in effective if item.role != "note"] == ["u1", "a1"]
+    assert not any(is_tool_change_note(item) for item in effective)
 
 
 @pytest.mark.asyncio

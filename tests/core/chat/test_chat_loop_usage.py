@@ -72,16 +72,16 @@ def _weather_adapter(
     return adapter_type([call, {"content": "Sunny", "tool_calls": None}])
 
 
-def _weather_tools(report: str = "") -> ToolRegistry:
+def _weather_tools(report: str = "", *, install: bool = False) -> ToolRegistry:
+    """A weather Tool; with *install* each call also enables another Tool."""
     tools = ToolRegistry()
-    tools.register(
-        "get_weather",
-        "Get weather.",
-        {"type": "object"},
-        lambda _context, arguments: tool_success(
-            {"temp": 22, "city": arguments["city"], "report": report}
-        ),
-    )
+
+    def weather(_context: Any, arguments: JsonObject) -> JsonObject:
+        if install:
+            tools.register("extra", "Extra Tool.", {"type": "object"}, weather)
+        return tool_success({"temp": 22, "city": arguments["city"], "report": report})
+
+    tools.register("get_weather", "Get weather.", {"type": "object"}, weather)
     return tools
 
 
@@ -257,12 +257,28 @@ async def test_unusable_provider_input_is_estimated_and_measured_output_kept(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("measured_input", "report", "estimation_bias", "fits"),
-    [(950, "x" * 400, 0, False), (300, "", 0, True), (300, "", 2_000, True)],
-    ids=["measured-fills-window", "measured-below-window", "biased-estimate-below-window"],
+    ("measured_input", "report", "estimation_bias", "install", "fits"),
+    [
+        (950, "x" * 400, 0, False, False),
+        # An enabled Tool leaves the pinned Tool list, and so the measurement, valid.
+        (950, "x" * 400, 0, True, False),
+        (300, "", 0, False, True),
+        (300, "", 2_000, False, True),
+    ],
+    ids=[
+        "measured-fills-window",
+        "measured-fills-window-after-tool-install",
+        "measured-below-window",
+        "biased-estimate-below-window",
+    ],
 )
 async def test_measured_context_decides_whether_the_next_request_fits_the_window(
-    tmp_path: Path, measured_input: int, report: str, estimation_bias: int, fits: bool
+    tmp_path: Path,
+    measured_input: int,
+    report: str,
+    estimation_bias: int,
+    install: bool,
+    fits: bool,
 ) -> None:
     class BiasedAdapter(StubAdapter):
         def estimate_request_input_tokens(self, messages, *, model_id, tools=None):
@@ -274,7 +290,7 @@ async def test_measured_context_decides_whether_the_next_request_fits_the_window
     runtime = _runtime(
         tmp_path,
         adapter,
-        tools=_weather_tools(report),
+        tools=_weather_tools(report, install=install),
         models=StubModels({("openai", "gpt-4.1"): 1_000}),
     )
     loop = build_chat_loop(runtime)

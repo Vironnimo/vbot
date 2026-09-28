@@ -1,18 +1,26 @@
-"""Prompt-epoch Tool catalog: Tool-change notes and their Model-facing text.
+"""Prompt-epoch Tool catalog: the pinned Tool list and the Tool changes announced since.
 
 Within one prompt epoch a Session sends the same Tool definitions on every
-request, so the Provider prompt cache survives Tool changes. A change reaches
-the Model as a ``[tool-change]`` note instead: a System Reminder that names the
-Tool and, when the Model cannot read it from its Tool list, carries its
-definition. The note stores a JSON payload, not text, so the dispatch
-allowlist and contracts can be rebuilt from Session history, and the wording is
-rendered at request time with the Tool's Model-facing name.
+request, so the Provider prompt cache survives Tool changes. The first request
+of an epoch pins its definitions (:class:`ToolEpochPin`); a successful
+Compaction starts the next epoch with a fresh pin. A later change reaches the
+Model as a ``[tool-change]`` note instead: a System Reminder that names the Tool
+and, when the Model cannot read it from its Tool list, carries its definition.
+The note stores a JSON payload, not text, so :class:`ToolEpochView` rebuilds
+what the Model knows (dispatch allowlist, contracts, request Tools) from the
+pin and Session history, and the wording is rendered at request time with the
+Tool's Model-facing name. :meth:`ToolEpochView.plan` compares that knowledge
+with the :class:`LiveToolCatalog` and returns the changes to announce.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+import uuid
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
+from functools import cached_property
 from typing import Any, Literal, cast
 
 from core.chat.messages import ChatMessage, JsonObject
@@ -20,6 +28,7 @@ from core.sessions import TOOL_CHANGE_NOTE_PREFIX, is_tool_change_note
 from core.tools import model_tool_name
 
 TOOL_CHANGE_NOTE_VERSION = 1
+TOOL_EPOCH_PIN_VERSION = 1
 
 ToolChangeKind = Literal["added", "removed", "changed"]
 _TOOL_CHANGE_KINDS: frozenset[str] = frozenset({"added", "removed", "changed"})
@@ -157,6 +166,320 @@ def compact_schema(parameters: Any) -> str:
     """Serialize a parameter schema compactly, keeping its key order."""
 
     return json.dumps(parameters, separators=(",", ":"), ensure_ascii=False)
+
+
+def definition_source(definition: Mapping[str, Any]) -> str:
+    """Fingerprint one registered Provider definition, before route projection."""
+
+    payload = json.dumps(definition, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class LiveToolCatalog:
+    """The Tools a Session's Agent may use now, measured on the Run's primary route.
+
+    ``usable`` names every Tool the Agent may call now, ready or not: a Tool the
+    Model knows that is missing here was removed. ``offered`` holds the
+    definitions a new prompt epoch would pin: the ready Tools after the route
+    gates, in request order. ``sources`` fingerprints each usable Tool's
+    registered definition. ``session_tool_grants`` are the Session's current
+    grants of session-scoped Tools.
+    """
+
+    usable: frozenset[str]
+    offered: tuple[JsonObject, ...]
+    sources: Mapping[str, str]
+    session_tool_grants: tuple[str, ...] = ()
+
+    @cached_property
+    def offered_by_name(self) -> dict[str, JsonObject]:
+        return {str(definition["name"]): definition for definition in self.offered}
+
+
+@dataclass(frozen=True)
+class ToolEpochPin:
+    """The Provider Tool definitions one prompt epoch sends on every request.
+
+    ``definitions`` are the exact post-route definitions of the epoch's first
+    request, in order, under registry names. ``sources`` fingerprints each
+    Tool's registered definition so a later schema change is recognized.
+    ``epoch`` keys the Tool-change notes of this epoch; notes of another epoch
+    are ignored.
+    """
+
+    epoch: str
+    definitions: tuple[JsonObject, ...]
+    sources: Mapping[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def start(cls, catalog: LiveToolCatalog) -> ToolEpochPin:
+        """Start a new epoch that lists every Tool *catalog* offers now."""
+
+        names = catalog.offered_by_name
+        return cls(
+            epoch=uuid.uuid4().hex,
+            definitions=catalog.offered,
+            sources={name: catalog.sources[name] for name in names if name in catalog.sources},
+        )
+
+    @cached_property
+    def names(self) -> tuple[str, ...]:
+        return tuple(str(definition["name"]) for definition in self.definitions)
+
+    def to_payload(self) -> JsonObject:
+        """Return the persisted pin value."""
+
+        return {
+            "v": TOOL_EPOCH_PIN_VERSION,
+            "epoch": self.epoch,
+            "definitions": [dict(definition) for definition in self.definitions],
+            "sources": dict(self.sources),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: object) -> ToolEpochPin | None:
+        """Parse a persisted pin; ``None`` when it is unreadable or of another version."""
+
+        if not isinstance(payload, dict) or payload.get("v") != TOOL_EPOCH_PIN_VERSION:
+            return None
+        epoch = payload.get("epoch")
+        definitions = payload.get("definitions")
+        sources = payload.get("sources")
+        if not isinstance(epoch, str) or not epoch:
+            return None
+        if not isinstance(definitions, list) or not isinstance(sources, dict):
+            return None
+        names: set[str] = set()
+        for definition in definitions:
+            if not isinstance(definition, dict):
+                return None
+            name = definition.get("name")
+            if (
+                not isinstance(name, str)
+                or not name
+                or name in names
+                or not isinstance(definition.get("description"), str)
+                or not isinstance(definition.get("parameters"), dict)
+            ):
+                return None
+            names.add(name)
+        if not all(
+            isinstance(name, str) and isinstance(source, str) for name, source in sources.items()
+        ):
+            return None
+        return cls(epoch=epoch, definitions=tuple(definitions), sources=dict(sources))
+
+
+@dataclass(frozen=True)
+class _KnownTool:
+    """One Tool as the Model knows it in the current epoch."""
+
+    available: bool
+    # The definition the Model was last told to use.
+    definition: JsonObject
+    source: str | None
+
+
+@dataclass(frozen=True)
+class ToolEpochView:
+    """What the Model knows about its Tools: the epoch's pin plus its announced changes."""
+
+    pin: ToolEpochPin
+    changes: tuple[ToolChange, ...] = ()
+
+    @classmethod
+    def fold(cls, pin: ToolEpochPin, messages: Iterable[ChatMessage]) -> ToolEpochView:
+        """Collect the Tool changes *messages* announced in *pin*'s epoch, in order."""
+
+        changes = tuple(
+            change
+            for message in messages
+            if (change := tool_change_from_note(message)) is not None and change.epoch == pin.epoch
+        )
+        return cls(pin=pin, changes=changes)
+
+    def with_changes(self, changes: Iterable[ToolChange]) -> ToolEpochView:
+        """Return this view after announcing *changes*."""
+
+        return replace(self, changes=(*self.changes, *changes))
+
+    @cached_property
+    def _known(self) -> dict[str, _KnownTool]:
+        known = {
+            str(definition["name"]): _KnownTool(
+                available=True,
+                definition=definition,
+                source=self.pin.sources.get(str(definition["name"])),
+            )
+            for definition in self.pin.definitions
+        }
+        for change in self.changes:
+            current = known.get(change.tool)
+            if change.change == "removed":
+                if current is not None:
+                    known[change.tool] = replace(current, available=False)
+            elif change.definition is not None:
+                known[change.tool] = _KnownTool(
+                    available=(
+                        True if change.change == "added" or current is None else current.available
+                    ),
+                    definition=change.definition,
+                    source=change.source,
+                )
+        return known
+
+    @cached_property
+    def allowed_names(self) -> tuple[str, ...]:
+        """Tools the Model may call: pinned and announced Tools not announced as removed."""
+
+        return tuple(name for name, known in self._known.items() if known.available)
+
+    @cached_property
+    def removed_names(self) -> frozenset[str]:
+        """Tools announced as removed and not enabled again."""
+
+        return frozenset(name for name, known in self._known.items() if not known.available)
+
+    @cached_property
+    def announced_names(self) -> tuple[str, ...]:
+        """Available Tools the pin does not list: announced additions."""
+
+        pinned = set(self.pin.names)
+        return tuple(name for name in self.allowed_names if name not in pinned)
+
+    def definitions(self) -> list[JsonObject]:
+        """The definitions dispatch validates against: what the Model was last told."""
+
+        return [self._known[name].definition for name in self.allowed_names]
+
+    def request_tools(self, *, list_announced: bool) -> list[JsonObject]:
+        """Return the request's Tool list: the pin, plus announced additions when listed.
+
+        A route that drops calls to Tools outside the request list, and every
+        fallback route, lists each Tool announced as added in this epoch, in
+        announcement order, with the definition its latest addition carried.
+        """
+
+        tools = [dict(definition) for definition in self.pin.definitions]
+        if not list_announced:
+            return tools
+        pinned = set(self.pin.names)
+        added: dict[str, JsonObject] = {}
+        for change in self.changes:
+            if (
+                change.change == "added"
+                and change.tool not in pinned
+                and change.definition is not None
+            ):
+                added[change.tool] = change.definition
+        return [*tools, *(dict(definition) for definition in added.values())]
+
+    def plan(
+        self, catalog: LiveToolCatalog, *, unlisted_tool_calls: bool
+    ) -> tuple[ToolChange, ...]:
+        """Return the changes that bring the Model's knowledge up to *catalog*.
+
+        A Tool the Model may call that is no longer usable is removed; readiness
+        alone never removes one, and a route gate never removes a Tool the Model
+        already knows. A Tool the Model may not call is added once it is usable,
+        ready and passes the route gates: a pinned Tool is available again, any
+        other Tool is announced with its definition, listed in the request when
+        the route (``unlisted_tool_calls`` false) drops calls to unlisted Tools.
+        A known Tool whose registered definition and parameters both changed is
+        announced as changed; a description-only change stays silent.
+        """
+
+        known = self._known
+        pinned = set(self.pin.names)
+        names = list(dict.fromkeys([*known, *catalog.offered_by_name]))
+        planned: list[ToolChange] = []
+        for name in names:
+            current = known.get(name)
+            offered = catalog.offered_by_name.get(name)
+            source = catalog.sources.get(name)
+            if current is not None and current.available:
+                if name not in catalog.usable:
+                    planned.append(ToolChange(change="removed", tool=name, epoch=self.pin.epoch))
+                elif offered is not None and _schema_changed(current, offered, source):
+                    planned.append(self._changed(name, offered, source, pinned=name in pinned))
+                continue
+            if offered is None:
+                continue
+            if name in pinned:
+                assert current is not None
+                planned.append(
+                    ToolChange(
+                        change="added",
+                        tool=name,
+                        epoch=self.pin.epoch,
+                        source=current.source,
+                        definition=current.definition,
+                        listed=True,
+                        pinned=True,
+                    )
+                )
+                if _schema_changed(current, offered, source):
+                    planned.append(self._changed(name, offered, source, pinned=True))
+                continue
+            planned.append(
+                ToolChange(
+                    change="added",
+                    tool=name,
+                    epoch=self.pin.epoch,
+                    source=source,
+                    definition=_model_definition(offered),
+                    listed=not unlisted_tool_calls,
+                )
+            )
+        return tuple(planned)
+
+    def _changed(
+        self, name: str, offered: JsonObject, source: str | None, *, pinned: bool
+    ) -> ToolChange:
+        return ToolChange(
+            change="changed",
+            tool=name,
+            epoch=self.pin.epoch,
+            source=source,
+            definition=_model_definition(offered),
+            listed=pinned,
+            pinned=pinned,
+        )
+
+
+def without_other_epoch_tool_changes(
+    messages: Iterable[ChatMessage], epoch: str
+) -> list[ChatMessage]:
+    """Drop Tool-change notes that do not belong to *epoch*.
+
+    Such notes describe another Agent's or an earlier epoch's Tools (after a
+    Takeover, a cross-scope move or a lost pin); the current pin already lists
+    what they announced.
+    """
+
+    return [
+        message
+        for message in messages
+        if not is_tool_change_note(message)
+        or ((change := tool_change_from_note(message)) is not None and change.epoch == epoch)
+    ]
+
+
+def _schema_changed(known: _KnownTool, offered: JsonObject, source: str | None) -> bool:
+    return (
+        source is not None
+        and source != known.source
+        and offered.get("parameters") != known.definition.get("parameters")
+    )
+
+
+def _model_definition(definition: JsonObject) -> JsonObject:
+    return {
+        "name": definition["name"],
+        "description": definition.get("description", ""),
+        "parameters": definition.get("parameters", {}),
+    }
 
 
 def _optional_string(value: object) -> bool:

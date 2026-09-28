@@ -641,6 +641,7 @@ class SystemPromptManager:
         agent: PromptAgent,
         *,
         session_tool_grants: Sequence[str] = (),
+        ready_only: bool = True,
     ) -> list[dict[str, Any]]:
         """Return provider tool definitions filtered by the agent allowlist.
 
@@ -649,21 +650,26 @@ class SystemPromptManager:
         tool. The only extra rule is identity-only visibility (applied inside
         :meth:`_provider_definitions_for_agent`): ``skill_manage`` writes to the
         agent's own private skill home, so it is withheld from a config/project agent
-        (empty ``workspace``) even under a wildcard allow-list.
+        (empty ``workspace``) even under a wildcard allow-list. ``ready_only=False``
+        also returns the allowed Tools that are not ready.
         """
-        return self._provider_definitions_for_agent(agent, session_tool_grants)
+        return self._provider_definitions_for_agent(
+            agent, session_tool_grants, ready_only=ready_only
+        )
 
     async def provider_tool_definitions_async(
         self,
         agent: PromptAgent,
         *,
         session_tool_grants: Sequence[str] = (),
+        ready_only: bool = True,
     ) -> list[dict[str, Any]]:
         """Build provider Tool schemas without running profile work on the Event Loop."""
         return await _PROMPT_WORKERS.run(
             self.provider_tool_definitions,
             agent,
             session_tool_grants=session_tool_grants,
+            ready_only=ready_only,
         )
 
     def _resolve_skill_registry(
@@ -817,6 +823,8 @@ class SystemPromptManager:
         self,
         agent: PromptAgent,
         session_tool_grants: Sequence[str] = (),
+        *,
+        ready_only: bool = True,
     ) -> list[JsonObject]:
         profile_context = ToolDefinitionProfileContext(
             agent_id=agent.id, project_id=getattr(agent, "project_id", None)
@@ -831,6 +839,7 @@ class SystemPromptManager:
         definitions = self._tool_registry.provider_definitions(
             resolution.allowed_tools,
             session_grants=resolution.session_tool_grants,
+            ready_only=ready_only,
             profile_context=profile_context,
         )
         return apply_agent_target_tool_visibility(

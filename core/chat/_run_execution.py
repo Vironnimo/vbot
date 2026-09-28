@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -18,7 +19,6 @@ from core.chat._request_history import (
 )
 from core.chat._run_state import (
     RequestBuildInputs,
-    _RequestState,
     _SessionSnapshot,
     create_run_execution_context,
 )
@@ -431,15 +431,12 @@ class RunExecution:
                     context.prior_continuation,
                     context_window=self._requests.resolve_context_window(agent, target),
                 )
-                context.request_state = _RequestState(
-                    inject_continuation_reminder(
+                context.request_state = replace(
+                    context.request_state,
+                    messages=inject_continuation_reminder(
                         context.request_state.messages,
                         context.continuation_reminder,
                     ),
-                    context.request_state.tools,
-                    context.request_state.allowed_tool_names,
-                    context.request_state.session_tool_grants,
-                    context.request_state.tool_contracts,
                 )
 
             if self._compaction_service is not None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -24,6 +24,7 @@ from core.chat.continuation import (
 from core.chat.events import _close_adapter
 from core.chat.messages import ChatMessage, JsonObject
 from core.chat.model_resolution import (
+    _model_accepts_unlisted_tool_calls,
     _model_input_modalities_for_target,
     _resolve_agent_connection,
     _split_agent_model,
@@ -33,6 +34,7 @@ from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import ProjectPromptContext
 from core.prompts.pinned_context import (
+    PINNED_TOOL_DEFINITIONS_SLOT,
     pinned_memory_files,
     pinned_skill_catalog,
     pinned_soul_context,
@@ -244,6 +246,11 @@ class ChatCompactionHost:
                 skill_registry=skill_registry,
                 skill_catalog=skill_catalog,
                 session_messages_override=messages,
+                list_announced_tools=not _model_accepts_unlisted_tool_calls(
+                    self._dependencies,
+                    provider_id,
+                    model_id,
+                ),
             )
             state = await self._requests.build_request_state(agent, session, inputs=inputs)
             return ManualCompactionRequest(
@@ -427,12 +434,17 @@ class ChatCompactionHost:
         *,
         since: SessionReadCursor,
         prompt_refresh: object | None,
+        request_state: RequestState,
     ) -> bool:
-        """Commit a manual *checkpoint* and its prompt epoch while *since* is current."""
+        """Commit a manual *checkpoint* and its prompt epoch while *since* is current.
+
+        *request_state* is the projected post-Compaction request; its Tool pin
+        starts the new epoch.
+        """
         refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
         async with self.sessions.write_lock(session.address):
             committed = await session.commit_compaction_async(
-                checkpoint, since=since, epoch=_prompt_epoch(refresh)
+                checkpoint, since=since, epoch=_prompt_epoch(refresh, request_state)
             )
         if committed is None:
             return False
@@ -445,18 +457,20 @@ class ChatCompactionHost:
         checkpoint: ChatMessage,
         *,
         prompt_refresh: object | None,
+        request_state: RequestState,
     ) -> bool:
         """Commit an automatic *checkpoint* against the Run snapshot and adopt its epoch.
 
         The Run snapshot advances past the checkpoint from the same transaction,
-        and the Run continues with the rotated prompt-cache affinity id and the
-        refreshed prompt inputs.
+        and the Run continues with the rotated prompt-cache affinity id, the
+        refreshed prompt inputs and *request_state*, the projected request whose
+        Tool pin starts the new epoch.
         """
         refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
         session = context.session
         async with self.sessions.write_lock(session.address):
             affinity_id = await context.session_snapshot.commit_checkpoint(
-                session, checkpoint, epoch=_prompt_epoch(refresh)
+                session, checkpoint, epoch=_prompt_epoch(refresh, request_state)
             )
         if affinity_id is None:
             return False
@@ -496,10 +510,13 @@ class ChatCompactionHost:
         inputs = cast(RequestBuildInputs, request_inputs).merged_with_refresh(
             cast(_CompactionPromptRefresh | None, prompt_refresh)
         )
+        # The new epoch lists every Tool offered now; the commit persists its pin.
         projected_state = await self._requests.rebuild_live_request_state(
             agent,
             session,
-            inputs=inputs.with_session_messages([*session_messages, checkpoint]),
+            inputs=replace(inputs, fresh_tool_epoch=True).with_session_messages(
+                [*session_messages, checkpoint]
+            ),
             live_messages=live_request_messages,
             continuation_reminder=continuation_reminder,
         )
@@ -586,23 +603,39 @@ class ChatCompactionHost:
         context.skill_catalog = typed_refresh.skill_catalog
 
 
-def _prompt_epoch(refresh: _CompactionPromptRefresh | None) -> PromptEpoch:
-    """The prompt epoch a committed checkpoint starts: fresh pins and seen Skills."""
+def _prompt_epoch(
+    refresh: _CompactionPromptRefresh | None, request_state: RequestState
+) -> PromptEpoch:
+    """The prompt epoch a committed checkpoint starts: fresh pins and seen Skills.
+
+    The Tool pin of the projected request always starts the new epoch, even
+    when the rest of the prompt refresh failed: the checkpoint drops the notes
+    that announced Tool changes, so the old pin would lose them.
+    """
+    tool_epoch = request_state.tool_epoch
+    tool_pin = {
+        PINNED_TOOL_DEFINITIONS_SLOT: (
+            tool_epoch.pin.to_payload() if tool_epoch is not None else None
+        )
+    }
     if refresh is None:
-        return PromptEpoch(pins={})
+        return PromptEpoch(pins=tool_pin)
     return PromptEpoch(
-        pins=prompt_epoch_pins(
-            skill_catalog=refresh.skill_catalog,
-            skill_project_id=refresh.skill_project_id,
-            working_project_context=refresh.working_project_context,
-            working_project_id=(
-                refresh.project_prompt_context.project_id
-                if refresh.project_prompt_context is not None
-                else None
+        pins={
+            **tool_pin,
+            **prompt_epoch_pins(
+                skill_catalog=refresh.skill_catalog,
+                skill_project_id=refresh.skill_project_id,
+                working_project_context=refresh.working_project_context,
+                working_project_id=(
+                    refresh.project_prompt_context.project_id
+                    if refresh.project_prompt_context is not None
+                    else None
+                ),
+                soul_context=refresh.soul_context,
+                memory_files_context=refresh.memory_files_context,
+                memory_prompt_mode=refresh.memory_prompt_mode,
             ),
-            soul_context=refresh.soul_context,
-            memory_files_context=refresh.memory_files_context,
-            memory_prompt_mode=refresh.memory_prompt_mode,
-        ),
+        },
         seen_skills=refresh.available_skill_names,
     )

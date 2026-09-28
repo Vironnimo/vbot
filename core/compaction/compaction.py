@@ -37,7 +37,12 @@ from core.compaction.errors import (
 )
 from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import estimate_wire_request_input_tokens
-from core.sessions import SessionAddress, current_skill_activation_contents, skill_tool_activation
+from core.sessions import (
+    SessionAddress,
+    current_skill_activation_contents,
+    is_tool_change_note,
+    skill_tool_activation,
+)
 from core.settings.normalizers import normalize_compaction_policy
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 from core.utils.workers import BoundedWorkerPool
@@ -627,6 +632,8 @@ def _finalize_compaction(
     if plan.user_quote is not None:
         projection.append(plan.user_quote)
     projection.extend(plan.after_summary)
+    # Tool-change notes belong to the ending prompt epoch: the next epoch's
+    # Tool pin lists every Tool they announced.
     projection = compaction_projection_without_active_skills(
         [
             message
@@ -636,6 +643,7 @@ def _finalize_compaction(
                 and isinstance(message.content, str)
                 and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
             )
+            and not is_tool_change_note(message)
         ],
         activation_result_names=dict(prepared.activation_result_names),
     )

@@ -131,6 +131,7 @@ class StubTools:
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        ready_only: bool = True,
         profile_context: Any | None = None,
     ) -> list[dict[str, Any]]:
         self.provider_allowlist_calls.append(_listed(allowed_tools))

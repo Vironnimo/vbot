@@ -450,6 +450,7 @@ class StubPrompts:
         skill_registry: Any = None,
         skill_catalog: Any = None,
         session_tool_grants: Any = (),
+        ready_only: bool = True,
     ) -> list[JsonObject]:
         self.agent_for_tools = agent
         policy = agent.tool_access
@@ -459,6 +460,7 @@ class StubPrompts:
             self.tool_registry.provider_definitions(
                 allowed,
                 session_grants=session_tool_grants,
+                ready_only=ready_only,
             )
             if self.tool_registry is not None
             else []
@@ -700,8 +702,10 @@ class StubModels:
         recommended_temperatures: dict[tuple[str, str], float] | None = None,
         recommended_top_ps: dict[tuple[str, str], float] | None = None,
         connection_context_windows: dict[tuple[str, str], dict[str, int]] | None = None,
+        unlisted_tool_calls: dict[tuple[str, str], bool] | None = None,
     ) -> None:
         modality_map = input_modalities or {}
+        unlisted_map = unlisted_tool_calls or {}
         temp_map = recommended_temperatures or {}
         top_p_map = recommended_top_ps or {}
         connection_window_map = connection_context_windows or {}
@@ -710,7 +714,8 @@ class StubModels:
                 context_window=context_window,
                 connection_context_windows=connection_window_map.get((provider_id, model_id), {}),
                 capabilities=SimpleNamespace(
-                    input_modalities=modality_map.get((provider_id, model_id), ())
+                    input_modalities=modality_map.get((provider_id, model_id), ()),
+                    unlisted_tool_calls=unlisted_map.get((provider_id, model_id), True),
                 ),
                 recommended_temperature=temp_map.get((provider_id, model_id)),
                 recommended_top_p=top_p_map.get((provider_id, model_id)),

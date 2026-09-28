@@ -217,9 +217,10 @@ class ToolPromptRegistry(Protocol):
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        ready_only: bool = True,
         profile_context: ToolDefinitionProfileContext | None = None,
     ) -> list[dict[str, Any]]:
-        """Return provider-ready tool schemas."""
+        """Return provider-ready tool schemas; ``ready_only=False`` keeps not-ready Tools."""
         ...
 
 

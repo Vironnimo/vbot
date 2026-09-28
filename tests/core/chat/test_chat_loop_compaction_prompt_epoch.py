@@ -10,19 +10,21 @@ import pytest
 from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.chat import ChatMessage
 from core.chat._run_state import RequestBuildInputs, _RunRequest
+from core.chat._tool_epoch import ToolEpochPin
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
 from core.prompts.pinned_context import (
     PINNED_MEMORY_FILES_SLOT,
     PINNED_SKILL_CATALOG_SLOT,
     PINNED_SOUL_CONTEXT_SLOT,
+    PINNED_TOOL_DEFINITIONS_SLOT,
     PINNED_WORKING_PROJECT_CONTEXT_SLOT,
     pinned_memory_files,
     pinned_skill_catalog,
     pinned_soul_context,
 )
 from core.runs import Run, RunExecutionOwner
-from core.tools import tool_success
+from core.tools import ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_compaction_test_support import (
     auto_compact,
@@ -114,6 +116,45 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
         "Prompt context refresh failed after automatic Compaction" in record.message
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_fails", [False, True], ids=["refreshed", "refresh-failed"])
+async def test_compaction_pins_the_current_tools_for_the_new_epoch(
+    tmp_path: Path, refresh_fails: bool
+) -> None:
+    # The checkpoint drops the notes that announced Tool changes, so the new epoch's
+    # Tool pin lists the Tools of now, even when the rest of the refresh failed.
+    tools = ToolRegistry()
+    for name in ("kept", "dropped"):
+        tools.register(name, "Probe.", {"type": "object"}, lambda *_args: tool_success({}))
+    runtime = compaction_runtime(tmp_path, tools=tools)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    context = await run_context(
+        loop, Run(run_id="run-1", agent_id="coder", session_id=session.id), session
+    )
+    old_epoch = context.request_state.tool_epoch.pin.epoch
+    tools.unregister("dropped")
+    tools.register("added", "Probe.", {"type": "object"}, lambda *_args: tool_success({}))
+    if refresh_fails:
+
+        def fail_refresh(_project_id: str | None, _agent_id: str | None) -> Any:
+            raise RuntimeError("scan failed")
+
+        runtime.refresh_skills_for = fail_refresh
+
+    rebuilt = await compact_context(loop, context)
+
+    pin = ToolEpochPin.from_payload(
+        runtime.chat_sessions.prompt_pin(session.address, PINNED_TOOL_DEFINITIONS_SLOT)
+    )
+    assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
+    assert pin is not None and pin.epoch != old_epoch
+    assert pin.names == ("get_weather", "added", "kept")
+    assert rebuilt.tools == list(pin.definitions)
+    assert rebuilt.tool_epoch.pin == pin
 
 
 @pytest.mark.asyncio
