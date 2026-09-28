@@ -219,8 +219,6 @@ export default Object.freeze({
   'chat.activity.subagents': 'Subagent Runs',
   'chat.activity.bash': 'Bash',
   'chat.activity.runningCount': '{count} running',
-  'chat.activity.active': 'Active',
-  'chat.activity.finished': 'Finished',
   'chat.activity.taskAria': 'Open {agent} Session · {status}',
   'chat.activity.bashTaskAria': 'Bash · {command} · {status}',
   'chat.activity.cancelSubAgentAria': 'Cancel {agent} background task',
