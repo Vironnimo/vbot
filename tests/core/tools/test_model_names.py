@@ -55,6 +55,16 @@ def test_shell_tool_is_offered_under_the_host_shell_name() -> None:
         ("vision_analyze", "analyze_image"),
         ("tts", "text_to_speech"),
         ("skills_list", "skill"),
+        # One inserted, removed, replaced or swapped character.
+        pytest.param(
+            "powerhell",
+            BASH_TOOL_NAME,
+            marks=pytest.mark.skipif(os.name != "nt", reason="PowerShell host name"),
+        ),
+        ("apply_pach", "apply_patch"),
+        ("serach_files", "search_files"),
+        ("web_fetchh", "web_fetch"),
+        ("subagant", "subagent"),
     ],
 )
 def test_called_names_resolve_to_the_offered_tool_they_mean(called: str, expected: str) -> None:
@@ -66,6 +76,8 @@ def test_called_names_resolve_to_the_offered_tool_they_mean(called: str, expecte
     [
         pytest.param("TodoWrite", OFFERED, (), id="no-offered-meaning"),
         pytest.param("Grepper", OFFERED, (), id="near-miss"),
+        pytest.param("reed", OFFERED, (), id="typo-of-short-name"),
+        pytest.param("web_fetche", ("web_fetch", "web_fetcher"), (), id="ambiguous-typo"),
         pytest.param("", OFFERED, (), id="empty"),
         pytest.param("memory", OFFERED, (), id="tool-not-offered"),
         pytest.param("Grep", ("read", "apply_patch"), (), id="harness-target-not-offered"),
