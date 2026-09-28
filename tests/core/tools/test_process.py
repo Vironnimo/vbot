@@ -222,7 +222,7 @@ async def test_input_actions_fail_with_the_alternative_and_leave_the_command_alo
 
     tracked = manager.get_process(process_id, AGENT_A)
     assert tracked.status == "running"
-    assert tracked.proc.stdin is None
+    assert tracked.proc is not None and tracked.proc.stdin is None
 
 
 def test_activity_row_shows_the_normalized_action_and_process_id() -> None:

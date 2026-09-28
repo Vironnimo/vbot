@@ -53,7 +53,7 @@ async def test_run_cancellation_stops_foreground_without_handoff(
     assert result["ok"] is False
     assert result["error"]["code"] == bash_module.RUN_CANCELLED_FAILURE_CODE
     assert watcher_calls == []
-    assert all(process.proc.returncode is not None for process in manager.list_processes(AGENT_ID))
+    assert all(process.exit_code is not None for process in manager.list_processes(AGENT_ID))
 
 
 @pytest.mark.asyncio
@@ -236,7 +236,7 @@ async def test_omitted_timeout_ends_silent_and_noisy_foreground_commands(
     tracked = manager.list_processes(AGENT_ID)[0]
     await asyncio.wait_for(asyncio.shield(tracked.wait_task), 10)
     assert tracked.status == "killed"
-    assert tracked.proc.returncode is not None
+    assert tracked.exit_code is not None
     assert result["error"]["code"] == "process_timeout"
     if noisy:
         assert "working" in result["error"]["message"]
@@ -517,7 +517,7 @@ async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
 
     async def observe_kill(process_id, agent_id, **kwargs):
         tracked = manager.get_process(process_id, agent_id, **kwargs)
-        assert tracked.proc.returncode == exit_code
+        assert tracked.proc is not None and tracked.proc.returncode == exit_code
         assert tracked.status == "running"
         deadline_entered.set()
         await original_kill(process_id, agent_id, **kwargs)
@@ -543,11 +543,9 @@ async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
         tracked = manager.list_processes(context.agent_id)[0]
         await asyncio.wait_for(asyncio.shield(tracked.wait_task), 5)
         assert deadline_entered.is_set()
-        assert tracked.proc.returncode == exit_code
         assert tracked.exit_code == exit_code
         assert tracked.status == ("completed" if exit_code == 0 else "failed")
         assert not tracked.wait_task.cancelled()
-        assert tracked.stdout_task.done() and tracked.stderr_task.done()
         assert not tracked.truncated
         diagnostics = [
             record

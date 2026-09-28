@@ -712,7 +712,7 @@ async def test_aclose_cancels_work_reaps_processes_and_persists_handed_off_trace
     assert reflection_task.cancelled()
     assert runtime.chat_runs is None
     assert tracked.status == "killed"
-    assert tracked.proc.returncode is not None
+    assert tracked.exit_code is not None
     assert tracked.wait_task is not None and tracked.wait_task.done()
 
 
