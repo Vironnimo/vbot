@@ -103,6 +103,31 @@ describe('Agent roster', () => {
     },
   );
 
+  it('reports a failed roster load and clears the error on the next load', async () => {
+    const { chatState, controller, onAgentsChanged, onAgentSelected } =
+      setupController({
+        shouldLoadCurrentHistory: () => false,
+        operationOverrides: {
+          listAgents: vi
+            .fn()
+            .mockRejectedValueOnce(new Error('Server unavailable'))
+            .mockResolvedValueOnce({ agents: [{ id: 'alpha' }] }),
+        },
+      });
+
+    expect(await controller.loadAgents()).toBe(false);
+    expect(chatState.agentsError).toBe('Server unavailable');
+    expect(chatState.loadingAgents).toBe(false);
+    expect(chatState.agents).toEqual([]);
+    expect(onAgentsChanged).not.toHaveBeenCalled();
+    expect(onAgentSelected).not.toHaveBeenCalled();
+
+    expect(await controller.loadAgents()).toBe(true);
+    expect(chatState.agentsError).toBeNull();
+    expect(chatState.agents).toEqual([{ id: 'alpha' }]);
+    expect(onAgentsChanged).toHaveBeenCalledExactlyOnceWith([{ id: 'alpha' }]);
+  });
+
   it('loads the roster, current History, Run truth, and Queue as one lifecycle', async () => {
     const history = deferred();
     const loadChatHistory = vi.fn(() => history.promise);
