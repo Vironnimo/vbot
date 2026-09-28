@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import ctypes
 import functools
+import locale
 import os
 import re
 import signal
@@ -398,22 +399,16 @@ def windows_taskkill_tree(pid: int, *, targets: list[Any] | None = None) -> bool
         root_alive = False
     except psutil.Error:
         return False
-    try:
-        if not root_alive:
-            raise ProcessLookupError
-        completed = subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=TASKKILL_TREE_TIMEOUT_SECONDS,
-            check=False,
-            creationflags=subprocess_creation_flags(),
-        )
-        taskkill_succeeded = completed.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        taskkill_succeeded = False
-    if not taskkill_succeeded:
-        _LOGGER.warning("taskkill failed for pid=%s; terminating the captured process tree", pid)
+    if root_alive:
+        taskkill_failure = _run_taskkill_tree(pid)
+        fallback = taskkill_failure is not None
+        outcome = f"taskkill {taskkill_failure}" if fallback else "taskkill succeeded"
+    else:
+        # taskkill /T needs the live root to walk the tree; after the root
+        # exited (usual on a retry) only the captured identities remain.
+        fallback = True
+        outcome = "the root already exited, taskkill not run"
+    if fallback:
         # Capture identity-bearing Process objects before root exit can orphan
         # its children. Process.kill also protects against PID reuse.
         for process in reversed(processes):
@@ -421,10 +416,55 @@ def windows_taskkill_tree(pid: int, *, targets: list[Any] | None = None) -> bool
                 process.kill()
             except psutil.NoSuchProcess:
                 pass
-            except psutil.Error:
-                return False
+            except psutil.Error as error:
+                outcome += f"; killing pid={process.pid} failed: {error}"
     _gone, alive = psutil.wait_procs(processes, timeout=TASKKILL_TREE_TIMEOUT_SECONDS)
-    return not alive
+    if alive:
+        _LOGGER.warning(
+            "Could not terminate the process tree of pid=%s: %d of %d captured processes "
+            "survive (%s)",
+            pid,
+            len(alive),
+            len(processes),
+            outcome,
+        )
+        return False
+    if fallback:
+        _LOGGER.debug("Terminated the captured process tree of pid=%s directly (%s)", pid, outcome)
+    return True
+
+
+_TASKKILL_DETAIL_MAX_CHARS = 200
+
+
+def _run_taskkill_tree(pid: int) -> str | None:
+    """Run ``taskkill /F /T``; return ``None`` on success or why it failed."""
+
+    try:
+        completed = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=TASKKILL_TREE_TIMEOUT_SECONDS,
+            check=False,
+            creationflags=subprocess_creation_flags(),
+        )
+    except subprocess.TimeoutExpired:
+        return f"timed out after {TASKKILL_TREE_TIMEOUT_SECONDS} s"
+    except OSError as error:
+        return f"could not run: {error}"
+    if completed.returncode == 0:
+        return None
+    # The first stderr line names the cause, in UTF-8 or the process code page.
+    stderr = completed.stderr or b""
+    try:
+        text = stderr.decode("utf-8")
+    except UnicodeDecodeError:
+        text = stderr.decode(locale.getpreferredencoding(False), errors="replace")
+    detail = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    if len(detail) > _TASKKILL_DETAIL_MAX_CHARS:
+        detail = detail[: _TASKKILL_DETAIL_MAX_CHARS - 3] + "..."
+    return f"exit code {completed.returncode}" + (f": {detail}" if detail else "")
 
 
 async def kill_process_tree_async(
