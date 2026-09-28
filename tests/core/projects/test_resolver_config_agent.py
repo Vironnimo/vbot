@@ -95,7 +95,7 @@ def test_config_agent_run_overrides_change_only_the_runtime_view(
     assert overridden.body == configured.body
 
 
-def test_temporary_profile_is_narrowed_by_the_selected_project_ceiling(
+def test_temporary_profile_keeps_its_selection_inside_a_narrower_project(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
     project = _project(projects, repo)
@@ -136,14 +136,11 @@ def test_temporary_profile_is_narrowed_by_the_selected_project_ceiling(
 
     assert resolved.model == "openai/gpt-mini"
     assert resolved.thinking_effort == "high"
-    assert resolved.tool_access == ToolAccess(
-        mode="selected",
-        allowed=("read", "grep"),
-        denied=("grep",),
-        granted=("read",),
-    )
-    assert resolved.tools == {"read": {"safe": True}}
-    assert resolved.allowed_skills == ["global-skill", "project-skill"]
+    # The Project's Tool and Skill whitelists bound its Team, not a temporary
+    # Agent's own selection.
+    assert resolved.tool_access == temporary.tool_access
+    assert resolved.tools == temporary.tools
+    assert resolved.allowed_skills == ["*"]
     assert resolved.workspace == ""
     assert resolved.root_project_id is None
     assert resolved.custom_system_prompt_enabled is False
@@ -197,7 +194,7 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
     )
     threads: dict[str, str] = {}
     resolve_binding = registry.resolve
-    apply_project = resolver._apply_temporary_project
+    require_project = resolver._require_temporary_project
 
     def recording_resolve(*args: Any, **kwargs: Any) -> Any:
         threads["binding"] = threading.current_thread().name
@@ -205,10 +202,10 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
 
     def recording_project(*args: Any) -> Any:
         threads["project"] = threading.current_thread().name
-        return apply_project(*args)
+        return require_project(*args)
 
     monkeypatch.setattr(registry, "resolve", recording_resolve)
-    monkeypatch.setattr(resolver, "_apply_temporary_project", recording_project)
+    monkeypatch.setattr(resolver, "_require_temporary_project", recording_project)
     try:
         resolved = await resolver.resolve_temporary_agent_async(
             binding.address, generation_id=binding.generation_id
@@ -226,65 +223,6 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
             )
     finally:
         sessions.close()
-
-
-@pytest.mark.parametrize(
-    ("tool_access", "allowed_skills", "skills_global_enabled", "resolved_skills"),
-    [
-        # An explicitly empty selection stays empty; Identity-private Skills never
-        # enter a Project.
-        pytest.param(
-            ToolAccess(mode="selected", allowed=()),
-            ["identity-private"],
-            [],
-            [],
-            id="empty-selection",
-        ),
-        # A Skill pattern can narrow the Project Skill ceiling, never widen it.
-        pytest.param(
-            ToolAccess(mode="selected", allowed=()),
-            ["allowed-*", "outside-*"],
-            ["allowed-skill"],
-            ["allowed-skill"],
-            id="skill-patterns",
-        ),
-    ],
-)
-def test_temporary_selection_cannot_widen_the_project_ceiling(
-    agents: AgentStore,
-    projects: ProjectStore,
-    repo: Path,
-    tool_access: ToolAccess,
-    allowed_skills: list[str],
-    skills_global_enabled: list[str],
-    resolved_skills: list[str],
-) -> None:
-    project = _project(projects, repo)
-    project = projects.update(project.project_id, skills_global_enabled=skills_global_enabled)
-    temporary = TemporaryAgent(
-        id="temporary",
-        name="temporary",
-        model="openai/gpt-5.2",
-        cwd=repo,
-        tool_access=tool_access,
-        allowed_skills=allowed_skills,
-        tools={},
-        fallback_models=[],
-    )
-    resolver = AgentResolver(
-        agents,
-        projects,
-        _openai_configured(),
-        lambda: {},
-        temporary_agents=SimpleNamespace(resolve=lambda *_args, **_kwargs: temporary),
-    )
-
-    resolved = resolver.resolve_temporary_agent(
-        SessionAddress(project.project_id, "temporary", "session"), generation_id="generation"
-    )
-
-    assert resolved.tool_access == tool_access
-    assert resolved.allowed_skills == resolved_skills
 
 
 _BASE_TOOLS = tuple(PROJECT_DEFAULT_ALLOWED_TOOLS)

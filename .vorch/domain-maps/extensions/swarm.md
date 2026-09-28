@@ -70,7 +70,7 @@ start disabled, and newly registered blocks stay disabled. This selection contro
 prompt text independently of working directory and Tool/Skill access. It is
 persisted in temporary Agent bindings and each started Swarm's profile snapshot.
 `profiles.preview` accepts an unsaved profile and formation row, using the host's
-read-only prompt inspection with the same Project ceilings and Model Tool routing.
+read-only prompt inspection with the same Project context and Model Tool routing.
 It returns rendered block details and separately transmitted Tool definitions;
 draft changes invalidate the displayed preview. Evidence:
 `test_runtime_extension_host.py`, `test_prompts_layouts_overrides.py`, `SwarmPage.profiles.test.js`.
@@ -82,7 +82,7 @@ continuation receipts add no Model-visible reminder. Existing Session history is
 not rewritten. Evidence: `extension.py`, `test_swarm_store_profiles.py`,
 `test_swarm_wakes.py`, `test_swarm_stop_resume.py`.
 
-Profiles expose all four private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_start.py`, `SwarmPage.profiles.test.js`).
+A profile's Tool and Skill selection applies as saved, also when the Swarm works in a Project whose Tool or Skill whitelist is narrower; the Project supplies directory, Skills and context (`projects.md`). Profiles expose all four private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_start.py`, `SwarmPage.profiles.test.js`).
 `swarm_inbox` is offered only when some route (`main`, `discussion`, `ping`) can hold messages back, i.e. its mode is not `all`: with every route on `all` (the default), pending posts reach the next Model request anyway, and Inbox-only requests cost 3-10% of input in the eight analyzed Runs (Sessions, 2026-09). `_participant_config` decides from the profile (snapshot) delivery and denies it through `_tool_access` when a Session is created (start, Resume of a missing participant, preview). Live `swarms.settings` changes do not add or remove it from existing Sessions; Agent texts check `_inbox_available(binding)` (`test_swarm_inbox_is_offered_only_when_a_route_can_wait`).
 
 Profiles carry an optional `compaction_policy`. `null` (materialized on save) or an

@@ -93,20 +93,6 @@ def _validate_temporary_tool_configuration(
         raise RuntimeError("temporary Tool configuration refers to an unavailable Tool")
 
 
-def _validate_temporary_project_ceiling(
-    config: TemporaryAgentConfig,
-    allowed_tools: set[str],
-) -> None:
-    """Reject explicit temporary Tool choices outside their selected Project."""
-
-    requested = set(config.tool_access.denied) | set(config.tool_access.granted)
-    if config.tool_access.mode == "selected":
-        requested.update(config.tool_access.allowed)
-    requested.update(config.tools)
-    if not requested <= allowed_tools:
-        raise RuntimeError("temporary Tool configuration is outside its Project ceiling")
-
-
 class ExtensionHostFactory:
     """Own temporary execution groups and Extension catalog/inspection capabilities."""
 
@@ -292,7 +278,8 @@ class ExtensionHostFactory:
             if not tool.session_scoped
         }
         # Private capabilities are granted by the owner; profiles may only deny
-        # them. Keep ordinary selection and Project ceilings independently strict.
+        # them. The ordinary selection applies as configured, also inside a
+        # Project, whose Tool whitelist bounds only its Team.
         assert self._extensions is not None
         record = next(
             item for item in self._extensions.records() if item.name == binding.owner_name
@@ -313,7 +300,6 @@ class ExtensionHostFactory:
             project = self.projects.get(project_id)
             if config.cwd.resolve() != Path(project.cwd).resolve():
                 raise RuntimeError("temporary working directory is outside its Project")
-            _validate_temporary_project_ceiling(ordinary_config, set(project.allowed_tools))
 
         resolved = self.agent_resolver.resolve_temporary_agent(
             binding.address,

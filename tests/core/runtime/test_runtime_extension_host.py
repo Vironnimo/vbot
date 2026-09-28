@@ -211,6 +211,20 @@ async def test_temporary_group_preflight_validates_participants_before_opening(
             assert not set(denied) & set(capability.tool_names)
             await groups.open_group(group_id)
 
+        # A Project's Tool whitelist bounds its Team, not a participant's selection.
+        runtime.projects.create("narrow", "Narrow", valid_cwd)
+        runtime.projects.update("narrow", allowed_tools=["read"])
+        await groups.create(
+            "in-project",
+            "peer",
+            replace(
+                _participant(valid_cwd),
+                tool_access=ToolAccess(mode="selected", allowed=("read", "search_files")),
+            ),
+            project_id="narrow",
+        )
+        await groups.open_group("in-project")
+
         # The owner is rechecked after the blocking validation on its worker.
         await groups.create("retired", "peer", _participant(valid_cwd))
         resolve_temporary_agent = runtime.agent_resolver.resolve_temporary_agent
