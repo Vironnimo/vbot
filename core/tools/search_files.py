@@ -650,7 +650,8 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         # The system's own message follows the host language and names vBot's
         # scratch files, such as the candidate spool; say why in English instead.
         message = (
-            f"search_files could not complete the search: {os_error_reason(error)}. Retry the call."
+            f"search_files could not use a file the search needs: {os_error_reason(error)}. "
+            "Retry the call."
             if isinstance(error, OSError)
             else str(error)
         )

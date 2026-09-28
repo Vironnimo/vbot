@@ -300,8 +300,16 @@ async def test_timeout_and_user_cancel(tree: Path, monkeypatch: pytest.MonkeyPat
 @pytest.mark.parametrize(
     ("locked", "pattern", "expected"),
     [
-        ("selection.sqlite", "absent", "search_files could not complete the search: {reason}."),
-        ("selection.sqlite", "runner", "search_files could not complete the search: {reason}."),
+        (
+            "selection.sqlite",
+            "absent",
+            "search_files could not use a file the search needs: {reason}.",
+        ),
+        (
+            "selection.sqlite",
+            "runner",
+            "search_files could not use a file the search needs: {reason}.",
+        ),
         (
             ".gitignore",
             "runner",

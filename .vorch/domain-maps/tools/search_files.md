@@ -184,8 +184,9 @@ immediate subdirectories so the Agent can repeat the search under a narrower pat
 the note explains that lowering `limit` does not reduce traversal.
 An operating-system error that ends the search (scratch spool, engine launch) fails
 with `search_error`, or becomes a warning of an incomplete result once results were
-observed, as `search_files could not complete the search: <reason>. Retry the call.`
-with the shared English reason from `file_state.os_error_reason` and no path: an
+observed, as `search_files could not use a file the search needs: <reason>. Retry
+the call.` with the shared English reason from `file_state.os_error_reason` (whose
+`it` then means that file) and no path: an
 Agent received Windows' German text naming the scratch `selection.sqlite`
 (Sessions, 2026-09). An unreadable ignore source names only its file name; an engine
 that exits with an error and no diagnostics names its exit code.
