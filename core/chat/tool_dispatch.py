@@ -6,7 +6,6 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Mapping, Sequence
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -183,7 +182,13 @@ class ToolDispatchContext:
 
 
 class _EmittingToolRegistry(ToolRegistry):
-    """Adapter that emits public lifecycle events around registry dispatch."""
+    """Adapter that emits public lifecycle events around registry dispatch.
+
+    Events share the Tool Call's argument object and the display snapshot with
+    the canonical Assistant and Tool messages instead of copying them per call.
+    All of them are read-only: transports project events into new containers,
+    and the Tool registry repairs arguments only on its own deep copies.
+    """
 
     def __init__(
         self,
@@ -303,7 +308,7 @@ class _EmittingToolRegistry(ToolRegistry):
                             "id": context.tool_call_id,
                             "index": context.tool_call_index,
                             "name": context.tool_name,
-                            "arguments": deepcopy(arguments),
+                            "arguments": arguments,
                         },
                         "display": display,
                         "schema_fingerprint": fingerprint,
@@ -351,7 +356,7 @@ class _EmittingToolRegistry(ToolRegistry):
                             "id": context.tool_call_id,
                             "index": context.tool_call_index,
                             "name": context.tool_name,
-                            "arguments": deepcopy(arguments),
+                            "arguments": arguments,
                         },
                         "display": display,
                         "schema_fingerprint": _tool_context_schema_fingerprint(self, context),
@@ -441,7 +446,7 @@ class _EmittingToolRegistry(ToolRegistry):
                         "id": context.tool_call_id,
                         "index": context.tool_call_index,
                         "name": context.tool_name,
-                        "arguments": deepcopy(effective_arguments),
+                        "arguments": effective_arguments,
                     },
                     "display": started_display,
                     "schema_fingerprint": fingerprint,
@@ -546,8 +551,7 @@ class _EmittingToolRegistry(ToolRegistry):
 
     def display_for_completed_call(self, tool_call_id: str) -> JsonObject | None:
         """Return the final presentation snapshot for a completed Tool call."""
-        display = self._tool_displays.get(tool_call_id)
-        return deepcopy(display) if display is not None else None
+        return self._tool_displays.get(tool_call_id)
 
     async def _dispatch_with_failure_envelope(
         self,
@@ -773,7 +777,7 @@ def _fail_tool_calls_without_dispatch(
                     "id": tool_call.id,
                     "index": index,
                     "name": tool_call.name,
-                    "arguments": deepcopy(tool_call.arguments),
+                    "arguments": tool_call.arguments,
                 },
                 "display": display,
                 "schema_fingerprint": fingerprint,

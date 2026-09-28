@@ -347,9 +347,10 @@ def _mark_openrouter_message(message: dict[str, Any]) -> bool:
     """Add ``cache_control`` to a message's last content part; return whether it did.
 
     A string content is wrapped into a single ``text`` part to carry the marker;
-    a list content takes the marker on its last dict part. Empty/`None` content
-    carries nothing (``False``), so the caller moves the breakpoint to an older
-    message.
+    a list content takes the marker on a copy of its last dict part, because the
+    wire message may still share its content list with the caller's history.
+    Empty/`None` content carries nothing (``False``), so the caller moves the
+    breakpoint to an older message.
     """
 
     content = message.get("content")
@@ -368,6 +369,8 @@ def _mark_openrouter_message(message: dict[str, Any]) -> bool:
         for index in range(len(content) - 1, -1, -1):
             part = content[index]
             if isinstance(part, dict):
-                part["cache_control"] = dict(OPENROUTER_CACHE_CONTROL_EPHEMERAL)
+                marked = list(content)
+                marked[index] = {**part, "cache_control": dict(OPENROUTER_CACHE_CONTROL_EPHEMERAL)}
+                message["content"] = marked
                 return True
     return False
