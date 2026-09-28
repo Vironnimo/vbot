@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -34,6 +34,7 @@ from core.tools import (
     ToolRegistry,
     ToolResultPersistedCallback,
     is_tool_result_envelope,
+    model_tool_name,
     tool_failure,
 )
 from core.tools import ToolCall as ScheduledToolCall
@@ -48,6 +49,12 @@ if TYPE_CHECKING:
     from core.skills.skills import SkillRegistry
 
 _LOGGER = get_logger("chat")
+
+TOOL_REMOVED_ERROR_CODE = "tool_removed"
+_TOOL_REMOVED_MESSAGE = (
+    "Nothing was run: the Tool {name} was removed from your Tools in this Session. "
+    "Use your other Tools, or tell the user if the task needs {name}."
+)
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,9 @@ class ToolDispatchContext:
     base_allowed_tools: Sequence[str] | None = None
     session_tool_grants: Sequence[str] = ()
     tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
+    # Tools announced as removed in this prompt epoch; calls to them fail with
+    # ``tool_removed`` before any hook or handler runs.
+    removed_tool_names: Collection[str] = frozenset()
     change_tracker: ChangeTracker | None = None
     allow_owned_effects: bool = False
     _result_persisted_callbacks: dict[str, list[ToolResultPersistedCallback]] = field(
@@ -196,8 +206,10 @@ class _EmittingToolRegistry(ToolRegistry):
         tool_restriction: Sequence[str] | None = None,
         assistant_message_id: str | None = None,
         result_payloads: ToolDispatchContext | None = None,
+        removed_tool_names: Collection[str] = frozenset(),
     ) -> None:
         self._registry = registry
+        self._removed_tool_names = frozenset(removed_tool_names)
         self._result_payloads = result_payloads
         self._assistant_message_id = assistant_message_id
         self._run = run
@@ -285,47 +297,37 @@ class _EmittingToolRegistry(ToolRegistry):
         try:
             rejection = self._rejections.get(context.tool_call_index)
             if rejection is not None:
-                rejected_result = tool_failure(
-                    rejection.code,
-                    rejection.message,
+                return self._answer_without_running(
+                    context,
+                    arguments,
+                    tool_failure(rejection.code, rejection.message, retryable=False),
+                    error_code=rejection.code,
+                    display=_empty_tool_display_payload(),
+                    started_at=started_at,
+                    started_perf=started_perf,
+                )
+            if context.tool_name in self._removed_tool_names:
+                name = model_tool_name(context.tool_name)
+                removed_result = tool_failure(
+                    TOOL_REMOVED_ERROR_CODE,
+                    _TOOL_REMOVED_MESSAGE.format(name=name),
                     retryable=False,
                 )
-                timing = _timing_payload(started_at, started_perf)
-                self._tool_timings[context.tool_call_id] = timing
-                fingerprint = _tool_context_schema_fingerprint(self, context)
-                display = _empty_tool_display_payload()
-                self._tool_displays[context.tool_call_id] = display
-                self._run.emit(
-                    TOOL_CALL_STARTED_EVENT,
-                    {
-                        "assistant_message_id": self._assistant_message_id,
-                        "tool_call": {
-                            "id": context.tool_call_id,
-                            "index": context.tool_call_index,
-                            "name": context.tool_name,
-                            "arguments": deepcopy(arguments),
-                        },
-                        "display": display,
-                        "schema_fingerprint": fingerprint,
-                    },
+                return self._answer_without_running(
+                    context,
+                    arguments,
+                    removed_result,
+                    error_code=TOOL_REMOVED_ERROR_CODE,
+                    display=_tool_display_payload(
+                        self._registry,
+                        context.tool_name,
+                        arguments,
+                        context=context,
+                        result=removed_result,
+                    ),
+                    started_at=started_at,
+                    started_perf=started_perf,
                 )
-                self._run.emit(
-                    TOOL_CALL_RESULT_EVENT,
-                    {
-                        "assistant_message_id": self._assistant_message_id,
-                        "tool_call": {
-                            "id": context.tool_call_id,
-                            "index": context.tool_call_index,
-                            "name": context.tool_name,
-                        },
-                        "result": rejected_result,
-                        "display": display,
-                        "timing": timing,
-                        "schema_fingerprint": fingerprint,
-                        "error_code": rejection.code,
-                    },
-                )
-                return rejected_result
             denial_message = (
                 self._denial_resolver(context.tool_name)
                 if self._denial_resolver is not None
@@ -333,47 +335,21 @@ class _EmittingToolRegistry(ToolRegistry):
             )
             if denial_message is not None:
                 denied_result = tool_failure("tool_not_allowed", denial_message)
-                timing = _timing_payload(started_at, started_perf)
-                self._tool_timings[context.tool_call_id] = timing
-                display = _tool_display_payload(
-                    self._registry,
-                    context.tool_name,
+                return self._answer_without_running(
+                    context,
                     arguments,
-                    context=context,
-                    result=denied_result,
+                    denied_result,
+                    error_code="tool_not_allowed",
+                    display=_tool_display_payload(
+                        self._registry,
+                        context.tool_name,
+                        arguments,
+                        context=context,
+                        result=denied_result,
+                    ),
+                    started_at=started_at,
+                    started_perf=started_perf,
                 )
-                self._tool_displays[context.tool_call_id] = display
-                self._run.emit(
-                    TOOL_CALL_STARTED_EVENT,
-                    {
-                        "assistant_message_id": self._assistant_message_id,
-                        "tool_call": {
-                            "id": context.tool_call_id,
-                            "index": context.tool_call_index,
-                            "name": context.tool_name,
-                            "arguments": deepcopy(arguments),
-                        },
-                        "display": display,
-                        "schema_fingerprint": _tool_context_schema_fingerprint(self, context),
-                    },
-                )
-                self._run.emit(
-                    TOOL_CALL_RESULT_EVENT,
-                    {
-                        "assistant_message_id": self._assistant_message_id,
-                        "tool_call": {
-                            "id": context.tool_call_id,
-                            "index": context.tool_call_index,
-                            "name": context.tool_name,
-                        },
-                        "result": denied_result,
-                        "display": display,
-                        "timing": timing,
-                        "schema_fingerprint": _tool_context_schema_fingerprint(self, context),
-                        "error_code": "tool_not_allowed",
-                    },
-                )
-                return denied_result
             # Decision pipeline runs before the started event so the timeline
             # shows the effective (possibly modified) arguments. A deny or
             # replace short-circuits execution; a modify rewrites the input the
@@ -532,6 +508,54 @@ class _EmittingToolRegistry(ToolRegistry):
             if self._result_payloads is not None:
                 self._result_payloads.close_result_payloads(context.tool_call_id, keep=returned)
 
+    def _answer_without_running(
+        self,
+        context: ToolContext,
+        arguments: JsonObject,
+        result: JsonObject,
+        *,
+        error_code: str,
+        display: JsonObject,
+        started_at: datetime,
+        started_perf: float,
+    ) -> JsonObject:
+        """Emit the lifecycle of a call answered before any hook or handler ran."""
+        timing = _timing_payload(started_at, started_perf)
+        self._tool_timings[context.tool_call_id] = timing
+        self._tool_displays[context.tool_call_id] = display
+        fingerprint = _tool_context_schema_fingerprint(self, context)
+        self._run.emit(
+            TOOL_CALL_STARTED_EVENT,
+            {
+                "assistant_message_id": self._assistant_message_id,
+                "tool_call": {
+                    "id": context.tool_call_id,
+                    "index": context.tool_call_index,
+                    "name": context.tool_name,
+                    "arguments": deepcopy(arguments),
+                },
+                "display": display,
+                "schema_fingerprint": fingerprint,
+            },
+        )
+        self._run.emit(
+            TOOL_CALL_RESULT_EVENT,
+            {
+                "assistant_message_id": self._assistant_message_id,
+                "tool_call": {
+                    "id": context.tool_call_id,
+                    "index": context.tool_call_index,
+                    "name": context.tool_name,
+                },
+                "result": result,
+                "display": display,
+                "timing": timing,
+                "schema_fingerprint": fingerprint,
+                "error_code": error_code,
+            },
+        )
+        return result
+
     def take_media_for_call(self, tool_call_id: str, *, tool_message_id: str) -> list[JsonObject]:
         """Transfer in-memory media to the correlated request without retaining a cache."""
         return [
@@ -642,6 +666,7 @@ async def _dispatch_tool_calls(
         assistant_message_id=session.assistant_message_id,
         denial_resolver=context.tool_denial_resolver,
         tool_restriction=context.tool_restriction,
+        removed_tool_names=context.removed_tool_names,
         rejections={
             index: tool_call.rejection
             for index, tool_call in enumerate(tool_calls)

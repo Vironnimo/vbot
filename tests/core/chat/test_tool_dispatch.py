@@ -164,6 +164,37 @@ async def test_run_tool_restriction_narrows_dispatch_to_the_intersection(
 
 
 @pytest.mark.asyncio
+async def test_a_removed_tool_fails_before_denials_and_lookup_without_running(
+    tmp_path: Path,
+) -> None:
+    tools, observed = _recording_tools("probe")
+    harness = ToolDispatchHarness(tmp_path, tools)
+
+    dispatched = await harness.dispatch(
+        [call("probe"), call("gone")],
+        removed_tool_names=frozenset({"probe", "gone"}),
+        tool_denial_resolver=lambda _name: "denied by the Run",
+    )
+
+    assert observed == []
+    probe, gone = dispatched.results
+    assert probe["error"] == {
+        "code": "tool_removed",
+        "message": (
+            "Nothing was run: the Tool probe was removed from your Tools in this Session. "
+            "Use your other Tools, or tell the user if the task needs probe."
+        ),
+        "retryable": False,
+    }
+    assert gone["error"]["code"] == "tool_removed"
+    assert [event.payload["error_code"] for event in dispatched.events(TOOL_CALL_RESULT_EVENT)] == [
+        "tool_removed",
+        "tool_removed",
+    ]
+    assert len(dispatched.events(TOOL_CALL_STARTED_EVENT)) == 2
+
+
+@pytest.mark.asyncio
 async def test_session_tool_grant_precedes_agent_and_run_dispatch_gates(tmp_path: Path) -> None:
     tools = ToolRegistry()
     tools.register(
