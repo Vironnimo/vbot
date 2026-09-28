@@ -11,8 +11,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.tools import _search_ignores, _search_selection
+from core.tools import _search_execution, _search_ignores, _search_selection
 from core.tools._search_selection import Glob
+from core.utils.search_binary import require_binary
 from tests.core.tools.search_files_test_support import context, dispatch, search, search_registry
 
 
@@ -256,14 +257,23 @@ def test_binary_encodings_and_existence(tmp_path: Path) -> None:
     )
 
 
-# The engine validates a pattern even when no file could be searched.
+# The engine validates a pattern even when no file could be searched. With candidates
+# spanning several native batches, its error surfaces while the candidate list is still
+# being read and must not be replaced by a failure to release that list.
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("args", "candidates"), [(["["], False), (["-P", "a{2,1}"], True)])
+@pytest.mark.parametrize(
+    ("args", "candidates"),
+    [(["["], 0), (["-P", "a{2,1}"], 1), (["-P", "a{2,1}"], 100)],
+)
 async def test_native_validation_with_and_without_candidates(
-    tmp_path: Path, args: list[str], candidates: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str], candidates: int
 ) -> None:
-    if candidates:
-        (tmp_path / "a.txt").write_text("[a{2,1}")
+    # Leaves room for about forty of the paths below per native command line.
+    monkeypatch.setattr(
+        _search_execution, "MAX_COMMAND_LINE_BYTES", len(str(require_binary())) + 600
+    )
+    for index in range(candidates):
+        (tmp_path / f"c{index:03d}.txt").write_text("[a{2,1}")
     result = await dispatch(tmp_path, {"args": args})
     assert result["ok"] is False
     message = result["error"]["message"]

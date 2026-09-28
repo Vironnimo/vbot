@@ -149,7 +149,7 @@ def _rename_agent_and_retarget_references(
             updated_cron_job_ids.append(job.id)
         for job in bootstrap_jobs:
             prior_bootstrap_jobs[job.id] = job
-            bootstrap_service.update_job(job.id, agent_id=new_agent_id)
+            bootstrap_service.retarget_agent(job.id, new_agent_id)
             updated_bootstrap_job_ids.append(job.id)
         calendar.actions.retarget_identity(agent_id, new_agent_id)
         calendar_retargeted = True

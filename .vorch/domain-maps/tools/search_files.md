@@ -139,6 +139,11 @@ first, with path tie-breaks. Explicit sorts cover path, modified, accessed, crea
 and unsorted discovery; unsupported creation timestamps reject. A call-scoped
 SQLite spool keeps union, deduplication, and sorting off unbounded Python lists;
 it is discarded with the call, so it runs without fsync or an on-disk journal.
+`FileSelection.close` closes every reader it handed out before the connection: a
+suspended reader (or a traceback retaining one) would keep the spool file open, and on
+Windows the failed scratch-directory cleanup would replace the error that ended the
+search, for example a regex the engine rejects while candidates for further native
+batches remain (`test_native_validation_with_and_without_candidates`).
 
 ## Results and Resource Bounds
 

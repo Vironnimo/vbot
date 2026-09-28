@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -236,6 +237,52 @@ async def test_failed_once_job_can_be_rearmed_for_a_later_startup(tmp_path: Path
     await retry.wait_until_idle()
     assert len(retry_trigger.calls) == 1
     assert retry.get_job(created.id).status == "completed"
+
+
+_EARLIER_RUN: dict[str, Any] = {
+    "last_started_startup_id": "creator",
+    "last_run_id": "run-before",
+    "last_session_id": "session-before",
+    "last_error": "boom",
+}
+_JOB_STATES = [
+    pytest.param({"status": "paused", **_EARLIER_RUN}, id="paused"),
+    pytest.param({"status": "failed", "last_outcome": "failed", **_EARLIER_RUN}, id="failed"),
+    pytest.param(_EARLIER_RUN, id="active-with-unreconciled-run"),
+]
+
+
+@pytest.mark.parametrize("state", _JOB_STATES)
+def test_retargeting_the_agent_keeps_status_arming_and_run_history(
+    tmp_path: Path, state: dict[str, Any]
+) -> None:
+    creator = make_service(StubTriggerService(), tmp_path, "creator")
+    created = creator.create_job(agent_id="main", prompt="Verify", mode="once")
+    creator.restore_job(replace(created, **state))
+    before = creator.get_job(created.id)
+    service = make_service(StubTriggerService(), tmp_path, "later")
+
+    retargeted = service.retarget_agent(created.id, "renamed")
+
+    assert retargeted == replace(before, agent_id="renamed")
+    assert make_service(StubTriggerService(), tmp_path, "reload").get_job(created.id) == retargeted
+
+
+@pytest.mark.parametrize("state", _JOB_STATES)
+def test_editing_a_job_rearms_it_and_clears_its_run_references(
+    tmp_path: Path, state: dict[str, Any]
+) -> None:
+    creator = make_service(StubTriggerService(), tmp_path, "creator")
+    created = creator.create_job(agent_id="main", prompt="Verify", mode="once")
+    creator.restore_job(replace(created, **state))
+    service = make_service(StubTriggerService(), tmp_path, "later")
+
+    edited = service.update_job(created.id, prompt="Changed")
+
+    assert edited.status == "active"
+    assert edited.armed_after_startup_id == "later"
+    assert edited.last_started_startup_id is None
+    assert (edited.last_run_id, edited.last_session_id, edited.last_error) == (None, None, None)
 
 
 @pytest.mark.asyncio

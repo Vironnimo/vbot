@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from core.automation.bootstrap import BootstrapService
 from core.channels import ChannelConfigError
 from core.runs import Run
 from core.sessions import SessionAddress
@@ -63,10 +65,35 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         SimpleNamespace(id="history", agent_id="coder", project_id=None, status="completed"),
         SimpleNamespace(id="project", agent_id="coder", project_id="vbot", status="active"),
     ]
-    bootstrap_jobs = [
-        SimpleNamespace(id="boot-active", agent_id="coder", project_id=None, status="active"),
-        SimpleNamespace(id="boot-history", agent_id="coder", project_id=None, status="completed"),
-    ]
+    bootstrap_creator = BootstrapService(
+        state.runtime.trigger_service, tmp_path, startup_id="earlier-startup"
+    )
+    bootstrap_jobs = {
+        status: bootstrap_creator.create_job(agent_id="coder", prompt=status, mode="once")
+        for status in ("active", "paused", "failed", "completed")
+    }
+    bootstrap_creator.disable_job(bootstrap_jobs["paused"].id)
+    earlier_run: dict[str, Any] = {
+        "last_started_startup_id": "earlier-startup",
+        "last_run_id": "run-before",
+        "last_session_id": "session-before",
+    }
+    bootstrap_creator.restore_job(
+        replace(
+            bootstrap_jobs["failed"],
+            status="failed",
+            last_outcome="failed",
+            last_error="boom",
+            **earlier_run,
+        )
+    )
+    bootstrap_creator.restore_job(
+        replace(
+            bootstrap_jobs["completed"], status="completed", last_outcome="success", **earlier_run
+        )
+    )
+    bootstrap_before = {job.id: job for job in bootstrap_creator.list_jobs()}
+    retargeted = [job.id for job in bootstrap_before.values() if job.status != "completed"]
 
     channel_update_loops: list[asyncio.AbstractEventLoop] = []
 
@@ -80,11 +107,6 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         job.agent_id = fields["agent_id"]
         return job
 
-    def update_bootstrap_job(job_id: str, **fields: Any) -> Any:
-        job = next(item for item in bootstrap_jobs if item.id == job_id)
-        job.agent_id = fields["agent_id"]
-        return job
-
     state.runtime.channel_service = SimpleNamespace(
         list_channels=lambda: channels,
         update_channel=update_channel,
@@ -93,10 +115,10 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         list_jobs=lambda: jobs,
         update_job=update_job,
     )
-    state.runtime.bootstrap_service = SimpleNamespace(
-        list_jobs=lambda: bootstrap_jobs,
-        update_job=update_bootstrap_job,
+    bootstrap_service = BootstrapService(
+        state.runtime.trigger_service, tmp_path, startup_id="rename-startup"
     )
+    state.runtime.bootstrap_service = bootstrap_service
 
     result = await rpc_result(state, "agent.rename", id="coder", new_id="researcher")
 
@@ -106,7 +128,7 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         "new_id": "researcher",
         "channels_updated": ["telegram"],
         "cron_jobs_updated": ["active"],
-        "bootstrap_jobs_updated": ["boot-active"],
+        "bootstrap_jobs_updated": retargeted,
         "agent_policies_updated": ["manager", "researcher"],
         "session_links_updated": 1,
     }
@@ -116,8 +138,14 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
     assert jobs[0].agent_id == "researcher"
     assert jobs[1].agent_id == "coder"
     assert jobs[2].agent_id == "coder"
-    assert bootstrap_jobs[0].agent_id == "researcher"
-    assert bootstrap_jobs[1].agent_id == "coder"
+    # Only the Agent id moves: a rename neither un-pauses nor re-arms a job and keeps
+    # a failed one's error, while a completed one-shot stays untouched history.
+    bootstrap_after = {job.id: job for job in bootstrap_service.list_jobs()}
+    for job_id in retargeted:
+        assert bootstrap_after[job_id] == replace(bootstrap_before[job_id], agent_id="researcher")
+    completed_id = bootstrap_jobs["completed"].id
+    assert bootstrap_after[completed_id] == bootstrap_before[completed_id]
+    assert bootstrap_after[completed_id].agent_id == "coder"
     assert state.runtime.agents.get("researcher").tools["subagent"]["allowed_agents"] == [
         "researcher",
         "coder@vbot",

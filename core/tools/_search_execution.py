@@ -22,6 +22,8 @@ from core.tools.tools import ToolContext
 from core.utils.processes import subprocess_creation_flags
 
 MAX_PROTOCOL_LINE = 8 * 1024 * 1024
+# Bound on one native command line; a longer path list runs in several batches.
+MAX_COMMAND_LINE_BYTES = 28000
 # Polling interval for the child memory bound; each poll is a process query.
 MEMORY_POLL_SECONDS = 0.05
 
@@ -400,9 +402,9 @@ def content_events(
         except ValueError:
             argument = str(path)
         argument_size = len(argument.encode("utf-8")) + 3
-        if argument_size + length > 28000:
+        if argument_size + length > MAX_COMMAND_LINE_BYTES:
             raise ValueError(f"Search path exceeds the native argument budget: {argument}")
-        if batch and size + argument_size > 28000:
+        if batch and size + argument_size > MAX_COMMAND_LINE_BYTES:
             yield from execute()
             batch.clear()
             size = length
