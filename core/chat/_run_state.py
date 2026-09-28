@@ -286,8 +286,16 @@ class _SessionSnapshot:
             active_lineage=list(batch.active_messages),
         )
 
-    async def refresh(self, session: ChatSession) -> None:
-        await self._apply(session, await session.load_since_async(self.cursor))
+    async def refresh(self, session: ChatSession) -> list[ChatMessage] | None:
+        """Advance to the Session's newest entry.
+
+        Returns the active messages appended since the previous cursor, or
+        ``None`` when the cursor could not continue (an edit or takeover) and
+        the whole snapshot was replaced.
+        """
+        batch = await session.load_since_async(self.cursor)
+        await self._apply(session, batch)
+        return None if batch is None else list(batch.active_messages)
 
     async def append(
         self,

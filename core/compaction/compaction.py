@@ -40,6 +40,7 @@ from core.providers.adapter import estimate_wire_request_input_tokens
 from core.sessions import (
     SessionAddress,
     current_skill_activation_contents,
+    is_skill_context_note,
     is_tool_change_note,
     skill_tool_activation,
 )
@@ -635,16 +636,7 @@ def _finalize_compaction(
     # Tool-change notes belong to the ending prompt epoch: the next epoch's
     # Tool pin lists every Tool they announced.
     projection = compaction_projection_without_active_skills(
-        [
-            message
-            for message in projection
-            if not (
-                message.role == "note"
-                and isinstance(message.content, str)
-                and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
-            )
-            and not is_tool_change_note(message)
-        ],
+        [message for message in projection if not _is_epoch_bound_note(message)],
         activation_result_names=dict(prepared.activation_result_names),
     )
     if prepared.active_skill_names:
@@ -673,6 +665,45 @@ def _finalize_compaction(
         policy=prepared.strategy_id,
         strategy=prepared.strategy_id,
     )
+
+
+def _is_epoch_bound_note(message: ChatMessage) -> bool:
+    """Whether *message* belongs to the prompt epoch a checkpoint ends; no Projection keeps it."""
+    return (
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
+    ) or is_tool_change_note(message)
+
+
+def carry_notes_into_checkpoint(
+    checkpoint: ChatMessage, appended: Sequence[ChatMessage]
+) -> ChatMessage | None:
+    """Return *checkpoint* with the notes appended since its snapshot kept after its Tail.
+
+    An automatic Compaction calls the Summary Model outside the Session write
+    lock, so other writers may append notes after the snapshot it summarized.
+    A checkpoint committed after such notes would push them behind its
+    Projection and out of the live Context. Plain notes need no summary and
+    stay verbatim, exactly like the Tail. ``None`` means *appended* holds any
+    other entry, or a note of the ending prompt epoch: the summary no longer
+    describes the Session, so the checkpoint must be discarded.
+    """
+    if not all(
+        message.role == "note"
+        and not _is_epoch_bound_note(message)
+        and not is_skill_context_note(message)
+        for message in appended
+    ):
+        return None
+    if not appended:
+        return checkpoint
+    carried = replace(
+        checkpoint,
+        projection=[*(checkpoint.projection or []), *(message.to_dict() for message in appended)],
+    )
+    carried.validate()
+    return carried
 
 
 def _append_compaction_skill_guidance(

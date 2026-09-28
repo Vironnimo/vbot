@@ -22,6 +22,7 @@ from core.compaction.compaction import (
     CompactionError,
     CompactionInsufficientReclaimError,
     CompactionSettings,
+    carry_notes_into_checkpoint,
     effective_compaction_policy,
 )
 from core.performance import record_span, session_track
@@ -43,6 +44,10 @@ if TYPE_CHECKING:
 
 
 _LOGGER = get_logger("compaction.coordination")
+
+# Commit attempts of one automatic checkpoint: each absorbs the notes that landed
+# while the previous attempt was projecting the post-Compaction request.
+AUTO_COMPACTION_COMMIT_ATTEMPTS = 3
 
 
 class ManualCompactionRequest(Protocol):
@@ -623,33 +628,56 @@ class CompactionRunCoordinator:
                         context,
                         context_window=self._host.resolve_context_window(agent, target),
                     )
-                checkpoint, rebuilt_state = await self._host.project_automatic_compaction_request(
-                    context=context,
-                    target=target,
-                    session_messages=session_messages,
-                    checkpoint=checkpoint,
-                    context_tokens_before=input_tokens,
-                    prompt_refresh=prompt_refresh,
-                    live_request_messages=messages if continue_same_run else None,
-                    continuation_reminder=(
-                        context.continuation_reminder if continue_same_run else None
-                    ),
-                )
             except Exception:
-                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
-                _LOGGER.warning(
-                    "Post-compaction request projection failed; continuing without Compaction",
-                    exc_info=True,
-                )
+                self._abort_failed_projection(run)
                 return current_state
 
-            checkpoint_committed = await self._host.commit_automatic_checkpoint(
-                context,
-                checkpoint,
-                prompt_refresh=prompt_refresh,
-                request_state=rebuilt_state,
-            )
-            if not checkpoint_committed:
+            # The summary omits what other writers appended during its Model call.
+            # Notes among them follow the Tail in the checkpoint and stay in the live
+            # Context; any other entry makes the summary stale. A writer that lands
+            # during the projection fails the commit, so the next attempt absorbs it
+            # too, up to a bound: the next boundary starts over.
+            committed_checkpoint: ChatMessage | None = None
+            carried_notes = 0
+            for _attempt in range(AUTO_COMPACTION_COMMIT_ATTEMPTS):
+                async with self._host.sessions.write_lock(session.address):
+                    appended = await context.session_snapshot.refresh(session)
+                if appended is None:
+                    break
+                carried = carry_notes_into_checkpoint(checkpoint, appended)
+                if carried is None:
+                    break
+                checkpoint = carried
+                carried_notes += len(appended)
+                session_messages = list(context.session_snapshot.active_messages)
+                try:
+                    (
+                        projected,
+                        rebuilt_state,
+                    ) = await self._host.project_automatic_compaction_request(
+                        context=context,
+                        target=target,
+                        session_messages=session_messages,
+                        checkpoint=checkpoint,
+                        context_tokens_before=input_tokens,
+                        prompt_refresh=prompt_refresh,
+                        live_request_messages=messages if continue_same_run else None,
+                        continuation_reminder=(
+                            context.continuation_reminder if continue_same_run else None
+                        ),
+                    )
+                except Exception:
+                    self._abort_failed_projection(run)
+                    return current_state
+                if await self._host.commit_automatic_checkpoint(
+                    context,
+                    projected,
+                    prompt_refresh=prompt_refresh,
+                    request_state=rebuilt_state,
+                ):
+                    committed_checkpoint = projected
+                    break
+            if committed_checkpoint is None:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "stale_context"})
                 _LOGGER.info(
                     "Auto-compaction discarded because the Session changed during its Model call "
@@ -673,14 +701,16 @@ class CompactionRunCoordinator:
                 return current_state
             accounting.reset()
             self._emit_compaction_completed(
-                run, context.session_snapshot.active_messages, checkpoint
+                run, context.session_snapshot.active_messages, committed_checkpoint
             )
-            checkpoint_usage = checkpoint.usage or {}
+            checkpoint_usage = committed_checkpoint.usage or {}
             _LOGGER.info(
-                "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",
+                "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d "
+                "carried_notes=%d)",
                 run.id,
                 run.session_id,
                 checkpoint_usage.get("context_tokens_after", 0),
+                carried_notes,
             )
             return rebuilt_state
         finally:
@@ -691,6 +721,14 @@ class CompactionRunCoordinator:
                 name="compaction",
                 args={"run_id": run.id, "trigger": "auto"},
             )
+
+    @staticmethod
+    def _abort_failed_projection(run: Run) -> None:
+        run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
+        _LOGGER.warning(
+            "Post-compaction request projection failed; continuing without Compaction",
+            exc_info=True,
+        )
 
     @staticmethod
     def _emit_compaction_completed(
