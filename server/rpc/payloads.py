@@ -49,6 +49,7 @@ def _run_response(
     sse_url: str | None = None,
     file_delivery: Any | None = None,
 ) -> JsonObject:
+    events = run.events
     response: JsonObject = {
         "run_id": run.id,
         "agent_id": run.agent_id,
@@ -58,10 +59,10 @@ def _run_response(
         "started_at": run.created_at,
         "iteration_count": run.iteration_count,
         "controls": run.controls(),
-        "controls_sequence": run.events[-1].sequence if run.events else 0,
+        "controls_sequence": run.last_sequence,
         "events": [
             remove_opaque_provider_metadata(event.to_dict(), file_delivery=file_delivery)
-            for event in run.events
+            for event in events
         ],
     }
     if final_message is not None:

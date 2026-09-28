@@ -166,8 +166,9 @@ async def test_exhausted_recovery_reaches_configured_backup(tmp_path, failure):
     assert len(adapter.stream_requests) == 9
     assert len(backup.stream_requests) == 1
     run = last_run(runtime, "test")
+    events = await runtime.timelines.events(run)
     assert run.status == RunStatus.COMPLETED
-    assert [event.type for event in run.events if event.type == MODEL_FALLBACK_ACTIVATED_EVENT] == [
+    assert [event.type for event in events if event.type == MODEL_FALLBACK_ACTIVATED_EVENT] == [
         MODEL_FALLBACK_ACTIVATED_EVENT
     ]
     assistants = [m for m in history(runtime, "test") if m.role == "assistant"]
@@ -316,9 +317,10 @@ async def test_fallback_chain_cannot_multiply_total_recovery_budget(tmp_path, fa
         await build_chat_loop(runtime, streaming=True).send("coder", "Work", session_id="test")
     assert [len(adapter.stream_requests) for adapter in adapters] == [9, 9 if fallback else 0, 0]
     run = last_run(runtime, "test")
+    events = await runtime.timelines.events(run)
     retry_status = [
         event.payload
-        for event in run.events
+        for event in events
         if event.type == PROVIDER_REQUEST_STATUS_EVENT
         and event.payload.get("state") == "retrying"
         and "attempt" in event.payload

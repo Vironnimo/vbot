@@ -734,7 +734,7 @@ async def test_extension_page_cancel_tool_is_owner_scoped_and_call_local(scenari
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", ["live", "retired"])
 async def test_extension_page_run_reports_verified_replay_watermark(scenario: str) -> None:
-    run = SimpleNamespace(events=[SimpleNamespace(sequence=7)])
+    run = SimpleNamespace(last_sequence=7)
 
     class Groups:
         reads = 0
@@ -753,7 +753,7 @@ async def test_extension_page_run_reports_verified_replay_watermark(scenario: st
         def page_declarations(self) -> list[tuple[Any, Any, Path]]:
             # Events the Run emits while ownership is re-verified belong to replay.
             if groups.reads:
-                run.events.append(SimpleNamespace(sequence=14))
+                run.last_sequence = 14
             return super().page_declarations()
 
     class Delivery:

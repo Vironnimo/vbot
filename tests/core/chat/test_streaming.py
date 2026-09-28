@@ -61,7 +61,6 @@ def test_accumulates_visible_deltas_in_provider_order() -> None:
         ASSISTANT_OUTPUT_DELTA_EVENT,
     ]
     assert [delta.event_type for delta in emitted] == order
-    assert [delta.event_type for delta in accumulator.visible_deltas] == order
     assert (fields.content, fields.reasoning) == ("Hello world", "Think")
 
 
@@ -281,7 +280,6 @@ def test_reasoning_meta_merges_without_a_public_delta() -> None:
     )
 
     assert visible == []
-    assert accumulator.visible_deltas == []
     assert accumulator.finalize_assistant_fields().reasoning_meta == {
         "signature": "opaque",
         "encrypted_content": "opaque-too",

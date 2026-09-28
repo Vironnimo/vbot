@@ -821,12 +821,18 @@ class ExtensionRegistry:
 
         Threads the list through every handler in load order: a handler returning
         a list makes it the current list (the next handler sees it); any other
-        return leaves the running list unchanged. Returns the final list. Chat
-        passes a shallow per-message copy in, so this is safe to use as the
-        request messages.
+        return leaves the running list unchanged. Returns the final list.
+
+        Handlers get a new list of shallow per-message copies, so replacing or
+        mutating a top-level message dict stays request-local and the caller's
+        messages remain intact; nested objects stay shared. Without a context
+        handler, the caller's list is returned as it is and nothing is copied.
         """
-        current = messages
-        for extension_name, handler in self._handlers.get("context", []):
+        handlers = self._handlers.get("context", [])
+        if not handlers:
+            return messages
+        current = [dict(message) for message in messages]
+        for extension_name, handler in handlers:
             payload = {"messages": current}
             result = await self._invoke("context", extension_name, handler, ctx, payload)
             if result is _HANDLER_FAILED:

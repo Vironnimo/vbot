@@ -10,10 +10,17 @@ import pytest
 
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
+    ASSISTANT_OUTPUT_EVENT,
+    FINISHED_RUN_REPLAY_LIMIT,
+    MODEL_STEP_USAGE_EVENT,
+    PROVIDER_REQUEST_STATUS_EVENT,
     REASONING_DELTA_EVENT,
     RUN_AGENT_ACTIVITY_FIELD,
     RUN_KIND_FIELD,
     TOOL_CALL_DELTA_EVENT,
+    TOOL_CALL_RESULT_EVENT,
+    TOOL_CALL_STARTED_EVENT,
+    TOOL_CALL_STDOUT_EVENT,
     ChatRunManager,
     Run,
     RunAdmission,
@@ -24,7 +31,7 @@ from core.runs import (
     RunStatus,
 )
 from core.sessions import SessionAddress
-from tests.core.runs.runs_test_support import SESSION, held
+from tests.core.runs.runs_test_support import SESSION, RunTimelines, held
 
 pytestmark = pytest.mark.asyncio
 
@@ -68,11 +75,12 @@ async def test_delta_events_use_normal_sequences_and_replay_filtering() -> None:
     run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "Hel"})
     run.emit(REASONING_DELTA_EVENT, {"reasoning_delta": "Thinking"})
     run.emit(TOOL_CALL_DELTA_EVENT, {"tool_call_id": "tool-one", "name_delta": "read"})
+    replay = asyncio.create_task(_collect(run.subscribe(after_sequence=1)))
+    await asyncio.sleep(0)
     run.mark_completed("done")
+    replayed_events = await replay
 
-    replayed_events = [event async for event in run.subscribe(after_sequence=1)]
-
-    assert [event.sequence for event in run.events] == [1, 2, 3, 4]
+    assert [event.sequence for event in replayed_events] == [2, 3, 4]
     assert [event.type for event in replayed_events] == [
         REASONING_DELTA_EVENT,
         TOOL_CALL_DELTA_EVENT,
@@ -82,6 +90,64 @@ async def test_delta_events_use_normal_sequences_and_replay_filtering() -> None:
         "tool_call_id": "tool-one",
         "name_delta": "read",
     }
+
+
+async def _collect(events: Any) -> list[Any]:
+    return [event async for event in events]
+
+
+@pytest.mark.parametrize(
+    ("emitted", "expected_ending"),
+    [
+        (
+            [
+                TOOL_CALL_STARTED_EVENT,
+                TOOL_CALL_STDOUT_EVENT,
+                TOOL_CALL_RESULT_EVENT,
+                ASSISTANT_OUTPUT_DELTA_EVENT,
+                ASSISTANT_OUTPUT_EVENT,
+                PROVIDER_REQUEST_STATUS_EVENT,
+                MODEL_STEP_USAGE_EVENT,
+            ],
+            [
+                ASSISTANT_OUTPUT_EVENT,
+                PROVIDER_REQUEST_STATUS_EVENT,
+                MODEL_STEP_USAGE_EVENT,
+                "run_completed",
+            ],
+        ),
+        ([ASSISTANT_OUTPUT_EVENT, ASSISTANT_OUTPUT_DELTA_EVENT], ["run_completed"]),
+        (
+            ["visible"] * 40,
+            ["visible"] * (FINISHED_RUN_REPLAY_LIMIT - 1) + ["run_completed"],
+        ),
+    ],
+    ids=["settled-step", "transient-before-terminal", "capped"],
+)
+async def test_finished_run_replays_only_its_settled_ending(
+    emitted: list[str], expected_ending: list[str]
+) -> None:
+    manager = ChatRunManager()
+    timelines = RunTimelines(manager)
+
+    async def execute(run: Run) -> str:
+        await asyncio.sleep(0)  # The live follower subscribes before the Run ends.
+        for event_type in emitted:
+            run.emit(event_type)
+        return "done"
+
+    run = await manager.start(SESSION, execute)
+    await run.wait()
+    followed = await timelines.events(run)
+    late = [event async for event in run.subscribe()]
+
+    # A live subscriber saw every event; one arriving after the end gets the
+    # terminal event plus the non-transient events directly before it.
+    assert [event.sequence for event in followed] == list(range(1, len(emitted) + 3))
+    assert [event.type for event in late] == expected_ending
+    assert late == followed[-len(expected_ending) :] == run.events
+    assert run.last_sequence == followed[-1].sequence
+    assert [event async for event in run.subscribe(after_sequence=run.last_sequence)] == []
 
 
 async def test_run_event_replay_window_is_bounded_without_reusing_sequences() -> None:

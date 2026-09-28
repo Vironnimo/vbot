@@ -58,7 +58,7 @@ def _observed_runtime(
     return runtime
 
 
-def _tool_results(runtime: Any, run: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+async def _tool_results(runtime: Any, run: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return the persisted and the streamed Tool results by Tool-call id."""
     history = runtime.chat_sessions.get(SessionAddress(None, "coder", "session-one")).load()
     persisted = {
@@ -68,7 +68,7 @@ def _tool_results(runtime: Any, run: Any) -> tuple[dict[str, Any], dict[str, Any
     }
     streamed = {
         event.payload["tool_call"]["id"]: event.payload["result"]
-        for event in run.events
+        for event in await runtime.timelines.events(run)
         if event.type == TOOL_CALL_RESULT_EVENT
     }
     return persisted, streamed
@@ -131,7 +131,10 @@ async def test_running_tool_result_survives_live_catalog_change(
     )
     assert effects == ["completed"]
     assert hook_results == [tool_success({"value": "completed"})]
-    assert _tool_results(runtime, run) == ({"dynamic-call": expected}, {"dynamic-call": expected})
+    assert await _tool_results(runtime, run) == (
+        {"dynamic-call": expected},
+        {"dynamic-call": expected},
+    )
     assert run.status == "completed"
 
 
@@ -222,7 +225,7 @@ async def test_worker_publication_before_dispatch_uses_selected_tool_contract(
     assert effects == ["replacement"]
     assert len(publisher_threads) == 1 and publisher_threads[0] != main_thread
     assert hook_results == [tool_success({"value": 42})]
-    persisted, streamed = _tool_results(runtime, run)
+    persisted, streamed = await _tool_results(runtime, run)
     assert persisted == {
         "publish-call": tool_success({"published": True}),
         "dynamic-call": expected,

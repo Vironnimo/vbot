@@ -76,7 +76,7 @@ class ReplayEventStream(Generic[EventT]):
 
     @property
     def events(self) -> list[EventT]:
-        """Return the currently retained replay window."""
+        """Return a new list holding the currently retained replay window."""
 
         return [event for event, _size in self._events]
 
@@ -99,6 +99,28 @@ class ReplayEventStream(Generic[EventT]):
             self._retained_bytes -= old_size
         for subscriber in list(self._subscribers):
             self._publish_to_subscriber(subscriber, event)
+
+    def compact(self, *, limit: int, keep: Callable[[EventT], bool]) -> None:
+        """Shrink retention to the newest events a settled stream still replays.
+
+        The newest event always stays retained, followed backwards by the
+        longest unbroken run of events that satisfy ``keep``, at most ``limit``
+        events in total. Everything older leaves retention. The window stays a
+        contiguous sequence suffix, so a later subscription receives it as an
+        ordinary replay head, while a subscriber that still needs a dropped
+        event is evicted as lagging exactly as after a normal retention trim.
+        """
+
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        retained = 0
+        for event, _size in reversed(self._events):
+            if retained >= limit or (retained and not keep(event)):
+                break
+            retained += 1
+        while len(self._events) > retained:
+            _old, old_size = self._events.popleft()
+            self._retained_bytes -= old_size
 
     async def subscribe(
         self,

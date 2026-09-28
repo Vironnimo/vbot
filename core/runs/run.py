@@ -63,6 +63,28 @@ TERMINAL_EVENT_TYPES = {
     RUN_CANCELLED_EVENT,
     RUN_INTERRUPTED_EVENT,
 }
+# High-rate fragments that only matter to a consumer following the Run live:
+# streamed text and Tool argument chunks, Tool output chunks, attempt resets
+# and Provider liveness. The authoritative events they build up to follow them
+# (``reasoning``, ``assistant_output``, ``tool_call_result``), and none of them
+# is Session history.
+TRANSIENT_EVENT_TYPES = frozenset(
+    {
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        REASONING_DELTA_EVENT,
+        TOOL_CALL_DELTA_EVENT,
+        TOOL_CALL_STDOUT_EVENT,
+        TOOL_CALL_STDERR_EVENT,
+        STREAM_ATTEMPT_RESTARTED_EVENT,
+        PROVIDER_HEARTBEAT_EVENT,
+    }
+)
+# Replay bound for a terminal Run: the terminal event plus the unbroken run of
+# non-transient events right before it. The final Model step ends with at most
+# its reasoning, Assistant output, request status, usage and change totals, so
+# the settled ending, including the final answer, fits with headroom while
+# every retained terminal Run costs O(1) events instead of the live window.
+FINISHED_RUN_REPLAY_LIMIT = 16
 RUN_AGENT_ACTIVITY_FIELD = "contributes_to_agent_activity"
 RUN_KIND_FIELD = "run_kind"
 
@@ -376,7 +398,11 @@ class Run:
         return True
 
     def register_tool_background(self, tool_call_id: str, callback: Callable[[], bool]) -> None:
-        if self.cancel_requested or self.tool_call_cancelled(tool_call_id):
+        if (
+            self.status != RunStatus.RUNNING
+            or self.cancel_requested
+            or self.tool_call_cancelled(tool_call_id)
+        ):
             return
         self._tool_background_callbacks[tool_call_id] = callback
         self.emit("run_controls_changed", self.controls())
@@ -399,8 +425,17 @@ class Run:
 
     @property
     def events(self) -> list[RunEvent]:
-        """Return a replayable snapshot of events emitted so far."""
+        """Return a new list holding the retained replay window.
+
+        Each access copies the window; read :attr:`last_sequence` when only
+        the newest sequence is needed.
+        """
         return self._event_stream.events
+
+    @property
+    def last_sequence(self) -> int:
+        """Return the newest emitted event sequence, or 0 before the first event."""
+        return self._next_sequence - 1
 
     @property
     def subscriber_count(self) -> int:
@@ -414,6 +449,8 @@ class Run:
 
     def add_completion_observer(self, observer: Callable[[RunStatus], Awaitable[None]]) -> None:
         """Observe the settled outcome after persistence, before terminal publication."""
+        if self.status != RunStatus.RUNNING:
+            return
         self._completion_observers.append(observer)
 
     async def notify_completion(self, status: RunStatus) -> list[str]:
@@ -431,6 +468,10 @@ class Run:
         """Register cleanup work to trigger when cancellation is requested."""
         if self.cancel_requested:
             self._schedule_cancel_callback(callback)
+            return
+        if self.status != RunStatus.RUNNING:
+            # A finished Run can never be cancelled; keeping the callback
+            # would only pin the resources it closes over.
             return
         self._cancel_callbacks.append(callback)
 
@@ -465,12 +506,16 @@ class Run:
             self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
             self._schedule_cancel_callback(callback)
             return
+        if self.status != RunStatus.RUNNING:
+            return
         self._tool_cancel_callbacks[tool_call_id] = callback
 
     def begin_tool_call(self, tool_call_id: str) -> None:
         """Make a started tool call cancellable before its callback is ready."""
         if self.cancel_requested:
             self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
+            return
+        if self.status != RunStatus.RUNNING:
             return
         self._tool_cancel_callbacks.setdefault(tool_call_id, _ACTIVE_TOOL_CALL)
 
@@ -596,7 +641,11 @@ class Run:
         return event
 
     async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[RunEvent, None]:
-        """Replay old events and stream future events until a terminal event."""
+        """Replay retained events, then stream live events until a terminal event.
+
+        A subscription opened after the Run finished replays only the settled
+        ending that terminal retention keeps, always including the terminal event.
+        """
         async with aclosing(
             self._event_stream.subscribe(
                 after_sequence=after_sequence,
@@ -641,6 +690,32 @@ class Run:
             raise self.error
         return self.result
 
+    def _settle(self) -> None:
+        """Release execution resources after the terminal event, then wake waiters.
+
+        Callers run this only after publishing the terminal event. The manager
+        has already drained cancellation cleanup and notified completion
+        observers, so every callback registry is dead weight from here on:
+        dropping it lets adapters, clients and Tool resources those closures
+        captured be freed while the Run stays addressable. Per-call cancel
+        markers remain so :meth:`tool_call_cancelled` keeps answering. Replay
+        shrinks to the settled ending (see ``FINISHED_RUN_REPLAY_LIMIT``);
+        sequences stay monotonic because nothing is ever renumbered.
+        """
+        self._cancel_callbacks.clear()
+        self._completion_observers.clear()
+        self._tool_background_callbacks.clear()
+        self._tool_cancel_callbacks = {
+            tool_call_id: entry
+            for tool_call_id, entry in self._tool_cancel_callbacks.items()
+            if entry is _CANCELLED_TOOL_CALL
+        }
+        self._event_stream.compact(
+            limit=FINISHED_RUN_REPLAY_LIMIT,
+            keep=lambda event: event.type not in TRANSIENT_EVENT_TYPES,
+        )
+        self._done.set()
+
     def mark_completed(self, result: Any, payload_extras: JsonObject | None = None) -> None:
         """Move the run to completed and publish the terminal event."""
         if self.status != RunStatus.RUNNING:
@@ -651,7 +726,7 @@ class Run:
         if payload_extras:
             payload.update(payload_extras)
         self.emit(RUN_COMPLETED_EVENT, payload)
-        self._done.set()
+        self._settle()
 
     def mark_failed(self, error: BaseException, payload_extras: JsonObject | None = None) -> None:
         """Move the run to failed and publish the terminal event.
@@ -686,7 +761,7 @@ class Run:
         if payload_extras:
             payload.update(payload_extras)
         self.emit(RUN_FAILED_EVENT, payload)
-        self._done.set()
+        self._settle()
 
     def mark_interrupted(
         self,
@@ -710,7 +785,7 @@ class Run:
         if payload_extras:
             payload.update(payload_extras)
         self.emit(RUN_INTERRUPTED_EVENT, payload)
-        self._done.set()
+        self._settle()
 
     def mark_cancelled(self, payload_extras: JsonObject | None = None) -> None:
         """Move the run to cancelled and publish the terminal event."""
@@ -723,7 +798,7 @@ class Run:
         if payload_extras:
             payload.update(payload_extras)
         self.emit(RUN_CANCELLED_EVENT, payload)
-        self._done.set()
+        self._settle()
 
 
 def _schedule_callback(callback: CancelCallback) -> asyncio.Future[Any] | None:

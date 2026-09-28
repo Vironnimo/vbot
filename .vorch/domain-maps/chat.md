@@ -62,6 +62,7 @@ New public Message ids use `msg_` plus 16 lowercase base32 characters (80 random
 - The direct `ChatLoop.send()` compatibility path can still create a Session when none is supplied; server/product paths require explicit Session creation.
 - Cancellation is best effort: it stops future progression and active processes but never rolls back already persisted history or output already delivered.
 - Unknown future JSON fields and `error_kind` values may appear. Do not make Chat depend on Provider-specific metadata shapes or a closed error-kind vocabulary.
+- The per-step Model request shares the live request-state message dicts instead of copying them, and Tool lifecycle events share the canonical Tool Call's argument object and display snapshot. Context hooks receive their own shallow copies (`extensions/capabilities.md`), image limiting copies on write and always returns a new list, and Provider Adapters treat request messages as read-only (`providers.md`). Code that must change a shared message, argument object, or nested value copies it first; Chat edits only its own live request state in place (image limiting of the live view, reasoning stripping on a Run-local fallback rebuild).
 - Adapters opened for a Chat turn are closed when they expose `aclose`; OAuth token refresh and HTTP error translation remain Provider-owned. Chat owns ordinary Model retry orchestration through its shared recovery budget; standalone Adapter callers retain their establishment retries.
 
 ## References

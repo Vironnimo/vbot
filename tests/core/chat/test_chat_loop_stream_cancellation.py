@@ -98,7 +98,7 @@ async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the
     assert (messages[1].content, messages[1].interrupted) == ("before", True)
     assert messages[-1].role == "run_summary"
     assert messages[-1].status == "cancelled"
-    assert event_types(run) == [
+    assert await event_types(runtime, run) == [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -185,6 +185,7 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
 
     with pytest.raises(RunCancelledError):
         await run.wait()
+    events = await runtime.timelines.events(run)
 
     messages = history(runtime)
     assert run.status == RunStatus.CANCELLED
@@ -194,8 +195,8 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
     assert messages[1].reasoning_meta == {"signature": "interrupted-signed-state"}
     assert messages[1].interrupted is True
 
-    reasoning_events = [event for event in run.events if event.type == "reasoning"]
-    assistant_events = [event for event in run.events if event.type == "assistant_output"]
+    reasoning_events = [event for event in events if event.type == "reasoning"]
+    assistant_events = [event for event in events if event.type == "assistant_output"]
     assert reasoning_events[-1].payload["message"]["reasoning"] == "Thinking hard."
     assert "reasoning_meta" not in reasoning_events[-1].payload["message"]
     assert assistant_events[-1].payload["message"]["interrupted"] is True
@@ -248,11 +249,12 @@ async def test_user_cancel_before_visible_output_does_not_persist_assistant(
 
     with pytest.raises(RunCancelledError):
         await run.wait()
+    events = await runtime.timelines.events(run)
 
     messages = history(runtime)
     assert run.status == RunStatus.CANCELLED
     assert persisted_roles(messages) == ["user"]
-    assert not any(event.type == "assistant_output" for event in run.events)
+    assert not any(event.type == "assistant_output" for event in events)
 
 
 @pytest.mark.asyncio

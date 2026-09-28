@@ -179,7 +179,7 @@ def _stub_run(run_id: str, **fields: Any) -> Any:
         "status": RunStatus.RUNNING,
         "created_at": "2026-08-05T18:00:00+00:00",
         "iteration_count": 0,
-        "events": [],
+        "last_sequence": 0,
         "controls": lambda: {"compaction": "unavailable", "background_tool_call_ids": []},
     }
     values.update(fields)
@@ -205,7 +205,7 @@ def test_websocket_hello_snapshots_running_runs_and_public_queues(
             "run-running",
             project_id="acme",
             iteration_count=4,
-            events=[SimpleNamespace(sequence=7)],
+            last_sequence=7,
         ),
         _stub_run("run-terminal", status=RunStatus.COMPLETED),
         # A review fork carries its source Session from the Run itself, so the

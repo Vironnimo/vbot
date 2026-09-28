@@ -115,7 +115,7 @@ async def test_failure_before_answer_text_restarts_the_identical_request(
     assert len(adapter.stream_requests) == 2
     assert adapter.stream_requests[0]["messages"] == adapter.stream_requests[1]["messages"]
     assert run.status == RunStatus.COMPLETED
-    assert STREAM_ATTEMPT_RESTARTED_EVENT in event_types(run)
+    assert STREAM_ATTEMPT_RESTARTED_EVENT in await event_types(runtime, run)
     # The discarded attempt leaves no error, partial or Continuation state behind.
     assert persisted_roles(history(runtime)) == ["user", "assistant"]
     assert (
@@ -165,7 +165,7 @@ async def test_failure_after_answer_text_continues_from_the_durable_partial(
         "partial",
     )
     assert "Continue the same task" in continuation_request[-1]["content"]
-    assert event_types(run) == [
+    assert await event_types(runtime, run) == [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -191,7 +191,7 @@ async def test_streaming_unsupported_before_output_falls_back_to_one_plain_reque
     assistant = await send_streaming(runtime)
 
     assert assistant.content == "Fallback answer"
-    assert event_types(last_run(runtime)) == [
+    assert await event_types(runtime, last_run(runtime)) == [
         "run_started",
         "user_message_persisted",
         "assistant_output",
@@ -220,7 +220,7 @@ async def test_streaming_unsupported_after_output_continues_the_partial_without_
     assert run.status == RunStatus.COMPLETED
     assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
-    assert event_types(run) == [
+    assert await event_types(runtime, run) == [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,

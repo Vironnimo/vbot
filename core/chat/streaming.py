@@ -442,14 +442,8 @@ class StreamingAccumulator:
         self._reasoning_started_at: str | None = None
         self._reasoning_completed_at: str | None = None
         self._tool_calls: OrderedDict[str, _ToolCallFragments] = OrderedDict()
-        self._visible_deltas: list[StreamingVisibleDelta] = []
         self._finish_reason: TerminalOutcome | None = None
         self._usage: JsonObject | None = None
-
-    @property
-    def visible_deltas(self) -> list[StreamingVisibleDelta]:
-        """Return visible deltas in the exact order they were accepted."""
-        return list(self._visible_deltas)
 
     @property
     def finish_reason(self) -> TerminalOutcome | None:
@@ -524,7 +518,6 @@ class StreamingAccumulator:
 
         if visible_delta is None:
             return []
-        self._visible_deltas.append(visible_delta)
         return [visible_delta]
 
     def finalize_assistant_fields(self) -> StreamingAssistantFields:

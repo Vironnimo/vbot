@@ -23,6 +23,7 @@ from tests.core.chat.chat_integration_test_support import FakeAdapter, JsonObjec
 from tests.core.chat.chat_integration_test_support import resources_dir as resources_dir
 from tests.core.chat.chat_integration_test_support import start_runtime as start_runtime
 from tests.core.chat.chat_loop_support import RecordingReflection, build_chat_loop, history
+from tests.core.runs.runs_test_support import RunTimelines
 
 
 def _ok_tool_handler(_context: Any, _arguments: JsonObject) -> JsonObject:
@@ -75,6 +76,7 @@ async def test_read_tool_batch_persists_each_result_and_counts_one_iteration_per
     )
 
     with start_runtime(adapter) as runtime:
+        timelines = RunTimelines(runtime.chat_run_manager)
         reflection = RecordingReflection()
         agent = runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
         Path(agent.workspace).joinpath("note.txt").write_text("file content", encoding="utf-8")
@@ -113,7 +115,7 @@ async def test_read_tool_batch_persists_each_result_and_counts_one_iteration_per
         assert (run.iteration_count, run.tool_call_count) == (2, 2)
         assert [
             event.payload["iteration_count"]
-            for event in run.events
+            for event in await timelines.events(run)
             if event.type == MODEL_STEP_USAGE_EVENT
         ] == [1, 2]
         assert messages[-1].status == "completed" and messages[-1].timing is not None
@@ -152,6 +154,7 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
     )
 
     with start_runtime(adapter) as runtime:
+        timelines = RunTimelines(runtime.chat_run_manager)
         agent = runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
         workspace = Path(agent.workspace)
         tracker = runtime.change_tracker
@@ -174,7 +177,7 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
         run = runtime.chat_run_manager.get(str(messages[-1].run_id))
         live_stats = [
             event.payload["change_stats"]
-            for event in run.events
+            for event in await timelines.events(run)
             if event.type == RUN_CHANGE_STATS_EVENT
         ]
         assert live_stats == [

@@ -514,7 +514,7 @@ async def test_user_compaction_waits_for_tool_result_and_continues_run(
     assert call["minimum_reclaim_tokens"] == MIN_AUTO_COMPACTION_RECLAIM_TOKENS
     assert run.compaction_state == "idle"
     roles = persisted_roles(session.load())
-    event_types = {event.type for event in run.events}
+    event_types = {event.type for event in await runtime.timelines.events(run)}
     if failure:
         assert "compaction_checkpoint" not in roles
         assert COMPACTION_ABORTED_EVENT in event_types

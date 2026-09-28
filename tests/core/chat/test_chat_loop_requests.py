@@ -119,15 +119,16 @@ async def test_send_persists_the_exchange_and_sends_the_agent_request(tmp_path: 
         ("user", "Hi"),
     ]
     run = last_run(runtime)
-    assert event_types(run) == [
+    assert await event_types(runtime, run) == [
         "run_started",
         "user_message_persisted",
         MODEL_STEP_USAGE_EVENT,
         "assistant_output",
         "run_completed",
     ]
-    assert run.events[1].payload["message"]["content"] == "Hi"
-    output = next(event for event in run.events if event.type == "assistant_output")
+    events = await runtime.timelines.events(run)
+    assert events[1].payload["message"]["content"] == "Hi"
+    output = next(event for event in events if event.type == "assistant_output")
     assert output.payload["message"]["content"] == "Hello"
 
 
@@ -371,7 +372,7 @@ async def test_internal_run_sends_its_prompt_as_a_reminder_after_the_reply_surfa
     assert persisted_roles(messages) == ["note", "note", "assistant"]
     assert _surface_notes(messages) == [messages[0]]
     assert messages[1].content == prompt
-    assert event_types(run) == [
+    assert await event_types(runtime, run) == [
         "run_started",
         MODEL_STEP_USAGE_EVENT,
         "assistant_output",
@@ -499,7 +500,11 @@ async def test_sender_is_persisted_and_attributed_only_in_the_request(
     assert (messages[0].sender, messages[0].content) == (sender, "Hi")
     assert request_messages[1]["content"] == "[Alice|50|member]: Hi"
     assert all("sender" not in message for message in request_messages)
-    persisted_event = next(event for event in run.events if event.type == "user_message_persisted")
+    persisted_event = next(
+        event
+        for event in await runtime.timelines.events(run)
+        if event.type == "user_message_persisted"
+    )
     assert persisted_event.payload["message"]["sender"] == {
         "id": "50",
         "display_name": "Alice",

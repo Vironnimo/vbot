@@ -46,8 +46,8 @@ from tests.core.chat.chat_loop_support import (
 _LIFECYCLE = {COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT}
 
 
-def _lifecycle(run: Any) -> list[str]:
-    return [event.type for event in run.events if event.type in _LIFECYCLE]
+def _lifecycle(events: list[Any]) -> list[str]:
+    return [event.type for event in events if event.type in _LIFECYCLE]
 
 
 @pytest.mark.asyncio
@@ -123,7 +123,7 @@ async def test_failed_compaction_logs_and_keeps_the_request(
     else:
         assert record.levelno == logging.ERROR
         assert record.exc_info is not None
-    assert _lifecycle(probe.run) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
+    assert _lifecycle(probe.run.events) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
     assert probe.run.events[-1].payload == {"reason": "failed"}
 
 
@@ -225,7 +225,7 @@ async def test_truncated_summary_leaves_history_skills_and_prompt_epoch_untouche
     assert catalog_pin is not None and catalog_pin["catalog_text"] == "catalog:1"
     assert runtime.refresh_skills_for_calls == []
     assert len(adapter.stream_requests) == 1
-    assert _lifecycle(probe.run) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
+    assert _lifecycle(probe.run.events) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
 
 
 @pytest.mark.asyncio
@@ -251,7 +251,7 @@ async def test_projected_request_failure_does_not_persist_the_checkpoint(
 
     assert probe.rebuilt == request
     assert persisted_roles(session.load()) == ["user", "assistant"]
-    assert _lifecycle(probe.run) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
+    assert _lifecycle(probe.run.events) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
     assert any(
         "Post-compaction request projection failed" in record.message for record in caplog.records
     )
@@ -288,8 +288,9 @@ async def test_stale_final_answer_compaction_yields_to_a_concurrent_note(tmp_pat
     assert result.content == "Finished"
     assert persisted_roles(messages) == ["user", "assistant", "note"]
     assert messages[-2].content == "Background completed"
-    assert _lifecycle(run) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
-    aborted = next(event for event in run.events if event.type == COMPACTION_ABORTED_EVENT)
+    events = await runtime.timelines.events(run)
+    assert _lifecycle(events) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
+    aborted = next(event for event in events if event.type == COMPACTION_ABORTED_EVENT)
     assert aborted.payload == {"reason": "stale_context"}
 
 
@@ -347,7 +348,10 @@ async def test_stale_mid_tool_compaction_rebuilds_the_request_with_the_concurren
         "assistant",
     ]
     assert "<system-reminder>\nBackground completed\n</system-reminder>" in second_request
-    assert _lifecycle(run) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
+    assert _lifecycle(await runtime.timelines.events(run)) == [
+        COMPACTION_STARTED_EVENT,
+        COMPACTION_ABORTED_EVENT,
+    ]
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ and the stateless Responses route for GPT-5.6."""
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import httpx
@@ -277,6 +278,14 @@ def _alternating(count: int) -> list[dict[str, Any]]:
             [True, False, True],
             id="pure-tool-call-turn-cannot-carry-a-marker",
         ),
+        pytest.param(
+            [
+                {"role": "system", "content": [{"type": "text", "text": "Sys"}]},
+                {"role": "user", "content": "Hi"},
+            ],
+            [True, True],
+            id="list-content-is-marked-on-a-copy",
+        ),
     ],
 )
 @respx.mock
@@ -285,10 +294,13 @@ async def test_claude_history_markers_roll_over_the_most_recent_markable_message
     history: list[dict[str, Any]], expected_marks: list[bool]
 ) -> None:
     route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
+    original = copy.deepcopy(history)
 
     await openrouter_adapter().send(history, model_id="anthropic/claude-sonnet-4.6")
 
     assert [_marked(message) for message in sent_body(route)["messages"]] == expected_marks
+    # Chat sends its live history without copying it; markers stay on the wire.
+    assert history == original
 
 
 def _gpt_5_6_lookup(model_id: str) -> Model:
