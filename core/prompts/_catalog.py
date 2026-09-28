@@ -209,7 +209,10 @@ class PromptBlockCatalog:
 
         The slug is validated with the canonical agent-id rule here too (defense in
         depth behind the RPC edge and the store). The block must not collide with an
-        existing ``user:`` block in the scope. Writes the override (``content`` or
+        existing ``user:`` block in the scope, compared case-insensitively: the
+        override file is named after the slug, and a case-insensitive filesystem
+        would give ``Notes`` and ``notes`` one file. Comparing folded ids keeps the
+        rule the same on every platform. Writes the override (``content`` or
         empty) and inserts a layout entry at ``position`` (default: end). Owner
         ``always``, ``kind="text"``. Returns the new block's metadata.
         """
@@ -219,8 +222,11 @@ class PromptBlockCatalog:
         block_id = f"{USER_BLOCK_ID_PREFIX}{slug}"
         scope_key = self.scope_key(prompt_scope)
         existing = self.resolve_layout(scope_key)
-        if any(entry.id == block_id for entry in existing):
-            raise PromptError(f"custom block already exists: {block_id}")
+        clash = next(
+            (entry.id for entry in existing if entry.id.casefold() == block_id.casefold()), None
+        )
+        if clash is not None:
+            raise PromptError(f"custom block already exists: {clash}")
 
         self._block_store.write_block_override(scope_key, block_id, content or "")
         new_entry = LayoutEntry(id=block_id, enabled=True, source=USER_BLOCK_SOURCE)

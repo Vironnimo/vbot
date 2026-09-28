@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
-import shutil
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -24,6 +24,7 @@ from core.projects.projects import (
 )
 from core.projects.store import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
+from core.utils import tree_move
 
 _SEEDED_FIELDS = (
     "cwd",
@@ -185,26 +186,104 @@ def test_delete_keeps_previous_archive_when_compensation_fails(
         archive = store.delete("vbot")
         (archive / "keep.txt").write_text("previous", encoding="utf-8")
         store.create("vbot", "Second", repo)
-        original_move = shutil.move
+        real_replace = os.replace
 
         def fail_archive(_project_id):
             raise RuntimeError("database unavailable")
 
-        def move(source, destination):
+        def replace(source, destination):
             if (
                 failed_restore == "active" and Path(destination) == data_dir / "projects" / "vbot"
             ) or (failed_restore == "previous" and Path(source).name == "previous"):
                 raise OSError("rollback unavailable")
-            return original_move(source, destination)
+            real_replace(source, destination)
 
         monkeypatch.setattr(store._session_manager(), "archive_project_sessions", fail_archive)
-        monkeypatch.setattr(shutil, "move", move)
-        with pytest.raises((OSError, ProjectError)):
+        monkeypatch.setattr(tree_move, "_replace", replace)
+        with pytest.raises(ProjectError, match="rollback unavailable"):
             store.delete("vbot")
 
         retained = list(archive.parent.glob(".vbot-archive-*/previous/keep.txt"))
         assert len(retained) == 1
         assert retained[0].read_text(encoding="utf-8") == "previous"
+        if failed_restore == "active":  # the Project files stay in the archive, never deleted
+            assert (archive / "project.json").is_file()
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "blocker",
+    [
+        "refused-rename",
+        pytest.param(
+            "open-file",
+            marks=pytest.mark.skipif(
+                os.name != "nt", reason="only Windows refuses to rename a tree with open files"
+            ),
+        ),
+    ],
+)
+def test_delete_keeps_the_anchor_and_previous_archive_when_the_move_cannot_complete(
+    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, blocker: str
+) -> None:
+    store = ProjectStore(data_dir)
+    try:
+        store.create("vbot", "First", repo)
+        previous_archive = store.delete("vbot")
+        (previous_archive / "keep.txt").write_text("previous", encoding="utf-8")
+        store.create("vbot", "Second", repo)
+        anchor = data_dir / "projects" / "vbot"
+        real_replace = os.replace
+
+        def replace(source, destination):
+            if Path(source) == anchor:
+                raise PermissionError(errno.EACCES, "held open by another program")
+            real_replace(source, destination)
+
+        if blocker == "refused-rename":
+            monkeypatch.setattr(tree_move, "_replace", replace)
+            held = None
+        else:
+            held = (anchor / "held.txt").open("w", encoding="utf-8")
+        try:
+            with pytest.raises(ProjectError, match="Project archival failed"):
+                store.delete("vbot")
+        finally:
+            if held is not None:
+                held.close()
+
+        # A move that fails means nothing moved: no partial copy replaces or removes a whole tree.
+        assert store.get("vbot").display_name == "Second"
+        assert (previous_archive / "keep.txt").read_text(encoding="utf-8") == "previous"
+        assert [path.name for path in previous_archive.parent.iterdir()] == ["vbot"]
+    finally:
+        store.close()
+
+
+def test_delete_across_volumes_archives_the_anchor_though_the_original_stays_partly(
+    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ProjectStore(data_dir)
+    try:
+        store.create("vbot", "vBot", repo)
+        real_replace = os.replace
+
+        def replace(source, destination):
+            if data_dir / "archive" in Path(destination).parents:  # another volume
+                raise OSError(errno.EXDEV, "Invalid cross-device link")
+            real_replace(source, destination)
+
+        def remove_nothing(_path):
+            raise PermissionError(errno.EACCES, "held open by another program")
+
+        monkeypatch.setattr(tree_move, "_replace", replace)
+        monkeypatch.setattr(tree_move, "_remove_tree", remove_nothing)
+
+        archive = store.delete("vbot")
+
+        assert (archive / "project.json").is_file()
+        assert store.list() == []
     finally:
         store.close()
 

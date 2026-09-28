@@ -1,6 +1,8 @@
 """Agent updates, current-Session repair and deletion."""
 
+import errno
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -15,6 +17,7 @@ from core.agents import agents as agents_module
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess
+from core.utils import tree_move
 from tests.core.agents.agents_test_support import persisted
 from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
@@ -403,26 +406,108 @@ def test_delete_keeps_previous_archive_when_compensation_fails(
     archive = store.delete("coder")
     (archive / "keep.txt").write_text("previous", encoding="utf-8")
     store.create("coder", "Second")
-    original_move = agents_module.shutil.move
+    real_replace = os.replace
 
     def fail_archive(_agent_id):
         raise RuntimeError("database unavailable")
 
-    def move(source, destination):
+    def replace(source, destination):
         if (
             failed_restore == "active" and Path(destination) == store.data_dir / "agents" / "coder"
         ) or (failed_restore == "previous" and Path(source).name == "previous"):
             raise OSError("rollback unavailable")
-        return original_move(source, destination)
+        real_replace(source, destination)
 
     monkeypatch.setattr(store._session_manager(), "archive_identity_agent_sessions", fail_archive)
-    monkeypatch.setattr(agents_module.shutil, "move", move)
-    with pytest.raises((OSError, AgentError)):
+    monkeypatch.setattr(tree_move, "_replace", replace)
+    with pytest.raises(AgentError, match="rollback unavailable"):
         store.delete("coder")
 
     retained = list(archive.parent.glob(".coder-archive-*/previous/keep.txt"))
     assert len(retained) == 1
     assert retained[0].read_text(encoding="utf-8") == "previous"
+    if failed_restore == "active":  # the Agent's files stay in the archive, never deleted
+        assert (archive / "agent" / "agent.json").is_file()
+
+
+@pytest.mark.parametrize(
+    "blocker",
+    [
+        "refused-rename",
+        pytest.param(
+            "open-file",
+            marks=pytest.mark.skipif(
+                os.name != "nt", reason="only Windows refuses to rename a tree with open files"
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("blocked", ["agent-tree", "external-workspace"])
+def test_delete_keeps_every_tree_when_a_move_cannot_complete(
+    store: AgentStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    blocker: str,
+    blocked: str,
+) -> None:
+    store.create("coder", "First")
+    previous_archive = store.delete("coder")
+    (previous_archive / "keep.txt").write_text("previous", encoding="utf-8")
+    workspace = tmp_path / "rooted-repo"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("repository", encoding="utf-8")
+    store.create("coder", "Second", workspace=workspace)
+    blocked_tree = store.data_dir / "agents" / "coder" if blocked == "agent-tree" else workspace
+    real_replace = os.replace
+
+    def replace(source, destination):
+        if Path(source) == blocked_tree:
+            raise PermissionError(errno.EACCES, "held open by another program")
+        real_replace(source, destination)
+
+    if blocker == "refused-rename":
+        monkeypatch.setattr(tree_move, "_replace", replace)
+        held = None
+    else:
+        held = (blocked_tree / "held.txt").open("w", encoding="utf-8")
+    try:
+        with pytest.raises(AgentError, match="Agent archival failed"):
+            store.delete("coder")
+    finally:
+        if held is not None:
+            held.close()
+
+    # A move that fails means nothing moved: no partial copy replaces or removes a whole tree.
+    assert store.get("coder").name == "Second"
+    assert (workspace / "README.md").read_text(encoding="utf-8") == "repository"
+    assert (previous_archive / "keep.txt").read_text(encoding="utf-8") == "previous"
+    assert [path.name for path in previous_archive.parent.iterdir()] == ["coder"]
+
+
+def test_delete_across_volumes_archives_the_agent_though_the_original_stays_partly(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.create("coder", "Coder")
+    store.create("beta", "Beta")
+    archive_root = store.data_dir / "archive"
+    real_replace = os.replace
+
+    def replace(source, destination):
+        if archive_root in Path(destination).parents:  # the archive is on another volume
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        real_replace(source, destination)
+
+    def remove_nothing(_path):
+        raise PermissionError(errno.EACCES, "held open by another program")
+
+    monkeypatch.setattr(tree_move, "_replace", replace)
+    monkeypatch.setattr(tree_move, "_remove_tree", remove_nothing)
+
+    archive_dir = store.delete("coder")
+
+    assert (archive_dir / "agent" / "agent.json").is_file()
+    assert not (store.data_dir / "agents" / "coder").exists()
+    assert [agent.id for agent in store.list_with_order().agents] == ["beta"]
 
 
 def test_delete_agent_named_like_sibling_archive_roots_never_touches_them(

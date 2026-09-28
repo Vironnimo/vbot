@@ -99,6 +99,7 @@ from core.tools.availability import (
 )
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
+from core.utils.tree_move import move_tree
 
 __all__ = [
     "Agent",
@@ -777,6 +778,11 @@ class AgentStore:
         archive. Product-level reference and Run admission guards belong to the
         caller.
 
+        Every tree moves through :func:`move_tree`, whose failure always means "not
+        moved", so compensation never has to guess which copy is whole. It only moves
+        trees back and removes the empty staging directory; it never deletes archive
+        content, because that may be the last complete copy of an Agent's data.
+
         A default workspace lives inside the agent directory, so it travels into
         the archive with the first move; the ``exists`` check below is then False
         (its live path is already gone) and the second move is skipped. Only a
@@ -794,7 +800,7 @@ class AgentStore:
             committed = False
             try:
                 if archive_dir.exists():
-                    shutil.move(str(archive_dir), str(previous_archive))
+                    move_tree(archive_dir, previous_archive)
                 try:
                     archive_dir.mkdir()
                     agent_archive = archive_dir / "agent"
@@ -803,32 +809,43 @@ class AgentStore:
                     agent_moved = False
                     workspace_moved = False
                     try:
-                        shutil.move(str(self._agent_dir(agent_id)), str(agent_archive))
+                        move_tree(self._agent_dir(agent_id), agent_archive)
                         agent_moved = True
                         if workspace_path.exists():
-                            shutil.move(str(workspace_path), str(workspace_archive))
+                            move_tree(workspace_path, workspace_archive)
                             workspace_moved = True
                         self._session_manager().archive_identity_agent_sessions(agent_id)
                     except Exception:
                         if workspace_moved:
-                            shutil.move(str(workspace_archive), str(workspace_path))
+                            move_tree(workspace_archive, workspace_path)
                         if agent_moved:
-                            shutil.move(str(agent_archive), str(self._agent_dir(agent_id)))
-                        shutil.rmtree(archive_dir, ignore_errors=True)
+                            move_tree(agent_archive, self._agent_dir(agent_id))
+                        # Both trees are back, so only the empty staging directory is
+                        # left; unlike ``rmtree``, ``rmdir`` refuses to delete anything else.
+                        with suppress(OSError):
+                            archive_dir.rmdir()
                         if previous_archive.exists():
-                            shutil.move(str(previous_archive), str(archive_dir))
+                            move_tree(previous_archive, archive_dir)
                         raise
                 except Exception:
                     # Covers mkdir failure after previous archive was staged away.
                     if not archive_dir.exists() and previous_archive.exists():
-                        shutil.move(str(previous_archive), str(archive_dir))
+                        move_tree(previous_archive, archive_dir)
                     raise
                 committed = True
             except Exception as exc:
+                # A failed move never removes anything, so what is left is where it is told.
+                retained = []
+                if not self._agent_dir(agent_id).exists():
+                    retained.append(f"Agent files retained at {archive_dir}")
                 if previous_archive.exists():
+                    retained.append(f"previous archive retained at {previous_archive}")
+                if retained:
                     raise AgentError(
-                        f"Agent archival failed; previous archive retained at {previous_archive}"
+                        f"Agent archival failed ({exc}); {'; '.join(retained)}"
                     ) from exc
+                if isinstance(exc, OSError):
+                    raise AgentError(f"Agent archival failed: {exc}") from exc
                 raise
             finally:
                 if committed or not previous_archive.exists():

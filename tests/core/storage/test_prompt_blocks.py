@@ -224,6 +224,24 @@ def test_block_override_lifecycle(tmp_path: Path, scope: str | None, relative_pa
     assert store.read_block_override(scope, "user:notes") is None
 
 
+def test_case_variant_blocks_never_read_write_or_remove_each_others_file(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.write_block_override(None, "user:Notes", "upper")
+    probe = tmp_path / "prompts" / "blocks" / "user" / "notes.md"
+
+    if probe.exists():  # case-insensitive filesystem: one file would serve both ids
+        with pytest.raises(StorageError):
+            store.write_block_override(None, "user:notes", "lower")
+        assert store.read_block_override(None, "user:notes") is None
+        assert store.remove_block_override(None, "user:notes") is False
+    else:  # case-sensitive: the variants keep separate files
+        store.write_block_override(None, "user:notes", "lower")
+        assert store.read_block_override(None, "user:notes") == "lower"
+        assert store.remove_block_override(None, "user:notes") is True
+
+    assert store.read_block_override(None, "user:Notes") == "upper"
+
+
 # --------------------------------------------------------------------------
 # agent-scope seeding
 # --------------------------------------------------------------------------
