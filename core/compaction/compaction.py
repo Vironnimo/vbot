@@ -506,17 +506,25 @@ class CompactionService:
                     if plan.model_target == "summary"
                     else active_model_reference
                 )
-                response = await _send_streaming_model_request(
-                    adapter,
-                    model_messages,
-                    request_options,
-                    usage_recorder=self._usage_recorder,
-                    model_reference=reference,
-                    session_address=session_address,
-                    run_id=run_id,
-                    owner_name=owner_name,
-                    group_id=group_id,
-                )
+                try:
+                    response = await _send_streaming_model_request(
+                        adapter,
+                        model_messages,
+                        request_options,
+                        usage_recorder=self._usage_recorder,
+                        model_reference=reference,
+                        session_address=session_address,
+                        run_id=run_id,
+                        owner_name=owner_name,
+                        group_id=group_id,
+                    )
+                except CompactionError as error:
+                    error.model = reference or model_id
+                    raise
+                except Exception as error:
+                    raise CompactionError(
+                        f"Compaction failed: {error}", model=reference or model_id
+                    ) from error
                 usage = dict(response.get("usage") or {})
                 pricing = (
                     self._pricing_lookup(reference) if self._pricing_lookup and reference else None
