@@ -354,6 +354,28 @@ class BootstrapService:
             raise
         return replace(candidate)
 
+    def retarget_agent(self, job_id: str, agent_id: str) -> BootstrapJob:
+        """Point a job at another Agent id without arming it again.
+
+        For a coordinated Agent rename, which moves the job's Sessions to the same
+        id: status, arming and the last Run's reconciliation references stay as they
+        were, so a paused job stays paused and a failed one keeps its error. Unlike
+        ``update_job``, this is not an edit of what the job runs.
+        """
+        self._ensure_loaded()
+        current = self._jobs.get(job_id)
+        if current is None:
+            raise BootstrapJobNotFoundError(f"Bootstrap job not found: {job_id}")
+        if current.status == "completed":
+            raise BootstrapJobValidationError("Completed Bootstrap jobs are immutable history")
+        self._require_not_running(job_id)
+        if current.agent_id == agent_id:
+            return replace(current)
+        candidate = replace(current, agent_id=agent_id)
+        self._validate_job(candidate)
+        self._replace_and_save(current, candidate)
+        return replace(candidate)
+
     def delete_job(self, job_id: str) -> None:
         self._ensure_loaded()
         self._require_not_running(job_id)
