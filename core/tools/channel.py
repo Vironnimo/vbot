@@ -210,8 +210,6 @@ def _platform_name(platform: str) -> str:
 
 def _channel_send_profile_parameters(configs: list[ChannelConfig]) -> JsonObject:
     canonical_properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
-    if not isinstance(canonical_properties, dict):
-        raise ValueError("channel_send canonical properties must be an object")
     visible_fields = {
         field_name
         for config in configs
