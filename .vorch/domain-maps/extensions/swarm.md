@@ -206,10 +206,15 @@ page reference, read-only calls resolve a page title or a unique close stored id
 ignores an unknown `page_id` and takes a missing title from the first Markdown
 heading, `limit` above the action maximum is lowered, `expected_revision` is
 dropped on read-only actions. Writes never resolve a guessed page; they fail with
-the suggested page number. An `update` without `page_id` fails with the live pages
-whose current content holds its exact `old_text` (`SwarmStore.wiki_pages(containing=...)`,
-newest change first, at most 3 named), since Agents twice sent a passage without its
-page (Sessions, 2026-09). Page numbers (`w3` or `3`) and exact stored ids are
+the suggested page number, and an explicit `page_id` is never overridden. A passage
+`update` (`old_text` with `new_text`) without `page_id` runs on the one live page whose
+current content holds its exact `old_text` (`SwarmStore.wiki_pages(containing=...)`),
+with the same checks inside that page as with its `page_id`, and notes the page it
+used; the text is the Agent's own evidence for its page. Such calls failed 18 times in
+two days, and in one Swarm Run all 9 retries repeated the update with the one page the
+error named (Sessions, 2026-09). With several such pages the call fails naming them
+(newest change first, at most 3); with none, or a whole-content `update` without
+`page_id`, it fails with the list call. Page numbers (`w3` or `3`) and exact stored ids are
 exact references in every action; the Tool names that page `w3` in the call before
 running it, so results, continuations and errors show the number. Failures name
 the next call: conflicts show the current revision

@@ -146,6 +146,9 @@ WIKI_PAGE_CLOSE = 'page_id {value} matched no page; used {page_id} ("{title}").'
 WIKI_PAGE_TITLE = "page_id {value} is a page title; used {page_id}."
 WIKI_CREATE_IGNORED_ID = "create makes a new page, so page_id {value} was ignored."
 WIKI_TITLE_FROM_HEADING = 'create needs a title; used the first heading, "{title}".'
+WIKI_PAGE_FROM_TEXT = (
+    'page_id was omitted; old_text occurs only in {page_id} ("{title}"), so that page was updated.'
+)
 
 # Failures.
 NOTHING_CHANGED = "Nothing changed."
@@ -153,9 +156,6 @@ WIKI_PAGE_NOT_FOUND = "No page {value} exists in your group's Wiki."
 WIKI_PAGE_SUGGESTION = 'The closest page is "{title}" ({page_id}).'
 WIKI_PAGE_RETRY = 'Repeat the call with page_id "{page_id}" if you meant it.'
 WIKI_PAGE_FIND = 'Find pages with {"action": "list"}.'
-WIKI_PAGE_HOLDS_TEXT = (
-    'update needs page_id. old_text occurs in {page}; repeat the call with page_id "{page_id}".'
-)
 WIKI_PAGES_HOLD_TEXT = (
     "update needs page_id. old_text occurs in {pages}; repeat the call with the page_id "
     "of the page you mean."
