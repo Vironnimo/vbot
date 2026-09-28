@@ -62,7 +62,7 @@ from core.utils.atomic import atomic_write_text
 # The block-id source prefixes that may appear on disk as a ``blocks/<namespace>``
 # subfolder. A fixed closed set (D3): an unknown namespace is invalid storage
 # data, not something to coerce into a path. ``memory`` ships as a core block
-# under the ``memory:`` source (see ``core/prompts/blocks.py`` ``BlockSource``).
+# under the ``memory:`` source (see ``core/prompts/blocks.py`` ``parse_block_source``).
 BLOCK_NAMESPACES = frozenset({"core", "tool", "extension", "user", "memory"})
 
 # Subfolder under a scope root that holds the per-block override files.
