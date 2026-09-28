@@ -7,7 +7,11 @@ second it samples loop utilization, process resources and injected gauges.
 The watchdog is a daemon thread. When the published deadline is overdue by
 more than the stall threshold, it samples the loop thread's Python stack on
 every cadence tick and aggregates identical stacks until the loop ticks again.
-Stack frames carry only code locations.
+Where the platform reports per-thread CPU time, it also reads it for every
+Python thread and samples the stacks of the other threads that ran since the
+previous tick; the stall names those that used a noticeable share of CPU, which
+is how a thread holding the GIL shows up. Stack frames carry only code
+locations.
 
 While running, the monitor also times cyclic garbage collections: each tick
 records the finished collections, and a stall reports how much of it was
@@ -22,7 +26,7 @@ import sys
 import sysconfig
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -33,6 +37,7 @@ from typing import Any
 import psutil  # type: ignore[import-untyped]
 
 from core.performance._gc import GcObserver
+from core.performance._thread_cpu import ThreadCpuReader, thread_cpu_reader
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("performance")
@@ -40,26 +45,77 @@ _LOGGER = get_logger("performance")
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _MAX_STACK_FRAMES = 40
 _MAX_DISTINCT_STACKS = 20
+_MAX_THREAD_STACKS = 5
+_MAX_STALL_THREADS = 5
+# Other threads are named in a stall from this share of its CPU window on.
+_STALL_THREAD_CPU_SHARE = 0.1
 _MEGABYTE = 1024 * 1024
+
+
+Samples = tuple[tuple[int, tuple[str, ...]], ...]
+# (file name, line, qualified name) per frame, innermost first. Stalls keep
+# stacks raw and render them when finished: rendering resolves file paths,
+# and each file system call releases the GIL, which under GIL contention
+# costs a switch interval to get back.
+_RawStack = tuple[tuple[str, int | None, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class StallThread:
+    """Another thread that used CPU during a stall, with its sampled stacks."""
+
+    name: str
+    cpu_ms: float
+    samples: Samples
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "cpu_ms": round(self.cpu_ms, 1), **_samples_dict(self.samples)}
 
 
 @dataclass(frozen=True, slots=True)
 class StallRecord:
-    """One finished Event Loop stall with its aggregated stack samples."""
+    """One finished Event Loop stall with its aggregated stack samples.
+
+    ``cpu_window_ms`` is the stretch from the first sample to the resume over
+    which ``loop_cpu_ms`` and the ``threads`` CPU were measured; all three are
+    empty where the platform reports no per-thread CPU time.
+    """
 
     started_perf: float
     started_at: datetime
     duration_ms: float
-    samples: tuple[tuple[int, tuple[str, ...]], ...]
+    samples: Samples
     gc_ms: float = 0.0
+    cpu_window_ms: float | None = None
+    loop_cpu_ms: float | None = None
+    threads: tuple[StallThread, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "started_at": self.started_at.isoformat(),
             "duration_ms": round(self.duration_ms, 1),
             "gc_ms": round(self.gc_ms, 1),
-            "samples": [{"count": count, "stack": list(stack)} for count, stack in self.samples],
+            "cpu_window_ms": _rounded(self.cpu_window_ms),
+            "loop_cpu_ms": _rounded(self.loop_cpu_ms),
+            **_samples_dict(self.samples),
+            "threads": [thread.to_dict() for thread in self.threads],
         }
+
+
+def _samples_dict(samples: Samples) -> dict[str, Any]:
+    return {"samples": [{"count": count, "stack": list(stack)} for count, stack in samples]}
+
+
+def _rounded(value: float | None) -> float | None:
+    return None if value is None else round(value, 1)
+
+
+@dataclass(slots=True)
+class _ThreadCapture:
+    name: str
+    cpu_start: float
+    cpu_last: float
+    stacks: dict[_RawStack, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -67,7 +123,10 @@ class _StallCapture:
     deadline: float
     started_at: datetime
     gc_total_s: float
-    stacks: dict[tuple[str, ...], int] = field(default_factory=dict)
+    stacks: dict[_RawStack, int] = field(default_factory=dict)
+    # Per-thread CPU by thread ident, from the first CPU read on.
+    cpu_started: float | None = None
+    threads: dict[int, _ThreadCapture] = field(default_factory=dict)
 
 
 class LoopMonitor:
@@ -105,6 +164,7 @@ class LoopMonitor:
         self._heartbeat: tuple[float, float, float] | None = None
         self._loop_thread_id: int | None = None
         self._failed_samplers: set[str] = set()
+        self._read_cpu: ThreadCpuReader | None = thread_cpu_reader()
 
     @property
     def running(self) -> bool:
@@ -243,48 +303,123 @@ class LoopMonitor:
                     started_at=datetime.now(UTC) - timedelta(seconds=overdue),
                     gc_total_s=gc_total_s,
                 )
-            self._sample_stack(capture)
+            self._sample(capture)
 
     def _finish_stall(self, capture: _StallCapture, resumed: float, gc_total_s: float) -> None:
-        samples = sorted(capture.stacks.items(), key=lambda item: item[1], reverse=True)
         duration_ms = max(0.0, (resumed - capture.deadline) * 1000.0)
         # Both totals come from heartbeats, so the window opens up to one tick
         # before the stall; the cap keeps that slack out of the reported share.
         gc_ms = min(duration_ms, max(0.0, (gc_total_s - capture.gc_total_s) * 1000.0))
+        cpu_window_ms = loop_cpu_ms = None
+        threads: tuple[StallThread, ...] = ()
+        if capture.cpu_started is not None:
+            self._sample_threads(capture, None)
+            cpu_window_ms = (time.perf_counter() - capture.cpu_started) * 1000.0
+            loop = capture.threads.pop(self._loop_thread_id or 0, None)
+            if loop is not None:
+                loop_cpu_ms = (loop.cpu_last - loop.cpu_start) * 1000.0
+            threads = _busy_threads(capture.threads.values(), cpu_window_ms)
         record = StallRecord(
             started_perf=capture.deadline,
             started_at=capture.started_at,
             duration_ms=duration_ms,
-            samples=tuple((count, stack) for stack, count in samples),
+            samples=_sorted_samples(capture.stacks),
             gc_ms=gc_ms,
+            cpu_window_ms=cpu_window_ms,
+            loop_cpu_ms=loop_cpu_ms,
+            threads=threads,
         )
         try:
             self._on_stall(record)
         except Exception:
             _LOGGER.warning("Recording an Event Loop stall failed", exc_info=True)
 
-    def _sample_stack(self, capture: _StallCapture) -> None:
+    def _sample(self, capture: _StallCapture) -> None:
+        frames = sys._current_frames()  # noqa: SLF001 - sampling profiler access.
         thread_id = self._loop_thread_id
-        if thread_id is None:
+        frame = frames.get(thread_id) if thread_id is not None else None
+        if frame is not None:
+            _count_stack(capture.stacks, _raw_stack(frame), _MAX_DISTINCT_STACKS)
+        if self._read_cpu is not None:
+            self._sample_threads(capture, frames)
+
+    def _sample_threads(
+        self, capture: _StallCapture, frames: Mapping[int, FrameType] | None
+    ) -> None:
+        """Read every thread's CPU; sample the stacks of those that ran since the last read.
+
+        A thread is sampled when first seen, since its earlier CPU is unknown;
+        only threads with enough CPU during the stall are reported. Without
+        ``frames`` it only reads CPU, for the end of the stall.
+        """
+        read_cpu = self._read_cpu
+        if read_cpu is None:
             return
-        frame = sys._current_frames().get(thread_id)  # noqa: SLF001 - sampling profiler access.
-        if frame is None:
-            return
-        stack = render_stack(frame)
-        if stack in capture.stacks:
-            capture.stacks[stack] += 1
-        elif len(capture.stacks) < _MAX_DISTINCT_STACKS:
-            capture.stacks[stack] = 1
+        if capture.cpu_started is None:
+            capture.cpu_started = time.perf_counter()
+        watchdog = threading.get_ident()
+        for thread in threading.enumerate():
+            ident, native_id = thread.ident, thread.native_id
+            if ident is None or native_id is None or ident == watchdog:
+                continue
+            cpu = read_cpu(native_id)
+            if cpu is None:
+                continue
+            state = capture.threads.get(ident)
+            ran = state is None or cpu > state.cpu_last
+            if state is None:
+                state = capture.threads[ident] = _ThreadCapture(thread.name, cpu, cpu)
+            state.cpu_last = cpu
+            frame = frames.get(ident) if frames is not None and ran else None
+            if frame is not None and ident != self._loop_thread_id:
+                _count_stack(state.stacks, _raw_stack(frame), _MAX_THREAD_STACKS)
+
+
+def _count_stack(stacks: dict[_RawStack, int], stack: _RawStack, limit: int) -> None:
+    if stack in stacks:
+        stacks[stack] += 1
+    elif len(stacks) < limit:
+        stacks[stack] = 1
+
+
+def _sorted_samples(stacks: Mapping[_RawStack, int]) -> Samples:
+    ordered = sorted(stacks.items(), key=lambda item: item[1], reverse=True)
+    return tuple((count, _render_raw(stack)) for stack, count in ordered)
+
+
+def _busy_threads(
+    threads: Iterable[_ThreadCapture], cpu_window_ms: float
+) -> tuple[StallThread, ...]:
+    minimum = max(cpu_window_ms * _STALL_THREAD_CPU_SHARE, 1.0)
+    busy = [
+        StallThread(
+            name=thread.name,
+            cpu_ms=(thread.cpu_last - thread.cpu_start) * 1000.0,
+            samples=_sorted_samples(thread.stacks),
+        )
+        for thread in threads
+        if (thread.cpu_last - thread.cpu_start) * 1000.0 >= minimum
+    ]
+    busy.sort(key=lambda thread: thread.cpu_ms, reverse=True)
+    return tuple(busy[:_MAX_STALL_THREADS])
 
 
 def render_stack(frame: FrameType | None) -> tuple[str, ...]:
     """Render ``path:line function`` frames, innermost first."""
-    rendered: list[str] = []
-    while frame is not None and len(rendered) < _MAX_STACK_FRAMES:
+    return _render_raw(_raw_stack(frame))
+
+
+def _raw_stack(frame: FrameType | None) -> _RawStack:
+    raw: list[tuple[str, int | None, str]] = []
+    while frame is not None and len(raw) < _MAX_STACK_FRAMES:
         code = frame.f_code
-        rendered.append(f"{code_path(code.co_filename)}:{frame.f_lineno} {code.co_qualname}")
+        raw.append((code.co_filename, frame.f_lineno, code.co_qualname))
         frame = frame.f_back
-    return tuple(rendered)
+    return tuple(raw)
+
+
+def _render_raw(stack: _RawStack) -> tuple[str, ...]:
+    return tuple(f"{code_path(filename)}:{line} {name}" for filename, line, name in stack)
 
 
 _PATH_CACHE_LIMIT = 4096

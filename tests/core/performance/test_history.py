@@ -12,7 +12,7 @@ import pytest
 
 from core.performance import PerformanceService, count, record_duration, set_gauge
 from core.performance._history import append_window
-from core.performance._monitor import StallRecord
+from core.performance._monitor import StallRecord, StallThread
 
 DAY = datetime(2026, 9, 20, 10, 0, tzinfo=UTC)
 
@@ -58,12 +58,14 @@ async def test_windows_hold_only_their_own_changes_and_outlive_the_process(
     set_gauge("test.level", 7)
     set_gauge("test.level", 2)
     stack = tuple(f"core/x.py:{line} f" for line in range(3))
+    samples = tuple((5 - index, (f"core/y.py:{index} g", *stack)) for index in range(5))
     service._record_stall(  # noqa: SLF001 - watchdog callback.
         StallRecord(
             started_perf=time.perf_counter(),
             started_at=datetime.now(UTC),
             duration_ms=400.0,
-            samples=tuple((5 - index, (f"core/y.py:{index} g", *stack)) for index in range(5)),
+            samples=samples,
+            threads=(StallThread("performance_0", 150.0, samples),),
         )
     )
     await service._write_window("interval")  # noqa: SLF001 - end the window now.
@@ -84,6 +86,8 @@ async def test_windows_hold_only_their_own_changes_and_outlive_the_process(
     assert first["counters"]["test.events"] == 3
     assert (first["gauges"]["test.level"], first["gauges_max"]["test.level"]) == (2, 7)
     assert [len(stall["samples"]) for stall in first["stalls"]] == [3]
+    # Other threads keep only their most frequent stack.
+    assert [len(thread["samples"]) for thread in first["stalls"][0]["threads"]] == [1]
     window_op = second["metrics"]["test.op"]
     assert window_op["count"] == 1
     # Extremes the window did not move are bounded by its bucket (about 10%).

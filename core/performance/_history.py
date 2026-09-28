@@ -31,6 +31,7 @@ REASON_SHUTDOWN = "shutdown"
 MAX_WINDOW_STALLS = 20
 _FILE_SUFFIX = ".jsonl"
 _STALL_SAMPLES = 3
+_STALL_THREAD_SAMPLES = 1
 _FILTERED_SECTIONS = ("metrics", "counters", "gauges", "gauges_max")
 
 
@@ -207,4 +208,11 @@ def _compact_stall(stall: Mapping[str, Any]) -> dict[str, Any]:
     samples = compact.get("samples")
     if isinstance(samples, list):
         compact["samples"] = samples[:_STALL_SAMPLES]
+    threads = compact.get("threads")
+    if isinstance(threads, list):
+        compact["threads"] = [
+            {**thread, "samples": thread.get("samples", [])[:_STALL_THREAD_SAMPLES]}
+            for thread in threads
+            if isinstance(thread, dict)
+        ]
     return compact

@@ -6,6 +6,7 @@ import asyncio
 import gc
 import json
 import logging
+import sys
 import threading
 import time
 from datetime import UTC, datetime
@@ -14,9 +15,12 @@ from pathlib import Path
 import pytest
 
 from core.performance import PerformanceService
-from core.performance._monitor import StallRecord, code_path, render_stack
+from core.performance._monitor import StallRecord, StallThread, code_path, render_stack
 
 WATCHDOG_THREAD = "vbot-performance-watchdog"
+SPINNER_THREAD = "test-spinner"
+# Windows and Linux report per-thread CPU time; elsewhere stalls carry none.
+THREAD_CPU = sys.platform == "win32" or sys.platform.startswith("linux")
 
 
 def _fast_service(tmp_path: Path, **kwargs) -> PerformanceService:
@@ -38,8 +42,17 @@ async def _wait_for(condition, *, timeout: float = 10.0) -> None:
         await asyncio.sleep(0.02)
 
 
+def spin_for_test(seconds: float) -> None:
+    deadline = time.perf_counter() + seconds
+    while time.perf_counter() < deadline:
+        pass
+
+
 def block_event_loop_for_test() -> None:
-    time.sleep(0.3)
+    # The loop waits for a thread that computes in Python, as behind a lock.
+    spinner = threading.Thread(target=spin_for_test, args=(0.3,), name=SPINNER_THREAD)
+    spinner.start()
+    spinner.join()
 
 
 def collect_slowly_for_test() -> None:
@@ -59,7 +72,7 @@ def _is_test_stall(stall: dict, marker: str = "block_event_loop_for_test") -> bo
 
 
 @pytest.mark.asyncio
-async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_stack(
+async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_and_busy_stacks(
     tmp_path: Path,
 ) -> None:
     service = _fast_service(tmp_path)
@@ -80,7 +93,15 @@ async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_stack(
 
     # A busy test host may add unrelated stalls; select the one this test caused.
     stall = next(filter(_is_test_stall, snapshot["stalls"]))
-    assert set(stall) == {"started_at", "duration_ms", "gc_ms", "samples"}
+    assert set(stall) == {
+        "started_at",
+        "duration_ms",
+        "gc_ms",
+        "cpu_window_ms",
+        "loop_cpu_ms",
+        "samples",
+        "threads",
+    }
     assert stall["duration_ms"] >= 150
     datetime.fromisoformat(stall["started_at"])
     frames = [frame for sample in stall["samples"] for frame in sample["stack"]]
@@ -88,6 +109,18 @@ async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_stack(
     assert blocking.startswith("tests/core/performance/test_monitor.py:")
     assert all("\\" not in frame for frame in frames)
     assert sum(sample["count"] for sample in stall["samples"]) >= 1
+    if THREAD_CPU:
+        # The waiting loop used little CPU; the thread it waited for is named
+        # with the stack it computed in.
+        assert stall["loop_cpu_ms"] < stall["cpu_window_ms"] / 2
+        spinner = next(thread for thread in stall["threads"] if thread["name"] == SPINNER_THREAD)
+        assert spinner["cpu_ms"] >= stall["cpu_window_ms"] / 10
+        assert any(
+            "spin_for_test" in frame for sample in spinner["samples"] for frame in sample["stack"]
+        )
+        assert WATCHDOG_THREAD not in {thread["name"] for thread in stall["threads"]}
+    else:
+        assert (stall["cpu_window_ms"], stall["loop_cpu_ms"], stall["threads"]) == (None, None, [])
     assert snapshot["metrics"]["event_loop.lag"]["max_ms"] >= 150
     assert stall in result["summary"]["stalls"]
     assert result["summary"]["metrics"]["event_loop.lag"]["max_ms"] >= 150
@@ -200,6 +233,12 @@ def test_long_stall_warnings_are_rate_limited_and_count_suppressions(
         duration_ms=1500.0,
         samples=((3, stack),),
         gc_ms=1200.0,
+        cpu_window_ms=1250.0,
+        loop_cpu_ms=20.0,
+        threads=(
+            StallThread("performance_0", 1180.0, ((2, (f"{library}:5 dumps", *stack[2:])),)),
+            StallThread("performance_1", 300.0, ()),
+        ),
     )
     short = StallRecord(stall.started_perf, stall.started_at, 400.0, ())
 
@@ -214,12 +253,16 @@ def test_long_stall_warnings_are_rate_limited_and_count_suppressions(
 
     warnings = [record.getMessage() for record in caplog.records]
     assert len(warnings) == 2
-    assert "stalled for 1500 ms (gc_ms=1200 samples=3" in warnings[0]
+    assert "stalled for 1500 ms (gc_ms=1200 loop_cpu_ms=20/1250 samples=3" in warnings[0]
     assert f"top frames: {' <- '.join(stack[:5])};" in warnings[0]
     # The innermost vBot frames skip library code, however deep it sits.
-    assert warnings[0].endswith(
+    assert (
         f"innermost vBot frames: {project}:12 blocking_helper <- {project}:40 caller"
-        f" <- {project}:41 outer_caller"
+        f" <- {project}:41 outer_caller;"
+    ) in warnings[0]
+    assert warnings[0].endswith(
+        f"busiest other thread: performance_0 (cpu_ms=1180/1250) at {project}:12 blocking_helper"
+        f" <- {project}:40 caller <- {project}:41 outer_caller"
     )
     assert "suppressed_warnings=0" in warnings[0]
     assert "suppressed_warnings=1" in warnings[1]

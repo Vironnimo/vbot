@@ -42,12 +42,21 @@ def test_status_shows_slowest_metrics_gauges_stalls_and_recording(
                     "started_at": "2026-09-24T10:01:00+00:00",
                     "duration_ms": 320.0,
                     "gc_ms": 250.0,
+                    "cpu_window_ms": 200.0,
+                    "loop_cpu_ms": 15.6,
                     "samples": [
                         {"count": 1, "stack": ["core/a.py:1 other"]},
                         {
                             "count": 5,
                             "stack": ["core/x.py:10 work", "core/y.py:5 caller", "a", "b"],
                         },
+                    ],
+                    "threads": [
+                        {
+                            "name": "performance_0",
+                            "cpu_ms": 187.5,
+                            "samples": [{"count": 4, "stack": ["core/z.py:3 census"]}],
+                        }
                     ],
                 }
             ],
@@ -82,10 +91,13 @@ def test_status_shows_slowest_metrics_gauges_stalls_and_recording(
         "- events.sse=900",
         "- events.resource_changed=40",
         "recent stalls (newest first, 1 retained):",
-        "- started_at=2026-09-24T10:01:00+00:00 duration_ms=320.0 gc_ms=250.0 samples=6",
+        "- started_at=2026-09-24T10:01:00+00:00 duration_ms=320.0 gc_ms=250.0 "
+        "loop_cpu_ms=15.6/200.0 samples=6",
         "    core/x.py:10 work",
         "    core/y.py:5 caller",
         "    a",
+        "  thread performance_0 cpu_ms=187.5/200.0",
+        "    core/z.py:3 census",
     ]
 
 

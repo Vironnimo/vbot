@@ -695,19 +695,43 @@ class PerformanceService:
             self._suppressed_stall_warnings = 0
             self._last_stall_warning = now
         stack = stall.samples[0][1] if stall.samples else ()
-        # The innermost frames are usually asyncio or library code; the
-        # innermost vBot frames name the code that owns the blocking call.
-        project_frames = [frame for frame in stack if is_project_frame(frame)]
         _LOGGER.warning(
-            "Event Loop stalled for %d ms (gc_ms=%d samples=%d suppressed_warnings=%d); "
-            "top frames: %s; innermost vBot frames: %s",
+            "Event Loop stalled for %d ms (gc_ms=%d loop_cpu_ms=%s samples=%d "
+            "suppressed_warnings=%d); top frames: %s; innermost vBot frames: %s; "
+            "busiest other thread: %s",
             round(stall.duration_ms),
             round(stall.gc_ms),
+            _cpu_text(stall.loop_cpu_ms, stall.cpu_window_ms),
             sum(count for count, _stack in stall.samples),
             suppressed,
             " <- ".join(stack[:_STALL_WARNING_FRAMES]) or "-",
-            " <- ".join(project_frames[:_STALL_WARNING_PROJECT_FRAMES]) or "-",
+            _project_frames(stack),
+            _busiest_thread(stall),
         )
+
+
+def _project_frames(stack: tuple[str, ...]) -> str:
+    # The innermost frames are usually asyncio or library code; the innermost
+    # vBot frames name the code that owns the blocking call.
+    frames = [frame for frame in stack if is_project_frame(frame)]
+    return " <- ".join(frames[:_STALL_WARNING_PROJECT_FRAMES]) or "-"
+
+
+def _cpu_text(cpu_ms: float | None, window_ms: float | None) -> str:
+    if cpu_ms is None or window_ms is None:
+        return "-"
+    return f"{round(cpu_ms)}/{round(window_ms)}"
+
+
+def _busiest_thread(stall: StallRecord) -> str:
+    if not stall.threads:
+        return "-"
+    thread = stall.threads[0]
+    stack = thread.samples[0][1] if thread.samples else ()
+    location = _project_frames(stack)
+    if location == "-":
+        location = " <- ".join(stack[:_STALL_WARNING_PROJECT_FRAMES]) or "-"
+    return f"{thread.name} (cpu_ms={_cpu_text(thread.cpu_ms, stall.cpu_window_ms)}) at {location}"
 
 
 def _validate_recording_request(label: str | None, max_seconds: int) -> None:

@@ -216,9 +216,15 @@ class Recording:
             self._stalls.append(dict(record))
             pid = self._track(track).pid
             args = {
-                "duration_ms": record["duration_ms"],
-                "gc_ms": record["gc_ms"],
-                "samples": record["samples"],
+                key: record.get(key)
+                for key in (
+                    "duration_ms",
+                    "gc_ms",
+                    "cpu_window_ms",
+                    "loop_cpu_ms",
+                    "samples",
+                    "threads",
+                )
             }
             self._append(("i", pid, 0, self._ts(started), None, "event_loop.stall", "stall", args))
 

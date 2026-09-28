@@ -19,6 +19,7 @@ _TOP_METRICS = 10
 _SUMMARY_METRICS = 5
 _RECENT_STALLS = 5
 _STALL_FRAMES = 3
+_STALL_THREADS = 2
 _KEY_GAUGES = (
     "event_loop.utilization",
     "process.cpu_percent",
@@ -375,17 +376,44 @@ def _stall_section(stalls: Sequence[object], title: str) -> list[str]:
             lines.append("- invalid stall entry")
             continue
         samples = [sample for sample in stall.get("samples") or [] if isinstance(sample, dict)]
+        window = stall.get("cpu_window_ms")
         lines.append(
             f"- started_at={_string_or_default(stall.get('started_at'), '-')} "
             f"duration_ms={_value_text(stall.get('duration_ms'))} "
             f"gc_ms={_value_text(stall.get('gc_ms'))} "
+            f"loop_cpu_ms={_cpu_share(stall.get('loop_cpu_ms'), window)} "
             f"samples={sum(_count(sample) for sample in samples)}"
         )
-        if samples:
-            common = max(samples, key=_count)
-            stack = _sequence(common.get("stack"))
-            lines.extend(f"    {frame}" for frame in stack[:_STALL_FRAMES])
+        lines.extend(_common_stack(samples))
+        threads = [thread for thread in _sequence(stall.get("threads")) if isinstance(thread, dict)]
+        for thread in threads[:_STALL_THREADS]:
+            lines.append(
+                f"  thread {_string_or_default(thread.get('name'), '?')} "
+                f"cpu_ms={_cpu_share(thread.get('cpu_ms'), window)}"
+            )
+            lines.extend(
+                _common_stack(
+                    [
+                        sample
+                        for sample in _sequence(thread.get("samples"))
+                        if isinstance(sample, dict)
+                    ]
+                )
+            )
     return lines
+
+
+def _common_stack(samples: Sequence[Mapping[str, Any]]) -> list[str]:
+    if not samples:
+        return []
+    stack = _sequence(max(samples, key=_count).get("stack"))
+    return [f"    {frame}" for frame in stack[:_STALL_FRAMES]]
+
+
+def _cpu_share(cpu_ms: object, window_ms: object) -> str:
+    if cpu_ms is None:
+        return "-"
+    return f"{_value_text(cpu_ms)}/{_value_text(window_ms)}"
 
 
 def _recording_row(entry: object) -> str:
