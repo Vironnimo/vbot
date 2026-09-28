@@ -13,17 +13,26 @@ environment) and is built once per process. ``ssl.SSLContext`` is safe to
 share between clients and threads; httpcore only (re)sets the HTTP/1.1 ALPN
 list on it before each handshake, which is idempotent while no client enables
 HTTP/2.
+
+httpx also imports its connection stack lazily: the first client imports
+httpcore, h11 and anyio, and the first request anyio's asyncio backend. On a
+cold start that took 380 ms on the Event Loop at the first Run, so the startup
+prewarm imports them too.
 """
 
 from __future__ import annotations
 
+import importlib
 import ssl
+import sys
 import threading
 
 import httpx
 
 _lock = threading.Lock()
 _context: ssl.SSLContext | None = None
+# What httpx imports on its first client and first request.
+_LAZY_TRANSPORT_MODULES = ("httpcore", "anyio._backends._asyncio")
 
 
 def shared_ssl_context() -> ssl.SSLContext:
@@ -38,16 +47,23 @@ def shared_ssl_context() -> ssl.SSLContext:
         return _context
 
 
-def prewarm_shared_ssl_context() -> None:
-    """Build the shared context on a daemon thread unless it already exists.
+def prewarm_outbound_http() -> None:
+    """Build the shared context and import httpx's lazy modules on a daemon thread.
 
-    CA parsing releases the GIL, so warming at startup keeps the first outbound
-    request from paying the build cost on the Event Loop.
+    CA parsing and import file access release the GIL, so warming at startup
+    keeps the first outbound client and request from paying either on the Event
+    Loop. A client created while the thread still runs waits only for the rest.
     """
-    if _context is not None:
+    if _context is not None and all(module in sys.modules for module in _LAZY_TRANSPORT_MODULES):
         return
     threading.Thread(
-        target=shared_ssl_context,
-        name="vbot-tls-prewarm",
+        target=_prewarm,
+        name="vbot-http-prewarm",
         daemon=True,
     ).start()
+
+
+def _prewarm() -> None:
+    shared_ssl_context()
+    for module in _LAZY_TRANSPORT_MODULES:
+        importlib.import_module(module)

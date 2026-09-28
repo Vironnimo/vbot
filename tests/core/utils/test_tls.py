@@ -69,24 +69,35 @@ def test_concurrent_first_use_builds_the_context_once(monkeypatch: pytest.Monkey
     assert results == [builds[0]] * 8
 
 
-def test_prewarm_builds_off_the_calling_thread_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prewarm_builds_and_imports_off_the_calling_thread_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _reset_shared_context(monkeypatch)
-    built = threading.Event()
     build_threads: list[str] = []
+    imports: list[tuple[str, str]] = []
+    done = threading.Event()
 
     def build() -> ssl.SSLContext:
         build_threads.append(threading.current_thread().name)
-        built.set()
         return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
+    def import_module(name: str) -> None:
+        imports.append((threading.current_thread().name, name))
+        if len(imports) == len(tls._LAZY_TRANSPORT_MODULES):  # noqa: SLF001 - the prewarm list.
+            done.set()
+
     monkeypatch.setattr(tls.httpx, "create_ssl_context", build)
+    monkeypatch.setattr(tls.importlib, "import_module", import_module)
 
-    tls.prewarm_shared_ssl_context()
-    assert built.wait(timeout=5)
+    tls.prewarm_outbound_http()
+    assert done.wait(timeout=5)
     context = tls.shared_ssl_context()
-    tls.prewarm_shared_ssl_context()
 
-    assert build_threads == ["vbot-tls-prewarm"]
+    assert build_threads == ["vbot-http-prewarm"]
+    assert imports == [
+        ("vbot-http-prewarm", "httpcore"),
+        ("vbot-http-prewarm", "anyio._backends._asyncio"),
+    ]
     assert tls.shared_ssl_context() is context
 
 

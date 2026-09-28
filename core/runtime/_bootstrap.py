@@ -115,7 +115,7 @@ from core.tools.subagent import register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.usage import UsageRecorder
-from core.utils.tls import prewarm_shared_ssl_context
+from core.utils.tls import prewarm_outbound_http
 from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
@@ -212,8 +212,9 @@ def bootstrap(runtime: Runtime) -> None:
             resources_path=resources_path,
             logger=runtime.logger,
         )
-        # Outbound HTTP clients share one TLS context; build it off the Event Loop.
-        prewarm_shared_ssl_context()
+        # Outbound HTTP clients share one TLS context and lazily imported
+        # transport modules; prepare both off the Event Loop.
+        prewarm_outbound_http()
         local_speech = LocalSpeechExecutor(engines_dir=runtime._storage.layout.speech_engines)
         runtime._model_tasks = TaskModelService(
             runtime._providers,
