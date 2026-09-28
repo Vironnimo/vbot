@@ -333,8 +333,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
   must identify a unique whole-line target; line numbers never resolve ambiguity.
-  Standalone added blocks require complete consecutive gutters. Continuation
-  gutters are rejected. Literal matching against gutter-shaped existing content
+  A run of added lines is recovered only when every line carries a gutter;
+  complete but nonconsecutive or continuation gutters are rejected
+  (`line_numbered_content`). Only unchanged and removed lines can make a miss a
+  gutter error. Two or more gutter-shaped lines among other added lines are
+  content, such as `N|value` data rows, and are written as sent with a note
+  quoting one of them. Literal matching against gutter-shaped existing content
   takes precedence over correction.
 - Patch-only typography normalization also recognizes expanded em dashes and
   ellipses, minus signs, and Unicode spaces. Precisely equivalent changed lines
