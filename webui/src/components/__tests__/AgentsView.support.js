@@ -96,10 +96,6 @@ export function getSearchablePanel() {
   return document.body.querySelector('.searchable-dropdown__panel');
 }
 
-export function getSearchableOptionsContainer() {
-  return getSearchablePanel()?.querySelector('.searchable-dropdown__options');
-}
-
 export function openSimpleDropdown(id) {
   const trigger = getSimpleTrigger(id);
   trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -137,7 +133,7 @@ export function getSimpleList() {
   return document.body.querySelector('.dropdown-primitive__list');
 }
 
-export function stubTriggerRect(trigger, rect) {
+function stubTriggerRect(trigger, rect) {
   trigger.getBoundingClientRect = () => ({
     x: rect.left,
     y: rect.top,
@@ -151,7 +147,7 @@ export function stubTriggerRect(trigger, rect) {
   });
 }
 
-export function defaultTriggerRect() {
+function defaultTriggerRect() {
   return {
     left: 96,
     top: 144,
@@ -402,7 +398,7 @@ export function createAgentsRpcMock(options = {}) {
   };
 }
 
-export function skillCatalog() {
+function skillCatalog() {
   return {
     skills: [
       {

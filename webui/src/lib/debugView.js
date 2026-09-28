@@ -175,14 +175,13 @@ export function modelProbeConnectionOptions(state) {
   }));
 }
 
-export function normalizeTraceEntries(traces) {
-  const rawTraces = Array.isArray(traces) ? traces : [];
-  return rawTraces
+function normalizeTraceEntries(traces) {
+  return traces
     .map((trace) => normalizeTraceEntry(trace))
     .filter((trace) => trace !== null);
 }
 
-export function normalizeTraceEntry(trace) {
+function normalizeTraceEntry(trace) {
   const traceId = asOptionalText(trace?.trace_id);
   if (traceId === null) {
     return null;
@@ -201,9 +200,8 @@ export function normalizeTraceEntry(trace) {
   };
 }
 
-export function normalizeModelProbeProviders(providers) {
-  const rawProviders = Array.isArray(providers) ? providers : [];
-  return rawProviders
+function normalizeModelProbeProviders(providers) {
+  return providers
     .map((provider) => {
       const id = asOptionalText(provider?.id ?? provider?.provider_id);
       if (id === null) {
@@ -240,11 +238,7 @@ export function normalizeModelProbeProviders(providers) {
     .filter((provider) => provider !== null);
 }
 
-export function normalizeProbePreview(normalized) {
-  if (!isPlainObject(normalized)) {
-    return { modelCount: 0, preview: [] };
-  }
-
+function normalizeProbePreview(normalized) {
   const modelCount = resolveNonNegativeInteger(normalized.model_count, 0);
   const rawPreview = Array.isArray(normalized.models) ? normalized.models : [];
 
@@ -285,8 +279,8 @@ function resolveSelectedProbeProvider(state) {
   return providers.find((p) => p.id === providerId) ?? null;
 }
 
-export function retainSelectedTrace(state) {
-  const traces = Array.isArray(state?.traces) ? state.traces : [];
+function retainSelectedTrace(state) {
+  const traces = state.traces;
   const currentSelection = state?.selectedTrace;
   const selectedId = asOptionalText(currentSelection?.trace_id);
   if (selectedId === null) {
@@ -297,10 +291,7 @@ export function retainSelectedTrace(state) {
     : null;
 }
 
-export function isJsonParseableText(value) {
-  if (typeof value !== 'string' || value.length === 0) {
-    return false;
-  }
+function isJsonParseableText(value) {
   try {
     JSON.parse(value);
     return true;
@@ -330,11 +321,7 @@ export function formattedBodyText(body) {
     if (!isJsonParseableText(body)) {
       return body;
     }
-    try {
-      return JSON.stringify(JSON.parse(body), null, 2);
-    } catch {
-      return body;
-    }
+    return JSON.stringify(JSON.parse(body), null, 2);
   }
   if (typeof body === 'object') {
     return safeStringify(body);

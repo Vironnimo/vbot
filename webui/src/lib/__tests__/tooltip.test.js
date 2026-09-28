@@ -8,7 +8,6 @@ import {
   TOOLTIP_SHOW_DELAY_MS as SHOW_DELAY_MS,
   TOOLTIP_SKIP_DELAY_MS,
   floatingHoverCard,
-  positionFloating,
   tooltip,
 } from '../tooltip.js';
 import {
@@ -491,77 +490,83 @@ describe('tooltip action', () => {
   });
 });
 
-describe('positionFloating', () => {
+describe('tooltip placement', () => {
   const originalHeight = window.innerHeight;
   const originalWidth = window.innerWidth;
+  let actions;
+  let tooltipSize;
 
   beforeEach(() => {
+    vi.useFakeTimers();
+    actions = [];
     window.innerHeight = 800;
     window.innerWidth = 1200;
+    // jsdom has no layout: give the shared tooltip a measurable size.
+    const measure = (dimension) =>
+      function () {
+        return this.id === 'app-tooltip' ? tooltipSize[dimension] : 0;
+      };
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(
+      measure('width'),
+    );
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(
+      measure('height'),
+    );
   });
 
   afterEach(() => {
+    for (const action of actions) {
+      action.destroy();
+    }
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+    vi.useRealTimers();
     window.innerHeight = originalHeight;
     window.innerWidth = originalWidth;
   });
 
-  function anchorAt({ top, bottom, left = 500, width = 40 }) {
-    return {
-      getBoundingClientRect: () => ({
-        top,
-        bottom,
-        left,
-        width,
-        right: left + width,
-        height: bottom - top,
-        x: left,
-        y: top,
-      }),
-    };
-  }
-
-  function floatingOfSize(width, height) {
-    const element = document.createElement('div');
-    Object.defineProperty(element, 'offsetWidth', { value: width });
-    Object.defineProperty(element, 'offsetHeight', { value: height });
-    return element;
+  /** Show a `width`x`height` tooltip for an anchor at `rect` and return it. */
+  function showFor(rect, { width = 100, height = 24, placement } = {}) {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    tooltipSize = { width, height };
+    const anchor = button('Anchor');
+    placeAt(anchor, rect);
+    actions.push(tooltip(anchor, { text: 'Hint', placement }));
+    hover(anchor);
+    return tooltipElement();
   }
 
   it('centers above the anchor when there is room and falls below otherwise', () => {
-    const element = floatingOfSize(100, 24);
-    positionFloating(anchorAt({ top: 300, bottom: 320 }), element);
+    let element = showFor({ left: 500, top: 300, width: 40, height: 20 });
 
     // centered: 500 + 20 - 50 = 470; above: 300 - 6 - 24 = 270.
     expect(element.style.left).toBe('470px');
     expect(element.style.top).toBe('270px');
     expect(element.dataset.floatingSide).toBe('top');
 
-    positionFloating(anchorAt({ top: 10, bottom: 30 }), element);
+    element = showFor({ left: 500, top: 10, width: 40, height: 20 });
     expect(element.style.top).toBe('36px');
     expect(element.dataset.floatingSide).toBe('bottom');
   });
 
   it('clamps to the viewport edges horizontally', () => {
-    const element = floatingOfSize(200, 24);
-    positionFloating(
-      anchorAt({ top: 300, bottom: 320, left: 0, width: 20 }),
-      element,
+    let element = showFor(
+      { left: 0, top: 300, width: 20, height: 20 },
+      { width: 200 },
     );
     expect(element.style.left).toBe('8px');
 
-    positionFloating(
-      anchorAt({ top: 300, bottom: 320, left: 1180, width: 20 }),
-      element,
+    element = showFor(
+      { left: 1180, top: 300, width: 20, height: 20 },
+      { width: 200 },
     );
     expect(element.style.left).toBe(`${1200 - 200 - 8}px`);
   });
 
   it('places a side placement beside the anchor, vertically centered, and flips it when it does not fit', () => {
-    const element = floatingOfSize(100, 24);
-    positionFloating(
-      anchorAt({ top: 300, bottom: 340, left: 12, width: 40 }),
-      element,
-      'right',
+    let element = showFor(
+      { left: 12, top: 300, width: 40, height: 40 },
+      { placement: 'right' },
     );
 
     // right: 12 + 40 + 6 = 58; centered: 300 + 20 - 12 = 308.
@@ -569,19 +574,17 @@ describe('positionFloating', () => {
     expect(element.style.top).toBe('308px');
     expect(element.dataset.floatingSide).toBe('right');
 
-    positionFloating(
-      anchorAt({ top: 300, bottom: 340, left: 1100, width: 40 }),
-      element,
-      'left',
+    element = showFor(
+      { left: 1100, top: 300, width: 40, height: 40 },
+      { placement: 'left' },
     );
     // left: 1100 - 6 - 100 = 994.
     expect(element.style.left).toBe('994px');
     expect(element.dataset.floatingSide).toBe('left');
 
-    positionFloating(
-      anchorAt({ top: 300, bottom: 320, left: 1150, width: 40 }),
-      element,
-      'right',
+    element = showFor(
+      { left: 1150, top: 300, width: 40, height: 20 },
+      { placement: 'right' },
     );
     // flipped left: 1150 - 6 - 100 = 1044.
     expect(element.style.left).toBe('1044px');
@@ -589,17 +592,17 @@ describe('positionFloating', () => {
   });
 
   it('falls back to above when neither side fits or the placement is unknown', () => {
-    const wide = floatingOfSize(700, 24);
-    positionFloating(
-      anchorAt({ top: 300, bottom: 320, left: 500, width: 40 }),
-      wide,
-      'right',
+    let element = showFor(
+      { left: 500, top: 300, width: 40, height: 20 },
+      { width: 700, placement: 'right' },
     );
-    expect(wide.style.top).toBe('270px');
-    expect(wide.dataset.floatingSide).toBe('top');
+    expect(element.style.top).toBe('270px');
+    expect(element.dataset.floatingSide).toBe('top');
 
-    const element = floatingOfSize(100, 24);
-    positionFloating(anchorAt({ top: 300, bottom: 320 }), element, 'sideways');
+    element = showFor(
+      { left: 500, top: 300, width: 40, height: 20 },
+      { placement: 'sideways' },
+    );
     expect(element.dataset.floatingSide).toBe('top');
   });
 });

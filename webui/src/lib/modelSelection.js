@@ -4,7 +4,7 @@ const DEFAULT_ACCOUNT_ID = 'default';
 // effective context window (or without tool calling) are hidden by default and
 // revealed by the "show all models" toggle with an honest badge. A view
 // constant — the backend never hard-filters.
-export const SUITABLE_MIN_CONTEXT = 32768;
+const SUITABLE_MIN_CONTEXT = 32768;
 
 const SUITABILITY_REASON_NO_TOOLS = 'noTools';
 const SUITABILITY_REASON_BELOW_MIN_CONTEXT = 'belowMinContext';
@@ -47,7 +47,7 @@ export function createModelCatalogLoader({ listModels, listConnections }) {
   };
 }
 
-export function modelSuitability(model) {
+function modelSuitability(model) {
   const reasons = [];
 
   if (model?.capabilities?.tools !== true) {

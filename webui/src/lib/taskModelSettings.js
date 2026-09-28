@@ -236,20 +236,6 @@ export function reconcileDependentOptions(fields, options, changedName) {
   return next;
 }
 
-export function applyOptionDefaults(binding, fields) {
-  const options = { ...(binding?.options ?? {}) };
-  for (const field of fields ?? []) {
-    if (
-      options[field.name] === undefined &&
-      field.default !== undefined &&
-      field.default !== null
-    ) {
-      options[field.name] = field.default;
-    }
-  }
-  return { ...normalizeBinding(binding), options };
-}
-
 export function createTaskModelUpdatePayload(bindings, previous) {
   const payload = {};
   const baseline = previous ? createTaskModelUpdatePayload(previous) : null;

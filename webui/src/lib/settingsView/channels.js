@@ -45,9 +45,7 @@ export function buildChannelUpdatePayload(formValues) {
 }
 
 export function getAgentItems(result) {
-  const agents = Array.isArray(result?.agents) ? result.agents : [];
-
-  return agents
+  return result.agents
     .map((agent) => {
       const id = textOrEmpty(agent?.id);
 

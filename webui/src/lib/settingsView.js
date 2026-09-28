@@ -40,16 +40,12 @@ export {
   formatAllowedChatIds,
 } from './settingsView/channels.js';
 export {
-  AGENT_DEFAULTS_FIELDS,
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
   normalizeAgentDefaultsSettings,
   buildAgentDefaultsPayload,
   normalizeSessionTitleSettings,
   buildSessionTitleSettingsPayload,
   normalizeSubAgentSettings,
-  normalizeCompactionSettings,
-  buildCompactionSettingsPayload,
-  getCompactionSettings,
   buildSubAgentSettingsPayload,
 } from './settingsView/agentDefaults.js';
 export {
@@ -66,10 +62,8 @@ export {
   applyExtensionsPanelList,
   extensionStatusChipVariant,
   extensionCapabilityParts,
-  summarizeExtensionCapabilities,
   describeExtensionWaiting,
   buildExtensionsUpdatePayload,
-  normalizeSchemaFields,
   buildSchemaFormState,
   buildSchemaConfigFromForm,
   hasSettingsSchema,
@@ -90,9 +84,7 @@ export {
   describeAccountSource,
   deriveAccountCredentialKey,
   connectionSupportsAddAccount,
-  isConnectionConfigured,
   isConnectionEnabled,
-  isConnectionUsable,
   connectionReachability,
   getConnectedProviderItems,
   getUsableProviderItems,

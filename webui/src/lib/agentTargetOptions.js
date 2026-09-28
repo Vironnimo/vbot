@@ -16,7 +16,7 @@
 import { formatAgentAddress } from './agentAddress.js';
 import { asText } from './values.js';
 
-export const AGENT_TARGET_GROUP_IDENTITY = 'identity';
+const AGENT_TARGET_GROUP_IDENTITY = 'identity';
 export const AGENT_TARGET_GROUP_PROJECT = 'project';
 
 // `identityAgents` is the `agent.list` projection (`{ id, name }`); `projectTeams`
@@ -117,7 +117,7 @@ export function buildAgentTargetDropdownOptions(
 // consumes. The team is read straight from `scan.team` (the repo is the source
 // of truth); only the bare `agent_id`/`display_name` the dropdown needs are
 // kept. An empty/bare project yields an empty team, which is normal.
-export function projectTeamEntry(projectId, showResponse) {
+function projectTeamEntry(projectId, showResponse) {
   const id = asText(projectId);
   const rawTeam = Array.isArray(showResponse?.scan?.team)
     ? showResponse.scan.team
@@ -137,11 +137,8 @@ export function projectTeamEntry(projectId, showResponse) {
 // The project ids to scan for teams, read from a `project.list` response. Lazy
 // scanning (one `project.show` per id, on demand) avoids an N+1 scan on every
 // render.
-export function projectIdsFromList(listResponse) {
-  const raw = Array.isArray(listResponse?.projects)
-    ? listResponse.projects
-    : [];
-  return raw
+function projectIdsFromList(listResponse) {
+  return listResponse.projects
     .map((project) => asText(project?.project_id))
     .filter((projectId) => projectId.length > 0);
 }

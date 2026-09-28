@@ -1,5 +1,4 @@
 import { textOrEmpty, positiveIntegerOrDefault } from './values.js';
-import { normalizeCompactionPolicy } from '../compactionPolicy.js';
 
 const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
   max_subagent_depth: 4,
@@ -7,7 +6,7 @@ const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
   subagent_timeout_minutes: 60,
 });
 
-export const AGENT_DEFAULTS_FIELDS = Object.freeze([
+const AGENT_DEFAULTS_FIELDS = Object.freeze([
   'model',
   'fallback_models',
   'temperature',
@@ -103,22 +102,6 @@ export function normalizeSubAgentSettings(rawSettings) {
       SUBAGENT_SETTINGS_DEFAULTS.subagent_timeout_minutes,
     ),
   };
-}
-
-export function normalizeCompactionSettings(rawSettings) {
-  return normalizeCompactionPolicy(rawSettings?.compaction);
-}
-
-export function buildCompactionSettingsPayload(formValues) {
-  return {
-    compaction: normalizeCompactionSettings({
-      compaction: formValues,
-    }),
-  };
-}
-
-export function getCompactionSettings(settings) {
-  return normalizeCompactionSettings(settings);
 }
 
 export function buildSubAgentSettingsPayload(formValues) {

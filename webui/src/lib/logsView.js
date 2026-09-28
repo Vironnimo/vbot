@@ -123,11 +123,8 @@ export function deriveLevelOptions(entries) {
   return [ALL_LEVELS_FILTER, ...Array.from(levels).sort()];
 }
 
-export function filterLogEntries(entries, filters = {}) {
-  const levelFilter =
-    typeof filters.levelFilter === 'string'
-      ? filters.levelFilter
-      : ALL_LEVELS_FILTER;
+function filterLogEntries(entries, filters = {}) {
+  const levelFilter = filters.levelFilter;
   const searchNeedle = normalizeSearchText(filters.searchText);
 
   return (Array.isArray(entries) ? entries : []).filter((entry) => {
@@ -143,7 +140,7 @@ export function filterLogEntries(entries, filters = {}) {
   });
 }
 
-export function sortLogEntries(entries, sortOrder = LOGS_SORT_ORDER_NEWEST) {
+function sortLogEntries(entries, sortOrder = LOGS_SORT_ORDER_NEWEST) {
   const nextEntries = Array.isArray(entries) ? [...entries] : [];
 
   if (sortOrder === LOGS_SORT_ORDER_OLDEST) {
