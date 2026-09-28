@@ -51,7 +51,7 @@ function canonicalAction(action) {
 }
 
 /** True when both actions do the same thing (missing means default command). */
-export function sameVoiceAction(left, right) {
+function sameVoiceAction(left, right) {
   const a = canonicalAction(left);
   const b = canonicalAction(right);
   if (a.type !== b.type) return false;
@@ -219,7 +219,7 @@ export function buildVoiceConfigChanges(draft, baseline) {
 }
 
 /** What a detection of one phrase does, with command defaults resolved. */
-export function effectiveVoiceAction(config, modelId) {
+function effectiveVoiceAction(config, modelId) {
   const action = canonicalAction(config.phrase_actions[modelId]);
   if (action.type === 'live_voice') return action;
   return {

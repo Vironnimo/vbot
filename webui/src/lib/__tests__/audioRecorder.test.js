@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  audioExtensionFromMimeType,
-  chooseAudioMimeType,
-  createAudioRecorder,
-} from '../audioRecorder.js';
+import { createAudioRecorder } from '../audioRecorder.js';
 
 class FakeMediaRecorder {
   static lastInstance = null;
@@ -38,10 +34,31 @@ class FakeMediaRecorder {
 }
 
 describe('audioRecorder', () => {
-  it('chooses the first supported browser audio MIME type', () => {
-    expect(chooseAudioMimeType(FakeMediaRecorder)).toBe('audio/webm');
-    expect(chooseAudioMimeType(undefined)).toBe('');
-    expect(audioExtensionFromMimeType('audio/ogg;codecs=opus')).toBe('ogg');
+  it('records in the first audio format the browser supports and names the file after it', async () => {
+    class OggRecorder extends FakeMediaRecorder {
+      static isTypeSupported(mimeType) {
+        return mimeType.startsWith('audio/ogg');
+      }
+    }
+    const ogg = await createAudioRecorder({
+      navigator: navigatorWithTrack({ stop: vi.fn() }),
+      MediaRecorder: OggRecorder,
+    });
+    expect(FakeMediaRecorder.lastInstance.options).toEqual({
+      mimeType: 'audio/ogg;codecs=opus',
+    });
+    expect(ogg.filename()).toBe('recording.ogg');
+
+    // A browser that cannot report its formats records in its default one.
+    class UntypedRecorder extends FakeMediaRecorder {
+      static isTypeSupported = undefined;
+    }
+    const untyped = await createAudioRecorder({
+      navigator: navigatorWithTrack({ stop: vi.fn() }),
+      MediaRecorder: UntypedRecorder,
+    });
+    expect(FakeMediaRecorder.lastInstance.options).toEqual({});
+    expect(untyped.filename()).toBe('recording.webm');
   });
 
   it('records the audio in the chosen format and releases the microphone after stopping', async () => {

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  isDesktop,
   isDesktopAccessor,
   desktopErrorCode,
   getDesktopCapabilities,
@@ -14,8 +13,6 @@ import {
   selectDesktopServer,
   disabledDesktopCapabilities,
   supportsDesktopVoice,
-  normalizeVoiceStatus,
-  normalizeVoiceEvent,
   getVoiceStatus,
   setVoiceEnabled,
   updateVoiceConfig,
@@ -110,26 +107,18 @@ describe('desktop detection', () => {
   });
 
   it.each([
-    ['without a window', undefined, false, false],
-    ['in a browser', pageWindow(''), false, false],
+    ['without a window', undefined, false],
+    ['in a browser', pageWindow(''), false],
     [
       'on the accessor URL before the bridge is ready',
       pageWindow('?accessor=desktop'),
       true,
-      false,
     ],
-    ['with a bridge but no accessor URL', pageWindow('', {}), false, false],
-    [
-      'on the accessor URL with the bridge',
-      pageWindow('?accessor=desktop', {}),
-      true,
-      true,
-    ],
-  ])('detects the Desktop %s', (_label, page, accessor, desktop) => {
+    ['with a bridge but no accessor URL', pageWindow('', {}), false],
+  ])('detects the Desktop %s', (_label, page, accessor) => {
     globalThis.window = page;
 
     expect(isDesktopAccessor()).toBe(accessor);
-    expect(isDesktop()).toBe(desktop);
   });
 });
 
@@ -367,16 +356,6 @@ describe('Desktop bridge calls', () => {
     );
   });
 
-  it('reads the status snapshot and rejects an invalid one', async () => {
-    desktopWindow({ getVoiceStatus: () => rawStatus() });
-    await expect(getVoiceStatus()).resolves.toEqual(rawStatus());
-
-    desktopWindow({ getVoiceStatus: () => ({ state: 'listening' }) });
-    await expect(getVoiceStatus()).rejects.toThrow(
-      'The Desktop returned an invalid Voice status',
-    );
-  });
-
   it('enables Voice and reports the reason of a refusal', async () => {
     const setEnabled = vi
       .fn()
@@ -452,7 +431,13 @@ describe('Desktop bridge calls', () => {
 });
 
 describe('Voice status validation', () => {
-  it('keeps a complete snapshot as reported', () => {
+  /** Read `raw` through the Desktop's status call. */
+  function readStatus(raw) {
+    desktopWindow({ getVoiceStatus: () => raw });
+    return getVoiceStatus();
+  }
+
+  it('keeps a complete snapshot as reported', async () => {
     const raw = rawStatus({
       microphone: { index: 2, name: 'Desk mic', host_api: 'WASAPI' },
       active_microphone: {
@@ -510,19 +495,26 @@ describe('Voice status validation', () => {
       },
     });
 
-    expect(normalizeVoiceStatus(raw)).toEqual(raw);
+    await expect(readStatus(raw)).resolves.toEqual(raw);
   });
 
-  it('rejects values that are not snapshots', () => {
-    expect(normalizeVoiceStatus(null)).toBeNull();
-    expect(normalizeVoiceStatus([])).toBeNull();
-    expect(normalizeVoiceStatus(rawStatus({ sequence: undefined }))).toBeNull();
-    expect(normalizeVoiceStatus(rawStatus({ sequence: -1 }))).toBeNull();
-    expect(normalizeVoiceStatus(rawStatus({ sequence: 1.5 }))).toBeNull();
+  it('rejects values that are not snapshots', async () => {
+    for (const raw of [
+      null,
+      [],
+      { state: 'listening' },
+      rawStatus({ sequence: undefined }),
+      rawStatus({ sequence: -1 }),
+      rawStatus({ sequence: 1.5 }),
+    ]) {
+      await expect(readStatus(raw)).rejects.toThrow(
+        'The Desktop returned an invalid Voice status',
+      );
+    }
   });
 
-  it('falls back to safe defaults for unknown or missing fields', () => {
-    const status = normalizeVoiceStatus({
+  it('falls back to safe defaults for unknown or missing fields', async () => {
+    const status = await readStatus({
       sequence: 0,
       enabled: 'yes',
       state: 'paused',
@@ -591,7 +583,7 @@ describe('Voice status validation', () => {
     });
   });
 
-  it('keeps every echo cancellation state the Desktop reports', () => {
+  it('keeps every echo cancellation state the Desktop reports', async () => {
     for (const state of [
       'off',
       'starting',
@@ -600,37 +592,9 @@ describe('Voice status validation', () => {
       'unavailable',
     ]) {
       const raw = rawStatus({ echo_cancellation: { enabled: true, state } });
-      expect(normalizeVoiceStatus(raw).echo_cancellation.state).toBe(state);
+      const status = await readStatus(raw);
+      expect(status.echo_cancellation.state).toBe(state);
     }
-  });
-
-  it('accepts only events with a sequence and a well-formed kind', () => {
-    expect(
-      normalizeVoiceEvent({
-        sequence: 5,
-        kind: 'command_failed',
-        model_id: 'builtin/okay_nabu',
-        command_id: 'c-1',
-        error_code: 'target_unavailable',
-      }),
-    ).toEqual({
-      sequence: 5,
-      kind: 'command_failed',
-      model_id: 'builtin/okay_nabu',
-      command_id: 'c-1',
-      agent_id: null,
-      session_id: null,
-      error_code: 'target_unavailable',
-    });
-    // A kind a newer Desktop adds still passes.
-    expect(normalizeVoiceEvent({ sequence: 6, kind: 'future_kind' })).not.toBe(
-      null,
-    );
-    expect(normalizeVoiceEvent({ kind: 'sent' })).toBeNull();
-    expect(normalizeVoiceEvent({ sequence: 1, kind: 'Sent!' })).toBeNull();
-    expect(normalizeVoiceEvent({ sequence: 1, kind: '' })).toBeNull();
-    expect(normalizeVoiceEvent({ sequence: 1, kind: 4 })).toBeNull();
-    expect(normalizeVoiceEvent('sent')).toBeNull();
   });
 });
 
@@ -676,14 +640,59 @@ describe('pushed Voice status and events', () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
+  it('accepts only events with a sequence and a well-formed kind', () => {
+    const handler = vi.fn();
+    const { cleanup, dispatch } = listen(handler);
+
+    for (const event of [
+      {
+        sequence: 5,
+        kind: 'command_failed',
+        model_id: 'builtin/okay_nabu',
+        command_id: 'c-1',
+        error_code: 'target_unavailable',
+      },
+      // A kind a newer Desktop adds still passes.
+      { sequence: 6, kind: 'future_kind' },
+      { kind: 'sent' },
+      { sequence: 1, kind: 'Sent!' },
+      { sequence: 1, kind: '' },
+      { sequence: 1, kind: 4 },
+      { sequence: 2, kind: 'DROP TABLE' },
+      'sent',
+    ]) {
+      dispatch({ type: 'event', event });
+    }
+
+    expect(handler.mock.calls.map(([push]) => push.event)).toEqual([
+      {
+        sequence: 5,
+        kind: 'command_failed',
+        model_id: 'builtin/okay_nabu',
+        command_id: 'c-1',
+        agent_id: null,
+        session_id: null,
+        error_code: 'target_unavailable',
+      },
+      {
+        sequence: 6,
+        kind: 'future_kind',
+        model_id: null,
+        command_id: null,
+        agent_id: null,
+        session_id: null,
+        error_code: null,
+      },
+    ]);
+    cleanup();
+  });
+
   it('drops malformed pushes', () => {
     const handler = vi.fn();
     const { cleanup, dispatch } = listen(handler);
 
     dispatch(null);
     dispatch({ type: 'status', status: { state: 'listening' } });
-    dispatch({ type: 'event', event: { kind: 'sent' } });
-    dispatch({ type: 'event', event: { sequence: 2, kind: 'DROP TABLE' } });
     dispatch({ type: 'snapshot', status: rawStatus() });
 
     expect(handler).not.toHaveBeenCalled();

@@ -13,7 +13,7 @@ const LIVE_REQUEST_ACTIONS = new Set(['start', 'toggle']);
 const LIVE_REQUEST_SOURCES = new Set(['wakeword', 'hotkey']);
 const VOICE_PUSH_EVENT = 'vbot-desktop-voice';
 // The Voice UI works only against this Desktop Voice bridge version.
-export const DESKTOP_VOICE_API_VERSION = 2;
+const DESKTOP_VOICE_API_VERSION = 2;
 // A Live voice start never waits longer than this for the Desktop capabilities
 // that decide whether the page may open the microphone.
 const MICROPHONE_ACCESS_TIMEOUT_MS = 3000;
@@ -60,11 +60,6 @@ export function isDesktopAccessor() {
   }
   const params = new URLSearchParams(window.location.search);
   return params.get('accessor') === 'desktop';
-}
-
-/** True when the WebUI is loaded inside the vBot Desktop pywebview shell. */
-export function isDesktop() {
-  return isDesktopAccessor() && bridgeAvailable();
 }
 
 /** Return whether the pywebview bridge is reachable. */
@@ -360,7 +355,7 @@ function normalizeLimits(raw) {
  * Limits the Desktop did not report stay null; the UI then offers no control
  * that depends on them.
  */
-export function normalizeVoiceStatus(raw) {
+function normalizeVoiceStatus(raw) {
   if (!isPlainObject(raw)) return null;
   const sequence = sequenceNumber(raw.sequence);
   if (sequence === null) return null;
@@ -397,7 +392,7 @@ export function normalizeVoiceStatus(raw) {
 }
 
 /** Validate one pushed Voice event; null when it is not an event. */
-export function normalizeVoiceEvent(raw) {
+function normalizeVoiceEvent(raw) {
   if (!isPlainObject(raw)) return null;
   const sequence = sequenceNumber(raw.sequence);
   if (sequence === null || typeof raw.kind !== 'string') return null;
