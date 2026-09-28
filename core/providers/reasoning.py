@@ -444,20 +444,13 @@ def effort_to_budget(
         if isinstance(budget_max, int) and not isinstance(budget_max, bool) and budget_max > 0
         else None
     )
+    # Every fraction is at most 1, so raising a budget to the floor never
+    # exceeds a ceiling at or above the floor.
     if ceiling is not None:
-        fraction = _EFFORT_BUDGET_FRACTIONS.get(normalized)
-        if fraction is None:
-            return None
-        budget = round(ceiling * fraction)
+        budget = round(ceiling * _EFFORT_BUDGET_FRACTIONS[normalized])
     else:
-        absolute = _EFFORT_BUDGET_ABSOLUTE.get(normalized)
-        if absolute is None:
-            return None
-        budget = absolute
-
+        budget = _EFFORT_BUDGET_ABSOLUTE[normalized]
     budget = max(budget, BUDGET_FLOOR_TOKENS)
-    if ceiling is not None and ceiling >= BUDGET_FLOOR_TOKENS:
-        budget = min(budget, ceiling)
 
     if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0:
         if max_tokens <= BUDGET_FLOOR_TOKENS:

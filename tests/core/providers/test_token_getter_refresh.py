@@ -331,10 +331,10 @@ async def test_injected_client_serves_refresh_and_stays_open(store: TokenStore) 
     )
 
     async with httpx.AsyncClient(verify=shared_ssl_context()) as client:
-        async with OAuthTokenGetter(
+        getter = OAuthTokenGetter(
             store, "github-copilot", "oauth", github_oauth_config(token_exchange=True), client
-        ) as getter:
-            assert await getter() == "fresh"
+        )
+        assert await getter() == "fresh"
         assert not client.is_closed
 
     assert route.call_count == 1

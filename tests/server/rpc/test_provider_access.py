@@ -25,12 +25,6 @@ class _RecordingTokenGetter:
         self.account_id = account_id
         _RecordingTokenGetter.instances.append(self)
 
-    async def __aenter__(self) -> _RecordingTokenGetter:
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        return None
-
     async def __call__(self) -> str:
         return f"token-for-{self.account_id}"
 

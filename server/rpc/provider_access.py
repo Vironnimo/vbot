@@ -72,11 +72,10 @@ async def _runtime_provider_credential(
     getter = OAuthTokenGetter(
         token_store, provider_id, connection.id, connection.oauth, account_id=account_id
     )
-    async with getter:
-        # Resolve expiring tokens before callers read token-derived endpoint metadata,
-        # but keep recovery and per-attempt credential access alive through discovery.
-        await getter()
-        yield getter
+    # Resolve expiring tokens before callers read token-derived endpoint metadata,
+    # but keep recovery and per-attempt credential access alive through discovery.
+    await getter()
+    yield getter
 
 
 def _connection_models_endpoint(connection: Any, provider: Any) -> str | None:

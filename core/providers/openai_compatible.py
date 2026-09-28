@@ -956,11 +956,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         try:
             async for event in iter_sse_events(response):
-                if event.comment is not None:
-                    yield {"type": "heartbeat"}
-                    continue
                 data = event.data
                 if data is None:
+                    # Every event without data is a transport comment.
+                    yield {"type": "heartbeat"}
                     continue
                 if data.strip() == SSE_DONE_MARKER:
                     seen_done_marker = True

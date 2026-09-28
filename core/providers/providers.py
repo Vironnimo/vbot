@@ -577,14 +577,11 @@ class ProviderRegistry:
     ) -> None:
         """Reload bundled and Custom Provider configs in place."""
 
-        resolved = resources_dir.resolve()
         self._configs = self._assemble_configs(
             resources_dir,
             custom_providers or {},
             tolerate_invalid=tolerate_invalid,
         )
-        if custom_providers is None and not tolerate_invalid:
-            _registry_cache[resolved] = self
 
     @classmethod
     def _assemble_configs(

@@ -81,12 +81,11 @@ async def test_unrecognized_403_is_not_a_token_rejection(
 ) -> None:
     """Only xAI's exact bad-credentials 403 renews; others do not even load the token."""
 
-    async with OAuthTokenGetter(TokenStore(tmp_path), "provider", "oauth", config) as getter:
-        # No token exists, so reading one would raise instead of returning None.
-        assert (
-            await getter.refresh_after_rejection("token", status_code=403, response_body=body)
-            is None
-        )
+    getter = OAuthTokenGetter(TokenStore(tmp_path), "provider", "oauth", config)
+    # No token exists, so reading one would raise instead of returning None.
+    assert (
+        await getter.refresh_after_rejection("token", status_code=403, response_body=body) is None
+    )
 
 
 @respx.mock
@@ -146,20 +145,18 @@ async def test_concurrent_rejected_requests_share_one_account_refresh(
     inference = respx.post("https://inference.example/request").mock(side_effect=serve)
 
     async def invoke(client: httpx.AsyncClient) -> Any:
-        async with OAuthTokenGetter(
-            store, "provider", "oauth", config, account_id="work"
-        ) as getter:
-            recovery = OAuthRequestRecovery(getter, BEARER)
+        getter = OAuthTokenGetter(store, "provider", "oauth", config, account_id="work")
+        recovery = OAuthRequestRecovery(getter, BEARER)
 
-            async def request() -> Any:
-                headers = {"Authorization": f"Bearer {await getter()}"}
-                response = await client.post("https://inference.example/request", headers=headers)
-                recovery.record_response(response.status_code, headers, response.text)
-                if response.status_code >= 400:
-                    raise ProviderAuthError("rejected")
-                return response.json()
+        async def request() -> Any:
+            headers = {"Authorization": f"Bearer {await getter()}"}
+            response = await client.post("https://inference.example/request", headers=headers)
+            recovery.record_response(response.status_code, headers, response.text)
+            if response.status_code >= 400:
+                raise ProviderAuthError("rejected")
+            return response.json()
 
-            return await recovery.run(request)
+        return await recovery.run(request)
 
     async with httpx.AsyncClient(verify=shared_ssl_context()) as client:
         results = await asyncio.gather(*(invoke(client) for _ in range(4)))
