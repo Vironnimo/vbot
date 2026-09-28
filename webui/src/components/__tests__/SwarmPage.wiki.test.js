@@ -307,19 +307,26 @@ describe('Swarm Wiki drafts and refresh', () => {
       ).length;
     const count = reads();
     const wikiCalls = callsTo(fixture.operation, 'wiki').length;
-    // Changes of another Swarm or of profiles leave the Wiki alone.
-    fixture.bridge.invalidate({
-      resource: 'swarms',
-      ids: ['swr-b'],
-      revision: 2,
-    });
-    fixture.bridge.invalidate({
-      resource: 'profiles',
-      ids: ['prf-a'],
-      revision: 2,
-    });
+    // Only changes of this Swarm's Wiki reload it.
+    for (const [resource, id] of [
+      ['wiki', 'swr-b'],
+      ['profiles', 'prf-a'],
+      ['posts', 'swr-a'],
+      ['participants', 'swr-a'],
+    ])
+      fixture.bridge.invalidate({ resource, ids: [id], revision: 2 });
     await settle(160);
     expect(callsTo(fixture.operation, 'wiki')).toHaveLength(wikiCalls);
+    fixture.bridge.invalidate({
+      resource: 'wiki',
+      ids: ['swr-a'],
+      revision: 2,
+    });
+    await vi.waitFor(() =>
+      expect(callsTo(fixture.operation, 'wiki').length).toBeGreaterThan(
+        wikiCalls,
+      ),
+    );
     fixture.bridge.invalidate();
     await settle(160);
     expect(reads()).toBe(count);

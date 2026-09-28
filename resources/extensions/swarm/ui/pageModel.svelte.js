@@ -10,7 +10,11 @@ import {
 import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
 import { onMount, tick } from 'svelte';
 import { createExtensionPageClient } from '$lib/extensionPageClient.js';
-import { createPageRefresh, swarmChanged } from './pageRefresh.js';
+import {
+  createPageRefresh,
+  everythingChanged,
+  swarmChanged,
+} from './pageRefresh.js';
 import { referenceLinks } from './referenceLinks.js';
 
 // Background changes reload the Usage report at most this often; the last
@@ -104,7 +108,16 @@ export function createSwarmPageModel(host) {
 
   let swarmsRequest = 0;
 
-  let boardRequest = 0;
+  // `board` holds the newest posts of `boardShown` (a Swarm and discussion)
+  // with any earlier pages below them. Each full load of the newest page
+  // counts up `boardVersion`; an earlier page or newer posts read for an older
+  // version are dropped, since the newer full load includes them.
+  let boardShown = null;
+
+  let boardVersion = 0;
+
+  // The full load in flight, which a read of newer posts waits for.
+  let boardLoading = null;
 
   let discussionsRequest = 0;
 
@@ -335,16 +348,11 @@ export function createSwarmPageModel(host) {
   }
 
   // Reloads what a coalesced burst of invalidations can affect: profiles for
-  // `profiles`, the Run list for any Swarm, and the selected Swarm with its
-  // visible tab when it is among them. Everything else refreshes the page.
+  // `profiles`, the Run list for `swarms`, and the selected Swarm with the
+  // changed parts of its visible tab when any change names it. Anything else
+  // refreshes the page.
   async function refreshChanges(changes) {
-    if (
-      changes === null ||
-      [...changes.keys()].some(
-        (resource) => resource !== 'swarms' && resource !== 'profiles',
-      )
-    )
-      return refresh({ background: true });
+    if (everythingChanged(changes)) return refresh({ background: true });
     const request = ++changesRequest;
     const selected =
       selectedSwarm &&
@@ -352,14 +360,19 @@ export function createSwarmPageModel(host) {
       swarmChanged(changes, selectedSwarm.id)
         ? selectedSwarm
         : null;
-    if (selected) forgetPageReferences();
+    if (selected && swarmChanged(changes, selected.id, 'wiki'))
+      forgetPageReferences();
     error = '';
     try {
       await Promise.all([
         changes.has('profiles') ? loadProfiles() : null,
         changes.has('swarms') ? loadSwarms() : null,
         selected
-          ? selectSwarm(selected.id, { silent: true, background: true })
+          ? selectSwarm(selected.id, {
+              silent: true,
+              background: true,
+              changes,
+            })
           : null,
       ]);
     } catch (cause) {
@@ -400,7 +413,11 @@ export function createSwarmPageModel(host) {
     swarmsCursor = result.cursor ?? null;
   }
 
-  async function selectSwarm(id, { silent = false, background = false } = {}) {
+  // `changes` limits a background reload of the visible tab to what changed.
+  async function selectSwarm(
+    id,
+    { silent = false, background = false, changes = null } = {},
+  ) {
     const request = ++selectionRequest;
     if (!silent) {
       error = '';
@@ -414,8 +431,7 @@ export function createSwarmPageModel(host) {
         references.clear();
         selectedDiscussion = swarm.main_discussion_id;
         discussions = [];
-        board = [];
-        boardCursor = null;
+        clearBoard();
         usage = null;
         participantUsage = [];
       }
@@ -433,24 +449,31 @@ export function createSwarmPageModel(host) {
       if (!disposed && request === selectionRequest && !silent)
         await client.replaceRoute(`/swarms/${id}`);
       if (disposed || request !== selectionRequest) return;
-      await loadVisibleTab(swarm, { background });
+      await loadVisibleTab(swarm, { background, changes });
     } catch (cause) {
       if (!disposed && request === selectionRequest) error = cause.message;
     }
   }
 
+  // Loads the visible tab, or with `changes` only its parts that changed:
+  // the discussions, and the posts newer than those the Board shows.
   async function loadVisibleTab(
     swarm = selectedSwarm,
-    { background = false } = {},
+    { background = false, changes = null } = {},
   ) {
     if (!swarm) return;
     if (background) usageChanges += 1;
-    if (activeTab === 'board')
+    if (activeTab === 'board') {
+      const changed = (resource) => swarmChanged(changes, swarm.id, resource);
       await Promise.all([
-        loadDiscussions(swarm),
-        loadBoard(swarm, selectedDiscussion),
+        changed('discussions') ? loadDiscussions(swarm) : null,
+        !changed('posts')
+          ? null
+          : changes
+            ? loadNewPosts(swarm)
+            : loadBoard(swarm, selectedDiscussion),
       ]);
-    else if (activeTab === 'usage')
+    } else if (activeTab === 'usage')
       await (background ? scheduleUsage(swarm) : loadUsage(swarm));
   }
 
@@ -503,37 +526,87 @@ export function createSwarmPageModel(host) {
     discussionCursor = result.cursor ?? null;
   }
 
+  function clearBoard() {
+    boardVersion += 1;
+    boardShown = null;
+    board = [];
+    boardCursor = null;
+  }
+
+  const shows = (swarm, discussionId) =>
+    boardShown?.swarmId === swarm.id &&
+    boardShown.discussionId === discussionId;
+
+  const boardCurrent = (version, swarm, discussionId) =>
+    !disposed &&
+    version === boardVersion &&
+    selectedSwarm?.id === swarm.id &&
+    selectedDiscussion === discussionId;
+
+  // Loads the discussion's newest page, or with `cursor` the earlier page
+  // below the posts the Board shows.
   async function loadBoard(
     swarm = selectedSwarm,
     discussionId = selectedDiscussion,
     cursor = null,
   ) {
     if (!swarm) return;
-    const selection = selectionRequest;
-    const request = ++boardRequest;
-    const result = await call('board.read', {
+    const version = cursor ? boardVersion : ++boardVersion;
+    const load = call('board.read', {
       swarm_id: swarm.id,
       discussion_id: discussionId,
       limit: 100,
       ...(cursor ? { cursor } : {}),
     });
-    if (
-      disposed ||
-      selection !== selectionRequest ||
-      request !== boardRequest ||
-      selectedSwarm?.id !== swarm.id ||
-      selectedDiscussion !== discussionId
-    )
-      return;
+    if (!cursor) boardLoading = load;
+    let result;
+    try {
+      result = await load;
+    } finally {
+      if (boardLoading === load) boardLoading = null;
+    }
+    if (!boardCurrent(version, swarm, discussionId)) return;
     const posts = [...page(result)].reverse();
-    board = cursor ? [...board, ...posts] : posts;
-    boardCursor = result.next_cursor ?? result.cursor ?? null;
+    if (cursor) {
+      if (!shows(swarm, discussionId)) return;
+      const oldest = board.at(-1)?.sequence ?? Infinity;
+      board = [...board, ...posts.filter((post) => post.sequence < oldest)];
+    } else {
+      board = posts;
+      boardShown = { swarmId: swarm.id, discussionId };
+    }
+    boardCursor = result.cursor ?? null;
+  }
+
+  // Puts the selected discussion's posts newer than the Board's newest on top.
+  // A Board that does not show the discussion yet loads its newest page.
+  async function loadNewPosts(swarm) {
+    const discussionId = selectedDiscussion;
+    // A full load in flight may have read before the newest posts.
+    await boardLoading?.catch(() => {});
+    if (!shows(swarm, discussionId)) return loadBoard(swarm, discussionId);
+    const version = boardVersion;
+    for (;;) {
+      const result = await call('board.read', {
+        swarm_id: swarm.id,
+        discussion_id: discussionId,
+        after: board[0]?.sequence ?? 0,
+        limit: 100,
+      });
+      if (!boardCurrent(version, swarm, discussionId)) return;
+      const posts = page(result);
+      const newest = board[0]?.sequence ?? 0;
+      board = [
+        ...posts.filter((post) => post.sequence > newest).reverse(),
+        ...board,
+      ];
+      if (!result.has_more || !posts.length) return;
+    }
   }
 
   async function chooseDiscussion(id) {
     selectedDiscussion = id;
-    board = [];
-    boardCursor = null;
+    clearBoard();
     await loadBoard(selectedSwarm, id);
   }
 

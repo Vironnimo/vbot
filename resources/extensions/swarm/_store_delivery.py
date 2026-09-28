@@ -390,6 +390,7 @@ def _mark_wake_admitted(
                 "boundary": boundary,
                 "admitted": True,
                 "replayed": True,
+                "swarm_state_changed": False,
             }
         if not participant["wake_pending"] or participant["idle_boundary"] != boundary:
             raise SwarmStoreError("wake_unavailable")
@@ -398,12 +399,12 @@ def _mark_wake_admitted(
             "UPDATE participants SET wake_pending=0,wake_announced_seq=wake_pending_seq,state=?,lifecycle_run_id=?,idle_boundary=? WHERE id=?",
             (state, run_id, boundary, participant_id),
         )
-        _refresh_swarm_state(db, connection, swarm_id)
         return {
             "participant_id": participant_id,
             "run_id": run_id,
             "boundary": boundary,
             "admitted": True,
+            "swarm_state_changed": _refresh_swarm_state(db, connection, swarm_id),
         }
 
     return db._write(operation)

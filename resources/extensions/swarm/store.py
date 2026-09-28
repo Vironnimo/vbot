@@ -493,12 +493,20 @@ class SwarmStore:
         message_id: str | None = None,
         cursor: str | None = None,
         limit: int = 20,
+        after: int | None = None,
     ) -> Page:
-        """Read public Board history without participant membership or receipts."""
+        """Read public Board history without participant membership or receipts.
+
+        With ``after`` (a post number), read only the discussion's posts numbered
+        above it, oldest first; ``has_more`` means the read repeats after the last
+        returned post.
+        """
         if message_id is not None and (
-            discussion_id is not None or cursor is not None or limit != 20
+            discussion_id is not None or cursor is not None or limit != 20 or after is not None
         ):
             raise SwarmStoreError("invalid_arguments", field="message_id")
+        if after is not None and (type(after) is not int or after < 0 or cursor is not None):
+            raise SwarmStoreError("invalid_arguments", field="after")
         return await self._run(
             _read_human_posts,
             swarm_id,
@@ -506,6 +514,7 @@ class SwarmStore:
             message_id,
             cursor,
             _limit(limit),
+            after,
         )
 
     async def post(

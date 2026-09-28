@@ -185,7 +185,7 @@ while the differing line lay beyond both excerpts (Sessions, 2026-09). With an o
 only a targeted edit without a title change may proceed. Title changes, delete,
 restore and future revisions otherwise keep strict revision checks. Delete retains
 history, and restore creates a new live revision from the chosen historical content.
-Wiki edits invalidate the human page but create no Board messages or participant
+Wiki edits publish a `wiki` change to the human page but create no Board messages or participant
 wakes. Agents share page links on the Board when they want attention.
 Evidence: `_store_wiki.py`, `_wiki_edit.py`, `test_swarm_wiki.py`,
 `test_swarm_wiki_evidence.py`, `swarm_wiki_cases.py`.
@@ -245,6 +245,13 @@ posts, chronological within each page. The Tool continues to older posts with
 `before` (the oldest shown post number); Store read cursors remain accepted.
 The Board UI reverses each page for newest-first display and appends older pages
 below it; this presentation does not change the Store or Tool read order.
+The management `board.read` (human projection, not the Tool) also takes `after`,
+a post number: it returns the discussion's posts numbered above it, oldest first
+and bounded like a page (`limit`, `batch_chars`); `has_more` means repeat after
+the last returned post, and such a page carries no cursor. `after` excludes
+`message_id` and `cursor` (`read_human_posts`, `test_swarm_store_board.py`,
+`test_swarm_operations.py`). The page uses it to put new posts on top instead of
+re-reading the newest page (see the page refresh paragraph below).
 Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
 typography, including fenced-code Copy actions. Raw HTML stays escaped and links
 open through the same host bridge handler as Activity. Discussion announcements
@@ -301,7 +308,7 @@ payload-bound request ids.
 Preparing a batch is not delivery. Only a matching canonical Session receipt
 acknowledges its contents. Tool batches are acknowledged after their complete
 carrier is saved. Successful automatic and Tool delivery acknowledgments publish
-a page invalidation, so pending counts refresh during an active Run without
+a `participants` change, so pending counts refresh during an active Run without
 waiting for another Board mutation or Run completion. Failed acknowledgments
 retain pending state; empty Tool batches do not invalidate the page. Evidence:
 `test_swarm_inbox_delivery.py`, `test_swarm_wakes.py`, `SwarmPage.activity.test.js`.
@@ -388,7 +395,7 @@ Participant status is an execution projection: `idle`, `running`, `failed`,
 `cancelled` or `interrupted`. A successful Run returns to idle and leaves the
 same Session reachable. All-idle Swarms remain open without polling Models;
 eligible new Board messages trigger Runs through the existing wake/receipt path.
-Successful wake admission publishes a page invalidation so an open participant
+Successful wake admission publishes a `participants` change so an open participant
 Session can attach to the new Run before it finishes (`test_swarm_wakes.py`).
 Messages are retained for every addressed participant, including failed or
 cancelled peers. Automatic wakes apply to idle peers; explicit Resume recovers
@@ -425,7 +432,16 @@ Run callbacks recompute the open Swarm's aggregate state: any running peer keeps
 it running, unsuccessful inactive peers require attention, and all-idle peers
 yield idle. Repeated start/wake acknowledgments cannot overwrite the same Run's
 terminal outcome. The page's active Run indicator uses exact canonical Run
-inspection, not the presence of a retained Run id.
+inspection, not the presence of a retained Run id. The recomputation
+(`_refresh_swarm_state`) reports whether the state changed, and wake admission,
+`record_run_started` and `reconcile_run_finished` return it as
+`swarm_state_changed`. Their callbacks (`_drain_wakes`, `_before_request`,
+`_run_finished`) publish `participants` and, only when the state changed, also
+`swarms`, so the Swarm list reloads for its own changes only. `_before_request`
+publishes when `record_run_started` recorded a Run the Store did not know yet
+(`recorded`): a Run started outside Start, Resume and wake admission, or a wake
+Run whose first request beats its admission record
+(`test_run_callbacks_publish_the_swarm_list_only_when_the_swarm_state_changes`).
 
 The Store's integer lifecycle epoch and the temporary facade's opaque admission
 epoch are different identities and are linked explicitly. Stop closes execution
@@ -534,8 +550,12 @@ Terminal Run events reload canonical history so non-streamed final output appear
 without reopening Activity. Refresh and reconnect also reload the open History
 and reattach an active Run when its id is unchanged. Activity loads older canonical
 History pages through `next_before`, retaining the loaded page depth on refresh.
-Board, discussion, audit and Usage replies commit only for the current selection
-and request; delayed reads cannot overwrite newer navigation.
+Discussion, audit and Usage replies commit only for the current selection
+and request; delayed reads cannot overwrite newer navigation. Board replies commit
+only for the selected Swarm and discussion and while no newer full load of the
+newest page started (`boardVersion`); a read of newer posts waits for a full load
+in flight, and one dropped by a newer full load is covered by it, because that
+load started after the change.
 Evidence: `SwarmPage.activity.test.js`, `SwarmPage.board.test.js`,
 `SwarmPage.usage.test.js` and `test_swarm_store_board.py`.
 
@@ -625,12 +645,25 @@ Background invalidations are coalesced by the Swarm-internal `ui/pageRefresh.js`
 each mounted page/panel has one refresh in flight and at most one pending pass,
 with a fixed scheduling window that continuous traffic cannot postpone. A pass
 receives the union of the changes it covers (resource -> ids), or `null` once any
-invalidation in it named none. The Extension publishes `swarms` with the changed
-Swarm id and `profiles` with the changed profile id. The overview then reloads
-profiles only for `profiles`, the Run list for any `swarms` change, and the
-selected Swarm (`swarms.get`) with its visible tab only when its id is among them;
-`null` or another resource reloads everything (`SwarmPage.test.js`,
-`test_swarm_operations.py`). The overview reloads Board or Usage data only for the
+invalidation in it named none. Each published change names what changed:
+`profiles` carries a profile id; the other resources carry a Swarm id -
+`swarms` its Swarm list entry (Start, title, settings, Stop, Resume, delete, a
+failed wake, and a changed aggregate state), `participants` their Runs, states and
+pending counts (delivery acknowledgments, wake admission, Run start and finish),
+`posts` new Board posts (Board Tool post and create, `board.post`), `discussions`
+discussions and members (Board Tool create, join, leave) and `wiki` Wiki pages
+(`_changed` and `_BOARD_CHANGES` in `extension.py`). The overview reloads profiles
+only for `profiles`, the Run list only for `swarms`, and the selected Swarm
+(`swarms.get`) for any change naming it, plus the changed parts of its visible
+tab: on the Board `board.list` for `discussions` and, for `posts`, a `board.read`
+after the newest shown post, repeated while `has_more` (a Board not yet showing
+the discussion loads its newest page instead). `null` or an unknown resource
+reloads everything, so reconnects, reloads and owner-less invalidations still
+refresh fully (`SwarmPage.test.js`, `SwarmPage.board.test.js`,
+`test_swarm_operations.py`, `test_swarm_board_tool.py`). Under the 3-participant
+`perf_load.py --scenario swarm --ui` load this cut the page's Swarm reads from 364
+to 148 in about two minutes; `swarms.get` stays at about one per pass, bounded
+only by the refresh window (2026-09-28). The overview reloads Board or Usage data only for the
 visible tab; selecting a tab loads its current data independently of hidden reports. Activity retains
 the existing History and live subscription while its participant's Run identity
 and active state are unchanged. A new Run or terminal state reconciles History through the generation/sequence append cursor, preserving older loaded pages;
@@ -640,7 +673,7 @@ and `SwarmPage.wiki.test.js`.
 
 WikiPanel.svelte shows each page's number in the list and page header and opens
 `#wiki/w3` links by number. List rows show only number and title (no excerpt);
-their tooltip names the latest revision and its author. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations, and changes naming only other Swarms or profiles skip the Wiki refresh. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
+their tooltip names the latest revision and its author. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations, and only `wiki` changes of its Swarm (or a full refresh) reload the Wiki. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
 
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are
@@ -679,8 +712,9 @@ Pending Board reads, automatic delivery, and participant counts use the partial
 Swarm's serialized database operations. The index is created with the current
 schema on open, without changing retained records. Ordered pending reads explicitly
 select this index so SQLite does not scan delivered posts to satisfy sequence order.
-Discussion Post pages likewise select `posts_discussion_page`, so a page of one
-Discussion does not walk the whole Swarm's Posts by sequence. Every index in
+Discussion Post pages and the page's reads after a post number likewise select
+`posts_discussion_page`, so a page of one Discussion does not walk the whole
+Swarm's Posts by sequence. Every index in
 `SCHEMA_SQL` names its reader in the comment above it.
 The regression fixture checks
 bounded SQLite work with 12 peers and 22,000 delivered recipient rows

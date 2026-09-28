@@ -173,6 +173,14 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
             "message_id": {"type": "string", "minLength": 1},
             "cursor": {"type": "string"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "after": {
+                "type": "integer",
+                "minimum": 0,
+                "description": (
+                    "Post number; read only the discussion's posts numbered above it, oldest "
+                    "first. When has_more is true, repeat with the last returned post's number."
+                ),
+            },
         },
         "required": ["swarm_id"],
         "additionalProperties": False,

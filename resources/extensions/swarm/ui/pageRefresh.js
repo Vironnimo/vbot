@@ -70,12 +70,38 @@ export function createPageRefresh(refresh) {
   };
 }
 
-// Whether a pass's changes can affect a view of the Swarm `swarmId`. The
-// Swarm Extension changes `swarms` (Swarm ids) and `profiles`; anything else
-// is treated as affecting every view.
-export function swarmChanged(changes, swarmId) {
+// The Swarm Extension names what changed: `profiles` carries profile ids; the
+// other resources carry Swarm ids and name a part of that Swarm's view:
+// `swarms` its entry in the Swarm list, `participants` their Runs and pending
+// messages, `posts` new Board posts, `discussions` the discussions and their
+// members, `wiki` its Wiki pages.
+const SWARM_RESOURCES = new Set([
+  'swarms',
+  'participants',
+  'posts',
+  'discussions',
+  'wiki',
+]);
+
+// Whether a pass must reload everything: it names no change, or a resource
+// this page does not know.
+export function everythingChanged(changes) {
   if (changes == null) return true;
   for (const resource of changes.keys())
-    if (resource !== 'swarms' && resource !== 'profiles') return true;
-  return changes.get('swarms')?.has(swarmId) === true;
+    if (resource !== 'profiles' && !SWARM_RESOURCES.has(resource)) return true;
+  return false;
+}
+
+// Whether a pass's changes can affect the view of the Swarm `swarmId`, or,
+// with `resource`, that part of it.
+export function swarmChanged(changes, swarmId, resource = null) {
+  if (everythingChanged(changes)) return true;
+  for (const [name, ids] of changes)
+    if (
+      SWARM_RESOURCES.has(name) &&
+      (resource === null || name === resource) &&
+      ids.has(swarmId)
+    )
+      return true;
+  return false;
 }

@@ -32,6 +32,10 @@ async def test_delivery_invalidates_pending_only_after_canonical_receipt(board, 
     sid = board.swarm["id"]
     sender, recipient = [binding.participant_id for binding in board.bindings[:2]]
     await board.store.post(sid, sender, text="receipt-sentinel", request_id="post")
+    # The recipient's Run was admitted before its first request.
+    await board.store.record_run_started(
+        sid, recipient, run_id=board.contexts[1].run_id, expected_epoch=0
+    )
     changes = []
     board.service.host = replace(
         board.service.host, publish_change=lambda *args: changes.append(args)
@@ -89,7 +93,7 @@ async def test_delivery_invalidates_pending_only_after_canonical_receipt(board, 
     assert (await board.store.participant_status(sid, recipient))["pending_count"] == 1
     await reconcile()
     assert (await board.store.participant_status(sid, recipient))["pending_count"] == 0
-    assert [change[0:2] for change in changes] == [("swarms", [sid])]
+    assert [change[0:2] for change in changes] == [("participants", [sid])]
     changes.clear()
     await board.runtime.reconcile_tool_batch(
         request,

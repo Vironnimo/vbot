@@ -15,6 +15,7 @@ from tests.resources.extensions.swarm.swarm_test_support import (
     PausedSwarmAdapter,
     QuietTimers,
     Received,
+    delivery_request,
     participant_post,
     received,
     settled,
@@ -184,7 +185,8 @@ async def test_automatic_delivery_updates_pending_during_each_running_iteration(
             assert run.status.value == "running"
             assert run.iteration_count == index
             assert snapshot["participants"][0]["pending_count"] == expected
-            assert any(change[0:2] == ("swarms", [sid]) for change in changes)
+            # Pending messages show on the participants, not in the Swarm list.
+            assert {change[0] for change in changes} == {"participants"}
         adapter.release[-1].set()
         await run.wait()
     delivered = delivered_messages(adapter.requests[-1], "pending-sentinel-")
@@ -336,10 +338,38 @@ async def test_automatic_wake_publishes_running_state(lifecycle, tmp_path):
     await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
     assert snapshot["participants"][0]["state"] == "running"
+    # The woken participant runs, and so the Swarm in the Swarm list.
+    expected = {("participants", started["swarm_id"]), ("swarms", started["swarm_id"])}
     async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
-        while not changes:
+        while not expected <= {(resource, *ids) for resource, ids, _revision in changes}:
             await asyncio.sleep(0.01)
-    assert changes[-1][0:2] == ("swarms", [started["swarm_id"]])
+
+
+@pytest.mark.asyncio
+async def test_run_callbacks_publish_the_swarm_list_only_when_the_swarm_state_changes(board):
+    sid = board.swarm["id"]
+    await board.store.set_swarm_state(sid, "idle")
+    changes = []
+    board.service.host = replace(
+        board.service.host, publish_change=lambda *args: changes.append(args)
+    )
+
+    def published():
+        result = [(resource, *ids) for resource, ids, _revision in changes]
+        changes.clear()
+        return result
+
+    first, second = (delivery_request(board, peer, run_id=f"run-{peer}") for peer in (0, 1))
+    await board.runtime.before_request(first)
+    assert published() == [("participants", sid), ("swarms", sid)]
+    await board.runtime.before_request(second)
+    await board.runtime.before_request(second)
+    assert published() == [("participants", sid)]
+    await board.runtime.run_finished(first, outcome="success")
+    assert published() == [("participants", sid)]
+    await board.runtime.run_finished(second, outcome="error")
+    assert published() == [("participants", sid), ("swarms", sid)]
+    assert (await board.store.get_swarm(sid))["state"] == "needs_attention"
 
 
 @pytest.mark.asyncio

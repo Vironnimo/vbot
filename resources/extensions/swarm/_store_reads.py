@@ -218,6 +218,7 @@ def _read_human_posts(
     message_id: str | None,
     cursor: str | None,
     limit: int,
+    after: int | None = None,
 ) -> Page:
     with db._read() as connection:
         if connection.execute("SELECT 1 FROM swarms WHERE id=?", (swarm_id,)).fetchone() is None:
@@ -236,7 +237,31 @@ def _read_human_posts(
             else _main(connection, swarm_id)
         )
         _discussion(connection, swarm_id, discussion_id)
+        if after is not None:
+            return _human_posts_after(connection, swarm_id, discussion_id, after, limit)
         return _human_post_page(db, connection, swarm_id, discussion_id, cursor, limit)
+
+
+def _human_posts_after(
+    connection: sqlite3.Connection, swarm_id: str, discussion_id: str, after: int, limit: int
+) -> Page:
+    """The discussion's posts numbered above ``after``, oldest first, bounded like a page.
+
+    An open page appends what changed instead of reading its newest page again; with
+    ``has_more`` it repeats the read after the last returned post.
+    """
+    rows = connection.execute(
+        f"SELECT {POST_COLUMNS},{_HUMAN_REPLY_SEQUENCE} FROM posts INDEXED BY posts_discussion_page "
+        "WHERE swarm_id=? AND discussion_id=? AND sequence>? ORDER BY sequence LIMIT ?",
+        (swarm_id, discussion_id, after, limit + 1),
+    ).fetchall()
+    batch_chars = _load(
+        connection.execute(
+            "SELECT delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
+        ).fetchone()[0]
+    )["batch_chars"]
+    selected = _budgeted_rows(rows, limit, batch_chars)
+    return Page(tuple(_human_posts(connection, selected)), len(rows) > len(selected), None)
 
 
 def _post_page(
