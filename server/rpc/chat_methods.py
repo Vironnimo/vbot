@@ -846,22 +846,19 @@ def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _chat_queue_steer(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "session_id", "item_id", "run_id"}, "chat.queue_steer")
+    _reject_unsupported(params, {"agent_id", "session_id", "item_id"}, "chat.queue_steer")
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     item_id = _required_string(params, "item_id")
-    run_id = _required_string(params, "run_id")
     try:
         manager = _state_chat_runs(state)
         if not _queue_item_is_public(manager, agent_id, session_id, item_id, project_id):
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
-        item = manager.steer_queued(
-            agent_id, session_id, item_id, project_id=project_id, run_id=run_id
-        )
+        item = manager.steer_queued(agent_id, session_id, item_id, project_id=project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     _publish_queue_changed(state, agent_id, session_id)
-    return {"item": item.to_dict(), "run_id": run_id}
+    return {"item": item.to_dict()}
 
 
 def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
@@ -913,10 +910,10 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
         queued_item = _public_queue_item(chat_runs, agent_id, session_id, item_id, project_id)
         if queued_item is None:
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
-        if queued_item.steering_run_id is not None:
+        if queued_item.steering:
             raise RpcError(
                 RPC_ERROR_QUEUE_ITEM_STEERING,
-                "queued item is being steered into the running Run and can no longer be edited",
+                "queued item is selected for steering and can no longer be edited",
             )
         if not queued_item.editable:
             raise RpcError(

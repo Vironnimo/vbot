@@ -63,7 +63,6 @@ from core.runs import (
     USER_MESSAGE_EVENT,
     Run,
     RunInterruptedError,
-    RunKind,
     RunStatus,
 )
 from core.sessions import (
@@ -130,7 +129,6 @@ class RunExecution:
         run: Run,
         request: _RunRequest,
     ) -> ChatMessage:
-        run.accepts_steering = request.supports_steering and run.run_kind == RunKind.USER
         extension_registry = self._dependencies.get_extension_registry()
         binding = request.temporary_binding
         if extension_registry is not None and binding is not None:
@@ -508,7 +506,6 @@ class RunExecution:
                     _LOGGER.warning("Failed to persist error for run %s", run.id, exc_info=True)
             raise
         finally:
-            run.accepts_steering = False
             # Detach and compute final statistics once, off the Event Loop. Run
             # cancellation must not skip worker admission or lose the result:
             # reverted edits still need their explicit zero terminal totals.

@@ -338,7 +338,8 @@ export default Object.freeze({
   'chat.fileMention.missing': 'file was not found at send time',
   'queue.steer': 'Steer',
   'queue.steering': 'Steering…',
-  'queue.steerHint': 'Send to the active Run at its next iteration.',
+  'queue.steerHint':
+    'Send to the active Run at its next iteration. If the Run ends first, the message runs next.',
   'queue.steerError': 'Message could not be steered.',
   'queue.title': 'Queued messages',
   'queue.removeMessage': 'Remove queued message',

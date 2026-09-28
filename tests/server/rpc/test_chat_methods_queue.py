@@ -233,13 +233,12 @@ class _Steering:
 
 @pytest_asyncio.fixture
 async def steering() -> AsyncIterator[_Steering]:
-    """A real Run accepting steering and one queued item for the project Session."""
+    """A real active Run and one queued item for the project Session."""
     manager = ChatRunManager()
     release = asyncio.Event()
     address = SessionAddress(project_id="project", agent_id="builder", session_id="s1")
 
-    async def execute(run: Run) -> str:
-        run.accepts_steering = True
+    async def execute(_run: Run) -> str:
         await release.wait()
         return "done"
 
@@ -255,23 +254,15 @@ async def steering() -> AsyncIterator[_Steering]:
 
 
 @pytest.mark.asyncio
-async def test_queue_steer_binds_a_public_item_to_the_exact_run(steering: _Steering) -> None:
-    params = {
-        "agent_id": "builder@project",
-        "session_id": "s1",
-        "item_id": steering.item.item_id,
-        "run_id": steering.run.id,
-    }
+async def test_queue_steer_selects_a_public_item(steering: _Steering) -> None:
+    params = {"agent_id": "builder@project", "session_id": "s1", "item_id": steering.item.item_id}
 
     wrong_scope = await call(
         steering.state, "chat.queue_steer", **{**params, "agent_id": "builder"}
     )
-    stale_run = await call(steering.state, "chat.queue_steer", **{**params, "run_id": "stale"})
     response = await call(steering.state, "chat.queue_steer", **params)
 
     assert wrong_scope["ok"] is False
-    assert stale_run["ok"] is False
-    assert response["result"]["run_id"] == steering.run.id
     assert response["result"]["item"]["steering"] is True
     assert response["result"]["item"]["editable"] is False
     assert resource_changes(steering.state, "queue") == _queue_signal("s1")
@@ -282,9 +273,7 @@ async def test_queue_steer_binds_a_public_item_to_the_exact_run(steering: _Steer
 @pytest.mark.asyncio
 async def test_a_steered_item_can_neither_be_edited_nor_removed(steering: _Steering) -> None:
     address = {"agent_id": "builder@project", "session_id": "s1", "item_id": steering.item.item_id}
-    steering.manager.steer_queued(
-        "builder", "s1", steering.item.item_id, project_id="project", run_id=steering.run.id
-    )
+    steering.manager.steer_queued("builder", "s1", steering.item.item_id, project_id="project")
 
     update = await call(steering.state, "chat.queue_update", **address, content="x")
     removals: list[dict[str, Any]] = []

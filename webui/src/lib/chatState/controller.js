@@ -708,15 +708,13 @@ export function createChatController({
   }
 
   async function steerQueued(sessionState, itemId) {
-    const runId = sessionState?.currentRun?.runId;
-    if (!runId) return false;
+    if (!sessionState) return false;
     sessionState.actionError = '';
     try {
       await operations.steerQueueItem(
         sessionState.agentId,
         sessionState.sessionId,
         itemId,
-        runId,
       );
       await syncSessionQueue(sessionState);
       return true;
