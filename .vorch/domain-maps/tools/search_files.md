@@ -96,7 +96,9 @@ no backslash splits like a command line, with quotes grouping words
 (`"-F computeDamage( src"`); backslashes would be shell escapes there but regex
 escapes here, so such a string stays one item and the parser asks for one argument
 per item with the split list as example. Other scalar strings stay one pattern,
-and quotes are never stripped from a scalar search pattern.
+and quotes are never stripped from a scalar search pattern. A `path` or `glob`
+string that is valid JSON for a nonempty list of strings (`'["docs", "src"]'`) is
+that list; any other string stays one path or glob.
 
 ## Selection Contract
 

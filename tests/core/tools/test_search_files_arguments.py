@@ -176,6 +176,15 @@ async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path
         ({"pattern": "o", "-c": True, "path": "src/app.py"}, "src/app.py:3"),
         ({"pattern": "load", "-l": True, "glob": "*.md"}, "docs/guide.md"),
         ({"recursive": False, "args": ["--entries"]}, "src/\ndocs/"),
+        # Lists sent as JSON text.
+        (
+            {"pattern": "load", "path": '["docs", "src/view.ts"]'},
+            "docs/guide.md:1:Call load() first.\nsrc/view.ts:1:export const load = 1;",
+        ),
+        (
+            {"pattern": "load", "glob": '[ "*.py", "*.md" ]', "output": "files"},
+            "docs/guide.md\nsrc/app.py",
+        ),
     ],
 )
 async def test_other_search_interfaces_spellings_run_as_intended(
