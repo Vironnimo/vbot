@@ -59,6 +59,8 @@ def test_interrupt_only_affects_current_call_and_next_agents_can_use_tool(
 
     connect_through(service, monkeypatch, new_client)
     service._driver = client
+    changes = []
+    service.host.publish_change = lambda *change: changes.append(change)
     callbacks = []
     context = replace(context, cancel_registration_hook=callbacks.append)
     entered = threading.Event()
@@ -95,6 +97,9 @@ def test_interrupt_only_affects_current_call_and_next_agents_can_use_tool(
             service._hotkey.callback(owner)
         result = future.result(timeout=2)
         assert result["error"]["code"] == "computer_use_interrupted"
+    # The WebUI reads the control status again on each change: start, stopping, end.
+    call_id = changes[0][1][0]
+    assert changes == [("control", [call_id], revision) for revision in (1, 2, 3)]
     assert client.broken and client.closed and service._driver is None
     assert not asyncio.run(service.control({}))["active"]
     assert service.handle(context, {"action": "apps"})["ok"]
@@ -113,6 +118,17 @@ def test_late_cancel_does_not_stop_next_call(computer):
     assert service.handle(context, {"action": "apps"})["ok"]
     assert not asyncio.run(service.control({}))["stopping"]
     assert not client.broken
+
+
+def test_call_ends_normally_when_its_registration_retired(computer):
+    service, context, _, _ = computer
+
+    def retired(*change):
+        raise ValueError("extension change is unavailable")
+
+    service.host.publish_change = retired
+    assert service.handle(context, {"action": "apps"})["ok"]
+    assert not asyncio.run(service.control({}))["active"]
 
 
 def test_control_reports_idle_status_and_rejects_release_and_untargeted_stop(computer):

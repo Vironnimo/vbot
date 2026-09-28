@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,8 +24,11 @@ class PendingInput:
 
 
 class InputRequests:
-    def __init__(self) -> None:
+    """Pending inputs; ``on_change`` receives the id of each added or removed one."""
+
+    def __init__(self, on_change: Callable[[str], None] | None = None) -> None:
         self._pending: dict[str, PendingInput] = {}
+        self._on_change = on_change
 
     async def request(
         self,
@@ -40,9 +44,15 @@ class InputRequests:
         )
         self._pending[identifier] = pending
         try:
+            self._changed(identifier)
             return await future
         finally:
             self._pending.pop(identifier, None)
+            self._changed(identifier)
+
+    def _changed(self, identifier: str) -> None:
+        if self._on_change is not None:
+            self._on_change(identifier)
 
     def list(self) -> list[dict[str, Any]]:
         return [

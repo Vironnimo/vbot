@@ -212,6 +212,65 @@ describe('App', () => {
     expect(agentReads()).toBeGreaterThan(readsBefore);
   });
 
+  it('re-reads Extension input requests and Computer Use status only on their changes', async () => {
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        agents: ALPHA,
+        methods: {
+          'extensions.pages': () => ({ pages: [] }),
+          'extensions.requests': () => ({ requests: [] }),
+          'extensions.list': () => ({
+            extensions: [{ name: 'computer_use', status: 'loaded' }],
+          }),
+          'extensions.operation': () => ({ available: true, active: false }),
+        },
+      }),
+    );
+    const handlers = mountApp();
+    const calls = (method) =>
+      rpcMock.mock.calls.filter(([name]) => name === method).length;
+    const counts = () => [
+      calls('extensions.requests'),
+      calls('extensions.operation'),
+    ];
+    await waitForCondition(() => {
+      expect(calls('extensions.pages')).toBe(1);
+      expect(calls('extensions.operation')).toBeGreaterThan(0);
+    });
+    // Startup reads (mount, first page catalog) end; nothing polls afterwards.
+    let settled;
+    await waitForCondition(() => {
+      const current = counts().join();
+      const stable = current === settled;
+      settled = current;
+      expect(stable).toBe(true);
+    });
+    const [requests, status] = counts();
+    const extensionsChanged = (scope) =>
+      handlers.onEvent({
+        type: 'resource_changed',
+        sequence: 1,
+        payload: { kind: 'extensions', ...(scope && { scope }) },
+      });
+    const change = (owner, resource) =>
+      extensionsChanged({ owner, resource, ids: ['record'], revision: 1 });
+
+    await change('swarm', 'swarms');
+    await change('mcp', 'pending_inputs');
+    await waitForCondition(() =>
+      expect(counts()).toEqual([requests + 1, status]),
+    );
+    await change('computer_use', 'control');
+    await waitForCondition(() =>
+      expect(counts()).toEqual([requests + 1, status + 1]),
+    );
+    // An Extension reload (or reconnect) can change both.
+    await extensionsChanged(null);
+    await waitForCondition(() =>
+      expect(counts()).toEqual([requests + 2, status + 2]),
+    );
+  });
+
   it('shows app_error events as error Toasts that stay until dismissed', () => {
     vi.useFakeTimers();
     const handlers = mountApp();

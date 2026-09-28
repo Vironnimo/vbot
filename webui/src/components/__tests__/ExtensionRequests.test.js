@@ -27,14 +27,34 @@ const namePayload = {
   },
 };
 let component;
+let listeners = [];
 
 afterEach(async () => {
   if (component) await unmount(component);
   component = null;
+  listeners = [];
   document.body.innerHTML = '';
   vi.clearAllMocks();
   vi.useRealTimers();
 });
+
+function subscribeInvalidations(listener) {
+  listeners.push(listener);
+  return () => listeners.splice(listeners.indexOf(listener), 1);
+}
+
+// Delivers one App Extension invalidation (`{owner, change}`).
+function invalidate(owner, resource = null) {
+  const change = resource ? { resource, ids: ['request'], revision: 1 } : null;
+  for (const listener of [...listeners]) listener({ owner, change });
+}
+
+function mountRequests() {
+  component = mount(ExtensionRequests, {
+    target: document.body,
+    props: { subscribeInvalidations },
+  });
+}
 
 // Mounts the request surface with one pending elicitation and opens it.
 async function openRequest(payload) {
@@ -50,7 +70,7 @@ async function openRequest(payload) {
       },
     ],
   });
-  component = mount(ExtensionRequests, { target: document.body });
+  mountRequests();
   await vi.waitFor(() => {
     flushSync();
     expect(button(REVIEW)).toBeDefined();
@@ -97,6 +117,59 @@ function closed() {
 }
 
 describe('Extension requests', () => {
+  it('reads pending inputs only on their changes and owner-less invalidations', async () => {
+    vi.useFakeTimers();
+    listRequests.mockResolvedValue({ requests: [] });
+    mountRequests();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(listRequests).toHaveBeenCalledOnce();
+
+    // Other Extension changes, such as a Swarm's, cannot alter the list.
+    invalidate('swarm', 'swarms');
+    invalidate('computer_use', 'control');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listRequests).toHaveBeenCalledOnce();
+
+    // A pending-input change from any Extension, then a reconnect or reload.
+    invalidate('mcp', 'pending_inputs');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listRequests).toHaveBeenCalledTimes(2);
+    invalidate(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listRequests).toHaveBeenCalledTimes(3);
+  });
+
+  it('reads once more after a change that arrives during a read', async () => {
+    let first;
+    listRequests.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          first = resolve;
+        }),
+    );
+    mountRequests();
+    await vi.waitFor(() => expect(listRequests).toHaveBeenCalledOnce());
+    listRequests.mockResolvedValue({
+      requests: [
+        {
+          id: 'request',
+          extension: 'mcp',
+          response_operation: 'respond',
+          kind: 'oauth',
+          payload: {},
+        },
+      ],
+    });
+    invalidate('mcp', 'pending_inputs');
+    invalidate('mcp', 'pending_inputs');
+    first({ requests: [] });
+    await vi.waitFor(() => {
+      flushSync();
+      expect(button(REVIEW)).toBeDefined();
+    });
+    expect(listRequests).toHaveBeenCalledTimes(2);
+  });
+
   it('converts typed answers into an accepted response and closes the dialog', async () => {
     operation.mockResolvedValue({ answered: true });
     const dialog = await openRequest({
@@ -139,7 +212,7 @@ describe('Extension requests', () => {
     });
   });
 
-  it('keeps a sent response when polling removes its request first', async () => {
+  it('keeps a sent response when a refresh removes its request first', async () => {
     vi.useFakeTimers();
     let finishResponse;
     operation.mockImplementation(
@@ -153,7 +226,8 @@ describe('Extension requests', () => {
     button(SEND).click();
     await vi.waitFor(() => expect(operation).toHaveBeenCalledOnce());
     listRequests.mockResolvedValue({ requests: [] });
-    await vi.advanceTimersByTimeAsync(2000);
+    invalidate('mcp', 'pending_inputs');
+    await vi.advanceTimersByTimeAsync(0);
     flushSync();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     finishResponse({ answered: true });

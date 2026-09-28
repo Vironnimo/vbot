@@ -14,6 +14,13 @@ from core.tools.tools import Tool, ToolContext, ToolRegistry
 
 JsonObject = dict[str, Any]
 
+# The ``resource`` of the change an Extension that declares
+# ``ExtensionOperations.pending_inputs`` publishes through its owner-bound
+# ``host.publish_change`` whenever that list gains or loses an entry, naming
+# the added or removed request ids. Accessors read ``extensions.requests``
+# again on exactly these changes instead of polling it.
+PENDING_INPUTS_RESOURCE = "pending_inputs"
+
 
 @dataclass(frozen=True)
 class ExtensionHost:
@@ -67,6 +74,8 @@ class ExtensionOperations:
     startup: list[Callable[[ExtensionHost], Awaitable[None]]] = field(default_factory=list)
     _registry: ToolRegistry | None = field(default=None, repr=False)
     _catalogs: dict[str, tuple[Tool, ...]] = field(default_factory=dict, repr=False)
+    # Feeds ``extensions.requests``; its owner publishes a
+    # ``PENDING_INPUTS_RESOURCE`` change whenever the list changes.
     pending_inputs: Callable[[], list[JsonObject]] | None = None
     input_response_operation: str | None = None
     _closed: bool = False

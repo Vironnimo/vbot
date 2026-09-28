@@ -107,6 +107,9 @@
     sessionInvalidations = [],
     // Bumped when Extension lifecycle changes alter the live slash-command catalog.
     commandsRefreshToken = 0,
+    // App's Extension invalidations (`{ owner, change }`); the composer's
+    // Computer Use control refreshes its status from them.
+    subscribeExtensionInvalidations = null,
     // Scope object of the latest `resource_changed(kind:"queue")` (a fresh
     // object per signal); re-syncs the matching held session's queue live.
     queueInvalidation = null,
@@ -975,7 +978,10 @@
                 onLoadModelCatalog={composerLoadModelCatalog}
               >
                 {#snippet computerControl()}
-                  <ComputerUseControl onError={actions.showChatToast} />
+                  <ComputerUseControl
+                    onError={actions.showChatToast}
+                    subscribeInvalidations={subscribeExtensionInvalidations}
+                  />
                 {/snippet}
               </ChatComposer>
             {:else}

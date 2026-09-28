@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { extensionOperation, listExtensionRequests } from '$lib/api.js';
   import {
+    PENDING_INPUTS_RESOURCE,
     inputFields,
     inputResponse,
     inputUrl,
@@ -15,33 +16,55 @@
   import TextField from './ui/TextField.svelte';
   import Dropdown from './Dropdown.svelte';
 
-  const POLL_INTERVAL_MS = 2000;
+  let { subscribeInvalidations = null } = $props();
   let requests = $state([]);
   let selected = $state(null);
   let drafts = $state({});
   let error = $state('');
   let busy = $state(false);
   let stopped = false;
+  // One read runs at a time; a request arriving meanwhile runs once more
+  // afterwards, so the last read always follows the newest change.
+  let loading = false;
+  let loadQueued = false;
+
+  // An Extension publishes a pending-inputs change whenever its list gains or
+  // loses an entry, so the list is read only then. An invalidation without an
+  // owner (reconnect, Extension reload, enable or disable) reads it too;
+  // other Extension changes cannot alter it.
+  function onInvalidation({ owner, change }) {
+    if (owner == null || change?.resource === PENDING_INPUTS_RESOURCE)
+      void refresh();
+  }
+
+  async function refresh() {
+    loadQueued = true;
+    if (loading) return;
+    loading = true;
+    try {
+      while (loadQueued && !stopped) {
+        loadQueued = false;
+        try {
+          const result = await listExtensionRequests();
+          if (stopped) return;
+          requests = result.requests;
+          if (selected && !requests.some((item) => item.id === selected.id))
+            selected = null;
+        } catch (failure) {
+          if (!stopped && selected) error = failure.message;
+        }
+      }
+    } finally {
+      loading = false;
+    }
+  }
+
+  $effect(() => subscribeInvalidations?.(onInvalidation));
 
   onMount(() => {
-    let timer;
-    async function poll() {
-      try {
-        const result = await listExtensionRequests();
-        if (stopped) return;
-        requests = result.requests;
-        if (selected && !requests.some((item) => item.id === selected.id))
-          selected = null;
-      } catch (failure) {
-        if (!stopped && selected) error = failure.message;
-      } finally {
-        if (!stopped) timer = setTimeout(poll, POLL_INTERVAL_MS);
-      }
-    }
-    void poll();
+    void refresh();
     return () => {
       stopped = true;
-      clearTimeout(timer);
     };
   });
 

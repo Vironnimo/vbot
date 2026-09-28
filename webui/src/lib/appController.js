@@ -177,7 +177,7 @@ export function createAppController({
   onAgentIdChanged = () => {},
   onReloadAgents,
   onReloadExtensionPages = async () => {},
-  onExtensionPageChange = () => {},
+  onExtensionChange = () => {},
   onLoadDataStoreStatus = async () => {},
   onSetOnboardingAside,
   browserHistory = globalThis.history,
@@ -619,11 +619,11 @@ export function createAppController({
     const kind = event.payload?.kind;
     noteInvalidation(kind);
     if (kind === 'extensions') {
-      // An owner-scoped change names data behind that Extension's page; an
-      // unscoped one follows a reload, whose page descriptors may differ.
+      // An owner-scoped change names data that Extension shows; an unscoped
+      // one follows a reload, whose page descriptors may differ.
       const scope = event.payload?.scope;
       if (typeof scope?.owner === 'string' && scope.owner) {
-        onExtensionPageChange(scope);
+        onExtensionChange(scope);
       } else {
         await onReloadExtensionPages();
       }
