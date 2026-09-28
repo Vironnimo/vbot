@@ -528,27 +528,21 @@ def _ensure_no_cron_reference(state: Any, project_id: str) -> None:
     so it never blocks a project removal even when its bare ``agent_id`` happens
     to match a same-named Team member.
     """
-    from core.calendar import CalendarService
     from core.projects.address import parse_agent_address
 
-    calendar = getattr(state.runtime, "calendar_service", None)
-    if isinstance(calendar, CalendarService):
-        references = [
-            f"calendar:{action['id']}"
-            for action in calendar.actions.list_actions()
-            if parse_agent_address(action["target"])[1] == project_id
-        ]
-        if references:
-            raise RpcError(
-                RPC_ERROR_PROJECT_IN_USE,
-                f"cannot remove project referenced by {', '.join(references)}",
-            )
-    cron_service = getattr(state.runtime, "cron_service", None)
-    if cron_service is None:
-        return
+    references = [
+        f"calendar:{action['id']}"
+        for action in state.runtime.calendar_service.actions.list_actions()
+        if parse_agent_address(action["target"])[1] == project_id
+    ]
+    if references:
+        raise RpcError(
+            RPC_ERROR_PROJECT_IN_USE,
+            f"cannot remove project referenced by {', '.join(references)}",
+        )
     referencing = sorted(
         f"cron:{job.id}"
-        for job in cron_service.list_jobs()
+        for job in state.runtime.cron_service.list_jobs()
         if _cron_targets_project_agent(job, project_id)
     )
     if referencing:
@@ -556,12 +550,9 @@ def _ensure_no_cron_reference(state: Any, project_id: str) -> None:
             RPC_ERROR_PROJECT_IN_USE,
             f"cannot remove project referenced by {', '.join(referencing)}",
         )
-    bootstrap_service = getattr(state.runtime, "bootstrap_service", None)
-    if bootstrap_service is None:
-        return
     bootstrap_references = sorted(
         f"bootstrap:{job.id}"
-        for job in bootstrap_service.list_jobs()
+        for job in state.runtime.bootstrap_service.list_jobs()
         if (
             job.project_id == project_id
             and getattr(job, "status", "active") not in TERMINAL_BOOTSTRAP_STATUSES
@@ -692,8 +683,7 @@ def _project_skill_pool(state: Any, project_id: str) -> JsonObject:
     project_descriptions = {skill.name: getattr(skill, "description", "") for skill in own_metadata}
     project_set = set(project_names)
 
-    skills_registry = getattr(runtime, "skills", None)
-    all_skills = list(skills_registry.list_all()) if skills_registry else []
+    all_skills = list(runtime.skills.list_all())
     registry_descriptions = {skill.name: getattr(skill, "description", "") for skill in all_skills}
 
     global_names = sorted(

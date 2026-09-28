@@ -393,8 +393,6 @@ async def _handle_start(
     if raw_group is not None:
         if not isinstance(raw_group, str) or not raw_group.strip():
             raise ValueError("group must be a non-empty string")
-        if len(raw_group.strip()) > TERMINAL_GROUP_NAME_MAX_CHARS:
-            raise ValueError(f"group must be at most {TERMINAL_GROUP_NAME_MAX_CHARS} characters")
         group_id = terminal_manager.resolve_or_create_agent_group(raw_group.strip()).group_id
     session = await terminal_manager.spawn(
         owner,
@@ -696,8 +694,6 @@ def _project_snapshot(
             projected.pop("rows", None)
     screen = projected.pop("screen", None)
     scrollback = dict(projected.pop("scrollback", None) or {})
-    scrollback.pop("next_before", None)
-    scrollback.pop("next_cursor", None)
     history = scrollback.pop("text", "")
     next_start = scrollback.get("next_start_line")
     scrollback["next_request"] = (

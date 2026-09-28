@@ -242,9 +242,12 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
     ) -> None:
         recall_removals.append((agent_id, session_id, project_id))
 
+    chat_runs = ChatRunManager()
     runtime = SimpleNamespace(
         agent_resolver=resolver,
         chat_sessions=sessions,
+        chat_run_manager=chat_runs,
+        bootstrap_service=SimpleNamespace(list_jobs=lambda: []),
         terminal_manager=FakeTerminalManager(),
         agents=SimpleNamespace(
             update=lambda agent_id, **k: updates.append({agent_id: k}),
@@ -270,7 +273,7 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
         runtime=runtime,
         event_bus=ServerEventBus(),
         # _state_chat_runs reads state.chat_runs directly (not under runtime).
-        chat_runs=ChatRunManager(),
+        chat_runs=chat_runs,
     )
     state._updates = updates  # type: ignore[attr-defined]
     state._resets = resets  # type: ignore[attr-defined]

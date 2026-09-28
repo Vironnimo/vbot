@@ -175,22 +175,15 @@ def _resolve_request_context_kwargs(
     run: Run,
     prompt_cache_affinity_id: str,
 ) -> dict[str, Any]:
-    """Resolve per-request conversation-context kwargs for one request build.
-
-    Adapters and test doubles that do not expose the hook contribute nothing,
-    so the provider call is unchanged for every adapter that has no use for the
-    conversation identity.
-    """
-    if hasattr(adapter, "request_context_kwargs"):
-        return dict(
-            adapter.request_context_kwargs(
-                agent_id=run.agent_id,
-                session_id=run.session_id,
-                project_id=run.project_id,
-                prompt_cache_affinity_id=prompt_cache_affinity_id,
-            )
+    """Resolve per-request conversation-context kwargs for one request build."""
+    return dict(
+        adapter.request_context_kwargs(
+            agent_id=run.agent_id,
+            session_id=run.session_id,
+            project_id=run.project_id,
+            prompt_cache_affinity_id=prompt_cache_affinity_id,
         )
-    return {}
+    )
 
 
 def _connection_local_id(connection: ConnectionRef) -> str | None:

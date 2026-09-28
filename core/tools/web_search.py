@@ -293,8 +293,6 @@ def _result_age(arguments: JsonObject) -> tuple[str, str, str | None]:
     periods: list[tuple[str, float]] = []
     days = arguments.get("days")
     if days is not None:
-        if isinstance(days, bool) or not isinstance(days, (int, float)) or days <= 0:
-            return "", "", "days must be a positive number"
         periods.append(("days", float(days)))
     after = arguments.get("date_after")
     if after is not None:

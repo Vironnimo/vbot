@@ -25,7 +25,6 @@ from core.tools.bash import (
     BASH_TOOL_NAME,
     BASH_TOOL_PARAMETERS,
     UpdateHandoffs,
-    bash_handler,
     project_bash_tool_definitions,
     register_bash_tool,
 )
@@ -71,7 +70,6 @@ from core.tools.memory import (
     MEMORY_TOOL_DESCRIPTION,
     MEMORY_TOOL_NAME,
     MEMORY_TOOL_PARAMETERS,
-    memory_handler,
     register_memory_tool,
 )
 from core.tools.model_names import called_tool_name, model_tool_name, registry_tool_name
@@ -99,14 +97,12 @@ from core.tools.search_files import (
     SEARCH_FILES_TOOL_NAME,
     SEARCH_FILES_TOOL_PARAMETERS,
     register_search_files_tool,
-    search_files_handler,
 )
 from core.tools.session_search import (
     SESSION_SEARCH_TOOL_DESCRIPTION,
     SESSION_SEARCH_TOOL_NAME,
     SESSION_SEARCH_TOOL_PARAMETERS,
     register_session_search_tool,
-    session_search_handler,
 )
 from core.tools.skill import (
     SKILL_TOOL_DESCRIPTION,
@@ -182,7 +178,6 @@ from core.tools.web_search import (
     WEB_SEARCH_TOOL_NAME,
     WEB_SEARCH_TOOL_PARAMETERS,
     register_web_search_tool,
-    web_search_handler,
 )
 
 
@@ -202,7 +197,6 @@ __all__ = [
     "SEARCH_FILES_TOOL_DESCRIPTION",
     "SEARCH_FILES_TOOL_NAME",
     "SEARCH_FILES_TOOL_PARAMETERS",
-    "search_files_handler",
     "register_search_files_tool",
     "register_apply_patch_tool",
     "BASH_SUBAGENT_TOOL_DESCRIPTION",
@@ -308,7 +302,6 @@ __all__ = [
     "WEB_SEARCH_TOOL_DESCRIPTION",
     "WEB_SEARCH_TOOL_NAME",
     "WEB_SEARCH_TOOL_PARAMETERS",
-    "bash_handler",
     "UpdateHandoffs",
     "READ_MEDIA_ARTIFACT_KIND",
     "is_tool_result_envelope",
@@ -334,12 +327,9 @@ __all__ = [
     "register_web_fetch_tool",
     "register_web_search_tool",
     "project_bash_tool_definitions",
-    "memory_handler",
-    "session_search_handler",
     "tool_failure",
     "tool_is_ready",
     "tool_success",
-    "web_search_handler",
     "compile_tool_contract",
     "memory_tool_enabled",
     "normalize_tool_access",

@@ -210,43 +210,24 @@ def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(tmp_path: Pa
     assert requested == ["shutdown"]
 
 
-@pytest.mark.parametrize(
-    "missing", [None, "statistics_index", "models", "list_owned_session_summaries"]
-)
-def test_statistics_warmup_runs_only_for_a_complete_statistics_surface(
-    tmp_path: Path, missing: str | None
-) -> None:
+def test_statistics_warmup_reconciles_the_index_at_startup(tmp_path: Path) -> None:
     write_bootstrap_marker(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
     runtime: Any = ServerStubRuntime(
         tmp_path,
-        chat_sessions=sessions,
+        chat_sessions=ChatSessionManager(tmp_path),
         statistics_index=StatisticsIndex(tmp_path),
         usage_recorder=None,
         agents=SimpleNamespace(list=lambda: []),
         models=SimpleNamespace(pricing_for=lambda _: None),
         projects=SimpleNamespace(list=lambda: [], session_owning_agents=lambda _project_id: []),
     )
-    if missing == "list_owned_session_summaries":
-        runtime.chat_sessions = SimpleNamespace(
-            **{
-                name: getattr(sessions, name)
-                for name in ("list_summaries", "list_history_versions", "get")
-            }
-        )
-    elif missing is not None:
-        delattr(runtime, missing)
     app = create_app(runtime=runtime)
 
     with TestClient(app) as client:
-        warmup = app.state.statistics_warmup_task
-        if warmup is not None:
-            assert client.portal is not None
-            client.portal.call(asyncio.wait_for, warmup, 10)
+        assert client.portal is not None
+        client.portal.call(asyncio.wait_for, app.state.statistics_warmup_task, 10)
 
-    assert (warmup is not None) is (missing is None)
-    index_file = tmp_path / "statistics" / "session-statistics.sqlite"
-    assert index_file.is_file() is (missing is None)
+    assert (tmp_path / "statistics" / "session-statistics.sqlite").is_file()
 
 
 def test_shutdown_ends_the_local_catalog_refresh_without_raising(

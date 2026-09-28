@@ -13,10 +13,11 @@ from typing import Any
 
 import pytest
 
+from tests.core.providers.adapter_test_support import AdapterHookDefaults
 from tests.scripts.provider_probe_helpers import PROBE
 
 
-class ScriptedAdapter:
+class ScriptedAdapter(AdapterHookDefaults):
     """Answers each request with the next scripted Model turn."""
 
     def __init__(self, *turns: dict[str, Any]) -> None:

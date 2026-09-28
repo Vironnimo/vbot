@@ -25,6 +25,7 @@ from core.sessions.titles import (
     _generated_title,
 )
 from tests.core.chat.usage_recorder_support import RecordingUsageRecorder
+from tests.core.providers.adapter_test_support import AdapterHookDefaults
 
 
 def _address(agent_id: str, session_id: str, project_id: str | None = None) -> SessionAddress:
@@ -39,7 +40,7 @@ class StubStorage:
         return dict(self.settings)
 
 
-class StubAdapter:
+class StubAdapter(AdapterHookDefaults):
     def __init__(
         self,
         title: str = "Generated title",

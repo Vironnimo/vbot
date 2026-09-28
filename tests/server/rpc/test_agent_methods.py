@@ -19,6 +19,7 @@ from core.projects.store import ProjectStore
 from core.prompts import LayoutEntry, load_bundled_default_layout
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
 from core.sessions import ChatSessionManager
+from core.storage import StorageManager
 from tests.server.rpc_test_support import (
     JsonObject,
     StubAdapter,
@@ -177,6 +178,7 @@ def _real_agent_state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
             agent_resolver=resolver,
             chat_sessions=sessions,
             models=_NoContextWindows(),
+            storage=StorageManager(data_dir),
         )
     )
 

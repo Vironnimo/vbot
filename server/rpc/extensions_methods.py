@@ -190,23 +190,19 @@ def _command_is_registered(
     extension_name: str,
     command_name: str,
 ) -> bool:
-    owner = getattr(state.command_dispatcher, "extension_command_owner", None)
-    return callable(owner) and owner(command_name) == extension_name
+    return bool(state.command_dispatcher.extension_command_owner(command_name) == extension_name)
 
 
 def _tool_is_ready(state: Any, tool_name: str) -> bool:
     """Re-evaluate a declared tool's live readiness through the runtime registry.
 
-    An unregistered name (skipped on a collision, or no registry wired) is not
-    ready — it is offered nowhere.
+    An unregistered name (skipped on a collision) is not ready — it is offered
+    nowhere.
     """
     from core.tools import tool_is_ready as tool_readiness
 
-    registry = getattr(state.runtime, "tools", None)
-    if registry is None:
-        return False
     try:
-        tool = registry.get(tool_name)
+        tool = state.runtime.tools.get(tool_name)
     except Exception:
         return False
     return tool_readiness(tool)

@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from core.chat._boundaries import _finish_visible_boundary
 from core.chat._queued_input import persist_steering_input, rebuild_after_steering
-from core.chat._request_builder import _run_prompt_method
 from core.chat._run_state import _AssistantStep, _RequestState
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
@@ -203,10 +202,8 @@ class AgenticProgression:
                 and registry.revision != tool_catalog_revision
             ):
                 tool_catalog_revision = registry.revision
-                refreshed = await _run_prompt_method(
-                    self._dependencies.get_system_prompts(),
-                    "provider_tool_definitions_async",
-                    "provider_tool_definitions",
+                system_prompts = self._dependencies.get_system_prompts()
+                refreshed = await system_prompts.provider_tool_definitions_async(
                     agent,
                     session_tool_grants=state.session_tool_grants,
                 )
@@ -327,19 +324,18 @@ class AgenticProgression:
             # The next ordinal is derived from the canonical completed count.
             # Failed requests therefore do not consume an Iteration number.
             request_iteration_number = run.iteration_count + 1
-            if hasattr(target.adapter, "set_debug_context"):
-                target.adapter.set_debug_context(
-                    DebugContext(
-                        run_id=run.id,
-                        agent_id=run.agent_id,
-                        session_id=run.session_id,
-                        provider_id=target.provider_id,
-                        connection_id=target.connection_id,
-                        model_id=target.model_id,
-                        streaming=self._streaming,
-                        iteration_number=request_iteration_number,
-                    )
+            target.adapter.set_debug_context(
+                DebugContext(
+                    run_id=run.id,
+                    agent_id=run.agent_id,
+                    session_id=run.session_id,
+                    provider_id=target.provider_id,
+                    connection_id=target.connection_id,
+                    model_id=target.model_id,
+                    streaming=self._streaming,
+                    iteration_number=request_iteration_number,
                 )
+            )
             _LOGGER.debug(
                 "Iteration %d requested (run=%s model=%s messages=%d)",
                 request_iteration_number,

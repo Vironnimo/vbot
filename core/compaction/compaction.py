@@ -486,15 +486,14 @@ class CompactionService:
                     ),
                     "thinking_effort": "",
                 }
-                if hasattr(adapter, "request_context_kwargs"):
-                    request_options.update(
-                        adapter.request_context_kwargs(
-                            agent_id=session_address.agent_id,
-                            session_id=session_address.session_id,
-                            project_id=session_address.project_id,
-                            prompt_cache_affinity_id=prompt_cache_affinity_id,
-                        )
+                request_options.update(
+                    adapter.request_context_kwargs(
+                        agent_id=session_address.agent_id,
+                        session_id=session_address.session_id,
+                        project_id=session_address.project_id,
+                        prompt_cache_affinity_id=prompt_cache_affinity_id,
                     )
+                )
                 if active_tools is not None:
                     request_options["tools"] = list(active_tools)
                 model_messages = await _COMPACTION_WORKERS.run(

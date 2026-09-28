@@ -430,9 +430,7 @@ async def connect_streaming_with_retry(
         headers = httpx.Headers(await build_headers())
         body_arguments: dict[str, Any]
         if isinstance(payload, bytes):
-            headers.setdefault(
-                "Content-Type", client.headers.get("Content-Type", "application/json")
-            )
+            headers.setdefault("Content-Type", "application/json")
             body_arguments = {"content": payload}
         else:
             body_arguments = {"json": payload}

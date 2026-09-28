@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import OrderedDict
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +35,9 @@ from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
+from server.file_delivery import FileDelivery
 from tests.core.chat.chat_loop_support import build_chat_loop
+from tests.core.providers.adapter_test_support import AdapterHookDefaults
 from tests.server.rpc_test_support_common import (
     StubAgent,
     StubAgentResolver,
@@ -134,6 +136,14 @@ class StubPrompts:
             session_grants=session_tool_grants,
         )
 
+    async def build_system_prompt_async(self, agent: StubAgent, **options: Any) -> str:
+        return self.build_system_prompt(agent, **options)
+
+    async def provider_tool_definitions_async(
+        self, agent: StubAgent, **options: Any
+    ) -> list[JsonObject]:
+        return self.provider_tool_definitions(agent, **options)
+
 
 @dataclass(frozen=True)
 class StubSkill:
@@ -191,7 +201,7 @@ class ReloadableStubRuntimeSkills:
         return []
 
 
-class StubAdapter:
+class StubAdapter(AdapterHookDefaults):
     def __init__(
         self,
         responses: list[JsonObject] | None = None,
@@ -252,12 +262,19 @@ class StubAdapter:
         return cast(list[JsonObject], self._stream_deltas)
 
 
+def _unsubscribe() -> None:
+    return None
+
+
 class StubProcessManager:
     async def cancel_scope_async(self, run_id: str) -> None:
         del run_id
 
     def release_scope(self, run_id: str) -> None:
         del run_id
+
+    def add_terminal_callback(self, _callback: Callable[[Any], None]) -> Callable[[], None]:
+        return _unsubscribe
 
 
 class RecordingCompactionService:
@@ -289,6 +306,46 @@ class StubTerminalManager:
     def transfer_scope(self, _source: Any, _target: Any) -> int:
         return 0
 
+    def add_changed_callback(self, _callback: Callable[[str], None]) -> Callable[[], None]:
+        return _unsubscribe
+
+
+class StubJobService:
+    """Cron or Bootstrap service double that holds no jobs."""
+
+    def list_jobs(self) -> list[Any]:
+        return []
+
+    def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
+        return _unsubscribe
+
+
+class StubCalendarActions:
+    def list_actions(self) -> list[Any]:
+        return []
+
+    def retarget_identity(self, _old_agent_id: str, _new_agent_id: str) -> None:
+        return None
+
+
+class StubCalendarService:
+    """Calendar double that holds no actions."""
+
+    def __init__(self) -> None:
+        self.actions = StubCalendarActions()
+
+    def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
+        return _unsubscribe
+
+
+class StubStatisticsIndex:
+    """Statistics index double: the startup warmup finds nothing to reconcile."""
+
+    async def run_async(
+        self, _function: Callable[..., Any], /, *_args: Any, **_kwargs: Any
+    ) -> None:
+        return None
+
 
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
@@ -317,6 +374,16 @@ class StubRuntime:
         self.extensions: Any = None
         self.process_manager = StubProcessManager()
         self.terminal_manager = StubTerminalManager()
+        self.cron_service: Any = StubJobService()
+        self.bootstrap_service: Any = StubJobService()
+        self.calendar_service: Any = StubCalendarService()
+        self.channel_service: Any = SimpleNamespace(list_channels=lambda: [])
+        self.subagents: Any = SimpleNamespace(
+            batch_tracker=SimpleNamespace(references_identity_agent=lambda _agent_id: False)
+        )
+        self.speech: Any = SimpleNamespace(preload_configured=_unsubscribe)
+        self.statistics_index: Any = StubStatisticsIndex()
+        self.usage_recorder: Any = None
         self.trigger_service: Any = None
         self.recall_reload_count = 0
         self.extension_reload_count = 0
@@ -547,6 +614,7 @@ def make_state(
         ),
         event_bus=ServerEventBus(),
         run_event_bridge_run_ids=OrderedDict(),
+        file_delivery=FileDelivery(),
         agent_delete_lock=asyncio.Lock(),
         server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
     )

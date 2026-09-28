@@ -483,12 +483,12 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         has_tool_calls = False
         try:
             async for event in iter_sse_events(response):
-                if event.comment is not None:
+                data = event.data
+                if data is None:
+                    # Every event without data is a transport comment.
                     yield {"type": "heartbeat"}
                     continue
-                if event.data is None:
-                    continue
-                raw = parse_sse_json_data(event.data, context="OpenCode Zen Gemini provider")
+                raw = parse_sse_json_data(data, context="OpenCode Zen Gemini provider")
                 if not isinstance(raw, dict):
                     raise ProviderError(
                         "OpenCode Zen Gemini provider sent non-object JSON in stream",

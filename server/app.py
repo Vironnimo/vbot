@@ -777,10 +777,7 @@ def create_app(
     @app.websocket("/ws/terminals/{terminal_id}")
     async def websocket_terminal(websocket: WebSocket, terminal_id: str) -> None:
         await websocket.accept()
-        manager = getattr(websocket.app.state.runtime, "terminal_manager", None)
-        if manager is None:
-            await websocket.close(code=1011, reason="Interactive terminals are unavailable")
-            return
+        manager = websocket.app.state.runtime.terminal_manager
         try:
             stream = manager.watch_for_operator(terminal_id)
             async with aclosing(stream) as events:

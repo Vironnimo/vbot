@@ -344,10 +344,7 @@ def _render_input(delegation: DelegationInput, request_label: str) -> str:
 
 
 def _request_context(adapter: Any, conversation_id: str) -> JsonObject:
-    build = getattr(adapter, "request_context_kwargs", None)
-    if not callable(build):
-        return {}
-    return dict(build(agent_id="live-voice", session_id=conversation_id))
+    return dict(adapter.request_context_kwargs(agent_id="live-voice", session_id=conversation_id))
 
 
 def _failure_reason(error: BaseException) -> str:

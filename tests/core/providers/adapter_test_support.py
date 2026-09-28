@@ -11,6 +11,25 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 TOKEN = "test-token"
 
 
+class AdapterHookDefaults:
+    """The ``ProviderAdapter`` hook defaults for Adapter test doubles outside the ABC.
+
+    Every real Adapter inherits these from ``ProviderAdapter``; a plain double
+    mixes them in so request paths can call each hook unconditionally.
+    """
+
+    def image_size_limit(self, model_id: str) -> int | None:
+        del model_id
+        return None
+
+    def request_context_kwargs(self, **context: Any) -> dict[str, Any]:
+        del context
+        return {}
+
+    def set_debug_context(self, context: Any) -> None:
+        del context
+
+
 def bearer_config(
     provider_id: str,
     *,

@@ -13,7 +13,6 @@ from core.providers.providers import (
     resolve_effective_context_window,
 )
 from core.runs import QueuedRunItem, Run
-from core.settings.normalizers import normalize_compaction_settings
 from core.tools import tool_is_ready
 
 JsonObject = dict[str, Any]
@@ -133,20 +132,13 @@ def _provider_config(state: Any, provider_id: str) -> Any:
 
 
 def _global_compaction_policy_loader(state: Any) -> Callable[[], JsonObject]:
-    """Return a loader for the global Compaction Policy, read at most once.
-
-    A runtime without Settings storage falls back to the built-in defaults.
-    """
-    storage = getattr(state.runtime, "storage", None)
+    """Return a loader for the global Compaction Policy, read at most once."""
+    storage = state.runtime.storage
     loaded: list[JsonObject] = []
 
     def load() -> JsonObject:
         if not loaded:
-            loaded.append(
-                storage.load_compaction_settings()
-                if storage is not None
-                else normalize_compaction_settings(None)
-            )
+            loaded.append(storage.load_compaction_settings())
         return loaded[0]
 
     return load

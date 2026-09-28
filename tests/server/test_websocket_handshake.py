@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
 from core.runs import RunKind, RunStatus
+from core.sessions import SessionAddress
 from server.app import create_app
 from server.events import APP_ERROR_EVENT, ServerEventBus
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
@@ -216,11 +217,15 @@ def test_websocket_hello_snapshots_running_runs_and_public_queues(
         ),
         _stub_run("run-system", run_kind=RunKind.SYSTEM, contributes_to_agent_activity=False),
     ]
+    writer_session = SessionAddress(
+        project_id="project-b", agent_id="writer", session_id="session-b"
+    )
+    coder_session = SessionAddress(project_id=None, agent_id="coder", session_id="session-a")
     queued = [
-        (("project-b", "writer", "session-b"), _QueuedItem("second")),
-        ((None, "coder", "session-a"), _QueuedItem("first")),
-        ((None, "coder", "session-a"), _QueuedItem("hidden", internal=True)),
-        (("project-b", "writer", "session-b"), _QueuedItem("third")),
+        (writer_session, _QueuedItem("second")),
+        (coder_session, _QueuedItem("first")),
+        (coder_session, _QueuedItem("hidden", internal=True)),
+        (writer_session, _QueuedItem("third")),
     ]
     app = _stub_app(tmp_path)
 

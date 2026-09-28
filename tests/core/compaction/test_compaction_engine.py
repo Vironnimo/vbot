@@ -246,7 +246,7 @@ async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop(
                 compacted_token_count=1,
             )
 
-    class RecordingAdapter:
+    class RecordingAdapter(StubAdapter):
         async def stream(
             self, messages: list[dict], **kwargs: Any
         ) -> AsyncIterator[dict[str, Any]]:
