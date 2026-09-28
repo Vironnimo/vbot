@@ -315,6 +315,7 @@ PERFORMANCE_HELP = {
     "record-start": "Start recording a performance timeline",
     "record-stop": "Stop the active recording and write its trace file",
     "recordings": "List stored performance recordings, newest first",
+    "heap": "Count the objects the garbage collector tracks, by type and module",
 }
 
 

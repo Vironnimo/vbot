@@ -338,3 +338,35 @@ async def test_closing_the_service_discards_its_active_recording(
     assert service.recording_status() is None
     assert "discarded" in caplog.text and recording_id in caplog.text
     assert not (tmp_path / "performance").exists() or not any((tmp_path / "performance").iterdir())
+
+
+class CensusProbe:
+    """A type only this test allocates, so its census rows are exact."""
+
+
+@pytest.mark.asyncio
+async def test_heap_census_counts_types_by_generation_and_reports_growth(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    probe = f"{CensusProbe.__module__}.CensusProbe"
+    try:
+        kept = [CensusProbe() for _ in range(30_000)]
+        first = await service.heap_census(top=100)
+        kept.extend(CensusProbe() for _ in range(30_000))
+        second = await service.heap_census(top=100)
+        with pytest.raises(ValueError, match="top"):
+            await service.heap_census(top=0)
+    finally:
+        await service.aclose()
+
+    assert first["previous_taken_at"] is None and first["growth"] == []
+    assert all(row["change"] is None for row in first["types"] + first["modules"])
+    assert second["previous_taken_at"] == first["taken_at"]
+    assert len(second["generations"]) == 3
+    assert second["tracked"] == sum(entry["objects"] for entry in second["generations"])
+    assert {"objects", "collections", "collected", "uncollectable"} <= set(second["generations"][0])
+    grown = {row["name"]: row for row in second["growth"]}
+    assert grown[probe]["count"] >= 60_000 and grown[probe]["change"] >= 30_000
+    # Modules group types by their first two package segments.
+    modules = {row["name"]: row for row in second["modules"]}
+    assert modules["tests.core"]["change"] >= 30_000
+    assert len(kept) == 60_000

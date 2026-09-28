@@ -233,3 +233,68 @@ def test_recordings_lists_the_stored_recordings(
     assert code == 0
     assert rpc.calls == [("performance.recording_list", {"limit": limit})]
     assert out.splitlines() == expected
+
+
+@pytest.mark.parametrize(
+    ("previous", "growth", "expected_tail"),
+    [
+        pytest.param(
+            None,
+            [],
+            ["growth: first census of this server process; run it again later to compare"],
+            id="first",
+        ),
+        pytest.param(
+            "2026-09-24T09:00:00+00:00",
+            [{"name": "core.runs.RunEvent", "count": 900, "change": 400}],
+            [
+                "largest growth since 2026-09-24T09:00:00+00:00:",
+                "- core.runs.RunEvent count=900 change=+400",
+            ],
+            id="compared",
+        ),
+    ],
+)
+def test_heap_prints_generations_top_types_modules_and_growth(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    previous: str | None,
+    growth: list[dict[str, Any]],
+    expected_tail: list[str],
+) -> None:
+    change = None if previous is None else -5
+    rpc.reply(
+        "performance.heap",
+        {
+            "taken_at": "2026-09-24T10:00:00+00:00",
+            "duration_ms": 412.5,
+            "previous_taken_at": previous,
+            "tracked": 1500,
+            "generations": [
+                {"objects": 100, "collections": 50, "collected": 7, "uncollectable": 0},
+                {"objects": 0, "collections": 5, "collected": 1, "uncollectable": 0},
+                {"objects": 1400, "collections": 2, "collected": 0, "uncollectable": 0},
+            ],
+            "frozen": 9000,
+            "types": [{"name": "builtins.dict", "count": 600, "change": change}],
+            "modules": [{"name": "builtins", "count": 1100, "change": change}],
+            "growth": growth,
+        },
+    )
+
+    code, out, _err = run_cli("performance", "heap", "--top", "5")
+
+    change_text = "" if change is None else " change=-5"
+    assert code == 0
+    assert rpc.calls == [("performance.heap", {"top": 5})]
+    assert out.splitlines() == [
+        "heap census: taken_at=2026-09-24T10:00:00+00:00 duration_ms=412.5 tracked=1500 "
+        "frozen=9000",
+        "generations: gen0 objects=100 collections=50 | gen1 objects=0 collections=5 "
+        "| gen2 objects=1400 collections=2",
+        "top types:",
+        f"- builtins.dict count=600{change_text}",
+        "top modules:",
+        f"- builtins count=1100{change_text}",
+        *expected_tail,
+    ]

@@ -32,11 +32,14 @@ vbot performance status                      # slowest operations since start, g
 vbot performance record start --label slow-ui --max-seconds 300
 vbot performance record stop                 # prints the trace path and the window's slowest operations
 vbot performance recordings                  # stored recordings (newest 20 are kept)
+vbot performance heap --top 30               # what the garbage collector tracks, by type and module
 ```
 
 Add the usual target options (`--port 8421` for the development instance, the worktree port for a worktree).
 
 A **recording** is the tool for "it is slow right now": start it, let the slowness happen in real use, stop it. The trace (`<data-dir>/artifacts/performance/<id>.trace.json`) opens in [Perfetto](https://ui.perfetto.dev); the file is processed locally in the browser. Each Session is its own process row, so you see per Agent which phase (request build, first token, Tool round, persist) took how long and where Sessions wait for each other. Worker pools, SQLite, RPC and the runtime (Event Loop lag, stalls, process gauges) have rows of their own. Traces contain timings, ids and code locations, never message content.
+
+A **heap census** answers "what fills the heap" when `gc.gen2` pauses grow: it counts the objects the garbage collector tracks per generation and by type (`core.runs.RunEvent`, `builtins.dict`, ...) and by module. Run it twice some minutes apart under load; the second run lists which types grew. A census blocks the Event Loop for up to about 100 ms on a heap of 5 million objects, so do not run it in a loop.
 
 ## Load test
 

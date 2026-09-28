@@ -1,14 +1,14 @@
 # Performance
 
-Always-on, low-overhead measurement of the server process plus on-demand Recordings that produce Perfetto-compatible timelines.
+Always-on, low-overhead measurement of the server process plus on-demand Recordings that produce Perfetto-compatible timelines and on-demand Heap Censuses.
 
 ## Overview
 
-`core/performance/` owns process-wide duration histograms and gauges, the Event Loop monitor and stall watchdog, Recordings, and their files. Instrumented code in any domain records through module-level functions into one process-wide sink, the same way it logs. The Runtime-owned `PerformanceService` runs the monitor and watchdog and owns Recording start/stop, trace writing, retention and listing. Exposure is `performance.*` RPC (`server/rpc/performance_methods.py`) and the `vbot performance` CLI area (`cli/performance_management.py`, alias `perf`); there is no WebUI.
+`core/performance/` owns process-wide duration histograms and gauges, the Event Loop monitor and stall watchdog, Recordings and their files, and Heap Censuses. Instrumented code in any domain records through module-level functions into one process-wide sink, the same way it logs. The Runtime-owned `PerformanceService` runs the monitor and watchdog and owns Recording start/stop, trace writing, retention and listing. Exposure is `performance.*` RPC (`server/rpc/performance_methods.py`) and the `vbot performance` CLI area (`cli/performance_management.py`, alias `perf`); there is no WebUI.
 
 The domain measures; it never changes behavior. It does not own what is measured: each owner decides its own measurement points (catalog below). Provider wire capture is a separate subsystem (`debug.md`); a performance trace never contains request or response content.
 
-Module split: `performance.py` (public API, sink, service), `_metrics.py` (log-scale histograms, name cap), `_monitor.py` (lag task, samplers, watchdog thread, stack rendering), `_gc.py` (cyclic garbage collection pause observer), `_recording.py` (event buffer, lanes, trace/summary files, retention).
+Module split: `performance.py` (public API, sink, service), `_metrics.py` (log-scale histograms, name cap), `_monitor.py` (lag task, samplers, watchdog thread, stack rendering), `_gc.py` (cyclic garbage collection pause observer), `_recording.py` (event buffer, lanes, trace/summary files, retention), `_heap.py` (Heap Census).
 
 ## Terms
 
@@ -22,6 +22,9 @@ The trace group a measurement belongs to, rendered as one Perfetto process: a Se
 
 ### Lane
 A trace thread inside one Track. A span takes the lowest lane that is free at its start, so concurrent spans of one Track never overlap on a lane. Lane numbers carry no identity (lane 0 is not a particular Run).
+
+### Heap Census
+An on-demand count of the objects the cyclic garbage collector tracks, per generation and by module-qualified type name (`module.qualname`), aggregated by module (first two package segments). Changes are relative to the same service's previous census. Objects frozen at startup (`server.md`) are only counted as `frozen`, so the generations show what serving created. Not a memory size: it counts container objects, whose number drives full-collection pauses.
 
 ### Stall
 An Event Loop tick overdue by more than the stall threshold (250 ms). The watchdog thread samples the loop thread's Python stack every 50 ms during the stall and aggregates identical stacks; frames are `path:line qualname` only. Few samples over a long stall mean the watchdog could not get the GIL either: a long GIL-holding call, most often a cyclic garbage collection, which `gc_ms` then shows.
@@ -39,6 +42,7 @@ An Event Loop tick overdue by more than the stall threshold (250 ms). The watchd
 - `performance.recording_start` `{label?, max_seconds?}` -> status `{recording_id, label, started_at, elapsed_seconds, max_seconds, event_count, truncated}`. `label` is non-blank, <= 200 characters; `max_seconds` is an integer 1..3600, default 300.
 - `performance.recording_stop` `{}` -> `{recording_id, label, started_at, duration_seconds, event_count, truncated, stopped_reason, trace_path, summary: {metrics, gauges_max, stalls}}`. `summary` covers only the Recording window.
 - `performance.recording_list` `{limit?}` (1..100, default 20) -> `{recordings: [...]}` newest first, each the stop result without `summary`.
+- `performance.heap` `{top?}` (1..100, default 20) -> `{taken_at, duration_ms, previous_taken_at, tracked, generations: [{objects, collections, collected, uncollectable}], frozen, types, modules, growth}`. `types` and `modules` are the `top` largest rows `{name, count, change}` (`change` is `null` on the first census of the service); `growth` holds the `top` rows with the largest positive `change` (empty on the first census). Censuses run one at a time on the `performance` worker pool.
 - Errors: `performance_recording_active` (start while recording), `performance_recording_inactive` (stop while idle), `invalid_request` (unknown params, bad label/limits).
 - `stopped_reason` is `requested` or `max_seconds`. `trace_path` is an absolute path with `/` separators.
 
@@ -78,6 +82,7 @@ Durations are milliseconds. Names are dotted lowercase words with low cardinalit
 - The garbage collection callback runs inside the collector on whatever thread allocated, possibly while that thread holds a lock such as the metric registry's. It must stay lock-free (timestamps, a float total and a bounded deque); histograms and spans are recorded later on the Event Loop.
 - The server process freezes its startup heap once the app is ready (`server.md`), so full collections skip modules, classes and Runtime services; `gc.gen2` then reflects the objects created while serving.
 - A `gc.gen2` pause grows with the number of tracked objects created since the freeze, and full collections come more often the more container objects survive into the old generation. Long-retained dict/list graphs therefore drive the pauses: finished Runs keep only their settled ending (`runs.md`), finished processes drop their asyncio internals (`tools/process.md`), and Model requests share the live request view instead of copying it per step (`chat.md`). Keep new per-Run or per-step data out of long-lived containers, or bound it.
+- A Heap Census lists each generation with one interpreter call that holds the GIL, then counts in 20,000-object slices: 5 million tracked objects took 355 ms with at most 107 ms of continuous Event Loop blocking (Python 3.14, Windows). It also holds references to every listed object until counted.
 - `measure()` costs about 0.7 us per call without a Recording and about 2.4 us with a track while recording (Python 3.14, Windows); keep it out of per-token or per-byte loops.
 
 ## Tests

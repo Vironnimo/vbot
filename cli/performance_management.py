@@ -123,6 +123,56 @@ def performance_recordings(instance: ServerInstance, limit: int) -> CommandResul
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
+def performance_heap(instance: ServerInstance, top: int) -> CommandResult:
+    """Summarize a garbage collector census via `performance.heap` RPC."""
+
+    payload = _rpc_call(instance, "performance.heap", {"top": top})
+    if not payload.ok:
+        return payload.to_command_result()
+    data = payload.data
+    generations = [entry for entry in _sequence(data.get("generations")) if isinstance(entry, dict)]
+    growth = _sequence(data.get("growth"))
+    previous = data.get("previous_taken_at")
+    lines = [
+        f"heap census: taken_at={_string_or_default(data.get('taken_at'), '-')} "
+        f"duration_ms={_value_text(data.get('duration_ms'))} "
+        f"tracked={_value_text(data.get('tracked'))} frozen={_value_text(data.get('frozen'))}",
+        "generations: "
+        + (
+            " | ".join(
+                f"gen{index} objects={_value_text(entry.get('objects'))} "
+                f"collections={_value_text(entry.get('collections'))}"
+                for index, entry in enumerate(generations)
+            )
+            or "-"
+        ),
+        *_census_section("top types", _sequence(data.get("types"))),
+        *_census_section("top modules", _sequence(data.get("modules"))),
+    ]
+    if previous is None:
+        lines.append("growth: first census of this server process; run it again later to compare")
+    else:
+        lines.extend(
+            _census_section(f"largest growth since {_string_or_default(previous, '-')}", growth)
+        )
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def _census_section(title: str, rows: Sequence[object]) -> list[str]:
+    entries = [row for row in rows if isinstance(row, dict)]
+    if not entries:
+        return [f"{title}: -"]
+    lines = [f"{title}:"]
+    for row in entries:
+        change = row.get("change")
+        change_text = "" if not isinstance(change, int) else f" change={change:+d}"
+        lines.append(
+            f"- {_string_or_default(row.get('name'), '?')} "
+            f"count={_value_text(row.get('count'))}{change_text}"
+        )
+    return lines
+
+
 def _recording_line(recording: object) -> str:
     if not isinstance(recording, dict):
         return "recording: none"

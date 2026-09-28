@@ -1,7 +1,9 @@
 """Performance measurement public API."""
 
 from core.performance.performance import (
+    DEFAULT_HEAP_TOP,
     DEFAULT_RECORDING_SECONDS,
+    MAX_HEAP_TOP,
     MAX_LABEL_LENGTH,
     MAX_RECORDING_SECONDS,
     RETAINED_RECORDINGS,
@@ -18,7 +20,9 @@ from core.performance.performance import (
 )
 
 __all__ = [
+    "DEFAULT_HEAP_TOP",
     "DEFAULT_RECORDING_SECONDS",
+    "MAX_HEAP_TOP",
     "MAX_LABEL_LENGTH",
     "MAX_RECORDING_SECONDS",
     "RETAINED_RECORDINGS",

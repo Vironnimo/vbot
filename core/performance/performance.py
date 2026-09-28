@@ -26,6 +26,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from core.performance._heap import HeapCensus, census_result, take_census
 from core.performance._metrics import MetricRegistry
 from core.performance._monitor import LoopMonitor, StallRecord, is_project_frame
 from core.performance._recording import (
@@ -50,6 +51,8 @@ MAX_RECORDING_EVENTS = 500_000
 MAX_LABEL_LENGTH = 200
 RETAINED_RECORDINGS = 20
 RETAINED_STALLS = 50
+DEFAULT_HEAP_TOP = 20
+MAX_HEAP_TOP = 100
 EVENT_LOOP_LAG_METRIC = "event_loop.lag"
 _STALL_WARNING_MS = 1000.0
 _STALL_WARNING_INTERVAL_S = 30.0
@@ -286,6 +289,8 @@ class PerformanceService:
         self._recording: Recording | None = None
         self._auto_stop: asyncio.TimerHandle | None = None
         self._finishing: set[asyncio.Task[dict[str, Any]]] = set()
+        self._census_lock = asyncio.Lock()
+        self._last_census: HeapCensus | None = None
 
     @property
     def monitoring(self) -> bool:
@@ -313,6 +318,19 @@ class PerformanceService:
     async def snapshot(self) -> dict[str, Any]:
         """Return process-wide metrics, gauges, recent stalls and recording status."""
         return await self._workers.run(self._snapshot)
+
+    async def heap_census(self, *, top: int = DEFAULT_HEAP_TOP) -> dict[str, Any]:
+        """Count tracked objects by generation, type and module, off the Event Loop.
+
+        Changes are relative to this service's previous census. Censuses run one
+        at a time; each holds the GIL about as long as a full collection.
+        """
+        if not isinstance(top, int) or isinstance(top, bool) or not 1 <= top <= MAX_HEAP_TOP:
+            raise ValueError(f"top must be an integer from 1 to {MAX_HEAP_TOP}")
+        async with self._census_lock:
+            census = await self._workers.run(take_census)
+            previous, self._last_census = self._last_census, census
+        return await self._workers.run(census_result, census, previous, top=top)
 
     def start_recording(
         self,

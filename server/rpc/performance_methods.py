@@ -3,8 +3,10 @@
 ``performance.snapshot`` returns the process-wide histograms, gauges, recent
 Event Loop stalls and the active recording. ``performance.recording_start`` /
 ``performance.recording_stop`` control the single trace recording, and
-``performance.recording_list`` reads the retained recordings. File work runs
-inside the Runtime-owned performance service, off the Event Loop.
+``performance.recording_list`` reads the retained recordings.
+``performance.heap`` counts the objects the garbage collector tracks. File and
+census work runs inside the Runtime-owned performance service, off the Event
+Loop.
 """
 
 from __future__ import annotations
@@ -12,7 +14,9 @@ from __future__ import annotations
 from typing import Any, cast
 
 from core.performance import (
+    DEFAULT_HEAP_TOP,
     DEFAULT_RECORDING_SECONDS,
+    MAX_HEAP_TOP,
     MAX_RECORDING_SECONDS,
     RETAINED_RECORDINGS,
     PerformanceService,
@@ -71,6 +75,12 @@ async def _recording_list(state: Any, params: JsonObject) -> JsonObject:
     return {"recordings": recordings}
 
 
+async def _heap(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"top"}, "performance.heap")
+    top = _optional_positive_integer(params, "top", max_value=MAX_HEAP_TOP)
+    return await _performance(state).heap_census(top=DEFAULT_HEAP_TOP if top is None else top)
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the performance measurement handlers."""
     return {
@@ -78,4 +88,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "performance.recording_start": _recording_start,
         "performance.recording_stop": _recording_stop,
         "performance.recording_list": _recording_list,
+        "performance.heap": _heap,
     }

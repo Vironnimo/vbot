@@ -17,7 +17,13 @@ from cli._parser_common import (
     STATISTICS_SECTIONS,
     _add_command_parser,
 )
-from core.performance import DEFAULT_RECORDING_SECONDS, MAX_LABEL_LENGTH, MAX_RECORDING_SECONDS
+from core.performance import (
+    DEFAULT_HEAP_TOP,
+    DEFAULT_RECORDING_SECONDS,
+    MAX_HEAP_TOP,
+    MAX_LABEL_LENGTH,
+    MAX_RECORDING_SECONDS,
+)
 from core.utils.config import DEFAULT_HOST
 
 
@@ -431,4 +437,17 @@ def _add_performance_parsers(
         default=20,
         metavar="<count>",
         help="Maximum recordings to list (1-100, default: 20)",
+    )
+    heap_parser = _add_command_parser(
+        performance_subparsers,
+        "heap",
+        PERFORMANCE_HELP["heap"],
+        example="performance heap --top 30",
+    )
+    heap_parser.add_argument(
+        "--top",
+        type=int,
+        default=DEFAULT_HEAP_TOP,
+        metavar="<count>",
+        help=f"Rows per list (1-{MAX_HEAP_TOP}, default: {DEFAULT_HEAP_TOP})",
     )

@@ -4,6 +4,7 @@ Coverage:
 - ``performance.snapshot`` returns the documented fields, including dispatch metrics,
 - a recording starts, reports status, stops into a trace file and is listed,
 - starting while recording and stopping while idle return their stable error codes,
+- ``performance.heap`` returns the documented census fields,
 - request parameters are validated before the service is touched.
 """
 
@@ -124,6 +125,25 @@ async def test_recording_start_stop_and_list_follow_the_contract(
 
 
 @pytest.mark.asyncio
+async def test_heap_census_returns_the_documented_fields(service: PerformanceService) -> None:
+    census = await _result(service, "performance.heap", top=3)
+
+    assert set(census) == {
+        "taken_at",
+        "duration_ms",
+        "previous_taken_at",
+        "tracked",
+        "generations",
+        "frozen",
+        "types",
+        "modules",
+        "growth",
+    }
+    assert len(census["types"]) == 3
+    assert set(census["types"][0]) == {"name", "count", "change"}
+
+
+@pytest.mark.asyncio
 async def test_recording_start_while_active_and_stop_while_idle_are_rejected(
     service: PerformanceService,
 ) -> None:
@@ -152,6 +172,9 @@ async def test_recording_start_while_active_and_stop_while_idle_are_rejected(
         ("performance.recording_stop", {"force": True}),
         ("performance.recording_list", {"limit": 0}),
         ("performance.recording_list", {"limit": 101}),
+        ("performance.heap", {"top": 0}),
+        ("performance.heap", {"top": 101}),
+        ("performance.heap", {"depth": 2}),
     ],
 )
 async def test_invalid_requests_are_rejected(
