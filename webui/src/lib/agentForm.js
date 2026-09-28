@@ -144,17 +144,6 @@ export function normalizeAgentForm(values, options = {}) {
   };
 }
 
-export function textToList(text) {
-  if (!hasValue(text)) {
-    return [];
-  }
-
-  return String(text)
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-}
-
 // The selected model's reasoning capability block, or null when the value is
 // empty or the model is unknown/custom (the catalog has no entry). Shared by the
 // editor and the create modal so both gate the thinking-effort options the same
