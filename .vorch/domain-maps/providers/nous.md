@@ -6,7 +6,7 @@ Read `providers.md` first. This reference owns vBot's Nous API-key and Portal-su
 
 - `nous:api-key` uses `NOUS_API_KEY` as an `Authorization: Bearer` credential against `https://inference-api.nousresearch.com/v1`. The key may spend Portal credits or a subscription entitlement; vBot does not infer the account type from the credential.
 - `nous:subscription` is a separate OAuth Device Flow Connection. It requests only `inference:invoke` from `https://portal.nousresearch.com/api/oauth/device/code`, polls `/api/oauth/token`, and uses the returned short-lived access JWT on the same explicit inference endpoint.
-- Nous refresh tokens rotate and are single-use. `OAuthTokenGetter` sends the credential only in `x-nous-refresh-token`, never in the form body, does not retry an ambiguous refresh POST, persists the rotated token, and removes a login rejected for terminal reuse/authorization failure. An explicitly advertised scope that lacks `inference:invoke` is rejected.
+- Nous refresh tokens rotate and are single-use. `OAuthTokenGetter` sends the credential only in `x-nous-refresh-token`, never in the form body, does not retry an ambiguous refresh POST, persists the rotated token, and removes a login only after a definite rejection (reuse detection or `invalid_grant`; server errors and other failures keep it, `providers/connections.md`). An explicitly advertised scope that lacks `inference:invoke` is rejected.
 - Credential and endpoint remain separate facts. The bundled Connections select the production endpoint directly; token contents, credential prefixes, and response aliases never choose a Connection or rewrite its endpoint.
 
 ## Request and response policy

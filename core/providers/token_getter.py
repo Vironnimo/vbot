@@ -311,8 +311,11 @@ class OAuthTokenGetter:
                 extra=extra,
             )
         except ProviderError as exc:
+            # Only a definite rejection quarantines the login; a server error or
+            # an inconclusive auth failure leaves the refresh token untouched.
             if (
                 isinstance(exc, ProviderAuthError)
+                and not isinstance(exc, _InconclusiveRejectionError)
                 and self._oauth_config.device_flow in ROTATING_REFRESH_DEVICE_FLOWS
             ):
                 self._token_store.replace_if_current(
@@ -537,6 +540,14 @@ def validate_nous_oauth_scope(data: dict[str, object], requested_scopes: list[st
         raise ProviderAuthError("Nous Portal connection is missing the inference scope")
 
 
+class _InconclusiveRejectionError(ProviderAuthError):
+    """A token-endpoint authentication failure that does not prove the login dead.
+
+    Callers see an ordinary ``ProviderAuthError``; rotating flows keep the stored
+    login for it, because deleting it costs a full device re-login.
+    """
+
+
 def _classify_nous_refresh_status(status_code: int, response_body: str) -> None:
     if status_code < 400:
         return
@@ -549,11 +560,21 @@ def _classify_nous_refresh_status(status_code: int, response_body: str) -> None:
 
 
 def _classify_token_exchange_status(status_code: int, response_body: str) -> None:
+    """Raise the error a failed token-endpoint status stands for.
+
+    Only a client error carrying the RFC 6749 ``invalid_grant`` code proves the
+    refresh token unusable and raises a plain ``ProviderAuthError``. Server-side
+    failures raise non-auth errors, and every other client error (a WAF page, a
+    bare 401, ``invalid_client``, ...) is an ``_InconclusiveRejectionError`` that
+    rotating flows must not treat as a dead login.
+    """
+
     if status_code < 400:
         return
     # Token endpoints may echo credentials or account details in their error
     # bodies, so messages and logs carry only the status and the error code.
-    detail = _token_endpoint_failure_detail(status_code, response_body)
+    error_code = _oauth_error_code(response_body)
+    detail = _token_endpoint_failure_detail(status_code, error_code)
     if status_code == 429:
         raise ProviderRateLimitError(f"OAuth token refresh rate limited ({detail})")
     # OAuth token exchange is a non-idempotent POST: authorization codes are
@@ -561,13 +582,19 @@ def _classify_token_exchange_status(status_code: int, response_body: str) -> Non
     # must not be blindly retried.
     if is_retryable_status(status_code, idempotent=False):
         raise ProviderError(f"OAuth token endpoint unavailable ({detail})", retryable=True)
-    raise ProviderAuthError(f"OAuth token refresh failed ({detail}) — please reconnect")
+    if status_code >= 500 or status_code == 408:
+        # A server-side failure (including CDN 52x pages) says nothing about the
+        # credential: neither an authentication error nor a reason to reconnect.
+        raise ProviderError(f"OAuth token endpoint failed ({detail})", retryable=False)
+    message = f"OAuth token refresh failed ({detail}) — please reconnect"
+    if error_code == "invalid_grant":
+        raise ProviderAuthError(message)
+    raise _InconclusiveRejectionError(message)
 
 
-def _token_endpoint_failure_detail(status_code: int, response_body: str) -> str:
+def _token_endpoint_failure_detail(status_code: int, error_code: str | None) -> str:
     """Return ``HTTP <status>`` plus the validated OAuth error code when present."""
 
-    error_code = _oauth_error_code(response_body)
     return f"HTTP {status_code}, {error_code}" if error_code else f"HTTP {status_code}"
 
 

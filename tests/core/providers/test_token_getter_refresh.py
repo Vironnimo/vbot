@@ -656,12 +656,90 @@ async def test_retryable_refresh_failure_is_sanitized_and_keeps_token(
 @respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("config", "status_code"),
+    [
+        pytest.param(openai_oauth_config(), 500, id="standard-500"),
+        pytest.param(xai_oauth_config(), 522, id="rotating-cdn-522"),
+        pytest.param(opencode_oauth_config(), 408, id="rotating-408"),
+    ],
+)
+async def test_server_side_refresh_failure_is_not_an_authentication_failure(
+    store: TokenStore,
+    caplog: pytest.LogCaptureFixture,
+    config: OAuthConfig,
+    status_code: int,
+) -> None:
+    """A server-side failure is neither replayed nor reported as a login to reconnect."""
+
+    original = expired_token()
+    store.save("provider", "subscription", original)
+    route = respx.post(config.token_url).mock(
+        return_value=httpx.Response(
+            status_code, json={"error": "server_error", "error_description": _LEAKY_DESCRIPTION}
+        )
+    )
+    getter = OAuthTokenGetter(store, "provider", "subscription", config)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
+        pytest.raises(ProviderError) as caught,
+    ):
+        await getter()
+
+    assert type(caught.value) is ProviderError
+    assert caught.value.retryable is False
+    message = str(caught.value)
+    assert f"HTTP {status_code}, server_error" in message
+    _assert_sanitized(message, *_getter_logs(caplog, logging.WARNING))
+    assert route.call_count == 1
+    assert store.load("provider", "subscription") == original
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("config", "failure"),
     [
         pytest.param(xai_oauth_config(), httpx.ReadError("lost"), id="xai-lost-response"),
         pytest.param(opencode_oauth_config(), httpx.ReadError("lost"), id="opencode-lost-response"),
         pytest.param(nous_oauth_config(), httpx.Response(503), id="nous-503"),
         pytest.param(minimax_oauth_config(), httpx.Response(503), id="minimax-503"),
+        # Neither a server-side failure nor an auth failure without the
+        # ``invalid_grant`` code proves the refresh token dead.
+        pytest.param(
+            xai_oauth_config(), httpx.Response(500, json={"error": "server_error"}), id="xai-500"
+        ),
+        pytest.param(
+            xai_oauth_config(),
+            httpx.Response(500, json={"error": "invalid_grant"}),
+            id="xai-500-with-invalid-grant",
+        ),
+        pytest.param(
+            opencode_oauth_config(), httpx.Response(522, text="error code: 522"), id="opencode-522"
+        ),
+        pytest.param(minimax_oauth_config(), httpx.Response(408), id="minimax-408"),
+        pytest.param(
+            nous_oauth_config(),
+            httpx.Response(403, text="<html>Attention Required</html>"),
+            id="nous-waf-403",
+        ),
+        pytest.param(opencode_oauth_config(), httpx.Response(404), id="opencode-misrouted-404"),
+        pytest.param(xai_oauth_config(), httpx.Response(401), id="xai-401-without-oauth-error"),
+        pytest.param(
+            minimax_oauth_config(),
+            httpx.Response(400, text="<html>Bad Request</html>"),
+            id="minimax-400-not-json",
+        ),
+        pytest.param(
+            xai_oauth_config(),
+            httpx.Response(400, json={"error": "invalid_request"}),
+            id="xai-400-invalid-request",
+        ),
+        pytest.param(
+            opencode_oauth_config(),
+            httpx.Response(401, json={"error": "invalid_client"}),
+            id="opencode-401-invalid-client",
+        ),
     ],
 )
 async def test_rotating_refresh_is_never_replayed_and_preserves_token(
@@ -673,7 +751,9 @@ async def test_rotating_refresh_is_never_replayed_and_preserves_token(
     """Every rotating flow follows ``ROTATING_REFRESH_DEVICE_FLOWS``.
 
     A replay after a lost response would send the retired refresh token; its auth
-    rejection would then delete the still-valid stored login.
+    rejection would then delete the still-valid stored login. Only a definite
+    rejection (``test_rotating_refresh_rejection_quarantines_the_login``) deletes
+    it; every other failure leaves the login for the next attempt.
     """
 
     assert config.device_flow in ROTATING_REFRESH_DEVICE_FLOWS
@@ -713,6 +793,16 @@ async def test_rotating_refresh_is_never_replayed_and_preserves_token(
             minimax_oauth_config(),
             httpx.Response(200, json={"status": "error"}),
             id="minimax-unsuccessful-status",
+        ),
+        pytest.param(
+            xai_oauth_config(),
+            httpx.Response(401, json={"error": "invalid_grant"}),
+            id="xai-401-invalid-grant",
+        ),
+        pytest.param(
+            opencode_oauth_config(),
+            httpx.Response(400, json={"error": {"code": "invalid_grant"}}),
+            id="opencode-400-nested-invalid-grant",
         ),
     ],
 )
