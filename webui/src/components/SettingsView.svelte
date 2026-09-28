@@ -9,6 +9,7 @@
   import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
   import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
+  import SettingsNotificationsPanel from './settings/SettingsNotificationsPanel.svelte';
   import SettingsProvidersPanel from './settings/SettingsProvidersPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
   import SettingsReflectionPanel from './settings/SettingsReflectionPanel.svelte';
@@ -74,6 +75,10 @@
     {
       id: 'preferences',
       label: () => t('settings.preferences.title'),
+    },
+    {
+      id: 'notifications',
+      label: () => t('settings.notifications.title'),
     },
     {
       id: 'providers',
@@ -154,7 +159,12 @@
       id: 'general',
       label: () => t('settings.pages.general'),
       description: () => t('settings.pages.generalDescription'),
-      sections: ['appearance', 'session_titles', 'preferences'],
+      sections: [
+        'appearance',
+        'session_titles',
+        'preferences',
+        'notifications',
+      ],
     },
     {
       id: 'providers',
@@ -614,6 +624,13 @@
     />
   {:else if panelId === 'reflection'}
     <SettingsReflectionPanel
+      {settings}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'notifications'}
+    <SettingsNotificationsPanel
       {settings}
       onCommit={commitSettings}
       {onToast}
