@@ -449,73 +449,6 @@ function makeUsageReport(overrides = {}) {
   };
 }
 
-function makeUsageHistoryReport() {
-  const provider = (usedPercent) => ({
-    connection: 'openai:subscription',
-    account: 'default',
-    display_name: 'OpenAI',
-    plan: 'Plus',
-    credits: { enabled: true, balance: 25 },
-    windows: [
-      {
-        label: '5h',
-        used_percent: usedPercent,
-        reset_at: '2026-06-16T15:00:00+00:00',
-        window_seconds: 18000,
-        used_units: null,
-        remaining_units: null,
-        total_units: null,
-        unit: null,
-        unlimited: null,
-      },
-    ],
-    error: null,
-  });
-  return {
-    generated_at: '2026-06-16T12:00:00+00:00',
-    samples: [
-      {
-        sampled_at: '2026-06-16T10:00:00+00:00',
-        providers: [provider(20)],
-      },
-      {
-        sampled_at: '2026-06-16T11:00:00+00:00',
-        providers: [provider(48.5)],
-      },
-    ],
-  };
-}
-
-function makeRunActivityReport() {
-  return {
-    generated_at: '2026-06-16T12:00:00+00:00',
-    window: {
-      since: '2026-06-16T10:00:00+00:00',
-      until: '2026-06-16T11:00:00+00:00',
-    },
-    total_runs: 1,
-    truncated: false,
-    runs: [
-      {
-        agent_id: 'main',
-        session_id: 's1',
-        session_title: 'Investigate limits',
-        run_id: 'r1',
-        status: 'completed',
-        started_at: '2026-06-16T10:15:00+00:00',
-        completed_at: '2026-06-16T10:16:00+00:00',
-        duration_ms: 60000,
-        models: ['openai/gpt-5'],
-        tool_calls: 2,
-        measured_input_tokens: 100,
-        measured_output_tokens: 20,
-        estimated_input_tokens: 5,
-        estimated_output_tokens: 2,
-      },
-    ],
-  };
-}
-
 function routedRpc(usageReport) {
   return (method) =>
     method === 'provider.usage'
@@ -529,10 +462,7 @@ function routedRpc(usageReport) {
 }
 
 function openLimitsTab() {
-  const limitsTab = [...document.querySelectorAll('.tab-list__tab')].find(
-    (button) => button.textContent.trim() === 'Limits',
-  );
-  limitsTab.click();
+  buttonNamed('statistics.subview.limits').click();
 }
 
 async function waitForCondition(predicate, attempts = 50) {
@@ -607,8 +537,6 @@ export {
   StatisticsView,
   makeReport,
   makeUsageReport,
-  makeUsageHistoryReport,
-  makeRunActivityReport,
   routedRpc,
   openLimitsTab,
   waitForCondition,

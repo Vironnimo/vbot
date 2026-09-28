@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../../lib/i18n.js';
+import { init, t } from '../../../lib/i18n.js';
 import { rpcBackedApiMock } from '../../__tests__/apiMock.support.js';
 
 const rpcMock = vi.fn();
@@ -48,17 +48,42 @@ function historyReport() {
   };
 }
 
-function runActivityReport() {
+function runActivityReport(runs = []) {
   return {
     generated_at: '2026-07-25T12:00:00+00:00',
     window: {
       since: '2026-07-25T10:00:00+00:00',
       until: '2026-07-25T11:00:00+00:00',
     },
-    total_runs: 0,
+    total_runs: runs.length,
     truncated: false,
-    runs: [],
+    runs,
   };
+}
+
+function routeHistory(runs) {
+  return (method) => {
+    if (method === 'provider.usage_history.clear') {
+      return Promise.resolve({ deleted_samples: 2 });
+    }
+    return Promise.resolve(
+      method === 'provider.usage_history'
+        ? historyReport()
+        : runActivityReport(runs),
+    );
+  };
+}
+
+function clearCalls() {
+  return rpcMock.mock.calls.filter(
+    ([method]) => method === 'provider.usage_history.clear',
+  ).length;
+}
+
+function buttonsLabelled(label) {
+  return [...document.querySelectorAll('button')].filter(
+    (button) => button.textContent.trim() === label,
+  );
 }
 
 async function waitForCondition(predicate, attempts = 50) {
@@ -89,20 +114,30 @@ describe('LimitHistory', () => {
     document.body.innerHTML = '';
   });
 
-  it('renders the hourly trace and loads overlapping Run activity', async () => {
-    rpcMock.mockImplementation((method) =>
-      Promise.resolve(
-        method === 'provider.usage_history'
-          ? historyReport()
-          : runActivityReport(),
-      ),
+  it('renders the hourly trace and the vBot Runs overlapping its interval', async () => {
+    rpcMock.mockImplementation(
+      routeHistory([
+        {
+          agent_id: 'main',
+          session_id: 's1',
+          session_title: 'Investigate limits',
+          run_id: 'r1',
+          status: 'completed',
+          started_at: '2026-07-25T10:15:00+00:00',
+          completed_at: '2026-07-25T10:16:00+00:00',
+          duration_ms: 60000,
+          models: ['openai/gpt-5'],
+          tool_calls: 2,
+          measured_input_tokens: 100,
+          measured_output_tokens: 20,
+          estimated_input_tokens: 5,
+          estimated_output_tokens: 2,
+        },
+      ]),
     );
 
     mountedComponent = mount(LimitHistory, { target: document.body });
-    await waitForCondition(() => document.querySelector('.limit-trace__line'));
-    await waitForCondition(() =>
-      document.querySelector('.limit-activity .empty-state'),
-    );
+    await waitForCondition(() => document.querySelector('.limit-run__tokens'));
 
     expect(document.body.textContent).toContain('+20 pp');
     expect(document.querySelectorAll('.limit-trace__line')).toHaveLength(1);
@@ -110,6 +145,30 @@ describe('LimitHistory', () => {
       since: '2026-07-25T10:00:00+00:00',
       until: '2026-07-25T11:00:00+00:00',
     });
+    expect(document.querySelector('.limit-run__tokens').textContent).toContain(
+      '120',
+    );
+  });
+
+  it('deletes the history only after confirmation', async () => {
+    rpcMock.mockImplementation(routeHistory([]));
+
+    mountedComponent = mount(LimitHistory, { target: document.body });
+    await waitForCondition(() =>
+      document.querySelector('.limit-activity .empty-state'),
+    );
+
+    buttonsLabelled(t('statistics.limits.deleteHistory'))[0].click();
+    flushSync();
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+    expect(clearCalls()).toBe(0);
+
+    buttonsLabelled(t('statistics.limits.deleteHistoryConfirm')).at(-1).click();
+    await waitForCondition(() =>
+      document.querySelector('.limit-history > .empty-state'),
+    );
+    expect(clearCalls()).toBe(1);
+    expect(document.querySelectorAll('.limit-trace')).toHaveLength(0);
   });
 
   it('shows a baseline empty state before the first snapshot exists', async () => {
