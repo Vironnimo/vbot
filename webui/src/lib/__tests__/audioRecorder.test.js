@@ -114,7 +114,6 @@ describe('audioRecorder', () => {
       createAudioRecorder({
         navigator: navigatorWithTrack(track),
         MediaRecorder,
-        mimeType: 'audio/webm',
       });
 
     if (step === 'creating the recorder') {
@@ -147,7 +146,6 @@ describe('audioRecorder', () => {
         },
       },
       MediaRecorder: FakeMediaRecorder,
-      mimeType: 'audio/webm',
     });
 
     expect(() => recorder.cancel()).not.toThrow();
