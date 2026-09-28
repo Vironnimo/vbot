@@ -22,6 +22,7 @@ import psutil  # type: ignore[import-untyped]
 from cli._server_target import (
     DEFAULT_PROBE_TIMEOUT_SECONDS,
     HEALTH_PATH,
+    PATIENT_PROBE_TIMEOUT_SECONDS,
     WEBUI_PATH,
     WILDCARD_HOSTS,
     CommandResult,
@@ -33,6 +34,7 @@ from cli._server_target import (
     find_listening_process,
     is_local_target,
     probe_health,
+    probe_health_patiently,
     probe_webui,
     resolve_instance,
 )
@@ -54,7 +56,14 @@ DEFAULT_STARTUP_TIMEOUT_SECONDS = 60.0
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
 
-DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = 1.0
+# A busy server may need seconds to accept the shutdown request. Giving up early
+# falls back to `terminate`, a hard kill on Windows that skips the graceful teardown.
+DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = PATIENT_PROBE_TIMEOUT_SECONDS
+
+
+# A local listener holds the target port but never answered `/health`, so it is
+# neither confirmed as vBot nor known to be foreign.
+UNRESPONSIVE_LISTENER_MESSAGE = "port occupied by unresponsive process"
 
 
 PROCESS_CREATE_TIME_TOLERANCE_SECONDS = 0.001
@@ -197,7 +206,7 @@ def start_server(
     manager = _create_cli_log_manager(instance)
     logger = manager.get_logger(CLI_SERVER_LOGGER_NAME)
     try:
-        initial_health = probe_health(instance)
+        initial_health = probe_health_patiently(instance)
         if initial_health.is_vbot:
             logger.info("CLI-managed background server already running at %s", instance.url)
             return CommandResult(
@@ -217,6 +226,21 @@ def start_server(
             return CommandResult(
                 ok=False,
                 message="port occupied by non-vBot process",
+                instance=instance,
+                health=initial_health,
+                log_path=instance.log_path,
+            )
+        if initial_health.unresponsive:
+            # A spawned duplicate would fail to bind or claim the target, and the
+            # readiness probe would then succeed against the old server.
+            logger.warning(
+                "Refusing CLI-managed background server start because %s is held by a"
+                " process that does not answer its health check",
+                instance.url,
+            )
+            return CommandResult(
+                ok=False,
+                message=UNRESPONSIVE_LISTENER_MESSAGE,
                 instance=instance,
                 health=initial_health,
                 log_path=instance.log_path,
@@ -343,8 +367,20 @@ def stop_server(
             message="server stop requires a local target",
             instance=instance,
         )
-    health = probe_health(instance)
-    if not health.reachable:
+    health = probe_health_patiently(instance)
+    if health.unresponsive:
+        # A listener that never answers cannot be confirmed as vBot through /health;
+        # only the exact process of the control record may be stopped. It still gets
+        # the cooperative request first: a merely busy server honors it.
+        process = _resolve_control_process(instance)
+        if process is None:
+            return CommandResult(
+                ok=False,
+                message=UNRESPONSIVE_LISTENER_MESSAGE,
+                instance=instance,
+                health=health,
+            )
+    elif not health.reachable:
         process = _resolve_control_process(instance)
         if process is not None:
             return _finish_unreachable_control_process(
@@ -354,22 +390,22 @@ def stop_server(
                 shutdown_timeout_seconds=shutdown_timeout_seconds,
             )
         return CommandResult(ok=True, message="not running", instance=instance, health=health)
-    if not health.is_vbot:
+    elif not health.is_vbot:
         return CommandResult(
             ok=False,
             message="port occupied by non-vBot process",
             instance=instance,
             health=health,
         )
-
-    process = find_listening_process(instance)
-    if process is None:
-        return CommandResult(
-            ok=False,
-            message="vBot process not found",
-            instance=instance,
-            health=health,
-        )
+    else:
+        process = find_listening_process(instance)
+        if process is None:
+            return CommandResult(
+                ok=False,
+                message="vBot process not found",
+                instance=instance,
+                health=health,
+            )
 
     cooperative = _request_cooperative_shutdown(instance, process)
     forced = False
@@ -925,7 +961,7 @@ def _run_scheduled_restart(argv: list[str]) -> int:
 def get_status(instance: ServerInstance) -> CommandResult:
     """Return current vBot/API and WebUI status for the instance."""
 
-    health = probe_health(instance)
+    health = probe_health_patiently(instance)
     if health.is_vbot:
         return CommandResult(
             ok=True,
@@ -942,6 +978,14 @@ def get_status(instance: ServerInstance) -> CommandResult:
             instance=instance,
             health=health,
             webui=WebUIProbeResult(available=False),
+            log_path=instance.log_path,
+        )
+    if health.unresponsive:
+        return CommandResult(
+            ok=False,
+            message=UNRESPONSIVE_LISTENER_MESSAGE,
+            instance=instance,
+            health=health,
             log_path=instance.log_path,
         )
     return CommandResult(
@@ -968,8 +1012,10 @@ __all__ = [
     "WebUIProbeResult",
     "build_server_base_url",
     "probe_health",
+    "probe_health_patiently",
     "probe_webui",
     "resolve_instance",
+    "UNRESPONSIVE_LISTENER_MESSAGE",
     "DEFAULT_STARTUP_TIMEOUT_SECONDS",
     "DEFAULT_SHUTDOWN_TIMEOUT_SECONDS",
     "DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS",
