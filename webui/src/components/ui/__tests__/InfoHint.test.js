@@ -68,17 +68,11 @@ describe('InfoHint', () => {
     flushSync();
   }
 
-  it('renders a closed "?" dot with an accessible default label', () => {
+  it('renders a closed "?" dot that previews after the shared hover intent with blank-line paragraphs', () => {
     mountHint();
-
-    expect(dot()).toBeTruthy();
     expect(dot().getAttribute('aria-label')).toBe('More information');
     expect(dot().getAttribute('aria-expanded')).toBe('false');
     expect(popover()).toBeNull();
-  });
-
-  it('previews after the shared hover intent and splits blank-line text into paragraphs', () => {
-    mountHint();
 
     dot().dispatchEvent(new Event('pointerenter'));
     vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS - 1);
@@ -111,7 +105,7 @@ describe('InfoHint', () => {
     expect(popover()).toBeNull();
   });
 
-  it('stays open while the pointer travels onto the popover, then closes after the grace', () => {
+  it('stays open while the pointer travels onto the popover, and closes at once when it heads away', () => {
     mountHint();
     hover(dot());
 
@@ -125,10 +119,7 @@ describe('InfoHint', () => {
     vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
     flushSync();
     expect(popover()).toBeNull();
-  });
 
-  it('closes a preview at once when the pointer leaves the dot away from it', () => {
-    mountHint();
     hover(dot());
     const popoverRect = { left: 90, top: 200, width: 220, height: 80 };
     popover().getBoundingClientRect = () => ({
@@ -136,7 +127,6 @@ describe('InfoHint', () => {
       right: popoverRect.left + popoverRect.width,
       bottom: popoverRect.top + popoverRect.height,
     });
-
     const leave = new Event('pointerleave');
     Object.defineProperties(leave, {
       clientX: { value: 200 },
@@ -151,11 +141,10 @@ describe('InfoHint', () => {
     });
     window.dispatchEvent(move);
     flushSync();
-
     expect(popover()).toBeNull();
   });
 
-  it('stays open when pinned by click, and a second click closes it', () => {
+  it('stays open when pinned by click and closes on a second click, Escape (consumed) or an outside pointerdown', () => {
     mountHint();
 
     dot().click();
@@ -168,10 +157,6 @@ describe('InfoHint', () => {
     dot().click();
     flushSync();
     expect(popover()).toBeNull();
-  });
-
-  it('closes on Escape (consumed while pinned) and on outside pointerdown', () => {
-    mountHint();
 
     dot().click();
     flushSync();

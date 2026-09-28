@@ -45,12 +45,13 @@ describe('ConfirmDialog', () => {
     flushSync();
   }
 
-  it('renders the message inside the dialog', () => {
+  it('renders the message inside the dialog without extra content by default', () => {
     render({});
 
     const dialog = document.body.querySelector('.modal');
     expect(dialog.getAttribute('role')).toBe('dialog');
     expect(dialog.textContent).toContain('This event repeats.');
+    expect(document.body.querySelector('.extra-choice')).toBeNull();
   });
 
   it('renders extra body content inside the dialog body', () => {
@@ -71,11 +72,5 @@ describe('ConfirmDialog', () => {
     );
     expect(extra).toBeTruthy();
     expect(dialog.contains(extra)).toBe(true);
-  });
-
-  it('omits extra content when none is provided', () => {
-    render({});
-
-    expect(document.body.querySelector('.extra-choice')).toBeNull();
   });
 });

@@ -62,20 +62,17 @@ describe('TabList', () => {
     expect(tabs[2].tabIndex).toBe(-1);
   });
 
-  it('reports pointer selection without duplicating caller-owned state', () => {
-    const onChange = vi.fn();
-    const tabList = render({ onChange });
-
-    tabList.querySelectorAll('[role="tab"]')[2].click();
-
-    expect(onChange).toHaveBeenCalledWith('runs', ITEMS[2]);
-  });
-
-  it('moves and activates with arrows, Home, and End while skipping disabled tabs', () => {
+  it('reports pointer selection and moves with arrows, Home, and End while skipping disabled tabs', () => {
     const onChange = vi.fn();
     const tabList = render({ onChange });
     const tabs = [...tabList.querySelectorAll('[role="tab"]')];
 
+    // Selection is reported without duplicating caller-owned state.
+    tabs[2].click();
+    expect(onChange).toHaveBeenCalledWith('runs', ITEMS[2]);
+    expect(tabs[0].getAttribute('aria-selected')).toBe('true');
+
+    onChange.mockClear();
     tabs[0].focus();
     tabs[0].dispatchEvent(
       new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
@@ -94,8 +91,8 @@ describe('TabList', () => {
     expect(document.activeElement).toBe(tabs[2]);
   });
 
-  it('supports segmented compact styling and safe fallbacks', () => {
-    let tabList = render({
+  it('supports segmented compact styling', () => {
+    const tabList = render({
       appearance: 'segmented',
       density: 'compact',
       class: 'extra',

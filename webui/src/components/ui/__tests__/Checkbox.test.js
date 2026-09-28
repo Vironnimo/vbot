@@ -48,7 +48,7 @@ describe('Checkbox', () => {
     expect(mixed.getAttribute('aria-checked')).toBe('mixed');
   });
 
-  it('calls onChange with the next value, selecting from the mixed state', () => {
+  it('calls onChange with the next value, selecting from the mixed state, but not while disabled', () => {
     const onChange = vi.fn();
     render({ checked: false, onChange }).click();
     expect(onChange).toHaveBeenLastCalledWith(true);
@@ -58,14 +58,11 @@ describe('Checkbox', () => {
 
     render({ indeterminate: true, onChange }).click();
     expect(onChange).toHaveBeenLastCalledWith(true);
-  });
 
-  it('does not fire onChange while disabled', () => {
-    const onChange = vi.fn();
-    const button = render({ disabled: true, onChange });
-    expect(button.disabled).toBe(true);
-    button.click();
-    expect(onChange).not.toHaveBeenCalled();
+    const disabled = render({ disabled: true, onChange });
+    expect(disabled.disabled).toBe(true);
+    disabled.click();
+    expect(onChange).toHaveBeenCalledTimes(3);
   });
 
   it('makes a passed label part of the click target', () => {

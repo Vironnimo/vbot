@@ -34,13 +34,28 @@ describe('TextArea', () => {
     return document.querySelector('textarea');
   }
 
-  it('renders the default controlled multi-line field', () => {
-    const textArea = render({ rows: 4, placeholder: 'Describe the run' });
+  it('renders the default controlled multi-line field with forwarded state and accessibility attributes', () => {
+    const textArea = render({
+      variant: 'unknown',
+      rows: 4,
+      placeholder: 'Describe the run',
+      disabled: true,
+      readonly: true,
+      ariaLabel: 'Skill content',
+      'aria-describedby': 'skill-help',
+      spellcheck: false,
+    });
 
     expect(textArea.classList.contains('text-area--default')).toBe(true);
     expect(textArea.value).toBe('Initial content');
     expect(textArea.rows).toBe(4);
     expect(textArea.placeholder).toBe('Describe the run');
+    expect(textArea.disabled).toBe(true);
+    expect(textArea.readOnly).toBe(true);
+    expect(textArea.getAttribute('aria-label')).toBe('Skill content');
+    expect(textArea.getAttribute('aria-describedby')).toBe('skill-help');
+    expect(textArea.getAttribute('spellcheck')).toBe('false');
+    expect(textArea.getAttribute('aria-invalid')).toBe('false');
   });
 
   it('reports edits with the next value and native event', () => {
@@ -55,35 +70,18 @@ describe('TextArea', () => {
     expect(onInput.mock.calls[0][1]).toBeInstanceOf(Event);
   });
 
-  it('owns code and invalid states with their ARIA contract', () => {
-    const textArea = render({ code: true, invalid: true });
-
-    expect(textArea.classList.contains('text-area--code')).toBe(true);
-    expect(textArea.classList.contains('text-area--invalid')).toBe(true);
-    expect(textArea.getAttribute('aria-invalid')).toBe('true');
-  });
-
-  it('supports the inset editor variant and safe fallback', () => {
-    const textArea = render({ variant: 'inset', class: 'extra' });
-
-    expect(textArea.classList.contains('text-area--inset')).toBe(true);
-    expect(textArea.classList.contains('extra')).toBe(true);
-  });
-
-  it('forwards field state and accessibility attributes', () => {
+  it('owns the inset variant, code and invalid states with their ARIA contract', () => {
     const textArea = render({
-      disabled: true,
-      readonly: true,
-      ariaLabel: 'Skill content',
-      'aria-describedby': 'skill-help',
-      spellcheck: false,
+      variant: 'inset',
+      code: true,
+      invalid: true,
+      class: 'extra',
     });
 
-    expect(textArea.disabled).toBe(true);
-    expect(textArea.readOnly).toBe(true);
-    expect(textArea.getAttribute('aria-label')).toBe('Skill content');
-    expect(textArea.getAttribute('aria-describedby')).toBe('skill-help');
-    expect(textArea.getAttribute('spellcheck')).toBe('false');
-    expect(textArea.getAttribute('aria-invalid')).toBe('false');
+    expect(textArea.classList.contains('text-area--inset')).toBe(true);
+    expect(textArea.classList.contains('text-area--code')).toBe(true);
+    expect(textArea.classList.contains('text-area--invalid')).toBe(true);
+    expect(textArea.classList.contains('extra')).toBe(true);
+    expect(textArea.getAttribute('aria-invalid')).toBe('true');
   });
 });

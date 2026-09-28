@@ -29,60 +29,7 @@ describe('Dropdown', () => {
     document.body.innerHTML = '';
   });
 
-  it('renders the chevron at the design-specified 10 by 10 size', () => {
-    mountedComponent = mount(Dropdown, {
-      target: document.body,
-      props: {
-        id: 'test-dropdown',
-        value: 'medium',
-        options: ['low', 'medium', 'high'],
-      },
-    });
-    flushSync();
-
-    const chevron = document.body.querySelector(
-      '#test-dropdown .dropdown-chevron, button#test-dropdown .dropdown-chevron',
-    );
-
-    expect(chevron).toBeTruthy();
-    expect(chevron?.getAttribute('width')).toBe('10');
-    expect(chevron?.getAttribute('height')).toBe('10');
-    expect(chevron?.getAttribute('viewBox')).toBe('0 0 12 12');
-  });
-
-  it('caps the open list to a viewport-aware max-height', async () => {
-    mountedComponent = mount(Dropdown, {
-      target: document.body,
-      props: {
-        id: 'capped-dropdown',
-        value: 'a',
-        options: ['a', 'b', 'c'],
-      },
-    });
-    flushSync();
-
-    document.querySelector('#capped-dropdown').click();
-
-    // open() awaits a tick before positioning the portaled list, so poll until
-    // the inline positioning style (incl. the height cap) lands.
-    let list = null;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      flushSync();
-      list = document.querySelector('.dropdown-list');
-      if ((list?.getAttribute('style') ?? '').includes('max-height')) {
-        break;
-      }
-    }
-
-    expect(list).toBeTruthy();
-    // The list height is constrained inline from the computed available space,
-    // not left to the static CSS cap, so it can scroll instead of overflowing.
-    expect(list.getAttribute('style') ?? '').toContain('max-height');
-  });
-
-  it('portals the open list and closes on outside mousedown or page scroll', async () => {
+  it('portals the open list with a viewport-aware height cap and closes on outside mousedown or page scroll', async () => {
     const host = document.createElement('div');
     document.body.append(host);
     mountedComponent = mount(Dropdown, {
@@ -93,6 +40,12 @@ describe('Dropdown', () => {
 
     const trigger = document.querySelector('#floating-dropdown');
     const root = trigger.closest('.dropdown-primitive');
+
+    // The chevron keeps the design-specified 10 by 10 size.
+    const chevron = trigger.querySelector('.dropdown-chevron');
+    expect(chevron.getAttribute('width')).toBe('10');
+    expect(chevron.getAttribute('height')).toBe('10');
+    expect(chevron.getAttribute('viewBox')).toBe('0 0 12 12');
     const list = () => document.querySelector('.dropdown-primitive__list');
     const open = async () => {
       trigger.click();
@@ -111,6 +64,11 @@ describe('Dropdown', () => {
     // Portaled to <body> so no card or modal ancestor can clip or cover it.
     expect(list().parentElement).toBe(document.body);
     expect(host.contains(list())).toBe(false);
+    // The list height is constrained inline from the computed available space,
+    // not left to the static CSS cap, so it can scroll instead of overflowing.
+    await vi.waitFor(() => {
+      expect(list().getAttribute('style') ?? '').toContain('max-height');
+    });
     list().dispatchEvent(new Event('scroll'));
     flushSync();
     expect(root.dataset.state).toBe('open');
@@ -126,51 +84,16 @@ describe('Dropdown', () => {
     expect(list()).toBeNull();
   });
 
-  it('treats an empty-string option as a real active option', async () => {
-    mountedComponent = mount(Dropdown, {
-      target: document.body,
-      props: {
-        id: 'empty-value-dropdown',
-        value: '',
-        options: [
-          { value: '', label: 'All' },
-          { value: 'a', label: 'A' },
-        ],
-      },
-    });
-    flushSync();
-
-    const trigger = document.querySelector('#empty-value-dropdown');
-    trigger.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
-    );
-    await vi.waitFor(() => {
-      expect(document.activeElement?.getAttribute('role')).toBe('listbox');
-    });
-    const listbox = document.activeElement;
-    expect(listbox.getAttribute('aria-activedescendant')).toContain(
-      '-option-0',
-    );
-
-    listbox.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
-    );
-    flushSync();
-    const options = [...listbox.querySelectorAll('[role="option"]')];
-    expect(options[0].classList.contains('active')).toBe(false);
-    expect(options[1].classList.contains('active')).toBe(true);
-  });
-
-  it('opens and traverses enabled options with standard listbox keys', async () => {
+  it('opens and traverses enabled options with standard listbox keys, treating an empty string as a real value', async () => {
     const onValueChange = vi.fn();
     mountedComponent = mount(Dropdown, {
       target: document.body,
       props: {
         id: 'keyboard-dropdown',
-        value: 'b',
+        value: '',
         options: [
+          { value: '', label: 'All' },
           { value: 'a', label: 'A', disabled: true },
-          { value: 'b', label: 'B' },
           { value: 'c', label: 'C' },
         ],
         onValueChange,
@@ -187,7 +110,7 @@ describe('Dropdown', () => {
     });
     const listbox = document.activeElement;
     expect(listbox.getAttribute('aria-activedescendant')).toContain(
-      '-option-1',
+      '-option-0',
     );
 
     listbox.dispatchEvent(
@@ -197,6 +120,9 @@ describe('Dropdown', () => {
     expect(listbox.getAttribute('aria-activedescendant')).toContain(
       '-option-2',
     );
+    const options = [...listbox.querySelectorAll('[role="option"]')];
+    expect(options[0].classList.contains('active')).toBe(false);
+    expect(options[2].classList.contains('active')).toBe(true);
 
     listbox.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),

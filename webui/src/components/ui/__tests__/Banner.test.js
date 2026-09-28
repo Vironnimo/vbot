@@ -31,26 +31,22 @@ describe('Banner', () => {
   });
 
   function render(props) {
+    if (mountedComponent) unmount(mountedComponent);
+    document.body.innerHTML = '';
     mountedComponent = mount(Banner, { target: document.body, props });
     flushSync();
     return document.body.querySelector('.banner');
   }
 
-  it('emits the canonical banner + variant classes', () => {
+  it('emits the canonical banner + variant classes, falling back to neutral', () => {
     for (const variant of ['neutral', 'info', 'success', 'warn', 'error']) {
       const banner = render({ variant });
       expect(banner.classList.contains('banner')).toBe(true);
       expect(banner.classList.contains(`banner--${variant}`)).toBe(true);
-
-      unmount(mountedComponent);
-      mountedComponent = null;
-      document.body.innerHTML = '';
     }
-  });
-
-  it('falls back to neutral for an unknown variant', () => {
-    const banner = render({ variant: 'nonsense' });
-    expect(banner.classList.contains('banner--neutral')).toBe(true);
+    expect(
+      render({ variant: 'nonsense' }).classList.contains('banner--neutral'),
+    ).toBe(true);
   });
 
   it.each(['default', 'compact'])(

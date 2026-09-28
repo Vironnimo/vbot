@@ -33,12 +33,14 @@ describe('Button', () => {
   });
 
   function render(props) {
+    if (mountedComponent) unmount(mountedComponent);
+    document.body.innerHTML = '';
     mountedComponent = mount(Button, { target: document.body, props });
     flushSync();
     return document.body.querySelector('button');
   }
 
-  it('emits the canonical class for each variant', () => {
+  it('emits the canonical class for each variant, falling back to secondary', () => {
     const cases = {
       primary: 'btn-primary',
       secondary: 'btn-secondary',
@@ -49,55 +51,36 @@ describe('Button', () => {
     for (const [variant, expectedClass] of Object.entries(cases)) {
       const button = render({ variant });
       expect(button.classList.contains(expectedClass)).toBe(true);
-      unmount(mountedComponent);
-      mountedComponent = null;
-      document.body.innerHTML = '';
     }
+    expect(
+      render({ variant: 'nonsense' }).classList.contains('btn-secondary'),
+    ).toBe(true);
   });
 
-  it('falls back to the secondary class for an unknown variant', () => {
-    const button = render({ variant: 'nonsense' });
-    expect(button.classList.contains('btn-secondary')).toBe(true);
-  });
-
-  it('adds the icon footprint modifier only when icon is set', () => {
+  it('adds the icon footprint modifier only when icon is set and appends passthrough classes', () => {
     const iconButton = render({ variant: 'primary', icon: true });
     expect(iconButton.classList.contains('btn-icon')).toBe(true);
 
-    unmount(mountedComponent);
-    mountedComponent = null;
-    document.body.innerHTML = '';
-
-    const plainButton = render({ variant: 'primary' });
+    const plainButton = render({ variant: 'secondary', class: 'extra-layout' });
     expect(plainButton.classList.contains('btn-icon')).toBe(false);
-  });
-
-  it('appends caller-supplied passthrough classes', () => {
-    const button = render({ variant: 'secondary', class: 'extra-layout' });
-    expect(button.classList.contains('btn-secondary')).toBe(true);
-    expect(button.classList.contains('extra-layout')).toBe(true);
+    expect(plainButton.classList.contains('btn-secondary')).toBe(true);
+    expect(plainButton.classList.contains('extra-layout')).toBe(true);
   });
 
   it('defaults the native type to button and honors an override', () => {
     expect(render({}).getAttribute('type')).toBe('button');
 
-    unmount(mountedComponent);
-    mountedComponent = null;
-    document.body.innerHTML = '';
-
     expect(render({ type: 'submit' }).getAttribute('type')).toBe('submit');
   });
 
-  it('disables and marks busy while loading', () => {
-    const button = render({ loading: true });
-    expect(button.disabled).toBe(true);
-    expect(button.getAttribute('aria-busy')).toBe('true');
-  });
+  it('disables while loading or disabled, marking only loading as busy', () => {
+    const loading = render({ loading: true });
+    expect(loading.disabled).toBe(true);
+    expect(loading.getAttribute('aria-busy')).toBe('true');
 
-  it('disables on the disabled prop without setting aria-busy', () => {
-    const button = render({ disabled: true });
-    expect(button.disabled).toBe(true);
-    expect(button.getAttribute('aria-busy')).toBe(null);
+    const disabled = render({ disabled: true });
+    expect(disabled.disabled).toBe(true);
+    expect(disabled.getAttribute('aria-busy')).toBe(null);
   });
 
   it('invokes onClick on click but not while disabled', () => {
@@ -105,10 +88,6 @@ describe('Button', () => {
     const button = render({ onClick });
     button.click();
     expect(onClick).toHaveBeenCalledTimes(1);
-
-    unmount(mountedComponent);
-    mountedComponent = null;
-    document.body.innerHTML = '';
 
     const disabledClick = vi.fn();
     const disabledButton = render({ onClick: disabledClick, disabled: true });

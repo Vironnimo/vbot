@@ -46,7 +46,7 @@ describe('Modal', () => {
     flushSync();
   }
 
-  it('renders the dialog semantics, title, and body content', () => {
+  it('renders the dialog semantics, title, and body content without a footer', () => {
     render({});
 
     const dialog = document.body.querySelector('.modal');
@@ -61,6 +61,7 @@ describe('Modal', () => {
     expect(document.body.querySelector('.modal-body').textContent).toContain(
       'body content',
     );
+    expect(document.body.querySelector('.modal-footer')).toBeNull();
   });
 
   it('always gives the dialog an accessible name from its visible title', () => {
@@ -80,14 +81,12 @@ describe('Modal', () => {
     expect(footer.querySelector('.my-footer').textContent).toBe('actions');
   });
 
-  it('omits the footer wrapper when no footer snippet is given', () => {
-    render({});
-    expect(document.body.querySelector('.modal-footer')).toBeNull();
-  });
-
-  it('closes on the × button, Escape, and a backdrop click', () => {
+  it('closes on the × button, Escape, and a backdrop click, but not on a click inside the dialog box', () => {
     const onClose = vi.fn();
     render({ onClose });
+
+    document.body.querySelector('.modal').click();
+    expect(onClose).not.toHaveBeenCalled();
 
     document.body.querySelector('.modal-close').click();
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -97,14 +96,6 @@ describe('Modal', () => {
 
     document.body.querySelector('.modal-overlay').click();
     expect(onClose).toHaveBeenCalledTimes(3);
-  });
-
-  it('does not close on a click inside the dialog box', () => {
-    const onClose = vi.fn();
-    render({ onClose });
-
-    document.body.querySelector('.modal').click();
-    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('leaves Escape consumed by a nested control to that control', () => {
