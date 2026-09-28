@@ -184,9 +184,22 @@ describe('Swarm Wiki pages', () => {
     expect(
       document.querySelector('.wiki-content h3 .wiki-number').textContent,
     ).toBe('w1');
-    expect(
-      document.querySelector('.wiki-page-link .wiki-number').textContent,
-    ).toBe('w1');
+    const row = document.querySelector('.wiki-page-link');
+    expect(row.querySelector('.wiki-number').textContent).toBe('w1');
+    // The list names pages; revision and author appear on hover or focus.
+    expect(row.textContent).not.toContain('Original evidence');
+    row.focus();
+    await vi.waitFor(() =>
+      expect(
+        [...document.querySelectorAll('#app-tooltip dt')].map((label) => [
+          label.textContent,
+          label.nextElementSibling.textContent,
+        ]),
+      ).toEqual([
+        [t('swarm.wiki.revisionLabel', 'Revision'), '1'],
+        [t('swarm.wiki.author', 'Author'), 'Alpha'],
+      ]),
+    );
     const restore = t('swarm.wiki.restore', 'Restore this version');
     const remove = t('swarm.wiki.delete', 'Delete page');
     button(remove).click();

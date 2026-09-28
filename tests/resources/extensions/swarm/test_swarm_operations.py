@@ -77,6 +77,9 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
     events = await operations.invoke("swarms.events", {"swarm_id": board.swarm["id"]})
     assert events == {"entries": [], "has_more": False}
     snapshot = await operations.invoke("swarms.get", {"swarm_id": board.swarm["id"]})
+    # The Run list names each Run's Swarm and size without a detail read.
+    assert swarms["entries"][0]["name"] == snapshot["swarm"]["profile_snapshot"]["name"]
+    assert swarms["entries"][0]["participant_count"] == len(snapshot["swarm"]["participants"])
     assert snapshot["swarm"]["main_discussion_id"] == board.swarm["main_discussion_id"]
     assert snapshot["swarm"]["newest_wiki_page_number"] is None
     posted = await operations.invoke(

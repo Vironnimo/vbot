@@ -505,6 +505,10 @@ pending title tasks. Runs started before titles existed keep the goal-line title
 The sidebar groups preparing/running/stopping records as Active runs;
 all other states, including idle and needs_attention, appear under Inactive runs.
 This presentation does not close an idle execution group or disable its Board wakes.
+Sidebar tooltips show a Swarm's participant count per Model (summed over formation
+rows) and a Run's title, Swarm name and participant count; `swarms.list` entries
+carry `name` from the profile snapshot for this (`SwarmPage.test.js`,
+`test_swarm_operations.py`).
 Swarm selection opens the editor; the pinned New run row returns to the goal form
 and is marked current while that form shows.
 The form prefills the directory after Swarm selection and preserves manual edits
@@ -586,7 +590,12 @@ Retired fields and values).
 The Store has no upgrade code. Saved profiles and Swarm snapshots are consumed as stored;
 input defaults are resolved when a profile is saved or previewed.
 
-The page offers confirmed deletion after Stop. `swarms.delete` marks a closed
+The header offers one lifecycle action: Stop while the Swarm is preparing,
+running or stopping or any participant runs, otherwise Resume, so a failed
+participant beside running peers does not add a second button. Deletion is
+disabled while that action is Stop; confirming deletion of an open Run whose
+participants are all inactive stops it first, then deletes (`SwarmPage.test.js`).
+The page offers confirmed deletion. `swarms.delete` marks a closed
 Swarm `deleting`, removes its bound participant Sessions through the host, then
 transactionally removes its Board, Wiki pages and revisions, participants, events
 and request receipts.
@@ -617,7 +626,8 @@ subscription failures remain retryable on a later invalidation. Coverage:
 and `SwarmPage.wiki.test.js`.
 
 WikiPanel.svelte shows each page's number in the list and page header and opens
-`#wiki/w3` links by number. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
+`#wiki/w3` links by number. List rows show only number and title (no excerpt);
+their tooltip names the latest revision and its author. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
 
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are

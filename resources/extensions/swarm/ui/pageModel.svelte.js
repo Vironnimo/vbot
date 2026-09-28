@@ -1,6 +1,8 @@
 import { SvelteDate, SvelteMap } from 'svelte/reactivity';
 import { t, activeLocaleTag, init } from '../../../../webui/src/lib/i18n.js';
 import {
+  canStop,
+  participantState,
   resumableParticipantState,
   page,
   requestId,
@@ -178,6 +180,16 @@ export function createSwarmPageModel(host) {
       ),
     },
   ]);
+
+  // The header offers Stop while anything works and Resume otherwise, so one
+  // failed participant beside running peers does not add a second action.
+  const working = $derived(
+    Boolean(selectedSwarm) &&
+      (['preparing', 'running', 'stopping'].includes(selectedSwarm.state) ||
+        (selectedSwarm.participants ?? []).some(
+          (participant) => participantState(participant) === 'running',
+        )),
+  );
 
   const canResume = $derived(
     selectedSwarm &&
@@ -579,6 +591,16 @@ export function createSwarmPageModel(host) {
     pending = 'delete';
     deleteError = '';
     try {
+      // An open Run whose participants are all idle offers Resume, not Stop;
+      // deletion closes it first because the Store deletes only stopped Runs.
+      // A retry after a failed deletion starts from the stopped state.
+      if (canStop(candidate.state)) {
+        const stopped = await call('swarms.stop', {
+          swarm_id: candidate.id,
+          request_id: requestId(),
+        });
+        swarmDeleteCandidate = { ...candidate, state: stopped.state };
+      }
       await call('swarms.delete', { swarm_id: candidate.id });
       if (selectedSwarm?.id === candidate.id) newSwarm();
       swarmDeleteCandidate = null;
@@ -1135,6 +1157,9 @@ export function createSwarmPageModel(host) {
     call,
     get runGroups() {
       return runGroups;
+    },
+    get working() {
+      return working;
     },
     get canResume() {
       return canResume;

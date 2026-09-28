@@ -126,6 +126,62 @@ describe('SwarmPage overview', () => {
     expect(runGroup(INACTIVE_RUNS).textContent).toContain('goal-running');
   });
 
+  it('describes a Swarm by participants per Model and a Run by its Swarm and size', async () => {
+    const formation = {
+      ...profile,
+      participants: [
+        { model: 'demo/model', count: 2 },
+        { model: 'demo/other', count: 1 },
+        { model: 'demo/model', count: 1 },
+      ],
+    };
+    const { bridge, operation } = createBridge(formation);
+    overrideOperations(operation, {
+      'swarms.list': () => ({
+        entries: [
+          {
+            id: 'swr-a',
+            title: 'Investigate',
+            name: 'Research',
+            participant_count: 4,
+            state: 'running',
+          },
+        ],
+      }),
+    });
+    await render(bridge);
+    const tooltip = () => document.querySelector('#app-tooltip');
+    const rows = () =>
+      [...tooltip().querySelectorAll('dt')].map((label) => [
+        label.textContent,
+        label.nextElementSibling.textContent,
+      ]);
+    button('Research (4)').focus();
+    await vi.waitFor(() =>
+      expect(tooltip()?.textContent).toContain('demo/other'),
+    );
+    expect(tooltip().querySelector('.app-tooltip__title').textContent).toBe(
+      'Research',
+    );
+    expect(rows()).toEqual([
+      [
+        t('swarm.participantCount', '{count} participants', { count: 3 }),
+        'demo/model',
+      ],
+      [t('swarm.participantCount.one', '1 participant'), 'demo/other'],
+    ]);
+    button('Investigate').focus();
+    await vi.waitFor(() =>
+      expect(tooltip().querySelector('.app-tooltip__title').textContent).toBe(
+        'Investigate',
+      ),
+    );
+    expect(rows()).toEqual([
+      [t('swarm.profile', 'Swarm'), 'Research'],
+      [t('swarm.participants', 'Participants'), '4'],
+    ]);
+  });
+
   it('marks New run as the current entry while the goal form is shown', async () => {
     const { bridge } = createBridge();
     await render(bridge);
@@ -304,60 +360,72 @@ describe('Swarm Run start', () => {
 });
 
 describe('Swarm Run controls', () => {
-  it('requires Stop before a Swarm can be deleted', async () => {
-    const { bridge, operation } = createBridge();
-    await openSwarm(bridge);
-    await settle();
-    expect(button(DELETE_RUN).disabled).toBe(true);
-    button(DELETE_RUN).click();
-    expect(callsTo(operation, 'swarms.delete')).toHaveLength(0);
-  });
-
-  it('confirms deletion, keeps the profile and clears the selected Swarm', async () => {
-    const { bridge, operation } = createBridge(profile, {
-      ...structuredClone(swarm),
-      state: 'cancelled',
-    });
-    let deleted = false;
-    overrideOperations(operation, {
-      'swarms.delete': () => {
-        deleted = true;
-        return { deleted: true };
-      },
-      'swarms.list': (_args, fallback) =>
-        deleted ? { entries: [], has_more: false } : fallback(),
-    });
-    await openSwarm(bridge);
-    await settle();
-    button(DELETE_RUN).click();
-    await tick();
-    expect(dialog().textContent).toContain(
-      t(
-        'swarm.deleteRun.body',
-        'Permanently delete this Run, its Board, Wiki and participant Sessions? The Swarm will be kept. This cannot be undone.',
-      ),
-    );
-    button(t('common.cancel', 'Cancel')).click();
-    await tick();
-    expect(callsTo(operation, 'swarms.delete')).toHaveLength(0);
-    button(DELETE_RUN).click();
-    await tick();
-    confirmDelete().click();
-    await settle();
-    expect(operation).toHaveBeenCalledWith('swarms.delete', {
-      swarm_id: 'swr-a',
-    });
-    expect(callsTo(operation, 'profiles.delete')).toHaveLength(0);
-    expect(dialog()).toBeNull();
-    expect(button('Investigate')).toBeUndefined();
-    expect(bridge.replaceRoute).toHaveBeenLastCalledWith('');
-    expect(button('Research')).toBeDefined();
-  });
+  it.each([
+    ['cancelled', []],
+    // An open Run whose participants all idle is stopped before deletion.
+    ['idle', ['swarms.stop']],
+  ])(
+    'confirms deletion of a %s Run, keeps the profile and clears the selected Swarm',
+    async (state, before) => {
+      const { bridge, operation } = createBridge(profile, {
+        ...structuredClone(swarm),
+        state,
+        participants: swarm.participants.map((participant) => ({
+          ...structuredClone(participant),
+          state: 'idle',
+        })),
+      });
+      let deleted = false;
+      overrideOperations(operation, {
+        'swarms.stop': () => ({ swarm_id: 'swr-a', state: 'stopped' }),
+        'swarms.delete': () => {
+          deleted = true;
+          return { deleted: true };
+        },
+        'swarms.list': (_args, fallback) =>
+          deleted ? { entries: [], has_more: false } : fallback(),
+      });
+      await openSwarm(bridge);
+      await settle();
+      button(DELETE_RUN).click();
+      await tick();
+      expect(dialog().textContent).toContain(
+        t(
+          'swarm.deleteRun.body',
+          'Permanently delete this Run, its Board, Wiki and participant Sessions? The Swarm will be kept. This cannot be undone.',
+        ),
+      );
+      button(t('common.cancel', 'Cancel')).click();
+      await tick();
+      expect(callsTo(operation, 'swarms.delete')).toHaveLength(0);
+      button(DELETE_RUN).click();
+      await tick();
+      confirmDelete().click();
+      await settle();
+      expect(operation).toHaveBeenCalledWith('swarms.delete', {
+        swarm_id: 'swr-a',
+      });
+      expect(
+        operation.mock.calls
+          .map(([name]) => name)
+          .filter((name) => ['swarms.stop', 'swarms.delete'].includes(name)),
+      ).toEqual([...before, 'swarms.delete']);
+      expect(callsTo(operation, 'profiles.delete')).toHaveLength(0);
+      expect(dialog()).toBeNull();
+      expect(button('Investigate')).toBeUndefined();
+      expect(bridge.replaceRoute).toHaveBeenLastCalledWith('');
+      expect(button('Research')).toBeDefined();
+    },
+  );
 
   it('retains the Run deletion confirmation and allows retry after a failure', async () => {
     const { bridge, operation } = createBridge(profile, {
       ...structuredClone(swarm),
       state: 'deleting',
+      participants: swarm.participants.map((participant) => ({
+        ...structuredClone(participant),
+        state: 'cancelled',
+      })),
     });
     overrideOperations(operation, {
       'swarms.delete': () => Promise.reject(new Error('Storage unavailable')),
@@ -377,36 +445,51 @@ describe('Swarm Run controls', () => {
   });
 
   it.each([
-    ['running', 'idle', true],
-    ['cancelled', 'cancelled', false],
-    ['interrupted', 'interrupted', false],
+    ['needs_attention', ['running', 'failed'], 'stop'],
+    ['idle', ['idle', { state: 'idle', run_active: true }], 'stop'],
+    ['preparing', ['idle', 'idle'], 'stop'],
+    ['idle', ['idle', 'idle'], 'resume'],
+    ['needs_attention', ['idle', 'failed'], 'resume'],
+    ['cancelled', ['cancelled', 'cancelled'], 'resume'],
+    ['interrupted', ['interrupted', 'idle'], 'resume'],
   ])(
-    'offers Resume for a %s Swarm with a %s participant (Stop offered: %s)',
-    async (swarmState, participantState, stopOffered) => {
+    'offers one lifecycle action for a %s Swarm with %j participants: %s',
+    async (swarmState, states, action) => {
       const { bridge, operation } = createBridge(profile, {
         ...structuredClone(swarm),
         state: swarmState,
-        participants: [
-          {
-            ...structuredClone(swarm.participants[0]),
-            state: participantState,
-          },
-        ],
+        participants: swarm.participants.map((participant, index) => ({
+          ...structuredClone(participant),
+          ...(typeof states[index] === 'string'
+            ? { state: states[index] }
+            : states[index]),
+        })),
       });
       await openSwarm(bridge);
       await settle();
-      expect(button(STOP) !== undefined).toBe(stopOffered);
-      button(RESUME).click();
+      const [shown, hidden] =
+        action === 'stop' ? [STOP, RESUME] : [RESUME, STOP];
+      expect(button(hidden)).toBeUndefined();
+      // Deletion waits until nothing works any more.
+      expect(button(DELETE_RUN).disabled).toBe(action === 'stop');
+      button(shown).click();
       await tick();
       expect(operation).toHaveBeenCalledWith(
-        'swarms.resume',
+        `swarms.${action}`,
         expect.objectContaining({ swarm_id: 'swr-a' }),
       );
     },
   );
 
   it('names participants whose Resume failed although the operation succeeded', async () => {
-    const { bridge, operation } = createBridge();
+    const { bridge, operation } = createBridge(profile, {
+      ...structuredClone(swarm),
+      state: 'idle',
+      participants: swarm.participants.map((participant) => ({
+        ...structuredClone(participant),
+        state: 'idle',
+      })),
+    });
     overrideOperations(operation, {
       'swarms.resume': () => ({
         runs: [{ participant_id: 'prt-b', error: 'RuntimeError' }],

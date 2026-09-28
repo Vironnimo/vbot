@@ -9,6 +9,7 @@
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
   import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
+  import { tooltip } from '../../../../webui/src/lib/tooltip.js';
   import { requestId } from './pagePresentation.js';
   import { createPageRefresh } from './pageRefresh.js';
 
@@ -46,6 +47,18 @@
   const hasChanges = () => editing && snapshot() !== baseline;
   // Participants refer to a page by its number, as in "w3" or a "#wiki/w3" link.
   const pageRef = (page) => (page?.number != null ? `w${page.number}` : null);
+  // The list shows number and title; the tooltip adds the latest revision.
+  const pageTooltip = (page) => ({
+    title: page.title,
+    rows: [
+      {
+        label: t('swarm.wiki.revisionLabel', 'Revision'),
+        value: page.revision,
+      },
+      { label: t('swarm.wiki.author', 'Author'), value: page.author?.name },
+    ],
+    placement: 'right',
+  });
   const call = (args) =>
     client.operation('wiki', { swarm_id: swarmId, ...args });
   const autosave = createDebouncedAutosave({
@@ -356,22 +369,26 @@
           />
           {t('swarm.wiki.showDeleted', 'Include deleted pages')}</label
         >
-        {#each entries as page (page.page_id)}
-          <button
-            class="wiki-page-link"
-            class:selected={selected?.page_id === page.page_id}
-            onclick={() => openPage(page.page_id)}
-          >
-            <span class="wiki-page-title"
-              >{#if page.number != null}<span class="wiki-number"
-                  >{pageRef(page)}</span
-                >{/if}<strong>{page.title}</strong></span
+        <nav class="wiki-pages" aria-label={t('swarm.wiki.pages', 'Pages')}>
+          {#each entries as page (page.page_id)}
+            <button
+              class="secondary-list__item wiki-page-link"
+              class:active={selected?.page_id === page.page_id}
+              aria-current={selected?.page_id === page.page_id
+                ? 'page'
+                : undefined}
+              use:tooltip={pageTooltip(page)}
+              onclick={() => openPage(page.page_id)}
             >
-            {#if page.deleted}<small>{t('swarm.wiki.deleted', 'Deleted')}</small
-              >{/if}
-            <small>{page.excerpt}</small>
-          </button>
-        {/each}
+              {#if page.number != null}<span class="wiki-number"
+                  >{pageRef(page)}</span
+                >{/if}<span class="wiki-page-title">{page.title}</span>
+              {#if page.deleted}<small
+                  >{t('swarm.wiki.deleted', 'Deleted')}</small
+                >{/if}
+            </button>
+          {/each}
+        </nav>
         {#if !loaded && !error}<p role="status">
             {t('common.loading', 'Loading...')}
           </p>
@@ -523,23 +540,21 @@
     flex-direction: column;
     gap: 0.75rem;
   }
-  .wiki-page-link {
+  /* Rows follow the shared secondary-list geometry: number column, one-line
+     title; revision and author live in the row tooltip. */
+  .wiki-pages {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    text-align: left;
-    padding: 0.75rem;
-    color: var(--text-hi);
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 0.4rem;
-    overflow-wrap: anywhere;
-    cursor: pointer;
+    gap: 2px;
   }
-  .wiki-page-title {
+  .wiki-page-link {
     display: flex;
     align-items: baseline;
-    gap: 0.5rem;
+    gap: 0.6rem;
+    padding: 8px 10px;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
   }
   .wiki-number {
     color: var(--text-med);
@@ -547,12 +562,21 @@
     font-variant-numeric: tabular-nums;
     margin-right: 0.5rem;
   }
-  .wiki-page-title .wiki-number {
+  .wiki-page-link .wiki-number {
+    flex-shrink: 0;
+    min-width: 3.5ch;
     margin-right: 0;
   }
-  .wiki-page-link.selected {
-    background: var(--surface-2);
-    border-color: var(--text-med);
+  .wiki-page-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .wiki-page-link small {
+    flex-shrink: 0;
+    font-size: var(--fs-label-sm);
   }
   .wiki-page-link small,
   .wiki-meta {

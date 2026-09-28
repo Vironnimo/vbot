@@ -4,7 +4,10 @@
     participantInitials,
     participantState,
     participantDetails,
-    canStop,
+    participantTotal,
+    profileTooltip,
+    runTitle,
+    runTooltip,
     resumableParticipantState,
     tokensUsed,
     usageCount,
@@ -156,13 +159,11 @@
             class="secondary-list__item"
             class:active={model.editor?.id === profile.id}
             aria-current={model.editor?.id === profile.id ? 'page' : undefined}
+            use:tooltip={profileTooltip(profile)}
             onclick={() => model.navigate(() => model.openProfile(profile))}
           >
             <span class="sidebar-title"
-              >{profile.name} ({(profile.participants ?? []).reduce(
-                (sum, row) => sum + row.count,
-                0,
-              )})</span
+              >{profile.name} ({participantTotal(profile)})</span
             >
           </button>
         {:else}<EmptyState
@@ -190,19 +191,11 @@
                 class="secondary-list__item"
                 class:active={!model.editor &&
                   model.selectedSwarm?.id === swarm.id}
-                use:tooltip={{
-                  text: swarm.title || swarm.id,
-                  placement: 'right',
-                  whenTruncated: true,
-                }}
+                use:tooltip={runTooltip(swarm)}
                 onclick={() =>
                   model.navigate(() => model.selectSwarm(swarm.id))}
               >
-                <span class="sidebar-title"
-                  >{swarm.title ||
-                    swarm.prompt?.split(/\r?\n/)[0] ||
-                    swarm.id}</span
-                >
+                <span class="sidebar-title">{runTitle(swarm)}</span>
               </button>
             {:else}
               <p class="run-group__empty">{group.empty}</p>
@@ -244,11 +237,7 @@
                   {model.selectedSwarm.profile_snapshot?.name ||
                     t('swarm.profile', 'Swarm')}
                 </h2>
-                <StatusChip
-                  variant={canStop(model.selectedSwarm.state)
-                    ? 'warn'
-                    : 'neutral'}
-                >
+                <StatusChip variant={model.working ? 'warn' : 'neutral'}>
                   {t(
                     `swarm.state.${model.selectedSwarm.state}`,
                     model.selectedSwarm.state,
@@ -257,25 +246,25 @@
               </div>
             </div>
             <div class="view-header__actions actions">
-              {#if canStop(model.selectedSwarm.state)}<Button
+              {#if model.working}<Button
                   variant="danger"
                   loading={model.pending === 'stop'}
                   onClick={() => model.lifecycle('stop')}
                   >{@render actionIcon('stop')}{model.pending === 'stop'
                     ? t('swarm.stopping', 'Stopping...')
                     : t('swarm.stop', 'Stop')}</Button
-                >{/if}{#if model.canResume}<Button
+                >{:else if model.canResume}<Button
                   variant="primary"
                   loading={model.pending === 'resume'}
-                  disabled={model.pending === 'stop'}
+                  disabled={!!model.pending}
                   onClick={() => model.lifecycle('resume')}
                   >{@render actionIcon('play')}{model.pending === 'resume'
                     ? t('swarm.resuming', 'Resuming...')
                     : t('swarm.resume', 'Resume')}</Button
                 >{/if}<Button
                 variant="danger"
-                disabled={!!model.pending || canStop(model.selectedSwarm.state)}
-                tooltip={canStop(model.selectedSwarm.state)
+                disabled={!!model.pending || model.working}
+                tooltip={model.working
                   ? t(
                       'swarm.deleteRun.stopFirst',
                       'Stop the Swarm before deleting it.',

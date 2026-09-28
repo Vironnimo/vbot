@@ -36,6 +36,47 @@ export function participantDetails(participant) {
   ].join(' · ');
 }
 
+export const participantTotal = (profile) =>
+  (profile.participants ?? []).reduce((sum, row) => sum + row.count, 0);
+
+const participantCount = (count) =>
+  count === 1
+    ? t('swarm.participantCount.one', '1 participant')
+    : t('swarm.participantCount', '{count} participants', { count });
+
+// Sidebar row tooltips: a Swarm's formation per Model, a Run's Swarm and size.
+export function profileTooltip(profile) {
+  const perModel = new Map();
+  for (const row of profile.participants ?? [])
+    perModel.set(row.model, (perModel.get(row.model) ?? 0) + row.count);
+  return {
+    title: profile.name,
+    rows: [...perModel].map(([model, count]) => ({
+      label: participantCount(count),
+      value: model,
+      mono: true,
+    })),
+    placement: 'right',
+  };
+}
+
+export const runTitle = (swarm) =>
+  swarm.title || swarm.prompt?.split(/\r?\n/)[0] || swarm.id;
+
+export function runTooltip(swarm) {
+  return {
+    title: runTitle(swarm),
+    rows: [
+      { label: t('swarm.profile', 'Swarm'), value: swarm.name },
+      {
+        label: t('swarm.participants', 'Participants'),
+        value: swarm.participant_count,
+      },
+    ],
+    placement: 'right',
+  };
+}
+
 export const page = (value) =>
   Array.isArray(value) ? value : (value?.entries ?? value?.items ?? []);
 

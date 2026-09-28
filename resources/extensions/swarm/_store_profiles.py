@@ -437,7 +437,8 @@ def _list_swarms(db: SwarmDatabase, cursor: str | None, limit: int) -> Page:
         else:
             offset = 0
         rows = connection.execute(
-            "SELECT s.id,s.state,s.created_at,substr(s.prompt,1,120) AS title,COUNT(p.id) AS participant_count,"
+            "SELECT s.id,s.state,s.created_at,substr(s.prompt,1,120) AS title,"
+            "json_extract(s.profile_snapshot,'$.name') AS name,COUNT(p.id) AS participant_count,"
             "ss.revision AS settings_revision "
             "FROM swarms s JOIN swarm_settings ss ON ss.swarm_id=s.id "
             "LEFT JOIN participants p ON p.swarm_id=s.id WHERE s.rowid<=? "
@@ -448,6 +449,7 @@ def _list_swarms(db: SwarmDatabase, cursor: str | None, limit: int) -> Page:
             {
                 "id": str(row["id"]),
                 "title": str(row["title"]).split("\n", 1)[0],
+                "name": str(row["name"] or ""),
                 "state": str(row["state"]),
                 "created_at": str(row["created_at"]),
                 "participant_count": int(row["participant_count"]),
