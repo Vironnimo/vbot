@@ -25,6 +25,7 @@ What is measured:
 - **SQLite:** per database (`sessions`, ...): `sqlite.<database>.write` (one write transaction including commit/fsync), `sqlite.<database>.write_wait` (waiting for that database's single writer), `sqlite.<database>.read`. The load-suite digest and report use the `sqlite.sessions.*` series.
 - **Chat per Model step:** `chat.request_build`, `provider.first_token`, `provider.response`, `chat.persist`, `chat.tool_round`, `tool.<name>`, `chat.compaction`, `chat.run`.
 - **RPC:** `rpc.<method>` per registered method.
+- **Server push (counters):** `events.<type>` per `/ws` event, `events.resource_changed.<kind>` per invalidation kind, `events.sse` per Run event sent over SSE. Compare an invalidation count with the RPC counts it causes: `events.resource_changed.extensions=500` next to `rpc.extensions.page_descriptors count=11500` means every invalidation made 23 clients or pages reload. In a recording, each invalidation is a marker on the `events` row, followed by the RPC spans it caused.
 - **Process:** `process.cpu_percent`, `process.rss_mb`, `process.python_threads`, `asyncio.tasks`, `runs.active`, `runs.queued`.
 
 ```bash
