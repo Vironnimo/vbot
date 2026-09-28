@@ -387,7 +387,7 @@ async def test_v41_image_profile_converts_gif_before_cloud_request() -> None:
     try:
         supported = adapter.wire_media_support(V41)
         assert supported == frozenset({"image/png", "image/jpeg", "image/webp"})
-        assert "image/gif" in adapter.wire_media_support("deepseek-v4-flash:0731")
+        assert "image/gif" in adapter.wire_media_support("kimi-k3")
         parts = await ContentBlockResolver.resolve_tool_image(
             original, frozenset({"text", "image"}), supported, ImageConverter()
         )

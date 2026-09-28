@@ -456,6 +456,7 @@ def _persist_and_restore(data_dir: Path, messages: list[ChatMessage]) -> list[Ch
     [
         pytest.param("openai", "gpt-6-astra", "subscription", id="responses"),
         pytest.param("opencode-go", "deepseek-flash", "api-key", id="chat-reasoning-content"),
+        pytest.param("opencode-go", "longcat-2.5-preview-free", "api-key", id="longcat-replay"),
         pytest.param("ollama-cloud", "deepseek-v4.1-flash", "api-key", id="chat-reasoning"),
     ],
 )

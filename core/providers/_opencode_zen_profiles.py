@@ -91,6 +91,7 @@ _GEMINI_MODELS = frozenset(
 _CHAT_MODELS = frozenset(
     {
         "space-bunny-free",
+        "qwen3.8-max",
         "deepseek-v4.1-flash",
         "deepseek-v4-flash-vision-exp",
         "glm-5.3",
@@ -120,6 +121,7 @@ _PROTOCOL_BY_MODEL = {
 _FREE_MODELS = frozenset(
     {
         "big-pickle",
+        "longcat-2.5-preview-free",
         "mimo-v2.6-flash-free",
         "mimo-v2.5-free",
         "laguna-s-2.1-free",

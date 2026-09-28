@@ -27,30 +27,6 @@
                 }
             }
         },
-        "deepseek-v4-flash:0731": {
-            "max_output_tokens": 65536,
-            "recommended_temperature": 1.0,
-            "recommended_top_p": 0.95,
-            "capabilities": {
-                "reasoning": {
-                    "control": "levels",
-                    "levels": [
-                        "low",
-                        "high",
-                        "max"
-                    ],
-                    "supported": true
-                }
-            },
-            "metadata": {
-                "ollama": {
-                    "remote": true
-                },
-                "ollama_cloud": {
-                    "reasoning_response_field": "reasoning"
-                }
-            }
-        },
         "deepseek-v4-pro:0813": {
             "max_output_tokens": 65536,
             "capabilities": {
@@ -75,17 +51,6 @@
         },
         "gemma4:31b": {
             "reasoning_replay": "none",
-            "metadata": {
-                "ollama": {
-                    "remote": true
-                },
-                "ollama_cloud": {
-                    "reasoning_response_field": "reasoning"
-                }
-            }
-        },
-        "glm-5.1": {
-            "recommended_temperature": 1.0,
             "metadata": {
                 "ollama": {
                     "remote": true
@@ -248,17 +213,6 @@
         },
         "nemotron-3-ultra": {
             "max_output_tokens": 65536,
-            "reasoning_replay": "none",
-            "metadata": {
-                "ollama": {
-                    "remote": true
-                },
-                "ollama_cloud": {
-                    "reasoning_response_field": "reasoning"
-                }
-            }
-        },
-        "qwen3.5:397b": {
             "reasoning_replay": "none",
             "metadata": {
                 "ollama": {

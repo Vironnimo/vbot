@@ -58,6 +58,10 @@ def _sent_payload(route: respx.Route) -> dict[str, Any]:
         ("mimo-v2.6-flash", None, {"type": "enabled"}, None, ("on", None)),
         ("mimo-v2.6-flash", "none", {"type": "disabled"}, None, ("off", None)),
         ("mimo-v2.6-pro", "high", {"type": "enabled"}, None, ("on", None)),
+        # LongCat 2.5 uses the same binary control and readable history carrier.
+        ("longcat-2.5-preview-free", None, {"type": "enabled"}, None, ("on", None)),
+        ("longcat-2.5-preview-free", "none", {"type": "disabled"}, None, ("off", None)),
+        ("longcat-2.5-preview-free", "high", {"type": "enabled"}, None, ("on", None)),
         # Space Bunny: mandatory Reasoning maps an off request to its cheapest rung.
         ("space-bunny-free", None, None, None, ("default", None)),
         ("space-bunny-free", "none", None, "low", ("effort", "low")),

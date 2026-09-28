@@ -63,6 +63,7 @@ async def _request(adapter: OpenCodeZenAdapter, model_id: str, *, streaming: boo
         ("gpt-6-sol", "responses"),
         ("claude-opus-5-5", "messages"),
         ("glm-5.3-flash", "chat_completions"),
+        ("qwen3.8-max", "chat_completions"),
         ("gemini-3.8-flash", "gemini_generate_content"),
     ],
 )
@@ -76,6 +77,7 @@ def test_catalog_records_the_reviewed_wire_protocol(model_id: str, protocol: str
     "model_id",
     [
         pytest.param("big-pickle", id="free-tier"),
+        pytest.param("longcat-2.5-preview-free", id="longcat-free-tier"),
         pytest.param("claude-opus-4-1", id="retired"),
         pytest.param("future-model", id="unreviewed"),
     ],
@@ -89,6 +91,7 @@ def test_catalog_skips_free_retired_and_unreviewed_models(model_id: str) -> None
     ("model_id", "stale_lookup", "streaming"),
     [
         pytest.param("big-pickle", True, False, id="free-tier-send"),
+        pytest.param("longcat-2.5-preview-free", True, True, id="longcat-free-tier-stream"),
         pytest.param("claude-opus-4-1", True, True, id="retired-stream"),
         pytest.param("openai/gpt-5.6-sol", False, False, id="unknown-alias-send"),
     ],
@@ -218,12 +221,22 @@ async def test_bundled_gpt6_model_uses_the_responses_wire_with_its_effort() -> N
 
 
 @pytest.mark.parametrize(
-    ("selected_effort", "wire_effort"),
-    [pytest.param("none", "low", id="snapped"), pytest.param("high", "high", id="supported")],
+    ("model_id", "selected_effort", "wire_effort", "thinking", "intent"),
+    [
+        ("space-bunny-free", "none", "low", None, ("effort", "low")),
+        ("space-bunny-free", "high", "high", None, ("effort", "high")),
+        ("qwen3.8-max", None, None, {"type": "enabled"}, ("on", None)),
+        ("qwen3.8-max", "none", None, {"type": "disabled"}, ("off", None)),
+        ("qwen3.8-max", "high", None, {"type": "enabled"}, ("on", None)),
+    ],
 )
 @pytest.mark.asyncio
-async def test_bundled_chat_model_renders_a_supported_reasoning_effort(
-    selected_effort: str, wire_effort: str
+async def test_bundled_chat_models_render_their_reasoning_controls(
+    model_id: str,
+    selected_effort: str | None,
+    wire_effort: str | None,
+    thinking: dict[str, str] | None,
+    intent: tuple[str, str | None],
 ) -> None:
     lookup = _bundled_lookup()
     adapter = OpenCodeZenAdapter(zen_config(), "zen-secret", model_lookup=lookup)
@@ -238,23 +251,22 @@ async def test_bundled_chat_model_renders_a_supported_reasoning_effort(
 
     with respx.mock:
         route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=body))
-        response = await adapter.send(
-            HELLO, model_id="space-bunny-free", thinking_effort=selected_effort
-        )
+        response = await adapter.send(HELLO, model_id=model_id, thinking_effort=selected_effort)
     await adapter.aclose()
 
     payload = json.loads(route.calls.last.request.content)
-    assert payload["model"] == "space-bunny-free"
-    assert payload["reasoning_effort"] == wire_effort
-    normalized = adapter.normalize_response(response, model_id="space-bunny-free")
+    assert payload["model"] == model_id
+    assert payload.get("reasoning_effort") == wire_effort
+    assert payload.get("thinking") == thinking
+    normalized = adapter.normalize_response(response, model_id=model_id)
     assert normalized["reasoning"] == "worked"
     description = adapter.describe_reasoning_render(
         model_lookup=lookup,
-        model_id="space-bunny-free",
+        model_id=model_id,
         effort=selected_effort,
         provider_config=zen_config(),
     )
-    assert description.effort_level == wire_effort
+    assert (description.kind, description.effort_level) == intent
 
 
 # ---------------------------------------------------------------------------
