@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -137,9 +138,13 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
     tools = ToolRegistry()
     for name in ("kept", "dropped", ANALYZE_IMAGE_TOOL_NAME):
         tools.register(name, "Probe.", {"type": "object"}, lambda *_args: tool_success({}))
-    runtime = compaction_runtime(
-        tmp_path, tools=tools, available_task_models={TASK_IMAGE_UNDERSTANDING}
-    )
+
+    def restart() -> Any:
+        return compaction_runtime(
+            tmp_path, tools=tools, available_task_models={TASK_IMAGE_UNDERSTANDING}
+        )
+
+    runtime = restart()
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
@@ -148,7 +153,14 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
     )
     old_epoch = context.request_state.tool_epoch.pin.epoch
     tools.unregister("dropped")
-    tools.register("added", "Probe.", {"type": "object"}, lambda *_args: tool_success({}))
+    # Keys in the author's order, which is not alphabetical at any level.
+    ordered = {
+        "type": "object",
+        "properties": {"zeta": {"type": "string", "description": "First."}, "alpha": {}},
+        "required": ["zeta"],
+        "additionalProperties": False,
+    }
+    tools.register("added", "Probe.", ordered, lambda *_args: tool_success({}))
     if refresh_fails:
 
         def fail_refresh(_project_id: str | None, _agent_id: str | None) -> Any:
@@ -169,8 +181,20 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
     assert pin is not None and pin.epoch != old_epoch
     assert pin.names == ("get_weather", "added", ANALYZE_IMAGE_TOOL_NAME, "kept")
-    assert rebuilt.tools == list(pin.definitions)
     assert rebuilt.tool_epoch.pin == pin
+    # The new epoch's first request already sends the bytes a restarted runtime's next
+    # Run reads back from the pin, with the author's key order.
+    runtime.chat_sessions.close()
+    runtime = restart()
+    reopened = runtime.chat_sessions.get(session.address)
+    next_run = await run_context(
+        build_chat_loop(runtime),
+        Run(run_id="run-2", agent_id="coder", session_id=session.id),
+        reopened,
+    )
+    sent = json.dumps(rebuilt.tools)
+    assert sent == json.dumps(list(pin.definitions)) == json.dumps(next_run.request_state.tools)
+    assert json.dumps(rebuilt.tools[1]["parameters"]) == json.dumps(ordered)
 
 
 @pytest.mark.asyncio

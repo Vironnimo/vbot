@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -53,17 +54,24 @@ def _plan(view: ToolEpochView, catalog: LiveToolCatalog, *, unlisted: bool = Tru
 
 
 def test_pin_payload_round_trips_and_an_unreadable_pin_counts_as_missing() -> None:
-    pin = _pin(_definition("read"), _definition("write"))
+    # Neither the definitions nor their schemas list their keys alphabetically.
+    pin = _pin(_definition("read"), _definition("write", zeta={"type": "string"}, alpha={}))
     payload = pin.to_payload()
+    # The Session store sorts the keys of the JSON objects it persists.
+    stored = json.loads(json.dumps(payload, sort_keys=True))
 
-    assert ToolEpochPin.from_payload(payload) == pin
+    restored = ToolEpochPin.from_payload(stored)
+    assert restored == pin
+    assert restored is not None and json.dumps(restored.definitions) == json.dumps(pin.definitions)
     assert pin.names == ("read", "write")
     for broken in (
         None,
-        {**payload, "v": 2},
+        {**payload, "v": 1},
         {**payload, "epoch": ""},
-        {**payload, "definitions": [_definition("read"), _definition("read")]},
-        {**payload, "definitions": [{"name": "read", "description": "Read."}]},
+        {**payload, "definitions": [_definition("read")]},
+        {**payload, "definitions": "[{"},
+        {**payload, "definitions": json.dumps([_definition("read"), _definition("read")])},
+        {**payload, "definitions": json.dumps([{"name": "read", "description": "Read."}])},
         {**payload, "sources": {"read": 1}},
     ):
         assert ToolEpochPin.from_payload(broken) is None

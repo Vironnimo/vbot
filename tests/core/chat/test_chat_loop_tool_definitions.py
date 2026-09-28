@@ -204,6 +204,16 @@ _PATH_PARAMETERS = {
     "required": ["path"],
     "additionalProperties": False,
 }
+# Keys in the author's order, which is not alphabetical at any level.
+_ORDERED_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "zeta": {"type": "string", "description": "Listed first."},
+        "alpha": {"type": "integer"},
+    },
+    "required": ["zeta"],
+    "additionalProperties": False,
+}
 
 
 @pytest.mark.asyncio
@@ -233,12 +243,12 @@ async def test_a_tool_enabled_mid_run_is_announced_while_the_tool_list_stays_pin
         )
         return tool_success({"installed": True})
 
-    tools.register("install", "Install a Tool.", {"type": "object"}, install)
+    tools.register("install", "Install a Tool.", _ORDERED_PARAMETERS, install)
     runtime = tool_runtime(
         tmp_path,
         tools,
         [
-            tool_turn(("install", "install")),
+            tool_turn(("install", "install", {"zeta": "now"})),
             # Another harness's spelling resolves to the announced Tool.
             tool_turn(("use", "functions.installed", {"path": "a"})),
             final("finished"),
@@ -249,13 +259,20 @@ async def test_a_tool_enabled_mid_run_is_announced_while_the_tool_list_stays_pin
 
     await build_chat_loop(runtime).send("coder", "install and use", session_id="session-one")
     await build_chat_loop(runtime).send("coder", "once more", session_id="session-one")
-    # A new loop on the same storage reads the pinned bytes, as after a restart.
+    # A restarted runtime on the same storage reads the pinned bytes back.
+    runtime.chat_sessions.close()
+    runtime = tool_runtime(tmp_path, tools, [], adapter=runtime.adapter)
     await build_chat_loop(runtime).send("coder", "and again", session_id="session-one")
 
     first, after_install = runtime.adapter.requests[:2]
     assert calls == [{"path": "a"}]
     assert "installed" not in _offered(first)
-    assert _tools_sent(runtime) == [first["kwargs"]["tools"]] * 5
+    # Byte-identical from the pinning request on, across Runs and the restart,
+    # with every definition's keys in the order its author wrote them.
+    pinned_bytes = json.dumps(first["kwargs"]["tools"])
+    assert [json.dumps(sent) for sent in _tools_sent(runtime)] == [pinned_bytes] * 5
+    install_definition = next(t for t in first["kwargs"]["tools"] if t["name"] == "install")
+    assert json.dumps(install_definition["parameters"]) == json.dumps(_ORDERED_PARAMETERS)
     # The announcement follows the Tool Result that caused it, and only once.
     assert [message["role"] for message in after_install["messages"]] == [
         "system",

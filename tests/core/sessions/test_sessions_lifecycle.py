@@ -75,7 +75,7 @@ _AGENT_RENDERED_PINS = {
     PINNED_SKILL_CATALOG_SLOT: {"catalog_text": "coder Skills"},
     PINNED_SOUL_CONTEXT_SLOT: {"text": "coder SOUL"},
     PINNED_MEMORY_FILES_SLOT: {"text": "coder memory", "mode": "full"},
-    PINNED_TOOL_DEFINITIONS_SLOT: {"v": 1, "epoch": "coder", "definitions": [], "sources": {}},
+    PINNED_TOOL_DEFINITIONS_SLOT: {"v": 2, "epoch": "coder", "definitions": "[]", "sources": {}},
 }
 
 

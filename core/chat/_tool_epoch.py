@@ -32,7 +32,7 @@ from core.utils.logging import get_logger
 _LOGGER = get_logger("chat")
 
 TOOL_CHANGE_NOTE_VERSION = 1
-TOOL_EPOCH_PIN_VERSION = 1
+TOOL_EPOCH_PIN_VERSION = 2
 
 ToolChangeKind = Literal["added", "removed", "changed"]
 _TOOL_CHANGE_KINDS: frozenset[str] = frozenset({"added", "removed", "changed"})
@@ -178,6 +178,17 @@ def compact_schema(parameters: Any) -> str:
     return json.dumps(parameters, separators=(",", ":"), ensure_ascii=False)
 
 
+def _json_copy(value: Any) -> Any:
+    """Return *value* as it reads back from its compact JSON, key order kept.
+
+    Definitions the Model is told about pass through here before their first
+    use, so the request that pins or announces them sends exactly the bytes
+    every later request parses from the persisted pin or note.
+    """
+
+    return json.loads(compact_schema(value))
+
+
 def definition_source(definition: Mapping[str, Any]) -> str:
     """Fingerprint one registered Provider definition, before route projection."""
 
@@ -214,10 +225,13 @@ class ToolEpochPin:
     """The Provider Tool definitions one prompt epoch sends on every request.
 
     ``definitions`` are the exact post-route definitions of the epoch's first
-    request, in order, under registry names. ``sources`` fingerprints each
-    Tool's registered definition so a later schema change is recognized.
-    ``epoch`` keys the Tool-change notes of this epoch; notes of another epoch
-    are ignored.
+    request, in order, under registry names. They persist as one compact JSON
+    string that keeps each definition's key order, because the Session store
+    sorts the keys of the JSON objects it stores; the first request sends them
+    as they read back, so every request of the epoch sends the same bytes.
+    ``sources`` fingerprints each Tool's registered definition so a later
+    schema change is recognized. ``epoch`` keys the Tool-change notes of this
+    epoch; notes of another epoch are ignored.
     """
 
     epoch: str
@@ -231,7 +245,7 @@ class ToolEpochPin:
         names = catalog.offered_by_name
         return cls(
             epoch=uuid.uuid4().hex,
-            definitions=catalog.offered,
+            definitions=tuple(_json_copy(list(catalog.offered))),
             sources={name: catalog.sources[name] for name in names if name in catalog.sources},
         )
 
@@ -245,7 +259,7 @@ class ToolEpochPin:
         return {
             "v": TOOL_EPOCH_PIN_VERSION,
             "epoch": self.epoch,
-            "definitions": [dict(definition) for definition in self.definitions],
+            "definitions": compact_schema(list(self.definitions)),
             "sources": dict(self.sources),
         }
 
@@ -256,11 +270,17 @@ class ToolEpochPin:
         if not isinstance(payload, dict) or payload.get("v") != TOOL_EPOCH_PIN_VERSION:
             return None
         epoch = payload.get("epoch")
-        definitions = payload.get("definitions")
+        serialized = payload.get("definitions")
         sources = payload.get("sources")
         if not isinstance(epoch, str) or not epoch:
             return None
-        if not isinstance(definitions, list) or not isinstance(sources, dict):
+        if not isinstance(serialized, str) or not isinstance(sources, dict):
+            return None
+        try:
+            definitions = json.loads(serialized)
+        except ValueError:
+            return None
+        if not isinstance(definitions, list):
             return None
         names: set[str] = set()
         for definition in definitions:
@@ -521,11 +541,16 @@ def _change_detail(
 
 
 def _model_definition(definition: JsonObject) -> JsonObject:
-    return {
-        "name": definition["name"],
-        "description": definition.get("description", ""),
-        "parameters": definition.get("parameters", {}),
-    }
+    return cast(
+        JsonObject,
+        _json_copy(
+            {
+                "name": definition["name"],
+                "description": definition.get("description", ""),
+                "parameters": definition.get("parameters", {}),
+            }
+        ),
+    )
 
 
 def _optional_string(value: object) -> bool:
