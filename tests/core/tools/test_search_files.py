@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -290,6 +292,60 @@ async def test_timeout_and_user_cancel(tree: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(shared, "SEARCH_TIMEOUT_SECONDS", -1)
     timed_out = await dispatch(tree, {"args": ["--entries"]})
     assert timed_out["data"]["complete"] is False
+
+
+# Windows reports a locked file in the system language and names the file, here the
+# search's own scratch spool; the Agent reads the reason in English, without paths.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("locked", "pattern", "expected"),
+    [
+        ("selection.sqlite", "absent", "search_files could not complete the search: {reason}."),
+        ("selection.sqlite", "runner", "search_files could not complete the search: {reason}."),
+        (
+            ".gitignore",
+            "runner",
+            "search_files could not read the ignore file .gitignore: {reason}.",
+        ),
+    ],
+)
+async def test_system_errors_are_explained_in_english_without_paths(
+    tree: Path, monkeypatch: pytest.MonkeyPatch, locked: str, pattern: str, expected: str
+) -> None:
+    import core.tools.search_files as search_files
+
+    def in_use(path: Path) -> PermissionError:
+        message = "Der Prozess kann nicht auf die Datei zugreifen"
+        return PermissionError(errno.EACCES, message, str(path), 32)
+
+    class LockedSpool(tempfile.TemporaryDirectory):
+        def __exit__(self, *exc_info):
+            super().__exit__(*exc_info)
+            raise in_use(Path(self.name) / locked)
+
+    stamp = _search_ignores._stamp
+
+    def locked_stamp(path: Path):
+        if path.name == locked:
+            raise in_use(path)
+        return stamp(path)
+
+    (tree / ".gitignore").write_text("*.log\n")
+    if locked == ".gitignore":
+        monkeypatch.setattr(_search_ignores, "_stamp", locked_stamp)
+    else:
+        monkeypatch.setattr(
+            search_files, "tempfile", SimpleNamespace(TemporaryDirectory=LockedSpool)
+        )
+    result = await dispatch(tree, {"pattern": pattern})
+
+    reason = "another program is using it" if os.name == "nt" else "permission denied"
+    message = f"{expected.format(reason=reason)} Retry the call."
+    if pattern == "absent" or locked == ".gitignore":
+        assert result["error"] == {"code": "search_error", "message": message}
+    else:
+        assert result["data"]["content"] == "src/a.py:5:runner"
+        assert (result["data"]["complete"], result["data"]["warnings"]) == (False, [message])
 
 
 def test_schema_display_and_registry_repairs(tree: Path) -> None:

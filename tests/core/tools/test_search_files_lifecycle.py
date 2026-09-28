@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import re
 import subprocess
 import sys
 import threading
@@ -312,8 +313,18 @@ def test_a_user_cancellation_kills_a_silent_child(tmp_path, monkeypatch):
     assert children[0].poll() is not None
 
 
-@pytest.mark.parametrize("exit_code", [0, 2])
-def test_finished_child_is_drained_when_process_monitor_misses_it(tmp_path, monkeypatch, exit_code):
+# A failed child reports its own diagnostics; without any, the Agent learns the exit code.
+@pytest.mark.parametrize(
+    ("exit_code", "diagnostics", "failure"),
+    [
+        (0, "", None),
+        (2, "specific failure", "specific failure"),
+        (2, "", "the search engine exited with code 2. Retry the call."),
+    ],
+)
+def test_finished_child_is_drained_when_process_monitor_misses_it(
+    tmp_path, monkeypatch, exit_code, diagnostics, failure
+):
     original = subprocess.Popen
     children = []
 
@@ -323,7 +334,7 @@ def test_finished_child_is_drained_when_process_monitor_misses_it(tmp_path, monk
                 sys.executable,
                 "-c",
                 f"import sys; print('found'); "
-                f"sys.stderr.write('specific failure' if {exit_code} else ''); "
+                f"sys.stderr.write({diagnostics!r}); "
                 f"sys.exit({exit_code})",
             ],
             **kwargs,
@@ -340,8 +351,8 @@ def test_finished_child_is_drained_when_process_monitor_misses_it(tmp_path, monk
     ctx = context(tmp_path)
     lines = native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx))
     assert next(lines).strip() == b"found"
-    if exit_code:
-        with pytest.raises(RuntimeError, match="specific failure"):
+    if failure:
+        with pytest.raises(RuntimeError, match=re.escape(failure)):
             next(lines)
     else:
         assert list(lines) == []

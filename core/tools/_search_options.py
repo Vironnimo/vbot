@@ -562,6 +562,15 @@ class SearchOptions:
         return None
 
 
+# Output modes without lines to show context around, and why context is ignored there.
+_LINELESS_OUTPUT = {
+    "lines": "count output contains no surrounding lines",
+    "counts": "count output contains no surrounding lines",
+    "files": "file-list output contains no lines",
+    "without": "file-list output contains no lines",
+}
+
+
 def parse_options(tokens: list[str], *, action: str, kind: str) -> SearchOptions:
     result = SearchOptions()
     index = 0
@@ -645,25 +654,25 @@ def parse_options(tokens: list[str], *, action: str, kind: str) -> SearchOptions
         raise ValueError(
             "File type and size filters require --files; they cannot select directories."
         )
-    if (
-        any(result.context)
-        and result.get("output") in {"lines", "counts"}
-        and not result.enabled("quiet")
-    ):
+    lineless = _LINELESS_OUTPUT.get(result.get("output"))
+    if any(result.context) and lineless and not result.enabled("quiet"):
         result.entries = [
             (option, value)
             for option, value in result.entries
             if option.key not in {"context", "before", "after"}
         ]
-        result.notes.append(
-            "Context was ignored because count output contains no surrounding lines."
-        )
-    if any(result.context) and (
-        result.get("output") or result.enabled("only") or result.enabled("quiet")
-    ):
+        result.notes.append(f"Context was ignored because {lineless}.")
+    if any(result.context) and result.enabled("quiet"):
         raise ValueError(
-            "Context requires matching-line output; remove the content-output "
-            "selector or context options."
+            "-q (--quiet) in args returns only whether a match exists, so it cannot show "
+            "context lines. Remove -q from args to see matching lines with context, or omit "
+            "context and -A/-B/-C."
+        )
+    if any(result.context) and result.enabled("only"):
+        raise ValueError(
+            "-o (--only-matching) in args returns only the matched text, so it cannot show "
+            "context lines. Remove -o from args to see matching lines with context, or omit "
+            "context and -A/-B/-C."
         )
     if result.enabled("dotall") and not result.enabled("multiline"):
         raise ValueError("--multiline-dotall requires -U/--multiline.")
