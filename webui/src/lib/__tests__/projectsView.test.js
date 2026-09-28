@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  FINDING_TYPE_BAD_MODEL,
-  FINDING_TYPE_ORPHAN,
-  FINDING_TYPE_SLUG_COLLISION,
-  FINDING_TYPE_UNAVAILABLE_TOOL,
-  FINDING_TYPE_UNSLUGIFIABLE_NAME,
   PROJECT_THINKING_EFFORT_NO_DEFAULT,
   createProjectsController,
   createProjectsState,
@@ -835,7 +830,7 @@ describe('Project scan projections', () => {
     // Without a clean flag the findings decide.
     expect(
       normalizeScanReport({
-        findings: [{ type: FINDING_TYPE_BAD_MODEL, detail: 'x' }],
+        findings: [{ type: 'bad_model', detail: 'x' }],
       }).clean,
     ).toBe(false);
   });
@@ -845,29 +840,29 @@ describe('Project scan projections', () => {
       clean: false,
       findings: [
         {
-          type: FINDING_TYPE_ORPHAN,
+          type: 'orphan',
           detail: 'orphan pointer',
           agent_id: 'ghost',
         },
         {
-          type: FINDING_TYPE_SLUG_COLLISION,
+          type: 'slug_collision',
           detail: 'two on one id',
           agent_id: 'dup',
           source_path: 'a.md',
         },
-        { type: FINDING_TYPE_BAD_MODEL, detail: 'bad model', agent_id: 'b' },
+        { type: 'bad_model', detail: 'bad model', agent_id: 'b' },
         {
-          type: FINDING_TYPE_UNSLUGIFIABLE_NAME,
+          type: 'unslugifiable_name',
           detail: 'no slug',
           agent_id: '',
         },
         {
-          type: FINDING_TYPE_SLUG_COLLISION,
+          type: 'slug_collision',
           detail: 'another collision',
           agent_id: 'dup2',
         },
         {
-          type: FINDING_TYPE_UNAVAILABLE_TOOL,
+          type: 'unavailable_tool',
           detail: 'extension tool is unavailable',
         },
       ],
@@ -876,11 +871,11 @@ describe('Project scan projections', () => {
     expect(report.clean).toBe(false);
     expect(report.findingCount).toBe(6);
     expect(report.groups.map((group) => group.type)).toEqual([
-      FINDING_TYPE_SLUG_COLLISION,
-      FINDING_TYPE_UNSLUGIFIABLE_NAME,
-      FINDING_TYPE_BAD_MODEL,
-      FINDING_TYPE_ORPHAN,
-      FINDING_TYPE_UNAVAILABLE_TOOL,
+      'slug_collision',
+      'unslugifiable_name',
+      'bad_model',
+      'orphan',
+      'unavailable_tool',
     ]);
     expect(report.groups[0].findings).toHaveLength(2);
   });
