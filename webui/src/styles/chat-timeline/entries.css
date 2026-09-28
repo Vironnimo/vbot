@@ -55,6 +55,12 @@
   flex-direction: column;
 }
 
+/* Stands in for timeline rows outside the mounted window; its height is set
+   inline from the scroll controller's layout model and must not flex. */
+.timeline-spacer {
+  flex: 0 0 auto;
+}
+
 /* The floating composer stack overlays the timeline's bottom; this trailing
    block reserves matching space so the newest message scrolls clear above
    the composer. It lives INSIDE the content element because Chromium drops

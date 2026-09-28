@@ -12,16 +12,53 @@
 // real user motion and immediately reclassifies the viewport from the live
 // position. Upward input (wheel/touch/keys) releases the pin before the
 // browser scrolls, so streaming growth can never yank the view back down.
+//
+// The controller also decides which rows are mounted. Once the timeline has
+// shown real layout, only the rows in and around the viewport (the window)
+// plus held rows are mounted; spacers sized from a per-Session layout model
+// of measured and estimated row heights stand in for the rest. The renderer
+// asks `renderPlan()` for the rows and spacers to mount and calls
+// `rendered()` after every update. Rows mounted above the reading position
+// correct it once through the same content anchor, before the browser paints.
+// Without layout (hidden, or a DOM without layout) every row stays mounted.
+
+import { trackInteractionHolds } from './chatScroll/interactionHolds.js';
+import { createLayoutModel } from './chatScroll/layoutModel.js';
+import { createTimelineWindow } from './chatScroll/timelineWindow.js';
 
 const STICK_TO_BOTTOM_THRESHOLD_PX = 56;
 const LOAD_OLDER_THRESHOLD_PX = 48;
 const PROGRAMMATIC_ECHO_TOLERANCE_PX = 1;
 const MAX_TRACKED_SESSIONS = 100;
+const MAX_TRACKED_LAYOUTS = 20;
+// Window updates that mount more rows run synchronously after an update so
+// the browser never paints a gap; this bounds them per frame, further ones
+// wait for the next frame.
+const MAX_SYNC_WINDOW_UPDATES_PER_FRAME = 8;
+
+function requestFrame(callback) {
+  if (typeof requestAnimationFrame === 'function') {
+    return requestAnimationFrame(callback);
+  }
+  return setTimeout(callback, 16);
+}
+
+function cancelFrame(frame) {
+  if (typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(frame);
+  } else {
+    clearTimeout(frame);
+  }
+}
 
 export function createChatScrollController(
   container,
   {
+    // The element whose children are the rendered rows and spacers.
+    content = null,
     onViewChanged = () => {},
+    // The rows to mount changed: the renderer must ask `renderPlan()` again.
+    onWindowChanged = () => {},
     shouldLoadOlder = () => false,
     requestLoadOlder = async () => false,
   } = {},
@@ -45,7 +82,42 @@ export function createChatScrollController(
   let contentSyncQueued = false;
   let contentSyncFrame = null;
 
+  // sessionId -> { model, window }, least recently displayed first. Row ids
+  // repeat across Sessions, so each Session has its own layout.
+  const layouts = new Map();
+  let layout = layoutFor('');
+  // Set once the content column has shown real layout; stays set, so a
+  // timeline that loses its layout (hidden) keeps its last window.
+  let virtualActive = false;
+  // layoutKey of the latest plan, and of the plan the last correction ran
+  // against.
+  let plannedLayoutKey = null;
+  let correctedLayoutKey = null;
+  // Render entries by key from the latest plan, reused while unchanged so
+  // the keyed list does not update rows whose item did not change.
+  let planEntries = new Map();
+  // Mounted row element -> { id, model }.
+  const observedRows = new Map();
+  let windowSyncFrame = null;
+  let syncWindowUpdates = 0;
+  let publishQueued = false;
+  let destroyed = false;
+
+  const resizeObserver =
+    typeof ResizeObserver === 'function'
+      ? new ResizeObserver(handleResize)
+      : null;
+  resizeObserver?.observe(container);
+  if (content) {
+    resizeObserver?.observe(content);
+  }
+  const interactionHolds = content
+    ? trackInteractionHolds(container, content, hold)
+    : null;
+
   container.addEventListener('scroll', handleContainerScroll);
+  // A timeline created visible plans its first rows as a window already.
+  virtualActive = hasLayout() && contentHasLayout();
 
   function createViewport() {
     return {
@@ -77,6 +149,25 @@ export function createChatScrollController(
     }
   }
 
+  function layoutFor(sessionId) {
+    let entry = layouts.get(sessionId);
+    if (entry) {
+      layouts.delete(sessionId);
+    } else {
+      const model = createLayoutModel();
+      entry = { model, window: createTimelineWindow(model) };
+    }
+    layouts.set(sessionId, entry);
+    while (layouts.size > MAX_TRACKED_LAYOUTS) {
+      layouts.delete(layouts.keys().next().value);
+    }
+    return entry;
+  }
+
+  function hasLayout() {
+    return container.clientHeight > 0;
+  }
+
   function isNearBottom() {
     return (
       container.offsetHeight + container.scrollTop >
@@ -103,6 +194,9 @@ export function createChatScrollController(
   }
 
   function handleContainerScroll() {
+    if (virtualActive) {
+      queueWindowSync();
+    }
     if (restorePending) {
       // Transition noise (clamps, programmatic resets) while a restore has
       // not been applied yet; the restore decides the position.
@@ -158,8 +252,10 @@ export function createChatScrollController(
         // The anchor correction handles this when an anchor exists; without
         // one (layout-less or replaced content), shift the held pixel
         // position by the exact growth so the reading position survives.
+        // With a window, the prepended rows enter as a spacer above the
+        // mounted anchor, which the correction after rendering covers.
         const growth = container.scrollHeight - previousScrollHeight;
-        if (growth > 0) {
+        if (growth > 0 && !virtualActive) {
           const viewport = viewportFor(currentSessionId);
           if (!viewport.pinned) {
             expectedScrollTop += growth;
@@ -185,15 +281,20 @@ export function createChatScrollController(
 
   // Record which content element sits at the current reading position, as an
   // offset the correction below can re-apply after content above it resizes.
+  // Only a visible row qualifies: a viewport showing a spacer has none.
   function captureAnchor(viewport) {
     viewport.fallbackTop = container.scrollTop;
     viewport.fallbackScrollHeight = container.scrollHeight;
-    const containerTop = container.getBoundingClientRect().top;
-    const anchor = timelineItemElements().find(
-      (element) =>
-        elementHasLayout(element) &&
-        element.getBoundingClientRect().bottom > containerTop,
-    );
+    const containerRect = container.getBoundingClientRect();
+    const containerBottom =
+      containerRect.bottom ?? containerRect.top + container.offsetHeight;
+    const anchor = timelineItemElements().find((element) => {
+      if (!elementHasLayout(element)) {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.bottom > containerRect.top && rect.top < containerBottom;
+    });
     if (!anchor) {
       viewport.anchorId = '';
       viewport.anchorDelta = 0;
@@ -224,6 +325,13 @@ export function createChatScrollController(
   // Called (coalesced) after any content growth: streaming deltas, image
   // loads, history pages, session swaps.
   function contentChanged() {
+    settlePosition();
+    syncWindow();
+  }
+
+  // Re-applies the viewport's mode to the current content: a pending restore,
+  // following the bottom, or holding the reading anchor.
+  function settlePosition() {
     if (restorePending) {
       applyRestore();
       return;
@@ -272,11 +380,31 @@ export function createChatScrollController(
   function sessionChanged(sessionId) {
     saveViewport(currentSessionId);
     currentSessionId = sessionId || '';
+    layout = layoutFor(currentSessionId);
+    interactionHolds?.releaseAll();
     const viewport = viewportFor(currentSessionId);
     restorePending = true;
     restoreToPinned = viewport.pinned;
     awaitingUserPosition = false;
+    aimWindow(viewport);
     onViewChanged();
+  }
+
+  // Points the window at the viewport's saved position: the tail when
+  // pinned, otherwise the rows around the saved anchor. The restore then
+  // takes its final position from the mounted anchor.
+  function aimWindow(viewport) {
+    if (viewport.pinned) {
+      layout.window.showTail();
+    } else if (viewport.anchorId) {
+      layout.window.showAround(viewport.anchorId, viewport.anchorDelta);
+    } else {
+      layout.window.showOffset(viewport.fallbackTop);
+    }
+    correctedLayoutKey = null;
+    if (virtualActive) {
+      publish();
+    }
   }
 
   function saveViewport(sessionId) {
@@ -321,6 +449,9 @@ export function createChatScrollController(
     // The anchor is gone and the height changed: the bottom is the only safe,
     // non-surprising landing. Resume following from there.
     viewport.pinned = true;
+    if (virtualActive) {
+      aimWindow(viewport);
+    }
     writeBottom();
     onViewChanged();
   }
@@ -332,6 +463,7 @@ export function createChatScrollController(
     const viewport = viewportFor(currentSessionId);
     viewport.pinned = true;
     viewport.anchorId = '';
+    aimWindow(viewport);
     writeBottom();
     onViewChanged();
   }
@@ -344,6 +476,7 @@ export function createChatScrollController(
     viewport.anchorId = '';
     restorePending = true;
     restoreToPinned = true;
+    aimWindow(viewport);
   }
 
   // Real user input releases the follow pin before the browser has scrolled,
@@ -366,17 +499,244 @@ export function createChatScrollController(
     maybeRequestLoadOlder();
   }
 
-  function destroy() {
-    container.removeEventListener('scroll', handleContainerScroll);
+  // --- Window ---------------------------------------------------------------
+
+  function publish() {
+    if (!destroyed) {
+      onWindowChanged();
+    }
+  }
+
+  // Holds change from component effects; the renderer re-plans after them.
+  function queuePublish() {
+    if (!virtualActive || publishQueued) {
+      return;
+    }
+    publishQueued = true;
+    queueMicrotask(() => {
+      publishQueued = false;
+      publish();
+    });
+  }
+
+  // The rows and spacers to mount for `items` of the Session `sessionId`, as
+  // keyed entries: rows `{ key, item }`, spacers `{ key, spacer, height }`.
+  // Before the timeline has shown layout, every row.
+  function renderPlan(items, sessionId = currentSessionId) {
+    const { model, window: rowWindow } = layoutFor(sessionId || '');
+    model.sync(items);
+    if (!virtualActive) {
+      plannedLayoutKey = null;
+      return stableEntries(items.map((item) => ({ key: item.id, item })));
+    }
+    const { entries, layoutKey } = rowWindow.plan(items);
+    plannedLayoutKey = `${sessionId}\n${layoutKey}`;
+    return stableEntries(entries);
+  }
+
+  function stableEntries(entries) {
+    const nextEntries = new Map();
+    const stable = entries.map((entry) => {
+      const previous = planEntries.get(entry.key);
+      const unchanged = entry.spacer
+        ? previous?.spacer && previous.height === entry.height
+        : previous?.item === entry.item;
+      const result = unchanged ? previous : entry;
+      nextEntries.set(entry.key, result);
+      return result;
+    });
+    planEntries = nextEntries;
+    return stable;
+  }
+
+  // The renderer applied the latest plan. Measures rows that just mounted,
+  // corrects the position before the browser paints when mounted rows or
+  // spacers changed, and extends the window if the viewport is not covered.
+  function rendered() {
+    const layoutReady = hasLayout();
+    observeRows(layoutReady);
+    if (!virtualActive) {
+      if (layoutReady && contentHasLayout()) {
+        activate();
+      }
+      return;
+    }
+    if (!layoutReady) {
+      return;
+    }
+    if (plannedLayoutKey !== correctedLayoutKey) {
+      correctedLayoutKey = plannedLayoutKey;
+      settlePosition();
+      captureMissingAnchor();
+    }
+    if (syncWindowUpdates >= MAX_SYNC_WINDOW_UPDATES_PER_FRAME) {
+      queueWindowSync();
+      return;
+    }
+    if (syncWindow()) {
+      if (syncWindowUpdates === 0) {
+        requestFrame(() => {
+          syncWindowUpdates = 0;
+        });
+      }
+      syncWindowUpdates += 1;
+    }
+  }
+
+  function contentHasLayout() {
+    return Boolean(content && content.getBoundingClientRect().height > 0);
+  }
+
+  // All rows are mounted and measured at this point, so the window collapses
+  // around the current position without moving it.
+  function activate() {
+    virtualActive = true;
+    const viewport = viewportFor(currentSessionId);
+    if (!restorePending && !viewport.pinned) {
+      captureAnchor(viewport);
+    }
+    aimWindow(viewport);
+  }
+
+  // A reading position taken while only a spacer was visible has no anchor;
+  // take it from the rows mounted there now.
+  function captureMissingAnchor() {
+    const viewport = viewportFor(currentSessionId);
     if (
-      contentSyncFrame !== null &&
-      typeof cancelAnimationFrame === 'function'
+      !restorePending &&
+      !awaitingUserPosition &&
+      !viewport.pinned &&
+      !viewport.anchorId
     ) {
-      cancelAnimationFrame(contentSyncFrame);
+      captureAnchor(viewport);
+    }
+  }
+
+  // Observes rows that mounted since the last update and measures them at
+  // once, so the window decision after this update already knows them.
+  function observeRows(layoutReady) {
+    if (!content) {
+      return;
+    }
+    for (const element of observedRows.keys()) {
+      if (!element.isConnected) {
+        resizeObserver?.unobserve(element);
+        observedRows.delete(element);
+      }
+    }
+    const { model } = layout;
+    for (const element of content.children) {
+      const id = element.dataset?.timelineItemId;
+      if (id === undefined) {
+        continue;
+      }
+      const observed = observedRows.get(element);
+      if (observed?.id === id && observed.model === model) {
+        continue;
+      }
+      if (!observed) {
+        resizeObserver?.observe(element);
+      }
+      observedRows.set(element, { id, model });
+      if (layoutReady) {
+        model.setMeasured(id, element.getBoundingClientRect().height);
+      }
+    }
+  }
+
+  function handleResize(entries) {
+    const layoutReady = hasLayout();
+    for (const entry of entries) {
+      const row = observedRows.get(entry.target);
+      if (!row || !layoutReady) {
+        continue;
+      }
+      row.model.setMeasured(
+        row.id,
+        entry.borderBoxSize?.[0]?.blockSize ??
+          entry.target.getBoundingClientRect().height,
+      );
+    }
+    if (!virtualActive && layoutReady && contentHasLayout()) {
+      activate();
+    }
+    queueContentChanged();
+  }
+
+  // Content y of the top spacer, which starts the row list.
+  function listOrigin() {
+    for (const element of content?.children ?? []) {
+      if (element.dataset?.timelineSpacer !== undefined) {
+        return (
+          element.getBoundingClientRect().top -
+          container.getBoundingClientRect().top +
+          container.scrollTop
+        );
+      }
+    }
+    return null;
+  }
+
+  // Moves the window to cover the viewport; returns whether it changed.
+  function syncWindow() {
+    if (!virtualActive || restorePending || !hasLayout()) {
+      return false;
+    }
+    const origin = listOrigin();
+    if (origin === null) {
+      return false;
+    }
+    const viewport = viewportFor(currentSessionId);
+    const changed = layout.window.update(
+      container.scrollTop - origin,
+      container.clientHeight,
+      { followTail: viewport.pinned && !awaitingUserPosition },
+    );
+    if (changed) {
+      publish();
+    }
+    return changed;
+  }
+
+  function queueWindowSync() {
+    if (windowSyncFrame !== null) {
+      return;
+    }
+    windowSyncFrame = requestFrame(() => {
+      windowSyncFrame = null;
+      syncWindow();
+    });
+  }
+
+  // Keeps row `id` of the displayed Session mounted outside the window until
+  // the returned release runs.
+  function hold(id) {
+    const release = layout.window.hold(id);
+    queuePublish();
+    return () => {
+      if (release()) {
+        queuePublish();
+      }
+    };
+  }
+
+  function destroy() {
+    destroyed = true;
+    container.removeEventListener('scroll', handleContainerScroll);
+    if (contentSyncFrame !== null) {
+      cancelFrame(contentSyncFrame);
+    }
+    if (windowSyncFrame !== null) {
+      cancelFrame(windowSyncFrame);
     }
     contentSyncFrame = null;
     contentSyncQueued = false;
+    windowSyncFrame = null;
+    resizeObserver?.disconnect();
+    interactionHolds?.destroy();
+    observedRows.clear();
     viewports.clear();
+    layouts.clear();
   }
 
   return {
@@ -387,6 +747,9 @@ export function createChatScrollController(
     noteUserInput,
     isNearBottom,
     isRestorePending: () => restorePending,
+    renderPlan,
+    rendered,
+    hold,
     destroy,
   };
 }

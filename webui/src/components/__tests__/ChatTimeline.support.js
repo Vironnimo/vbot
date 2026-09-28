@@ -54,6 +54,8 @@ export function setupChatTimelineSuite({ observeResize = false } = {}) {
 
         observe() {}
 
+        unobserve() {}
+
         disconnect() {}
       };
     }
