@@ -422,19 +422,23 @@ async def test_unicode_escape_repair_does_not_hide_unrelated_invalid_regex(tmp_p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("arguments", "expected"),
+    ("arguments", "expected", "output"),
     [
-        ({"output": "count", "context": 2}, "code:2"),
-        ({"args": ["-c", "-C", "2"]}, "code:2"),
-        ({"args": ["-C2", "--count-matches"]}, "code:3"),
-        ({"output": "files", "context": 2, "args": ["-c"]}, "code:2"),
-        ({"output": "count", "context": 2, "args": ["--count-matches"]}, "code:3"),
+        ({"output": "count", "context": 2}, "code:2", "count"),
+        ({"args": ["-c", "-C", "2"]}, "code:2", "count"),
+        ({"args": ["-C2", "--count-matches"]}, "code:3", "count"),
+        ({"output": "files", "context": 2, "args": ["-c"]}, "code:2", "count"),
+        ({"output": "count", "context": 2, "args": ["--count-matches"]}, "code:3", "count"),
+        ({"output": "files", "context": 3}, "code", "file-list"),
+        ({"args": ["-c", "-C", "2", "-l"]}, "code", "file-list"),
+        ({"path": ".", "args": ["-A1", "--files-without-match"]}, "other", "file-list"),
     ],
 )
-async def test_count_output_ignores_context_after_resolving_option_precedence(
-    tmp_path, arguments, expected
+async def test_count_and_file_list_output_ignore_context_after_resolving_option_precedence(
+    tmp_path, arguments, expected, output
 ):
     (tmp_path / "code").write_text("before\nneedle needle\nneedle\nafter\n")
+    (tmp_path / "other").write_text("nothing\n")
     supplied = {"pattern": "needle", "path": "code", **arguments}
     original = copy.deepcopy(supplied)
 
@@ -444,7 +448,7 @@ async def test_count_output_ignores_context_after_resolving_option_precedence(
     assert result["ok"], result
     assert result["data"]["content"] == expected
     assert result["data"]["complete"] is True
-    assert "note" in result["data"]
+    assert f"Context was ignored because {output} output" in result["data"]["note"]
 
 
 @pytest.mark.parametrize(
@@ -526,7 +530,6 @@ async def test_literal_payloads_are_never_shell_or_repair_syntax(tmp_path, patte
     assert normalize_search_arguments(arguments)["args"][-1] == pattern
 
 
-_CONTEXT = "Context requires matching-line output"
 _OPTION = "Unsupported search option"
 _ROOTS = "Search roots must be nonempty file or directory paths"
 _LIST = "args contains a malformed encoded list"
@@ -553,15 +556,18 @@ _LIST = "args contains a malformed encoded list"
         ),
         ({"args": ["--files", "-c"]}, "invalid_arguments", "-c searches contents"),
         ({"args": ["--dirs", "-tpy"]}, "invalid_arguments", "they cannot select directories"),
-        ({"args": ["needle", "-C", "2", "-l"]}, "invalid_arguments", _CONTEXT),
-        *[
-            (
-                {"pattern": "needle", "path": "code", "output": "count", "context": 2, "args": a},
-                "invalid_arguments",
-                _CONTEXT,
-            )
-            for a in (["-l"], ["-q"], ["--files-without-match"])
-        ],
+        (
+            {"pattern": "needle", "path": "code", "output": "count", "context": 2, "args": ["-q"]},
+            "invalid_arguments",
+            "-q (--quiet) in args returns only whether a match exists, so it cannot show "
+            "context lines. Remove -q from args",
+        ),
+        (
+            {"args": ["needle", "-C", "2", "-o"]},
+            "invalid_arguments",
+            "-o (--only-matching) in args returns only the matched text, so it cannot show "
+            "context lines. Remove -o from args",
+        ),
         ({"args": ["--help", "missing"]}, "invalid_arguments", "--help does not search"),
         # Incomplete or unsupported options, and roots that are not paths.
         ({"args": ["--files", "-g"]}, "invalid_arguments", "-g requires a value"),

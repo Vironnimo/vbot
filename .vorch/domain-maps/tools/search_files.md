@@ -63,8 +63,11 @@ symlinks, depth/size/filesystem limits, ordering, encoding, CRLF/NUL, binary
 handling, and diagnostics. Unknown flags, missing operands, or incompatible
 effects reject with a correction. Plain source coordinates and
 formatting are fixed; formatting flags already satisfied by output are accepted.
-Context combined with count output is ignored with an interpretation note, after
-resolving option precedence; a later file/quiet selector still rejects context.
+Context combined with count or file-list output (`output` `count` or `files`, `-c`,
+`--count-matches`, `-l`, `--files-without-match`) is dropped with an interpretation
+note, after resolving option precedence: Agents twice sent `output: "files"` with
+`context: 3` and got a rejection (Sessions, 2026-09). Context beside `-q` or `-o`
+still rejects, naming that flag to remove or `context` and `-A`/`-B`/`-C` to omit.
 
 Common scalar/container encodings and known call wrappers use shared repair.
 The owner normalizer also accepts field names from other search Tools and
@@ -179,6 +182,14 @@ timeouts, Run cancellation, and unreadable entries make results incomplete with
 bounded warnings. After a timed-out directory search, `narrow_call` lists its
 immediate subdirectories so the Agent can repeat the search under a narrower path;
 the note explains that lowering `limit` does not reduce traversal.
+An operating-system error that ends the search (scratch spool, engine launch) fails
+with `search_error`, or becomes a warning of an incomplete result once results were
+observed, as `search_files could not use a file the search needs: <reason>. Retry
+the call.` with the shared English reason from `file_state.os_error_reason` (whose
+`it` then means that file) and no path: an
+Agent received Windows' German text naming the scratch `selection.sqlite`
+(Sessions, 2026-09). An unreadable ignore source names only its file name; an engine
+that exits with an error and no diagnostics names its exit code.
 Regex errors fail even when selection is empty: the native content
 run reports pattern and option errors itself, and a separate native check against an
 empty file runs only when no candidate file was selected. Native exit 1
@@ -240,10 +251,10 @@ chat rows remain readable.
 ## Verification
 
 Primary tests: `tests/core/tools/test_search_files*.py` (modes, scope, ignores,
-links, encodings, paging, and deterministic traversal-pruning and timeout-recovery
-checks in `test_search_files.py`; named fields, other interfaces' spellings, grep
-habits, command-line strings, path suggestions, and encoded-list, literal-payload,
-conflict, regex-repair, and empty-scope regressions in
+links, encodings, paging, and deterministic traversal-pruning, timeout-recovery and
+system-error checks in `test_search_files.py`; named fields, other interfaces'
+spellings, grep habits, command-line strings, path suggestions, and encoded-list,
+literal-payload, conflict, regex-repair, and empty-scope regressions in
 `test_search_files_arguments.py`; native children in `test_search_files_lifecycle.py`),
 `tests/cli/test_search_runtime.py`, `tests/scripts/converters/persistence_generation_1/test_json_documents.py`,
 the retained probe cases in `tests/scripts/test_provider_probe.py`, plus runtime, scanner, Chat, packaging,

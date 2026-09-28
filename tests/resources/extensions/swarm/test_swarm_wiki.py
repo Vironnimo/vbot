@@ -710,14 +710,21 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
         'closest page is "Release plan" (w1). Repeat the call with page_id "w1" if you meant '
         "it. Nothing changed."
     )
-    # Without page_id, an update names the pages that hold its old_text, newest change first.
+    # Without page_id, an update runs on the one live page that holds its exact old_text.
     changed = {"action": "update", "page_id": "w2", "old_text": "x", "new_text": "no"}
     assert (await invoke(board, changed))["ok"]
+    unnamed = await invoke(board, {"action": "update", "old_text": "Body", "new_text": "Body text"})
+    assert (unnamed["data"]["page_id"], unnamed["data"]["revision"]) == ("w1", 2)
+    assert unnamed["data"]["note"] == (
+        'page_id was omitted; old_text occurs only in w1 ("Release plan"), so that page was '
+        "updated."
+    )
+    assert (await stored(board, "w1"))["content"] == "Body text"
+    # Several pages or none: the update names them, newest change first, and changes nothing.
     for old_text, named in (
-        ("Body", 'old_text occurs in w1 ("Release plan"); repeat the call with page_id "w1".'),
         (
             "o",
-            'old_text occurs in w2 ("B") and w1 ("Release plan"); repeat the call with the '
+            'old_text occurs in w1 ("Release plan") and w2 ("B"); repeat the call with the '
             "page_id of the page you mean.",
         ),
         ("Missing", 'Find pages with {"action": "list"}.'),
@@ -726,7 +733,7 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
         assert visible(unnamed) == (
             f"Error (invalid_arguments): update needs page_id. {named} Nothing changed."
         )
-    assert (await stored(board, "w1"))["content"] == "Body"
+    assert [(await stored(board, page))["content"] for page in ("w1", "w2")] == ["Body text", "no"]
     for unknown in ("w9", "wpg_unrelated"):
         missing = await invoke(board, {"action": "read", "page_id": unknown})
         assert visible(missing) == (
@@ -736,6 +743,12 @@ async def test_wiki_page_references_resolve_only_for_reading(board):
     assert not (await stored(board, "w1"))["deleted"]
     # A deleted page keeps its number, and a new page gets the next one.
     assert (await invoke(board, {"action": "delete", "page_id": "w2"}))["ok"]
+    # Only live pages count: with w2 deleted, "o" occurs only in w1.
+    only_live = await invoke(board, {"action": "update", "old_text": "o", "new_text": "O"})
+    assert (only_live["data"]["page_id"], (await stored(board, "w1"))["content"]) == (
+        "w1",
+        "BOdy text",
+    )
     assert await create(board, "y", "C") == "w3"
     assert (await stored(board, "w2"))["deleted"]
 

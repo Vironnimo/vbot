@@ -29,6 +29,7 @@ from core.tools._search_selection import FileSelection
 from core.tools._tool_context import _path_argument
 from core.tools.arguments import optional_int
 from core.tools.contracts import ToolContractError, _load_json_value, compile_tool_contract
+from core.tools.file_state import os_error_reason
 from core.tools.search import SearchBudget
 from core.tools.tools import (
     JsonObject,
@@ -646,9 +647,17 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
     except (OSError, RuntimeError) as error:
+        # The system's own message follows the host language and names vBot's
+        # scratch files, such as the candidate spool; say why in English instead.
+        message = (
+            f"search_files could not use a file the search needs: {os_error_reason(error)}. "
+            "Retry the call."
+            if isinstance(error, OSError)
+            else str(error)
+        )
         if not page.observed:
-            return tool_failure("search_error", str(error))
-        warnings.append(str(error))
+            return tool_failure("search_error", message)
+        warnings.append(message)
         complete = False
     if budget.cancelled_by_user or context.was_cancelled_by_user():
         return tool_failure("cancelled_by_user", "Search aborted by the user")

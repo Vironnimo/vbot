@@ -148,7 +148,8 @@ def native_lines(
         if process.returncode not in (0, 1) and not interrupted:
             raise RuntimeError(
                 diagnostics.decode("utf-8", errors="backslashreplace").strip()
-                or f"Search engine exited with code {process.returncode}."
+                or "search_files could not complete the search: the search engine exited "
+                f"with code {process.returncode}. Retry the call."
             )
         if diagnostics and not interrupted:
             raise RuntimeError(diagnostics.decode("utf-8", errors="backslashreplace").strip())
@@ -392,7 +393,10 @@ def content_events(
                     }
                     buffer = remainder
             if buffer and not budget.stopped:
-                raise RuntimeError("Search returned an incomplete result record.")
+                raise RuntimeError(
+                    "search_files could not complete the search: the search engine returned "
+                    "an incomplete result. Retry the call."
+                )
 
     for path, _ in paths:
         if not budget.keep_going():

@@ -69,8 +69,8 @@ class WikiCall:
 
         action = self._prepare(arguments)
         if action == "update" and not arguments.get("page_id"):
-            raise await self._page_needed(arguments["old_text"])
-        if action == "create" and "page_id" in arguments:
+            arguments["page_id"] = await self._page_holding(arguments["old_text"])
+        elif action == "create" and "page_id" in arguments:
             await self._drop_create_page_id(arguments)
         elif "page_id" in arguments:
             await self._name_by_number(arguments)
@@ -171,7 +171,7 @@ class WikiCall:
 
         if action not in {"list", "create"} and not arguments.get("page_id"):
             old_text = arguments.get("old_text")
-            # run() names the pages that hold the text an update replaces.
+            # run() finds the page that holds the text an update replaces.
             if action != "update" or not isinstance(old_text, str) or not old_text.strip():
                 message = text.WIKI_NEEDS["page_id"].format(action=action)
                 if action in MUTATIONS:
@@ -218,22 +218,28 @@ class WikiCall:
             )
         self.notes.append(text.WIKI_CREATE_IGNORED_ID.format(value=value))
 
-    async def _page_needed(self, old_text: str) -> AgentCallError:
-        """Name the pages that hold ``old_text``; a change never picks one itself."""
+    async def _page_holding(self, old_text: str) -> str:
+        """Return the one live page whose content holds ``old_text``; else name the choices.
+
+        An update without page_id replaces a passage whose exact text identifies its
+        page; among several pages the call never picks one itself.
+        """
 
         pages = await self.store.wiki_pages(self.sid, containing=old_text)
-        named = [f'{wiki_ref(page["number"])} ("{page["title"]}")' for page in pages[:3]]
         if len(pages) == 1:
-            message = text.WIKI_PAGE_HOLDS_TEXT.format(
-                page=named[0], page_id=wiki_ref(pages[0]["number"])
+            reference = wiki_ref(pages[0]["number"])
+            self.notes.append(
+                text.WIKI_PAGE_FROM_TEXT.format(page_id=reference, title=pages[0]["title"])
             )
-        elif pages:
+            return reference
+        if pages:
+            named = [f'{wiki_ref(page["number"])} ("{page["title"]}")' for page in pages[:3]]
             if len(pages) > len(named):
                 named.append(text.WIKI_MORE_PAGES.format(count=len(pages) - len(named)))
             message = text.WIKI_PAGES_HOLD_TEXT.format(pages=spoken_list(named))
         else:
             message = text.WIKI_NEEDS["page_id"].format(action="update")
-        return AgentCallError("invalid_arguments", f"{message} {text.NOTHING_CHANGED}")
+        raise AgentCallError("invalid_arguments", f"{message} {text.NOTHING_CHANGED}")
 
     async def _name_by_number(self, arguments: Json) -> None:
         """Refer to a page the call names exactly by its number, as results show it."""

@@ -13,6 +13,7 @@ from typing import TypeVar
 from pathspec import PathSpec
 
 from core.tools._search_options import SearchOptions
+from core.tools.file_state import os_error_reason
 
 _MAX_IGNORE_FILE_CHARS = 2 * 1024 * 1024
 _MAX_IGNORE_LINE_CHARS = 4096
@@ -54,6 +55,13 @@ def _remember(cache: OrderedDict[_K, tuple[_Stamp, _V]], key: _K, stamp: _Stamp,
             cache.popitem(last=False)
 
 
+def _unreadable(source: str, error: OSError) -> RuntimeError:
+    """Say in English why an ignore source is unreadable, without its absolute path."""
+    return RuntimeError(
+        f"search_files could not read {source}: {os_error_reason(error)}. Retry the call."
+    )
+
+
 def _compiled_source(path: Path, *, casefold: bool) -> tuple[int, list]:
     """Return one ignore file's line count and compiled patterns; missing is empty."""
     try:
@@ -61,7 +69,7 @@ def _compiled_source(path: Path, *, casefold: bool) -> tuple[int, list]:
     except (FileNotFoundError, NotADirectoryError):
         return 0, []
     except OSError as error:
-        raise RuntimeError(f"Cannot read ignore file {path}: {error}") from error
+        raise _unreadable(f"the ignore file {path.name}", error) from error
     cached = _cached(_SOURCES, (path, casefold), stamp)
     if cached is not None:
         return cached
@@ -71,7 +79,7 @@ def _compiled_source(path: Path, *, casefold: bool) -> tuple[int, list]:
     except (FileNotFoundError, NotADirectoryError):
         return 0, []
     except OSError as error:
-        raise RuntimeError(f"Cannot read ignore file {path}: {error}") from error
+        raise _unreadable(f"the ignore file {path.name}", error) from error
     if len(text) > _MAX_IGNORE_FILE_CHARS:
         raise ValueError(f"Ignore file exceeds 2 MiB: {path}")
     if casefold:
@@ -195,7 +203,10 @@ class IgnoreRules:
                     git = git / common.read_text(encoding="utf-8").strip()
                 self.repository_excludes[repository] = git / "info" / "exclude"
             except OSError as error:
-                raise RuntimeError(f"Cannot read repository excludes: {error}") from error
+                name = Path(error.filename).name if error.filename else ".git"
+                raise _unreadable(
+                    f"the file {name} of the Git repository {repository.name}", error
+                ) from error
         return self.repository_excludes[repository]
 
     def _groups(self, parent: Path) -> list[tuple[Path, list]]:
