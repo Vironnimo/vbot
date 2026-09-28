@@ -21,7 +21,7 @@ export const DAILY_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
 export const STATISTICS_RANGES = Object.freeze(['7d', '30d', '90d', 'all']);
 export const USAGE_HISTORY_RANGES = Object.freeze(['24h', '7d', '30d', 'all']);
 
-export const ACTIVITY_BUCKET_COUNTS = Object.freeze({
+const ACTIVITY_BUCKET_COUNTS = Object.freeze({
   day: 30,
   week: 16,
   month: 12,
@@ -210,7 +210,7 @@ export function usageSeverity(percent) {
   return 'ok';
 }
 
-export function providerUsageTargetKey(snapshot) {
+function providerUsageTargetKey(snapshot) {
   const connection =
     typeof snapshot?.connection === 'string' ? snapshot.connection : '';
   const account =
@@ -588,11 +588,11 @@ export function groupModelsByProvider(models) {
 // Roll the day-granularity series up to week (ISO Monday) or month buckets,
 // summing every numeric field. 'day' returns the series unchanged. Each point
 // must carry a `date` of the shape 'YYYY-MM-DD'.
-export function rollupDaily(points, granularity = 'day') {
+function rollupDaily(points, granularity = 'day') {
   if (!Array.isArray(points)) {
     return [];
   }
-  if (granularity === 'day' || !DAILY_GRANULARITIES.includes(granularity)) {
+  if (granularity === 'day') {
     return points.map((point) => ({ ...point }));
   }
 
@@ -742,36 +742,6 @@ export function statisticsInsights(report) {
   };
 }
 
-export function activitySummary(points) {
-  const series = Array.isArray(points) ? points : [];
-  const totals = {
-    totalRuns: 0,
-    completed: 0,
-    failed: 0,
-    cancelled: 0,
-    interrupted: 0,
-  };
-  let peak = null;
-  for (const point of series) {
-    const runs = toFiniteNumber(point?.runs);
-    totals.totalRuns += runs;
-    totals.completed += toFiniteNumber(point?.completed);
-    totals.failed += toFiniteNumber(point?.failed);
-    totals.cancelled += toFiniteNumber(point?.cancelled);
-    totals.interrupted += toFiniteNumber(point?.interrupted);
-    if (peak === null || runs > peak.runs) {
-      peak = { date: point?.date ?? '', runs };
-    }
-  }
-  return {
-    ...totals,
-    completionRate:
-      totals.totalRuns > 0 ? totals.completed / totals.totalRuns : null,
-    peak,
-    scaleMax: niceScaleMax(peak?.runs ?? 0),
-  };
-}
-
 export function formatActivityDate(
   dateKey,
   granularity,
@@ -866,35 +836,8 @@ function niceScaleMax(value) {
   return ceiling * magnitude;
 }
 
-// Build a `points="x,y …"` attribute for an SVG sparkline polyline. Values map
-// left→right across `width`; the largest value touches the top of `height`.
-// Pass `max` for an absolute scale (e.g. 1 for a 0–100% ratio series) instead
-// of normalizing to the series' own maximum.
-export function sparklinePoints(values, width, height, { max } = {}) {
-  if (!Array.isArray(values) || values.length === 0) {
-    return '';
-  }
-  const numeric = values.map(toFiniteNumber);
-  if (numeric.length === 1) {
-    const scale = max ?? numeric[0];
-    return `0,${height} ${width},${height - barFraction(numeric[0], scale) * height}`;
-  }
-  const scale = max ?? Math.max(...numeric, 0);
-  return numeric
-    .map((value, index) => {
-      const x = (index / (numeric.length - 1)) * width;
-      const y = height - barFraction(value, scale) * height;
-      return `${round(x)},${round(y)}`;
-    })
-    .join(' ');
-}
-
 function barFraction(value, max) {
   return max > 0 ? Math.max(0, value) / max : 0;
-}
-
-function round(value) {
-  return Math.round(value * 100) / 100;
 }
 
 // Scale a list of bar values to [0,1] fractions of the largest value, so the
