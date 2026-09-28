@@ -297,8 +297,9 @@ def model_facing_request(
     Look-alike tags are neutralized in user text and text blocks, Assistant
     content and readable Reasoning, and Tool Result content blocks; Provider
     wires neutralize the Tool Result body when they render it
-    (``tool_result_text``). System messages, opaque ``reasoning_meta`` and Tool
-    call arguments are never changed. The projection is deterministic and
+    (``tool_result_text``) and the readable text they replay from
+    ``reasoning_meta``. System messages, ``reasoning_meta`` itself and Tool
+    call arguments are never changed here. The projection is deterministic and
     returns unchanged items as they are; persisted history is never modified.
     """
 
