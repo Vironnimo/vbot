@@ -4,7 +4,7 @@
 // that changed, never the new data. This module owns two pure halves so they
 // stay unit-testable and framework-free:
 //   (a) routing a kind to the refresh-token group(s) it invalidates, and
-//   (b) the "apply the visible swap now, or defer it" decision per surface type.
+//   (b) the "apply the visible swap now, or defer it" decision for a form.
 // App.svelte holds the reactive refresh-token state; each view holds its own
 // reactive editing signals. Neither half touches Svelte.
 
@@ -56,30 +56,18 @@ export function tokenKeysForKind(kind) {
   return KIND_TOKEN_GROUPS[kind] ?? [];
 }
 
-// Surface types for the apply/defer decision.
-export const SURFACE_DISPLAY = 'display';
-export const SURFACE_FORM = 'form';
-
-// A form/picker is "busy" — actively being edited — while a dropdown is open, a
-// field holds focus, or a debounced save is still pending. While busy, a reload
-// must hold its visible swap so it cannot yank an open selection or half-typed
-// input out from under the user.
-export function isSurfaceBusy(signals = {}) {
+// Decide whether a freshly-arrived reload may swap a form's or picker's visible
+// data now. The surface is "busy" — actively being edited — while a dropdown is
+// open, a field holds focus, or a debounced save is still pending. While busy,
+// a reload must hold its visible swap so it cannot yank an open selection or
+// half-typed input out from under the user. This gates only the *visible* swap
+// — callers still fetch fresh data right away and apply the deferred swap once
+// the surface goes idle.
+export function shouldApplyReloadNow(signals = {}) {
   const {
     dropdownOpen = false,
     focused = false,
     savePending = false,
   } = signals;
-  return Boolean(dropdownOpen || focused || savePending);
-}
-
-// Decide whether a freshly-arrived reload may swap visible data now. Pure
-// displays always apply immediately; forms/pickers apply only when not busy.
-// This gates only the *visible* swap — callers still fetch fresh data right away
-// and apply the deferred swap once the surface goes idle.
-export function shouldApplyReloadNow(surface, signals = {}) {
-  if (surface === SURFACE_DISPLAY) {
-    return true;
-  }
-  return !isSurfaceBusy(signals);
+  return !(dropdownOpen || focused || savePending);
 }

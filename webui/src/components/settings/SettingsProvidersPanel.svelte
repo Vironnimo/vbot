@@ -41,10 +41,7 @@
     setConnectionEnabled as setConnectionEnabledRequest,
     unsetProviderKey,
   } from '$lib/api.js';
-  import {
-    SURFACE_FORM,
-    shouldApplyReloadNow,
-  } from '$lib/resourceInvalidation.js';
+  import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
   import { createLocalProviderModels } from './providers/localModels.svelte.js';
 
   const noop = () => {};
@@ -227,7 +224,7 @@
   $effect(() => {
     if (
       pendingProviderRefresh &&
-      shouldApplyReloadNow(SURFACE_FORM, { focused: modalScope !== null })
+      shouldApplyReloadNow({ focused: modalScope !== null })
     ) {
       pendingProviderRefresh = false;
       void Promise.resolve(onRefreshProviderSettings()).catch((error) => {

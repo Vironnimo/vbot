@@ -13,7 +13,7 @@ import {
   showProject,
 } from '../api.js';
 import { scheduleAutosave } from '../autosave.js';
-import { SURFACE_FORM, shouldApplyReloadNow } from '../resourceInvalidation.js';
+import { shouldApplyReloadNow } from '../resourceInvalidation.js';
 import { normalizeToolAccess } from '../toolAccess.js';
 import {
   emptyScanSkills,
@@ -232,7 +232,7 @@ export function createProjectsController({
   }
 
   function projectReloadCanApply() {
-    return shouldApplyReloadNow(SURFACE_FORM, {
+    return shouldApplyReloadNow({
       dropdownOpen: state.modelDropdownOpenCount > 0,
       focused:
         state.isAddOpen ||
@@ -405,7 +405,7 @@ export function createProjectsController({
     }
     if (
       !reload ||
-      shouldApplyReloadNow(SURFACE_FORM, {
+      shouldApplyReloadNow({
         dropdownOpen: state.modelDropdownOpenCount > 0,
       })
     ) {
