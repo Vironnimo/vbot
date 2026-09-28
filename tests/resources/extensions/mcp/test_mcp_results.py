@@ -14,6 +14,8 @@ from resources.extensions.mcp.content import (
     READ_TOO_LARGE,
     RESULT_DENIED,
     RESULT_MISSING,
+    RESULT_READ_CHARACTERS,
+    RESULT_READ_ENTRIES,
     RESULT_TEXT_CHARACTERS,
     RESULT_VIEW_CHARACTERS,
     ContentStore,
@@ -53,6 +55,7 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
         if "next" not in page:
             break
         arguments = page["next"]
+    oversized = restored.read_result(document, {**continuation, "limit": 10_000})
 
     # The view shows the text start and names the read that continues it; it holds no
     # file path: read is the only way to the saved payload.
@@ -62,6 +65,8 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
     assert f"first {RESULT_TEXT_CHARACTERS} of {len(text)} characters" in receipt["note"]
     assert len(json.dumps(receipt)) < RESULT_VIEW_CHARACTERS
     assert "".join(pieces) == text
+    # A text page holds at most RESULT_READ_CHARACTERS, whatever limit asks for.
+    assert oversized["content"] == text[RESULT_TEXT_CHARACTERS:][:RESULT_READ_CHARACTERS]
     assert document["payload"]["_meta"] == payload["_meta"]
     assert list(payloads(host).rows) == [receipt["result_id"]]
     assert not (host.data_dir / "mcp").exists()
@@ -118,6 +123,7 @@ async def test_result_reader_filters_rows_and_paginates_without_losing_values(ho
     )
     second = store.read_result(document, first["next"])
 
+    assert len(first["entries"]) == RESULT_READ_ENTRIES
     assert [entry["value"] for entry in first["entries"] + second["entries"]] == [
         {"id": index} for index in range(31)
     ]

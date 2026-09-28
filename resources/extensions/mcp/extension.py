@@ -41,6 +41,8 @@ from ._definitions import (
     MCP_OPERATION_DESCRIPTIONS,
     MCP_OPERATIONS,
     MCP_PARAMETERS,
+    SEARCH_MAX_LIMIT,
+    SEARCH_PAGE_CHARACTERS,
     SEARCH_PAGE_SIZE,
     SEARCH_SUMMARY_CHARACTERS,
     TARGET_FINGERPRINT_LENGTH,
@@ -50,7 +52,7 @@ from ._definitions import (
 from ._views import argument_problem, compact, schema_summary
 from .client import READ_OPERATIONS, ConnectionRunner, InvocationNotSentError, operation_schema
 from .config import CONNECTION_SCHEMA, ConnectionStore, validate_connection
-from .content import RESULT_VIEW_CHARACTERS, ContentStore, pointer_part
+from .content import ContentStore, pointer_part
 from .interactions import InputRequests
 
 __all__ = [
@@ -73,6 +75,9 @@ __all__ = [
 
 
 _TARGET_KINDS = ("tool", "resource", "template", "prompt", "operation")
+
+# What a search without kind covers: the application's own items.
+_APPLICATION_KINDS = ("tool", "resource", "template", "prompt")
 
 _DETAIL_CHARACTERS = 300
 
@@ -318,9 +323,10 @@ class MCPService:
                 ("tool", "resource", "template", "prompt", "connection", "operation")
             )
         }
+        kinds = (kind,) if kind else _APPLICATION_KINDS
         scored = []
         for entry in entries:
-            if kind and entry["kind"] != kind:
+            if entry["kind"] not in kinds:
                 continue
             text = (entry["name"] + " " + entry["description"]).casefold()
             score = sum(word in text for word in words)
@@ -481,7 +487,10 @@ class MCPService:
         kind = arguments.get("kind")
         matches = self._search_entries(entries, query, kind)
         offset = arguments.get("offset", 0)
-        limit = min(arguments.get("limit", SEARCH_PAGE_SIZE), SEARCH_PAGE_SIZE)
+        requested = arguments.get("limit")
+        limit = SEARCH_PAGE_SIZE if requested is None else min(requested, SEARCH_MAX_LIMIT)
+        # A continuation repeats the search with the limit that was applied.
+        continued = arguments if requested is None else {**arguments, "limit": limit}
         instructions = runner.catalog.get("instructions") or ""
         prompts = [entry for entry in entries if entry["kind"] == "prompt"]
         available = {
@@ -506,7 +515,7 @@ class MCPService:
             f"{entry['target']}: {_one_line(entry['description'], SEARCH_SUMMARY_CHARACTERS)}"
             for entry in page
         ]
-        while len(lines) > 1 and len("\n".join(lines)) > RESULT_VIEW_CHARACTERS - 2000:
+        while len(lines) > 1 and len("\n".join(lines)) > SEARCH_PAGE_CHARACTERS:
             lines.pop()
             page = page[: len(lines)]
         view: dict[str, Any] = {
@@ -520,13 +529,20 @@ class MCPService:
             view["matches"] = f"{offset + 1}-{offset + len(page)} of {len(matches)}"
         else:
             view["matches"] = f"none after {offset} of {len(matches)}" if matches else "none"
+        if requested is not None and requested > limit:
+            view["limit"] = MCP_MESSAGES["search_limit"].format(requested=requested, applied=limit)
         if offset + len(page) < len(matches):
-            view["next"] = {**arguments, "offset": offset + len(page)}
+            view["next"] = {**continued, "offset": offset + len(page)}
         elif offset and offset >= len(matches):
-            view["next"] = {**arguments, "offset": 0}
+            view["next"] = {**continued, "offset": 0}
         if not matches and query.strip():
-            view["note"] = MCP_MESSAGES["no_matches"]
+            searched = f"{kind}s" if kind else "tools, resources, templates or prompts"
+            view["note"] = MCP_MESSAGES["no_matches"].format(searched=searched)
             view["next"] = {"action": "search", "kind": "tool"}
+        if kind is None and not offset:
+            operations = self._operations_line(entries, query)
+            if operations:
+                view["operations"] = operations
         sections = ["\n".join(lines)] if lines else []
         if not query.strip() and not offset and kind is None:
             if instructions:
@@ -557,6 +573,19 @@ class MCPService:
         if sections:
             view["content"] = "\n\n".join(sections)
         return tool_success(view)
+
+    def _operations_line(self, entries: list[dict[str, Any]], query: str) -> str | None:
+        """Point a search without kind to the protocol operations it leaves out."""
+        if not query.strip():
+            call = compact({"action": "search", "kind": "operation"})
+            return MCP_MESSAGES["operations"].format(call=call)
+        count = len(self._search_entries(entries, query, "operation"))
+        if not count:
+            return None
+        call = compact({"action": "search", "kind": "operation", "query": query.strip()})
+        return MCP_MESSAGES["operations_matching"].format(
+            count=count, verb="matches" if count == 1 else "match", call=call
+        )
 
     def _resolve(
         self, entries: list[dict[str, Any]], arguments: dict[str, Any]
