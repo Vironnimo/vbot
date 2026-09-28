@@ -25,11 +25,20 @@ import { isPlainObject } from '../values.js';
 // A History item is a pure projection of the Messages it was built from.
 // `reuse` (see `createHistoryItemReuse`) hands back the object an earlier
 // projection built from the same Messages, so keyed rendering skips unchanged
-// rows instead of re-rendering the whole History on every streaming flush.
+// rows instead of re-rendering the whole History on every streaming flush,
+// and a run of Messages projected before is not rebuilt at all.
 export function historyTimelineItems(messages, reuse = null) {
+  const projected = projectedHistorySegment(reuse, messages);
+  if (projected) {
+    return projected;
+  }
   const timelineItems = [];
-  const push = (item, sources) =>
-    timelineItems.push(reuseHistoryItem(reuse, item, sources));
+  const entries = [];
+  const push = (item, sources) => {
+    const entry = reuseHistoryItem(reuse, item, sources);
+    entries.push(entry);
+    timelineItems.push(entry.item);
+  };
   let activeAssistantRun = null;
   let activeRunSources = [];
   let previousVisibleRole = '';
@@ -165,29 +174,52 @@ export function historyTimelineItems(messages, reuse = null) {
   }
 
   pushActiveRun();
+  if (reuse && messages?.length) {
+    reuse.nextSegments.set(messages[0], { messages: [...messages], entries });
+  }
   return timelineItems;
 }
 
 // One projection generation per displayed Session: an item built from the
-// same Messages as in the previous generation is handed back unchanged.
+// same Messages as in the previous generation is handed back unchanged, and so
+// are all items of a Message sequence projected in the previous generation.
 export function createHistoryItemReuse() {
-  return { previous: new Map(), next: new Map() };
+  return {
+    previous: new Map(),
+    next: new Map(),
+    previousSegments: new Map(),
+    nextSegments: new Map(),
+  };
 }
 
 export function finishHistoryItemReuse(reuse) {
   reuse.previous = reuse.next;
   reuse.next = new Map();
+  reuse.previousSegments = reuse.nextSegments;
+  reuse.nextSegments = new Map();
+}
+
+function projectedHistorySegment(reuse, messages) {
+  const first = messages?.[0];
+  const segment = first && reuse?.previousSegments.get(first);
+  if (!segment || !sameMessages(segment.messages, messages)) {
+    return null;
+  }
+  reuse.nextSegments.set(first, segment);
+  for (const entry of segment.entries) {
+    reuse.next.set(entry.item.id, entry);
+  }
+  return segment.entries.map((entry) => entry.item);
 }
 
 function reuseHistoryItem(reuse, item, sources) {
-  if (!reuse) {
-    return item;
-  }
-  const cached = reuse.previous.get(item.id);
-  const kept =
-    cached && sameMessages(cached.sources, sources) ? cached.item : item;
-  reuse.next.set(item.id, { sources, item: kept });
-  return kept;
+  const cached = reuse?.previous.get(item.id);
+  const entry =
+    cached && sameMessages(cached.sources, sources)
+      ? cached
+      : { sources, item };
+  reuse?.next.set(item.id, entry);
+  return entry;
 }
 
 function sameMessages(left, right) {
