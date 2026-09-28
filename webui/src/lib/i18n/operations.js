@@ -354,7 +354,7 @@ export default Object.freeze({
   'cron.errors.delete': 'Cron job could not be deleted.',
   'cron.errors.toggle': 'Cron job status could not be updated.',
   'cron.errors.missingRequired':
-    'Name, agent, prompt, and schedule details are required.',
+    'Agent, prompt, and a valid schedule are required. The repeat limit must be a positive whole number; a Once schedule allows only 1.',
   'cron.messages.created': 'Cron job created.',
   'cron.messages.updated': 'Cron job updated.',
   'cron.messages.deleted': 'Cron job deleted.',

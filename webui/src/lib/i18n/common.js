@@ -115,7 +115,8 @@ export default Object.freeze({
   'loading.history': 'Loading chat history…',
   'errors.generic': 'Something went wrong. Try again.',
   'errors.validation': 'Check the highlighted fields and try again.',
-  'errors.streamClosed': 'The live stream closed before the run finished.',
+  'errors.streamClosed':
+    'The live stream closed before the run finished. Waiting for server status.',
   'errors.minimumAgents': 'At least one agent must remain.',
   'errors.appError': 'Error',
   'errors.streamReconnecting': 'The live stream closed. Reconnecting...',
