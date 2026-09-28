@@ -137,8 +137,13 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
     for index in range(8):
         many.joinpath(f"settings-{index}.txt").write_text("candidate", encoding="utf-8")
 
+    for folder in ("tests", "tests/deep", ".hidden", "node_modules"):
+        tmp_path.joinpath(folder).mkdir()
+        tmp_path.joinpath(folder, "corpus.py").write_text("x", encoding="utf-8")
+
     message = failure(await read(tmp_path, {"path": "ranked/settings.txt"}), "file_not_found")
     bounded = failure(await read(tmp_path, {"path": "many/settings.txt"}), "file_not_found")
+    elsewhere = failure(await read(tmp_path, {"path": "corpus.py"}), "file_not_found")
 
     # Same stem first, then files or directories beside it; never unrelated names
     # or the absolute path.
@@ -147,6 +152,11 @@ async def test_a_missing_file_suggests_ranked_similar_paths(tmp_path: Path) -> N
         "ranked/settings.txt.backup, ranked/settngs.txt)."
     )
     assert bounded.count("settings-") == 5
+    # The same name in other folders, shallow ones first; hidden and dependency
+    # folders are not searched.
+    assert (
+        elsewhere == "File not found: corpus.py (similar: tests/corpus.py, tests/deep/corpus.py)."
+    )
 
 
 @pytest.mark.asyncio

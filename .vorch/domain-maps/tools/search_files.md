@@ -44,7 +44,8 @@ is missing, the call fails with `path_not_found`, naming the root relative to th
 working directory when it lies inside it. Each missing root names up to five
 existing suggestions from `core/tools/_path_suggestions.py` (shared with `read`):
 a relative path that repeats the end of the working directory, per-component
-spelling repair, and similar sibling names. Suggestions are never applied, and roots
+spelling repair, for a name missing from an existing folder the same name in
+other folders below the working directory, and similar sibling names. Suggestions are never applied, and roots
 are never reinterpreted as patterns or replaced by the working directory. When the
 pattern came from the first `args` operand, the diagnostic shows how to search the
 missing operand as another pattern (`pattern "a|b"`, or repeated `-e` with `-F`).
