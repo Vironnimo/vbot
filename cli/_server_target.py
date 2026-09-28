@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal
@@ -15,6 +15,12 @@ from core.utils.config import DEFAULT_HOST, Config, resolve_port
 from core.utils.logging import resolve_daily_log_path
 
 DEFAULT_PROBE_TIMEOUT_SECONDS = 0.5
+
+
+# A busy Event Loop (heavy Run load, a large replay) can hold back a reply for
+# seconds. Lifecycle decisions that would treat "no answer" as "not running" give
+# a listener this long before concluding it is unresponsive.
+PATIENT_PROBE_TIMEOUT_SECONDS = 5.0
 
 
 HEALTH_PATH = "/health"
@@ -36,12 +42,21 @@ class ServerInstance:
 
 @dataclass(frozen=True)
 class HealthProbeResult:
-    """Result of probing a target server's vBot health endpoint."""
+    """Result of probing a target server's vBot health endpoint.
+
+    ``reachable`` means some HTTP answer arrived. ``timed_out`` records only that
+    none arrived in time: it does not prove a listener exists, because Windows
+    reports a refused connection to a closed port as a connect timeout under a
+    short budget. ``unresponsive`` is the conclusion of ``probe_health_patiently``:
+    a local listener holds the target but never answered.
+    """
 
     reachable: bool
     is_vbot: bool
     status_code: int | None = None
     error: str | None = None
+    timed_out: bool = False
+    unresponsive: bool = False
 
 
 @dataclass(frozen=True)
@@ -127,8 +142,33 @@ def probe_health(
             trust_env=False,
         )
     except httpx.RequestError as exc:
-        return HealthProbeResult(reachable=False, is_vbot=False, error=exc.__class__.__name__)
+        return HealthProbeResult(
+            reachable=False,
+            is_vbot=False,
+            error=exc.__class__.__name__,
+            timed_out=isinstance(exc, httpx.TimeoutException),
+        )
     return health_result(response)
+
+
+def probe_health_patiently(instance: ServerInstance) -> HealthProbeResult:
+    """Probe `/health`, telling a missing server from a listener that is only busy.
+
+    The quick probe suits polling loops, but a lifecycle decision made on one
+    missed answer would take a stalled Event Loop for a server that is not
+    running. When the quick probe times out and a local listener holds the target,
+    one longer probe follows; a listener that still does not answer is reported
+    ``unresponsive``. Without a local listener, or for a remote target, the quick
+    result stands.
+    """
+
+    health = probe_health(instance)
+    if not health.timed_out or not has_local_listener(instance):
+        return health
+    health = probe_health(instance, timeout_seconds=PATIENT_PROBE_TIMEOUT_SECONDS)
+    if health.timed_out:
+        return replace(health, unresponsive=True)
+    return health
 
 
 def health_result(response: httpx.Response) -> HealthProbeResult:
@@ -196,6 +236,27 @@ def find_listening_process(instance: ServerInstance) -> psutil.Process | None:
             if _connection_matches_instance(connection, instance):
                 return process
     return None
+
+
+def has_local_listener(instance: ServerInstance) -> bool:
+    """Return whether a local socket listens on the resolved TCP host and port.
+
+    One system-wide table read, unlike ``find_listening_process``, which needs a
+    per-process scan to name the owner. An unreadable table counts as no listener,
+    so a lifecycle decision falls back to the quick probe's verdict.
+    """
+
+    if not is_local_target(instance):
+        return False
+    try:
+        connections = psutil.net_connections(kind="tcp")
+    except (psutil.Error, OSError):
+        return False
+    return any(
+        connection.status == psutil.CONN_LISTEN
+        and _connection_matches_instance(connection, instance)
+        for connection in connections
+    )
 
 
 def is_local_target(instance: ServerInstance) -> bool:

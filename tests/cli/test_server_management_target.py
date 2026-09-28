@@ -15,11 +15,13 @@ import pytest
 
 from cli import _server_target, server_management
 from cli.server_management import (
+    UNRESPONSIVE_LISTENER_MESSAGE,
     HealthProbeResult,
     ServerInstance,
     WebUIProbeResult,
     get_status,
     probe_health,
+    probe_health_patiently,
     probe_webui,
     resolve_instance,
 )
@@ -169,6 +171,10 @@ def respond(response: httpx.Response) -> Callable[..., httpx.Response]:
     return lambda _url, **_kwargs: response
 
 
+def read_timeout(url: str, **_kwargs: Any) -> httpx.Response:
+    raise httpx.ReadTimeout("busy", request=httpx.Request("GET", url))
+
+
 @pytest.mark.parametrize(
     ("get", "expected"),
     [
@@ -202,6 +208,11 @@ def respond(response: httpx.Response) -> Callable[..., httpx.Response]:
             HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
             id="unreachable",
         ),
+        pytest.param(
+            read_timeout,
+            HealthProbeResult(reachable=False, is_vbot=False, error="ReadTimeout", timed_out=True),
+            id="timeout",
+        ),
     ],
 )
 def test_probe_health_classifies_only_the_exact_health_answer_as_vbot(
@@ -213,6 +224,75 @@ def test_probe_health_classifies_only_the_exact_health_answer_as_vbot(
     monkeypatch.setattr(server_management.httpx, "get", get)
 
     assert probe_health(instance) == expected
+
+
+BUSY_ABSENT = HealthProbeResult(reachable=False, is_vbot=False, error="ReadTimeout", timed_out=True)
+
+
+@pytest.mark.parametrize(
+    ("answers", "listener_offset", "requested_timeouts", "expected"),
+    [
+        pytest.param(
+            [respond(httpx.Response(200, json={"status": "ok"}))],
+            0,
+            [0.5],
+            HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+            id="quick-answer-needs-no-retry",
+        ),
+        pytest.param(
+            [read_timeout, respond(httpx.Response(200, json={"status": "ok"}))],
+            0,
+            [0.5, 5.0],
+            HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+            id="busy-listener-answers-late",
+        ),
+        pytest.param(
+            [read_timeout, read_timeout],
+            0,
+            [0.5, 5.0],
+            replace(BUSY_ABSENT, unresponsive=True),
+            id="listener-never-answers",
+        ),
+        pytest.param(
+            [read_timeout, connect_error],
+            0,
+            [0.5, 5.0],
+            HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+            id="listener-closes-during-the-retry",
+        ),
+        # Windows reports a refused connection to a closed port as a connect timeout
+        # within the quick budget, so a timeout alone must not mean a listener.
+        pytest.param([read_timeout], None, [0.5], BUSY_ABSENT, id="no-listener-is-absent"),
+        pytest.param([read_timeout], 1, [0.5], BUSY_ABSENT, id="other-port-listener-is-absent"),
+    ],
+)
+def test_probe_health_patiently_tells_a_busy_listener_from_an_absent_server(
+    instance: ServerInstance,
+    monkeypatch: pytest.MonkeyPatch,
+    answers: list[Callable[..., httpx.Response]],
+    listener_offset: int | None,
+    requested_timeouts: list[float],
+    expected: HealthProbeResult,
+) -> None:
+    timeouts: list[float] = []
+    scripted = iter(answers)
+
+    def get(url: str, *, timeout: float, **kwargs: Any) -> httpx.Response:
+        timeouts.append(timeout)
+        return next(scripted)(url, **kwargs)
+
+    table = [
+        SimpleNamespace(
+            status=server_management.psutil.CONN_LISTEN,
+            laddr=SimpleNamespace(ip="127.0.0.1", port=instance.port + offset),
+        )
+        for offset in ([] if listener_offset is None else [listener_offset])
+    ]
+    monkeypatch.setattr(server_management.httpx, "get", get)
+    monkeypatch.setattr(server_management.psutil, "net_connections", lambda kind: table)
+
+    assert probe_health_patiently(instance) == expected
+    assert timeouts == requested_timeouts
 
 
 @pytest.mark.parametrize(
@@ -296,6 +376,19 @@ def test_probes_request_the_wildcard_target_directly_on_loopback_without_proxies
             WebUIProbeResult(False),
             id="not-running",
         ),
+        pytest.param(
+            HealthProbeResult(
+                reachable=False,
+                is_vbot=False,
+                error="ReadTimeout",
+                timed_out=True,
+                unresponsive=True,
+            ),
+            False,
+            UNRESPONSIVE_LISTENER_MESSAGE,
+            None,
+            id="unresponsive",
+        ),
     ],
 )
 def test_get_status_reports_health_and_probes_the_webui_only_for_vbot(
@@ -304,9 +397,9 @@ def test_get_status_reports_health_and_probes_the_webui_only_for_vbot(
     health: HealthProbeResult,
     ok: bool,
     message: str,
-    webui: WebUIProbeResult,
+    webui: WebUIProbeResult | None,
 ) -> None:
-    monkeypatch.setattr(server_management, "probe_health", lambda _instance: health)
+    monkeypatch.setattr(server_management, "probe_health_patiently", lambda _instance: health)
     monkeypatch.setattr(
         server_management, "probe_webui", lambda _instance: WebUIProbeResult(True, 200)
     )

@@ -10,7 +10,13 @@ import pytest
 
 from cli import _commands
 from cli import main as cli_main
-from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, WebUIProbeResult
+from cli.server_management import (
+    UNRESPONSIVE_LISTENER_MESSAGE,
+    CommandResult,
+    HealthProbeResult,
+    ServerInstance,
+    WebUIProbeResult,
+)
 from cli.uninstall_management import UninstallMode, UninstallResult
 from core.utils.config import VBOT_ROOT
 from tests.cli.cli_test_support import make_instance
@@ -218,6 +224,23 @@ URL = "http://127.0.0.1:8420"
             f"[ERROR] The vBot server is not running at {URL}; "
             "the port is occupied by a non-vBot process.",
             id="status-conflict-is-an-answer",
+        ),
+        pytest.param(
+            "status",
+            (),
+            DEFAULT_TARGET,
+            {
+                "ok": False,
+                "message": UNRESPONSIVE_LISTENER_MESSAGE,
+                "health": HealthProbeResult(
+                    reachable=False, is_vbot=False, timed_out=True, unresponsive=True
+                ),
+            },
+            1,
+            (f"result: {UNRESPONSIVE_LISTENER_MESSAGE}", "running: no", "webui: unknown"),
+            f"[ERROR] Could not determine the status of the vBot server at {URL}: "
+            f"{UNRESPONSIVE_LISTENER_MESSAGE}.",
+            id="status-unresponsive-listener-fails",
         ),
     ],
 )

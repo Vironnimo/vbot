@@ -9,10 +9,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from cli import _server_target, server_management
 from cli.server_management import (
+    UNRESPONSIVE_LISTENER_MESSAGE,
     CommandResult,
     HealthProbeResult,
     ServerInstance,
@@ -80,10 +82,39 @@ class FakeProcess:
 
 
 def answer_health(monkeypatch: pytest.MonkeyPatch, *answers: HealthProbeResult) -> None:
-    """Answer successive health probes in order."""
+    """Answer successive health probes in order, quick or patient."""
 
     remaining = iter(answers)
-    monkeypatch.setattr(server_management, "probe_health", lambda _instance: next(remaining))
+    for probe in ("probe_health", "probe_health_patiently"):
+        monkeypatch.setattr(server_management, probe, lambda _instance: next(remaining))
+
+
+def script_busy_listener(
+    monkeypatch: pytest.MonkeyPatch, instance: ServerInstance, *patient: httpx.Response | None
+) -> list[float]:
+    """Time out the quick health probe of a listening server, then answer the patient probe.
+
+    Each ``patient`` entry answers the next longer probe; ``None`` times it out too.
+    Returns the timeout of every health request made.
+    """
+
+    timeouts: list[float] = []
+    later = iter(patient)
+
+    def get(url: str, *, timeout: float, **_kwargs: Any) -> httpx.Response:
+        timeouts.append(timeout)
+        answer = next(later) if len(timeouts) > 1 else None
+        if answer is None:
+            raise httpx.ReadTimeout("busy", request=httpx.Request("GET", url))
+        return answer
+
+    listener = SimpleNamespace(
+        status=server_management.psutil.CONN_LISTEN,
+        laddr=SimpleNamespace(ip=instance.host, port=instance.port),
+    )
+    monkeypatch.setattr(server_management.httpx, "get", get)
+    monkeypatch.setattr(server_management.psutil, "net_connections", lambda kind: [listener])
+    return timeouts
 
 
 @pytest.mark.parametrize(
@@ -169,6 +200,41 @@ def test_start_server_never_spawns_when_the_port_already_answers(
     assert (result.ok, result.message, result.health, result.webui) == (ok, message, health, webui)
     assert result.instance is instance
     assert result.log_path == instance.log_path
+
+
+@pytest.mark.parametrize(
+    ("patient", "ok", "message"),
+    [
+        pytest.param(
+            httpx.Response(200, json={"status": "ok"}), True, "already running", id="late"
+        ),
+        pytest.param(None, False, UNRESPONSIVE_LISTENER_MESSAGE, id="never-answers"),
+    ],
+)
+def test_start_server_never_spawns_a_duplicate_next_to_a_busy_listener(
+    instance: ServerInstance,
+    monkeypatch: pytest.MonkeyPatch,
+    patient: httpx.Response | None,
+    ok: bool,
+    message: str,
+) -> None:
+    # A stalled Event Loop misses the quick probe; a duplicate child would fail to claim
+    # the target and the next probe would report "started" for the old server.
+    script_busy_listener(monkeypatch, instance, patient)
+    monkeypatch.setattr(
+        server_management, "probe_webui", lambda _instance: WebUIProbeResult(True, 200)
+    )
+    monkeypatch.setattr(
+        server_management,
+        "start_server_process",
+        lambda _instance: pytest.fail("a listening server must not be duplicated"),
+    )
+
+    result = start_server(instance)
+
+    assert (result.ok, result.message, result.process_id) == (ok, message, None)
+    assert result.health is not None
+    assert result.health.unresponsive is (not ok)
 
 
 @pytest.mark.parametrize("data_dir_exists", [False, True], ids=["missing-root", "existing-root"])
@@ -430,6 +496,68 @@ def test_stop_server_finishes_only_the_recorded_process_after_the_listener_close
     assert (result.ok, result.message, result.process_id) == (True, message, process_id)
     assert result.forced is forced
     assert process.calls == calls
+
+
+@pytest.mark.parametrize(
+    ("patient", "control", "cooperative", "ok", "message", "calls"),
+    [
+        pytest.param(
+            httpx.Response(200, json={"status": "ok"}),
+            True,
+            True,
+            True,
+            "stopped",
+            [("wait", 2.0)],
+            id="late-answer-shuts-down-cooperatively",
+        ),
+        pytest.param(
+            None, True, True, True, "stopped", [("wait", 2.0)], id="unresponsive-is-asked-first"
+        ),
+        pytest.param(
+            None,
+            True,
+            False,
+            True,
+            "stopped",
+            ["terminate", ("wait", 2.0)],
+            id="unresponsive-refusal-terminates-before-any-kill",
+        ),
+        pytest.param(
+            None, False, False, False, UNRESPONSIVE_LISTENER_MESSAGE, [], id="unrecorded-is-left"
+        ),
+    ],
+)
+def test_stop_server_asks_a_busy_listener_to_shut_down_instead_of_killing_it(
+    instance: ServerInstance,
+    monkeypatch: pytest.MonkeyPatch,
+    patient: httpx.Response | None,
+    control: bool,
+    cooperative: bool,
+    ok: bool,
+    message: str,
+    calls: list[Any],
+) -> None:
+    # The quick probe missed the busy server; only the exact recorded process may be
+    # stopped, and never before it was asked to exit.
+    process = FakeProcess(pid=456)
+    requested: list[int] = []
+
+    def request_shutdown(_instance: ServerInstance, target: FakeProcess) -> bool:
+        requested.append(target.pid)
+        return cooperative
+
+    script_busy_listener(monkeypatch, instance, patient)
+    record = SimpleNamespace(pid=456, process_create_time=1000.25) if control else None
+    monkeypatch.setattr(server_management, "read_server_control", lambda *_args: record)
+    monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: process)
+    monkeypatch.setattr(server_management, "find_listening_process", lambda _instance: process)
+    monkeypatch.setattr(server_management, "_request_cooperative_shutdown", request_shutdown)
+
+    result = stop_server(instance, shutdown_timeout_seconds=2.0)
+
+    assert (result.ok, result.message, result.forced) == (ok, message, False)
+    assert process.calls == calls
+    assert requested == ([456] if ok else [])
 
 
 def test_cooperative_shutdown_requires_control_record_for_listener_pid(
