@@ -115,6 +115,8 @@ def test_plan_announces_additions_removals_and_schema_changes_once() -> None:
     ]
     view = view.with_changes(view.plan(back, unlisted_tool_calls=True))
     assert view.definitions() == [changed, removed, reshaped]
+    # Pinned Tools keep their pinned bytes; a listed announced Tool shows its change.
+    assert view.request_tools(list_announced=True) == [kept, removed, reshaped]
     assert _plan(view, back) == []
 
 

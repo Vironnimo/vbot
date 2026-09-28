@@ -390,22 +390,22 @@ class ToolEpochView:
 
         A route that drops calls to Tools outside the request list, and every
         fallback route, lists each Tool announced as added in this epoch, in
-        announcement order, with the definition its latest addition carried.
+        order of its first announcement, with the definition the Model was last
+        told to use: that of its latest addition or change.
         """
 
         tools = [dict(definition) for definition in self.pin.definitions]
         if not list_announced:
             return tools
         pinned = set(self.pin.names)
-        added: dict[str, JsonObject] = {}
-        for change in self.changes:
-            if (
-                change.change == "added"
-                and change.tool not in pinned
-                and change.definition is not None
-            ):
-                added[change.tool] = change.definition
-        return [*tools, *(dict(definition) for definition in added.values())]
+        added = dict.fromkeys(
+            change.tool
+            for change in self.changes
+            if change.change == "added"
+            and change.tool not in pinned
+            and change.definition is not None
+        )
+        return [*tools, *(dict(self._known[name].definition) for name in added)]
 
     def plan(
         self, catalog: LiveToolCatalog, *, unlisted_tool_calls: bool
