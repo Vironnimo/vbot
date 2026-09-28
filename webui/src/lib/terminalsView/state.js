@@ -85,8 +85,6 @@ export function createTerminalsViewState() {
     listError: '',
     actionError: '',
     streams: {},
-    killing: '',
-    forgetting: '',
     closing: '',
     groupActionPending: false,
     startingTerminal: false,
@@ -109,14 +107,6 @@ export function selectedGroup(state) {
   return (
     state.groups.find((group) => group.group_id === state.selectedGroupId) ??
     null
-  );
-}
-
-export function selectedTerminal(state) {
-  return (
-    state.terminals.find(
-      (terminal) => terminal.terminal_id === state.selectedTerminalId,
-    ) ?? null
   );
 }
 
@@ -150,7 +140,7 @@ export function reconcileTerminalList(state, result) {
   return state.selectedTerminalId;
 }
 
-export function reconcileTerminalGroups(state, result) {
+function reconcileTerminalGroups(state, result) {
   if (!Array.isArray(result?.groups)) {
     return state.groups;
   }

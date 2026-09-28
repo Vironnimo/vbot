@@ -6,13 +6,8 @@ const AUDIO_MIME_CANDIDATES = Object.freeze([
   'audio/mp4',
 ]);
 
-export function chooseAudioMimeType(
-  MediaRecorderClass = globalThis.MediaRecorder,
-) {
-  if (
-    !MediaRecorderClass ||
-    typeof MediaRecorderClass.isTypeSupported !== 'function'
-  ) {
+function chooseAudioMimeType(MediaRecorderClass) {
+  if (typeof MediaRecorderClass.isTypeSupported !== 'function') {
     return '';
   }
 
@@ -23,7 +18,7 @@ export function chooseAudioMimeType(
   );
 }
 
-export function audioExtensionFromMimeType(mimeType) {
+function audioExtensionFromMimeType(mimeType) {
   const normalized =
     typeof mimeType === 'string' ? mimeType.toLowerCase().split(';')[0] : '';
   if (normalized === 'audio/ogg') {

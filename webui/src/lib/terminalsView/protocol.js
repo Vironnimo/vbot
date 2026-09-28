@@ -75,14 +75,7 @@ export function createPtyFrameSanitizer() {
     return combined;
   }
 
-  function flush() {
-    // The held tail can only ever be an escape start; its rest never
-    // arrives at end of stream, so dropping it protects the parser.
-    pending = '';
-    return '';
-  }
-
-  return { next, flush };
+  return { next };
 }
 
 // eslint-disable-next-line no-control-regex -- intentional ESC byte in ANSI sequence parser

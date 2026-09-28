@@ -6,11 +6,9 @@ import {
   ACTION_CHOICE_LIVE_TOGGLE,
   buildVoiceConfigChanges,
   cloneVoiceConfig,
-  effectiveVoiceAction,
   liveWakePhrases,
   overlappingPhraseConflicts,
   rebaseVoiceConfig,
-  sameVoiceAction,
   voiceActionChoice,
   voiceActionForChoice,
   voiceConfigFromStatus,
@@ -181,6 +179,25 @@ describe('buildVoiceConfigChanges', () => {
       active_model_ids: [NABU, HEY_NABU, JARVIS],
     });
   });
+
+  it('compares phrase actions by what they do', () => {
+    const baseline = voiceConfigFromStatus(
+      status({
+        phrases: [
+          phrase(NABU),
+          phrase(HEY_NABU, { action: { type: 'live_voice', mode: 'toggle' } }),
+        ],
+      }),
+    );
+    const draft = cloneVoiceConfig(baseline);
+    // An empty Agent override is the default command the phrase already has.
+    draft.phrase_actions[NABU] = { type: 'command', agent_id: '' };
+    draft.phrase_actions[HEY_NABU] = { type: 'live_voice', mode: 'start' };
+
+    expect(buildVoiceConfigChanges(draft, baseline)).toEqual({
+      phrase_actions: { [HEY_NABU]: { type: 'live_voice', mode: 'start' } },
+    });
+  });
 });
 
 describe('rebaseVoiceConfig', () => {
@@ -228,63 +245,6 @@ describe('rebaseVoiceConfig', () => {
 });
 
 describe('phrase actions', () => {
-  it('compares actions with a missing action as the default command', () => {
-    expect(sameVoiceAction(undefined, DEFAULT_COMMAND)).toBe(true);
-    expect(
-      sameVoiceAction(
-        { type: 'command', agent_id: '' },
-        { type: 'command', agent_id: null, session_behavior: null },
-      ),
-    ).toBe(true);
-    expect(
-      sameVoiceAction(
-        { type: 'live_voice', mode: 'start' },
-        { type: 'live_voice', mode: 'toggle' },
-      ),
-    ).toBe(false);
-    expect(
-      sameVoiceAction(
-        { type: 'command', agent_id: 'writer' },
-        { type: 'command', agent_id: 'main' },
-      ),
-    ).toBe(false);
-  });
-
-  it('resolves command defaults for the effective action', () => {
-    const config = voiceConfigFromStatus(
-      status({
-        default_agent_id: 'main',
-        default_session_behavior: 'new',
-        phrases: [
-          phrase(NABU),
-          phrase(HEY_NABU, {
-            action: {
-              type: 'command',
-              agent_id: 'writer',
-              session_behavior: 'active',
-            },
-          }),
-          phrase(JARVIS, { action: { type: 'live_voice', mode: 'toggle' } }),
-        ],
-      }),
-    );
-
-    expect(effectiveVoiceAction(config, NABU)).toEqual({
-      type: 'command',
-      agent_id: 'main',
-      session_behavior: 'new',
-    });
-    expect(effectiveVoiceAction(config, HEY_NABU)).toEqual({
-      type: 'command',
-      agent_id: 'writer',
-      session_behavior: 'active',
-    });
-    expect(effectiveVoiceAction(config, JARVIS)).toEqual({
-      type: 'live_voice',
-      mode: 'toggle',
-    });
-  });
-
   it('maps actions to select values and back', () => {
     const override = {
       type: 'command',
@@ -352,9 +312,13 @@ describe('overlappingPhraseConflicts', () => {
       'overlapping phrases with the same effective action',
       [
         phrase(NABU),
-        // The explicit default Agent does the same as no override.
+        // The explicit defaults do the same as no override.
         phrase(HEY_NABU, {
-          action: { type: 'command', agent_id: 'main', session_behavior: null },
+          action: {
+            type: 'command',
+            agent_id: 'main',
+            session_behavior: 'active',
+          },
         }),
       ],
     ],
