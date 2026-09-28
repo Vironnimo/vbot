@@ -89,7 +89,12 @@ def database_worker_pool(spec: DatabaseSpec) -> BoundedWorkerPool:
 
 
 class _ProjectionMismatchError(Exception):
-    """A disposable database was built for another projection; rebuild it."""
+    """A disposable database was built for another projection version; rebuild it."""
+
+    def __init__(self, found: str, expected: int) -> None:
+        super().__init__(f"projection version {found} is not {expected}")
+        self.found = found
+        self.expected = expected
 
 
 class Database:
@@ -353,7 +358,17 @@ def _open_disposable(spec: DatabaseSpec, *, workers: BoundedWorkerPool | None = 
                 if isinstance(exc, DatabaseError):
                     raise
                 raise DatabaseCorruptError(f"{spec.name}: rebuilt projection is unusable") from exc
-            _LOGGER.warning("Discarding the %s projection at %s: %s", spec.name, spec.path, exc)
+            if isinstance(exc, _ProjectionMismatchError):
+                # The designed upgrade path, not damage: the new projection
+                # version is rebuilt from its canonical sources.
+                _LOGGER.info(
+                    "Rebuilding the %s projection: version %s -> %s",
+                    spec.name,
+                    exc.found,
+                    exc.expected,
+                )
+            else:
+                _LOGGER.warning("Discarding the %s projection at %s: %s", spec.name, spec.path, exc)
             _discard(spec)
     raise AssertionError("unreachable")
 
@@ -546,13 +561,14 @@ def _verify_identity(
         raise DatabaseCorruptError(f"{spec.path} has an invalid database identity")
     if expected_database_id is not None and database_id != expected_database_id:
         raise DatabaseCorruptError(f"{spec.path} identity does not match the data-store marker")
-    if spec.profile == DISPOSABLE and identity.get("projection_version") != str(
-        spec.projection_version
-    ):
-        raise _ProjectionMismatchError(
-            f"projection version {identity.get('projection_version')} is not "
-            f"{spec.projection_version}"
-        )
+    if spec.profile == DISPOSABLE:
+        projection_version = identity.get("projection_version")
+        if projection_version is None:
+            raise DatabaseCorruptError(f"{spec.path} has no projection version")
+        if spec.projection_version is not None and projection_version != str(
+            spec.projection_version
+        ):
+            raise _ProjectionMismatchError(projection_version, spec.projection_version)
     _refuse_unknown_breaking_migrations(spec, ledger)
     return identity
 
