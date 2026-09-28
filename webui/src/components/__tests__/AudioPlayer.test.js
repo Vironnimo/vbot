@@ -21,7 +21,8 @@ const { default: ChatAssistantRun } =
   await import('../chat/ChatAssistantRun.svelte');
 const { default: ChatTimelineEntry } =
   await import('../chat/ChatTimelineEntry.svelte');
-const { default: ChatTimeline } = await import('../ChatTimeline.svelte');
+const { default: ChatTimelineHost } =
+  await import('./ChatTimelineHost.support.svelte');
 let components = [];
 let play;
 let pause;
@@ -427,7 +428,7 @@ it('keeps speech playing when its finished Run is rebuilt from Session history',
     tool_call: toolCall,
     result: envelope,
   });
-  render(props, ChatTimeline);
+  render(props, ChatTimelineHost);
   const audio = document.querySelector('audio');
   expect(audio?.getAttribute('src')).toBe(url);
   ready(audio);
