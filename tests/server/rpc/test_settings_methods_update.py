@@ -554,7 +554,7 @@ _NO_EFFECTS: JsonObject = {
     "skills_reloaded": False,
     "recall_reloads": 0,
     "keep_awake": [],
-    "commands": False,
+    "extension_layer_invalidated": False,
 }
 
 
@@ -565,8 +565,8 @@ def _extensions(disabled: list[str]) -> JsonObject:
 # Which live services a Settings change refreshes is the Runtime's decision
 # (tests/core/runtime/test_runtime_settings.py). These rows cover the RPC
 # wiring: both methods hand over the persisted before/after Settings, an
-# explicit section save requests its refresh, and a changed Command catalog
-# publishes a resource change.
+# explicit section save requests its refresh, and a changed Extension layer
+# invalidates its Commands and page descriptors.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("seed", "method", "params", "effects"),
@@ -575,7 +575,7 @@ def _extensions(disabled: list[str]) -> JsonObject:
             {},
             "settings.patch",
             _patch(_set("extensions.directories", ["~/extra-extensions"])),
-            {"extension_reloads": 1, "commands": True},
+            {"extension_reloads": 1, "extension_layer_invalidated": True},
             id="patch-extension-directories",
         ),
         # A patch elsewhere neither re-validates nor reloads an extension-provided backend.
@@ -590,7 +590,7 @@ def _extensions(disabled: list[str]) -> JsonObject:
             {},
             "settings.update",
             _extensions(["homeassistant"]),
-            {"disabled_changes": [{"homeassistant"}], "commands": True},
+            {"disabled_changes": [{"homeassistant"}], "extension_layer_invalidated": True},
             id="update-disable",
         ),
         # A valid config passes the Extension's schema and applies live through
@@ -645,7 +645,8 @@ async def test_saved_settings_apply_their_live_effects(
         "skills_reloaded": runtime.skills is not previous_skills,
         "recall_reloads": runtime.recall_reload_count,
         "keep_awake": keep_awake,
-        "commands": resource_changes(state) == [{"kind": "commands"}],
+        "extension_layer_invalidated": resource_changes(state)
+        == [{"kind": "commands"}, {"kind": "extensions"}],
     } == {**_NO_EFFECTS, **effects}
 
 
