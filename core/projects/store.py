@@ -9,7 +9,7 @@ repo (see add-projects.md → Speicherort & Datenmodell). Layout::
 The anchor holds **no run config** — only Project configuration; config comes live
 from the scan/repo. This module owns creation, read, list, cwd-mutation, and
 removal. Removal **archives** the project subtree using the same mechanic as agent deletion
-(``shutil.move`` into ``<data_dir>/archive/...`` replacing an existing archive),
+(``move_tree`` into ``<data_dir>/archive/...`` replacing an existing archive),
 so nothing is hard-deleted and the repo is never touched.
 
 The duplicate-cwd guard lives here: two projects may not point at the same repo
@@ -47,6 +47,7 @@ from core.settings import (
 )
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
+from core.utils.tree_move import move_tree
 
 if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
@@ -61,9 +62,9 @@ def _validate_project_id(project_id: str) -> str:
     """Reject any project id that is not a bare slug before it becomes a path segment.
 
     The id is a path segment under ``<data_dir>/projects/`` and :meth:`ProjectStore.delete`
-    archives that directory with ``shutil.move`` (over a ``shutil.rmtree`` of the prior
-    archive). A separator or ``..`` component (``../agents``, ``/etc``) would let an
-    operation escape the projects subtree and move or remove an arbitrary directory.
+    archives that directory with ``move_tree`` (replacing the prior archive). A separator
+    or ``..`` component (``../agents``, ``/etc``) would let an operation escape the
+    projects subtree and move or remove an arbitrary directory.
     Every legitimately created id is a :func:`slugify_project_id` slug, so this only ever
     rejects crafted input — and it does so at the path-building choke point every store
     and session-path call funnels through, not only at config validation.
@@ -379,28 +380,37 @@ class ProjectStore:
             committed = False
             try:
                 if archive_dir.exists():
-                    shutil.move(str(archive_dir), str(previous_archive))
+                    move_tree(archive_dir, previous_archive)
                 project_moved = False
                 try:
-                    shutil.move(str(project_dir), str(archive_dir))
+                    move_tree(project_dir, archive_dir)
                     project_moved = True
                     self._session_manager().archive_project_sessions(project_id)
                 except Exception:
                     if project_moved:
-                        shutil.move(str(archive_dir), str(project_dir))
+                        move_tree(archive_dir, project_dir)
                     if previous_archive.exists():
                         # Restore prior archive whether move or DB step failed.
                         # If project_moved and DB rolled back, archive_dir is already
                         # gone (moved back), so this recreates the previous archive.
-                        # If move failed, archive_dir never existed.
-                        shutil.move(str(previous_archive), str(archive_dir))
+                        # If move failed, archive_dir never existed: a failed
+                        # ``move_tree`` leaves no destination behind.
+                        move_tree(previous_archive, archive_dir)
                     raise
                 committed = True
             except Exception as exc:
+                # A failed move never removes anything, so what is left is where it is told.
+                retained = []
+                if not project_dir.exists():
+                    retained.append(f"Project files retained at {archive_dir}")
                 if previous_archive.exists():
+                    retained.append(f"previous archive retained at {previous_archive}")
+                if retained:
                     raise ProjectError(
-                        f"Project archival failed; previous archive retained at {previous_archive}"
+                        f"Project archival failed ({exc}); {'; '.join(retained)}"
                     ) from exc
+                if isinstance(exc, OSError):
+                    raise ProjectError(f"Project archival failed: {exc}") from exc
                 raise
             finally:
                 if committed or not previous_archive.exists():
