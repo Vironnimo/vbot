@@ -30,27 +30,6 @@ describe('SearchableDropdown', () => {
     document.body.innerHTML = '';
   });
 
-  it('renders the chevron at the design-specified 10 by 10 size', () => {
-    mountedComponent = mount(SearchableDropdown, {
-      target: document.body,
-      props: {
-        id: 'test-searchable-dropdown',
-        value: 'openai/gpt-5.2',
-        options: ['openai/gpt-5.2', 'anthropic/claude-sonnet-4-20250219'],
-      },
-    });
-    flushSync();
-
-    const chevron = document.body.querySelector(
-      'button#test-searchable-dropdown .dropdown-chevron',
-    );
-
-    expect(chevron).toBeTruthy();
-    expect(chevron?.getAttribute('width')).toBe('10');
-    expect(chevron?.getAttribute('height')).toBe('10');
-    expect(chevron?.getAttribute('viewBox')).toBe('0 0 12 12');
-  });
-
   it('portals a fixed panel sized to its trigger and closes on outside mousedown or page scroll', async () => {
     const host = document.createElement('div');
     document.body.append(host);
@@ -65,6 +44,11 @@ describe('SearchableDropdown', () => {
     flushSync();
 
     const trigger = document.querySelector('#floating-searchable-dropdown');
+    // The chevron keeps the design-specified 10 by 10 size.
+    const chevron = trigger.querySelector('.dropdown-chevron');
+    expect(chevron.getAttribute('width')).toBe('10');
+    expect(chevron.getAttribute('height')).toBe('10');
+    expect(chevron.getAttribute('viewBox')).toBe('0 0 12 12');
     trigger.getBoundingClientRect = () => ({
       x: 120,
       y: 180,

@@ -32,11 +32,20 @@ describe('TextField', () => {
     return document.body;
   }
 
-  it('renders the default input with the s-input class', () => {
-    const input = render({ value: 'hi' }).querySelector('input');
-    expect(input).toBeTruthy();
+  it('renders the default s-input with its value and forwarded attributes', () => {
+    const input = render({
+      value: 'hi',
+      placeholder: 'C:/path',
+      inputmode: 'decimal',
+      class: 'mono',
+      disabled: true,
+    }).querySelector('input');
     expect(input.classList.contains('s-input')).toBe(true);
+    expect(input.classList.contains('mono')).toBe(true);
     expect(input.value).toBe('hi');
+    expect(input.getAttribute('placeholder')).toBe('C:/path');
+    expect(input.getAttribute('inputmode')).toBe('decimal');
+    expect(input.disabled).toBe(true);
   });
 
   it('uses the modal-input class for the modal variant', () => {
@@ -59,11 +68,6 @@ describe('TextField', () => {
     expect(box.textContent).toContain('/home/data');
   });
 
-  it('disables the input', () => {
-    const input = render({ disabled: true }).querySelector('input');
-    expect(input.disabled).toBe(true);
-  });
-
   it('calls onInput with the new value on input', () => {
     const onInput = vi.fn();
     const input = render({ value: '', onInput }).querySelector('input');
@@ -71,17 +75,5 @@ describe('TextField', () => {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     expect(onInput).toHaveBeenCalledTimes(1);
     expect(onInput.mock.calls[0][0]).toBe('typed');
-  });
-
-  it('forwards placeholder, inputmode, and a passthrough class', () => {
-    const input = render({
-      placeholder: 'C:/path',
-      inputmode: 'decimal',
-      class: 'mono',
-    }).querySelector('input');
-    expect(input.getAttribute('placeholder')).toBe('C:/path');
-    expect(input.getAttribute('inputmode')).toBe('decimal');
-    expect(input.classList.contains('s-input')).toBe(true);
-    expect(input.classList.contains('mono')).toBe(true);
   });
 });

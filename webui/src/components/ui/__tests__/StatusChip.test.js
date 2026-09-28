@@ -31,26 +31,22 @@ describe('StatusChip', () => {
   });
 
   function render(props) {
+    if (mountedComponent) unmount(mountedComponent);
+    document.body.innerHTML = '';
     mountedComponent = mount(StatusChip, { target: document.body, props });
     flushSync();
     return document.body.querySelector('.chip');
   }
 
-  it('emits the canonical chip + variant classes', () => {
+  it('emits the canonical chip + variant classes, falling back to neutral', () => {
     for (const variant of ['success', 'warn', 'info', 'error', 'neutral']) {
       const chip = render({ variant });
       expect(chip.classList.contains('chip')).toBe(true);
       expect(chip.classList.contains(variant)).toBe(true);
-
-      unmount(mountedComponent);
-      mountedComponent = null;
-      document.body.innerHTML = '';
     }
-  });
-
-  it('falls back to neutral for an unknown variant', () => {
-    const chip = render({ variant: 'nonsense' });
-    expect(chip.classList.contains('neutral')).toBe(true);
+    expect(render({ variant: 'nonsense' }).classList.contains('neutral')).toBe(
+      true,
+    );
   });
 
   it('renders the label content and appends a passthrough class', () => {

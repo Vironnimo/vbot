@@ -31,26 +31,22 @@ describe('Badge', () => {
   });
 
   function render(props) {
+    if (mountedComponent) unmount(mountedComponent);
+    document.body.innerHTML = '';
     mountedComponent = mount(Badge, { target: document.body, props });
     flushSync();
     return document.body.querySelector('.badge');
   }
 
-  it('emits the canonical badge + variant modifier classes', () => {
+  it('emits the canonical badge + variant modifier classes, falling back to neutral', () => {
     for (const variant of ['neutral', 'info', 'success', 'warn', 'error']) {
       const badge = render({ variant });
       expect(badge.classList.contains('badge')).toBe(true);
       expect(badge.classList.contains(`badge--${variant}`)).toBe(true);
-
-      unmount(mountedComponent);
-      mountedComponent = null;
-      document.body.innerHTML = '';
     }
-  });
-
-  it('falls back to neutral for an unknown variant', () => {
-    const badge = render({ variant: 'nonsense' });
-    expect(badge.classList.contains('badge--neutral')).toBe(true);
+    expect(
+      render({ variant: 'nonsense' }).classList.contains('badge--neutral'),
+    ).toBe(true);
   });
 
   it('renders the label content and appends a passthrough class', () => {

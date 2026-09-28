@@ -31,6 +31,8 @@ describe('EmptyState', () => {
   });
 
   function render(props) {
+    if (mountedComponent) unmount(mountedComponent);
+    document.body.innerHTML = '';
     mountedComponent = mount(EmptyState, { target: document.body, props });
     flushSync();
     return document.body.querySelector('.empty-state');
@@ -50,22 +52,19 @@ describe('EmptyState', () => {
     expect(emptyState.querySelector('button')?.textContent).toBe('Start');
   });
 
-  it('supports compact and fill geometry', () => {
-    const emptyState = render({ density: 'compact', fill: true });
+  it('supports compact and fill geometry, falls back to default density, and forwards attributes', () => {
+    const compact = render({ density: 'compact', fill: true });
+    expect(compact.classList.contains('empty-state--compact')).toBe(true);
+    expect(compact.classList.contains('empty-state--fill')).toBe(true);
 
-    expect(emptyState.classList.contains('empty-state--compact')).toBe(true);
-    expect(emptyState.classList.contains('empty-state--fill')).toBe(true);
-  });
-
-  it('falls back to default density and forwards attributes and classes', () => {
-    const emptyState = render({
+    const fallback = render({
       density: 'unknown',
       class: 'extra',
       role: 'status',
     });
-
-    expect(emptyState.classList.contains('empty-state--default')).toBe(true);
-    expect(emptyState.classList.contains('extra')).toBe(true);
-    expect(emptyState.getAttribute('role')).toBe('status');
+    expect(fallback.classList.contains('empty-state--default')).toBe(true);
+    expect(fallback.classList.contains('empty-state--fill')).toBe(false);
+    expect(fallback.classList.contains('extra')).toBe(true);
+    expect(fallback.getAttribute('role')).toBe('status');
   });
 });

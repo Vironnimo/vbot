@@ -5,13 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
   HOVER_CARD_SHOW_DELAY_MS,
-  INTENTIONAL_HOVER_SHOW_DELAY_MS,
   TOOLTIP_SHOW_DELAY_MS as SHOW_DELAY_MS,
   TOOLTIP_SKIP_DELAY_MS,
   floatingHoverCard,
   positionFloating,
   tooltip,
 } from '../tooltip.js';
+import {
+  button,
+  placeAt,
+  pointerAt,
+  pointerEvent,
+  pressKey,
+} from './tooltip.support.js';
 
 function tooltipElement() {
   return document.getElementById('app-tooltip');
@@ -24,65 +30,6 @@ function isVisible() {
 function hover(node) {
   node.dispatchEvent(new Event('pointerenter'));
   vi.advanceTimersByTime(SHOW_DELAY_MS);
-}
-
-function pointerEvent(type, pointerType) {
-  const event = new Event(type, { bubbles: type === 'pointerdown' });
-  Object.defineProperty(event, 'pointerType', { value: pointerType });
-  return event;
-}
-
-// Keyboard modality: the next focus counts as keyboard focus.
-function pressKey(target, key, options = {}) {
-  const event = new KeyboardEvent('keydown', {
-    key,
-    bubbles: true,
-    cancelable: true,
-    ...options,
-  });
-  target.dispatchEvent(event);
-  return event;
-}
-
-async function flushMicrotasks() {
-  for (let index = 0; index < 3; index += 1) {
-    await Promise.resolve();
-  }
-}
-
-// A pointer event at viewport coordinates, as real browsers deliver them.
-function pointerAt(type, x, y, { relatedTarget, buttons } = {}) {
-  const event = new Event(type, { bubbles: type === 'pointerdown' });
-  Object.defineProperty(event, 'clientX', { value: x });
-  Object.defineProperty(event, 'clientY', { value: y });
-  if (relatedTarget !== undefined) {
-    Object.defineProperty(event, 'relatedTarget', { value: relatedTarget });
-  }
-  if (buttons) {
-    Object.defineProperty(event, 'buttons', { value: buttons });
-  }
-  return event;
-}
-
-function placeAt(element, { left, top, width, height }) {
-  element.getBoundingClientRect = () => ({
-    left,
-    top,
-    width,
-    height,
-    right: left + width,
-    bottom: top + height,
-    x: left,
-    y: top,
-  });
-}
-
-function button(label, parent = document.body) {
-  const element = document.createElement('button');
-  element.type = 'button';
-  element.textContent = label;
-  parent.appendChild(element);
-  return element;
 }
 
 describe('tooltip action', () => {
@@ -101,7 +48,8 @@ describe('tooltip action', () => {
     vi.useRealTimers();
   });
 
-  it('shows the text after the hover delay and links it via aria-describedby', () => {
+  it('shows the text after the hover delay and adds itself to the anchor description', () => {
+    node.setAttribute('aria-describedby', 'field-help');
     action = tooltip(node, 'Copy to clipboard');
 
     node.dispatchEvent(new Event('pointerenter'));
@@ -112,14 +60,6 @@ describe('tooltip action', () => {
     expect(isVisible()).toBe(true);
     expect(tooltipElement().textContent).toBe('Copy to clipboard');
     expect(tooltipElement().getAttribute('role')).toBe('tooltip');
-    expect(node.getAttribute('aria-describedby')).toBe('app-tooltip');
-  });
-
-  it('keeps other descriptions on the anchor while linked', () => {
-    node.setAttribute('aria-describedby', 'field-help');
-    action = tooltip(node, 'Copy to clipboard');
-
-    hover(node);
     expect(node.getAttribute('aria-describedby')).toBe(
       'field-help app-tooltip',
     );
@@ -128,27 +68,18 @@ describe('tooltip action', () => {
     expect(node.getAttribute('aria-describedby')).toBe('field-help');
   });
 
-  it('hides after a short grace on pointer leave and clears the aria link', () => {
-    action = tooltip(node, 'Copy to clipboard');
-    hover(node);
-
-    node.dispatchEvent(new Event('pointerleave'));
-    expect(isVisible()).toBe(true);
-    vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
-    expect(isVisible()).toBe(false);
-    expect(node.hasAttribute('aria-describedby')).toBe(false);
-  });
-
-  it('lets the pointer pass through a label, which closes after leaving its anchor', () => {
+  it('lets the pointer pass through a label, which closes after a short grace and clears the aria link', () => {
     action = tooltip(node, 'Copy to clipboard');
     hover(node);
     expect(tooltipElement().dataset.selectable).toBe('false');
 
     node.dispatchEvent(new Event('pointerleave'));
     tooltipElement().dispatchEvent(new Event('pointerenter'));
+    expect(isVisible()).toBe(true);
     vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
 
     expect(isVisible()).toBe(false);
+    expect(node.hasAttribute('aria-describedby')).toBe(false);
   });
 
   describe('when selectable', () => {
@@ -182,7 +113,7 @@ describe('tooltip action', () => {
       expect(isVisible()).toBe(false);
     });
 
-    it('closes at once when the pointer leaves its anchor away from it', () => {
+    it('closes at once when the pointer leaves its anchor away from it or leaves the document', () => {
       node.dispatchEvent(
         pointerAt('pointerleave', 140, 321, { relatedTarget: document.body }),
       );
@@ -190,9 +121,8 @@ describe('tooltip action', () => {
 
       window.dispatchEvent(pointerAt('pointermove', 140, 330));
       expect(isVisible()).toBe(false);
-    });
 
-    it('closes at once when the pointer leaves the document', () => {
+      hover(node);
       node.dispatchEvent(
         pointerAt('pointerleave', 140, 299, { relatedTarget: null }),
       );
@@ -296,22 +226,16 @@ describe('tooltip action', () => {
     markerAction.destroy();
   });
 
-  it('stays quiet while a pointer button is held', () => {
+  it('stays quiet while a pointer button is held or when the pointer leaves within the delay', () => {
     action = tooltip(node, 'Copy to clipboard');
 
     node.dispatchEvent(pointerAt('pointerenter', 10, 10, { buttons: 1 }));
     vi.advanceTimersByTime(SHOW_DELAY_MS);
-
     expect(isVisible()).toBe(false);
-  });
-
-  it('cancels a pending show when the pointer leaves within the delay', () => {
-    action = tooltip(node, 'Copy to clipboard');
 
     node.dispatchEvent(new Event('pointerenter'));
     node.dispatchEvent(new Event('pointerleave'));
     vi.advanceTimersByTime(SHOW_DELAY_MS);
-
     expect(isVisible()).toBe(false);
   });
 
@@ -352,42 +276,29 @@ describe('tooltip action', () => {
     thirdAction.destroy();
   });
 
-  it('keeps a pending show alive when an unrelated tooltip instance is destroyed', () => {
-    // Streaming re-renders destroy tooltip actions (e.g. remounted code-block
-    // copy buttons) while the pointer dwells somewhere else entirely.
-    const churned = button('Churned');
-    const churnedAction = tooltip(churned, 'Churned away');
-    const hovered = button('Hovered');
-    const hoveredAction = tooltip(hovered, 'Hovered');
+  // Streaming re-renders destroy or disable tooltip actions (e.g. remounted
+  // code-block copy buttons) while the pointer dwells somewhere else entirely.
+  it.each([
+    ['destroyed', (churned) => churned.destroy()],
+    ['disabled via update', (churned) => churned.update('')],
+  ])(
+    'keeps a pending show alive when an unrelated tooltip is %s',
+    (_label, churn) => {
+      const churnedAction = tooltip(button('Churned'), 'Churned away');
+      const hovered = button('Hovered');
+      action = tooltip(hovered, 'Hovered');
 
-    hovered.dispatchEvent(new Event('pointerenter'));
-    churnedAction.destroy();
-    vi.advanceTimersByTime(SHOW_DELAY_MS);
+      hovered.dispatchEvent(new Event('pointerenter'));
+      churn(churnedAction);
+      vi.advanceTimersByTime(SHOW_DELAY_MS);
 
-    expect(isVisible()).toBe(true);
-    expect(tooltipElement().textContent).toBe('Hovered');
+      expect(isVisible()).toBe(true);
+      expect(tooltipElement().textContent).toBe('Hovered');
+      churnedAction.destroy();
+    },
+  );
 
-    hoveredAction.destroy();
-  });
-
-  it('keeps a pending show alive when an unrelated tooltip is disabled via update', () => {
-    const churned = button('Churned');
-    const churnedAction = tooltip(churned, 'Churned away');
-    const hovered = button('Hovered');
-    const hoveredAction = tooltip(hovered, 'Hovered');
-
-    hovered.dispatchEvent(new Event('pointerenter'));
-    churnedAction.update('');
-    vi.advanceTimersByTime(SHOW_DELAY_MS);
-
-    expect(isVisible()).toBe(true);
-    expect(tooltipElement().textContent).toBe('Hovered');
-
-    hoveredAction.destroy();
-    churnedAction.destroy();
-  });
-
-  it('shows immediately when a node is replaced under a stationary pointer', () => {
+  it('shows at once for a node replaced under a stationary pointer, but waits again after a move', () => {
     action = tooltip(node, 'Copy to clipboard');
 
     // Streaming content swaps the hovered node for an identical one: the
@@ -401,13 +312,12 @@ describe('tooltip action', () => {
     );
     expect(isVisible()).toBe(true);
     expect(tooltipElement().textContent).toBe('Copy to clipboard');
-  });
-
-  it('applies the hover delay again after the pointer actually moved', () => {
-    action = tooltip(node, 'Copy to clipboard');
 
     node.dispatchEvent(
       new MouseEvent('pointerleave', { clientX: 12, clientY: 34 }),
+    );
+    vi.advanceTimersByTime(
+      FLOATING_HOVER_CLOSE_DELAY_MS + TOOLTIP_SKIP_DELAY_MS,
     );
     node.dispatchEvent(
       new MouseEvent('pointerenter', { clientX: 40, clientY: 60 }),
@@ -452,19 +362,7 @@ describe('tooltip action', () => {
     expect(isVisible()).toBe(false);
   });
 
-  it('shows at once on keyboard focus and hides on blur', () => {
-    action = tooltip(node, 'Copy to clipboard');
-
-    pressKey(document.body, 'Tab');
-    node.focus();
-    expect(isVisible()).toBe(true);
-    expect(node.getAttribute('aria-describedby')).toBe('app-tooltip');
-
-    node.blur();
-    expect(isVisible()).toBe(false);
-  });
-
-  it('does not pop open when a pointer press focuses the control', () => {
+  it('shows at once on keyboard focus, not on a pointer press focus, and hides on blur', () => {
     action = tooltip(node, 'Copy to clipboard');
 
     node.dispatchEvent(new Event('pointerdown', { bubbles: true }));
@@ -475,6 +373,10 @@ describe('tooltip action', () => {
     pressKey(document.body, 'Tab');
     node.focus();
     expect(isVisible()).toBe(true);
+    expect(node.getAttribute('aria-describedby')).toBe('app-tooltip');
+
+    node.blur();
+    expect(isVisible()).toBe(false);
   });
 
   it('reacts to keyboard focus inside a tooltip-anchor wrapper', () => {
@@ -507,7 +409,7 @@ describe('tooltip action', () => {
     innerAction.destroy();
   });
 
-  it('never shows for empty text, and update() can disable a visible tooltip', () => {
+  it('never shows for empty text, and update() enables, swaps and disables it in place', () => {
     action = tooltip(node, '');
     hover(node);
     expect(isVisible()).toBe(false);
@@ -517,17 +419,12 @@ describe('tooltip action', () => {
     hover(node);
     expect(isVisible()).toBe(true);
 
-    action.update('');
-    expect(isVisible()).toBe(false);
-  });
-
-  it('update() swaps the text of a visible tooltip in place', () => {
-    action = tooltip(node, 'Before');
-    hover(node);
-
     action.update('After');
     expect(tooltipElement().textContent).toBe('After');
     expect(isVisible()).toBe(true);
+
+    action.update('');
+    expect(isVisible()).toBe(false);
   });
 
   it('cleans up on destroy', () => {
@@ -543,11 +440,12 @@ describe('tooltip action', () => {
     expect(isVisible()).toBe(false);
   });
 
-  it('repositions on scroll instead of hiding while the anchor is visible', () => {
+  it('repositions on scroll while its anchor is visible and hides once it scrolled out', () => {
     action = tooltip(node, 'Context: 5000 tok');
+    let top = 300;
     node.getBoundingClientRect = () => ({
-      top: 300,
-      bottom: 320,
+      top,
+      bottom: top + 20,
       left: 500,
       right: 540,
       width: 40,
@@ -556,10 +454,16 @@ describe('tooltip action', () => {
     window.innerHeight = 800;
     window.innerWidth = 1200;
     hover(node);
-    expect(isVisible()).toBe(true);
+    const initialTop = tooltipElement().style.top;
 
+    top = 200;
     window.dispatchEvent(new Event('scroll'));
     expect(isVisible()).toBe(true);
+    expect(tooltipElement().style.top).not.toBe(initialTop);
+
+    top = -100;
+    window.dispatchEvent(new Event('scroll'));
+    expect(isVisible()).toBe(false);
   });
 
   it('follows its anchor when the viewport is resized', () => {
@@ -584,25 +488,6 @@ describe('tooltip action', () => {
 
     expect(isVisible()).toBe(true);
     expect(tooltipElement().style.left).not.toBe(initialLeft);
-  });
-
-  it('hides on scroll when the anchor has scrolled out of the viewport', () => {
-    action = tooltip(node, 'Context: 5000 tok');
-    node.getBoundingClientRect = () => ({
-      top: -100,
-      bottom: -80,
-      left: 500,
-      right: 540,
-      width: 40,
-      height: 20,
-    });
-    window.innerHeight = 800;
-    window.innerWidth = 1200;
-    hover(node);
-    expect(isVisible()).toBe(true);
-
-    window.dispatchEvent(new Event('scroll'));
-    expect(isVisible()).toBe(false);
   });
 });
 
@@ -642,7 +527,7 @@ describe('positionFloating', () => {
     return element;
   }
 
-  it('centers above the anchor when there is room', () => {
+  it('centers above the anchor when there is room and falls below otherwise', () => {
     const element = floatingOfSize(100, 24);
     positionFloating(anchorAt({ top: 300, bottom: 320 }), element);
 
@@ -650,12 +535,8 @@ describe('positionFloating', () => {
     expect(element.style.left).toBe('470px');
     expect(element.style.top).toBe('270px');
     expect(element.dataset.floatingSide).toBe('top');
-  });
 
-  it('falls below the anchor when there is no room above', () => {
-    const element = floatingOfSize(100, 24);
     positionFloating(anchorAt({ top: 10, bottom: 30 }), element);
-
     expect(element.style.top).toBe('36px');
     expect(element.dataset.floatingSide).toBe('bottom');
   });
@@ -675,7 +556,7 @@ describe('positionFloating', () => {
     expect(element.style.left).toBe(`${1200 - 200 - 8}px`);
   });
 
-  it('places a side placement beside the anchor, vertically centered', () => {
+  it('places a side placement beside the anchor, vertically centered, and flips it when it does not fit', () => {
     const element = floatingOfSize(100, 24);
     positionFloating(
       anchorAt({ top: 300, bottom: 340, left: 12, width: 40 }),
@@ -696,405 +577,30 @@ describe('positionFloating', () => {
     // left: 1100 - 6 - 100 = 994.
     expect(element.style.left).toBe('994px');
     expect(element.dataset.floatingSide).toBe('left');
-  });
 
-  it('flips a side placement to the opposite side when it does not fit', () => {
-    const element = floatingOfSize(100, 24);
     positionFloating(
       anchorAt({ top: 300, bottom: 320, left: 1150, width: 40 }),
       element,
       'right',
     );
-
-    // left: 1150 - 6 - 100 = 1044.
+    // flipped left: 1150 - 6 - 100 = 1044.
     expect(element.style.left).toBe('1044px');
     expect(element.dataset.floatingSide).toBe('left');
   });
 
-  it('falls back to above when neither side fits', () => {
-    const element = floatingOfSize(700, 24);
+  it('falls back to above when neither side fits or the placement is unknown', () => {
+    const wide = floatingOfSize(700, 24);
     positionFloating(
       anchorAt({ top: 300, bottom: 320, left: 500, width: 40 }),
-      element,
+      wide,
       'right',
     );
+    expect(wide.style.top).toBe('270px');
+    expect(wide.dataset.floatingSide).toBe('top');
 
-    expect(element.style.top).toBe('270px');
-    expect(element.dataset.floatingSide).toBe('top');
-  });
-
-  it('treats an unknown placement as the default above', () => {
     const element = floatingOfSize(100, 24);
     positionFloating(anchorAt({ top: 300, bottom: 320 }), element, 'sideways');
-
     expect(element.dataset.floatingSide).toBe('top');
-  });
-});
-
-describe('floatingHoverCard action', () => {
-  let anchor;
-  let card;
-  let action;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    anchor = document.createElement('div');
-    card = document.createElement('div');
-    card.textContent = 'Structured description';
-    anchor.appendChild(card);
-    document.body.appendChild(anchor);
-  });
-
-  afterEach(() => {
-    action?.destroy();
-    action = null;
-    document.body.innerHTML = '';
-    vi.useRealTimers();
-  });
-
-  function open() {
-    anchor.dispatchEvent(new Event('pointerenter'));
-    vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS);
-  }
-
-  it('portals rich content to body and opens it against the anchor after hover intent', () => {
-    action = floatingHoverCard(card);
-
-    expect(card.parentElement).toBe(document.body);
-    expect(card.dataset.floatingOpen).toBe('false');
-
-    anchor.dispatchEvent(new Event('pointerenter'));
-    vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS - 1);
-    expect(card.dataset.floatingOpen).toBe('false');
-    vi.advanceTimersByTime(1);
-
-    expect(card.dataset.floatingOpen).toBe('true');
-    expect(card.getAttribute('aria-hidden')).toBe('false');
-    expect(card.getAttribute('role')).toBe('tooltip');
-    expect(anchor.getAttribute('aria-describedby')).toBe(card.id);
-    expect(card.style.left).not.toBe('');
-    expect(card.style.top).not.toBe('');
-  });
-
-  it('waits for intentional pointer dwell and cancels a pending open', () => {
-    action = floatingHoverCard(card, {
-      showDelayMs: INTENTIONAL_HOVER_SHOW_DELAY_MS,
-    });
-
-    anchor.dispatchEvent(new Event('pointerenter'));
-    vi.advanceTimersByTime(INTENTIONAL_HOVER_SHOW_DELAY_MS - 1);
-    expect(card.dataset.floatingOpen).toBe('false');
-
-    anchor.dispatchEvent(new Event('pointerleave'));
-    vi.advanceTimersByTime(INTENTIONAL_HOVER_SHOW_DELAY_MS);
-    expect(card.dataset.floatingOpen).toBe('false');
-
-    anchor.dispatchEvent(new Event('pointerenter'));
-    vi.advanceTimersByTime(INTENTIONAL_HOVER_SHOW_DELAY_MS);
-    expect(card.dataset.floatingOpen).toBe('true');
-  });
-
-  it('lets an anchor press win over a delayed hover open', () => {
-    const control = button('Toggle', anchor);
-    action = floatingHoverCard(card);
-
-    anchor.dispatchEvent(new Event('pointerenter'));
-    control.dispatchEvent(new Event('pointerdown', { bubbles: true }));
-    control.focus();
-    vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS);
-    expect(card.dataset.floatingOpen).toBe('false');
-
-    control.blur();
-    pressKey(document.body, 'Tab');
-    control.focus();
-    expect(card.dataset.floatingOpen).toBe('true');
-  });
-
-  it('opens at once on a press when revealing the card is the anchor purpose', () => {
-    const trigger = button('Context window usage', anchor);
-    action = floatingHoverCard(card, { openOnPress: true });
-
-    trigger.dispatchEvent(new Event('pointerdown', { bubbles: true }));
-
-    expect(card.dataset.floatingOpen).toBe('true');
-  });
-
-  it('keeps an interactive card open while the pointer crosses the gap', () => {
-    action = floatingHoverCard(card);
-    open();
-    anchor.dispatchEvent(new Event('pointerleave'));
-    card.dispatchEvent(new Event('pointerenter'));
-    vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
-
-    expect(card.dataset.floatingOpen).toBe('true');
-
-    card.dispatchEvent(new Event('pointerleave'));
-    vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
-    expect(card.dataset.floatingOpen).toBe('false');
-  });
-
-  it('closes at once when the pointer leaves the anchor away from the card', () => {
-    placeAt(anchor, { left: 100, top: 300, width: 200, height: 24 });
-    action = floatingHoverCard(card, { placement: 'right' });
-    open();
-    // To the right of the anchor, 6px away.
-    placeAt(card, { left: 306, top: 280, width: 180, height: 64 });
-
-    anchor.dispatchEvent(
-      pointerAt('pointerleave', 200, 299, { relatedTarget: document.body }),
-    );
-    window.dispatchEvent(pointerAt('pointermove', 200, 290));
-
-    expect(card.dataset.floatingOpen).toBe('false');
-  });
-
-  it('links keyboard focus and closes on Escape or ancestor scrolling', () => {
-    const control = button('Anchor control');
-    anchor.prepend(control);
-    action = floatingHoverCard(card);
-
-    control.focus();
-    expect(card.dataset.floatingOpen).toBe('true');
-    expect(control.getAttribute('aria-describedby')).toBe(card.id);
-
-    const escape = pressKey(window, 'Escape');
-    expect(card.dataset.floatingOpen).toBe('false');
-    expect(control.hasAttribute('aria-describedby')).toBe(false);
-    // Focus stayed on the anchor, so Escape still reaches enclosing layers.
-    expect(escape.defaultPrevented).toBe(false);
-    expect(document.activeElement).toBe(control);
-
-    open();
-    expect(card.dataset.floatingOpen).toBe('true');
-    document.dispatchEvent(new Event('scroll'));
-    expect(card.dataset.floatingOpen).toBe('false');
-  });
-
-  it('repositions on scroll instead of hiding while the anchor is visible', () => {
-    action = floatingHoverCard(card);
-    anchor.getBoundingClientRect = () => ({
-      top: 300,
-      bottom: 320,
-      left: 500,
-      right: 540,
-      width: 40,
-      height: 20,
-    });
-    window.innerHeight = 800;
-    window.innerWidth = 1200;
-
-    open();
-    expect(card.dataset.floatingOpen).toBe('true');
-
-    document.dispatchEvent(new Event('scroll'));
-    expect(card.dataset.floatingOpen).toBe('true');
-  });
-
-  it('stays anchored above while its content grows and stops observing once hidden', () => {
-    const observers = [];
-    class FakeResizeObserver {
-      constructor(callback) {
-        this.callback = callback;
-        this.observed = [];
-        this.disconnected = false;
-        observers.push(this);
-      }
-      observe(target) {
-        this.observed.push(target);
-      }
-      disconnect() {
-        this.disconnected = true;
-      }
-    }
-    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
-    try {
-      let height = 100;
-      Object.defineProperty(card, 'offsetHeight', { get: () => height });
-      anchor.getBoundingClientRect = () => ({
-        top: 500,
-        bottom: 520,
-        left: 500,
-        right: 540,
-        width: 40,
-        height: 20,
-      });
-      window.innerHeight = 800;
-      window.innerWidth = 1200;
-      action = floatingHoverCard(card);
-
-      open();
-      expect(card.style.top).toBe('394px');
-      expect(observers).toHaveLength(1);
-      expect(observers[0].observed).toEqual([card]);
-
-      // A row appears while the card is open: it must grow upward, not over
-      // the anchor.
-      height = 160;
-      observers[0].callback([]);
-      expect(card.style.top).toBe('334px');
-
-      pressKey(window, 'Escape');
-      expect(card.dataset.floatingOpen).toBe('false');
-      expect(observers[0].disconnected).toBe(true);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it('keeps decorative previews out of the accessibility tree', () => {
-    action = floatingHoverCard(card, { accessible: false });
-
-    open();
-
-    expect(card.dataset.floatingOpen).toBe('true');
-    expect(card.getAttribute('aria-hidden')).toBe('true');
-    expect(card.hasAttribute('role')).toBe(false);
-    expect(anchor.hasAttribute('aria-describedby')).toBe(false);
-  });
-
-  it('opens on touch at once unless taps belong to the anchor', () => {
-    action = floatingHoverCard(card);
-    anchor.dispatchEvent(pointerEvent('pointerdown', 'touch'));
-    expect(card.dataset.floatingOpen).toBe('true');
-    anchor.dispatchEvent(pointerEvent('pointerdown', 'touch'));
-    expect(card.dataset.floatingOpen).toBe('false');
-    action.destroy();
-
-    const preview = document.createElement('span');
-    anchor.appendChild(preview);
-    action = floatingHoverCard(preview, { accessible: false, touch: false });
-    anchor.dispatchEvent(pointerEvent('pointerenter', 'touch'));
-    anchor.dispatchEvent(pointerEvent('pointerdown', 'touch'));
-    vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS);
-    expect(preview.dataset.floatingOpen).toBe('false');
-  });
-
-  describe('with interactive content', () => {
-    let control;
-    let copy;
-    let more;
-    let after;
-
-    beforeEach(() => {
-      control = button('Value', anchor);
-      card.textContent = '';
-      copy = button('Copy', card);
-      more = button('Open Extensions', card);
-      after = button('Next control');
-      action = floatingHoverCard(card);
-    });
-
-    it('drops the tooltip role because tooltips must not be interactive', () => {
-      control.focus();
-      expect(card.dataset.floatingOpen).toBe('true');
-      expect(card.hasAttribute('role')).toBe(false);
-      expect(control.getAttribute('aria-describedby')).toBe(card.id);
-    });
-
-    it('moves Tab from the anchor into the card and back out in page order', () => {
-      control.focus();
-      const tab = pressKey(control, 'Tab');
-      expect(tab.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(copy);
-
-      pressKey(copy, 'Tab');
-      expect(document.activeElement).toBe(copy);
-      more.focus();
-      pressKey(more, 'Tab');
-      expect(document.activeElement).toBe(after);
-      expect(card.dataset.floatingOpen).toBe('false');
-    });
-
-    it('returns Shift+Tab from the first card control to the anchor', () => {
-      control.focus();
-      pressKey(control, 'Tab');
-      const back = pressKey(copy, 'Tab', { shiftKey: true });
-
-      expect(back.defaultPrevented).toBe(true);
-      expect(document.activeElement).toBe(control);
-      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
-      expect(card.dataset.floatingOpen).toBe('true');
-    });
-
-    it('closes on Escape inside the card, returns focus to the anchor, and consumes the key', () => {
-      control.focus();
-      pressKey(control, 'Tab');
-
-      const escape = pressKey(window, 'Escape');
-
-      expect(escape.defaultPrevented).toBe(true);
-      expect(card.dataset.floatingOpen).toBe('false');
-      expect(document.activeElement).toBe(control);
-    });
-
-    it('stays open while the pointer rests on it and a focused control gives up focus', () => {
-      anchor.dispatchEvent(new Event('pointerenter'));
-      vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS);
-      anchor.dispatchEvent(new Event('pointerleave'));
-      card.dispatchEvent(new Event('pointerenter'));
-      copy.focus();
-
-      // A control that disables itself after activation drops focus.
-      copy.blur();
-      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 2);
-      expect(card.dataset.floatingOpen).toBe('true');
-
-      card.dispatchEvent(new Event('pointerleave'));
-      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
-      expect(card.dataset.floatingOpen).toBe('false');
-    });
-
-    it('returns keyboard focus to the anchor when a focused card control disables itself', async () => {
-      control.focus();
-      pressKey(control, 'Tab');
-      expect(document.activeElement).toBe(copy);
-
-      // Browsers drop focus to <body> once the focused control is disabled.
-      copy.disabled = true;
-      copy.blur();
-      await flushMicrotasks();
-
-      expect(document.activeElement).toBe(control);
-      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 2);
-      expect(card.dataset.floatingOpen).toBe('true');
-      pressKey(window, 'Escape');
-      expect(card.dataset.floatingOpen).toBe('false');
-    });
-
-    it('recovers focus when the focused card control is removed without a focus event', async () => {
-      control.focus();
-      pressKey(control, 'Tab');
-
-      copy.remove();
-      await flushMicrotasks();
-
-      expect(document.activeElement).toBe(control);
-      expect(card.dataset.floatingOpen).toBe('true');
-    });
-
-    it('leaves focus alone when an enabled card control loses it', async () => {
-      control.focus();
-      pressKey(control, 'Tab');
-
-      copy.blur();
-      await flushMicrotasks();
-
-      expect(document.activeElement).toBe(document.body);
-      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
-      expect(card.dataset.floatingOpen).toBe('false');
-    });
-
-    it('stays open while keyboard focus is inside, even when the pointer leaves', () => {
-      control.focus();
-      pressKey(control, 'Tab');
-
-      card.dispatchEvent(new Event('pointerleave'));
-      anchor.dispatchEvent(new Event('pointerleave'));
-      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 2);
-
-      expect(card.dataset.floatingOpen).toBe('true');
-      expect(document.activeElement).toBe(copy);
-    });
   });
 });
 

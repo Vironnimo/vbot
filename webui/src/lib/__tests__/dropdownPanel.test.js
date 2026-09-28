@@ -36,61 +36,44 @@ describe('computePanelPosition', () => {
     window.innerWidth = originalWidth;
   });
 
-  it('opens below when there is room beneath the trigger', () => {
-    const result = computePanelPosition(triggerAt({ top: 100, bottom: 130 }));
-    expect(result.placement).toBe('bottom');
-    expect(result.verticalRule).toContain('top:');
-  });
+  it('opens below when there is room beneath the trigger and flips above near the viewport bottom', () => {
+    const below = computePanelPosition(triggerAt({ top: 100, bottom: 130 }));
+    expect(below.placement).toBe('bottom');
+    expect(below.verticalRule).toContain('top:');
 
-  it('flips above when the trigger sits near the viewport bottom', () => {
     // availableBelow = 800 - 760 - 12 = 28; availableAbove = 730 - 12 = 718.
-    const result = computePanelPosition(triggerAt({ top: 730, bottom: 760 }));
-    expect(result.placement).toBe('top');
-    expect(result.verticalRule).toContain('bottom:');
+    const above = computePanelPosition(triggerAt({ top: 730, bottom: 760 }));
+    expect(above.placement).toBe('top');
+    expect(above.verticalRule).toContain('bottom:');
   });
 
-  it('caps the panel to the room available below when it stays below', () => {
-    // availableBelow = 800 - 568 - 12 = 220 — above the 200 flip threshold (so
+  it('caps a panel that stays below and flips earlier for a measured content height', () => {
+    // availableBelow = 800 - 568 - 12 = 220: above the 200 flip threshold (so
     // it stays below) but under MAX_HEIGHT, so the cap binds to 220, not 240.
-    const result = computePanelPosition(triggerAt({ top: 538, bottom: 568 }));
-    const availableBelow = window.innerHeight - 568 - GAP;
-    expect(result.placement).toBe('bottom');
-    expect(result.optionsMaxHeight).toBe(availableBelow);
-  });
-
-  it('uses the measured content height to flip earlier than the fixed threshold', () => {
-    // availableBelow = 800 - 568 - 12 = 220 — above the 200 threshold but below
-    // a 300px-tall list. availableAbove = 538 - 12 = 526.
+    // A 300px-tall list does not fit there; availableAbove = 538 - 12 = 526.
     const trigger = triggerAt({ top: 538, bottom: 568 });
+    const fixed = computePanelPosition(trigger);
+    expect(fixed.placement).toBe('bottom');
+    expect(fixed.optionsMaxHeight).toBe(window.innerHeight - 568 - GAP);
 
-    // Without a measured content height the helper falls back to the fixed
-    // threshold (200), so 220px below still counts as "fits" — no flip.
-    expect(computePanelPosition(trigger).placement).toBe('bottom');
-
-    // With the real content height the panel does not fit below, and there is
-    // more room above, so it flips up.
     expect(
       computePanelPosition(trigger, { contentHeight: 300 }).placement,
     ).toBe('top');
   });
 
-  it('right-aligns a wider floating menu with its trigger', () => {
-    const result = computePanelPosition(
+  it('right-aligns a wider floating menu and widens a narrow panel to its minimum within the viewport', () => {
+    const menu = computePanelPosition(
       triggerAt({ top: 100, bottom: 124, left: 300, width: 24 }),
       {
         panelWidth: 160,
         horizontalAlign: 'end',
       },
     );
+    expect(menu.width).toBe(160);
+    expect(menu.left).toBe(164);
 
-    expect(result.width).toBe(160);
-    expect(result.left).toBe(164);
-  });
-
-  it('widens a panel under a narrow trigger to its minimum width', () => {
     const narrow = triggerAt({ top: 100, bottom: 130, width: 150 });
     const wide = triggerAt({ top: 100, bottom: 130, width: 300 });
-
     expect(computePanelPosition(narrow, { minWidth: 240 }).width).toBe(240);
     expect(computePanelPosition(wide, { minWidth: 240 }).width).toBe(300);
     window.innerWidth = 200;
