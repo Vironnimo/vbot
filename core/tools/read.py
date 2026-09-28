@@ -166,12 +166,8 @@ def make_read_handler(
         raise ValueError("speech_max_size_bytes must be a positive integer")
 
     def prepare_read(context: ToolContext, arguments: JsonObject) -> JsonObject | _PreparedAudio:
-        path_argument = arguments.get("path")
-        if not isinstance(path_argument, str) or not path_argument:
-            return tool_failure("invalid_arguments", "path must be a non-empty string")
-
         try:
-            resolved = context.resolve_path(path_argument)
+            resolved = context.resolve_path(arguments["path"])
         except RuntimeError as error:
             return tool_failure("invalid_path", str(error))
         cwd = _call_cwd(context)

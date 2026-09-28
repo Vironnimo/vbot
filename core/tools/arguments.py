@@ -17,7 +17,6 @@ TEXT_LINE_BREAK = re.compile(r"\r\n|[\n\r]")
 # A block is treated as the gutter (not ordinary content that merely contains a
 # pipe) only when at least this share of its non-blank lines carry a consecutive
 # ``N|`` prefix (with or without its separator space after model reproduction).
-_LINE_NUMBER_GUTTER_DOMINANCE = 0.6
 # Two consecutive numbered lines is the minimum signal: a lone ``1|value`` line
 # or a sparse pipe table must still pass through.
 _LINE_NUMBER_GUTTER_MIN_LINES = 2
@@ -166,52 +165,6 @@ def split_text_lines(text: str, *, keepends: bool = False) -> list[str]:
     return lines
 
 
-def logical_line_count(text: str) -> int:
-    """Count ordinary text-file lines without inventing one after a final newline."""
-    if not text:
-        return 0
-    line_breaks = text.count("\n") + text.count("\r") - text.count("\r\n")
-    return line_breaks + (0 if text.endswith(("\r", "\n")) else 1)
-
-
-def looks_like_line_numbered_content(text: str) -> bool:
-    """Return whether ``text`` is dominated by the read tool's reference gutter.
-
-    The read tool prefixes each line with ``N| `` and an in-line continuation with
-    ``N:C| ``. If a model echoes either display format back into a write or edit,
-    the file is silently corrupted with reference gutters. This detects that case
-    so the write path can reject it, while still letting sparse literal-pipe content
-    through (a lone ``1|value`` line, a Markdown table). The signal is deliberately
-    strict: at least two lines, a majority of non-blank lines prefixed by a line
-    number and the separator, and those line numbers running consecutively.
-    """
-    if not isinstance(text, str):
-        return False
-
-    lines = [line for line in split_text_lines(text) if line.strip()]
-    if len(lines) < _LINE_NUMBER_GUTTER_MIN_LINES:
-        return False
-
-    numbers: list[int] = []
-    for line in lines:
-        prefix, separator, _rest = line.lstrip().partition(LINE_NUMBER_GUTTER_SEPARATOR)
-        line_number, colon, character = prefix.partition(":")
-        if separator and line_number.isdigit() and (not colon or character.isdigit()):
-            numbers.append(int(line_number))
-
-    if len(numbers) < _LINE_NUMBER_GUTTER_MIN_LINES:
-        return False
-    if len(numbers) / len(lines) < _LINE_NUMBER_GUTTER_DOMINANCE:
-        return False
-
-    consecutive = sum(
-        1
-        for previous, current in zip(numbers, numbers[1:], strict=False)
-        if current == previous + 1
-    )
-    return consecutive >= len(numbers) - 1
-
-
 def _split_supported_line_ending(line: str) -> tuple[str, str]:
     for ending in _SUPPORTED_LINE_ENDINGS:
         if line.endswith(ending):
@@ -227,8 +180,8 @@ def line_number_gutter_candidates(
 ) -> tuple[str, ...]:
     """Return raw-text candidates for a complete pasted ``read`` gutter block.
 
-    Auto-recovery is intentionally stricter than the write-corruption detector:
-    every physical line must carry a consecutive ``N|``/``N:C|`` gutter. The
+    Auto-recovery is intentionally strict: every physical line must carry a
+    consecutive ``N|``/``N:C|`` gutter. The
     first candidate removes the current display separator space; the second
     preserves post-pipe whitespace for compact gutters reproduced without that
     separator. Returning both lets the edit matcher resolve the otherwise
@@ -354,7 +307,6 @@ __all__ = [
     "TEXT_LINE_BREAK",
     "ToolArgumentError",
     "line_number_gutter_candidates",
-    "looks_like_line_numbered_content",
     "strip_line_number_gutters",
     "optional_bool",
     "optional_int",
