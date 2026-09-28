@@ -28,8 +28,6 @@ from core.projects._resolution_values import (
     _project_agent_tools,
     _resolve_temperature,
     _resolve_thinking_effort,
-    _temporary_project_allowed_skills,
-    _temporary_project_tool_access,
     effective_project_allowed_skills,
 )
 from core.projects._runtime_agent import (
@@ -253,7 +251,7 @@ class AgentResolver:
     ) -> RuntimeAgent:
         """Event-Loop-safe :meth:`resolve_temporary_agent`.
 
-        The binding read runs on the Session database's pool; Project ceilings
+        The binding read runs on the Session database's pool; the Project check
         and Run overrides, which read Project and Model configuration, run on the
         ``agent-resolution`` pool.
         """
@@ -272,7 +270,7 @@ class AgentResolver:
     def preview_temporary_agent(
         self, config: TemporaryAgentConfig, project_id: str | None = None
     ) -> TemporaryAgent:
-        """Resolve editor configuration through the same ceilings without creating a Session."""
+        """Resolve editor configuration like a started one, without creating a Session."""
         from core.agents.temporary import TemporaryAgent
 
         agent = TemporaryAgent(
@@ -290,7 +288,8 @@ class AgentResolver:
             thinking_effort=config.thinking_effort,
             compaction_policy=config.compaction_policy,
         )
-        return self._apply_temporary_project(agent, project_id)
+        self._require_temporary_project(project_id)
+        return agent
 
     def _temporary_registry(self) -> Any:
         if self._temporary_agents is None:
@@ -303,32 +302,16 @@ class AgentResolver:
         address: Any,
         run_overrides: AgentRunOverrides | None,
     ) -> RuntimeAgent:
-        """Apply the address's Project ceilings, then the Run overrides."""
-        agent = self._apply_temporary_project(agent, getattr(address, "project_id", None))
+        """Check the address's Project, then apply the Run overrides."""
+        self._require_temporary_project(getattr(address, "project_id", None))
         return self._apply_run_overrides(agent, run_overrides)
 
-    def _apply_temporary_project(
-        self, agent: TemporaryAgent, project_id: str | None
-    ) -> TemporaryAgent:
+    def _require_temporary_project(self, project_id: str | None) -> None:
+        # A temporary Agent keeps its owner's Tool and Skill selection: like a
+        # Rooted Agent it uses the Project's directory, Skills and context, not
+        # the Tool and Skill whitelists that bound the Project's Team.
         if project_id is not None:
-            project = self._load_project(project_id)
-            tool_access = _temporary_project_tool_access(project, agent.tool_access)
-            allowed_skills = _temporary_project_allowed_skills(
-                agent.allowed_skills,
-                effective_project_allowed_skills(project, self._project_skill_names(project_id)),
-            )
-            tools = {
-                name: settings
-                for name, settings in agent.tools.items()
-                if name in tool_access.allowed and name not in tool_access.denied
-            }
-            agent = replace(
-                agent,
-                tool_access=tool_access,
-                allowed_skills=allowed_skills,
-                tools=tools,
-            )
-        return agent
+            self._load_project(project_id)
 
     def _apply_run_overrides(
         self,

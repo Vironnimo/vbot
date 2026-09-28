@@ -8,7 +8,7 @@ Read this reference when changing how a Project Agent becomes effective runtime 
 
 Resolution reads Agent configuration, may seed a workspace or normalize the current Session, and can wait for the Agent store's write lock. Event-Loop callers therefore use `resolve_agent_async` / `resolve_temporary_agent_async`; Chat Run admission and execution, Subagent spawns, and Reflection reviews resolve this way. Synchronous callers already on a worker or outside a Run path keep the plain methods.
 
-The async variants follow the per-database pool rule (`database.md`). An Identity Agent read, which may seed its workspace and verify or repair its current-Session pointer, runs as one unit on the Session database's pool (`AgentStore.get_async`), and so does a temporary Session binding read (`TemporaryAgentRegistry.resolve_async`); a closed Session database raises `DatabaseUnavailableError`. Project Agent resolution, Run overrides and a temporary Agent's Project ceilings stay on the bounded `agent-resolution` pool: they read Project, repository and configuration files and check Model usability. Their only database access is incidental: the first resolution in a Project whose Team is not cached yet runs the scan report, which lists the Project's Session-owning Agents (`ProjectStore.session_owning_agents`) in the middle of the repository scan. Splitting that one read per Team cache fill onto the Session pool would cut the scan into two hops for no gain, so it deliberately stays (`tests/core/projects/test_resolver_scan_identity.py`, `test_resolver_config_agent.py`).
+The async variants follow the per-database pool rule (`database.md`). An Identity Agent read, which may seed its workspace and verify or repair its current-Session pointer, runs as one unit on the Session database's pool (`AgentStore.get_async`), and so does a temporary Session binding read (`TemporaryAgentRegistry.resolve_async`); a closed Session database raises `DatabaseUnavailableError`. Project Agent resolution, Run overrides and a temporary Agent's Project check stay on the bounded `agent-resolution` pool: they read Project, repository and configuration files and check Model usability. Their only database access is incidental: the first resolution in a Project whose Team is not cached yet runs the scan report, which lists the Project's Session-owning Agents (`ProjectStore.session_owning_agents`) in the middle of the repository scan. Splitting that one read per Team cache fill onto the Session pool would cut the scan into two hops for no gain, so it deliberately stays (`tests/core/projects/test_resolver_scan_identity.py`, `test_resolver_config_agent.py`).
 
 Team membership is cached per Project, but the selected repository Agent source is reread on each resolution. This gives stable, cheap membership lookup while allowing edits to model, instructions, Tool denials, Agent-target rules, or scalar settings to take effect without a Team rebuild.
 
@@ -77,9 +77,10 @@ The working-Project functions in `core/projects/resolver.py` derive the admitted
 ## Change Rules
 
 `preview_temporary_agent` and persisted temporary-Agent resolution share
-`_apply_temporary_project`: both enforce the same Project Tool/Skill ceilings,
-while preview constructs no Session binding. Explicit prompt-block selection is
-preserved independently of those ceilings. Evidence: `core/projects/resolver.py`,
+`_require_temporary_project`: both check that the selected Project exists and
+keep the configured Tool selection, Skill allowlist and prompt blocks unchanged,
+because Project ceilings bound only the Team (`projects.md`); preview constructs
+no Session binding. Evidence: `core/projects/resolver.py`,
 `tests/core/projects/test_resolver_config_agent.py`.
 
 - Add or reorder a fallback tier only in the resolver and update `effective_config()` provenance, RPC/UI presentation, and tests together.

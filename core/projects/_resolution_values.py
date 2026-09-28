@@ -54,42 +54,6 @@ def _project_agent_tool_access(project: Project, scanned: ScannedAgent) -> ToolA
     )
 
 
-def _temporary_project_tool_access(project: Project, access: ToolAccess) -> ToolAccess:
-    """Materialize a temporary profile inside an explicit Project Tool ceiling."""
-
-    from core.tools.availability import ToolAccess
-
-    if access.mode == "none":
-        return access
-    ceiling = tuple(project.allowed_tools)
-    allowed = (
-        ceiling if access.mode == "all" else [name for name in access.allowed if name in ceiling]
-    )
-    return ToolAccess(
-        mode="selected",
-        allowed=tuple(allowed),
-        denied=access.denied,
-        granted=tuple(name for name in access.granted if name in ceiling),
-    )
-
-
-def _temporary_project_allowed_skills(
-    profile_allowed: list[str],
-    project_allowed: list[str],
-) -> list[str]:
-    """Intersect a temporary profile's Skill selection with the Project ceiling."""
-
-    if not profile_allowed:
-        return []
-    if WILDCARD_ALLOWLIST in profile_allowed:
-        return project_allowed
-    return [
-        name
-        for name in project_allowed
-        if any(fnmatchcase(name, pattern) for pattern in profile_allowed)
-    ]
-
-
 def effective_project_allowed_skills(
     project: Project, project_skill_names: frozenset[str]
 ) -> list[str]:
