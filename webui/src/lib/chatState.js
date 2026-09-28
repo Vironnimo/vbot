@@ -15,39 +15,24 @@ export {
   setAgents,
   selectAgent,
   selectedAgent,
-  sessionKey,
   ensureSessionState,
-  syncAgentSessionActivity,
-  applySessionCompletionActivity,
   agentActivityStatus,
   agentUnreadResults,
   newestUnreadSessionForAgent,
   sessionHasTerminalRun,
   currentSessionState,
-  updateSessionUsage,
-  syncQueueFromServer,
-  addServerQueuedMessage,
-  updateQueuedMessageContent,
   removeQueuedMessage,
   isSessionEmpty,
   isRunActive,
   contextCompactionState,
   resetStaleRun,
 } from './chatState/sessionState.js';
-export {
-  createChatController,
-  normalizeBuiltInCommandName,
-} from './chatState/controller.js';
-export {
-  loadHistory,
-  prependHistory,
-  truncateSessionForEdit,
-} from './chatState/history.js';
+export { createChatController } from './chatState/controller.js';
+export { loadHistory } from './chatState/history.js';
 export {
   startRun,
   appendRunEvent,
   applyRunControls,
-  finishRun,
   isReleasedRun,
   releaseFinishedRunEvents,
 } from './chatState/runEvents.js';
@@ -56,8 +41,6 @@ export {
   isProjectSelected,
   resolveAgentAddressing,
   pickProjectAgentSessionId,
-  resolveMoveActionFromResponse,
-  resolveMoveTarget,
 } from './chatState/addressing.js';
 export {
   assistantRunChildProgressKey,

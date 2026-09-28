@@ -4,7 +4,6 @@ import {
   CHAT_STATUS_CANCELLED,
   CHAT_STATUS_IDLE,
   CHAT_STATUS_RUNNING,
-  addServerQueuedMessage,
   agentActivityStatus,
   ensureSessionState,
   resetStaleRun,
@@ -378,7 +377,7 @@ describe('live Run events of the displayed Session', () => {
           });
         }
         const sessionState = harness.displayedSession();
-        addServerQueuedMessage(sessionState, queued);
+        sessionState.queue = [{ ...queued }];
 
         if (transport === 'SSE') {
           harness.sse({

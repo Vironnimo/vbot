@@ -1019,7 +1019,7 @@ export function createChatController({
   };
 }
 
-export function normalizeBuiltInCommandName(value) {
+function normalizeBuiltInCommandName(value) {
   if (typeof value !== 'string') {
     return '';
   }
