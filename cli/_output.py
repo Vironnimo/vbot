@@ -253,6 +253,7 @@ def _operation_duration(operation: Operation) -> str | None:
 def print_application_update_result(
     install: Installation, operation: Operation, *, handoff: bool = False
 ) -> None:
+    from cli.application.operations import result_summary
     from cli.application.packages import version_label
     from cli.application.state import read_json
     from cli.update_management import read_checkout_version
@@ -265,34 +266,15 @@ def print_application_update_result(
             return version_label(read_json(root / "release.json", limit=32 * 1024**2))
         return read_checkout_version(root / "app")
 
-    messages = {
-        "completed": (
-            "Update completed — Desktop client is current; no local server restart is needed."
-            if not install.owns_server
-            else "Update completed — server restarted and passed its health check."
-            if operation.server_was_running
-            else "Update completed — the server remains stopped."
-        ),
-        "prepared": "Update prepared. The active version has not changed.",
-        "failed": "vBot update failed.",
-        "rolled_back": "Update failed. The previous version was restored.",
-        "needs_attention": "Update needs attention. Check its status before trying again.",
-    }
     unchanged = (
         operation.phase == "completed"
         and operation.candidate_version
         and operation.candidate_version == operation.previous_version
     )
-    if unchanged:
-        messages["completed"] = "vBot is already up to date; no restart was needed."
     failed = operation.phase in {"failed", "rolled_back", "needs_attention"}
     state: Status = "error" if failed else "success" if operation.phase == "completed" else "info"
     print()
-    print(
-        status_line(
-            state, messages.get(operation.phase, "Update accepted; running in the background.")
-        )
-    )
+    print(status_line(state, result_summary(install, operation)))
     if operation.phase in {"completed", "prepared"}:
         candidate = operation.candidate_version
         if candidate:

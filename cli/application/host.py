@@ -6,83 +6,133 @@ import logging
 import os
 import subprocess
 import sys
+import time
 import webbrowser
+from datetime import datetime
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode
 
 import psutil  # type: ignore[import-untyped]
 
 from cli.application import operations, processes
+from cli.application.monitor import MonitorStatus, ServerMonitor
+from cli.application.notifications import Notifier
 from cli.application.state import (
     ApplicationError,
     Installation,
+    Operation,
     contained,
     discover,
     exclusive,
     read_json,
     write_json,
 )
-from cli.application.tray import TrayState, run_tray
+from cli.application.tray import TraySink, TrayState, run_tray
 from core.utils.logging import LogManager
 
 _LOGGER = logging.getLogger("vbot.application.host")
+_ACTIVITY_LIMIT = 200
+_FAILED_UPDATE_PHASES = frozenset({"failed", "rolled_back", "needs_attention"})
 
 
 class ApplicationFacade:
-    """Translate the tray's small action surface to installed application owners."""
+    """Translate the tray's small action surface to installed application owners.
+
+    ``state`` stays cheap enough to call every second: update records are
+    reread only when their files change, and the server state comes from the
+    event-stream monitor that :meth:`watch` starts.
+    """
 
     def __init__(self, install: Installation) -> None:
         self._install = install
         self._status_error = ""
         self._display_version_id = ""
         self._display_version = ""
+        self._version_signature: tuple[int, int] | None = None
+        self._observer = operations.OperationObserver(install)
+        self._server_url_value: str | None = None
+        self._source_label: str | None = None
+        self._monitor: ServerMonitor | None = None
+        self._notifier: Notifier | None = None
+        self._progress_id: str | None = None
+        self._progress_key: tuple[str, str, str | None] | None = None
+        self._progress_announced = ""
+        self._progress_history = False
+        self._observed = False
+        self._activity: list[str] = []
+        self._last_update = ""
 
     def state(self) -> TrayState:
         try:
-            operation = operations.status(self._install)
+            operation = self._observer.latest()
         except Exception as error:
             self.report_error(f"Could not read update status: {error}")
             operation = None
-        if not self._install.owns_server:
-            server_state = "not_applicable"
-        else:
-            health = processes.probe_health(processes.target(self._install))
-            server_state = (
-                "running" if health.is_vbot else "stopped" if not health.reachable else "conflict"
-            )
-        active = self._install.version()
-        if active.name != self._display_version_id:
-            release = read_json(active / "release.json", limit=32 * 1024**2)
-            version = release.get("version")
-            self._display_version = version if isinstance(version, str) else ""
-            self._display_version_id = active.name
+        activity = self._observe_progress(operation)
+        server_state, server_url = self._server()
         return TrayState(
             server_state=server_state,
             install_shape=self._install.install_shape,
             update_phase=operation.phase if operation else None,
             update_message=operation.message if operation else "",
-            version=self._display_version,
+            version=self._version(),
             exit_requested=_valid_exit_request(self._install.root),
             error=self._status_error,
+            server_url=server_url,
+            update_activity=activity,
+            details=self._details(server_url),
         )
+
+    def watch(self, sink: TraySink) -> None:
+        """Follow the server's event stream and report changes and toasts to ``sink``."""
+
+        monitor: ServerMonitor | None = None
+
+        async def rpc(method: str, params: dict[str, Any]) -> dict[str, Any] | None:
+            return None if monitor is None else await monitor.rpc(method, params)
+
+        notifier = Notifier(
+            sink,
+            rpc,
+            owns_server=self._install.owns_server,
+            update_active=self._update_running,
+        )
+        monitor = ServerMonitor(
+            self._monitor_target,
+            _MonitorEvents(notifier, sink),
+            local=self._install.owns_server,
+            user_agent=f"vBot-Tray/{self._version() or 'unknown'}",
+        )
+        self._notifier, self._monitor = notifier, monitor
+        monitor.start()
+
+    def unwatch(self) -> None:
+        if self._monitor is not None:
+            self._monitor.close()
 
     def start_server(self) -> None:
         self._require_server()
         with exclusive(self._install.root, "operation"):
             self._require_success(processes.start(self._install))
         self._clear_status_error()
+        self._reconnect()
 
     def stop_server(self) -> None:
         self._require_server()
+        self._expect_stop()
         with exclusive(self._install.root, "operation", allow_removal=True):
             self._require_success(processes.stop(self._install))
         self._clear_status_error()
 
     def restart_server(self) -> None:
         self._require_server()
+        self._expect_stop()
         with exclusive(self._install.root, "operation"):
             self._require_success(processes.stop(self._install))
             self._require_success(processes.start(self._install))
         self._clear_status_error()
+        self._reconnect()
 
     def open_desktop(self, *, host: str | None = None, port: int | None = None) -> None:
         from cli.application.desktop import open_desktop
@@ -92,6 +142,24 @@ class ApplicationFacade:
     def open_browser(self) -> None:
         self._require_server()
         webbrowser.open(processes.target(self._install).url)
+
+    def open_session(self, agent: str, session: str) -> None:
+        """Show one Session in the Desktop, or in the browser without a Desktop."""
+
+        from cli.application.desktop import open_desktop
+
+        if self._install.install_shape == "server":
+            query = urlencode({"open_agent": agent, "open_session": session})
+            webbrowser.open(f"{processes.target(self._install).url}/?{query}")
+        elif self._install.owns_server:
+            open_desktop(self._install, open_session=(agent, session))
+        else:
+            target = _desktop_target()
+            if target is None:
+                raise ApplicationError("The Desktop has no server to open this Session on")
+            open_desktop(
+                self._install, host=target[0], port=target[1], open_session=(agent, session)
+            )
 
     def start_update(self) -> None:
         operations.request_update(self._install)
@@ -106,29 +174,6 @@ class ApplicationFacade:
         path = processes.target(self._install).data_dir / "logs"
         path.mkdir(parents=True, exist_ok=True)
         _open_folder(path)
-
-    def show_update(self) -> None:
-        operation = operations.status(self._install)
-        if operation is None:
-            message = "No update has been requested."
-        else:
-            message = operation.message
-            if operation.target_label:
-                message += (
-                    f"\n\nVersion: {operation.previous_label or 'unknown'} "
-                    f"-> {operation.target_label}"
-                )
-            if operation.error:
-                message += f"\n\n{operation.error}"
-            message += f"\n\nDetails in the terminal:\nvbot update status {operation.id}"
-            if operation.phase == "prepared":
-                message += (
-                    f"\n\nActivate this prepared version:\nvbot update activate {operation.id}"
-                )
-        if sys.platform == "win32":
-            import ctypes
-
-            ctypes.windll.user32.MessageBoxW(None, message, "vBot update", 0x40)
 
     def quit(self) -> None:
         if self._install.owns_server:
@@ -150,6 +195,163 @@ class ApplicationFacade:
 
     def _clear_status_error(self) -> None:
         self._status_error = ""
+
+    def _expect_stop(self) -> None:
+        if self._notifier is not None:
+            self._notifier.expect_server_stop()
+
+    def _reconnect(self) -> None:
+        if self._monitor is not None:
+            self._monitor.reconnect()
+
+    def _version(self) -> str:
+        # Resolve the verified pointer only when its file changed.
+        try:
+            stat = (self._install.root / "active-version").stat()
+            signature: tuple[int, int] | None = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            signature = None
+        if signature is not None and signature == self._version_signature:
+            return self._display_version
+        self._version_signature = signature
+        active = self._install.version()
+        if active.name != self._display_version_id:
+            release = read_json(active / "release.json", limit=32 * 1024**2)
+            version = release.get("version")
+            self._display_version = version if isinstance(version, str) else ""
+            self._display_version_id = active.name
+            self._source_label = None
+        return self._display_version
+
+    def _server(self) -> tuple[str, str]:
+        status = self._monitor.status if self._monitor is not None else MonitorStatus()
+        if not self._install.owns_server:
+            return "not_applicable", status.url or ""
+        if status.connection == "rejected":
+            server_state = "running" if status.vbot else "conflict"
+        else:
+            server_state = {
+                "connected": "running",
+                "refused": "stopped",
+                "unreachable": "stopped",
+            }.get(status.connection, "unknown")
+        return server_state, self._server_url()
+
+    def _server_url(self) -> str:
+        if self._server_url_value is None:
+            self._server_url_value = processes.target(self._install).url
+        return self._server_url_value
+
+    def _monitor_target(self) -> str | None:
+        if self._install.owns_server:
+            return self._server_url()
+        target = _desktop_target()
+        if target is None:
+            return None
+        from cli._server_target import build_server_base_url
+
+        return build_server_base_url(*target)
+
+    def _update_running(self) -> bool:
+        try:
+            operation = self._observer.latest()
+        except Exception:
+            return True
+        return operation is not None and not operation.terminal
+
+    def _observe_progress(self, operation: Operation | None) -> tuple[str, ...]:
+        """Record update progress like a waiting ``vbot update`` prints it."""
+
+        first, self._observed = not self._observed, True
+        if operation is None:
+            return ()
+        if operation.id != self._progress_id:
+            self._progress_id, self._progress_key = operation.id, None
+            self._progress_announced, self._activity = "", []
+            # An update already finished when the tray started is only history.
+            self._progress_history = first and operation.terminal
+        key = (operation.phase, operation.message, operation.target_label)
+        if key == self._progress_key:
+            return tuple(self._activity)
+        self._progress_key = key
+        if operation.terminal:
+            self._last_update = (
+                f"{operations.result_summary(self._install, operation)} "
+                f"({_local_time(operation.updated_at, full=True)})"
+            )
+            self._source_label = None
+        if self._progress_history:
+            return ()
+        stamp = time.strftime("%H:%M:%S")
+        if operation.target_label and operation.target_label != self._progress_announced:
+            self._progress_announced = operation.target_label
+            before = operation.previous_label
+            self._activity.append(
+                f"{stamp}  Updating vBot: {before} -> {operation.target_label}"
+                if before and before != operation.target_label
+                else f"{stamp}  Target version: {operation.target_label}"
+            )
+        if not operation.terminal:
+            self._activity.append(f"{stamp}  {operation.message}")
+        else:
+            summary = operations.result_summary(self._install, operation)
+            self._activity.append(f"{stamp}  {summary}")
+            if operation.phase in _FAILED_UPDATE_PHASES:
+                if operation.message:
+                    self._activity.append(f"{' ' * 10}{operation.message}")
+                if operation.error:
+                    self._activity.append(f"{' ' * 10}Reason: {operation.error}")
+            if self._notifier is not None:
+                self._notifier.update_finished(operation, summary)
+        del self._activity[:-_ACTIVITY_LIMIT]
+        return tuple(self._activity)
+
+    def _details(self, server_url: str) -> tuple[tuple[str, str], ...]:
+        rows: list[tuple[str, str]] = []
+        if self._install.owns_server:
+            rows.append(("Server", server_url))
+            rows.append(("Data", str(self._install.server_data_directory or "")))
+        else:
+            rows.append(("Server", server_url or "No Desktop server selected"))
+        rows.append(("Updates from", self._update_source()))
+        if self._last_update:
+            rows.append(("Last update", self._last_update))
+        rows.append(("Installed in", str(self._install.root)))
+        return tuple(rows)
+
+    def _update_source(self) -> str:
+        if self._source_label is None:
+            from cli.application.source_updates import read_binding
+
+            try:
+                binding = read_binding(self._install)
+            except ApplicationError as error:
+                self._source_label = f"Unreadable source binding: {error}"
+            else:
+                self._source_label = (
+                    "Published releases"
+                    if binding is None
+                    else f"Branch {binding['branch']} of {binding['checkout']}"
+                )
+        return self._source_label
+
+
+class _MonitorEvents:
+    """Deliver monitor observations to the notifier and wake the tray on status changes."""
+
+    def __init__(self, notifier: Notifier, sink: TraySink) -> None:
+        self._notifier = notifier
+        self._sink = sink
+
+    def status_changed(self, status: MonitorStatus) -> None:
+        self._notifier.status_changed(status)
+        self._sink.changed()
+
+    def connection_lost(self, close_code: int) -> None:
+        self._notifier.connection_lost(close_code)
+
+    def event_received(self, event: dict[str, Any]) -> None:
+        self._notifier.event_received(event)
 
 
 def main() -> int:
@@ -193,6 +395,28 @@ def main() -> int:
     return 0
 
 
+def _desktop_target() -> tuple[str, int] | None:
+    """Return the server the Desktop last used, which a Desktop Client tray follows."""
+
+    try:
+        from desktop.settings import read_last_used
+    except ImportError:
+        return None
+    target = read_last_used()
+    if target is None:
+        return None
+    host, port = target.get("host"), target.get("port")
+    return (host, port) if isinstance(host, str) and isinstance(port, int) else None
+
+
+def _local_time(value: str, *, full: bool = False) -> str:
+    try:
+        moment = datetime.fromisoformat(value).astimezone()
+    except ValueError:
+        return value
+    return moment.strftime("%Y-%m-%d %H:%M" if full else "%H:%M:%S")
+
+
 def _open_folder(path: Path) -> None:
     if os.name == "nt":
         os.startfile(path)  # type: ignore[attr-defined]
@@ -209,6 +433,8 @@ def _open_folder(path: Path) -> None:
 def _valid_exit_request(root: Path) -> bool:
     """Accept only the bounded request record written by the exact host-exit flow."""
 
+    if not (root / "host-exit-request.json").exists():
+        return False
     path = contained(root, "host-exit-request.json")
     if not path.is_file():
         return False

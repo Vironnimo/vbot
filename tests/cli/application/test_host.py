@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from contextlib import contextmanager
@@ -12,7 +13,9 @@ from typing import Any, cast
 import pytest
 
 from cli.application import desktop, host
-from cli.application.state import ApplicationError, Installation
+from cli.application.monitor import MonitorStatus
+from cli.application.notifications import Toast
+from cli.application.state import ApplicationError, Installation, Operation
 
 
 def _install(root: Path, *, shape: str = "server") -> Installation:
@@ -41,7 +44,6 @@ def test_client_state_never_resolves_a_local_server_target(
 ):
     facade = host.ApplicationFacade(_install(tmp_path, shape="desktop-client"))
     monkeypatch.setattr(host.processes, "target", lambda _install: pytest.fail("must not target"))
-    monkeypatch.setattr(host.operations, "status", lambda _install: None)
 
     state = facade.state()
     assert state.server_state == "not_applicable"
@@ -52,7 +54,6 @@ def test_tray_version_handles_full_manifest_and_refreshes_only_on_activation(tmp
     install = _install(tmp_path, shape="desktop-client")
     manifest = install.version() / "release.json"
     manifest.write_text(json.dumps({"version": "1.0", "files": {"fixture": "x" * 1024**2}}))
-    monkeypatch.setattr(host.operations, "status", lambda _install: None)
     read = host.read_json
     reads = []
 
@@ -73,62 +74,147 @@ def test_tray_version_handles_full_manifest_and_refreshes_only_on_activation(tmp
     assert reads == [manifest, next_version / "release.json"]
 
 
-def test_server_state_uses_actual_health_and_latest_operation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    facade = host.ApplicationFacade(_install(tmp_path))
-    instance = SimpleNamespace(url="http://127.0.0.1:8420", data_dir=tmp_path / "data")
-    monkeypatch.setattr(host.processes, "target", lambda _install: instance)
+class _Monitor:
+    instances: list[_Monitor] = []
+
+    def __init__(self, target, listener, *, local: bool, user_agent: str) -> None:
+        self.target, self.listener, self.local = target, listener, local
+        self.status = MonitorStatus()
+        self.reconnects = 0
+        _Monitor.instances.append(self)
+
+    def start(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def reconnect(self) -> None:
+        self.reconnects += 1
+
+    async def rpc(self, method: str, params: dict[str, Any]) -> None:
+        return None
+
+
+class _Sink:
+    def __init__(self) -> None:
+        self.changes = 0
+        self.toasts: list[Toast] = []
+
+    def changed(self) -> None:
+        self.changes += 1
+
+    def show(self, toast: Toast) -> None:
+        self.toasts.append(toast)
+
+    def dismiss(self, key: str) -> None:
+        pass
+
+
+def _watched(
+    install: Installation, monkeypatch: pytest.MonkeyPatch
+) -> tuple[host.ApplicationFacade, _Monitor, _Sink]:
+    monkeypatch.setattr(host, "ServerMonitor", _Monitor)
     monkeypatch.setattr(
         host.processes,
-        "probe_health",
-        lambda _instance: SimpleNamespace(is_vbot=True, reachable=True),
+        "target",
+        lambda _install: SimpleNamespace(url="http://127.0.0.1:8420", data_dir=Path("data")),
     )
-    monkeypatch.setattr(
-        host.operations,
-        "status",
-        lambda _install: SimpleNamespace(
-            phase="preparing", terminal=False, message="Checking release"
-        ),
-    )
+    facade, sink = host.ApplicationFacade(install), _Sink()
+    facade.watch(sink)
+    return facade, _Monitor.instances[-1], sink
 
+
+def _on_monitor_loop(callback) -> None:
+    """Deliver a monitor callback the way the monitor does: on its event loop."""
+
+    async def deliver() -> None:
+        callback()
+
+    asyncio.run(deliver())
+
+
+@pytest.mark.parametrize(
+    ("status", "server_state"),
+    [
+        pytest.param(MonitorStatus(), "unknown", id="before-first-attempt"),
+        pytest.param(MonitorStatus("u", "connected", True), "running", id="connected"),
+        pytest.param(MonitorStatus("u", "refused"), "stopped", id="refused"),
+        pytest.param(MonitorStatus("u", "rejected", True), "running", id="safe-mode"),
+        pytest.param(MonitorStatus("u", "rejected", False), "conflict", id="foreign-listener"),
+    ],
+)
+def test_server_state_follows_the_event_stream_monitor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: MonitorStatus, server_state: str
+):
+    facade, monitor, sink = _watched(_install(tmp_path), monkeypatch)
+    assert monitor.target() == "http://127.0.0.1:8420"
+    assert monitor.local is True
+
+    monitor.status = status
+    _on_monitor_loop(lambda: monitor.listener.status_changed(status))
+
+    assert facade.state().server_state == server_state
+    assert sink.changes == 1
+
+
+def test_update_progress_is_recorded_and_its_result_toasted_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    Operation(id="upd_old", phase="failed", message="Old failure").save(install)
+    facade, _monitor, sink = _watched(install, monkeypatch)
+    # An update that finished before the tray started is only history.
+    assert facade.state().update_activity == ()
+    assert sink.toasts == []
+
+    operation = Operation(id="upd_new", phase="preparing", message="Checking release")
+    operation.save(install)
     state = facade.state()
-    assert state.server_state == "running"
     assert (state.update_phase, state.update_message) == ("preparing", "Checking release")
+    operation.target_label, operation.previous_label = "0.5.0", "0.4.2"
+    operation.server_was_running = True
+    operation.transition(install, "completed", "Updated")
+    lines = facade.state().update_activity
+    assert facade.state().update_activity == lines
+
+    assert [line.split("  ", 1)[1] for line in lines] == [
+        "Checking release",
+        "Updating vBot: 0.4.2 -> 0.5.0",
+        "Update completed — server restarted and passed its health check.",
+    ]
+    assert [(toast.kind, toast.title) for toast in sink.toasts] == [
+        ("update_result", "vBot updated")
+    ]
+    assert "Version: 0.4.2 -> 0.5.0" in sink.toasts[0].body
+    assert any(label == "Last update" for label, _value in facade.state().details)
 
 
-def test_terminal_update_state_keeps_current_server_health(
+def test_tray_initiated_stop_never_counts_as_an_unexpected_server_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    facade = host.ApplicationFacade(_install(tmp_path))
-    instance = SimpleNamespace(url="http://127.0.0.1:8420", data_dir=tmp_path / "data")
-    monkeypatch.setattr(host.processes, "target", lambda _install: instance)
-    monkeypatch.setattr(
-        host.processes,
-        "probe_health",
-        lambda _instance: SimpleNamespace(is_vbot=False, reachable=False),
-    )
-    monkeypatch.setattr(
-        host.operations,
-        "status",
-        lambda _install: SimpleNamespace(phase="completed", terminal=True, message="Updated"),
-    )
+    facade, monitor, sink = _watched(_install(tmp_path), monkeypatch)
 
-    state = facade.state()
-    assert state.server_state == "stopped"
-    assert (state.update_phase, state.update_message) == ("completed", "Updated")
+    @contextmanager
+    def lock(_root: Path, _name: str, **_kwargs: object):
+        yield
+
+    monkeypatch.setattr(host, "exclusive", lock)
+    monkeypatch.setattr(host.processes, "stop", lambda _install: SimpleNamespace(ok=True))
+    monkeypatch.setattr(host.processes, "start", lambda _install: SimpleNamespace(ok=True))
+    facade.stop_server()
+    monitor.listener.connection_lost(1006)
+    monitor.listener.status_changed(MonitorStatus("u", "refused"))
+    facade.start_server()
+
+    assert sink.toasts == []
+    assert monitor.reconnects == 1
 
 
 def test_malformed_host_exit_request_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     install = _install(tmp_path)
     (install.root / "host-exit-request.json").write_text("{bad", encoding="utf-8")
-    monkeypatch.setattr(host.operations, "status", lambda _install: None)
-    monkeypatch.setattr(host.processes, "target", lambda _install: SimpleNamespace())
-    monkeypatch.setattr(
-        host.processes,
-        "probe_health",
-        lambda _instance: SimpleNamespace(is_vbot=False, reachable=False),
-    )
+    monkeypatch.setattr(host.processes, "target", lambda _install: SimpleNamespace(url=""))
 
     assert host.ApplicationFacade(install).state().exit_requested is False
 
@@ -239,6 +325,46 @@ def test_open_desktop_targets_only_an_explicit_or_owned_server(
     assert launches == [[str(executable), "-m", "desktop.main", *target_arguments]]
 
 
+@pytest.mark.parametrize(
+    ("shape", "opened"),
+    [
+        pytest.param(
+            "server",
+            "http://127.0.0.1:8420/?open_agent=coder%40site&open_session=ses_1",
+            id="browser-deep-link",
+        ),
+        pytest.param(
+            "server-desktop",
+            ["--host", "127.0.0.1", "--port", "8420", "--open-session", "coder@site", "ses_1"],
+            id="owned-desktop",
+        ),
+        pytest.param(
+            "desktop-client",
+            ["--host", "192.0.2.8", "--port", "18420", "--open-session", "coder@site", "ses_1"],
+            id="client-desktop-target",
+        ),
+    ],
+)
+def test_open_session_shows_the_session_where_this_installation_can(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str, opened: object
+):
+    install = _install(tmp_path, shape=shape)
+    executable = _desktop_interpreter(install)
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(b"")
+    launches: list[object] = []
+    monkeypatch.setattr(host.subprocess, "Popen", lambda args, **_kwargs: launches.append(args[3:]))
+    monkeypatch.setattr(host.webbrowser, "open", launches.append)
+    monkeypatch.setattr(
+        host.processes, "target", lambda _install: SimpleNamespace(url="http://127.0.0.1:8420")
+    )
+    monkeypatch.setattr(host, "_desktop_target", lambda: ("192.0.2.8", 18420))
+
+    host.ApplicationFacade(install).open_session("coder@site", "ses_1")
+
+    assert launches == [opened]
+
+
 def test_browser_and_logs_use_only_the_owned_local_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -284,7 +410,6 @@ def test_main_recovers_before_initial_start_and_never_restarts_after_manual_stop
     monkeypatch.setattr(
         host.operations, "recover_operations", lambda _install: order.append("recover")
     )
-    monkeypatch.setattr(host.operations, "status", lambda _install: None)
     monkeypatch.setattr(host.ApplicationFacade, "start_server", lambda _self: order.append("start"))
     monkeypatch.setattr(host, "run_tray", lambda _facade, _icon: order.append("tray"))
 

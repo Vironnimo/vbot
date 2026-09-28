@@ -1,4 +1,4 @@
-"""The tray controller remains usable without its optional native backend."""
+"""The tray controller and its native Windows view keep their user-facing contracts."""
 
 from __future__ import annotations
 
@@ -7,7 +7,16 @@ import threading
 import time
 from dataclasses import replace
 
-from cli.application.tray import TrayActions, TrayController, TrayState
+import pytest
+
+from cli.application.notifications import Toast
+from cli.application.tray import (
+    TrayActions,
+    TrayController,
+    TrayPresentation,
+    TraySink,
+    TrayState,
+)
 
 
 class Actions(TrayActions):
@@ -18,6 +27,12 @@ class Actions(TrayActions):
 
     def state(self) -> TrayState:
         return self.current
+
+    def watch(self, sink: TraySink) -> None:
+        self.calls.append("watch")
+
+    def unwatch(self) -> None:
+        self.calls.append("unwatch")
 
     def _call(self, name: str) -> None:
         self.calls.append(name)
@@ -39,6 +54,9 @@ class Actions(TrayActions):
     def open_browser(self) -> None:
         self._call("open_browser")
 
+    def open_session(self, agent: str, session: str) -> None:
+        self._call(f"open_session:{agent}:{session}")
+
     def start_update(self) -> None:
         self._call("start_update")
 
@@ -48,29 +66,43 @@ class Actions(TrayActions):
     def open_server_logs(self) -> None:
         self._call("open_server_logs")
 
-    def show_update(self) -> None:
-        self._call("show_update")
-
     def quit(self) -> None:
         self._call("quit")
+
+
+class View:
+    def __init__(self) -> None:
+        self.presented: list[TrayPresentation] = []
+        self.toasts: list[Toast] = []
+        self.dismissed: list[str] = []
+        self.status_shown = 0
+        self.stopped = False
+
+    def present(self, presentation: TrayPresentation) -> None:
+        self.presented.append(presentation)
+
+    def show_toast(self, toast: Toast) -> None:
+        self.toasts.append(toast)
+
+    def dismiss_toast(self, key: str) -> None:
+        self.dismissed.append(key)
+
+    def show_status(self) -> None:
+        self.status_shown += 1
+
+    def stop(self) -> None:
+        self.stopped = True
 
 
 def _labels(controller: TrayController) -> dict[str, object]:
     return {item.label: item for item in controller.menu_items()}
 
 
-def _wait_for_call(actions: Actions, name: str) -> None:
-    deadline = time.monotonic() + 2
-    while name not in actions.calls and time.monotonic() < deadline:
+def _wait_until(condition, *, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert name in actions.calls
-
-
-def _wait_for_call_count(actions: Actions, name: str, count: int) -> None:
-    deadline = time.monotonic() + 2
-    while actions.calls.count(name) < count and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert actions.calls.count(name) == count
+    assert condition()
 
 
 def test_server_desktop_menu_projects_only_the_available_actions():
@@ -83,12 +115,13 @@ def test_server_desktop_menu_projects_only_the_available_actions():
     assert "Open in browser" in menu
     assert "Restart server" in menu
     assert "Stop server" in menu
+    assert "Status…" in menu
     assert "Start server" not in menu
     assert "1.2.3" in next(iter(menu))
 
 
 def test_desktop_client_never_exposes_or_queues_server_actions():
-    actions = Actions(TrayState("running", "desktop-client"))
+    actions = Actions(TrayState("not_applicable", "desktop-client"))
     controller = TrayController(actions)
     controller._poll_state()
 
@@ -110,6 +143,115 @@ def test_update_is_disabled_while_an_operation_is_active():
     assert menu["Update"].enabled is False
     controller.invoke("start_update")
     assert actions.calls == []
+
+
+@pytest.mark.parametrize(
+    ("state", "icon", "status"),
+    [
+        pytest.param(TrayState("running", "server"), "normal", "Server running", id="running"),
+        pytest.param(TrayState("stopped", "server"), "stopped", "Server stopped", id="stopped"),
+        pytest.param(
+            TrayState("running", "server", update_phase="verifying"),
+            "updating",
+            "Updating…",
+            id="updating",
+        ),
+        pytest.param(
+            TrayState("running", "server", update_phase="rolled_back"),
+            "error",
+            "Update failed",
+            id="failed-update",
+        ),
+        pytest.param(
+            TrayState("conflict", "server"), "error", "Server port is occupied", id="conflict"
+        ),
+        pytest.param(
+            TrayState("not_applicable", "desktop-client"),
+            "normal",
+            "Desktop Client",
+            id="client",
+        ),
+    ],
+)
+def test_icon_and_tooltip_show_the_application_state(state: TrayState, icon: str, status: str):
+    controller = TrayController(Actions(replace(state, version="0.5.0")))
+    controller._poll_state()
+
+    presentation = controller.presentation()
+    assert presentation.icon == icon
+    assert presentation.tooltip.startswith("vBot 0.5.0")
+    assert status in presentation.tooltip
+    assert status in presentation.status.headline
+
+
+def test_status_window_lists_details_progress_and_recovery_actions():
+    actions = Actions(
+        TrayState(
+            "stopped",
+            "server",
+            version="0.5.0",
+            update_activity=("12:00:00  Checking release",),
+            details=(("Server", "http://127.0.0.1:8420"),),
+            error="Startup failed: port is occupied",
+        )
+    )
+    controller = TrayController(actions)
+    controller._poll_state()
+
+    status = controller.presentation().status
+    assert status.title == "vBot 0.5.0"
+    assert status.failed is True
+    assert status.rows[0] == ("Last error", "Startup failed: port is occupied")
+    assert ("Server", "http://127.0.0.1:8420") in status.rows
+    assert status.activity == ("12:00:00  Checking release",)
+    assert [item.action for item in status.buttons] == [
+        "start_server",
+        "start_update",
+        "open_logs",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        pytest.param(TrayState("running", "server-desktop"), "open_desktop", id="desktop"),
+        pytest.param(TrayState("running", "server"), "open_browser", id="browser"),
+        pytest.param(TrayState("stopped", "server"), "status", id="status"),
+    ],
+)
+def test_left_click_runs_the_primary_action(state: TrayState, expected: str):
+    actions = Actions(state)
+    view = View()
+    controller = TrayController(actions, poll_interval=0.01)
+    controller.attach_view(view)
+    controller._poll_state()
+    controller.start()
+    try:
+        controller.invoke_default()
+        if expected == "status":
+            assert view.status_shown == 1
+        else:
+            _wait_until(lambda: expected in actions.calls)
+    finally:
+        controller.close()
+
+
+def test_clicked_toast_opens_its_session_or_the_status_window():
+    actions = Actions(TrayState("running", "server-desktop"))
+    view = View()
+    controller = TrayController(actions, poll_interval=0.01)
+    controller.attach_view(view)
+    controller._poll_state()
+    controller.start()
+    try:
+        controller.activate_toast(
+            Toast("run:r1", "run_completed", "Coder finished", "Plan", session=("coder", "s1"))
+        )
+        _wait_until(lambda: "open_session:coder:s1" in actions.calls)
+        controller.activate_toast(Toast("server", "server_stopped", "vBot server stopped", ""))
+        assert view.status_shown == 1
+    finally:
+        controller.close()
 
 
 def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
@@ -171,14 +313,14 @@ def test_update_request_disables_duplicate_clicks_until_facade_reports_completio
     controller.start()
     try:
         controller.invoke("start_update")
-        _wait_for_call(actions, "start_update")
+        _wait_until(lambda: "start_update" in actions.calls)
         assert _labels(controller)["Update"].enabled is False
 
         actions.current = replace(actions.current, update_phase="completed")
         controller._poll_state()
         assert _labels(controller)["Update"].enabled is True
         controller.invoke("start_update")
-        _wait_for_call_count(actions, "start_update", 2)
+        _wait_until(lambda: actions.calls.count("start_update") == 2)
     finally:
         controller.close()
 
@@ -210,212 +352,204 @@ def test_facade_startup_error_is_visible_without_removing_recovery_actions():
     assert menu["Application logs"].enabled is True
 
 
-def test_unchanged_poll_does_not_replace_the_native_menu(monkeypatch):
-    class Icon:
-        menu = None
-        updates = 0
-
-        def update_menu(self) -> None:
-            self.updates += 1
-
+def test_unchanged_poll_does_not_present_again():
     actions = Actions(TrayState("running", "server", version="0.4.2"))
     controller = TrayController(actions)
-    icon = Icon()
-    monkeypatch.setattr("cli.application.tray._native_menu", lambda *_args, **_kwargs: object())
-    controller.attach_icon(icon)
-    initial_updates = icon.updates
+    view = View()
+    controller.attach_view(view)
+    initial = len(view.presented)
 
     controller._poll_state()
     controller._poll_state()
 
-    assert icon.updates == initial_updates + 1
+    assert len(view.presented) == initial + 1
 
 
-def test_windows_menu_metrics_scale_for_per_monitor_dpi():
-    if os.name != "nt":
-        return
-    from cli.application.windows_tray import _scale
-
-    assert _scale(28, 96) == 28
-    assert _scale(28, 144) == 42
-    assert _scale(28, 192) == 56
-
-
-def test_windows_owner_draw_paints_explicit_dark_hover_background(monkeypatch):
-    if os.name != "nt":
-        return
-    import ctypes
-    from ctypes import wintypes
-
-    from cli.application import windows_tray
-
-    windows_tray._gdi32.CreateCompatibleDC.restype = wintypes.HDC
-    windows_tray._gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
-    windows_tray._gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
-    windows_tray._gdi32.CreateCompatibleBitmap.argtypes = [
-        wintypes.HDC,
-        ctypes.c_int,
-        ctypes.c_int,
-    ]
-    windows_tray._gdi32.GetPixel.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
-    windows_tray._gdi32.DeleteDC.argtypes = [wintypes.HDC]
-
-    icon = object.__new__(windows_tray.WindowsTrayIcon)
-    icon._running = False
-    icon._icon_handle = None
-    icon._labels = {1: "Open Desktop"}
-    icon._menu_hwnd = None
-    icon._hwnd = None
-    icon._dpi = lambda: 96
-    monkeypatch.setattr(windows_tray, "_apps_use_dark_theme", lambda: True)
-    screen = windows_tray._user32.GetDC(None)
-    dc = windows_tray._gdi32.CreateCompatibleDC(screen)
-    bitmap = windows_tray._gdi32.CreateCompatibleBitmap(screen, 240, 32)
-    previous = windows_tray._gdi32.SelectObject(dc, bitmap)
-    draw = windows_tray._DrawItem(
-        itemID=1,
-        itemState=windows_tray._ODS_SELECTED,
-        hDC=dc,
-        rcItem=wintypes.RECT(0, 0, 240, 32),
-    )
-    try:
-        assert icon._on_draw_item(0, ctypes.addressof(draw)) == 1
-        assert windows_tray._gdi32.GetPixel(dc, 12, 12) == 0x00383838
-        assert windows_tray._gdi32.GetPixel(dc, 2, 2) == 0x00202020
-    finally:
-        windows_tray._gdi32.SelectObject(dc, previous)
-        windows_tray._gdi32.DeleteObject(bitmap)
-        windows_tray._gdi32.DeleteDC(dc)
-        windows_tray._user32.ReleaseDC(None, screen)
-
-
-def test_windows_right_click_tracks_exactly_one_popup_and_one_callback(monkeypatch):
-    if os.name != "nt":
-        return
-    from cli.application import windows_tray
-
-    calls: list[str] = []
-    icon = object.__new__(windows_tray.WindowsTrayIcon)
-    icon._running = False
-    icon._icon_handle = None
-    icon._menu_handle = (17, [lambda _icon: calls.append("callback")])
-    icon._hwnd = 23
-    icon._menu_open = False
-    icon._menu_pending = False
-    monkeypatch.setattr(windows_tray._win32.win32, "SetForegroundWindow", lambda _hwnd: None)
-    monkeypatch.setattr(windows_tray._win32.win32, "GetCursorPos", lambda _point: True)
-    monkeypatch.setattr(
-        windows_tray._win32.win32,
-        "TrackPopupMenuEx",
-        lambda *_args: calls.append("popup") or 1,
-    )
-    monkeypatch.setattr(
-        windows_tray._win32.Icon,
-        "_on_notify",
-        lambda *_args: calls.append("base"),
-    )
-
-    assert icon._on_notify(0, windows_tray._win32.win32.WM_RBUTTONUP) is None
-    assert calls == ["popup", "callback"]
-
-
-def test_windows_menu_update_is_deferred_even_on_ui_thread_while_popup_is_open():
-    if os.name != "nt":
-        return
-    from cli.application import windows_tray
-
-    applied: list[bool] = []
-    icon = object.__new__(windows_tray.WindowsTrayIcon)
-    icon._running = False
-    icon._icon_handle = None
-    icon._hwnd = 23
-    icon._thread = threading.current_thread()
-    icon._menu_open = True
-    icon._menu_pending = False
-    icon._apply_menu = lambda: applied.append(True)
-
-    icon._update_menu()
-
-    assert icon._menu_pending is True
-    assert applied == []
-
-
-def test_exit_request_queues_quit_and_stops_the_icon_only_after_success():
-    class Icon:
-        stopped = False
-
-        def stop(self) -> None:
-            self.stopped = True
-
-        def update_menu(self) -> None:
-            pass
-
+def test_exit_request_queues_quit_and_stops_the_view_only_after_success():
     actions = Actions(TrayState("stopped", "server", exit_requested=True))
     controller = TrayController(actions, poll_interval=0.01)
-    icon = Icon()
-    controller.attach_icon(icon)
+    view = View()
+    controller.attach_view(view)
     controller.start()
     try:
-        _wait_for_call(actions, "quit")
-        deadline = time.monotonic() + 2
-        while not icon.stopped and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert icon.stopped is True
+        _wait_until(lambda: "quit" in actions.calls)
+        _wait_until(lambda: view.stopped)
     finally:
         controller.close()
 
 
 def test_busy_external_exit_request_failure_keeps_the_tray_visible():
-    class Icon:
-        stopped = False
-
-        def stop(self) -> None:
-            self.stopped = True
-
-        def update_menu(self) -> None:
-            pass
-
     actions = Actions(TrayState("running", "server", update_phase="preparing", exit_requested=True))
     actions.fail = "quit"
     controller = TrayController(actions, poll_interval=0.05)
-    icon = Icon()
-    controller.attach_icon(icon)
+    view = View()
+    controller.attach_view(view)
     controller.start()
     try:
-        _wait_for_call(actions, "quit")
-        assert icon.stopped is False
+        _wait_until(lambda: "quit" in actions.calls)
+        assert view.stopped is False
         assert _labels(controller)["Quit vBot"].enabled is False
     finally:
         controller.close()
 
 
-def test_quit_stops_the_icon_only_after_the_facade_quits_successfully():
-    class Icon:
-        stopped = False
-
-        def stop(self) -> None:
-            self.stopped = True
-
+def test_quit_stops_the_view_only_after_the_facade_quits_successfully():
     actions = Actions(TrayState("stopped", "server"))
     controller = TrayController(actions, poll_interval=0.01)
-    icon = Icon()
-    controller.attach_icon(icon)
+    view = View()
+    controller.attach_view(view)
     controller._poll_state()
     controller.start()
     try:
         controller.invoke("quit")
-        assert icon.stopped is False
-        _wait_for_call(actions, "quit")
-        deadline = time.monotonic() + 2
-        while not icon.stopped and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert icon.stopped is True
+        _wait_until(lambda: view.stopped)
 
         actions.fail = "quit"
-        icon.stopped = False
+        view.stopped = False
         controller.invoke("quit")
-        _wait_for_call_count(actions, "quit", 2)
+        _wait_until(lambda: actions.calls.count("quit") == 2)
         time.sleep(0.05)
-        assert icon.stopped is False
+        assert view.stopped is False
     finally:
         controller.close()
+
+
+windows = pytest.mark.skipif(os.name != "nt", reason="native Windows tray")
+
+
+class Commands:
+    def __init__(self) -> None:
+        self.calls: list[object] = []
+
+    def invoke(self, action: str) -> None:
+        self.calls.append(action)
+
+    def invoke_default(self) -> None:
+        self.calls.append("default")
+
+    def activate_toast(self, toast: Toast) -> None:
+        self.calls.append(toast)
+
+
+def _tray(commands: Commands, monkeypatch: pytest.MonkeyPatch, tmp_path):
+    from cli.application import windows_tray
+
+    tray = windows_tray.WindowsTray(commands, tmp_path / "icon.ico")
+    tray._hwnd = 23
+    notified: list[tuple[int, str]] = []
+
+    def notify(message, data):
+        notified.append((message, data._obj.szInfo))
+        return True
+
+    monkeypatch.setattr(windows_tray.native.shell32, "Shell_NotifyIconW", notify)
+    monkeypatch.setattr(windows_tray.WindowsTray, "_icon", lambda *_args: 0)
+    return tray, notified
+
+
+@windows
+def test_windows_menu_metrics_scale_for_per_monitor_dpi():
+    from cli.application.windows_native import scale
+
+    assert scale(28, 96) == 28
+    assert scale(28, 144) == 42
+    assert scale(28, 192) == 56
+
+
+@windows
+def test_windows_owner_draw_paints_explicit_dark_hover_background():
+    from ctypes import wintypes
+
+    from cli.application import windows_native as native
+    from cli.application.tray import TrayMenuItem
+    from cli.application.windows_tray import paint_menu_item
+
+    screen = native.user32.GetDC(None)
+    dc = native.gdi32.CreateCompatibleDC(screen)
+    bitmap = native.gdi32.CreateCompatibleBitmap(screen, 240, 32)
+    previous = native.gdi32.SelectObject(dc, bitmap)
+    draw = native.DRAWITEMSTRUCT(itemState=0x1, hDC=dc, rcItem=wintypes.RECT(0, 0, 240, 32))
+    try:
+        paint_menu_item(draw, TrayMenuItem("Open Desktop", "open_desktop"), 96, native.DARK)
+        assert native.gdi32.GetPixel(dc, 12, 12) == 0x00383838
+        assert native.gdi32.GetPixel(dc, 2, 2) == 0x00202020
+    finally:
+        native.gdi32.SelectObject(dc, previous)
+        native.gdi32.DeleteObject(bitmap)
+        native.gdi32.DeleteDC(dc)
+        native.user32.ReleaseDC(None, screen)
+
+
+@windows
+def test_windows_right_click_sets_an_arrow_cursor_and_runs_one_chosen_action(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    from cli.application import windows_tray
+    from cli.application.tray import TrayMenuItem, TrayStatus
+
+    commands = Commands()
+    tray, _notified = _tray(commands, monkeypatch, tmp_path)
+    menu = (TrayMenuItem("vBot\nServer running"), TrayMenuItem("Status…", "show_status"))
+    tray._presentation = TrayPresentation(
+        "normal", "vBot", menu, TrayStatus("vBot", "", False, (), (), ())
+    )
+    order: list[str] = []
+    user32 = windows_tray.native.user32
+    for name in ("SetWindowPos", "SetForegroundWindow", "PostMessageW", "AllowSetForegroundWindow"):
+        monkeypatch.setattr(user32, name, lambda *_args: True)
+    monkeypatch.setattr(user32, "SetCursor", lambda _cursor: order.append("cursor"))
+
+    def popup(*_args: object) -> int:
+        order.append("popup")
+        return 2
+
+    monkeypatch.setattr(user32, "TrackPopupMenuEx", popup)
+
+    tray._on_tray(windows_tray.native.WM_CONTEXTMENU, 100 | (200 << 16))
+
+    assert order == ["cursor", "popup"]
+    assert commands.calls == ["show_status"]
+    assert tray._menu_open is False
+
+
+@windows
+def test_windows_toast_click_opens_it_and_switching_to_desktop_dismisses_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    from cli.application import windows_tray
+
+    commands = Commands()
+    tray, notified = _tray(commands, monkeypatch, tmp_path)
+    monkeypatch.setattr(windows_tray.native.user32, "SetWinEventHook", lambda *_args: 7)
+    monkeypatch.setattr(windows_tray.native.user32, "UnhookWinEvent", lambda _hook: True)
+    monkeypatch.setattr(windows_tray.native.user32, "AllowSetForegroundWindow", lambda _v: True)
+    toast = Toast("run:r1", "run_completed", "Coder finished", "Plan", session=("coder", "s1"))
+
+    tray._show_toast(toast)
+    tray._on_tray(0x405, 0)  # NIN_BALLOONUSERCLICK
+    assert commands.calls == [toast]
+
+    executable = {"name": "explorer.exe"}
+    monkeypatch.setattr(windows_tray, "_executable_name", lambda _hwnd: executable["name"])
+    tray._show_toast(toast)
+    tray._on_foreground(7, 3, 99, 0, 0, 0, 0)
+    assert tray._toast is toast
+    executable["name"] = "vbot.desktop.exe"
+    tray._on_foreground(7, 3, 99, 0, 0, 0, 0)
+    assert tray._toast is None
+    assert notified[-1] == (1, "")  # NIM_MODIFY with empty text removes the toast
+
+
+@windows
+@pytest.mark.parametrize("state", ["stopped", "updating", "error"])
+def test_windows_icon_badges_the_state_and_keeps_the_normal_logo(state: str):
+    from PIL import Image
+
+    from cli.application.windows_tray import render_icon
+
+    base = Image.new("RGBA", (64, 64), (255, 255, 255, 255))
+    normal = render_icon(base, "normal", 32)
+    badged = render_icon(base, state, 32)
+    assert normal.getpixel((28, 28)) == (255, 255, 255, 255)
+    assert badged.getpixel((28, 28))[:3] != (255, 255, 255)
+    assert badged.getpixel((4, 4)) == (255, 255, 255, 255)
