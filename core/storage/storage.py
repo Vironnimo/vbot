@@ -44,6 +44,7 @@ from core.settings.normalizers import (
     normalize_extensions_settings,
     normalize_local_models_settings,
     normalize_model_task_settings,
+    normalize_notification_settings,
     normalize_providers_settings,
     normalize_recall_settings,
     normalize_reflection_settings,
@@ -482,6 +483,11 @@ class StorageManager:
                     settings,
                     settings_update["session_titles"],
                 )
+            if "notifications" in settings_update:
+                updated_sections["notifications"] = settings_updates.apply_notification_settings(
+                    settings,
+                    settings_update["notifications"],
+                )
             return dict(updated_sections)
 
         return self.update_settings(apply_update)
@@ -671,6 +677,11 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_reflection_settings(settings.get("reflection"))
+
+    def load_notification_settings(self) -> dict[str, bool]:
+        """Return all persisted desktop-notification switches."""
+
+        return normalize_notification_settings(self.load_settings().get("notifications"))
 
     def load_web_fetch_settings(self) -> dict[str, Any]:
         return normalize_web_fetch_settings(self.load_settings().get("web_fetch"))

@@ -14,6 +14,7 @@ from core.settings.normalizers import (
     REFLECTION_SETTING_DEFAULTS,
     normalize_appearance_settings,
     normalize_compaction_settings,
+    normalize_notification_settings,
     normalize_reflection_settings,
 )
 from core.utils.errors import StorageError
@@ -81,6 +82,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "context_windows": {"ollama/ministral-3:8b": 16384, "ollama/old:1b": None}
             },
             "server": {"keep_awake": True, "timezone": "Europe/Berlin"},
+            "notifications": {"run_completed": False, "server_stopped": True},
         }
     )
 
@@ -143,6 +145,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             "context_windows": {"ollama/ministral-3:8b": 16384, "ollama/old:1b": None}
         },
         "server": {"keep_awake": True, "timezone": "Europe/Berlin"},
+        "notifications": {"run_completed": False, "server_stopped": True},
     }
 
 
@@ -170,6 +173,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         pytest.param({"reflection": {}}, None, id="empty-reflection"),
         pytest.param({"reflection": {"memory_turn_interval": 3}}, None, id="one-interval"),
         pytest.param({"server": {}}, None, id="empty-server"),
+        pytest.param({"notifications": {}}, None, id="empty-notifications"),
         pytest.param({"local_models": {"context_windows": {}}}, None, id="no-context-windows"),
         # The extensions section is a full replacement.
         pytest.param(
@@ -450,6 +454,12 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
         ({"server": []}, "params.server must be an object"),
         ({"server": {"extra_key": 1}}, "unsupported server settings: extra_key"),
         ({"server": {"keep_awake": "yes"}}, "params.server.keep_awake must be a boolean"),
+        ({"notifications": []}, "params.notifications must be an object"),
+        ({"notifications": {"sound": True}}, "unsupported notifications settings: sound"),
+        (
+            {"notifications": {"run_failed": "no"}},
+            "params.notifications.run_failed must be a boolean",
+        ),
         (
             {"server": {"timezone": "Berlin"}},
             "params.server.timezone is not a known IANA timezone",
@@ -509,6 +519,11 @@ def test_stored_reflection_section_fills_defaults(
             normalize_reflection_settings,
             {"memory_turn_interval": 0},
             "memory_turn_interval must be positive",
+        ),
+        (
+            normalize_notification_settings,
+            {"update_result": 1},
+            "Notification setting update_result must be a boolean",
         ),
         (
             normalize_compaction_settings,

@@ -169,7 +169,12 @@ describe('SettingsView', () => {
         'System',
       ]);
       const expectedSections = {
-        general: ['appearance', 'session_titles', 'preferences'],
+        general: [
+          'appearance',
+          'session_titles',
+          'preferences',
+          'notifications',
+        ],
         voice: ['speech_models', 'live_voice_model', 'voice_controls'],
         memory: ['recall', 'embedding_model', 'reflection'],
         tools: [

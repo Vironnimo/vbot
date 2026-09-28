@@ -21,6 +21,7 @@ from core.settings.normalizers import (
     normalize_json_object,
     normalize_local_models_settings,
     normalize_model_task_settings,
+    normalize_notification_settings,
     normalize_providers_settings,
     normalize_recall_settings,
     normalize_reflection_settings,
@@ -199,6 +200,25 @@ def apply_reflection_settings(
     )
     settings["reflection"] = normalized_reflection
     return dict(normalized_reflection)
+
+
+def apply_notification_settings(
+    settings: dict[str, Any],
+    notifications: Mapping[str, Any],
+) -> dict[str, bool]:
+    """Merge desktop-notification switches into an in-memory settings mapping."""
+
+    if not isinstance(notifications, Mapping):
+        raise StorageError("Notification settings must be a mapping")
+
+    normalized = normalize_notification_settings(
+        {
+            **normalize_notification_settings(settings.get("notifications")),
+            **dict(notifications),
+        }
+    )
+    settings["notifications"] = normalized
+    return dict(normalized)
 
 
 def apply_extensions_settings(

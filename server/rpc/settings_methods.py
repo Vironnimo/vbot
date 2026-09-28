@@ -668,6 +668,7 @@ async def _settings_response(state: Any) -> JsonObject:
         "speech": speech,
         "model_tasks": model_tasks,
         "session_titles": session_titles,
+        "notifications": runtime.storage.load_notification_settings(),
         "local_models": runtime.storage.load_local_models_settings(),
         "skills": {
             "default_directory": str(runtime.storage.data_dir / "skills"),

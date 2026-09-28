@@ -96,6 +96,11 @@ def test_atomic_patch_sets_multiple_nested_values() -> None:
             "web_search.provider must be one of",
             id="invalid-value",
         ),
+        pytest.param(
+            [{"op": "set", "path": "notifications.run_failed", "value": "yes"}],
+            "notifications.run_failed must be boolean",
+            id="non-boolean-switch",
+        ),
         # An unhashable operation name must not crash the set lookup.
         pytest.param(
             [{"op": [], "path": "server.port", "value": 8420}],
@@ -479,6 +484,7 @@ def test_catalog_contains_static_and_dynamic_public_paths() -> None:
     assert "server.timezone" in paths
     assert "web_search.provider" in paths
     assert "speech.transcription_audio.profile" in paths
+    assert "notifications.automation_failed" in paths
     assert 'local_models.context_windows["<model>"]' in paths
     assert 'extensions.config["<extension>"]["<field>"]' in paths
     assert 'model_tasks["<task>"].options["<option_path>"]...' in paths

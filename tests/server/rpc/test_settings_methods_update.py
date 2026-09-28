@@ -176,6 +176,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         reflection={"enabled": True, "memory_turn_interval": 5},
         web_search={"provider": "searxng", "searxng": {"base_url": "http://localhost:9999"}},
         session_titles={"enabled": True, "model": "openai/gpt-4.1-mini::api-key"},
+        notifications={"run_completed": False},
         providers={"openrouter": {"routing": _OPENROUTER_ROUTING}},
         server={"keep_awake": True, "timezone": "America/New_York"},
     )
@@ -210,6 +211,13 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         "searxng": {"base_url": "http://localhost:9999"},
     }
     assert result["session_titles"] == {"enabled": True, "model": "openai/gpt-4.1-mini::api-key"}
+    assert result["notifications"] == {
+        "run_completed": False,
+        "run_failed": True,
+        "automation_failed": True,
+        "update_result": True,
+        "server_stopped": True,
+    }
     openrouter = next(item for item in result["providers"]["items"] if item["id"] == "openrouter")
     assert openrouter["routing"] == _OPENROUTER_ROUTING
 

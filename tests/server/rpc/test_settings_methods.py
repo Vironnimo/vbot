@@ -320,6 +320,13 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         },
         "model_tasks": {},
         "session_titles": {"enabled": False, "model": ""},
+        "notifications": {
+            "run_completed": True,
+            "run_failed": True,
+            "automation_failed": True,
+            "update_result": True,
+            "server_stopped": True,
+        },
         "local_models": {"context_windows": {}},
         "skills": {
             "default_directory": str(tmp_path / "skills"),

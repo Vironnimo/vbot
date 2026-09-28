@@ -34,6 +34,7 @@ from core.settings.normalizers import (
     DEFAULT_APPEARANCE_LANGUAGE,
     DEFAULT_RECALL_SETTINGS,
     DEFAULT_SESSION_TITLE_SETTINGS,
+    NOTIFICATION_SETTING_DEFAULTS,
     REFLECTION_SETTING_DEFAULTS,
     SUPPORTED_APPEARANCE_LANGUAGES,
 )
@@ -366,6 +367,35 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "string",
         "Optional Model binding used to generate Session titles.",
         default=DEFAULT_SESSION_TITLE_SETTINGS["model"],
+    ),
+    *(
+        _static(
+            f"notifications.{field}",
+            "boolean",
+            description,
+            default=NOTIFICATION_SETTING_DEFAULTS[field],
+        )
+        for field, description in (
+            (
+                "run_completed",
+                "Windows notification from the vBot tray when an Agent Run finishes.",
+            ),
+            ("run_failed", "Windows notification from the vBot tray when an Agent Run fails."),
+            (
+                "automation_failed",
+                "Windows notification from the vBot tray when a Cron job or Calendar action fails.",
+            ),
+            (
+                "update_result",
+                "Windows notification from the vBot tray when an application update "
+                "finishes or fails.",
+            ),
+            (
+                "server_stopped",
+                "Windows notification from the vBot tray when the local vBot server stops "
+                "unexpectedly.",
+            ),
+        )
     ),
     _static(
         "extensions.disabled",

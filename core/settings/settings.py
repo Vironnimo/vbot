@@ -99,7 +99,17 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "local_models",
         "session_titles",
         "speech",
+        "notifications",
     }
+)
+# Desktop notification kinds the Windows tray application shows. Each field is
+# an independent boolean switch; defaults live in ``normalizers.py``.
+NOTIFICATION_FIELDS = (
+    "run_completed",
+    "run_failed",
+    "automation_failed",
+    "update_result",
+    "server_stopped",
 )
 OPENROUTER_ROUTING_MODES = frozenset({"automatic", "allowed", "ordered"})
 OPENROUTER_ROUTING_FIELDS = frozenset({"default", "models"})
@@ -219,7 +229,32 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "speech" in params:
         parsed_update["speech"] = _parse_speech_update(params["speech"])
 
+    if "notifications" in params:
+        parsed_update["notifications"] = _parse_notifications_update(params["notifications"])
+
     return parsed_update
+
+
+def _parse_notifications_update(notifications: Any) -> JsonObject:
+    """Parse the desktop-notification switches (sparse update, like reflection)."""
+    if not isinstance(notifications, dict):
+        raise SettingsValidationError("params.notifications must be an object")
+
+    unsupported_fields = sorted(set(notifications) - set(NOTIFICATION_FIELDS))
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported notifications settings: {', '.join(unsupported_fields)}"
+        )
+
+    parsed: JsonObject = {}
+    for field in NOTIFICATION_FIELDS:
+        if field not in notifications:
+            continue
+        enabled = notifications[field]
+        if not isinstance(enabled, bool):
+            raise SettingsValidationError(f"params.notifications.{field} must be a boolean")
+        parsed[field] = enabled
+    return parsed
 
 
 def _parse_speech_update(speech: Any) -> JsonObject:
