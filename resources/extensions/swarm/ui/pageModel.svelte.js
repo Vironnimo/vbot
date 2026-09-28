@@ -10,8 +10,12 @@ import {
 import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
 import { onMount, tick } from 'svelte';
 import { createExtensionPageClient } from '$lib/extensionPageClient.js';
-import { createPageRefresh } from './pageRefresh.js';
+import { createPageRefresh, swarmChanged } from './pageRefresh.js';
 import { referenceLinks } from './referenceLinks.js';
+
+// Background changes reload the Usage report at most this often; the last
+// change of a burst is always followed by a reload.
+const USAGE_REFRESH_INTERVAL_MS = 10_000;
 
 export function createSwarmPageModel(host) {
   let client = $state(null);
@@ -94,6 +98,12 @@ export function createSwarmPageModel(host) {
 
   let overviewRequest = 0;
 
+  let changesRequest = 0;
+
+  let profilesRequest = 0;
+
+  let swarmsRequest = 0;
+
   let boardRequest = 0;
 
   let discussionsRequest = 0;
@@ -101,6 +111,14 @@ export function createSwarmPageModel(host) {
   let usageRequest = 0;
 
   let usageFlight = null;
+
+  // Counts background changes of the selected Swarm; an in-flight Usage
+  // request is shared only while no change has arrived since it started.
+  let usageChanges = 0;
+
+  let usageStartedAt = -Infinity;
+
+  let usageTimer = null;
 
   let usageLoading = $state(false);
 
@@ -113,7 +131,7 @@ export function createSwarmPageModel(host) {
 
   let disposed = false;
 
-  const backgroundRefresh = createPageRefresh(() => refresh());
+  const backgroundRefresh = createPageRefresh(refreshChanges);
 
   function navigate(action) {
     if (profileEditor) return profileEditor.requestTransition(action);
@@ -283,48 +301,31 @@ export function createSwarmPageModel(host) {
       );
   }
 
-  async function refresh({ keepSelection = true } = {}) {
+  // Posts never change; a Wiki page's title and text can.
+  function forgetPageReferences() {
+    for (const key of references.keys())
+      if (key.startsWith('page:')) references.delete(key);
+  }
+
+  // Reloads everything the page shows. `background` marks a refresh no user
+  // action asked for, which reloads a visible Usage report at most every
+  // USAGE_REFRESH_INTERVAL_MS.
+  async function refresh({ background = false } = {}) {
     const request = ++overviewRequest;
     const selection = selectionRequest;
     // Invalidation must not unmount an active form or Run inspection.
     loading = loading && !editor;
-    // Posts never change; a Wiki page's title and text can.
-    for (const key of references.keys())
-      if (key.startsWith('page:')) references.delete(key);
+    forgetPageReferences();
     error = '';
     try {
-      const [nextProfiles, nextSwarms] = await Promise.all([
-        call('profiles.list', { limit: 100 }),
-        call('swarms.list', { limit: 100 }),
-      ]);
+      await Promise.all([loadProfiles(), loadSwarms()]);
       if (disposed || request !== overviewRequest) return;
-      profiles = page(nextProfiles);
-      swarms = page(nextSwarms);
-      profilesCursor = nextProfiles.cursor ?? null;
-      swarmsCursor = nextSwarms.cursor ?? null;
-      const previousProfile = selectedProfile;
-      if (!keepSelection || !selectedProfile)
-        selectedProfile = profiles[0] ?? null;
-      if (selectedProfile)
-        selectedProfile =
-          profiles.find((item) => item.id === selectedProfile.id) ??
-          profiles[0] ??
-          null;
-      if (
-        previousProfile?.id !== selectedProfile?.id ||
-        (!editor &&
-          !selectedSwarm &&
-          runDirectory === defaultDirectory &&
-          JSON.stringify(previousProfile?.working_directory) !==
-            JSON.stringify(selectedProfile?.working_directory))
-      )
-        void selectRunProfile(selectedProfile);
       if (
         selection === selectionRequest &&
         selectedSwarm &&
         pending !== 'delete'
       )
-        await selectSwarm(selectedSwarm.id, { silent: true });
+        await selectSwarm(selectedSwarm.id, { silent: true, background });
     } catch (cause) {
       if (disposed || request !== overviewRequest) return;
       error = cause.message ?? t('swarm.loadError');
@@ -333,7 +334,73 @@ export function createSwarmPageModel(host) {
     }
   }
 
-  async function selectSwarm(id, { silent = false } = {}) {
+  // Reloads what a coalesced burst of invalidations can affect: profiles for
+  // `profiles`, the Run list for any Swarm, and the selected Swarm with its
+  // visible tab when it is among them. Everything else refreshes the page.
+  async function refreshChanges(changes) {
+    if (
+      changes === null ||
+      [...changes.keys()].some(
+        (resource) => resource !== 'swarms' && resource !== 'profiles',
+      )
+    )
+      return refresh({ background: true });
+    const request = ++changesRequest;
+    const selected =
+      selectedSwarm &&
+      pending !== 'delete' &&
+      swarmChanged(changes, selectedSwarm.id)
+        ? selectedSwarm
+        : null;
+    if (selected) forgetPageReferences();
+    error = '';
+    try {
+      await Promise.all([
+        changes.has('profiles') ? loadProfiles() : null,
+        changes.has('swarms') ? loadSwarms() : null,
+        selected
+          ? selectSwarm(selected.id, { silent: true, background: true })
+          : null,
+      ]);
+    } catch (cause) {
+      if (disposed || request !== changesRequest) return;
+      error = cause.message ?? t('swarm.loadError');
+    }
+  }
+
+  async function loadProfiles() {
+    const request = ++profilesRequest;
+    const result = await call('profiles.list', { limit: 100 });
+    if (disposed || request !== profilesRequest) return;
+    profiles = page(result);
+    profilesCursor = result.cursor ?? null;
+    const previousProfile = selectedProfile;
+    if (!selectedProfile) selectedProfile = profiles[0] ?? null;
+    if (selectedProfile)
+      selectedProfile =
+        profiles.find((item) => item.id === selectedProfile.id) ??
+        profiles[0] ??
+        null;
+    if (
+      previousProfile?.id !== selectedProfile?.id ||
+      (!editor &&
+        !selectedSwarm &&
+        runDirectory === defaultDirectory &&
+        JSON.stringify(previousProfile?.working_directory) !==
+          JSON.stringify(selectedProfile?.working_directory))
+    )
+      void selectRunProfile(selectedProfile);
+  }
+
+  async function loadSwarms() {
+    const request = ++swarmsRequest;
+    const result = await call('swarms.list', { limit: 100 });
+    if (disposed || request !== swarmsRequest) return;
+    swarms = page(result);
+    swarmsCursor = result.cursor ?? null;
+  }
+
+  async function selectSwarm(id, { silent = false, background = false } = {}) {
     const request = ++selectionRequest;
     if (!silent) {
       error = '';
@@ -366,20 +433,25 @@ export function createSwarmPageModel(host) {
       if (!disposed && request === selectionRequest && !silent)
         await client.replaceRoute(`/swarms/${id}`);
       if (disposed || request !== selectionRequest) return;
-      await loadVisibleTab(swarm);
+      await loadVisibleTab(swarm, { background });
     } catch (cause) {
       if (!disposed && request === selectionRequest) error = cause.message;
     }
   }
 
-  async function loadVisibleTab(swarm = selectedSwarm) {
+  async function loadVisibleTab(
+    swarm = selectedSwarm,
+    { background = false } = {},
+  ) {
     if (!swarm) return;
+    if (background) usageChanges += 1;
     if (activeTab === 'board')
       await Promise.all([
         loadDiscussions(swarm),
         loadBoard(swarm, selectedDiscussion),
       ]);
-    else if (activeTab === 'usage') await loadUsage(swarm);
+    else if (activeTab === 'usage')
+      await (background ? scheduleUsage(swarm) : loadUsage(swarm));
   }
 
   async function loadMoreProfiles() {
@@ -478,16 +550,37 @@ export function createSwarmPageModel(host) {
     }
   }
 
+  // A background change reloads Usage at once when the last request is old
+  // enough, otherwise when USAGE_REFRESH_INTERVAL_MS since it have passed.
+  function scheduleUsage(swarm) {
+    const wait = usageStartedAt + USAGE_REFRESH_INTERVAL_MS - Date.now();
+    if (wait <= 0) return loadUsage(swarm);
+    usageTimer ??= setTimeout(() => {
+      usageTimer = null;
+      if (disposed || activeTab !== 'usage' || !selectedSwarm) return;
+      void loadUsage(selectedSwarm).catch((cause) => {
+        if (!disposed) error = cause.message;
+      });
+    }, wait);
+  }
+
   async function loadUsage(swarm = selectedSwarm) {
     if (!swarm) return;
+    clearTimeout(usageTimer);
+    usageTimer = null;
     const request = ++usageRequest;
     usageLoading = true;
-    if (usageFlight?.swarmId !== swarm.id) {
+    if (
+      usageFlight?.swarmId !== swarm.id ||
+      usageFlight.changes !== usageChanges
+    ) {
       const flight = {
         swarmId: swarm.id,
+        changes: usageChanges,
         promise: call('swarms.usage', { swarm_id: swarm.id }),
       };
       usageFlight = flight;
+      usageStartedAt = Date.now();
     }
     const flight = usageFlight;
     try {
@@ -969,10 +1062,13 @@ export function createSwarmPageModel(host) {
         void backgroundRefresh.run();
       } else if (next.route !== previousRoute) routeSelection(next.route);
     });
-    const offInvalidation = client.onInvalidation(backgroundRefresh.schedule);
+    const offInvalidation = client.onInvalidation((invalidation) =>
+      backgroundRefresh.schedule(invalidation?.change ?? null),
+    );
     return () => {
       disposed = true;
       backgroundRefresh.destroy();
+      clearTimeout(usageTimer);
       selectionRequest += 1;
       host.activity.destroy();
       clearTimeout(startupTimeout);

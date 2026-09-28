@@ -223,8 +223,10 @@ function createBridge(initialProfile = profile, detail = swarm) {
       get autosave() {
         return autosaveParticipant;
       },
-      invalidate() {
-        for (const listener of invalidationListeners) listener();
+      // `change` is the Extension's `{resource, ids, revision}`, if any.
+      invalidate(change = null) {
+        for (const listener of invalidationListeners)
+          listener({ reason: null, change });
       },
       openLink: (url) => operation('link.open', { url }),
       openMedia: (url) => operation('media.open', { url }),

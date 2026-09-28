@@ -1,6 +1,7 @@
 """Swarm management operations: catalog, snapshots, resume and delete."""
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -67,6 +68,10 @@ async def test_swarm_get_projects_canonical_run_activity(board, monkeypatch):
 @pytest.mark.asyncio
 async def test_management_profiles_and_swarm_snapshots_are_owner_operations(board):
     operations = board.service.api.operations
+    changes = []
+    board.service.host = replace(
+        board.service.host, publish_change=lambda *args: changes.append(args)
+    )
     profiles = await operations.invoke("profiles.list", {})
     assert profiles["entries"][0]["slug"] == "fixture"
 
@@ -106,6 +111,18 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
     assert discussions["entries"][0]["id"] == board.swarm["main_discussion_id"]
     page = await operations.invoke("board.read", {"swarm_id": board.swarm["id"]})
     assert page["entries"][-1]["text"] == "operator note"
+    saved = await operations.invoke(
+        "profiles.save", {"profile": profile["profile"], "expected_revision": 1}
+    )
+    await operations.invoke(
+        "profiles.delete",
+        {"profile_id": saved["profile"]["id"], "expected_revision": saved["profile"]["revision"]},
+    )
+    # Each mutation names the changed record, so the page reloads only what shows it.
+    assert {(resource, tuple(ids)) for resource, ids, _revision in changes} == {
+        ("swarms", (board.swarm["id"],)),
+        ("profiles", (saved["profile"]["id"],)),
+    }
 
 
 @pytest.mark.asyncio

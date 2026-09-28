@@ -393,9 +393,15 @@ class SwarmExtension:
             self._changed(sid, swarm["settings_revision"])
         return data
 
+    # The open page reloads only what shows the changed record: a Swarm
+    # (``swarms``) or a profile (``profiles``).
     def _changed(self, swarm_id: str, revision: int) -> None:
         if self.host is not None and self.host.publish_change is not None:
             self.host.publish_change("swarms", [swarm_id], revision)
+
+    def _profile_changed(self, profile_id: str, revision: int) -> None:
+        if self.host is not None and self.host.publish_change is not None:
+            self.host.publish_change("profiles", [profile_id], revision)
 
     async def operation(self, name: str, arguments: Json) -> Json:
         """Run a management operation without exposing runtime services to the page."""
@@ -498,7 +504,7 @@ class SwarmExtension:
         if expected is not None and type(expected) is not int:
             raise SwarmStoreError("invalid_arguments", field="expected_revision")
         saved = await self._store().save_profile(profile, expected_revision=expected)
-        self._changed("profiles", saved["revision"])
+        self._profile_changed(saved["id"], saved["revision"])
         return {"profile": saved}
 
     async def _profiles_delete(self, arguments: Json) -> Json:
@@ -506,7 +512,7 @@ class SwarmExtension:
         profile_id = _string(arguments, "profile_id")
         revision = _integer(arguments, "expected_revision", minimum=1)
         await self._store().delete_profile(profile_id, expected_revision=revision)
-        self._changed("profiles", revision)
+        self._profile_changed(profile_id, revision)
         return {"profile_id": profile_id, "deleted": True}
 
     async def _swarms_list(self, arguments: Json) -> Json:
