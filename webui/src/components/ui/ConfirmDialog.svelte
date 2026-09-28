@@ -24,7 +24,7 @@
     // inside the dialog body, after the message.
     bodyExtra,
     confirmLabel,
-    cancelLabel = t('common.cancel', 'Cancel'),
+    cancelLabel = t('common.cancel'),
     danger = true,
     onConfirm = noop,
     onCancel = noop,

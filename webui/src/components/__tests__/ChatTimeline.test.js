@@ -96,7 +96,7 @@ describe('ChatTimeline messages', () => {
 
     const errorMessage = document.querySelector('.msg.error');
     expect(errorMessage.textContent).toContain(
-      t('chat.role.error', 'Error').toUpperCase(),
+      t('chat.role.error').toUpperCase(),
     );
     expect(errorMessage.textContent).toContain('Provider rate limit exceeded');
   });
@@ -144,7 +144,7 @@ describe('ChatTimeline messages', () => {
       );
       expect(image.getAttribute('alt')).toBe('diagram.png');
       expect(document.querySelector('.attachment-name').textContent).toBe(
-        t('chat.attachment.imageReference', 'Image {number}', { number: 1 }),
+        t('chat.attachment.imageReference', { number: 1 }),
       );
       expect(
         document.querySelector('.inline-attachment').getAttribute('href'),
@@ -467,7 +467,7 @@ describe('ChatTimeline messages', () => {
       ).toBe('Comparing options');
       expect(
         document.querySelector('.reasoning-summary__count').textContent,
-      ).toBe(t('chat.reasoning.sections', '', { count: 2 }));
+      ).toBe(t('chat.reasoning.sections', { count: 2 }));
       expect(document.querySelector('.reasoning-duration')).toBeNull();
 
       const message = {
@@ -557,7 +557,7 @@ describe('ChatTimeline messages', () => {
 
   describe('Compaction', () => {
     const compactedLabel = () =>
-      t('chat.compactedWithTokens', '', { before: '250k', after: '30k' });
+      t('chat.compactedWithTokens', { before: '250k', after: '30k' });
 
     it('renders a live Compaction divider between its surrounding Run output', () => {
       const summaryText =

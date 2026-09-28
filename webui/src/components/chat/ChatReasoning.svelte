@@ -26,10 +26,10 @@
   );
   const label = $derived(
     isSummary
-      ? t('chat.reasoning.summary', 'Reasoning summary')
+      ? t('chat.reasoning.summary')
       : working
-        ? t('chat.reasoning.active', 'thinking...')
-        : t('chat.reasoning.done', 'thought'),
+        ? t('chat.reasoning.active')
+        : t('chat.reasoning.done'),
   );
   const copyText = $derived(
     reasoningMarkdownSource(isSummary ? sections.join('\n\n') : source),
@@ -56,7 +56,7 @@
     {#if title}<span class="reasoning-summary__title">{title}</span>{/if}
     {#if isSummary && sections.length > 1}
       <span class="reasoning-summary__count"
-        >{t('chat.reasoning.sections', '{count} sections', {
+        >{t('chat.reasoning.sections', {
           count: sections.length,
         })}</span
       >
@@ -80,11 +80,11 @@
         text={copyText}
         class="chat-copy-action reasoning-copy"
         label={isSummary
-          ? t('chat.reasoning.copySummary', 'Copy reasoning summary')
-          : t('chat.copyReasoning', 'Copy thinking')}
+          ? t('chat.reasoning.copySummary')
+          : t('chat.copyReasoning')}
         copiedLabel={isSummary
-          ? t('chat.reasoning.summaryCopied', 'Summary copied')
-          : t('chat.reasoningCopied', 'Thinking copied')}
+          ? t('chat.reasoning.summaryCopied')
+          : t('chat.reasoningCopied')}
       />
     </div>
     {#if isSummary}

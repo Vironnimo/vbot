@@ -106,11 +106,8 @@ export const subAgentToolStatusLabel = (
   if (dotStatus === 'cancelled') {
     const duration = formatDurationMs(
       subAgentRunDurationMs(tool, subAgentStatuses),
-      'chat.toolDurationSeconds',
     );
-    return [t('chat.toolCancelled', 'cancelled'), duration]
-      .filter(Boolean)
-      .join(' · ');
+    return [t('chat.toolCancelled'), duration].filter(Boolean).join(' · ');
   }
   if (dotStatus === 'running') {
     return formatDurationMs(
@@ -118,13 +115,12 @@ export const subAgentToolStatusLabel = (
         subAgentRunStartedAt(tool, subAgentStatuses),
         nowMs,
       ),
-      'chat.toolDurationSeconds',
     );
   }
 
   const childDurationMs = subAgentRunDurationMs(tool, subAgentStatuses);
   if (childDurationMs !== null) {
-    return formatDurationMs(childDurationMs, 'chat.toolDurationSeconds');
+    return formatDurationMs(childDurationMs);
   }
 
   // A background spawn carries no inline result, so its own duration is just
@@ -135,7 +131,7 @@ export const subAgentToolStatusLabel = (
   ) {
     return '';
   }
-  return formatDurationMs(toolDurationMs(tool), 'chat.toolDurationSeconds');
+  return formatDurationMs(toolDurationMs(tool));
 };
 
 export const isSubAgentSpawnTool = (tool) => {
@@ -189,7 +185,7 @@ const subAgentSessionId = (tool) => {
 };
 
 export const subAgentAgentId = (tool) => {
-  return subAgentTargetAddress(tool) || t('common.unknown', 'Unknown');
+  return subAgentTargetAddress(tool) || t('common.unknown');
 };
 
 // The child's outside address. Current results carry `agent@projekt` in

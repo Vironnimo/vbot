@@ -134,7 +134,7 @@
 
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -163,8 +163,7 @@
       buildPayload: () => ({
         reflection: getReflectionSettings({ reflection: reflectionSettings }),
       }),
-      successKey: 'settings.reflection.saveSuccess',
-      successFallback: 'Reflection settings updated.',
+      successTitle: t('settings.reflection.saveSuccess'),
       getDraftSnapshot: () => reflectionSettings,
       applyResult: (next) => (reflectionSettings = getReflectionSettings(next)),
     });
@@ -175,22 +174,16 @@
   <div class="s-row s-row--compact">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.reflection.enabled', 'Enable background reflection')}
+        {t('settings.reflection.enabled')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.reflection.enabledDescription',
-          'After a run finishes, the agent periodically reviews the conversation in a forked session and saves durable memory and skill updates. The original conversation is never touched.',
-        )}
+        {t('settings.reflection.enabledDescription')}
       </div>
     </div>
     <div class="s-row-control">
       <Toggle
         checked={reflectionSettings.enabled === true}
-        ariaLabel={t(
-          'settings.reflection.enabled',
-          'Enable background reflection',
-        )}
+        ariaLabel={t('settings.reflection.enabled')}
         onChange={(next) => {
           reflectionSettings = {
             ...reflectionSettings,
@@ -205,16 +198,10 @@
   <div class="s-row s-row--compact">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t(
-          'settings.reflection.memoryInterval',
-          'Memory review interval (turns)',
-        )}
+        {t('settings.reflection.memoryInterval')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.reflection.memoryIntervalDescription',
-          'A memory review becomes due after this many of your messages in a conversation.',
-        )}
+        {t('settings.reflection.memoryIntervalDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
@@ -224,10 +211,7 @@
         min="1"
         step="1"
         value={reflectionSettings.memory_turn_interval}
-        ariaLabel={t(
-          'settings.reflection.memoryInterval',
-          'Memory review interval (turns)',
-        )}
+        ariaLabel={t('settings.reflection.memoryInterval')}
         onInput={(next) => handleIntervalInput('memory_turn_interval', next)}
       />
     </div>
@@ -236,16 +220,10 @@
   <div class="s-row s-row--compact">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t(
-          'settings.reflection.skillInterval',
-          'Skill review interval (Iterations)',
-        )}
+        {t('settings.reflection.skillInterval')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.reflection.skillIntervalDescription',
-          'A skill review becomes due after this many completed Model request/response pairs in a conversation.',
-        )}
+        {t('settings.reflection.skillIntervalDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
@@ -255,10 +233,7 @@
         min="1"
         step="1"
         value={reflectionSettings.skill_model_step_interval}
-        ariaLabel={t(
-          'settings.reflection.skillInterval',
-          'Skill review interval (Iterations)',
-        )}
+        ariaLabel={t('settings.reflection.skillInterval')}
         onInput={(next) =>
           handleIntervalInput('skill_model_step_interval', next)}
       />

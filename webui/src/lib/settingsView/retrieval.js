@@ -1,3 +1,4 @@
+import { tOr } from '../i18n.js';
 import { textOrFallback, textOrEmpty } from './values.js';
 
 const RECALL_BACKEND_SQLITE_FTS = 'sqlite_fts';
@@ -70,11 +71,11 @@ export function buildRecallSettingsPayload(formValues) {
   };
 }
 
-export function buildRecallBackendOptions(recallSettings, translate) {
+export function buildRecallBackendOptions(recallSettings) {
   return normalizeRecallBackends(recallSettings?.available_backends).map(
     (backend) => ({
       value: backend,
-      label: translate(`settings.recall.backends.${backend}`, backend),
+      label: tOr(`settings.recall.backends.${backend}`, backend),
     }),
   );
 }
@@ -141,12 +142,12 @@ export function buildWebSearchSettingsPayload(formValues) {
   };
 }
 
-export function buildWebSearchProviderOptions(webSearchSettings, translate) {
+export function buildWebSearchProviderOptions(webSearchSettings) {
   return normalizeWebSearchProviders(
     webSearchSettings?.available_providers,
   ).map((provider) => ({
     value: provider,
-    label: translate(`settings.webSearch.providers.${provider}`, provider),
+    label: tOr(`settings.webSearch.providers.${provider}`, provider),
   }));
 }
 

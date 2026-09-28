@@ -41,8 +41,8 @@
             <CopyButton
               text={part.fullText}
               class="tool-primary-hover-card__copy"
-              label={t('chat.copyToolValue', 'Copy full value')}
-              copiedLabel={t('chat.toolValueCopied', 'Full value copied')}
+              label={t('chat.copyToolValue')}
+              copiedLabel={t('chat.toolValueCopied')}
             />
           </span>
         {/if}</span

@@ -40,7 +40,7 @@
   // "No project" (Personal) plus one option per project, mirroring the chosen
   // project's display name back into the trigger label.
   let projectOptions = $derived([
-    { value: '', label: t('chat.project.none', 'No project selected') },
+    { value: '', label: t('chat.project.none') },
     ...projects.map((project) => ({
       value: project.project_id,
       label: project.display_name || project.project_id,
@@ -94,15 +94,15 @@
   );
   let pickerLabel = $derived(
     selectedEntry
-      ? t('chat.agentPicker.label', 'Select agent ({activity})', {
+      ? t('chat.agentPicker.label', {
           activity: selectedEntry.label,
         })
-      : t('chat.selectAgent', 'Select agent'),
+      : t('chat.selectAgent'),
   );
   let pickerProps = $derived({
     value: selectedAgentId,
     options: agentOptions,
-    placeholder: t('chat.selectAgent', 'Select agent'),
+    placeholder: t('chat.selectAgent'),
     ariaLabel: pickerLabel,
     triggerClass: 'chat-header__agent-picker',
     triggerTooltip: selectedEntry?.tooltip ?? '',
@@ -147,52 +147,43 @@
   function agentActivityLabel(name, status, unreadCount) {
     if (status === 'running') {
       if (unreadCount === 1) {
-        return t(
-          'chat.agentActivity.runningUnreadOne',
-          '{name}: Running, 1 unread result',
-          { name },
-        );
+        return t('chat.agentActivity.runningUnreadOne', { name });
       }
       if (unreadCount > 1) {
-        return t(
-          'chat.agentActivity.runningUnreadCount',
-          '{name}: Running, {count} unread results',
-          { name, count: unreadCount },
-        );
+        return t('chat.agentActivity.runningUnreadCount', {
+          name,
+          count: unreadCount,
+        });
       }
-      return t('chat.agentActivity.running', '{name}: Running', { name });
+      return t('chat.agentActivity.running', { name });
     }
     if (status === 'unread') {
       if (unreadCount === 1) {
-        return t('chat.agentActivity.unreadOne', '{name}: 1 unread result', {
+        return t('chat.agentActivity.unreadOne', {
           name,
         });
       }
       if (unreadCount > 1) {
-        return t(
-          'chat.agentActivity.unreadCount',
-          '{name}: {count} unread results',
-          { name, count: unreadCount },
-        );
+        return t('chat.agentActivity.unreadCount', {
+          name,
+          count: unreadCount,
+        });
       }
-      return t('chat.agentActivity.unread', '{name}: Unread result', { name });
+      return t('chat.agentActivity.unread', { name });
     }
-    return t('chat.agentActivity.idle', '{name}: Idle', { name });
+    return t('chat.agentActivity.idle', { name });
   }
 </script>
 
 <header class="chat-header">
-  <h2 id={titleId} class="chat-title">{t('chat.title', 'Chat')}</h2>
+  <h2 id={titleId} class="chat-title">{t('chat.title')}</h2>
   <div class="agent-switcher">
     {#if showPersonalLabel}
       <span
         class="agent-switcher__personal-label"
-        use:tooltip={t(
-          'chat.personalBarHint',
-          'Your personal agents — available with or without a project.',
-        )}
+        use:tooltip={t('chat.personalBarHint')}
       >
-        {t('chat.personalBarLabel', 'Personal')}
+        {t('chat.personalBarLabel')}
       </span>
     {/if}
     {#if agents.length > 0}
@@ -200,8 +191,8 @@
         <SearchableDropdown
           bind:this={agentPicker}
           {...pickerProps}
-          searchPlaceholder={t('chat.agentPicker.filter', 'Filter agents…')}
-          emptyLabel={t('chat.agentPicker.empty', 'No agents match')}
+          searchPlaceholder={t('chat.agentPicker.filter')}
+          emptyLabel={t('chat.agentPicker.empty')}
         />
       {:else}
         <Dropdown bind:this={agentPicker} {...pickerProps} />
@@ -214,7 +205,7 @@
       />
     {:else}
       <span class="agent-switcher__empty">
-        {t('chat.noAgents', 'No agents are available yet.')}
+        {t('chat.noAgents')}
       </span>
     {/if}
   </div>
@@ -222,7 +213,7 @@
     <Dropdown
       value={selectedProjectId}
       options={projectOptions}
-      ariaLabel={t('chat.project.selectAria', 'Select project')}
+      ariaLabel={t('chat.project.selectAria')}
       triggerClass="chat-header__project-dropdown"
       onValueChange={(next) => onSelectProject(next)}
     />

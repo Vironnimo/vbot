@@ -95,15 +95,11 @@
 
   async function moveAutoLoadEntry(from, to) {
     if (!projectsController.moveAutoLoadEntry(from, to)) return;
-    autoLoadAnnouncement = t(
-      'projects.manage.autoLoadMoved',
-      'Moved {file} to position {position} of {total}',
-      {
-        file: projectsState.editForm.auto_load[to],
-        position: to + 1,
-        total: projectsState.editForm.auto_load.length,
-      },
-    );
+    autoLoadAnnouncement = t('projects.manage.autoLoadMoved', {
+      file: projectsState.editForm.auto_load[to],
+      position: to + 1,
+      total: projectsState.editForm.auto_load.length,
+    });
     await tick();
     autoLoadList?.querySelector(`[data-auto-load-handle="${to}"]`)?.focus();
   }
@@ -119,14 +115,9 @@
   <section class="s-section" aria-labelledby="project-section-auto-load">
     <header class="s-section__head">
       <h3 class="s-section__title" id="project-section-auto-load">
-        {t('projects.detail.sectionAutoLoad', 'Auto-load files')}
+        {t('projects.detail.sectionAutoLoad')}
       </h3>
-      <InfoHint
-        text={t(
-          'projects.detail.autoLoadInfo',
-          'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
-        )}
-      />
+      <InfoHint text={t('projects.detail.autoLoadInfo')} />
     </header>
     <div class="s-section__body">
       <div class="s-group projects-auto-load">
@@ -150,16 +141,12 @@
                   draggable={!projectsState.editSaving}
                   disabled={projectsState.editForm.auto_load.length < 2}
                   data-auto-load-handle={index}
-                  ariaLabel={t(
-                    'projects.manage.autoLoadReorder',
-                    'Reorder {file} (drag or use arrow keys)',
-                    { file: filePath },
-                  )}
-                  tooltip={t(
-                    'projects.manage.autoLoadReorder',
-                    'Reorder {file} (drag or use arrow keys)',
-                    { file: filePath },
-                  )}
+                  ariaLabel={t('projects.manage.autoLoadReorder', {
+                    file: filePath,
+                  })}
+                  tooltip={t('projects.manage.autoLoadReorder', {
+                    file: filePath,
+                  })}
                   ondragstart={(event) => startAutoLoadDrag(index, event)}
                   ondragend={endAutoLoadDrag}
                   onkeydown={(event) => reorderAutoLoadKeydown(index, event)}
@@ -184,11 +171,9 @@
                   type="button"
                   class="projects-file-remove"
                   data-testid={`project-auto-load-remove-${index}`}
-                  aria-label={t(
-                    'projects.manage.autoLoadRemove',
-                    'Remove {file}',
-                    { file: filePath },
-                  )}
+                  aria-label={t('projects.manage.autoLoadRemove', {
+                    file: filePath,
+                  })}
                   onclick={() => removeAutoLoadEntry(index)}
                 >
                   ×
@@ -198,7 +183,7 @@
           </ul>
         {:else}
           <div class="s-group__block s-group__note">
-            {t('projects.manage.autoLoadEmpty', 'No auto-load files')}
+            {t('projects.manage.autoLoadEmpty')}
           </div>
         {/if}
         <div class="s-group__block projects-file-add">
@@ -207,11 +192,8 @@
             class="projects-file-input"
             code
             value={projectsState.autoLoadDraft}
-            placeholder={t(
-              'projects.manage.autoLoadPlaceholder',
-              'Add a file path…',
-            )}
-            ariaLabel={t('projects.manage.autoLoad', 'Auto-load files')}
+            placeholder={t('projects.manage.autoLoadPlaceholder')}
+            ariaLabel={t('projects.manage.autoLoad')}
             onInput={(next) => {
               projectsState.autoLoadDraft = next;
             }}
@@ -223,7 +205,7 @@
             disabled={projectsState.autoLoadDraft.trim().length === 0}
             onClick={addAutoLoadEntry}
           >
-            {t('projects.manage.autoLoadAdd', 'Add')}
+            {t('projects.manage.autoLoadAdd')}
           </Button>
         </div>
       </div>

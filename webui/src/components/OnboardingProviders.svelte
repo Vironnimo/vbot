@@ -26,9 +26,9 @@
   });
 
   function methodLabel(type) {
-    if (type === 'api_key') return t('onboarding.connect.apiKey', 'API key');
-    if (type === 'none') return t('onboarding.connect.local', 'Local');
-    return t('onboarding.connect.signIn', 'Sign in');
+    if (type === 'api_key') return t('onboarding.connect.apiKey');
+    if (type === 'none') return t('onboarding.connect.local');
+    return t('onboarding.connect.signIn');
   }
 
   async function toggleExpanded() {
@@ -64,19 +64,19 @@
       id="onboarding-provider-search"
       type="search"
       value={search}
-      placeholder={t('onboarding.service.search', 'Search Providers…')}
-      ariaLabel={t('onboarding.service.search', 'Search Providers…')}
+      placeholder={t('onboarding.service.search')}
+      ariaLabel={t('onboarding.service.search')}
       autocomplete="off"
       {disabled}
       onInput={(value) => (search = value)}
     />
     {#if search}
       <Button variant="tertiary" onClick={() => (search = '')}
-        >{t('onboarding.service.clearSearch', 'Clear')}</Button
+        >{t('onboarding.service.clearSearch')}</Button
       >
     {:else}
       <span class="onboarding-provider-count"
-        >{t('onboarding.service.count', '{count} Providers', {
+        >{t('onboarding.service.count', {
           count: items.length,
         })}</span
       >
@@ -88,7 +88,7 @@
     class="onboarding-provider-list"
     class:onboarding-provider-list--single-column={singleColumn}
     bind:this={listElement}
-    aria-label={t('onboarding.progress.service', 'Providers')}
+    aria-label={t('onboarding.progress.service')}
   >
     {#each visibleItems as item (item.provider.id)}
       <li>
@@ -114,11 +114,11 @@
                 stroke-width="1.8"
                 aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg
               >
-              {t('onboarding.service.connected', 'Connected')}
+              {t('onboarding.service.connected')}
             </span>
           {:else if !item.scope}
             <span class="onboarding-provider-unavailable"
-              >{t('onboarding.service.manage', 'Manage in Settings')}</span
+              >{t('onboarding.service.manage')}</span
             >
           {/if}
           {#if item.scope}
@@ -138,11 +138,8 @@
     {:else}
       <li class="onboarding-provider-empty" role="status">
         {search
-          ? t('onboarding.service.noMatches', 'No Providers match your search.')
-          : t(
-              'onboarding.service.empty',
-              'No connection is available here. Open Settings → Providers to check disabled connections or add a custom Provider.',
-            )}
+          ? t('onboarding.service.noMatches')
+          : t('onboarding.service.empty')}
       </li>
     {/each}
   </ul>
@@ -155,8 +152,8 @@
       onClick={toggleExpanded}
     >
       {expanded
-        ? t('onboarding.service.showFewer', 'Show fewer Providers')
-        : t('onboarding.service.showAll', 'Show all {count} Providers', {
+        ? t('onboarding.service.showFewer')
+        : t('onboarding.service.showAll', {
             count: items.length,
           })}
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"

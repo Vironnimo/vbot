@@ -27,8 +27,8 @@
   let resetTimer = null;
 
   let copyText = $derived(typeof text === 'string' ? text : '');
-  let restingLabel = $derived(label || t('common.copy', 'Copy'));
-  let doneLabel = $derived(copiedLabel || t('common.copied', 'Copied'));
+  let restingLabel = $derived(label || t('common.copy'));
+  let doneLabel = $derived(copiedLabel || t('common.copied'));
   let currentLabel = $derived(copied ? doneLabel : restingLabel);
 
   async function handleCopy() {

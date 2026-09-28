@@ -20,153 +20,124 @@
 <div class="stats-panel">
   <div class="stats-grid">
     {@render statCard(
-      t('statistics.compactions.averageAfter', 'Average remaining tokens'),
+      t('statistics.compactions.averageAfter'),
       formatOptionalTokens(context.average_after_tokens, locale),
     )}
     {@render statCard(
-      t('statistics.compactions.p95After', 'P95 remaining tokens'),
+      t('statistics.compactions.p95After'),
       formatOptionalTokens(context.p95_after_tokens, locale),
-      t(
-        'statistics.compactions.p95Hint',
-        '95% of recorded context sizes after Compaction are at or below this value.',
-      ),
+      t('statistics.compactions.p95Hint'),
     )}
     {@render statCard(
-      t('statistics.compactions.reduction', 'Context reduction'),
+      t('statistics.compactions.reduction'),
       formatPercent(context.reduction_ratio),
-      t(
-        'statistics.compactions.reductionHint',
-        'Total before minus total after, divided by total before. Negative values mean the context grew.',
-      ),
+      t('statistics.compactions.reductionHint'),
     )}
     {@render statCard(
-      t('statistics.compactions.steps', 'Model steps between Compactions'),
+      t('statistics.compactions.steps'),
       formatOptionalTokens(context.average_steps_between, locale),
-      t(
-        'statistics.compactions.stepsHint',
-        'Average saved Chat responses between consecutive checkpoints in the same Session. The first checkpoint has no interval.',
-      ),
+      t('statistics.compactions.stepsHint'),
     )}
   </div>
   <p class="stats-note">
-    {t(
-      'statistics.compactions.coverage',
-      '{known} of {total} checkpoints have before/after context estimates.',
-      {
-        known: formatInteger(context.observations, locale),
-        total: formatInteger(compactions.total_compactions, locale),
-      },
-    )}
+    {t('statistics.compactions.coverage', {
+      known: formatInteger(context.observations, locale),
+      total: formatInteger(compactions.total_compactions, locale),
+    })}
   </p>
   <div class="stats-columns">
     <div class="stats-block">
       <h3 class="stats-block__title">
-        {t('statistics.compactions.effectiveness', 'Context & duration')}
+        {t('statistics.compactions.effectiveness')}
       </h3>
       <dl class="stats-facts">
         <div>
           <dt>
-            {t('statistics.compactions.averageBefore', 'Average tokens before')}
+            {t('statistics.compactions.averageBefore')}
           </dt>
           <dd>{formatOptionalTokens(context.average_before_tokens, locale)}</dd>
         </div>
         <div>
-          <dt>{t('statistics.compactions.p50After', 'Median tokens after')}</dt>
+          <dt>{t('statistics.compactions.p50After')}</dt>
           <dd>{formatOptionalTokens(context.p50_after_tokens, locale)}</dd>
         </div>
         <div>
           <dt>
-            {t(
-              'statistics.compactions.nextInput',
-              'Average next measured input',
-            )}
+            {t('statistics.compactions.nextInput')}
           </dt>
           <dd>
             {formatOptionalTokens(context.average_next_input_tokens, locale)}
           </dd>
         </div>
         <div>
-          <dt>{t('statistics.compactions.duration', 'Average duration')}</dt>
+          <dt>{t('statistics.compactions.duration')}</dt>
           <dd>{formatDurationMs(context.average_duration_ms)}</dd>
         </div>
         <div>
-          <dt>{t('statistics.compactions.p95Duration', 'P95 duration')}</dt>
+          <dt>{t('statistics.compactions.p95Duration')}</dt>
           <dd>{formatDurationMs(context.p95_duration_ms)}</dd>
         </div>
       </dl>
       <p class="stats-note">
-        {t(
-          'statistics.compactions.nextInputHint',
-          'Before/after values are context estimates. The first subsequent measured request includes its new input and is shown separately; it is not a direct estimate-error measurement.',
-        )}
+        {t('statistics.compactions.nextInputHint')}
       </p>
     </div>
     <div class="stats-block">
       <h3 class="stats-block__title">
-        {t('statistics.overview.coverage', 'Coverage & diagnostics')}
+        {t('statistics.overview.coverage')}
       </h3>
       <dl class="stats-facts">
         <div>
-          <dt>{t('statistics.compactions.total', 'Compactions')}</dt>
+          <dt>{t('statistics.compactions.total')}</dt>
           <dd>{formatInteger(compactions.total_compactions, locale)}</dd>
         </div>
         <div>
-          <dt>{t('statistics.compactions.sessions', 'Compacted Sessions')}</dt>
+          <dt>{t('statistics.compactions.sessions')}</dt>
           <dd>
             {formatInteger(compactions.sessions_with_compactions, locale)}
           </dd>
         </div>
         <div>
           <dt>
-            {t(
-              'statistics.compactions.nonShrinking',
-              'Without context reduction',
-            )}
+            {t('statistics.compactions.nonShrinking')}
           </dt>
           <dd>{formatInteger(context.non_shrinking, locale)}</dd>
         </div>
         <div>
           <dt>
-            {t('statistics.compactions.rapid', 'Repeated within 2 Model steps')}
+            {t('statistics.compactions.rapid')}
           </dt>
           <dd>{formatInteger(context.rapid_recompactions, locale)}</dd>
         </div>
         <div>
-          <dt>{t('statistics.cost.reported', 'Provider-reported cost')}</dt>
+          <dt>{t('statistics.cost.reported')}</dt>
           <dd>{formatCost(costs.reported_usd, locale)}</dd>
         </div>
         <div>
-          <dt>{t('statistics.cost.estimated', 'Estimated API value')}</dt>
+          <dt>{t('statistics.cost.estimated')}</dt>
           <dd>{formatCost(costs.estimated_usd, locale)}</dd>
         </div>
       </dl>
       <p class="stats-note">
-        {t(
-          'statistics.compactions.diagnosticHint',
-          'Rapid recurrence or growing context can help locate ineffective Compactions. Older checkpoints may have no duration or Model usage; missing data stays unknown.',
-        )}
+        {t('statistics.compactions.diagnosticHint')}
       </p>
       <p class="stats-note stats-spaced">
-        {t(
-          'statistics.compactions.samples',
-          '{intervals} intervals · {durations} durations · {inputs} subsequent inputs · {calls} saved Model calls',
-          {
-            intervals: formatInteger(context.interval_observations, locale),
-            durations: formatInteger(context.duration_observations, locale),
-            inputs: formatInteger(context.next_input_observations, locale),
-            calls: formatInteger(costs.calls, locale),
-          },
-        )}
+        {t('statistics.compactions.samples', {
+          intervals: formatInteger(context.interval_observations, locale),
+          durations: formatInteger(context.duration_observations, locale),
+          inputs: formatInteger(context.next_input_observations, locale),
+          calls: formatInteger(costs.calls, locale),
+        })}
       </p>
     </div>
   </div>
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t('statistics.compactions.byStrategy', 'By strategy')}
+      {t('statistics.compactions.byStrategy')}
     </h3>
     {#if compactions.by_strategy.length === 0}<EmptyState
         density="compact"
-        description={t('statistics.empty', 'No activity recorded yet.')}
+        description={t('statistics.empty')}
       />
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
@@ -174,31 +145,18 @@
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t('statistics.compactions.byStrategy', 'By strategy')}
+        aria-label={t('statistics.compactions.byStrategy')}
       >
         <table class="stats-table">
           <thead
             ><tr
-              ><th>{t('statistics.col.strategy', 'Strategy')}</th><th
-                >{t('statistics.compactions.total', 'Compactions')}</th
+              ><th>{t('statistics.col.strategy')}</th><th
+                >{t('statistics.compactions.total')}</th
               >
-              <th
-                >{t(
-                  'statistics.compactions.averageBefore',
-                  'Average tokens before',
-                )}</th
-              ><th
-                >{t(
-                  'statistics.compactions.averageAfter',
-                  'Average remaining tokens',
-                )}</th
+              <th>{t('statistics.compactions.averageBefore')}</th><th
+                >{t('statistics.compactions.averageAfter')}</th
               >
-              <th
-                >{t(
-                  'statistics.compactions.reduction',
-                  'Context reduction',
-                )}</th
-              >
+              <th>{t('statistics.compactions.reduction')}</th>
             </tr></thead
           ><tbody
             >{#each compactions.by_strategy as row (row.strategy)}<tr>
@@ -219,11 +177,11 @@
   </div>
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t('statistics.compactions.recent', 'Recent Compactions · up to 50')}
+      {t('statistics.compactions.recent')}
     </h3>
     {#if !compactions.recent?.length}<EmptyState
         density="compact"
-        description={t('statistics.empty', 'No activity recorded yet.')}
+        description={t('statistics.empty')}
       />
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
@@ -231,29 +189,18 @@
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t(
-          'statistics.compactions.recent',
-          'Recent Compactions · up to 50',
-        )}
+        aria-label={t('statistics.compactions.recent')}
       >
         <table class="stats-table">
           <thead
             ><tr>
-              <th>{t('statistics.col.session', 'Session')}</th><th
-                >{t('statistics.col.date', 'Date')}</th
-              ><th>{t('statistics.col.strategy', 'Strategy')}</th>
-              <th
-                >{t(
-                  'statistics.compactions.beforeAfter',
-                  'Tokens before → after',
-                )}</th
-              ><th>{t('statistics.compactions.durationShort', 'Duration')}</th>
-              <th
-                >{t(
-                  'statistics.compactions.stepsShort',
-                  'Steps since previous',
-                )}</th
+              <th>{t('statistics.col.session')}</th><th
+                >{t('statistics.col.date')}</th
+              ><th>{t('statistics.col.strategy')}</th>
+              <th>{t('statistics.compactions.beforeAfter')}</th><th
+                >{t('statistics.compactions.durationShort')}</th
               >
+              <th>{t('statistics.compactions.stepsShort')}</th>
             </tr></thead
           ><tbody
             >{#each compactions.recent as row (row)}<tr>

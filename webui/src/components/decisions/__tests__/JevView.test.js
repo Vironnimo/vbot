@@ -60,8 +60,7 @@ it('shows the workspace under the real shell cascade and opens a saved example',
     'flex',
   );
   const button = [...document.querySelectorAll('button')].find(
-    (node) =>
-      node.textContent.trim() === t('jev.example.triage', 'Support triage'),
+    (node) => node.textContent.trim() === t('jev.example.triage'),
   );
   button.click();
   await settle();

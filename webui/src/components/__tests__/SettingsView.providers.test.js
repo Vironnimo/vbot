@@ -237,10 +237,7 @@ describe('SettingsView Providers', () => {
     // Keyless connection: descriptive text, no key management actions.
     await waitForCondition(() =>
       providerRow('Ollama').textContent.includes(
-        t(
-          'settings.providers.keylessDescription',
-          'No key required — this endpoint is keyless.',
-        ),
+        t('settings.providers.keylessDescription'),
       ),
     );
     expect(providerRow('Ollama').textContent).not.toContain('Replace key');

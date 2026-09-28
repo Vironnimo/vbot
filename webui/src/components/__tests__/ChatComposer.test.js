@@ -95,7 +95,7 @@ describe('ChatComposer', () => {
       const { trigger, card } = mountContextRing();
       expect(trigger.tagName).toBe('BUTTON');
       expect(trigger.getAttribute('aria-label')).toBe(
-        t('chat.contextRingLabel', 'Context window usage'),
+        t('chat.contextRingLabel'),
       );
 
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));

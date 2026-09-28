@@ -162,7 +162,7 @@
       const child = group.children[index];
       if (child.type === 'tool_call') {
         return isSubAgentSpawnTool(child)
-          ? t('chat.subagent.label', 'Sub-agent')
+          ? t('chat.subagent.label')
           : toolNameForRunTool(child);
       }
     }
@@ -230,11 +230,11 @@
   >
     <div class="teb-section-header">
       <span class="teb-label">{label}</span>
-      {#if presentation.copyText !== t('chat.toolNoData', '—')}
+      {#if presentation.copyText !== t('chat.toolNoData')}
         <CopyButton
           text={presentation.copyText}
           class="chat-copy-action tool-detail-copy"
-          label={t('chat.copyToolField', 'Copy {label}', { label })}
+          label={t('chat.copyToolField', { label })}
         />
       {/if}
     </div>
@@ -259,7 +259,7 @@
             <span
               class="image-unavailable"
               role="img"
-              aria-label={t('chat.image.unavailable', 'Image not available')}
+              aria-label={t('chat.image.unavailable')}
             >
               <svg viewBox="0 0 32 24" aria-hidden="true"
                 ><rect x="1" y="1" width="30" height="22" rx="2" /><circle
@@ -268,7 +268,7 @@
                   r="2"
                 /><path d="m3 20 8-8 6 6 4-4 8 6M3 2l26 20" /></svg
               >
-              <span>{t('chat.image.unavailable', 'Image not available')}</span>
+              <span>{t('chat.image.unavailable')}</span>
             </span>
             <span>{image.filename}</span>
           </a>
@@ -312,7 +312,7 @@
   <div class="msg-header">
     <div class="msg-avatar">{avatarForItem(item)}</div>
     <span class="msg-author"
-      >{agentName || t('chat.role.assistant', 'Assistant').toUpperCase()}</span
+      >{agentName || t('chat.role.assistant').toUpperCase()}</span
     >
     {#if formatTime(timestampForItem(item))}
       <span class="msg-timestamp">{formatTime(timestampForItem(item))}</span>
@@ -321,8 +321,8 @@
       <CopyButton
         text={answerCopyText}
         class="chat-copy-action message-copy"
-        label={t('chat.copyAnswer', 'Copy answer')}
-        copiedLabel={t('chat.answerCopied', 'Answer copied')}
+        label={t('chat.copyAnswer')}
+        copiedLabel={t('chat.answerCopied')}
       />
     {/if}
   </div>
@@ -363,10 +363,10 @@
                 class="te-dot">●</span
               >
               <span class="te-fn">
-                {t('chat.subagent.label', 'Sub-agent')}
+                {t('chat.subagent.label')}
               </span>
               <span class="subagent-agent">
-                {t('agents.form.id', 'Agent ID')}: {subAgentAgentId(child)}
+                {t('agents.form.id')}: {subAgentAgentId(child)}
               </span>
               {#if lastToolName}
                 <span class="te-arg subagent-preview subagent-activity">
@@ -382,14 +382,8 @@
                   variant="tertiary"
                   icon
                   class="tool-row-action subagent-session-action subagent-link"
-                  tooltip={t(
-                    'chat.subagent.openSession',
-                    'Open Sub-Agent Session',
-                  )}
-                  ariaLabel={t(
-                    'chat.subagent.openSession',
-                    'Open Sub-Agent Session',
-                  )}
+                  tooltip={t('chat.subagent.openSession')}
+                  ariaLabel={t('chat.subagent.openSession')}
                   onClick={(event) => handleSubAgentNavigate(event, child)}
                 >
                   <svg
@@ -404,12 +398,12 @@
                 </Button>
               {:else if dotStatus === 'running' && isStartingForegroundSubAgent(child)}
                 <span class="subagent-state">
-                  {t('chat.subagent.starting', 'starting')}
+                  {t('chat.subagent.starting')}
                 </span>
               {/if}
               {#if subAgentResult?.loading}
                 <span class="subagent-state">
-                  {t('chat.subagent.loadingResult', 'loading result…')}
+                  {t('chat.subagent.loadingResult')}
                 </span>
               {/if}
               {#if subAgentTimeLabel}
@@ -431,14 +425,8 @@
                       `subagent:${child?.toolCallId ?? child?.id ?? ''}`
                     ],
                   )}
-                  tooltip={t(
-                    'chat.cancelSubAgentAria',
-                    'Cancel running sub-agent',
-                  )}
-                  ariaLabel={t(
-                    'chat.cancelSubAgentAria',
-                    'Cancel running sub-agent',
-                  )}
+                  tooltip={t('chat.cancelSubAgentAria')}
+                  ariaLabel={t('chat.cancelSubAgentAria')}
                   onClick={(event) => handleCancelSubAgent(event, child)}
                 >
                   <svg
@@ -454,7 +442,7 @@
             </summary>
             <div class="tool-event-body tool-event-details">
               {@render toolDetailSection(
-                t('chat.toolArgs', 'Args'),
+                t('chat.toolArgs'),
                 toolArguments(child),
                 false,
                 false,
@@ -462,20 +450,17 @@
                 child,
               )}
               {#if child.stdout}
-                {@render toolDetailSection(
-                  t('chat.toolStdout', 'Stdout'),
-                  child.stdout,
-                )}
+                {@render toolDetailSection(t('chat.toolStdout'), child.stdout)}
               {/if}
               {#if child.stderr}
                 {@render toolDetailSection(
-                  t('chat.toolStderr', 'Stderr'),
+                  t('chat.toolStderr'),
                   child.stderr,
                   true,
                 )}
               {/if}
               {@render toolDetailSection(
-                t('chat.toolResultLabel', 'Result'),
+                t('chat.toolResultLabel'),
                 subAgentDisplayResult(child, subAgentResult),
                 toolStatus(child) === 'failed',
                 true,
@@ -536,8 +521,8 @@
                     loading={Boolean(
                       pendingActions[`background:${child.toolCallId}`],
                     )}
-                    tooltip={t('chat.moveToBackground', 'Move to background')}
-                    ariaLabel={t('chat.moveToBackground', 'Move to background')}
+                    tooltip={t('chat.moveToBackground')}
+                    ariaLabel={t('chat.moveToBackground')}
                     onClick={(event) => handleBackgroundToolCall(event, child)}
                   >
                     <svg
@@ -558,14 +543,8 @@
                   loading={Boolean(
                     pendingActions[`tool:${child?.toolCallId ?? ''}`],
                   )}
-                  tooltip={t(
-                    'chat.cancelToolCallAria',
-                    'Cancel running tool call',
-                  )}
-                  ariaLabel={t(
-                    'chat.cancelToolCallAria',
-                    'Cancel running tool call',
-                  )}
+                  tooltip={t('chat.cancelToolCallAria')}
+                  ariaLabel={t('chat.cancelToolCallAria')}
                   onClick={(event) => handleCancelToolCall(event, child)}
                 >
                   <svg
@@ -581,7 +560,7 @@
             </summary>
             <div class="tool-event-body tool-event-details">
               {@render toolDetailSection(
-                t('chat.toolArgs', 'Args'),
+                t('chat.toolArgs'),
                 toolArguments(child),
                 false,
                 false,
@@ -589,20 +568,17 @@
                 child,
               )}
               {#if child.stdout}
-                {@render toolDetailSection(
-                  t('chat.toolStdout', 'Stdout'),
-                  child.stdout,
-                )}
+                {@render toolDetailSection(t('chat.toolStdout'), child.stdout)}
               {/if}
               {#if child.stderr}
                 {@render toolDetailSection(
-                  t('chat.toolStderr', 'Stderr'),
+                  t('chat.toolStderr'),
                   child.stderr,
                   true,
                 )}
               {/if}
               {@render toolDetailSection(
-                t('chat.toolResultLabel', 'Result'),
+                t('chat.toolResultLabel'),
                 bashRowState
                   ? backgroundBashDisplayResult(child, bashRowState)
                   : child.result,
@@ -639,7 +615,7 @@
         />
       {:else if child.type === 'model_fallback'}
         <Banner variant="info" class="run-inline-banner">
-          {t('chat.modelFallbackActivated', 'Switched to {model}', {
+          {t('chat.modelFallbackActivated', {
             model: child.to_model,
           })}
         </Banner>
@@ -660,9 +636,7 @@
         >
           <summary class="working-block__summary">
             <span class="working-block__label">
-              {groupActive
-                ? t('chat.working.active', 'working...')
-                : t('chat.working.done', 'done working')}
+              {groupActive ? t('chat.working.active') : t('chat.working.done')}
             </span>
             {#if groupToolName}
               <span class="working-block__activity">

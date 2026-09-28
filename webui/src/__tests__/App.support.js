@@ -343,7 +343,7 @@ export function sidebarNavButton(viewIdOrTitle) {
   const item = NAVIGATION_ITEMS.find(({ id }) => id === viewIdOrTitle);
   return buttonWithText(
     'nav.app-shell__navigation .app-shell__nav-item',
-    item ? t(item.labelKey, item.labelFallback) : viewIdOrTitle,
+    item ? item.label() : viewIdOrTitle,
   );
 }
 

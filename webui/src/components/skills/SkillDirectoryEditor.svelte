@@ -115,7 +115,7 @@
 
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -139,14 +139,12 @@
       );
       onCommit(nextSettings);
       onToast({
-        title: t('settings.skills.saveSuccess', 'Skill directories updated.'),
+        title: t('settings.skills.saveSuccess'),
         variant: 'success',
       });
       return true;
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
       return false;
     } finally {
       saving = false;
@@ -160,7 +158,7 @@
 <section class="s-section" aria-labelledby="skills-section-directories">
   <div class="s-section__head">
     <h3 class="s-section__title" id="skills-section-directories">
-      {t('settings.skills.extraDirectories', 'Additional skill directories')}
+      {t('settings.skills.extraDirectories')}
     </h3>
     <div class="s-section__aside">
       <SaveButton
@@ -171,19 +169,13 @@
     </div>
   </div>
   <p class="s-section__desc">
-    {t(
-      'settings.skills.extraDirectoriesDescription',
-      'Extra folders scanned for skills as part of the global library — their skills are available to every agent. Useful for keeping a skill collection outside the vBot data directory.',
-    )}
+    {t('settings.skills.extraDirectoriesDescription')}
   </p>
   <div class="s-section__body">
     <div class="s-group">
       {#if skillDirectories.length === 0}
         <p class="s-group__block s-group__note skills-directory-empty">
-          {t(
-            'settings.skills.emptyDirectories',
-            'No additional skill directories configured.',
-          )}
+          {t('settings.skills.emptyDirectories')}
         </p>
       {:else}
         {#each skillDirectories as directory (directory)}
@@ -191,14 +183,12 @@
             <span class="skills-directory-path">{directory}</span>
             <Button
               variant="secondary"
-              ariaLabel={t(
-                'settings.skills.removeDirectory',
-                'Remove skill directory {path}',
-                { path: directory },
-              )}
+              ariaLabel={t('settings.skills.removeDirectory', {
+                path: directory,
+              })}
               onClick={() => removeSkillDirectory(directory)}
             >
-              {t('common.remove', 'Remove')}
+              {t('common.remove')}
             </Button>
           </div>
         {/each}
@@ -209,14 +199,8 @@
           code
           value={newSkillDirectory}
           onInput={(next) => (newSkillDirectory = next)}
-          placeholder={t(
-            'settings.skills.pathPlaceholder',
-            'C:/path/to/skills',
-          )}
-          ariaLabel={t(
-            'settings.skills.extraDirectories',
-            'Additional skill directories',
-          )}
+          placeholder={t('settings.skills.pathPlaceholder')}
+          ariaLabel={t('settings.skills.extraDirectories')}
           onkeydown={handleSkillDirectoryKeydown}
         />
         <Button
@@ -224,7 +208,7 @@
           disabled={!newSkillDirectory.trim()}
           onClick={addSkillDirectory}
         >
-          {t('settings.skills.addDirectory', 'Add directory')}
+          {t('settings.skills.addDirectory')}
         </Button>
       </div>
     </div>
@@ -234,14 +218,11 @@
 <section class="s-section" aria-labelledby="skills-section-default-directory">
   <div class="s-section__head">
     <h3 class="s-section__title" id="skills-section-default-directory">
-      {t('settings.skills.defaultDirectory', 'Default skill directory')}
+      {t('settings.skills.defaultDirectory')}
     </h3>
   </div>
   <p class="s-section__desc">
-    {t(
-      'settings.skills.defaultDirectoryDescription',
-      'Always scanned from the vBot data directory and kept read-only here.',
-    )}
+    {t('settings.skills.defaultDirectoryDescription')}
   </p>
   <div class="s-section__body">
     <div class="s-group">

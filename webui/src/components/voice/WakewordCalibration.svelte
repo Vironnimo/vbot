@@ -42,29 +42,18 @@
   );
   let instruction = $derived.by(() => {
     if (calibration?.phase === 'noise') {
-      return t(
-        'settings.voice.calibrationNoiseInstruction',
-        'Stay quiet for {seconds} seconds while vBot measures the room.',
-        {
-          seconds: Math.max(1, Math.ceil(calibration.noise_seconds_remaining)),
-        },
-      );
+      return t('settings.voice.calibrationNoiseInstruction', {
+        seconds: Math.max(1, Math.ceil(calibration.noise_seconds_remaining)),
+      });
     }
     if (calibration?.phase === 'phrases') {
-      return t(
-        'settings.voice.calibrationPhraseInstruction',
-        'Say “{name}” naturally — {count} of {required} repetitions captured. Pause briefly between repetitions.',
-        {
-          name: label,
-          count: calibration.sample_count,
-          required: requiredSamples ?? '–',
-        },
-      );
+      return t('settings.voice.calibrationPhraseInstruction', {
+        name: label,
+        count: calibration.sample_count,
+        required: requiredSamples ?? '–',
+      });
     }
-    return t(
-      'settings.voice.calibrationReviewInstruction',
-      'Measurement complete. Review the calculated sensitivity, then apply it.',
-    );
+    return t('settings.voice.calibrationReviewInstruction');
   });
 
   function stepState(step) {
@@ -103,10 +92,7 @@
     return run(
       'restarting',
       async () => onStatus(await restartVoiceCalibration()),
-      t(
-        'settings.voice.calibrationResetFailed',
-        'Calibration could not restart.',
-      ),
+      t('settings.voice.calibrationResetFailed'),
     );
   }
 
@@ -115,7 +101,7 @@
     return run(
       'discarding',
       async () => onStatus(await stopVoiceCalibration()),
-      t('settings.voice.calibrationStopFailed', 'Calibration could not stop.'),
+      t('settings.voice.calibrationStopFailed'),
     );
   }
 
@@ -127,17 +113,11 @@
       async () => {
         if (!(await onApply(value))) return;
         onToast({
-          title: t(
-            'settings.voice.calibrationApplied',
-            'Wakeword sensitivity applied.',
-          ),
+          title: t('settings.voice.calibrationApplied'),
           variant: 'success',
         });
       },
-      t(
-        'settings.voice.calibrationApplyFailed',
-        'Calibration could not be applied.',
-      ),
+      t('settings.voice.calibrationApplyFailed'),
     );
   }
 </script>
@@ -146,7 +126,7 @@
   <div class="voice-calibration-header">
     <div>
       <div class="voice-calibration-heading">
-        {t('settings.voice.calibrationHeading', 'Calibrating “{name}”', {
+        {t('settings.voice.calibrationHeading', {
           name: label,
         })}
       </div>
@@ -154,39 +134,34 @@
     </div>
     <StatusChip variant={ready ? 'success' : 'warn'}>
       {ready
-        ? t('settings.voice.calibrationReadyToApply', 'Ready to apply')
-        : t('settings.voice.calibrationListening', 'Commands paused')}
+        ? t('settings.voice.calibrationReadyToApply')
+        : t('settings.voice.calibrationListening')}
     </StatusChip>
   </div>
 
   {#if calibration?.noise_high}
     <div class="voice-calibration-noise-warning" role="alert">
-      {t(
-        'settings.voice.calibrationNoiseHighWarning',
-        'Room noise is high ({level}). Consider moving to a quieter environment or reducing background noise for better results.',
-        { level: clampScore(calibration.noise_level).toFixed(2) },
-      )}
+      {t('settings.voice.calibrationNoiseHighWarning', {
+        level: clampScore(calibration.noise_level).toFixed(2),
+      })}
     </div>
   {/if}
 
   <ol
     class="voice-calibration-steps"
-    aria-label={t(
-      'settings.voice.calibrationProgressAria',
-      'Calibration progress',
-    )}
+    aria-label={t('settings.voice.calibrationProgressAria')}
   >
     <li data-state={stepState(0)}>
       <span>1</span>
-      {t('settings.voice.calibrationStepNoise', 'Room noise')}
+      {t('settings.voice.calibrationStepNoise')}
     </li>
     <li data-state={stepState(1)}>
       <span>2</span>
-      {t('settings.voice.calibrationStepPhrases', 'Wakeword samples')}
+      {t('settings.voice.calibrationStepPhrases')}
     </li>
     <li data-state={stepState(2)}>
       <span>3</span>
-      {t('settings.voice.calibrationStepReview', 'Review')}
+      {t('settings.voice.calibrationStepReview')}
     </li>
   </ol>
 
@@ -194,22 +169,18 @@
     <div class="voice-calibration-model__header">
       <span class="voice-calibration-model__identity">{label}</span>
       <span class="voice-calibration-model__values">
-        {t('settings.voice.calibrationScore', 'Score')}
+        {t('settings.voice.calibrationScore')}
         {score.toFixed(2)}
-        · {t('settings.voice.calibrationNoise', 'Noise')}
+        · {t('settings.voice.calibrationNoise')}
         {clampScore(calibration?.noise_level).toFixed(2)}
-        · {t('settings.voice.calibrationThreshold', 'Threshold')}
+        · {t('settings.voice.calibrationThreshold')}
         {threshold.toFixed(2)}
       </span>
     </div>
     <div
       class="voice-calibration-meter"
       role="meter"
-      aria-label={t(
-        'settings.voice.calibrationMeterAria',
-        '{name} detector score',
-        { name: label },
-      )}
+      aria-label={t('settings.voice.calibrationMeterAria', { name: label })}
       aria-valuemin="0"
       aria-valuemax="1"
       aria-valuenow={score}
@@ -227,30 +198,24 @@
     </div>
     <div class="voice-calibration-model__result">
       <span>
-        {t(
-          'settings.voice.calibrationSamples',
-          '{count} / {required} samples',
-          {
-            count: calibration?.sample_count ?? 0,
-            required: requiredSamples ?? '–',
-          },
-        )}
+        {t('settings.voice.calibrationSamples', {
+          count: calibration?.sample_count ?? 0,
+          required: requiredSamples ?? '–',
+        })}
       </span>
       {#if ready}
         <strong>
           {#if currentSensitivity !== null}
-            {t('settings.voice.calibrationCurrentSensitivity', 'Current')}
+            {t('settings.voice.calibrationCurrentSensitivity')}
             {Math.round(currentSensitivity * 100)}% →
           {/if}
-          {t(
-            'settings.voice.calibrationRecommendation',
-            'Recommended sensitivity {value}%',
-            { value: Math.round(recommendation * 100) },
-          )}
+          {t('settings.voice.calibrationRecommendation', {
+            value: Math.round(recommendation * 100),
+          })}
         </strong>
       {:else if peak > 0}
         <span>
-          {t('settings.voice.calibrationPeak', 'Peak')}
+          {t('settings.voice.calibrationPeak')}
           {peak.toFixed(2)}
         </span>
       {/if}
@@ -260,11 +225,11 @@
   <div class="voice-calibration-legend" aria-hidden="true">
     <span>
       <i class="voice-calibration-legend__peak"></i>
-      {t('settings.voice.calibrationPeak', 'Peak')}
+      {t('settings.voice.calibrationPeak')}
     </span>
     <span>
       <i class="voice-calibration-legend__threshold"></i>
-      {t('settings.voice.calibrationThreshold', 'Threshold')}
+      {t('settings.voice.calibrationThreshold')}
     </span>
   </div>
 
@@ -275,7 +240,7 @@
       loading={actionState === 'restarting'}
       onClick={restart}
     >
-      {t('settings.voice.calibrationReset', 'Restart calibration')}
+      {t('settings.voice.calibrationReset')}
     </Button>
     <div class="voice-calibration-actions__decision">
       <Button
@@ -284,7 +249,7 @@
         loading={actionState === 'discarding'}
         onClick={() => (discardConfirm = true)}
       >
-        {t('settings.voice.calibrationDiscard', 'Discard and stop')}
+        {t('settings.voice.calibrationDiscard')}
       </Button>
       <Button
         variant="primary"
@@ -292,22 +257,16 @@
         disabled={busy || !ready}
         onClick={apply}
       >
-        {t('settings.voice.calibrationApply', 'Apply calibrated value')}
+        {t('settings.voice.calibrationApply')}
       </Button>
     </div>
   </div>
 
   {#if discardConfirm}
     <ConfirmDialog
-      title={t(
-        'settings.voice.calibrationDiscardConfirmTitle',
-        'Discard calibration?',
-      )}
-      body={t(
-        'settings.voice.calibrationDiscardConfirm',
-        'All measurements will be discarded and the sensitivity stays unchanged.',
-      )}
-      confirmLabel={t('settings.voice.calibrationDiscard', 'Discard and stop')}
+      title={t('settings.voice.calibrationDiscardConfirmTitle')}
+      body={t('settings.voice.calibrationDiscardConfirm')}
+      confirmLabel={t('settings.voice.calibrationDiscard')}
       onConfirm={discard}
       onCancel={() => (discardConfirm = false)}
     />

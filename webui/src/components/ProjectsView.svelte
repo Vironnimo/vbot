@@ -76,7 +76,7 @@
         projectsController.pendingOverrideChanges().length === 0
       ) {
         onToast({
-          title: t('common.alreadySaved', 'Already saved'),
+          title: t('common.alreadySaved'),
           variant: 'success',
         });
         return true;
@@ -204,14 +204,14 @@
     >
       <div class="pane-header secondary-pane__header">
         <span id="projects-list-title" class="secondary-pane__title">
-          {t('projects.title', 'Projects')}
+          {t('projects.title')}
         </span>
         <div class="pane-header-actions">
           <Button
             variant="tertiary"
             icon
-            ariaLabel={t('projects.add.title', 'Add project')}
-            tooltip={t('projects.add.title', 'Add project')}
+            ariaLabel={t('projects.add.title')}
+            tooltip={t('projects.add.title')}
             data-testid="project-add-open"
             onClick={openAdd}
           >
@@ -236,15 +236,12 @@
 
         {#if projectsState.loadingProjects}
           <p class="project-list-state" role="status">
-            {t('projects.loading', 'Loading projects…')}
+            {t('projects.loading')}
           </p>
         {:else if !hasProjects}
           <EmptyState
-            title={t('projects.emptyTitle', 'No projects yet')}
-            description={t(
-              'projects.emptySubtitle',
-              'Choose Add project (+) to connect your first repository.',
-            )}
+            title={t('projects.emptyTitle')}
+            description={t('projects.emptySubtitle')}
           />
         {:else}
           {#each projectsState.projects as project (project.project_id)}
@@ -263,7 +260,7 @@
                   </span>
                   {#if needsRePoint(project)}
                     <StatusChip variant="error">
-                      {t('projects.rePoint.title', 'Repository not found')}
+                      {t('projects.rePoint.title')}
                     </StatusChip>
                   {/if}
                 </span>
@@ -291,10 +288,7 @@
         <EmptyState
           fill
           class="master-detail-empty"
-          title={t(
-            'projects.detail.empty',
-            'Select a project to view and edit it.',
-          )}
+          title={t('projects.detail.empty')}
         />
       </div>
     {:else}
@@ -314,7 +308,7 @@
                     </h2>
                     {#if needsRePoint(selectedProject)}
                       <StatusChip variant="error">
-                        {t('projects.rePoint.title', 'Repository not found')}
+                        {t('projects.rePoint.title')}
                       </StatusChip>
                     {/if}
                   </div>
@@ -344,7 +338,7 @@
                       data-testid={`project-repoint-${selectedProject.project_id}`}
                       onClick={() => openRePoint(selectedProject)}
                     >
-                      {t('projects.rePoint.submit', 'Re-point')}
+                      {t('projects.rePoint.submit')}
                     </Button>
                   {/if}
                   <Button
@@ -354,7 +348,7 @@
                       selectedProject.project_id || projectsState.editSaving}
                     onClick={() => removeOne(selectedProject)}
                   >
-                    {t('projects.remove', 'Remove')}
+                    {t('projects.remove')}
                   </Button>
                 </div>{/snippet}
             </ProjectOverviewPanel>
@@ -375,8 +369,8 @@
                   onClick={refreshScan}
                 >
                   {projectsState.scanRefreshRequested
-                    ? t('projects.repository.rescanning', 'Scanning…')
-                    : t('projects.repository.rescan', 'Rescan repository')}
+                    ? t('projects.repository.rescanning')
+                    : t('projects.repository.rescan')}
                 </Button>{/snippet}
             </ProjectTeamPanel>
             <ProjectContextPanel bind:projectsState {projectsController} />

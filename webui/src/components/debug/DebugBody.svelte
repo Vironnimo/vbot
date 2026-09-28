@@ -38,9 +38,9 @@
   let offset = $derived(matches[match] ?? -1);
   let bytes = $derived(new TextEncoder().encode(raw).length);
   let tabs = $derived([
-    { id: 'readable', label: t('debug.readable', 'Readable') },
-    { id: 'formatted', label: t('debug.formatted', 'Formatted JSON') },
-    { id: 'raw', label: t('debug.streamRaw', 'Raw') },
+    { id: 'readable', label: t('debug.readable') },
+    { id: 'formatted', label: t('debug.formatted') },
+    { id: 'raw', label: t('debug.streamRaw') },
   ]);
 
   async function find(event) {
@@ -67,9 +67,9 @@
 
 <section class="debug-body debug-view__detail-section">
   <div class="body-toolbar">
-    <h4 class="debug-view__detail-heading">{t('debug.requestBody', 'Body')}</h4>
+    <h4 class="debug-view__detail-heading">{t('debug.requestBody')}</h4>
     <span class="body-size"
-      >{t('debug.bodyBytes', '{count} bytes', {
+      >{t('debug.bodyBytes', {
         count: new Intl.NumberFormat(activeLocaleTag()).format(bytes),
       })}</span
     >
@@ -77,7 +77,7 @@
       <TabList
         items={tabs}
         value={effectiveView}
-        ariaLabel={t('debug.bodyView', 'Body view')}
+        ariaLabel={t('debug.bodyView')}
         appearance="segmented"
         density="compact"
         {idPrefix}
@@ -85,7 +85,7 @@
         onChange={changeView}
       />
     {/if}
-    <CopyButton text={raw} label={t('debug.copyRawBody', 'Copy raw body')} />
+    <CopyButton text={raw} label={t('debug.copyRawBody')} />
   </div>
   <div class="body-search">
     <input
@@ -98,12 +98,12 @@
           nextMatch(event.shiftKey ? -1 : 1);
         }
       }}
-      aria-label={t('debug.findBody', 'Find in body (case-sensitive)')}
-      placeholder={t('debug.findBody', 'Find in body (case-sensitive)')}
+      aria-label={t('debug.findBody')}
+      placeholder={t('debug.findBody')}
     />
     {#if query}
       <span aria-live="polite"
-        >{t('debug.matchCount', '{current} / {total}', {
+        >{t('debug.matchCount', {
           current: matches.length ? match + 1 : 0,
           total: matches.length,
         })}</span
@@ -111,14 +111,14 @@
       <Button
         variant="tertiary"
         icon
-        ariaLabel={t('debug.previousMatch', 'Previous match')}
+        ariaLabel={t('debug.previousMatch')}
         disabled={!matches.length}
         onClick={() => nextMatch(-1)}>↑</Button
       >
       <Button
         variant="tertiary"
         icon
-        ariaLabel={t('debug.nextMatch', 'Next match')}
+        ariaLabel={t('debug.nextMatch')}
         disabled={!matches.length}
         onClick={() => nextMatch(1)}>↓</Button
       >
@@ -129,14 +129,14 @@
           size="sm"
           checked={wrap}
           onChange={(value) => (wrap = value)}
-          ariaLabel={t('debug.wrapLines', 'Wrap lines')}
-        />{t('debug.wrapLines', 'Wrap lines')}</label
+          ariaLabel={t('debug.wrapLines')}
+        />{t('debug.wrapLines')}</label
       >
     {/if}
   </div>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scrollable payload must be keyboard reachable, including non-JSON bodies.) -->
   <div
-    aria-label={parseable ? undefined : t('debug.requestBody', 'Body')}
+    aria-label={parseable ? undefined : t('debug.requestBody')}
     class="body-content"
     role={parseable ? 'tabpanel' : 'region'}
     id={parseable ? `${idPrefix}-panel-${effectiveView}` : undefined}
@@ -144,13 +144,10 @@
     tabindex="0"
   >
     {#if !raw}
-      <p class="body-note">{t('debug.emptyBody', 'No body captured.')}</p>
+      <p class="body-note">{t('debug.emptyBody')}</p>
     {:else if effectiveView === 'readable'}
       <p class="body-note">
-        {t(
-          'debug.readableHint',
-          'JSON reading view. Strings show their line breaks; Raw preserves the captured text.',
-        )}
+        {t('debug.readableHint')}
       </p>
       {#if entries}
         {#each entries.slice(0, visibleCount) as [key, value] (key)}
@@ -158,11 +155,9 @@
         {/each}
         {#if entries.length > visibleCount}
           <Button variant="tertiary" onClick={() => (visibleCount += 50)}
-            >{t(
-              'debug.showMoreFields',
-              'Show next fields ({count} remaining)',
-              { count: entries.length - visibleCount },
-            )}</Button
+            >{t('debug.showMoreFields', {
+              count: entries.length - visibleCount,
+            })}</Button
           >
         {/if}
       {:else}

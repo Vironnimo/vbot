@@ -101,23 +101,23 @@ it('creates an action with a relative time and a fresh Session by default after 
     },
   });
   await settle();
-  button(t('calendar.actions.add', 'Add action')).click();
+  button(t('calendar.actions.add')).click();
   await settle();
   expect(triggerLabel('calendar-action-target')).toBe('Main');
   expect(triggerLabel('calendar-action-session')).toBe(
-    t('calendar.actions.newSession', 'New Session for each execution'),
+    t('calendar.actions.newSession'),
   );
   change('calendar-action-prompt', 'Prepare meeting');
 
   // A failed save keeps the edit visible and does not claim it was saved.
   rpcMock.mockRejectedValueOnce(new Error('test-owned failure'));
-  button(t('common.save', 'Save')).click();
+  button(t('common.save')).click();
   await settle();
   expect(document.body.textContent).toContain('test-owned failure');
   expect(document.querySelector('.calendar-action-editor')).not.toBeNull();
   expect(onChanged).not.toHaveBeenCalled();
 
-  button(t('common.save', 'Save')).click();
+  button(t('common.save')).click();
   await settle();
   expect(rpcMock).toHaveBeenLastCalledWith('calendar.add_action', {
     id: 'event1',
@@ -162,13 +162,13 @@ it('preserves the Session and result after a single event moves', async () => {
     },
   });
   await settle();
-  button(t('calendar.actions.openSession', 'Open Session')).click();
+  button(t('calendar.actions.openSession')).click();
   expect(open).toHaveBeenCalledWith('main', 'existing');
-  button(t('common.edit', 'Edit')).click();
+  button(t('common.edit')).click();
   await settle();
   expect(triggerLabel('calendar-action-session')).toBe('Existing discussion');
   change('calendar-action-amount', '45');
-  button(t('common.save', 'Save')).click();
+  button(t('common.save')).click();
   await settle();
   expect(rpcMock).toHaveBeenCalledWith('calendar.update_action', {
     id: 'a1',
@@ -184,11 +184,7 @@ it.each([
     'another Team fails',
     { projects: [{ project_id: 'broken' }, { project_id: 'healthy' }] },
     ['Main', 'coder@healthy'],
-    () =>
-      t(
-        'calendar.actions.targetsPartial',
-        'Some Project Agent targets could not be loaded.',
-      ),
+    () => t('calendar.actions.targetsPartial'),
   ],
   [
     'the Project list fails',
@@ -219,7 +215,7 @@ it.each([
     });
     await settle();
     expect(document.body.textContent).toContain(message());
-    button(t('calendar.actions.add', 'Add action')).click();
+    button(t('calendar.actions.add')).click();
     await settle();
     expect(optionLabels('calendar-action-target')).toEqual(targets);
   },
@@ -250,7 +246,7 @@ it('builds the timing and Session from the choice fields', async () => {
     props: { eventId: 'event1', occurrenceStart: '2027-01-01T12:00' },
   });
   await settle();
-  button(t('calendar.actions.add', 'Add action')).click();
+  button(t('calendar.actions.add')).click();
   await settle();
   choose('calendar-action-session', 'Existing discussion');
   // Switching the Agent drops the Session chosen for the previous Agent and
@@ -258,14 +254,14 @@ it('builds the timing and Session from the choice fields', async () => {
   choose('calendar-action-target', 'Helper');
   await settle();
   expect(triggerLabel('calendar-action-session')).toBe(
-    t('calendar.actions.newSession', 'New Session for each execution'),
+    t('calendar.actions.newSession'),
   );
   choose('calendar-action-session', 'Helper thread');
-  choose('calendar-action-direction', t('calendar.actions.after', 'After'));
-  choose('calendar-action-unit', t('calendar.actions.minutes', 'minutes'));
-  choose('calendar-action-anchor', t('calendar.actions.end', 'End'));
+  choose('calendar-action-direction', t('calendar.actions.after'));
+  choose('calendar-action-unit', t('calendar.actions.minutes'));
+  choose('calendar-action-anchor', t('calendar.actions.end'));
   change('calendar-action-prompt', 'Summarize');
-  button(t('common.save', 'Save')).click();
+  button(t('common.save')).click();
   await settle();
   expect(rpcMock).toHaveBeenCalledWith('calendar.add_action', {
     id: 'event1',
@@ -282,13 +278,13 @@ it('hides the offset fields for an action at the event anchor', async () => {
     props: { eventId: 'event1', occurrenceStart: '2027-01-01T12:00' },
   });
   await settle();
-  button(t('calendar.actions.add', 'Add action')).click();
+  button(t('calendar.actions.add')).click();
   await settle();
-  choose('calendar-action-direction', t('calendar.actions.at', 'At'));
+  choose('calendar-action-direction', t('calendar.actions.at'));
   expect(document.getElementById('calendar-action-amount')).toBeNull();
   expect(document.getElementById('calendar-action-unit')).toBeNull();
   change('calendar-action-prompt', 'Join');
-  button(t('common.save', 'Save')).click();
+  button(t('common.save')).click();
   await settle();
   expect(rpcMock).toHaveBeenCalledWith(
     'calendar.add_action',

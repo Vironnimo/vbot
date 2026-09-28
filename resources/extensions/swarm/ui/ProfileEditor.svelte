@@ -147,11 +147,8 @@
     ),
   );
   const reminderTitles = $derived({
-    delivery: t(
-      'swarm.profile.reminderDelivery',
-      'When Board messages are delivered',
-    ),
-    resume: t('swarm.profile.reminderResume', 'When you resume work'),
+    delivery: t('swarm.profile.reminderDelivery'),
+    resume: t('swarm.profile.reminderResume'),
   });
   function setPromptBlock(id, enabled) {
     draft.prompt_blocks = enabled
@@ -186,12 +183,12 @@
   );
   const skills = $derived(catalog.skills ?? []);
   const tabs = $derived([
-    { id: 'overview', label: t('swarm.profile.overview', 'Overview') },
-    { id: 'prompt', label: t('swarm.profile.systemPrompt', 'System Prompt') },
-    { id: 'access', label: t('swarm.profile.access', 'Tools & Skills') },
+    { id: 'overview', label: t('swarm.profile.overview') },
+    { id: 'prompt', label: t('swarm.profile.systemPrompt') },
+    { id: 'access', label: t('swarm.profile.access') },
     {
       id: 'communication',
-      label: t('swarm.profile.communication', 'Communication'),
+      label: t('swarm.profile.communication'),
     },
   ]);
   const skillItems = $derived(
@@ -209,28 +206,28 @@
   const directoryOptions = $derived([
     {
       value: 'directory',
-      label: t('swarm.profile.directoryOption', 'Directory'),
+      label: t('swarm.profile.directoryOption'),
     },
-    { value: 'project', label: t('swarm.profile.projectOption', 'Project') },
+    { value: 'project', label: t('swarm.profile.projectOption') },
   ]);
   const deliveryOptions = $derived([
     {
       value: 'all',
-      label: t('swarm.profile.deliveryAll', 'During work and when idle'),
+      label: t('swarm.profile.deliveryAll'),
     },
-    { value: 'idle', label: t('swarm.profile.deliveryIdle', 'When idle') },
+    { value: 'idle', label: t('swarm.profile.deliveryIdle') },
     {
       value: 'pull',
-      label: t('swarm.profile.deliveryPull', 'On request or when waking'),
+      label: t('swarm.profile.deliveryPull'),
     },
   ]);
   const routes = $derived([
-    { id: 'main', label: t('swarm.profile.mainMessages', 'Main discussion') },
+    { id: 'main', label: t('swarm.profile.mainMessages') },
     {
       id: 'discussion',
-      label: t('swarm.profile.joinedMessages', 'Joined discussions'),
+      label: t('swarm.profile.joinedMessages'),
     },
-    { id: 'ping', label: t('swarm.profile.mentions', 'Direct mentions') },
+    { id: 'ping', label: t('swarm.profile.mentions') },
   ]);
 
   function modelOptions(value) {
@@ -238,7 +235,7 @@
       models,
       modelOnly: true,
       selectedModelValue: value,
-      emptyLabel: t('swarm.profile.selectModel', 'Select a model'),
+      emptyLabel: t('swarm.profile.selectModel'),
       translate: t,
     });
   }
@@ -248,8 +245,8 @@
         value,
         label:
           value === ''
-            ? t('swarm.profile.providerDefault', 'Provider default')
-            : t(`agents.form.thinkingEffortOption.${value}`, value),
+            ? t('swarm.profile.providerDefault')
+            : t(`agents.form.thinkingEffortOption.${value}`),
       }),
     );
   }
@@ -303,7 +300,7 @@
       models,
       modelOnly: true,
       selectedModelValue: compactionPolicy?.strategy.summary_model ?? '',
-      emptyLabel: t('swarm.profile.summaryModelDefault', 'Participant Model'),
+      emptyLabel: t('swarm.profile.summaryModelDefault'),
       translate: t,
     }),
   );
@@ -332,24 +329,15 @@
     saveReason = reason;
     if (profile && !hasChanges()) {
       if (reason === 'manual')
-        bridgeClient.toast(
-          t('settings.alreadySaved', 'Already saved'),
-          'success',
-        );
+        bridgeClient.toast(t('common.alreadySaved'), 'success');
       return true;
     }
     error = '';
     if (!draft.name.trim())
-      return invalid(
-        t('swarm.profile.nameRequired', 'Enter a Swarm name.'),
-        'swarm-profile-name',
-      );
+      return invalid(t('swarm.profile.nameRequired'), 'swarm-profile-name');
     if (draft.slug?.trim() && !/^[a-z0-9][a-z0-9_-]*$/.test(draft.slug)) {
       await invalid(
-        t(
-          'swarm.profile.shortcutValidation',
-          'Use lowercase letters, numbers, hyphens or underscores for the Chat shortcut.',
-        ),
+        t('swarm.profile.shortcutValidation'),
         'swarm-profile-slug',
       );
       const shortcut = document.getElementById('swarm-profile-slug');
@@ -365,10 +353,7 @@
     );
     if (invalidRow >= 0)
       return invalid(
-        t(
-          'swarm.profile.modelsRequired',
-          'Choose a Model and a whole participant count of at least 1.',
-        ),
+        t('swarm.profile.modelsRequired'),
         `swarm-model-${invalidRow}`,
       );
     const directory = draft.working_directory;
@@ -378,10 +363,7 @@
         : !directory.path?.trim()
     ) {
       return invalid(
-        t(
-          'swarm.profile.directoryValidation',
-          'Choose a working directory before saving.',
-        ),
+        t('swarm.profile.directoryValidation'),
         directory.kind === 'project' ? 'swarm-project' : 'swarm-directory',
       );
     }
@@ -408,18 +390,15 @@
 
 <section
   class="editor swarm-profile-editor"
-  aria-label={t('swarm.profile.editorLabel', 'Swarm editor')}
+  aria-label={t('swarm.profile.editorLabel')}
 >
   <header class="editor-head">
     <div class="view-header__intro">
       <h2 class="view-header__title">
-        {profile ? savedProfile.name : t('swarm.profile.new', 'New Swarm')}
+        {profile ? savedProfile.name : t('swarm.profile.new')}
       </h2>
       <p class="view-header__subtitle">
-        {t(
-          'swarm.profile.scopeHelp',
-          'A reusable setup. Changes apply to new Runs.',
-        )}
+        {t('swarm.profile.scopeHelp')}
       </p>
     </div>
     <div class="view-header__actions">
@@ -430,8 +409,8 @@
           variant="tertiary"
           icon
           disabled={saving}
-          ariaLabel={t('swarm.delete.title', 'Delete Swarm')}
-          tooltip={t('swarm.delete.title', 'Delete Swarm')}
+          ariaLabel={t('swarm.delete.title')}
+          tooltip={t('swarm.delete.title')}
           onClick={() => onDelete(savedProfile)}
         >
           <svg
@@ -452,8 +431,8 @@
         variant="tertiary"
         icon
         disabled={busy}
-        ariaLabel={t('common.close', 'Close')}
-        tooltip={t('common.close', 'Close')}
+        ariaLabel={t('common.close')}
+        tooltip={t('common.close')}
         onClick={onCancel}
       >
         <svg
@@ -472,7 +451,7 @@
     items={tabs}
     value={tab}
     idPrefix="swarm-profile"
-    ariaLabel={t('swarm.profile.sections', 'Swarm sections')}
+    ariaLabel={t('swarm.profile.sections')}
     onChange={changeTab}
   />
   {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
@@ -488,7 +467,7 @@
       >
         <FormField
           controlId="swarm-profile-name"
-          label={t('swarm.profile.name', 'Name')}
+          label={t('swarm.profile.name')}
           required
         >
           <TextField
@@ -500,7 +479,7 @@
         </FormField>
         <section class="form-section">
           <div class="section-head">
-            <h3>{t('swarm.profile.models', 'Models & participants')}</h3>
+            <h3>{t('swarm.profile.models')}</h3>
             <Button
               onClick={() =>
                 (draft.participants = [
@@ -515,7 +494,7 @@
                 stroke="currentColor"
                 stroke-width="1.7"
                 aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg
-              >{t('swarm.profile.addModel', 'Add Model')}</Button
+              >{t('swarm.profile.addModel')}</Button
             >
           </div>
           {#each draft.participants as row, index (index)}
@@ -529,19 +508,16 @@
             <div class="formation">
               <FormField
                 controlId={`swarm-model-${index}`}
-                label={t('swarm.profile.model', 'Model')}
+                label={t('swarm.profile.model')}
                 required
               >
                 <SearchableDropdown
                   id={`swarm-model-${index}`}
                   value={row.model}
                   options={visibleOptions}
-                  ariaLabel={t('swarm.profile.model', 'Model')}
+                  ariaLabel={t('swarm.profile.model')}
                   disabled={busy}
-                  searchPlaceholder={t(
-                    'agents.form.modelSearchPlaceholder',
-                    'Filter models…',
-                  )}
+                  searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
                   footerActionLabel={modelFilterFooterLabel({
                     showAll: showAllModels,
                     hiddenCount: allOptions.length - visibleOptions.length,
@@ -555,36 +531,26 @@
                 <FormField
                   controlId={`swarm-effort-${index}`}
                   help={noReasoning
-                    ? t(
-                        'agents.form.thinkingEffortUnsupported',
-                        'This model does not support reasoning.',
-                      )
+                    ? t('agents.form.thinkingEffortUnsupported')
                     : ''}
                 >
                   {#snippet labelContent()}{t(
                       'agents.form.thinkingEffort',
-                      'Thinking effort',
                     )}<InfoHint
-                      text={t(
-                        'swarm.profile.effortHelp',
-                        'Reasoning effort for these participants. Provider default leaves it to the Provider; shared Agent defaults do not apply.',
-                      )}
+                      text={t('swarm.profile.effortHelp')}
                     />{/snippet}
                   <Dropdown
                     id={`swarm-effort-${index}`}
                     value={row.thinking_effort ?? ''}
                     options={effortOptions(row.model)}
-                    ariaLabel={t(
-                      'agents.form.thinkingEffort',
-                      'Thinking effort',
-                    )}
+                    ariaLabel={t('agents.form.thinkingEffort')}
                     disabled={busy || !row.model || noReasoning}
                     onValueChange={(value) => (row.thinking_effort = value)}
                   />
                 </FormField>
                 <FormField
                   controlId={`swarm-count-${index}`}
-                  label={t('swarm.profile.participants', 'Participants')}
+                  label={t('swarm.profile.participants')}
                   required
                 >
                   <TextField
@@ -599,12 +565,10 @@
                 <Button
                   variant="danger"
                   icon
-                  ariaLabel={t(
-                    'swarm.profile.removeModel',
-                    'Remove Model row {number}',
-                    { number: index + 1 },
-                  )}
-                  tooltip={t('swarm.profile.remove', 'Remove Model')}
+                  ariaLabel={t('swarm.profile.removeModel', {
+                    number: index + 1,
+                  })}
+                  tooltip={t('swarm.profile.remove')}
                   disabled={busy || draft.participants.length === 1}
                   onClick={() =>
                     (draft.participants = draft.participants.filter(
@@ -625,23 +589,19 @@
             </div>
           {/each}
           <p class="hint">
-            {t(
-              'swarm.profile.sessionCount',
-              '{count} participants, each with its own Session.',
-              { count: totalParticipants },
-            )}
+            {t('swarm.profile.sessionCount', { count: totalParticipants })}
           </p>
         </section>
         <section class="form-section">
-          <h3>{t('swarm.profile.directoryHeading', 'Working directory')}</h3>
+          <h3>{t('swarm.profile.directoryHeading')}</h3>
           <div class="directory-fields">
             <FormField
               controlId="swarm-directory-source"
-              label={t('swarm.profile.directorySource', 'Source')}
+              label={t('swarm.profile.directorySource')}
             >
               <Dropdown
                 id="swarm-directory-source"
-                ariaLabel={t('swarm.profile.directorySource', 'Source')}
+                ariaLabel={t('swarm.profile.directorySource')}
                 value={draft.working_directory.kind}
                 options={directoryOptions}
                 disabled={busy}
@@ -651,12 +611,12 @@
             {#if draft.working_directory.kind === 'project'}
               <FormField
                 controlId="swarm-project"
-                label={t('swarm.profile.project', 'Project')}
+                label={t('swarm.profile.project')}
                 required
               >
                 <SearchableDropdown
                   id="swarm-project"
-                  ariaLabel={t('swarm.profile.project', 'Project')}
+                  ariaLabel={t('swarm.profile.project')}
                   value={draft.working_directory.project_id}
                   disabled={busy}
                   options={projects.map((project) => ({
@@ -664,10 +624,7 @@
                     label: project.name,
                     secondaryLabel: project.cwd,
                   }))}
-                  placeholder={t(
-                    'swarm.profile.selectProject',
-                    'Select a project',
-                  )}
+                  placeholder={t('swarm.profile.selectProject')}
                   onValueChange={(value) =>
                     (draft.working_directory.project_id = value)}
                 />
@@ -675,7 +632,7 @@
             {:else}
               <FormField
                 controlId="swarm-directory"
-                label={t('swarm.profile.directory', 'Directory')}
+                label={t('swarm.profile.directory')}
                 required
               >
                 <TextField
@@ -688,32 +645,18 @@
           </div>
         </section>
         <section class="form-section">
-          <h3>{t('swarm.profile.compactionHeading', 'Compaction')}</h3>
+          <h3>{t('swarm.profile.compactionHeading')}</h3>
           <p class="hint">
             {compactionPolicy
-              ? t(
-                  'swarm.profile.compactionCustomHelp',
-                  'Every participant of new Runs uses this policy for automatic and manual Compaction.',
-                )
-              : t(
-                  'swarm.profile.compactionInheritHelp',
-                  'Participants use the global Compaction settings. Turn on to set a policy for this Swarm.',
-                )}
+              ? t('swarm.profile.compactionCustomHelp')
+              : t('swarm.profile.compactionInheritHelp')}
           </p>
           <div class="switch-row">
-            <span
-              >{t(
-                'swarm.profile.customCompaction',
-                'Custom compaction policy',
-              )}</span
-            >
+            <span>{t('swarm.profile.customCompaction')}</span>
             <Toggle
               checked={compactionPolicy !== null}
               disabled={busy}
-              ariaLabel={t(
-                'swarm.profile.customCompaction',
-                'Custom compaction policy',
-              )}
+              ariaLabel={t('swarm.profile.customCompaction')}
               onChange={setCustomCompaction}
             />
           </div>
@@ -731,29 +674,18 @@
           {/if}
         </section>
         <details class="advanced">
-          <summary
-            >{t(
-              'swarm.profile.chatShortcut',
-              'Chat shortcut (optional)',
-            )}</summary
-          >
+          <summary>{t('swarm.profile.chatShortcut')}</summary>
           <p class="hint">
-            {t(
-              'swarm.profile.shortcutHelp',
-              'A shortcut is generated from the name when you save. Use it to choose this Swarm with /swarm from Chat.',
-            )}
+            {t('swarm.profile.shortcutHelp')}
           </p>
           <FormField
             controlId="swarm-profile-slug"
-            label={t('swarm.profile.shortcutName', 'Shortcut name')}
+            label={t('swarm.profile.shortcutName')}
           >
             <TextField
               id="swarm-profile-slug"
               value={draft.slug ?? ''}
-              placeholder={t(
-                'swarm.profile.automaticShortcut',
-                'Generated automatically',
-              )}
+              placeholder={t('swarm.profile.automaticShortcut')}
               onInput={(value) => (draft.slug = value)}
             />
           </FormField>
@@ -770,7 +702,7 @@
       >
         <FormField
           controlId="swarm-instructions"
-          label={t('swarm.profile.instructions', 'Your instructions')}
+          label={t('swarm.profile.instructions')}
         >
           <TextArea
             id="swarm-instructions"
@@ -781,16 +713,10 @@
         </FormField>
         <section class="form-section">
           <h3>
-            {t(
-              'swarm.profile.promptContributions',
-              'Additional System Prompt content',
-            )}
+            {t('swarm.profile.promptContributions')}
           </h3>
           <p class="hint">
-            {t(
-              'swarm.profile.promptSelectionHelp',
-              'Only selected blocks are included. New blocks stay off until you enable them. Project context is independent of the working directory and Tool access.',
-            )}
+            {t('swarm.profile.promptSelectionHelp')}
           </p>
           {#each promptBlocks as block (block.id)}
             {@const detail = preview.previewCurrent
@@ -806,23 +732,15 @@
                 />
               </div>
               <details>
-                <summary
-                  >{t('swarm.profile.inspectContent', 'Show content')}</summary
-                >
+                <summary>{t('swarm.profile.inspectContent')}</summary>
                 {#if detail}
                   {#if !detail.active}<p class="hint">
-                      {t(
-                        'swarm.profile.blockInactive',
-                        'Unavailable for this configuration; not included.',
-                      )}
+                      {t('swarm.profile.blockInactive')}
                     </p>{/if}
                   <pre>{detail.text}</pre>
                 {:else if block.text !== undefined}<pre>{block.text}</pre>
                 {:else}<p class="hint">
-                    {t(
-                      'swarm.profile.dynamicPreview',
-                      'Generate the preview to inspect this content for the selected Model and Project.',
-                    )}
+                    {t('swarm.profile.dynamicPreview')}
                   </p>{/if}
               </details>
             </div>
@@ -832,7 +750,6 @@
               <span
                 >{preview.blockTitle(id)} — {t(
                   'swarm.profile.blockUnavailable',
-                  'Currently unavailable',
                 )}</span
               >
               <Toggle
@@ -844,45 +761,37 @@
           {/each}
         </section>
         <section class="form-section">
-          <h3>{t('swarm.profile.promptPreview', 'Combined System Prompt')}</h3>
+          <h3>{t('swarm.profile.promptPreview')}</h3>
           <div class="prompt-block-head">
             <Dropdown
               id="swarm-preview-model"
               value={preview.previewFormation}
               options={draft.participants.map((row, index) => ({
                 value: index,
-                label: `${index + 1}: ${row.model || t('swarm.profile.selectModel', 'Select a model')}`,
+                label: `${index + 1}: ${row.model || t('swarm.profile.selectModel')}`,
               }))}
-              ariaLabel={t('swarm.profile.previewModel', 'Preview Model')}
+              ariaLabel={t('swarm.profile.previewModel')}
               onValueChange={(value) => (preview.previewFormation = value)}
             />
             <Button
               variant="secondary"
               disabled={preview.previewBusy}
               onClick={preview.inspectPrompt}
-              >{t('swarm.profile.generatePreview', 'Generate preview')}</Button
+              >{t('swarm.profile.generatePreview')}</Button
             >
           </div>
           {#if preview.previewError}<Banner variant="error" role="alert"
               >{preview.previewError}</Banner
             >{/if}
           {#if preview.preview && !preview.previewCurrent}<Banner
-              >{t(
-                'swarm.profile.previewStale',
-                'Configuration changed. Generate a new preview to see the current prompt.',
-              )}</Banner
+              >{t('swarm.profile.previewStale')}</Banner
             >{/if}
           {#if preview.previewCurrent}
             <pre
               class="prompt-preview"
               data-testid="swarm-prompt-preview">{preview.preview.text}</pre>
             <details>
-              <summary
-                >{t(
-                  'swarm.profile.nativeTools',
-                  'Tool definitions sent separately',
-                )}</summary
-              >
+              <summary>{t('swarm.profile.nativeTools')}</summary>
               {#each preview.preview.tools as tool (tool.name)}
                 <details>
                   <summary>{tool.name}</summary>
@@ -893,12 +802,9 @@
           {/if}
         </section>
         <section class="form-section">
-          <h3>{t('swarm.profile.reminders', 'Swarm reminders during work')}</h3>
+          <h3>{t('swarm.profile.reminders')}</h3>
           <p class="hint">
-            {t(
-              'swarm.profile.reminderHelp',
-              'These event-triggered instructions are separate from the System Prompt. Turning one off removes its guidance; Board messages and lifecycle actions still work. Previously delivered text remains in an existing Session.',
-            )}
+            {t('swarm.profile.reminderHelp')}
           </p>
           {#each Object.entries(catalog.reminder_texts ?? {}) as [event, text] (event)}
             <div class="prompt-block">
@@ -911,9 +817,7 @@
                 />
               </div>
               <details>
-                <summary
-                  >{t('swarm.profile.inspectContent', 'Show content')}</summary
-                >
+                <summary>{t('swarm.profile.inspectContent')}</summary>
                 <pre>{text}</pre>
               </details>
             </div>
@@ -929,12 +833,9 @@
         aria-labelledby="swarm-profile-tab-access"
       >
         <section class="form-section">
-          <h3>{t('swarm.profile.tools', 'Tool access')}</h3>
+          <h3>{t('swarm.profile.tools')}</h3>
           <p class="hint">
-            {t(
-              'swarm.profile.toolSelectionHelp',
-              'Applies to every participant. All selects the currently available Tools; newly added Tools are not included automatically.',
-            )}
+            {t('swarm.profile.toolSelectionHelp')}
           </p>
           <ToolAccessEditor
             value={draft.tool_access}
@@ -945,18 +846,14 @@
           />
         </section>
         <section class="form-section">
-          <h3>{t('swarm.profile.skillsHeading', 'Skills')}</h3>
+          <h3>{t('swarm.profile.skillsHeading')}</h3>
           <ToggleChipList
             items={skillItems}
-            emptyLabel={t('swarm.profile.noSkills', 'No Skills are available.')}
+            emptyLabel={t('swarm.profile.noSkills')}
             note={draft.allowed_skills.includes('*')
-              ? t(
-                  'swarm.profile.allSkills',
-                  'All current and future Skills are allowed.',
-                )
+              ? t('swarm.profile.allSkills')
               : ''}
-            ariaToggleLabel={(name) =>
-              t('swarm.profile.toggleSkill', 'Toggle Skill {name}', { name })}
+            ariaToggleLabel={(name) => t('swarm.profile.toggleSkill', { name })}
             onToggle={setSkill}
             onSetAll={(next) => (draft.allowed_skills = next ? ['*'] : [])}
           />
@@ -971,24 +868,18 @@
         aria-labelledby="swarm-profile-tab-communication"
       >
         <p class="hint">
-          {t(
-            'swarm.profile.communicationHelp',
-            'Choose when participants receive Board messages and whether a new message starts work when they are idle.',
-          )}
+          {t('swarm.profile.communicationHelp')}
         </p>
         {#each routes as route (route.id)}
           <section class="form-section">
             <h3>{route.label}</h3>
             <FormField
               controlId={`swarm-delivery-${route.id}`}
-              label={t('swarm.profile.receiveMessages', 'Receive messages')}
+              label={t('swarm.profile.receiveMessages')}
             >
               <Dropdown
                 id={`swarm-delivery-${route.id}`}
-                ariaLabel={t(
-                  'swarm.profile.receiveMessages',
-                  'Receive messages',
-                )}
+                ariaLabel={t('swarm.profile.receiveMessages')}
                 value={draft.delivery[route.id].mode}
                 options={deliveryOptions}
                 disabled={busy}
@@ -997,20 +888,11 @@
               />
             </FormField>
             <div class="switch-row">
-              <span
-                >{t(
-                  'swarm.profile.wakeIdle',
-                  'Start work when a message arrives',
-                )}</span
-              >
+              <span>{t('swarm.profile.wakeIdle')}</span>
               <Toggle
                 checked={draft.delivery[route.id].wake_idle}
                 disabled={busy}
-                ariaLabel={t(
-                  'swarm.profile.wakeRoute',
-                  'Start idle participants for {route}',
-                  { route: route.label },
-                )}
+                ariaLabel={t('swarm.profile.wakeRoute', { route: route.label })}
                 onChange={(value) =>
                   (draft.delivery[route.id].wake_idle = value)}
               />
@@ -1018,16 +900,11 @@
           </section>
         {/each}
         <details class="advanced">
-          <summary
-            >{t(
-              'swarm.profile.advancedDelivery',
-              'Advanced delivery settings',
-            )}</summary
-          >
+          <summary>{t('swarm.profile.advancedDelivery')}</summary>
           <div class="three">
             <FormField
               controlId="swarm-coalesce"
-              label={t('swarm.profile.batchDelay', 'Batch delay (ms)')}
+              label={t('swarm.profile.batchDelay')}
             >
               <TextField
                 id="swarm-coalesce"
@@ -1040,7 +917,7 @@
             </FormField>
             <FormField
               controlId="swarm-batch-messages"
-              label={t('swarm.delivery.batchMessages', 'Messages per batch')}
+              label={t('swarm.delivery.batchMessages')}
             >
               <TextField
                 id="swarm-batch-messages"
@@ -1053,7 +930,7 @@
             </FormField>
             <FormField
               controlId="swarm-batch-chars"
-              label={t('swarm.delivery.batchChars', 'Characters per batch')}
+              label={t('swarm.delivery.batchChars')}
             >
               <TextField
                 id="swarm-batch-chars"
@@ -1076,10 +953,10 @@
           <SaveButton {saving} pending={hasChanges()} onClick={save} />
         {:else}
           <Button disabled={busy} onClick={onCancel}
-            >{t('common.cancel', 'Cancel')}</Button
+            >{t('common.cancel')}</Button
           >
           <Button variant="primary" loading={saving} onClick={save}>
-            {t('swarm.profile.save', 'Save Swarm')}
+            {t('swarm.profile.save')}
           </Button>
         {/if}
       </div>
@@ -1089,25 +966,22 @@
 
 {#if pendingTransition}
   <Modal
-    title={t('autosave.transitionFailureTitle', 'Changes could not be saved')}
+    title={t('autosave.transitionFailureTitle')}
     closeDisabled={transitionSaving}
     onClose={() => (pendingTransition = null)}
   >
     {#snippet body()}<p class="transition-copy swarm-profile-transition-copy">
-        {t(
-          'autosave.transitionFailureBody',
-          'Retry saving your changes, or discard them and continue.',
-        )}
+        {t('autosave.transitionFailureBody')}
       </p>{/snippet}
     {#snippet footer()}
       <Button
         variant="primary"
         loading={transitionSaving}
         onClick={() => requestTransition(pendingTransition)}
-        >{t('common.retry', 'Retry')}</Button
+        >{t('common.retry')}</Button
       >
       <Button disabled={transitionSaving} onClick={discardTransition}
-        >{t('autosave.discardAndContinue', 'Discard and continue')}</Button
+        >{t('autosave.discardAndContinue')}</Button
       >
     {/snippet}
   </Modal>

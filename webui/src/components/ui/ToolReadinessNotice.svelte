@@ -38,7 +38,7 @@
 {#if isNotReady}
   <div class="tool-readiness">
     <span class="tool-readiness__badge">
-      {t('agents.tools.notReadyBadge', 'Currently unavailable')}
+      {t('agents.tools.notReadyBadge')}
     </span>
     {#if hintText}
       <span class="tool-readiness__hint">{hintText}</span>
@@ -49,7 +49,7 @@
         class="tool-readiness__link"
         onClick={() => onOpenExtensions(extensionName)}
       >
-        {t('agents.tools.openExtensions', 'Open Extensions')}
+        {t('agents.tools.openExtensions')}
       </Button>
     {/if}
   </div>

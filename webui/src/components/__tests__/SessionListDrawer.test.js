@@ -470,7 +470,7 @@ describe('SessionListDrawer list', () => {
     expect(
       document.querySelector('.session-drawer__more-hint').textContent,
     ).toContain(
-      t('sessions.moreHint', '{count} more sessions — scroll to load', {
+      t('sessions.moreHint', {
         count: 20,
       }),
     );

@@ -146,24 +146,24 @@
     if (status === 'connected') {
       return {
         variant: 'success',
-        label: t('settings.providers.connected', 'Connected'),
+        label: t('settings.providers.connected'),
       };
     }
     if (status === 'unreachable') {
       return {
         variant: 'warn',
-        label: t('settings.providers.notReachableChip', 'Not reachable'),
+        label: t('settings.providers.notReachableChip'),
       };
     }
     if (status === 'not_usable') {
       return {
         variant: 'warn',
-        label: t('settings.providers.accounts.notUsable', 'Not usable'),
+        label: t('settings.providers.accounts.notUsable'),
       };
     }
     return {
       variant: 'warn',
-      label: t('settings.providers.disabledChip', 'Disabled'),
+      label: t('settings.providers.disabledChip'),
     };
   }
 
@@ -228,9 +228,7 @@
     ) {
       pendingProviderRefresh = false;
       void Promise.resolve(onRefreshProviderSettings()).catch((error) => {
-        onError(
-          `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`,
-        );
+        onError(`${t('settings.loadError')} ${error.message}`);
       });
     }
   });
@@ -264,40 +262,30 @@
       const connectionLabel = connection.label ?? connection.id;
       if (!enabled) {
         onToast({
-          title: t(
-            'settings.providers.disabledToast',
-            '{connection} disabled.',
-            {
-              connection: connectionLabel,
-            },
-          ),
+          title: t('settings.providers.disabledToast', {
+            connection: connectionLabel,
+          }),
           variant: 'success',
         });
       } else if (result?.reachable === false) {
         onToast({
-          title: t(
-            'settings.providers.enabledUnreachableToast',
-            '{connection} enabled, but the endpoint is not reachable. Start the service and its models appear automatically.',
-            { connection: connectionLabel },
-          ),
+          title: t('settings.providers.enabledUnreachableToast', {
+            connection: connectionLabel,
+          }),
           variant: 'warn',
         });
       } else if (result?.reachable === true) {
         onToast({
-          title: t(
-            'settings.providers.enabledReachableToast',
-            '{connection} enabled — endpoint reachable, model catalog refreshed.',
-            { connection: connectionLabel },
-          ),
+          title: t('settings.providers.enabledReachableToast', {
+            connection: connectionLabel,
+          }),
           variant: 'success',
         });
       }
 
       await onRefreshProviderSettings();
     } catch (error) {
-      onError(
-        `${t('settings.providers.toggleError', 'Provider connection could not be updated.')} ${error.message}`,
-      );
+      onError(`${t('settings.providers.toggleError')} ${error.message}`);
     } finally {
       connectionToggleBusy = false;
     }
@@ -308,33 +296,18 @@
       return describeSharedOpenCodeKey(t);
     }
     if (!isConnectionEnabled(connection)) {
-      return t(
-        'settings.providers.disabledDescription',
-        'Disabled — not probed and offering no models until you enable it.',
-      );
+      return t('settings.providers.disabledDescription');
     }
     if (isKeylessConnection(connection)) {
-      return t(
-        'settings.providers.keylessDescription',
-        'No key required — this endpoint is keyless.',
-      );
+      return t('settings.providers.keylessDescription');
     }
     if (isOAuthDeviceFlowConnection(connection)) {
-      return t(
-        'settings.providers.oauthDescription',
-        'OAuth device authorization managed by the provider.',
-      );
+      return t('settings.providers.oauthDescription');
     }
     if (isOAuthConnection(connection)) {
-      return t(
-        'settings.providers.oauthTokenDescription',
-        'OAuth token configured from environment or data directory.',
-      );
+      return t('settings.providers.oauthTokenDescription');
     }
-    return t(
-      'settings.providers.apiKeyDescription',
-      'Static credential configured from environment or data directory.',
-    );
+    return t('settings.providers.apiKeyDescription');
   }
 
   function openAddProviderModal() {
@@ -370,20 +343,12 @@
       await deleteCustomProvider({ provider_id: providerId });
       deleteCustomCandidate = null;
       onToast({
-        title: t(
-          'settings.providers.custom.deleted',
-          'Custom Provider deleted.',
-        ),
+        title: t('settings.providers.custom.deleted'),
         variant: 'success',
       });
       await onRefreshProviderSettings();
     } catch (error) {
-      onError(
-        `${t(
-          'settings.providers.custom.deleteError',
-          'Custom Provider could not be deleted.',
-        )} ${error.message}`,
-      );
+      onError(`${t('settings.providers.custom.deleteError')} ${error.message}`);
     }
   }
 
@@ -418,9 +383,7 @@
       );
       await onRefreshProviderSettings();
     } catch (error) {
-      onError(
-        `${t('settings.providers.disconnectError', 'Provider connection could not be disconnected.')} ${error.message}`,
-      );
+      onError(`${t('settings.providers.disconnectError')} ${error.message}`);
     }
   }
 
@@ -436,24 +399,19 @@
 
       if (result?.configured === true) {
         onToast({
-          title: t(
-            'settings.providers.removeKeyStillEnv',
-            'Key removed, but the process environment still provides a credential.',
-          ),
+          title: t('settings.providers.removeKeyStillEnv'),
           variant: 'warn',
         });
       } else {
         onToast({
-          title: t('settings.providers.removeKeySuccess', 'API key removed.'),
+          title: t('settings.providers.removeKeySuccess'),
           variant: 'success',
         });
       }
 
       await onRefreshProviderSettings();
     } catch (error) {
-      onError(
-        `${t('settings.providers.removeKeyError', 'API key could not be removed.')} ${error.message}`,
-      );
+      onError(`${t('settings.providers.removeKeyError')} ${error.message}`);
     }
   }
 
@@ -479,32 +437,22 @@
       await listModels();
       // The operation result remains visible through the app-level toast while
       // Provider invalidation refreshes the catalog in place.
+      const { providerCount, count } = refreshSummary(result);
       onToast({
-        title: t(
-          'settings.providers.refreshSuccess',
-          'Model DB updated: {providerCount} providers, {count} models available.',
-          refreshSummaryValues(result),
-        ),
+        title: t('settings.providers.refreshSuccess', { providerCount, count }),
         variant: 'success',
       });
       const failedProviders = getRefreshFailures(result);
       if (failedProviders.length > 0) {
         onToast({
-          title: t(
-            'settings.providers.refreshPartial',
-            'Some providers could not be reached and were skipped: {providers}.',
-            { providers: failedProviders.join(', ') },
-          ),
+          title: t('settings.providers.refreshPartial', {
+            providers: failedProviders.join(', '),
+          }),
           variant: 'warn',
         });
       }
     } catch (error) {
-      onError(
-        `${t(
-          'settings.providers.refreshError',
-          'Model DB could not be updated.',
-        )} ${error.message}`,
-      );
+      onError(`${t('settings.providers.refreshError')} ${error.message}`);
     } finally {
       refreshingModels = false;
     }
@@ -562,7 +510,7 @@
       .filter((label) => typeof label === 'string' && label.length > 0);
   }
 
-  function refreshSummaryValues(result) {
+  function refreshSummary(result) {
     const refreshedProviders = getRefreshedProviders(result);
     const modelCount = Number.isFinite(result?.model_count)
       ? result.model_count
@@ -584,15 +532,12 @@
   <Button
     variant="tertiary"
     disabled={refreshingModels}
-    tooltip={t(
-      'settings.providers.refreshModelsHint',
-      'Fetches the current model lists from your connected providers and the public model catalog. Run it when a provider ships new models — your hand-maintained overrides are never touched.',
-    )}
+    tooltip={t('settings.providers.refreshModelsHint')}
     onClick={refreshModelDatabase}
   >
     {refreshingModels
-      ? t('settings.providers.refreshingModels', 'Updating…')
-      : t('settings.providers.refreshModels', 'Update Model DB')}
+      ? t('settings.providers.refreshingModels')
+      : t('settings.providers.refreshModels')}
   </Button>
 {/snippet}
 
@@ -600,20 +545,17 @@
   {#if displayedProviders.length === 0}
     <EmptyState
       density="compact"
-      description={t(
-        'settings.providers.noneConnected',
-        'No providers connected yet. Add one to make its models available.',
-      )}
+      description={t('settings.providers.noneConnected')}
     >
       {#snippet actions()}
         <Button variant="primary" onClick={openAddProviderModal}>
-          {t('settings.providers.add.button', 'Add provider')}
+          {t('settings.providers.add.button')}
         </Button>
         <Button
           variant="secondary"
           onClick={() => openCustomProviderModal(null)}
         >
-          {t('settings.providers.custom.addButton', 'Add custom')}
+          {t('settings.providers.custom.addButton')}
         </Button>
         {#if hasRefreshEligibleProvider}
           {@render refreshModelsButton()}
@@ -625,7 +567,7 @@
          sits at the far end of the same line. -->
     <div class="s-group-toolbar s-list-toolbar">
       <span class="s-group-toolbar__meta">
-        {t('settings.providers.connectedCount', '{count} connected', {
+        {t('settings.providers.connectedCount', {
           count: displayedProviders.length,
         })}
       </span>
@@ -637,10 +579,10 @@
           variant="tertiary"
           onClick={() => openCustomProviderModal(null)}
         >
-          {t('settings.providers.custom.addButton', 'Add custom')}
+          {t('settings.providers.custom.addButton')}
         </Button>
         <Button variant="primary" onClick={openAddProviderModal}>
-          {t('settings.providers.add.button', 'Add provider')}
+          {t('settings.providers.add.button')}
         </Button>
       </div>
     </div>
@@ -677,13 +619,9 @@
                 variant="tertiary"
                 icon
                 class="s-disclosure-btn"
-                ariaLabel={t(
-                  'settings.providers.detailsAria',
-                  'Details for {id}',
-                  {
-                    id: provider.id,
-                  },
-                )}
+                ariaLabel={t('settings.providers.detailsAria', {
+                  id: provider.id,
+                })}
                 aria-expanded={expanded}
                 onClick={() => toggleProviderDetails(provider)}
               >
@@ -713,53 +651,43 @@
                     <div class="s-entity__end">
                       {#if !isConnectionEnabled(connection)}
                         <StatusChip variant="warn">
-                          {t('settings.providers.disabledChip', 'Disabled')}
+                          {t('settings.providers.disabledChip')}
                         </StatusChip>
                         <Button
                           variant="secondary"
                           disabled={connectionToggleBusy}
-                          ariaLabel={t(
-                            'settings.providers.enableAria',
-                            'Enable connection {id}',
-                            { id: connection.id },
-                          )}
+                          ariaLabel={t('settings.providers.enableAria', {
+                            id: connection.id,
+                          })}
                           onClick={() =>
                             setConnectionEnabled(provider, connection, true)}
                         >
-                          {t('settings.providers.enable', 'Enable')}
+                          {t('settings.providers.enable')}
                         </Button>
                       {:else}
                         {#if connectionReachability(connection) === false}
                           <StatusChip variant="warn">
-                            {t(
-                              'settings.providers.notReachableChip',
-                              'Not reachable',
-                            )}
+                            {t('settings.providers.notReachableChip')}
                           </StatusChip>
                         {:else if getConnectionAccounts(connection).length === 0 || isKeylessConnection(connection) || connectionAccountsUsable(connection)}
                           <StatusChip variant="success">
-                            {t('settings.providers.connected', 'Connected')}
+                            {t('settings.providers.connected')}
                           </StatusChip>
                         {:else}
                           <StatusChip variant="warn">
-                            {t(
-                              'settings.providers.accounts.notUsable',
-                              'Not usable',
-                            )}
+                            {t('settings.providers.accounts.notUsable')}
                           </StatusChip>
                         {/if}
                         <Button
                           variant="secondary"
                           disabled={connectionToggleBusy}
-                          ariaLabel={t(
-                            'settings.providers.disableAria',
-                            'Disable connection {id}',
-                            { id: connection.id },
-                          )}
+                          ariaLabel={t('settings.providers.disableAria', {
+                            id: connection.id,
+                          })}
                           onClick={() =>
                             setConnectionEnabled(provider, connection, false)}
                         >
-                          {t('settings.providers.disable', 'Disable')}
+                          {t('settings.providers.disable')}
                         </Button>
                       {/if}
                     </div>
@@ -779,11 +707,8 @@
                                 : 'warn'}
                             >
                               {isAccountUsable(account)
-                                ? t('settings.providers.connected', 'Connected')
-                                : t(
-                                    'settings.providers.accounts.notUsable',
-                                    'Not usable',
-                                  )}
+                                ? t('settings.providers.connected')
+                                : t('settings.providers.accounts.notUsable')}
                             </StatusChip>
                             <span class="s-connection-account-source">
                               {describeAccountSource(account, t)}
@@ -799,10 +724,7 @@
                                       account,
                                     )}
                                 >
-                                  {t(
-                                    'settings.providers.disconnect',
-                                    'Disconnect',
-                                  )}
+                                  {t('settings.providers.disconnect')}
                                 </Button>
                               {:else if !isOAuthConnection(connection)}
                                 <Button
@@ -814,21 +736,17 @@
                                       account,
                                     )}
                                 >
-                                  {t(
-                                    'settings.providers.replaceKey',
-                                    'Replace key…',
-                                  )}
+                                  {t('settings.providers.replaceKey')}
                                 </Button>
                                 {#if isProcessEnvAccount(account)}
                                   <span
                                     class="s-connection-account-locked"
                                     use:tooltip={t(
                                       'settings.providers.accounts.removeEnvHint',
-                                      'This credential comes from the process environment and cannot be removed here.',
                                     )}
                                   >
                                     <Button variant="danger" disabled>
-                                      {t('common.remove', 'Remove')}
+                                      {t('common.remove')}
                                     </Button>
                                   </span>
                                 {:else}
@@ -844,9 +762,8 @@
                                     {isSharedOpenCodeConnection(connection)
                                       ? t(
                                           'settings.providers.opencode.removeKey',
-                                          'Remove shared key',
                                         )
-                                      : t('common.remove', 'Remove')}
+                                      : t('common.remove')}
                                   </Button>
                                 {/if}
                               {/if}
@@ -862,10 +779,7 @@
                           onClick={() =>
                             openAddAccountModal(provider, connection)}
                         >
-                          {t(
-                            'settings.providers.accounts.addButton',
-                            'Add account…',
-                          )}
+                          {t('settings.providers.accounts.addButton')}
                         </Button>
                       </div>
                     {/if}
@@ -881,10 +795,7 @@
                     variant="secondary"
                     onClick={() => openAddConnectionModal(provider)}
                   >
-                    {t(
-                      'settings.providers.add.connectionButton',
-                      'Add connection',
-                    )}
+                    {t('settings.providers.add.connectionButton')}
                   </Button>
                 {/if}
                 {#if provider.custom === true}
@@ -895,7 +806,7 @@
                         customProviderSettings(provider.id),
                       )}
                   >
-                    {t('common.edit', 'Edit')}
+                    {t('common.edit')}
                   </Button>
                   <Button
                     variant="danger"
@@ -903,7 +814,7 @@
                       deleteCustomCandidate = provider;
                     }}
                   >
-                    {t('common.delete', 'Delete')}
+                    {t('common.delete')}
                   </Button>
                 {/if}
               </div>
@@ -924,16 +835,10 @@
               <div class="s-provider-local-context">
                 <div class="s-row-info">
                   <div class="s-provider-connection-label">
-                    {t(
-                      'settings.providers.localContext.title',
-                      'Local model context',
-                    )}
+                    {t('settings.providers.localContext.title')}
                   </div>
                   <div class="s-row-desc">
-                    {t(
-                      'settings.providers.localContext.description',
-                      'The context window vBot budgets against and requests from the local server per call. Empty uses the default (32k, capped at the model max).',
-                    )}
+                    {t('settings.providers.localContext.description')}
                   </div>
                 </div>
                 {#each localModels.localModelsByProvider[provider.id] as model (model.id)}
@@ -949,7 +854,6 @@
                       disabled={localModels.localContextBusy}
                       aria-label={t(
                         'settings.providers.localContext.inputLabel',
-                        'Context window for {model}',
                         { model: model.model_id },
                       )}
                       onchange={(event) =>
@@ -960,11 +864,9 @@
                     />
                     {#if model.context_window}
                       <span class="s-local-context-max">
-                        {t(
-                          'settings.providers.localContext.maxHint',
-                          'model max {max}',
-                          { max: model.context_window.toLocaleString() },
-                        )}
+                        {t('settings.providers.localContext.maxHint', {
+                          max: model.context_window.toLocaleString(),
+                        })}
                       </span>
                     {/if}
                   </div>
@@ -1003,15 +905,9 @@
 
   {#if deleteCustomCandidate}
     <ConfirmDialog
-      title={t(
-        'settings.providers.custom.deleteTitle',
-        'Delete Custom Provider?',
-      )}
-      body={t(
-        'settings.providers.custom.deleteBody',
-        'The Provider and its stored data-directory API keys are removed. Existing Model references are kept and become unavailable.',
-      )}
-      confirmLabel={t('common.delete', 'Delete')}
+      title={t('settings.providers.custom.deleteTitle')}
+      body={t('settings.providers.custom.deleteBody')}
+      confirmLabel={t('common.delete')}
       onConfirm={confirmDeleteCustomProvider}
       onCancel={() => {
         deleteCustomCandidate = null;

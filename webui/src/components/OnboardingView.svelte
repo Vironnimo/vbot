@@ -167,7 +167,7 @@
       return result;
     } catch (error) {
       if (!disposed && request === settingsRequest) {
-        settingsError = `${t('onboarding.service.loadError', 'Providers could not be loaded.')} ${error.message}`;
+        settingsError = `${t('onboarding.service.loadError')} ${error.message}`;
       }
       return null;
     } finally {
@@ -182,9 +182,7 @@
   }
 
   function providerName(provider) {
-    return (
-      provider?.name ?? provider?.id ?? t('onboarding.provider', 'Provider')
-    );
+    return provider?.name ?? provider?.id ?? t('onboarding.provider');
   }
 
   async function focusStep() {
@@ -241,7 +239,7 @@
         selectedModelValue = '';
     } catch (error) {
       if (!disposed)
-        modelsError = `${t('onboarding.model.loadError', 'Models could not be loaded.')} ${error.message}`;
+        modelsError = `${t('onboarding.model.loadError')} ${error.message}`;
     } finally {
       if (!disposed && request === modelRequest) loadingModels = false;
     }
@@ -281,17 +279,14 @@
         { mode: AGENT_FORM_MODE_EDIT, initialValues: baseline },
       );
       if (!result.isValid) {
-        assignError = t(
-          'onboarding.model.assignError',
-          'The Model could not be assigned.',
-        );
+        assignError = t('onboarding.model.assignError');
         return;
       }
       await updateAgent(result.payload);
       if (!disposed) onComplete();
     } catch (error) {
       if (!disposed)
-        assignError = `${t('onboarding.model.assignError', 'The Model could not be assigned.')} ${error.message}`;
+        assignError = `${t('onboarding.model.assignError')} ${error.message}`;
     } finally {
       if (!disposed) assigning = false;
     }
@@ -332,14 +327,14 @@
             width="44"
             height="32"
           />
-          <h2 id="onboarding-title">{t('onboarding.title', 'Set up vBot')}</h2>
+          <h2 id="onboarding-title">{t('onboarding.title')}</h2>
         </div>
         <Button variant="tertiary" disabled={assigning} onClick={onDismiss}>
-          {t('onboarding.dismiss', 'Explore first')}
+          {t('onboarding.dismiss')}
         </Button>
       </header>
 
-      <nav aria-label={t('onboarding.progress', 'Setup progress')}>
+      <nav aria-label={t('onboarding.progress')}>
         <ol class="onboarding-progress">
           <li
             class:current={step === 'service'}
@@ -354,7 +349,7 @@
               <span class="onboarding-step-number" aria-hidden="true"
                 >{#if connectedProvider}{@render check()}{:else}1{/if}</span
               >
-              <span>{t('onboarding.progress.service', 'Providers')}</span>
+              <span>{t('onboarding.progress.service')}</span>
             </button>
           </li>
           <li class:current={step === 'model'}>
@@ -368,7 +363,7 @@
               onclick={goToModelStep}
             >
               <span class="onboarding-step-number" aria-hidden="true">2</span>
-              <span>{t('onboarding.progress.model', 'First Model')}</span>
+              <span>{t('onboarding.progress.model')}</span>
             </button>
           </li>
         </ol>
@@ -382,19 +377,13 @@
             tabindex="-1"
           >
             {step === 'service'
-              ? t('onboarding.step.service.title', 'Connect your Providers')
-              : t('onboarding.step.model.title', 'Choose your first Model')}
+              ? t('onboarding.step.service.title')
+              : t('onboarding.step.model.title')}
           </h3>
           <p class="onboarding-step-subtitle">
             {step === 'service'
-              ? t(
-                  'onboarding.step.service.subtitle',
-                  'Choose a Provider, then how to connect. Add as many as you use.',
-                )
-              : t(
-                  'onboarding.step.model.subtitle',
-                  'Choose the Model your Agent starts with. All your connected Providers remain available.',
-                )}
+              ? t('onboarding.step.service.subtitle')
+              : t('onboarding.step.model.subtitle')}
           </p>
         </header>
 
@@ -405,7 +394,7 @@
               variant="secondary"
               disabled={loadingSettings}
               onClick={step === 'service' ? loadSettings : retryModels}
-              >{t('onboarding.retry', 'Try again')}</Button
+              >{t('onboarding.retry')}</Button
             >
           </Banner>
         {/if}
@@ -415,7 +404,6 @@
             <p class="onboarding-loading" role="status">
               <span class="s-inline-spinner" aria-hidden="true"></span>{t(
                 'onboarding.service.loading',
-                'Loading Providers…',
               )}
             </p>
           {:else if settings}
@@ -436,43 +424,25 @@
               <p>
                 <span class="onboarding-connected-icon">{@render check()}</span
                 ><strong
-                  >{t(
-                    'onboarding.service.connectedCount',
-                    '{count} connected',
-                    { count: usableProviders.length },
-                  )}</strong
-                ><span
-                  >{t(
-                    'onboarding.service.addMore',
-                    'Add another, or continue when you’re ready.',
-                  )}</span
-                >
+                  >{t('onboarding.service.connectedCount', {
+                    count: usableProviders.length,
+                  })}</strong
+                ><span>{t('onboarding.service.addMore')}</span>
               </p>
-              <ul
-                aria-label={t(
-                  'onboarding.service.existing',
-                  'Connected Providers',
-                )}
-              >
+              <ul aria-label={t('onboarding.service.existing')}>
                 {#each usableProviders as provider (provider.id)}
                   <li>{providerName(provider)}</li>
                 {/each}
               </ul>
             {:else}
               <p>
-                {t(
-                  'onboarding.service.required',
-                  'Connect at least one Provider to continue.',
-                )}
+                {t('onboarding.service.required')}
               </p>
             {/if}
           </div>
           <footer class="onboarding-footer">
             <p class="onboarding-footnote">
-              {t(
-                'onboarding.service.later',
-                'You can add or change Providers later in Settings.',
-              )}
+              {t('onboarding.service.later')}
             </p>
             <Button
               variant="primary"
@@ -482,17 +452,14 @@
                 Boolean(settingsError)}
               onClick={goToModelStep}
             >
-              {t(
-                'onboarding.service.continue',
-                'Continue to Model',
-              )}{@render arrow()}
+              {t('onboarding.service.continue')}{@render arrow()}
             </Button>
           </footer>
         {:else}
           <div class="onboarding-model-provider">
             {#if usableProviders.length > 1}
               <label for="onboarding-model-provider"
-                >{t('onboarding.provider', 'Provider')}</label
+                >{t('onboarding.provider')}</label
               >
               <SearchableDropdown
                 id="onboarding-model-provider"
@@ -503,26 +470,20 @@
                   label: providerName(provider),
                 }))}
                 disabled={assigning}
-                ariaLabel={t('onboarding.provider', 'Provider')}
-                searchPlaceholder={t(
-                  'onboarding.service.search',
-                  'Search Providers…',
-                )}
+                ariaLabel={t('onboarding.provider')}
+                searchPlaceholder={t('onboarding.service.search')}
                 onValueChange={selectModelProvider}
               />
             {:else if activeProvider}
               <div class="onboarding-connection-summary">
                 <span class="onboarding-connected-icon">{@render check()}</span
                 ><strong>{providerName(activeProvider)}</strong><span
-                  >{t('onboarding.service.connected', 'Connected')}</span
+                  >{t('onboarding.service.connected')}</span
                 >
               </div>
             {:else}
               <p class="onboarding-help">
-                {t(
-                  'onboarding.model.disconnected',
-                  'This Provider is no longer connected. Go back to Providers to reconnect.',
-                )}
+                {t('onboarding.model.disconnected')}
               </p>
             {/if}
           </div>
@@ -534,36 +495,28 @@
               <p class="onboarding-loading" role="status">
                 <span class="s-inline-spinner" aria-hidden="true"></span>{t(
                   'onboarding.model.loading',
-                  'Finding available Models…',
                 )}
               </p>
             {:else if modelsError}
               <Banner variant="error" role="alert">{modelsError}</Banner>
               <Button variant="secondary" onClick={retryModels}
-                >{t('onboarding.retry', 'Try again')}</Button
+                >{t('onboarding.retry')}</Button
               >
             {:else if !allModelOptions.length}
               <EmptyState
                 density="compact"
-                title={t(
-                  'onboarding.model.emptyTitle',
-                  'No Models available yet',
-                )}
-                description={t(
-                  'onboarding.model.empty',
-                  'Check that your Provider has Models available. For a local Provider, start its server and install a Model, then try again.',
-                )}
+                title={t('onboarding.model.emptyTitle')}
+                description={t('onboarding.model.empty')}
               >
                 {#snippet actions()}<Button
                     variant="secondary"
-                    onClick={retryModels}
-                    >{t('onboarding.retry', 'Try again')}</Button
+                    onClick={retryModels}>{t('onboarding.retry')}</Button
                   >{/snippet}
               </EmptyState>
             {:else}
               <div class="onboarding-model-label">
                 <label for="onboarding-model"
-                  >{t('onboarding.model.label', 'Model')}</label
+                  >{t('onboarding.model.label')}</label
                 >{#if connectedProvider === 'openrouter'}<Button
                     variant="secondary"
                     class="onboarding-free-filter"
@@ -579,11 +532,7 @@
                       ) {
                         selectedModelValue = '';
                       }
-                    }}
-                    >{t(
-                      'onboarding.model.freeOnly',
-                      'Free Models only',
-                    )}</Button
+                    }}>{t('onboarding.model.freeOnly')}</Button
                   >{/if}
               </div>
               <SearchableDropdown
@@ -592,21 +541,12 @@
                 value={selectedModelValue}
                 options={modelOptions}
                 disabled={assigning}
-                placeholder={t('onboarding.model.placeholder', 'Find a Model…')}
-                searchPlaceholder={t(
-                  'onboarding.model.searchPlaceholder',
-                  'Search by name…',
-                )}
+                placeholder={t('onboarding.model.placeholder')}
+                searchPlaceholder={t('onboarding.model.searchPlaceholder')}
                 emptyLabel={onlyFree
-                  ? t(
-                      'onboarding.model.noFree',
-                      'No free Models match. Turn off the free filter to see more.',
-                    )
-                  : t(
-                      'onboarding.model.searchEmpty',
-                      'No Models match. Try another search or show all Models below.',
-                    )}
-                ariaLabel={t('onboarding.model.label', 'Model')}
+                  ? t('onboarding.model.noFree')
+                  : t('onboarding.model.searchEmpty')}
+                ariaLabel={t('onboarding.model.label')}
                 ariaDescribedby="onboarding-model-help"
                 footerActionLabel={modelFilterFooter}
                 onFooterAction={() => (showAllModels = !showAllModels)}
@@ -616,10 +556,7 @@
                 }}
               />
               <p id="onboarding-model-help" class="onboarding-help">
-                {t(
-                  'onboarding.model.help',
-                  'Models suited to Agent work are shown first. Search by name, or use “Show all Models” in the list to see the rest.',
-                )}
+                {t('onboarding.model.help')}
               </p>
               {#if selectedOption}
                 <div class="onboarding-selection" role="status">
@@ -629,19 +566,13 @@
                   <div>
                     <strong>{selectedOption.label}</strong>
                     <p>
-                      {t(
-                        'onboarding.model.ready',
-                        'Start chatting to save this Model for your Agent. You can change it later in Agents.',
-                      )}
+                      {t('onboarding.model.ready')}
                     </p>
                   </div>
                 </div>
               {:else}
                 <p class="onboarding-model-prompt">
-                  {t(
-                    'onboarding.model.prompt',
-                    'Choose a Model above to continue.',
-                  )}
+                  {t('onboarding.model.prompt')}
                 </p>
               {/if}
             {/if}
@@ -654,8 +585,7 @@
             <Button
               variant="tertiary"
               disabled={assigning}
-              onClick={goToServiceStep}
-              >{t('onboarding.model.back', 'Back to Providers')}</Button
+              onClick={goToServiceStep}>{t('onboarding.model.back')}</Button
             >
             <Button
               variant="primary"
@@ -663,11 +593,8 @@
               loading={assigning}
               onClick={startChatting}
               >{assigning
-                ? t('common.saving', 'Saving…')
-                : t(
-                    'onboarding.model.start',
-                    'Start chatting',
-                  )}{@render arrow()}</Button
+                ? t('common.saving')
+                : t('onboarding.model.start')}{@render arrow()}</Button
             >
           </footer>
         {/if}

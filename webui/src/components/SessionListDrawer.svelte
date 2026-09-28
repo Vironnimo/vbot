@@ -145,28 +145,23 @@
   const SESSION_FILTER_ROWS = [
     {
       key: 'channels',
-      labelKey: 'sessions.filters.channels',
-      labelFallback: 'Show channels',
+      label: () => t('sessions.filters.channels'),
     },
     {
       key: 'subagents',
-      labelKey: 'sessions.filters.subagents',
-      labelFallback: 'Subagent runs',
+      label: () => t('sessions.filters.subagents'),
     },
     {
       key: 'memoryReflections',
-      labelKey: 'sessions.filters.memoryReflections',
-      labelFallback: 'Memory reflections',
+      label: () => t('sessions.filters.memoryReflections'),
     },
     {
       key: 'skillReflections',
-      labelKey: 'sessions.filters.skillReflections',
-      labelFallback: 'Skill reflections',
+      label: () => t('sessions.filters.skillReflections'),
     },
     {
       key: 'cron',
-      labelKey: 'sessions.filters.cron',
-      labelFallback: 'Cron runs',
+      label: () => t('sessions.filters.cron'),
     },
   ];
 
@@ -502,13 +497,13 @@
 
 <svelte:window onresize={menus.closeMenu} />
 
-<aside class="session-drawer" aria-label={t('sessions.title', 'Sessions')}>
+<aside class="session-drawer" aria-label={t('sessions.title')}>
   <div class="session-drawer__header">
     <div class="session-drawer__controls">
       {#if headerControls}
         {@render headerControls()}
       {:else}
-        <h3 class="session-drawer__title">{t('sessions.title', 'Sessions')}</h3>
+        <h3 class="session-drawer__title">{t('sessions.title')}</h3>
       {/if}
     </div>
     <div class="session-drawer__filter">
@@ -516,9 +511,9 @@
         type="button"
         class="session-drawer__icon-button session-drawer__all-agents"
         class:session-drawer__filter-trigger--active={filters.allAgents}
-        aria-label={t('sessions.filters.allAgents', 'All agents')}
+        aria-label={t('sessions.filters.allAgents')}
         aria-pressed={filters.allAgents}
-        use:tooltip={t('sessions.filters.allAgents', 'All agents')}
+        use:tooltip={t('sessions.filters.allAgents')}
         onclick={() => setFilter('allAgents', !filters.allAgents)}
       >
         <svg
@@ -540,7 +535,7 @@
         class="session-drawer__icon-button session-drawer__filter-trigger"
         class:session-drawer__filter-trigger--active={activeFilterCount > 0}
         class:session-drawer__filter-trigger--open={menus.filterMenuOpen}
-        aria-label={t('sessions.filtersAria', 'Session list filters')}
+        aria-label={t('sessions.filtersAria')}
         aria-haspopup="menu"
         aria-expanded={menus.filterMenuOpen}
         onclick={(event) => menus.toggleFilterMenu(event.currentTarget)}
@@ -557,7 +552,7 @@
         {#if activeFilterCount > 0}
           <span
             class="session-drawer__filter-count"
-            aria-label={t('sessions.filtersActive', '{count} active filters', {
+            aria-label={t('sessions.filtersActive', {
               count: activeFilterCount,
             })}
           >
@@ -581,11 +576,11 @@
               role="menuitemcheckbox"
               aria-checked={filters[filterRow.key]}
             >
-              <span>{t(filterRow.labelKey, filterRow.labelFallback)}</span>
+              <span>{filterRow.label()}</span>
               <Toggle
                 size="sm"
                 checked={filters[filterRow.key]}
-                ariaLabel={t(filterRow.labelKey, filterRow.labelFallback)}
+                ariaLabel={filterRow.label()}
                 onChange={(checked) => setFilter(filterRow.key, checked)}
               />
             </div>
@@ -609,31 +604,28 @@
         disabled={sessionState.loading || !agentId}
         onClick={() => loadSessions()}
       >
-        {t('common.retry', 'Retry')}
+        {t('common.retry')}
       </Button>
     </Banner>
   {:else if sessionState.loading && sessionState.sessions.length === 0}
     <p class="session-drawer__state">
-      {t('sessions.loading', 'Loading sessions…')}
+      {t('sessions.loading')}
     </p>
   {:else if sessionState.sessions.length === 0}
     <EmptyState
       density="compact"
       class="session-drawer__empty-layout"
-      title={t('chat.sessions.emptyTitle', 'No sessions yet')}
+      title={t('chat.sessions.emptyTitle')}
       description={filters.allAgents
-        ? t('sessions.no_sessions_all', 'No sessions found.')
-        : t('sessions.no_sessions', 'No sessions found for this agent.')}
+        ? t('sessions.no_sessions_all')
+        : t('sessions.no_sessions')}
     />
   {:else if visibleSessions.length === 0}
     <EmptyState
       density="compact"
       class="session-drawer__empty-layout"
-      title={t('sessions.noImportantTitle', 'No important sessions')}
-      description={t(
-        'sessions.noImportantDescription',
-        'Use the filters to browse Channel, Subagent, Reflection, and Cron sessions.',
-      )}
+      title={t('sessions.noImportantTitle')}
+      description={t('sessions.noImportantDescription')}
     />
   {:else}
     <ul class="session-drawer__list" onscroll={handleListScroll}>
@@ -651,8 +643,8 @@
                 type="text"
                 value={actions.editValue}
                 maxlength={actions.SESSION_TITLE_MAX_LENGTH}
-                placeholder={t('sessions.rename_placeholder', 'Session name')}
-                aria-label={t('sessions.rename_label', 'Rename session')}
+                placeholder={t('sessions.rename_placeholder')}
+                aria-label={t('sessions.rename_label')}
                 disabled={actions.renameSaving}
                 oninput={(event) =>
                   (actions.editValue = event.currentTarget.value)}
@@ -680,11 +672,8 @@
                 {#if session.has_active_run}
                   <span
                     class="session-row__active-dot"
-                    aria-label={t('sessions.activeRun', 'Active')}
-                    use:tooltip={t(
-                      'sessions.activeRunHint',
-                      'This session is currently running.',
-                    )}
+                    aria-label={t('sessions.activeRun')}
+                    use:tooltip={t('sessions.activeRunHint')}
                   >
                     <span
                       class="tab-indicator tab-indicator--running"
@@ -699,11 +688,8 @@
                   {#if session.has_unread_completion && session.id !== currentSessionId}
                     <span
                       class="session-row__unread"
-                      aria-label={t('sessions.unreadCompletion', 'Unread')}
-                      use:tooltip={t(
-                        'sessions.unreadCompletionHint',
-                        'This Session has an unread result.',
-                      )}
+                      aria-label={t('sessions.unreadCompletion')}
+                      use:tooltip={t('sessions.unreadCompletionHint')}
                     >
                       <span
                         class="tab-indicator tab-indicator--unread session-row__unread-dot"
@@ -800,15 +786,12 @@
                   {#if session.is_subagent_session}
                     <span
                       class="tooltip-anchor session-row__marker-anchor"
-                      use:tooltip={t(
-                        'sessions.subagentHint',
-                        'A session run by a Subagent working on behalf of a parent session. The parent is shown below.',
-                      )}
+                      use:tooltip={t('sessions.subagentHint')}
                     >
                       <Badge
                         variant="neutral"
                         class="session-row__badge session-row__badge--icon"
-                        aria-label={t('chat.subagent.label', 'Subagent')}
+                        aria-label={t('chat.subagent.label')}
                         data-session-marker="subagent"
                       >
                         <svg
@@ -832,15 +815,12 @@
                   {#if session.is_fork}
                     <span
                       class="tooltip-anchor session-row__marker-anchor"
-                      use:tooltip={t(
-                        'sessions.forkHint',
-                        'A copy of another session. Background reflection and /reflect review a conversation in a fork so the original session stays untouched.',
-                      )}
+                      use:tooltip={t('sessions.forkHint')}
                     >
                       <Badge
                         variant="neutral"
                         class="session-row__badge session-row__badge--icon"
-                        aria-label={t('sessions.fork', 'Fork')}
+                        aria-label={t('sessions.fork')}
                         data-session-marker="fork"
                       >
                         <svg
@@ -867,12 +847,12 @@
                   {#if session.run_kinds.includes('cron')}
                     <span
                       class="tooltip-anchor session-row__marker-anchor"
-                      use:tooltip={t('sessions.runKind.cron', 'Cron')}
+                      use:tooltip={t('sessions.runKind.cron')}
                     >
                       <Badge
                         variant="warn"
                         class="session-row__badge session-row__badge--icon"
-                        aria-label={t('sessions.runKind.cron', 'Cron')}
+                        aria-label={t('sessions.runKind.cron')}
                         data-session-marker="cron"
                       >
                         <svg
@@ -895,12 +875,12 @@
                   {#each reflectionBadgeKinds(session) as runKind (runKind)}
                     <span
                       class="tooltip-anchor session-row__marker-anchor"
-                      use:tooltip={t(`sessions.runKind.${runKind}`, runKind)}
+                      use:tooltip={t(`sessions.runKind.${runKind}`)}
                     >
                       <Badge
                         variant="neutral"
                         class="session-row__badge session-row__badge--icon"
-                        aria-label={t(`sessions.runKind.${runKind}`, runKind)}
+                        aria-label={t(`sessions.runKind.${runKind}`)}
                         data-session-marker={runKind}
                       >
                         <svg
@@ -933,7 +913,7 @@
                 class="session-row__menu-trigger"
                 class:session-row__menu-trigger--open={menus.openMenuSessionId ===
                   sessionRowKey(session)}
-                aria-label={t('sessions.actions', 'Session actions')}
+                aria-label={t('sessions.actions')}
                 aria-haspopup="menu"
                 aria-expanded={menus.openMenuSessionId ===
                   sessionRowKey(session)}
@@ -962,7 +942,7 @@
                     role="menuitem"
                     onclick={() => actions.startRename(session)}
                   >
-                    {t('sessions.rename', 'Rename')}
+                    {t('sessions.rename')}
                   </button>
                   <button
                     type="button"
@@ -970,7 +950,7 @@
                     role="menuitem"
                     onclick={() => actions.startPolicyEdit(session)}
                   >
-                    {t('sessions.compactionPolicy', 'Compaction Policy')}
+                    {t('sessions.compactionPolicy')}
                   </button>
                   <button
                     type="button"
@@ -978,7 +958,7 @@
                     role="menuitem"
                     onclick={() => actions.requestDelete(session)}
                   >
-                    {t('sessions.delete', 'Delete')}
+                    {t('sessions.delete')}
                   </button>
                 </div>
               {/if}
@@ -989,7 +969,7 @@
     </ul>
     {#if hasMoreToDisplay}
       <p class="session-drawer__more-hint">
-        {t('sessions.moreHint', '{count} more sessions — scroll to load', {
+        {t('sessions.moreHint', {
           count: remainingSessionCount,
         })}
       </p>
@@ -999,9 +979,9 @@
 
 {#if actions.deleteConfirmSession}
   <ConfirmDialog
-    title={t('sessions.delete_confirm_title', 'Delete session')}
+    title={t('sessions.delete_confirm_title')}
     body={actions.deleteConfirmMessage}
-    confirmLabel={t('common.delete', 'Delete')}
+    confirmLabel={t('common.delete')}
     onConfirm={actions.confirmDelete}
     onCancel={actions.cancelDelete}
   />
@@ -1009,7 +989,7 @@
 
 {#if actions.policySession}
   <Modal
-    title={t('sessions.compactionPolicy', 'Compaction Policy')}
+    title={t('sessions.compactionPolicy')}
     labelledById="session-compaction-policy-title"
     closeDisabled={actions.policySaving}
     onClose={actions.closePolicyEdit}
@@ -1019,19 +999,16 @@
         <div class="session-policy-modal__inheritance">
           <div>
             <div class="session-policy-modal__label">
-              {t('sessions.compactionOverride', 'Session override')}
+              {t('sessions.compactionOverride')}
             </div>
             <p>
-              {t(
-                'sessions.compactionOverrideDescription',
-                'When disabled, this Session follows later Agent or global Policy changes.',
-              )}
+              {t('sessions.compactionOverrideDescription')}
             </p>
           </div>
           <Toggle
             checked={actions.policyUsesOverride}
             disabled={actions.policySaving}
-            ariaLabel={t('sessions.compactionOverride', 'Session override')}
+            ariaLabel={t('sessions.compactionOverride')}
             onChange={(enabled) => (actions.policyUsesOverride = enabled)}
           />
         </div>
@@ -1054,12 +1031,10 @@
         disabled={actions.policySaving}
         onClick={actions.closePolicyEdit}
       >
-        {t('common.cancel', 'Cancel')}
+        {t('common.cancel')}
       </Button>
       <Button disabled={actions.policySaving} onClick={actions.savePolicy}>
-        {actions.policySaving
-          ? t('common.saving', 'Saving…')
-          : t('common.save', 'Save')}
+        {actions.policySaving ? t('common.saving') : t('common.save')}
       </Button>
     {/snippet}
   </Modal>

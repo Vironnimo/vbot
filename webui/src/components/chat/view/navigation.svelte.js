@@ -698,7 +698,7 @@ export function createChatViewNavigation(context) {
       context.layout.requestComposerFocus({ includeMobile: true });
     } catch (error) {
       context.actions.setSessionActionError(
-        `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`,
+        `${t('chat.sessionCreateError')} ${error.message}`,
         sourceSessionState,
       );
     } finally {
@@ -736,7 +736,7 @@ export function createChatViewNavigation(context) {
       return true;
     } catch (error) {
       context.actions.setSessionActionError(
-        `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`,
+        `${t('chat.sessionCreateError')} ${error.message}`,
         sourceSessionState,
       );
       return false;

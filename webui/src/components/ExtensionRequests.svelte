@@ -78,22 +78,16 @@
 
 {#if requests.length}
   <Banner variant="warn" role="status">
-    <span
-      >{t(
-        'extensions.inputWaiting',
-        '{count} Extension requests need your response.',
-        { count: requests.length },
-      )}</span
-    >
+    <span>{t('extensions.inputWaiting', { count: requests.length })}</span>
     <Button variant="primary" onClick={() => review(requests[0])}
-      >{t('extensions.reviewInput', 'Review request')}</Button
+      >{t('extensions.reviewInput')}</Button
     >
   </Banner>
 {/if}
 
 {#if selected}
   <Modal
-    title={t('extensions.inputTitle', 'Request from {name}', {
+    title={t('extensions.inputTitle', {
       name: selected.connection ?? selected.extension,
     })}
     closeDisabled={busy}
@@ -103,22 +97,15 @@
       <div class="modal-body extension-input">
         {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
         <p>
-          {selected.payload?.message ??
-            t(
-              'extensions.signInHelp',
-              'Open the sign-in page. After signing in, paste the complete redirected address below.',
-            )}
+          {selected.payload?.message ?? t('extensions.signInHelp')}
         </p>
         {#if inputUrl(selected)}
           <a href={inputUrl(selected)} target="_blank" rel="noopener noreferrer"
-            >{t('extensions.openRequest', 'Open requested page')}</a
+            >{t('extensions.openRequest')}</a
           >
         {/if}
         {#if selected.kind === 'oauth'}
-          <FormField
-            label={t('extensions.redirectUrl', 'Redirected address')}
-            full
-          >
+          <FormField label={t('extensions.redirectUrl')} full>
             {#snippet children(field)}
               <TextField
                 id={field.controlId}
@@ -147,8 +134,8 @@
                     value={drafts[input.key] ?? ''}
                     options={input.type === 'boolean'
                       ? [
-                          { value: 'true', label: t('common.yes', 'Yes') },
-                          { value: 'false', label: t('common.no', 'No') },
+                          { value: 'true', label: t('common.yes') },
+                          { value: 'false', label: t('common.no') },
                         ]
                       : (input.oneOf?.map((choice) => ({
                           value: String(choice.const),
@@ -184,17 +171,17 @@
       <Button
         variant="primary"
         onClick={() => respond('accept')}
-        disabled={busy}>{t('extensions.sendResponse', 'Send response')}</Button
+        disabled={busy}>{t('extensions.sendResponse')}</Button
       >
       <Button
         variant="secondary"
         onClick={() => respond('decline')}
-        disabled={busy}>{t('extensions.declineInput', 'Decline')}</Button
+        disabled={busy}>{t('extensions.declineInput')}</Button
       >
       <Button
         variant="secondary"
         onClick={() => respond('cancel')}
-        disabled={busy}>{t('common.cancel', 'Cancel')}</Button
+        disabled={busy}>{t('common.cancel')}</Button
       >
     {/snippet}
   </Modal>

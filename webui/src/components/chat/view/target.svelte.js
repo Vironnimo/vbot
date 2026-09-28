@@ -448,7 +448,7 @@ export function createChatViewTarget(context) {
       }
       projectTeam = [];
       projectReport = null;
-      projectScanError = `${t('chat.project.loadError', 'The project team could not be loaded.')} ${error.message}`;
+      projectScanError = `${t('chat.project.loadError')} ${error.message}`;
     } finally {
       if (isCurrent()) {
         loadingProjectTeam = false;
@@ -550,7 +550,7 @@ export function createChatViewTarget(context) {
         return;
       }
       context.actions.setSessionActionError(
-        `${t('chat.project.sessionError', 'The project agent session could not be opened.')} ${error.message}`,
+        `${t('chat.project.sessionError')} ${error.message}`,
       );
     }
   };
@@ -614,7 +614,7 @@ export function createChatViewTarget(context) {
       if (!isCurrent()) return;
       projectTeam = [];
       projectReport = null;
-      projectScanError = `${t('chat.project.loadError', 'The project team could not be loaded.')} ${error.message}`;
+      projectScanError = `${t('chat.project.loadError')} ${error.message}`;
     } finally {
       if (isCurrent()) loadingProjectTeam = false;
     }

@@ -72,8 +72,7 @@
   let sessionStatsLabel = $derived(changeStatsLabel(sessionStats));
 
   const panelId = $props.id();
-  const runningLabel = (count) =>
-    t('chat.activity.runningCount', '{count} running', { count });
+  const runningLabel = (count) => t('chat.activity.runningCount', { count });
 
   const togglePanel = () => {
     open = !open;
@@ -124,21 +123,21 @@
 
   const statusLabel = (status) => {
     if (status === 'running') {
-      return t('chat.activity.status.running', 'Working');
+      return t('chat.activity.status.running');
     }
     if (status === 'success' || status === 'completed') {
-      return t('chat.activity.status.completed', 'Completed');
+      return t('chat.activity.status.completed');
     }
     if (status === 'failed') {
-      return t('chat.activity.status.failed', 'Failed');
+      return t('chat.activity.status.failed');
     }
     if (status === 'cancelled') {
-      return t('chat.activity.status.cancelled', 'Cancelled');
+      return t('chat.activity.status.cancelled');
     }
     if (status === 'interrupted') {
-      return t('chat.activity.status.interrupted', 'Interrupted');
+      return t('chat.activity.status.interrupted');
     }
-    return t('chat.activity.status.unknown', 'Unknown');
+    return t('chat.activity.status.unknown');
   };
 
   // The panel's status icons key off the shared dot vocabulary; reflection
@@ -152,33 +151,33 @@
 
   const reflectionScopeLabel = (row) => {
     if (row.scope === 'memory') {
-      return t('chat.activity.reflectionScope.memory', 'Memory review');
+      return t('chat.activity.reflectionScope.memory');
     }
     if (row.scope === 'skill') {
-      return t('chat.activity.reflectionScope.skill', 'Skill review');
+      return t('chat.activity.reflectionScope.skill');
     }
-    return t('chat.activity.reflectionScope.combined', 'Memory & skill review');
+    return t('chat.activity.reflectionScope.combined');
   };
 
   const reflectionRowLabel = (row) =>
-    t('chat.activity.reflectionOpenAria', 'Open {scope} Session · {status}', {
+    t('chat.activity.reflectionOpenAria', {
       scope: reflectionScopeLabel(row),
       status: statusLabel(row.status),
     });
 
   const parentSessionLabel = () =>
-    t('chat.activity.openParentSession', 'Open parent Session · {session}', {
+    t('chat.activity.openParentSession', {
       session: parentSession?.displayName ?? '',
     });
 
   const taskLabel = (task) => {
     if (task.kind === 'bash') {
-      return t('chat.activity.bashTaskAria', 'Bash · {command} · {status}', {
+      return t('chat.activity.bashTaskAria', {
         command: task.command,
         status: statusLabel(task.dotStatus),
       });
     }
-    return t('chat.activity.taskAria', 'Open {agent} Session · {status}', {
+    return t('chat.activity.taskAria', {
       agent: task.agentId,
       status: statusLabel(task.dotStatus),
     });
@@ -186,17 +185,9 @@
 
   const cancelTaskLabel = (task) => {
     if (task.kind === 'bash') {
-      return t(
-        'chat.activity.cancelBashAria',
-        'Cancel Bash background process · {command}',
-        { command: task.command },
-      );
+      return t('chat.activity.cancelBashAria', { command: task.command });
     }
-    return t(
-      'chat.activity.cancelSubAgentAria',
-      'Cancel {agent} background task',
-      { agent: task.agentId },
-    );
+    return t('chat.activity.cancelSubAgentAria', { agent: task.agentId });
   };
 
   const isTaskCancelling = (task) => cancellingTaskIds.has(task.id);
@@ -220,19 +211,12 @@
 
   let railLabel = $derived(
     open
-      ? t('chat.activity.close', 'Close session info')
+      ? t('chat.activity.close')
       : runningTaskCount === 1
-        ? t(
-            'chat.activity.openOneRunning',
-            'Open session info · 1 task running',
-          )
+        ? t('chat.activity.openOneRunning')
         : runningTaskCount > 1
-          ? t(
-              'chat.activity.openManyRunning',
-              'Open session info · {count} tasks running',
-              { count: runningTaskCount },
-            )
-          : t('chat.activity.open', 'Open session info'),
+          ? t('chat.activity.openManyRunning', { count: runningTaskCount })
+          : t('chat.activity.open'),
   );
 </script>
 
@@ -396,7 +380,7 @@
     >
       <header class="chat-activity__header">
         <h2 id={`${panelId}-title`} class="chat-activity__title">
-          {t('chat.activity.title', 'Session')}
+          {t('chat.activity.title')}
         </h2>
       </header>
 
@@ -410,7 +394,7 @@
               id={`${panelId}-parent-title`}
               class="chat-activity__group-title"
             >
-              {t('chat.activity.parentSession', 'Parent Session')}
+              {t('chat.activity.parentSession')}
             </h3>
             <Button
               variant="tertiary"
@@ -439,7 +423,7 @@
           aria-labelledby={`${panelId}-stats-title`}
         >
           <h3 id={`${panelId}-stats-title`} class="chat-activity__group-title">
-            {t('chat.activity.statsTitle', 'Session stats')}
+            {t('chat.activity.statsTitle')}
           </h3>
           {#if sessionStats}
             <!-- The change block is focusable so keyboard users reach the
@@ -464,7 +448,7 @@
             </p>
           {:else}
             <p class="chat-activity__stats-empty">
-              {t('chat.activity.statsEmpty', 'No changes yet')}
+              {t('chat.activity.statsEmpty')}
             </p>
           {/if}
         </section>
@@ -472,7 +456,7 @@
         <div class="chat-activity__tasks">
           {#if tasks.length === 0 && reflectionTasks.length === 0}
             <p class="chat-activity__empty">
-              {t('chat.activity.empty', 'No background tasks')}
+              {t('chat.activity.empty')}
             </p>
           {:else}
             {#if subagentTasks.length > 0}
@@ -484,7 +468,7 @@
                   id={`${panelId}-subagents`}
                   class="chat-activity__group-title"
                 >
-                  {t('chat.activity.subagents', 'Subagent Runs')}
+                  {t('chat.activity.subagents')}
                   <span class="chat-activity__count"
                     >{subagentTasks.length}</span
                   >
@@ -505,7 +489,7 @@
                   id={`${panelId}-reflections`}
                   class="chat-activity__group-title"
                 >
-                  {t('chat.activity.reflections', 'Reflections')}
+                  {t('chat.activity.reflections')}
                   <span class="chat-activity__count"
                     >{reflectionTasks.length}</span
                   >
@@ -533,7 +517,7 @@
                     height="12"
                     aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
                   >
-                  {t('chat.activity.bash', 'Bash')}
+                  {t('chat.activity.bash')}
                   <span class="chat-activity__count">{bashTasks.length}</span>
                   {#if activeBashCount > 0}
                     <span class="chat-activity__running-count"

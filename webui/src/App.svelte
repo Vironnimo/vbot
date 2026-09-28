@@ -1,81 +1,70 @@
 <script module>
+  import { t } from '$lib/i18n.js';
+
   export const NAVIGATION_ITEMS = Object.freeze([
     {
       id: 'chat',
-      labelKey: 'navigation.chat',
-      labelFallback: 'Chat',
+      label: () => t('navigation.chat'),
       section: 'work',
     },
     {
       id: 'terminals',
-      labelKey: 'navigation.terminals',
-      labelFallback: 'Terminals',
+      label: () => t('navigation.terminals'),
       section: 'work',
     },
     {
       id: 'agents',
-      labelKey: 'navigation.agents',
-      labelFallback: 'Agents',
+      label: () => t('navigation.agents'),
       section: 'work',
     },
     {
       id: 'projects',
-      labelKey: 'navigation.projects',
-      labelFallback: 'Projects',
+      label: () => t('navigation.projects'),
       section: 'work',
     },
     {
       id: 'calendar',
-      labelKey: 'navigation.calendar',
-      labelFallback: 'Calendar',
+      label: () => t('navigation.calendar'),
       section: 'work',
     },
     {
       id: 'jev',
-      labelKey: 'navigation.jev',
-      labelFallback: 'Jev',
+      label: () => t('navigation.jev'),
       section: 'work',
     },
     {
       id: 'skills',
-      labelKey: 'navigation.skills',
-      labelFallback: 'Skills',
+      label: () => t('navigation.skills'),
       section: 'configure',
     },
     {
       id: 'cron',
-      labelKey: 'navigation.cron',
-      labelFallback: 'Cron',
+      label: () => t('navigation.cron'),
       section: 'configure',
     },
     {
       id: 'system-prompt',
-      labelKey: 'navigation.systemPrompt',
-      labelFallback: 'System Prompt',
+      label: () => t('navigation.systemPrompt'),
       section: 'configure',
     },
     {
       id: 'settings',
-      labelKey: 'navigation.settings',
-      labelFallback: 'Settings',
+      label: () => t('navigation.settings'),
       section: 'configure',
     },
     {
       id: 'statistics',
-      labelKey: 'navigation.statistics',
-      labelFallback: 'Statistics',
+      label: () => t('navigation.statistics'),
       section: 'insights',
     },
     {
       id: 'logs',
-      labelKey: 'navigation.logs',
-      labelFallback: 'Logs',
+      label: () => t('navigation.logs'),
       section: 'insights',
     },
     {
       id: 'debug',
-      labelKey: 'navigation.debug',
-      labelFallback: 'Debug',
+      label: () => t('navigation.debug'),
       section: 'insights',
     },
   ]);
@@ -84,7 +73,6 @@
 <script>
   import AppShell from './components/AppShell.svelte';
   import Banner from './components/ui/Banner.svelte';
-  import { t } from '$lib/i18n.js';
   import Button from './components/ui/Button.svelte';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
   import LiveVoice from './components/LiveVoice.svelte';
@@ -398,13 +386,8 @@
       appControllerState.dataStoreIncident = result?.incidents?.[0] ?? null;
     } catch (error) {
       desktop.showToast({
-        title: t(
-          'dataStore.acknowledgeFailedTitle',
-          'Recovery notice still needs attention',
-        ),
-        message:
-          error?.message ??
-          t('dataStore.acknowledgeFailed', 'Refresh the status and try again.'),
+        title: t('dataStore.acknowledgeFailedTitle'),
+        message: error?.message ?? t('dataStore.acknowledgeFailed'),
         variant: 'error',
       });
     }
@@ -467,7 +450,7 @@
     isOperational: () => setup.operational,
     onAppError: (message) => {
       desktop.showToast({
-        title: t('errors.appError', 'Error'),
+        title: t('errors.appError'),
         message,
         variant: 'error',
       });
@@ -553,13 +536,10 @@
   {#if setup.showFinishSetup}
     <Banner variant="info" class="app-finish-setup">
       <span class="app-finish-setup__text">
-        {t(
-          'onboarding.finishSetupHint',
-          'Connect an AI service to start chatting.',
-        )}
+        {t('onboarding.finishSetupHint')}
       </span>
       <Button variant="secondary" onClick={setup.reopenOnboarding}>
-        {t('onboarding.finishSetup', 'Finish setup')}
+        {t('onboarding.finishSetup')}
       </Button>
     </Banner>
   {/if}
@@ -576,23 +556,20 @@
   {#if dataStoreIncident}
     <Banner variant="error" role="alert" class="app-data-store-incident">
       <div class="app-data-store-incident__copy">
-        <strong>{t('dataStore.recoveredTitle', 'Data recovered')}</strong>
+        <strong>{t('dataStore.recoveredTitle')}</strong>
         <span>
-          {t(
-            'dataStore.recoveredMessage',
-            'A damaged database was restored from a verified data snapshot. Recent changes may be missing.',
-          )}
+          {t('dataStore.recoveredMessage')}
         </span>
         <span class="app-data-store-incident__meta">
-          {t('dataStore.database', 'Database')}: {dataStoreIncident.database}
-          · {t('dataStore.snapshot', 'Snapshot')}: {dataStoreIncident.restored_snapshot_id}
-          · {t('dataStore.possibleLoss', 'Possible loss')}: {dataStoreIncident
+          {t('dataStore.database')}: {dataStoreIncident.database}
+          · {t('dataStore.snapshot')}: {dataStoreIncident.restored_snapshot_id}
+          · {t('dataStore.possibleLoss')}: {dataStoreIncident
             .possible_loss_interval?.start}
           → {dataStoreIncident.possible_loss_interval?.end}
         </span>
       </div>
       <Button variant="secondary" onClick={acknowledgeDataStoreRecovery}>
-        {t('dataStore.acknowledge', 'Acknowledge')}
+        {t('dataStore.acknowledge')}
       </Button>
     </Banner>
   {/if}
@@ -768,7 +745,7 @@
 
 {#if autosaveFailureOpen}
   <Modal
-    title={t('autosave.transitionFailureTitle', 'Changes could not be saved')}
+    title={t('autosave.transitionFailureTitle')}
     labelledById="autosave-transition-failure-title"
     closeDisabled={true}
     onClose={() => {}}
@@ -776,10 +753,7 @@
     {#snippet body()}
       <div class="modal-body">
         <p>
-          {t(
-            'autosave.transitionFailureBody',
-            'Your changes are still open. Try saving again, or discard them and continue.',
-          )}
+          {t('autosave.transitionFailureBody')}
         </p>
       </div>
     {/snippet}
@@ -789,16 +763,14 @@
         disabled={autosaveTransitionSaving}
         onClick={retryAutosaveTransition}
       >
-        {autosaveTransitionSaving
-          ? t('common.saving', 'Saving…')
-          : t('common.retry', 'Retry')}
+        {autosaveTransitionSaving ? t('common.saving') : t('common.retry')}
       </Button>
       <Button
         variant="danger"
         disabled={autosaveTransitionSaving}
         onClick={discardAutosaveTransition}
       >
-        {t('autosave.discardAndContinue', 'Discard and continue')}
+        {t('autosave.discardAndContinue')}
       </Button>
     {/snippet}
   </Modal>
@@ -806,7 +778,7 @@
 
 {#if serverSwitcherOpen}
   <Modal
-    title={t('settings.desktop.switchModalTitle', 'Switch server')}
+    title={t('settings.desktop.switchModalTitle')}
     labelledById="desktop-server-switch-title"
     class="desktop-server-switch-modal"
     onClose={() => (serverSwitcherOpen = false)}

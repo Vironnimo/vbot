@@ -118,7 +118,7 @@ describe('ChatView Agent activity', () => {
         await waitForCondition(() => chipIsUnread('Beta'));
         const betaChip = agentChip('Beta');
         expect(betaChip.getAttribute('aria-label')).toBe(
-          t('chat.agentActivity.unreadOne', '{name}: 1 unread result', {
+          t('chat.agentActivity.unreadOne', {
             name: 'Beta',
           }),
         );

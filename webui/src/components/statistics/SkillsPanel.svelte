@@ -1,5 +1,5 @@
 <script>
-  import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { t, tOr, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import Badge from '../ui/Badge.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
@@ -25,51 +25,45 @@
   function originLabel(origin) {
     const { scope, detail } = parseOrigin(origin);
     if (detail !== null) {
-      return t(`statistics.skills.origin.${scope}`, `${scope}: ${detail}`, {
+      return tOr(`statistics.skills.origin.${scope}`, `${scope}: ${detail}`, {
         detail,
       });
     }
-    return t(`statistics.skills.origin.${scope}`, scope);
+    return tOr(`statistics.skills.origin.${scope}`, scope);
   }
 </script>
 
 <div class="stats-panel">
   <div class="stats-grid">
     {@render statCard(
-      t('statistics.skills.total', 'Skills'),
+      t('statistics.skills.total'),
       formatInteger(skills.total_skills, locale),
     )}
     {@render statCard(
-      t('statistics.skills.used', 'Activated'),
+      t('statistics.skills.used'),
       formatInteger(skills.used_skills, locale),
     )}
     {@render statCard(
-      t('statistics.skills.offeredUnactivated', 'No offer conversion'),
+      t('statistics.skills.offeredUnactivated'),
       formatInteger(skills.offered_unactivated_skills, locale),
     )}
     {@render statCard(
-      t('statistics.skills.withoutOfferData', 'No offer data'),
+      t('statistics.skills.withoutOfferData'),
       formatInteger(skills.skills_without_offer_data, locale),
     )}
   </div>
   <p class="stats-note">
-    {t(
-      'statistics.skills.intro',
-      'A Skill is offered when it appears in a Session catalog and activated when the Agent invokes it. “Offer conversion” counts only Sessions where both facts are recorded, so older Sessions without catalog metadata cannot inflate the rate.',
-    )}
+    {t('statistics.skills.intro')}
   </p>
 
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t('statistics.skills.perSkill', 'Per skill')}
+      {t('statistics.skills.perSkill')}
     </h3>
     {#if skills.skills.length === 0}
       <EmptyState
         density="compact"
-        description={t(
-          'statistics.skills.empty',
-          'No skills in the current inventory.',
-        )}
+        description={t('statistics.skills.empty')}
       />
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
@@ -77,21 +71,18 @@
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t(
-          'statistics.table.scroll',
-          'Statistics table; scroll for more columns',
-        )}
+        aria-label={t('statistics.table.scroll')}
       >
         <table class="stats-table">
           <thead>
             <tr>
-              <th>{t('statistics.col.skill', 'Skill')}</th>
-              <th>{t('statistics.col.origins', 'Origins')}</th>
-              <th>{t('statistics.col.offered', 'Offered')}</th>
-              <th>{t('statistics.col.activated', 'Activated')}</th>
-              <th>{t('statistics.col.usageRate', 'Offer conversion')}</th>
-              <th>{t('statistics.col.firstActivated', 'First activated')}</th>
-              <th>{t('statistics.col.lastActivated', 'Last activated')}</th>
+              <th>{t('statistics.col.skill')}</th>
+              <th>{t('statistics.col.origins')}</th>
+              <th>{t('statistics.col.offered')}</th>
+              <th>{t('statistics.col.activated')}</th>
+              <th>{t('statistics.col.usageRate')}</th>
+              <th>{t('statistics.col.firstActivated')}</th>
+              <th>{t('statistics.col.lastActivated')}</th>
             </tr>
           </thead>
           <tbody>
@@ -103,15 +94,9 @@
               <tr
                 class:stats-skill-row--candidate={offeredUnactivated}
                 use:tooltip={offeredUnactivated
-                  ? t(
-                      'statistics.skills.neverUsedRowTitle',
-                      'No Session with recorded offer data also recorded an activation — a candidate to delete or improve.',
-                    )
+                  ? t('statistics.skills.neverUsedRowTitle')
                   : withoutOfferData
-                    ? t(
-                        'statistics.skills.noOfferDataRowTitle',
-                        'No Session has recorded this Skill in its offered catalog yet, so there is not enough evidence to judge it.',
-                      )
+                    ? t('statistics.skills.noOfferDataRowTitle')
                     : ''}
               >
                 <td class="stats-mono">
@@ -119,17 +104,11 @@
                     <span>{skill.name}</span>
                     {#if offeredUnactivated}
                       <Badge variant="warn">
-                        {t(
-                          'statistics.skills.neverUsedBadge',
-                          'No offer conversion',
-                        )}
+                        {t('statistics.skills.neverUsedBadge')}
                       </Badge>
                     {:else if withoutOfferData}
                       <Badge variant="neutral">
-                        {t(
-                          'statistics.skills.noOfferDataBadge',
-                          'No offer data',
-                        )}
+                        {t('statistics.skills.noOfferDataBadge')}
                       </Badge>
                     {/if}
                   </span>
@@ -150,7 +129,7 @@
 
   <div class="stats-columns">
     {@render agentCountTable(
-      t('statistics.skills.byAgent', 'Activations per agent'),
+      t('statistics.skills.byAgent'),
       skillActivationsByAgent,
     )}
   </div>

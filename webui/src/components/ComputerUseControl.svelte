@@ -76,19 +76,13 @@
     variant="danger"
     icon
     disabled={stopping || status?.stopping}
-    ariaLabel={t('computerControl.stop', 'Stop computer control')}
+    ariaLabel={t('computerControl.stop')}
     tooltip={error ||
       (stopping || status?.stopping
-        ? t('computerControl.stopping', 'Stopping computer control…')
+        ? t('computerControl.stopping')
         : status.hotkey_available
-          ? t(
-              'computerControl.hotkey',
-              'Stop computer control — press Esc twice in any app',
-            )
-          : t(
-              'computerControl.noHotkey',
-              'Global shortcut unavailable. Click to stop computer control.',
-            ))}
+          ? t('computerControl.hotkey')
+          : t('computerControl.noHotkey'))}
     onClick={stop}
   >
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">

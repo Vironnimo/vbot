@@ -1,3 +1,4 @@
+import { t } from './i18n.js';
 const DEFAULT_ACCOUNT_ID = 'default';
 
 // Soft suitability filter threshold for agent-model pickers: models below this
@@ -96,38 +97,29 @@ export function filterModelSelectOptions(
 export function modelFilterFooterLabel({
   showAll = false,
   hiddenCount = 0,
-  translate = defaultTranslate,
+  translate = t,
 } = {}) {
   if (showAll) {
-    return translate('models.filter.showSuitable', 'Show only suitable models');
+    return translate('models.filter.showSuitable');
   }
 
   if (hiddenCount <= 0) {
     return '';
   }
 
-  return translate(
-    'models.filter.showAll',
-    'Show all models ({count} hidden)',
-    {
-      count: hiddenCount,
-    },
-  );
+  return translate('models.filter.showAll', {
+    count: hiddenCount,
+  });
 }
 
 function suitabilityBadgeLabel(reasons, translate) {
   const labels = {
-    [SUITABILITY_REASON_NO_TOOLS]: translate(
-      'models.filter.noTools',
-      'no tool calling',
-    ),
+    [SUITABILITY_REASON_NO_TOOLS]: translate('models.filter.noTools'),
     [SUITABILITY_REASON_BELOW_MIN_CONTEXT]: translate(
       'models.filter.belowMinContext',
-      'below 32k context',
     ),
     [SUITABILITY_REASON_CONTEXT_UNKNOWN]: translate(
       'models.filter.contextUnknown',
-      'context unknown',
     ),
   };
 
@@ -143,9 +135,7 @@ function suitabilityFields(model, translate) {
   // not running) badges the option but never hides it — the model stays
   // selectable so agents can be configured ahead of starting the service.
   const unreachableLabel =
-    model?.reachable === false
-      ? translate('models.filter.unreachable', 'service not running')
-      : '';
+    model?.reachable === false ? translate('models.filter.unreachable') : '';
 
   if (suitable) {
     return unreachableLabel
@@ -172,7 +162,7 @@ export function buildModelSelectOptions({
   modelOnly = false,
   selectedModelValue = '',
   emptyLabel = '',
-  translate = defaultTranslate,
+  translate = t,
 } = {}) {
   const connectionsByProvider = usableConnectionsByProvider(connections);
   const selectedModel = parseModelSelectionValue(selectedModelValue);
@@ -480,7 +470,7 @@ function accountModelOptionLabel(
 
 function accountDisplayName(accountId, translate) {
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    return translate('settings.providers.accounts.defaultLabel', 'Default');
+    return translate('settings.providers.accounts.defaultLabel');
   }
 
   return accountId;
@@ -493,23 +483,15 @@ function unavailableModelOptionLabel(
   translate,
 ) {
   if (!connectionId) {
-    return translate(
-      'agents.form.modelUnavailableOption',
-      'Unavailable / custom: {model}',
-      {
-        model,
-      },
-    );
+    return translate('agents.form.modelUnavailableOption', {
+      model,
+    });
   }
 
-  return translate(
-    'agents.form.modelUnavailableConnectionOption',
-    'Unavailable / custom: {model} ({connection})',
-    {
-      connection: connectionDisplayLabel(connectionId, connections, translate),
-      model,
-    },
-  );
+  return translate('agents.form.modelUnavailableConnectionOption', {
+    connection: connectionDisplayLabel(connectionId, connections, translate),
+    model,
+  });
 }
 
 function connectionDisplayLabel(connectionId, connections, translate) {
@@ -576,8 +558,4 @@ function connectionIdFromModel(model, connectionLocalId) {
   }
 
   return `${providerId}:${connectionLocalId}`;
-}
-
-function defaultTranslate(_key, fallback) {
-  return fallback;
 }

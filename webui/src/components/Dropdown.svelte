@@ -19,7 +19,7 @@
     name = '',
     value = '',
     options = [],
-    placeholder = t('dropdown.placeholder', 'Select an option'),
+    placeholder = t('dropdown.placeholder'),
     disabled = false,
     ariaLabel = '',
     ariaDescribedby = undefined,

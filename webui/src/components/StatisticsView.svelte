@@ -12,6 +12,7 @@
   import ToolsPanel from './statistics/ToolsPanel.svelte';
   import SkillsPanel from './statistics/SkillsPanel.svelte';
   import ExtensionsPanel from './statistics/ExtensionsPanel.svelte';
+  import { rangeLabel } from './statistics/reportTimeline.js';
   import './statistics/report.css';
   import { getStatisticsReport } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
@@ -60,10 +61,7 @@
       if (destroyed) {
         return;
       }
-      errorMessage = errorMessageText(
-        error,
-        t('statistics.loadError', 'Statistics could not be loaded.'),
-      );
+      errorMessage = errorMessageText(error, t('statistics.loadError'));
     } finally {
       if (!destroyed) {
         loading = false;
@@ -81,26 +79,22 @@
   function subViewLabel(id) {
     switch (id) {
       case 'usage':
-        return t('statistics.subview.usage', 'Usage & costs');
+        return t('statistics.subview.usage');
       case 'runs':
-        return t('statistics.subview.runs', 'Runs & errors');
+        return t('statistics.subview.runs');
       case 'compactions':
-        return t('statistics.subview.compactions', 'Compactions');
+        return t('statistics.subview.compactions');
       case 'tools':
-        return t('statistics.subview.tools', 'Tools');
+        return t('statistics.subview.tools');
       case 'skills':
-        return t('statistics.subview.skills', 'Skills');
+        return t('statistics.subview.skills');
       case 'limits':
-        return t('statistics.subview.limits', 'Limits');
+        return t('statistics.subview.limits');
       case 'extensions':
-        return t('statistics.subview.extensions', 'Extensions');
+        return t('statistics.subview.extensions');
       default:
-        return t('statistics.subview.overview', 'Overview');
+        return t('statistics.subview.overview');
     }
-  }
-
-  function rangeLabel(range) {
-    return t(`statistics.range.${range}`, range);
   }
 </script>
 
@@ -108,13 +102,10 @@
   <header class="stats-view__header view-header">
     <div class="view-header__intro">
       <h2 id="stats-title" class="stats-view__title view-header__title">
-        {t('statistics.title', 'Statistics')}
+        {t('statistics.title')}
       </h2>
       <p class="stats-view__subtitle view-header__subtitle">
-        {t(
-          'statistics.subtitle',
-          'Understand token usage, cost, cache efficiency and Compaction across your Sessions.',
-        )}
+        {t('statistics.subtitle')}
       </p>
     </div>
   </header>
@@ -124,7 +115,7 @@
       class="view-toolbar__tabs"
       items={statisticsTabs}
       value={activeSubView}
-      ariaLabel={t('statistics.title', 'Statistics')}
+      ariaLabel={t('statistics.title')}
       idPrefix="statistics-subviews"
       onChange={(value) => {
         activeSubView = value;
@@ -141,24 +132,24 @@
         disabled={loading}
         onClick={() => loadReport()}
       >
-        {t('common.retry', 'Retry')}
+        {t('common.retry')}
       </Button>
     </Banner>
   {/if}
 
   {#if loading && !report && activeSubView !== 'limits'}
     <p class="stats-view__placeholder">
-      {t('statistics.loading', 'Loading statistics…')}
+      {t('statistics.loading')}
     </p>
   {/if}
   {#if report && activeSubView !== 'limits'}
     <div class="stats-scope view-toolbar">
       <div class="stats-scope__range">
-        <span>{t('statistics.range.label', 'Time range')}</span>
+        <span>{t('statistics.range.label')}</span>
         <div
           class="stats-toggle"
           role="group"
-          aria-label={t('statistics.range.label', 'Time range')}
+          aria-label={t('statistics.range.label')}
         >
           {#each STATISTICS_RANGES as range (range)}
             <button
@@ -169,21 +160,16 @@
               aria-label={rangeLabel(range)}
               disabled={loading}
               onclick={() => loadReport(range)}
-              >{t(`statistics.range.short.${range}`, rangeLabel(range))}</button
+              >{t(`statistics.range.short.${range}`)}</button
             >
           {/each}
         </div>
-        <InfoHint
-          text={t(
-            'statistics.range.hint',
-            'Activity uses UTC calendar days, including today so far. Agent, Session and Skill inventory totals describe the current collection. Skill offers use the offering Session’s creation date.',
-          )}
-        />
+        <InfoHint text={t('statistics.range.hint')} />
       </div>
       <div class="stats-view__header-actions view-toolbar__actions">
         {#if report?.generated_at}
           <span class="stats-view__generated view-toolbar__meta">
-            {t('statistics.generatedAt', 'Generated {time}', {
+            {t('statistics.generatedAt', {
               time: formatDateTime(report.generated_at, locale),
             })}
           </span>
@@ -193,9 +179,7 @@
           disabled={loading}
           onClick={() => loadReport(reportRange)}
         >
-          {loading
-            ? t('statistics.refreshing', 'Refreshing…')
-            : t('common.refresh', 'Refresh')}
+          {loading ? t('statistics.refreshing') : t('common.refresh')}
         </Button>
       </div>
     </div>

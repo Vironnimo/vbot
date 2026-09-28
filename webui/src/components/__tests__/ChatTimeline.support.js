@@ -153,20 +153,18 @@ export function userPersisted(id, content) {
 }
 
 // The Tool detail row labelled with the i18n `key` (`chat.toolArgs`,
-// `chat.toolResultLabel`, ...); `fallback` covers keys missing from the
-// catalog.
-export function detailRow(key, fallback) {
+// `chat.toolResultLabel`, ...).
+export function detailRow(key) {
   return (
     Array.from(document.querySelectorAll('.teb-row')).find(
-      (row) =>
-        row.querySelector('.teb-label')?.textContent === t(key, fallback),
+      (row) => row.querySelector('.teb-label')?.textContent === t(key),
     ) ?? null
   );
 }
 
 // A detail row's visible text: `key: value` lines for fields, else the code.
-export function detailText(key, fallback) {
-  const row = detailRow(key, fallback);
+export function detailText(key) {
+  const row = detailRow(key);
   const fields = Array.from(row?.querySelectorAll('.teb-field') ?? []);
   if (fields.length > 0) {
     return fields

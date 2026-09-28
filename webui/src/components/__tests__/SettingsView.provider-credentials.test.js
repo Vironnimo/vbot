@@ -382,7 +382,7 @@ describe('SettingsView provider credentials', () => {
         account: 'default',
       });
       expect(document.body.textContent).toContain(
-        t('settings.providers.device_flow.title', 'Connect {provider}', {
+        t('settings.providers.device_flow.title', {
           provider: 'GitHub Copilot',
         }),
       );

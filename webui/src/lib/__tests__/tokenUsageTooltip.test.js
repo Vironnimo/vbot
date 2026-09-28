@@ -233,7 +233,7 @@ describe('formatTokenUsageTooltip', () => {
 });
 
 describe('contextUsageCardModel', () => {
-  const label = (key, params) => t(`chat.contextCard.${key}`, '', params);
+  const label = (key, params) => t(`chat.contextCard.${key}`, params);
 
   it('returns the headline and labelled rows with shares as sub-rows', () => {
     const contextUsage = {

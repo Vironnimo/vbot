@@ -103,7 +103,7 @@ describe('SystemPromptView blocks', () => {
 
   it('opens a block without changing inclusion or losing edits across tabs', async () => {
     await mountView();
-    clickTab(t('systemPrompt.tabs.edit', 'Edit blocks'));
+    clickTab(t('systemPrompt.tabs.edit'));
     const block = blockElement('core:intro');
     const disclosure = block.querySelector('button[aria-expanded]');
     expect(disclosure.getAttribute('aria-expanded')).toBe('false');
@@ -112,8 +112,8 @@ describe('SystemPromptView blocks', () => {
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
     expect(lastCall('prompt.set_layout')).toBeUndefined();
     editBlock('core:intro', 'PRESERVED-DRAFT');
-    clickTab(t('systemPrompt.tabs.tools', 'Tools'));
-    clickTab(t('systemPrompt.tabs.edit', 'Edit blocks'));
+    clickTab(t('systemPrompt.tabs.tools'));
+    clickTab(t('systemPrompt.tabs.edit'));
     expect(block.querySelector('textarea').value).toBe('PRESERVED-DRAFT');
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
   });
@@ -146,7 +146,7 @@ describe('SystemPromptView blocks', () => {
 
     editBlock('core:intro', 'updated intro');
     expect(document.body.textContent).toContain(
-      t('systemPrompt.fragmentEditor.dirtyIndicator', 'unsaved'),
+      t('systemPrompt.fragmentEditor.dirtyIndicator'),
     );
     expect(hasCall('prompt.update')).toBe(false);
 
@@ -198,11 +198,10 @@ describe('SystemPromptView blocks', () => {
     expect(
       document.body.querySelector('[aria-live="polite"]').textContent,
     ).toContain(
-      t(
-        'systemPrompt.blockList.reorderAnnouncement',
-        'Moved to position {position} of {total}',
-        { position: 2, total: 4 },
-      ),
+      t('systemPrompt.blockList.reorderAnnouncement', {
+        position: 2,
+        total: 4,
+      }),
     );
 
     // The autosave targets core:intro by id even though its index changed.
@@ -258,14 +257,13 @@ describe('SystemPromptView blocks', () => {
     )
       .find(
         (button) =>
-          button.textContent.trim() ===
-          t('systemPrompt.fragmentEditor.reset', 'Reset'),
+          button.textContent.trim() === t('systemPrompt.fragmentEditor.reset'),
       )
       .click();
     flushSync();
     expect(hasCall('prompt.reset')).toBe(false);
 
-    confirmDialog(t('common.reset', 'Reset'));
+    confirmDialog(t('common.reset'));
     flushSync();
     await waitForCondition(() => hasCall('prompt.reset'), 100);
     expect(lastCall('prompt.reset')[1]).toMatchObject({ id: 'core:intro' });
@@ -294,7 +292,7 @@ describe('SystemPromptView blocks', () => {
       window.prompt = vi.fn(() => slug);
       await mountView({ createBlockError }, { onToast });
 
-      clickToolbarButton(t('systemPrompt.blockList.newBlock', 'New block'));
+      clickToolbarButton(t('systemPrompt.blockList.newBlock'));
       flushSync();
       await Promise.resolve();
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -334,7 +332,7 @@ describe('SystemPromptView blocks', () => {
       ],
     });
 
-    const removeLabel = t('common.remove', 'Remove');
+    const removeLabel = t('common.remove');
     Array.from(
       blockElement('user:my-note').querySelectorAll('button.btn-danger'),
     )
@@ -354,13 +352,11 @@ describe('SystemPromptView blocks', () => {
   it('resets the layout through prompt.reset_layout after confirmation', async () => {
     await mountView();
 
-    clickToolbarButton(
-      t('systemPrompt.blockList.resetLayout', 'Reset order & visibility'),
-    );
+    clickToolbarButton(t('systemPrompt.blockList.resetLayout'));
     flushSync();
     expect(hasCall('prompt.reset_layout')).toBe(false);
 
-    confirmDialog(t('common.reset', 'Reset'));
+    confirmDialog(t('common.reset'));
     flushSync();
     await waitForCondition(() => hasCall('prompt.reset_layout'), 100);
   });

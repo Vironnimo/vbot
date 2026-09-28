@@ -112,13 +112,10 @@
 
   function eyebrowText() {
     if (marker === '$') {
-      return t('skillAutocomplete.eyebrow.skills', 'Skills');
+      return t('skillAutocomplete.eyebrow.skills');
     }
 
-    return t(
-      'skillAutocomplete.eyebrow.commandsAndSkills',
-      'Commands & skills',
-    );
+    return t('skillAutocomplete.eyebrow.commandsAndSkills');
   }
 </script>
 
@@ -127,7 +124,7 @@
     bind:this={containerElement}
     class="skill-autocomplete"
     role="listbox"
-    aria-label={t('skillAutocomplete.label', 'Skill suggestions')}
+    aria-label={t('skillAutocomplete.label')}
   >
     <div class="skill-autocomplete__eyebrow">
       {eyebrowText()}
@@ -150,7 +147,7 @@
           </span>
         {:else}
           <span class="skill-autocomplete__description muted">
-            {t('skillAutocomplete.noDescription', 'No description available')}
+            {t('skillAutocomplete.noDescription')}
           </span>
         {/if}
       </button>

@@ -165,16 +165,16 @@ export function createSwarmPageModel(host) {
   const runGroups = $derived([
     {
       id: 'active',
-      label: t('swarm.runs.active', 'Active runs'),
-      empty: t('swarm.runs.noActive', 'No active runs'),
+      label: t('swarm.runs.active'),
+      empty: t('swarm.runs.noActive'),
       entries: swarms.filter((swarm) =>
         ['preparing', 'running', 'stopping'].includes(swarm.state),
       ),
     },
     {
       id: 'inactive',
-      label: t('swarm.runs.inactive', 'Inactive runs'),
-      empty: t('swarm.runs.noInactive', 'No inactive runs'),
+      label: t('swarm.runs.inactive'),
+      empty: t('swarm.runs.noInactive'),
       entries: swarms.filter(
         (swarm) => !['preparing', 'running', 'stopping'].includes(swarm.state),
       ),
@@ -202,10 +202,10 @@ export function createSwarmPageModel(host) {
   );
 
   const tabs = $derived([
-    { id: 'board', label: t('swarm.tabs.board', 'Board') },
-    { id: 'wiki', label: t('swarm.tabs.wiki', 'Wiki') },
-    { id: 'participants', label: t('swarm.tabs.activity', 'Activity') },
-    { id: 'usage', label: t('swarm.tabs.usage', 'Usage') },
+    { id: 'board', label: t('swarm.tabs.board') },
+    { id: 'wiki', label: t('swarm.tabs.wiki') },
+    { id: 'participants', label: t('swarm.tabs.activity') },
+    { id: 'usage', label: t('swarm.tabs.usage') },
   ]);
 
   const date = (value) =>
@@ -247,7 +247,7 @@ export function createSwarmPageModel(host) {
                 deliveryDraft[field] !== selectedSwarm.delivery?.[field],
             )
             .map((field) => ({
-              route: t('swarm.communication.advanced', 'Advanced'),
+              route: t('swarm.communication.advanced'),
               field,
               before: String(selectedSwarm.delivery?.[field]),
               after: String(deliveryDraft[field]),
@@ -327,8 +327,7 @@ export function createSwarmPageModel(host) {
         await selectSwarm(selectedSwarm.id, { silent: true });
     } catch (cause) {
       if (disposed || request !== overviewRequest) return;
-      error =
-        cause.message ?? t('swarm.loadError', 'The Swarm page could not load.');
+      error = cause.message ?? t('swarm.loadError');
     } finally {
       if (!disposed && request === overviewRequest) loading = false;
     }
@@ -615,11 +614,11 @@ export function createSwarmPageModel(host) {
   async function startSwarm() {
     error = '';
     if (!selectedProfile || !goal.trim()) {
-      error = t('swarm.start.validation', 'Choose a Swarm and enter a goal.');
+      error = t('swarm.start.validation');
       return;
     }
     if (directoryLoading || !runDirectory.trim()) {
-      error = t('swarm.start.directoryRequired', 'Choose a working directory.');
+      error = t('swarm.start.directoryRequired');
       return;
     }
     pending = 'start';
@@ -664,10 +663,7 @@ export function createSwarmPageModel(host) {
 
   function showResumeFailures(result) {
     if (result.resume_failed) {
-      error = t(
-        'swarm.post.resumeFailed',
-        'Your message was posted, but the Swarm could not resume. Use Resume to try again.',
-      );
+      error = t('swarm.post.resumeFailed');
       return;
     }
     const failed = (result.runs ?? []).filter((run) => run.error);
@@ -678,11 +674,7 @@ export function createSwarmPageModel(host) {
             (participant) => participant.id === run.participant_id,
           )?.display_name ?? run.participant_id,
       );
-      error = t(
-        'swarm.resume.failed',
-        'Could not resume: {names}. Open their Activity and check the application logs for details.',
-        { names: names.join(', ') },
-      );
+      error = t('swarm.resume.failed', { names: names.join(', ') });
     }
   }
 
@@ -764,7 +756,7 @@ export function createSwarmPageModel(host) {
           describe: describeReference,
           loading: (reference) => ({
             title: reference,
-            text: t('swarm.references.loading', 'Loading…'),
+            text: t('swarm.references.loading'),
           }),
         })
       : null;
@@ -800,13 +792,9 @@ export function createSwarmPageModel(host) {
         (kind === 'post' ? describePost(number) : describePage(number)).catch(
           () => {
             references.delete(key);
-            return t(
-              'swarm.references.unavailable',
-              'Could not load {reference}.',
-              {
-                reference: kind === 'post' ? `#${number}` : `w${number}`,
-              },
-            );
+            return t('swarm.references.unavailable', {
+              reference: kind === 'post' ? `#${number}` : `w${number}`,
+            });
           },
         ),
       );
@@ -830,7 +818,7 @@ export function createSwarmPageModel(host) {
         }),
       )[0];
     return {
-      title: `#${number} · ${post.author?.name ?? t('swarm.participant', 'Participant')}`,
+      title: `#${number} · ${post.author?.name ?? t('swarm.participant')}`,
       text: opening(post.text),
     };
   }
@@ -844,7 +832,7 @@ export function createSwarmPageModel(host) {
     });
     return {
       title: result.deleted
-        ? t('swarm.references.deletedPage', '{reference} · {title} (deleted)', {
+        ? t('swarm.references.deletedPage', {
             reference: `w${number}`,
             title: result.title,
           })
@@ -968,10 +956,7 @@ export function createSwarmPageModel(host) {
     client ??= host.bridgeClient ?? createExtensionPageClient();
     const startupTimeout = setTimeout(() => {
       loading = false;
-      error = t(
-        'swarm.hostUnavailable',
-        'The Swarm page could not connect. Reopen Swarms to try again.',
-      );
+      error = t('swarm.hostUnavailable');
     }, 10_000);
     let initialized = false;
     const offContext = client.onContext((next) => {

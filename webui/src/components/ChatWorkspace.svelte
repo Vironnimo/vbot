@@ -305,7 +305,7 @@
     void openDesktopExternalUrl(new URL(url, window.location.href).href).catch(
       () => {
         onToast({
-          title: t('preview.externalFailed', 'Could not open the browser'),
+          title: t('preview.externalFailed'),
           variant: 'error',
         });
       },
@@ -319,12 +319,12 @@
       if (isDesktopAccessor()) await setDesktopClipboardText(path);
       else await navigator.clipboard.writeText(path);
       onToast({
-        title: t('files.pathCopied', 'File path copied'),
+        title: t('files.pathCopied'),
         variant: 'success',
       });
     } catch {
       onToast({
-        title: t('files.pathCopyFailed', 'Could not copy the file path'),
+        title: t('files.pathCopyFailed'),
         variant: 'error',
       });
     }
@@ -419,12 +419,8 @@
     icon
     class={inChat ? 'chat-view__workspace-action' : ''}
     data-workspace-action
-    ariaLabel={split
-      ? t('split.close', 'Close area')
-      : t('split.open', 'Split view')}
-    tooltip={split
-      ? t('split.close', 'Close area')
-      : t('split.open', 'Split view')}
+    ariaLabel={split ? t('split.close') : t('split.open')}
+    tooltip={split ? t('split.close') : t('split.open')}
     onClick={() => (split ? closePane(index) : openSplit())}
   >
     {#if split}
@@ -459,11 +455,11 @@
       icon
       class={inChat ? 'chat-view__workspace-action' : ''}
       ariaLabel={kinds[index] === 'chat'
-        ? t('split.showPreview', 'Show preview')
-        : t('split.backToChat', 'Back to chat')}
+        ? t('split.showPreview')
+        : t('split.backToChat')}
       tooltip={kinds[index] === 'chat'
-        ? t('split.showPreview', 'Show preview')
-        : t('split.backToChat', 'Back to chat')}
+        ? t('split.showPreview')
+        : t('split.backToChat')}
       onClick={() =>
         changeContent(index, kinds[index] === 'chat' ? 'preview' : 'chat')}
     >
@@ -510,7 +506,7 @@
     id={`${id}-actions`}
     role="menu"
     tabindex="-1"
-    aria-label={t('preview.fileActions', 'Actions for {filename}', {
+    aria-label={t('preview.fileActions', {
       filename: menuFile.filename,
     })}
     style={menuStyle}
@@ -521,11 +517,11 @@
         variant="tertiary"
         role="menuitem"
         onClick={() => openPreview(menuPane, menuFile.source)}
-        >{t('split.showPreview', 'Show preview')}</Button
+        >{t('split.showPreview')}</Button
       >{/if}
     {#if menuFile.path}
       <Button variant="tertiary" role="menuitem" onClick={copyFilePath}>
-        {t('files.copyPath', 'Copy file path')}
+        {t('files.copyPath')}
       </Button>
     {/if}
     <a
@@ -536,7 +532,7 @@
       onclick={(event) => {
         openExternal(event, menuFile.source);
         closeMenu(true);
-      }}>{t('preview.openBrowser', 'Open in browser')}</a
+      }}>{t('preview.openBrowser')}</a
     >
     <a
       role="menuitem"
@@ -547,7 +543,7 @@
       onclick={(event) => {
         openExternal(event, downloadUrl(menuFile.source));
         closeMenu(true);
-      }}>{t('preview.download', 'Download')}</a
+      }}>{t('preview.download')}</a
     >
   </div>
 {/if}
@@ -572,16 +568,13 @@
           class="chat-workspace__divider"
           role="separator"
           tabindex="0"
-          aria-label={t('split.resize', 'Resize chat areas')}
+          aria-label={t('split.resize')}
           aria-orientation={stacked ? 'horizontal' : 'vertical'}
           aria-valuemin={Math.round(minimum)}
           aria-valuemax={Math.round(100 - minimum)}
           aria-valuenow={Math.round(effectiveRatio)}
           aria-controls={`${id}-pane-0 ${id}-pane-1`}
-          use:tooltip={t(
-            'split.resizeHint',
-            'Drag to resize. Arrow keys adjust; Enter resets.',
-          )}
+          use:tooltip={t('split.resizeHint')}
           onpointerdown={startDrag}
           onpointermove={moveDivider}
           onpointerup={stopDrag}
@@ -600,9 +593,7 @@
         class="chat-workspace__pane"
         id={`${id}-pane-${index}`}
         hidden={!split && singlePane !== index}
-        aria-label={index === 0
-          ? t('split.firstArea', 'First area')
-          : t('split.secondArea', 'Second area')}
+        aria-label={index === 0 ? t('split.firstArea') : t('split.secondArea')}
         onfocusin={() => (focusedPane = index)}
         onpointerdowncapture={() => (focusedPane = index)}
         use:interceptFiles={index}

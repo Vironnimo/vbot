@@ -15,7 +15,7 @@ import {
 import { t } from '../../lib/i18n.js';
 
 // The `sessions.delete` menu label has no catalog entry yet.
-const DELETE_ITEM = t('sessions.delete', 'Delete');
+const DELETE_ITEM = t('sessions.delete');
 
 function typeRename(value) {
   const input = document.querySelector('.session-row__edit-input');

@@ -76,13 +76,8 @@ export const toolRowFromEvent = (event) => {
 
 export const toolStatusLabel = (tool, nowMs = Date.now()) => {
   if (toolStatus(tool) === 'cancelled') {
-    const duration = formatDurationMs(
-      toolDurationMs(tool),
-      'chat.toolDurationSeconds',
-    );
-    return [t('chat.toolCancelled', 'cancelled'), duration]
-      .filter(Boolean)
-      .join(' · ');
+    const duration = formatDurationMs(toolDurationMs(tool));
+    return [t('chat.toolCancelled'), duration].filter(Boolean).join(' · ');
   }
   if (toolStatus(tool) === 'running') {
     if (isToolPreparing(tool)) {
@@ -90,17 +85,11 @@ export const toolStatusLabel = (tool, nowMs = Date.now()) => {
     }
     return formatDurationMs(
       elapsedSinceTimestamp(toolStartedTimestamp(tool), nowMs),
-      'chat.toolDurationSeconds',
     );
   }
-  const duration = formatDurationMs(
-    toolDurationMs(tool),
-    'chat.toolDurationSeconds',
-  );
+  const duration = formatDurationMs(toolDurationMs(tool));
   if (toolStatus(tool) === 'partial') {
-    return [t('chat.toolPartial', 'partial'), duration]
-      .filter(Boolean)
-      .join(' · ');
+    return [t('chat.toolPartial'), duration].filter(Boolean).join(' · ');
   }
   return duration;
 };
@@ -173,6 +162,30 @@ function toolPrimaryPart(part) {
   };
 }
 
+// Singular and plural label of each counted tool-fact unit.
+const COUNT_FACT_LABELS = {
+  edits: [
+    (count) => t('chat.toolFact.edit', { count }),
+    (count) => t('chat.toolFact.edits', { count }),
+  ],
+  failures: [
+    (count) => t('chat.toolFact.failure', { count }),
+    (count) => t('chat.toolFact.failures', { count }),
+  ],
+  files: [
+    (count) => t('chat.toolFact.file', { count }),
+    (count) => t('chat.toolFact.files', { count }),
+  ],
+  matches: [
+    (count) => t('chat.toolFact.match', { count }),
+    (count) => t('chat.toolFact.matches', { count }),
+  ],
+  results: [
+    (count) => t('chat.toolFact.result', { count }),
+    (count) => t('chat.toolFact.results', { count }),
+  ],
+};
+
 function toolFactPresentation(fact) {
   if (
     isPlainObject(fact) &&
@@ -184,7 +197,7 @@ function toolFactPresentation(fact) {
   ) {
     return {
       kind: 'line_range',
-      text: t('chat.toolFact.lines', 'lines {start}-{end}', {
+      text: t('chat.toolFact.lines', {
         start: fact.start,
         end: fact.end,
       }),
@@ -209,39 +222,14 @@ function toolFactPresentation(fact) {
     fact.kind !== 'count' ||
     !Number.isInteger(fact.value) ||
     fact.value < 0 ||
-    !['edits', 'failures', 'files', 'matches', 'results'].includes(fact.unit)
+    !Object.hasOwn(COUNT_FACT_LABELS, fact.unit)
   ) {
     return null;
   }
-  const renderedCount = `${fact.value}${fact.at_least === true ? '+' : ''}`;
+  const count = `${fact.value}${fact.at_least === true ? '+' : ''}`;
   const singular = fact.value === 1 && fact.at_least !== true;
-  const unitKeys = {
-    edits: ['chat.toolFact.edit', 'chat.toolFact.edits', 'edit', 'edits'],
-    failures: [
-      'chat.toolFact.failure',
-      'chat.toolFact.failures',
-      'failed',
-      'failed',
-    ],
-    files: ['chat.toolFact.file', 'chat.toolFact.files', 'file', 'files'],
-    matches: [
-      'chat.toolFact.match',
-      'chat.toolFact.matches',
-      'match',
-      'matches',
-    ],
-    results: [
-      'chat.toolFact.result',
-      'chat.toolFact.results',
-      'result',
-      'results',
-    ],
-  };
-  const [singularKey, pluralKey, singularWord, pluralWord] =
-    unitKeys[fact.unit];
-  const label = singular
-    ? t(singularKey, `{count} ${singularWord}`, { count: renderedCount })
-    : t(pluralKey, `{count} ${pluralWord}`, { count: renderedCount });
+  const [singularLabel, pluralLabel] = COUNT_FACT_LABELS[fact.unit];
+  const label = singular ? singularLabel(count) : pluralLabel(count);
   return { kind: 'count', text: label, variant: 'neutral' };
 }
 

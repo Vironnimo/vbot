@@ -123,17 +123,17 @@
   );
   let diagnostics = $derived(selected ? skillDiagnosticLines(selected) : []);
   let statusOptions = $derived([
-    { value: 'all', label: t('skills.filter.all', 'All statuses') },
+    { value: 'all', label: t('skills.filter.all') },
     {
       value: 'attention',
-      label: t('skills.filter.attention', 'Needs attention'),
+      label: t('skills.filter.attention'),
     },
-    { value: 'disabled', label: t('skills.status.disabled', 'Disabled') },
-    { value: 'available', label: t('skills.status.available', 'Available') },
+    { value: 'disabled', label: t('skills.status.disabled') },
+    { value: 'available', label: t('skills.status.available') },
   ]);
   let contentTabs = $derived([
-    { id: 'instructions', label: t('skills.instructions', 'Instructions') },
-    { id: 'original', label: t('skills.original', 'Original text') },
+    { id: 'instructions', label: t('skills.instructions') },
+    { id: 'original', label: t('skills.original') },
   ]);
 
   function clearSelection() {
@@ -217,8 +217,7 @@
       if (!disposed)
         agents = Array.isArray(result?.agents) ? result.agents : [];
     } catch (error) {
-      if (!disposed)
-        agentError = `${t('skills.agentsError', 'Agents could not be loaded.')} ${error.message}`;
+      if (!disposed) agentError = `${t('skills.agentsError')} ${error.message}`;
     }
   }
 
@@ -253,7 +252,7 @@
       }
     } catch (error) {
       if (!disposed && version === inventoryVersion)
-        loadError = `${t('skills.loadError', 'Skills could not be loaded.')} ${error.message}`;
+        loadError = `${t('skills.loadError')} ${error.message}`;
     } finally {
       if (!disposed && version === inventoryVersion) loading = false;
     }
@@ -285,13 +284,10 @@
     // response still fulfills this selection unless the user navigates away.
     pendingInstallSelection = { name: result.name, scope: result.scope };
     onToast({
-      title: t(
+      title:
         result.operation === 'unchanged'
-          ? 'skills.install.unchanged'
-          : 'skills.install.success',
-        '',
-        { name: result.name },
-      ),
+          ? t('skills.install.unchanged')
+          : t('skills.install.success', { name: result.name }),
       variant: 'success',
     });
     if (result.warnings?.length)
@@ -304,14 +300,14 @@
   <div
     class="skills-actions"
     role="group"
-    aria-label={t('skills.actionsFor', '', { name: entry.name })}
+    aria-label={t('skills.actionsFor', { name: entry.name })}
   >
     {#if entry.owner_id}
       <Button
         variant="tertiary"
         icon
         disabled={actions.busy || Boolean(agentError)}
-        ariaLabel={t('skills.shareNamed', '', { name: entry.name })}
+        ariaLabel={t('skills.shareNamed', { name: entry.name })}
         tooltip={t('skills.sharing')}
         onClick={() => actions.openShareModal(entry)}
       >
@@ -335,7 +331,7 @@
         variant="danger"
         icon
         disabled={actions.busy}
-        ariaLabel={t('skills.deleteNamed', '', { name: entry.name })}
+        ariaLabel={t('skills.deleteNamed', { name: entry.name })}
         tooltip={t('common.delete')}
         onClick={() => actions.requestDelete(entry)}
       >
@@ -359,7 +355,7 @@
         <Toggle
           checked={!entry.disabled}
           disabled={actions.busy}
-          ariaLabel={t('skills.enabledNamed', '', { name: entry.name })}
+          ariaLabel={t('skills.enabledNamed', { name: entry.name })}
           onChange={() => actions.toggleDisabled(entry)}
         />
       </label>
@@ -371,7 +367,7 @@
           size="sm"
           checked={!entry.disabled}
           disabled={actions.busy}
-          ariaLabel={t('skills.enabledNamed', '', { name: entry.name })}
+          ariaLabel={t('skills.enabledNamed', { name: entry.name })}
           onChange={() => actions.toggleDisabled(entry)}
         />
       </span>
@@ -380,10 +376,7 @@
 {/snippet}
 
 <section class="skills-view view active" aria-labelledby="skills-title">
-  <aside
-    class="skills-nav secondary-pane"
-    aria-label={t('skills.collections', 'Skill collections')}
-  >
+  <aside class="skills-nav secondary-pane" aria-label={t('skills.collections')}>
     <nav class="secondary-list">
       {#each ['library', 'agents', 'projects'] as section (section)}
         {#if collections.some((item) => item.section === section)}
@@ -469,7 +462,7 @@
           {scope === 'directories'
             ? t('skills.locationsSubtitle')
             : scope.startsWith('agent:')
-              ? t('skills.agentSubtitle', '', { name: collection?.label })
+              ? t('skills.agentSubtitle', { name: collection?.label })
               : scope === 'shared'
                 ? t('skills.sharedSubtitle')
                 : t('skills.librarySubtitle')}
@@ -480,25 +473,25 @@
     {#if loadError}
       <Banner variant="error" role="alert"
         >{loadError}<Button variant="secondary" onClick={loadInventory}
-          >{t('common.retry', 'Retry')}</Button
+          >{t('common.retry')}</Button
         ></Banner
       >
     {/if}
     {#if agentError}
       <Banner variant="warn" role="alert"
         >{agentError}<Button variant="secondary" onClick={loadAgents}
-          >{t('common.retry', 'Retry')}</Button
+          >{t('common.retry')}</Button
         ></Banner
       >
     {/if}
     {#if staleShared.length || policyDiagnostics.length}
       <details class="skills-notice">
         <summary
-          >{t('skills.policyAttention', '', {
+          >{t('skills.policyAttention', {
             count: staleShared.length + policyDiagnostics.length,
           })}</summary
         >
-        <p>{t('skills.staleShared', '', { count: staleShared.length })}</p>
+        <p>{t('skills.staleShared', { count: staleShared.length })}</p>
         <ul>
           {#each staleShared as item, index (index)}<li>
               {item.agent_id} / {item.name}
@@ -590,7 +583,7 @@
         >
           <div class="s-group-toolbar skills-results-meta" aria-live="polite">
             <span class="s-group-toolbar__meta"
-              >{t('skills.resultCount', '', { count: filtered.length })}</span
+              >{t('skills.resultCount', { count: filtered.length })}</span
             >
             {#if loading}<span class="s-group-toolbar__meta"
                 >{t('skills.refreshing')}</span
@@ -610,16 +603,12 @@
               <Banner variant="neutral">{t('skills.loading')}</Banner>
             {:else if !filtered.length}
               <EmptyState
-                title={t(
-                  searchQuery || statusFilter !== 'all'
-                    ? 'skills.noMatches'
-                    : 'skills.noCollectionSkills',
-                )}
-                description={t(
-                  searchQuery || statusFilter !== 'all'
-                    ? 'skills.noMatchesHelp'
-                    : 'skills.noCollectionSkillsHelp',
-                )}
+                title={searchQuery || statusFilter !== 'all'
+                  ? t('skills.noMatches')
+                  : t('skills.noCollectionSkills')}
+                description={searchQuery || statusFilter !== 'all'
+                  ? t('skills.noMatchesHelp')
+                  : t('skills.noCollectionSkillsHelp')}
               />
             {:else}
               <div class="s-group skills-group">
@@ -674,7 +663,7 @@
                 ariaLabel={t('skills.previousPage')}>←</Button
               >
               <span
-                >{t('skills.page', '', {
+                >{t('skills.page', {
                   page: currentPage + 1,
                   pages: pageCount,
                 })}</span
@@ -723,13 +712,13 @@
                 <h4>{t('skills.access')}</h4>
                 {#if selected.owner_id}
                   <p>
-                    {t('skills.ownerAccess', '', {
+                    {t('skills.ownerAccess', {
                       name: agentDisplayName(selected.owner_id, agents),
                     })}
                   </p>
                   <p>
                     {selected.shared
-                      ? t('skills.receivers', '', {
+                      ? t('skills.receivers', {
                           names: selected.shared_with
                             .map((id) => agentDisplayName(id, agents))
                             .join(', '),
@@ -740,11 +729,9 @@
                       {t('skills.sharedAccessHelp')}
                     </p>{/if}
                 {:else}<p>
-                    {t(
-                      selected.origin?.startsWith('project:')
-                        ? 'skills.projectAccess'
-                        : 'skills.poolAccess',
-                    )}
+                    {selected.origin?.startsWith('project:')
+                      ? t('skills.projectAccess')
+                      : t('skills.poolAccess')}
                   </p>{/if}
                 {#if selected.disabled}<p>{t('skills.disabledEffect')}</p>{/if}
               </div>
@@ -754,7 +741,7 @@
                   open={['invalid', 'unavailable'].includes(selected.status)}
                 >
                   <summary
-                    >{t('skills.diagnostics', '', {
+                    >{t('skills.diagnostics', {
                       count: diagnostics.length,
                     })}</summary
                   >
@@ -802,7 +789,7 @@
                     >{inspectError}<Button
                       variant="secondary"
                       onClick={() => openSkill(selected, false)}
-                      >{t('common.retry', 'Retry')}</Button
+                      >{t('common.retry')}</Button
                     ></Banner
                   >
                 {:else if inspected}
@@ -841,7 +828,7 @@
 
 {#if actions.showCreateModal}
   <Modal
-    title={t('settings.skills.newSkill', 'New skill')}
+    title={t('settings.skills.newSkill')}
     class="skills-editor-modal"
     labelledById="skill-create-modal-title"
     closeDisabled={actions.busy}
@@ -851,7 +838,7 @@
       <div class="skills-modal-body">
         <div class="skills-field">
           <label class="skills-field-label" for="create-scope">
-            {t('skills.createScopeLabel', 'Create in')}
+            {t('skills.createScopeLabel')}
           </label>
           <Dropdown
             id="create-scope"
@@ -861,22 +848,20 @@
             onValueChange={(value) => (actions.createScope = value)}
           />
           <p class="skills-secondary">
-            {t(
-              actions.createScope === 'global'
-                ? 'skills.createGlobalHelp'
-                : 'skills.createPrivateHelp',
-            )}
+            {actions.createScope === 'global'
+              ? t('skills.createGlobalHelp')
+              : t('skills.createPrivateHelp')}
           </p>
         </div>
         <div class="skills-field">
           <label class="skills-field-label" for="new-skill-name">
-            {t('settings.skills.nameLabel', 'Skill name')}
+            {t('settings.skills.nameLabel')}
           </label>
           <TextField
             id="new-skill-name"
             value={actions.newName}
             onInput={(next) => (actions.newName = next)}
-            placeholder={t('settings.skills.namePlaceholder', 'skill-name')}
+            placeholder={t('settings.skills.namePlaceholder')}
           />
         </div>
         <div class="skills-field">
@@ -911,14 +896,14 @@
         disabled={actions.busy}
         onClick={actions.closeCreateModal}
       >
-        {t('common.cancel', 'Cancel')}
+        {t('common.cancel')}
       </Button>
       <Button
         variant="primary"
         disabled={actions.createDisabled}
         onClick={actions.createSkill}
       >
-        {t('settings.skills.create', 'Create skill')}
+        {t('settings.skills.create')}
       </Button>
     {/snippet}
   </Modal>
@@ -926,7 +911,7 @@
 
 {#if actions.editing}
   <Modal
-    title={t('skills.editTitle', 'Edit {name}', { name: actions.editing.name })}
+    title={t('skills.editTitle', { name: actions.editing.name })}
     class="skills-editor-modal"
     labelledById="skill-edit-modal-title"
     closeDisabled={actions.busy}
@@ -942,7 +927,7 @@
             class="skills-field-label"
             for={`skill-content-${actions.editing.name}`}
           >
-            {t('settings.skills.contentLabel', 'SKILL.md content')}
+            {t('settings.skills.contentLabel')}
           </label>
           <TextArea
             id={`skill-content-${actions.editing.name}`}
@@ -960,16 +945,14 @@
         disabled={actions.busy}
         onClick={actions.closeEditModal}
       >
-        {t('common.cancel', 'Cancel')}
+        {t('common.cancel')}
       </Button>
       <Button
         variant="primary"
         disabled={actions.busy}
         onClick={actions.saveEdit}
       >
-        {actions.busy
-          ? t('common.saving', 'Saving…')
-          : t('common.save', 'Save')}
+        {actions.busy ? t('common.saving') : t('common.save')}
       </Button>
     {/snippet}
   </Modal>
@@ -977,7 +960,7 @@
 
 {#if actions.shareTarget}
   <Modal
-    title={t('skills.shareTitle', 'Share {name}', {
+    title={t('skills.shareTitle', {
       name: actions.shareTarget.name,
     })}
     labelledById="skill-share-modal-title"
@@ -988,18 +971,12 @@
       <div class="skills-modal-body">
         {#if agentError}<Banner variant="warn">{agentError}</Banner>{/if}
         <p class="skills-share-desc">
-          {t(
-            'skills.shareExplanation',
-            'Select which agents should have access to this skill. They can activate and co-maintain it.',
-          )}
+          {t('skills.shareExplanation')}
         </p>
         {#if actions.shareableAgents.length === 0}
           <EmptyState
             density="compact"
-            description={t(
-              'skills.noOtherAgents',
-              'No other identity agents exist to share with.',
-            )}
+            description={t('skills.noOtherAgents')}
           />
         {:else}
           <div class="skills-share-list">
@@ -1012,7 +989,7 @@
                 )}
                 role="switch"
                 aria-checked={actions.shareReceivers.includes(agent.id)}
-                aria-label={t('skills.toggleReceiver', 'Share with {name}', {
+                aria-label={t('skills.toggleReceiver', {
                   name: agent.name || agent.id,
                 })}
                 onclick={() => actions.toggleReceiver(agent.id)}
@@ -1038,14 +1015,14 @@
         disabled={actions.busy}
         onClick={actions.closeShareModal}
       >
-        {t('common.cancel', 'Cancel')}
+        {t('common.cancel')}
       </Button>
       <Button
         variant="primary"
         disabled={actions.shareSaveDisabled}
         onClick={actions.saveShare}
       >
-        {t('skills.saveShare', 'Save')}
+        {t('skills.saveShare')}
       </Button>
     {/snippet}
   </Modal>
@@ -1053,13 +1030,9 @@
 
 {#if actions.deleteTarget}
   <ConfirmDialog
-    title={t('settings.skills.deleteConfirmTitle', 'Delete skill')}
-    body={t(
-      'skills.deletePackageConfirm',
-      'Delete skill "{name}" permanently? The skill file is removed from disk.',
-      { name: actions.deleteTarget.name },
-    )}
-    confirmLabel={t('common.delete', 'Delete')}
+    title={t('settings.skills.deleteConfirmTitle')}
+    body={t('skills.deletePackageConfirm', { name: actions.deleteTarget.name })}
+    confirmLabel={t('common.delete')}
     onConfirm={actions.confirmDelete}
     onCancel={actions.cancelDelete}
   />

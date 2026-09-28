@@ -95,7 +95,7 @@
       <p class="s-check-group__note">{emptyLabel}</p>
     {:else if visibleItems.length === 0}
       <p class="s-check-group__note">
-        {t('access.noMatches', 'No matches.')}
+        {t('access.noMatches')}
       </p>
     {:else}
       {#each visibleItems as item (item.name)}

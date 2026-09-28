@@ -90,7 +90,7 @@ it('preserves edits made during a slow save and evaluates the newest revision', 
   input(title, 'Second');
   release();
   await flush();
-  button(t('jev.evaluate', 'Evaluate')).click();
+  button(t('jev.evaluate')).click();
   await flush();
   expect(api.saveDecisionExperiment.mock.calls[1][0].title).toBe('Second');
   expect(api.saveDecisionExperiment.mock.calls[1][2]).toBe(2);
@@ -109,14 +109,12 @@ it('offers explicit discard and reload after a concurrent revision conflict', as
   render({ onReload });
   await flush();
   input(document.querySelector('input'), 'My local edit');
-  button(t('jev.save', 'Save')).click();
+  button(t('jev.save')).click();
   await flush();
   expect(document.querySelector('[role=alert]').textContent).toBe(
     'Changed elsewhere',
   );
-  button(
-    t('jev.reloadSaved', 'Discard local edits and reload saved version'),
-  ).click();
+  button(t('jev.reloadSaved')).click();
   await flush();
   expect(onReload).toHaveBeenCalledOnce();
   expect(api.startDecisionEvaluation).not.toHaveBeenCalled();
@@ -125,9 +123,9 @@ it('offers explicit discard and reload after a concurrent revision conflict', as
 it('blocks invalid JSON locally and never starts a request', async () => {
   render();
   await flush();
-  button(t('jev.json', 'JSON')).click();
+  button(t('jev.json')).click();
   await flush();
-  button(t('jev.evaluate', 'Evaluate')).click();
+  button(t('jev.evaluate')).click();
   await flush();
   expect(document.querySelector('[role="alert"]')).not.toBeNull();
   expect(api.startDecisionEvaluation).not.toHaveBeenCalled();
@@ -148,7 +146,7 @@ it('unmounting an active control removes observers without cancelling execution'
   api.getDecisionResult.mockResolvedValue(record);
   render();
   await flush();
-  expect(button(t('jev.stopControl', 'Stop control'))).toBeTruthy();
+  expect(button(t('jev.stopControl'))).toBeTruthy();
   await unmount(component);
   component = null;
   const calls = api.getDecisionResult.mock.calls.length;
@@ -160,14 +158,14 @@ it('unmounting an active control removes observers without cancelling execution'
 it('starts control explicitly with a saved setup and a distinct mode', async () => {
   render();
   await flush();
-  button(t('jev.control', 'Application control')).click();
+  button(t('jev.control')).click();
   await flush();
   const goal = document.querySelector('textarea');
   input(goal, 'Keep the job moving');
   api.startDecisionEvaluation.mockRejectedValue(
     new Error('fixture validation'),
   );
-  button(t('jev.startControl', 'Start control')).click();
+  button(t('jev.startControl')).click();
   await flush();
   expect(api.saveDecisionExperiment.mock.calls[0][0].control.instructions).toBe(
     'Keep the job moving',
@@ -207,19 +205,17 @@ it('opens saved results with their own state and keeps comparison inputs distinc
   expect(document.querySelector('.jev-state-excerpt').textContent).toContain(
     current.snapshot.state,
   );
-  button(t('jev.setup', 'Setup')).click();
+  button(t('jev.setup')).click();
   await flush();
   input(
     document.querySelector('[aria-label="State"]'),
     'Unsaved new setup state',
   );
-  button(t('jev.results', 'Results')).click();
+  button(t('jev.results')).click();
   await flush();
   [...document.querySelectorAll('button')]
     .find(
-      (node) =>
-        node.textContent.trim() === t('jev.compare', 'Compare') &&
-        !node.disabled,
+      (node) => node.textContent.trim() === t('jev.compare') && !node.disabled,
     )
     .click();
   await flush();
@@ -230,7 +226,7 @@ it('opens saved results with their own state and keeps comparison inputs distinc
   expect(states[0]).toContain(current.snapshot.state);
   expect(states[1]).toContain(older.snapshot.state.message);
   expect(states.join(' ')).not.toContain('Unsaved new setup state');
-  button(t('jev.setup', 'Setup')).click();
+  button(t('jev.setup')).click();
   await flush();
   expect(document.querySelector('[aria-label="State"]').value).toBe(
     'Unsaved new setup state',
@@ -241,9 +237,9 @@ it('opens saved results with their own state and keeps comparison inputs distinc
 it('allocates question ids internally and preserves them through edits and removal', async () => {
   render();
   await flush();
-  button(`+ ${t('jev.choice', 'Choice')}`).click();
+  button(`+ ${t('jev.choice')}`).click();
   await flush();
-  button(t('jev.save', 'Save')).click();
+  button(t('jev.save')).click();
   await flush();
   const initialQuestions =
     api.saveDecisionExperiment.mock.calls.at(-1)[0].questions;
@@ -252,9 +248,9 @@ it('allocates question ids internally and preserves them through edits and remov
   expect(document.querySelector('input[id$="-id"]')).toBeNull();
   document.querySelector('.jev-question button').click();
   await flush();
-  button(`+ ${t('jev.score', 'Score')}`).click();
+  button(`+ ${t('jev.score')}`).click();
   await flush();
-  button(t('jev.save', 'Save')).click();
+  button(t('jev.save')).click();
   await flush();
   const finalQuestions =
     api.saveDecisionExperiment.mock.calls.at(-1)[0].questions;

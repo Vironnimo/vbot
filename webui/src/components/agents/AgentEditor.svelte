@@ -91,13 +91,13 @@
   );
   let submitLabel = $derived(
     formMode === AGENT_FORM_MODE_CREATE
-      ? t('agents.form.submitCreate', 'Create agent')
-      : t('agents.form.submitUpdate', 'Save changes'),
+      ? t('agents.form.submitCreate')
+      : t('agents.form.submitUpdate'),
   );
   let detailSubtitle = $derived(
     formMode === AGENT_FORM_MODE_CREATE
-      ? t('agents.detail.newSubtitle', 'id assigned at creation')
-      : t('agents.detail.idValue', 'id: {id}', {
+      ? t('agents.detail.newSubtitle')
+      : t('agents.detail.idValue', {
           id: agent?.id ?? formValues.id,
         }),
   );
@@ -176,10 +176,7 @@
 
     if (!result.isValid) {
       if (source !== 'auto') {
-        errorMessage = t(
-          'errors.validation',
-          'Check the highlighted fields and try again.',
-        );
+        errorMessage = t('errors.validation');
         await tick();
         editorForm?.querySelector('[aria-invalid="true"]')?.focus();
       }
@@ -191,7 +188,7 @@
       !agentPayloadHasChanges(result.payload)
     ) {
       if (source === 'manual') {
-        showAgentToast(t('common.alreadySaved', 'Already saved'));
+        showAgentToast(t('common.alreadySaved'));
       }
 
       return true;
@@ -227,7 +224,7 @@
         saveMode === AGENT_FORM_MODE_CREATE ? createAgent : updateAgent;
       const savedAgent = await saveAgent(result.payload);
       if (saveMode === AGENT_FORM_MODE_CREATE) {
-        showAgentToast(t('agents.created', 'Agent created.'));
+        showAgentToast(t('agents.created'));
         await onAgentCreated(savedAgent.id ?? result.payload.id);
       } else {
         const updatedSelectedAgent = applySavedAgentUpdate(
@@ -236,7 +233,7 @@
           draftValues,
         );
         if (updatedSelectedAgent && source === 'manual') {
-          showAgentToast(t('agents.updated', 'Agent updated.'));
+          showAgentToast(t('agents.updated'));
         }
       }
 
@@ -375,10 +372,7 @@
     }
 
     if (!canDeleteSelectedAgent) {
-      errorMessage = t(
-        'errors.minimumAgents',
-        'At least one agent must remain.',
-      );
+      errorMessage = t('errors.minimumAgents');
       return;
     }
 
@@ -387,7 +381,7 @@
 
     try {
       await deleteAgent(agent.id);
-      showAgentToast(t('agents.deleted', 'Agent deleted.'));
+      showAgentToast(t('agents.deleted'));
       await onAgentDeleted(agent.id);
     } catch (error) {
       errorMessage = viewErrorMessage(error, t('agents.deleteError'));
@@ -428,18 +422,12 @@
     if (validationError) {
       renameError =
         validationError === 'required'
-          ? t('agents.form.required', 'This field is required.')
-          : t(
-              'agents.rename.invalidId',
-              'Use 1–64 letters, numbers, hyphens, or underscores, starting with a letter or number.',
-            );
+          ? t('agents.form.required')
+          : t('agents.rename.invalidId');
       return;
     }
     if (nextId === agent.id) {
-      renameError = t(
-        'agents.rename.sameId',
-        'Enter an ID different from the current one.',
-      );
+      renameError = t('agents.rename.sameId');
       return;
     }
 
@@ -449,13 +437,10 @@
     try {
       const renamedAgent = await renameAgent(oldId, nextId);
       renameDialogOpen = false;
-      showAgentToast(t('agents.renamed', 'Agent ID changed.'));
+      showAgentToast(t('agents.renamed'));
       onAgentRenamed(renamedAgent, { oldId, newId: renamedAgent.id ?? nextId });
     } catch (error) {
-      renameError = viewErrorMessage(
-        error,
-        t('agents.renameError', 'Could not change Agent ID.'),
-      );
+      renameError = viewErrorMessage(error, t('agents.renameError'));
     } finally {
       isRenaming = false;
     }
@@ -545,25 +530,18 @@
     }
 
     if (formErrors[fieldName] === 'required') {
-      return t('agents.form.required', 'This field is required.');
+      return t('agents.form.required');
     }
 
-    return t(
-      'errors.validation',
-      'Check the highlighted fields and try again.',
-    );
+    return t('errors.validation');
   }
 
   function viewErrorMessage(error, fallback) {
     if (error?.code === 'last_agent') {
-      return t('errors.minimumAgents', 'At least one agent must remain.');
+      return t('errors.minimumAgents');
     }
 
-    return (
-      error?.message ||
-      fallback ||
-      t('errors.generic', 'Something went wrong. Try again.')
-    );
+    return error?.message || fallback || t('errors.generic');
   }
 </script>
 
@@ -578,7 +556,7 @@
         <div>
           <h2 class="detail-heading">
             {formMode === AGENT_FORM_MODE_CREATE
-              ? t('agents.create', 'Create agent')
+              ? t('agents.create')
               : agent?.name || formValues.name || agent?.id}
           </h2>
           <div class="detail-sub">{detailSubtitle}</div>
@@ -648,7 +626,7 @@
         />
       {:else}
         <Button variant="tertiary" type="submit" disabled={isSaving}>
-          {isSaving ? t('common.saving', 'Saving…') : submitLabel}
+          {isSaving ? t('common.saving') : submitLabel}
         </Button>
       {/if}
     </div>
@@ -658,18 +636,9 @@
 {#if disableCustomPromptConfirmOpen}
   <ConfirmDialog
     danger={false}
-    title={t(
-      'agents.confirmDisableCustomPrompt.title',
-      'Disable custom system prompt?',
-    )}
-    body={t(
-      'agents.confirmDisableCustomPrompt.body',
-      'This agent has customized prompt blocks. They will be kept, but the agent stops using them and follows the Default scope again. Re-enabling brings them back.',
-    )}
-    confirmLabel={t(
-      'agents.confirmDisableCustomPrompt.confirm',
-      'Disable custom prompt',
-    )}
+    title={t('agents.confirmDisableCustomPrompt.title')}
+    body={t('agents.confirmDisableCustomPrompt.body')}
+    confirmLabel={t('agents.confirmDisableCustomPrompt.confirm')}
     onConfirm={confirmDisableCustomPrompt}
     onCancel={cancelDisableCustomPrompt}
   />
@@ -677,21 +646,18 @@
 
 {#if renameDialogOpen}
   <Modal
-    title={t('agents.rename.title', 'Change Agent ID?')}
+    title={t('agents.rename.title')}
     closeDisabled={isRenaming}
     onClose={closeRenameDialog}
   >
     {#snippet body()}
       <form id="agent-rename-form" onsubmit={renameSelectedAgent}>
         <p>
-          {t(
-            'agents.rename.body',
-            'The complete Identity Agent moves to the new ID, including Sessions, Memory, prompts, private Skills, and its internal Workspace. Live Channels, Cron jobs, delegation policies, and Sub-Agent navigation links are updated. Historical records keep the ID they were created with.',
-          )}
+          {t('agents.rename.body')}
         </p>
         <FormField
           controlId="agent-rename-id"
-          label={t('agents.rename.newId', 'New Agent ID')}
+          label={t('agents.rename.newId')}
           required
           error={renameError}
         >
@@ -718,7 +684,7 @@
         onClick={closeRenameDialog}
         disabled={isRenaming}
       >
-        {t('common.cancel', 'Cancel')}
+        {t('common.cancel')}
       </Button>
       <Button
         variant="primary"
@@ -726,9 +692,7 @@
         form="agent-rename-form"
         loading={isRenaming}
       >
-        {isRenaming
-          ? t('common.saving', 'Saving…')
-          : t('agents.rename.confirm', 'Change ID')}
+        {isRenaming ? t('common.saving') : t('agents.rename.confirm')}
       </Button>
     {/snippet}
   </Modal>
@@ -736,26 +700,23 @@
 
 {#if workspaceDecisionOpen}
   <Modal
-    title={t('agents.workspaceMove.title', 'Change Workspace?')}
+    title={t('agents.workspaceMove.title')}
     onClose={cancelWorkspaceDecision}
   >
     {#snippet body()}
       <p>
-        {t(
-          'agents.workspaceMove.body',
-          'Choose whether to copy SOUL.md, USER.md, and MEMORY.md into the new Workspace. Source files remain in place; existing destination versions are backed up before replacement.',
-        )}
+        {t('agents.workspaceMove.body')}
       </p>
     {/snippet}
     {#snippet footer()}
       <Button variant="secondary" onClick={cancelWorkspaceDecision}>
-        {t('common.cancel', 'Cancel')}
+        {t('common.cancel')}
       </Button>
       <Button variant="secondary" onClick={() => chooseWorkspaceCopy(false)}>
-        {t('agents.workspaceMove.dontCopy', "Don't copy")}
+        {t('agents.workspaceMove.dontCopy')}
       </Button>
       <Button variant="primary" onClick={() => chooseWorkspaceCopy(true)}>
-        {t('agents.workspaceMove.copy', 'Copy files')}
+        {t('agents.workspaceMove.copy')}
       </Button>
     {/snippet}
   </Modal>

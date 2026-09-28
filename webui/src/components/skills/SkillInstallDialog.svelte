@@ -207,11 +207,9 @@
           }}
         />
         <p class="skills-field-help">
-          {t(
-            scope === 'global'
-              ? 'skills.createGlobalHelp'
-              : 'skills.createPrivateHelp',
-          )}
+          {scope === 'global'
+            ? t('skills.createGlobalHelp')
+            : t('skills.createPrivateHelp')}
         </p>
       </div>
       <details class="skills-install-options">
@@ -279,16 +277,12 @@
           <h3>{preview.name}</h3>
           <p>{selected?.description}</p>
           <p class="skills-field-help">
-            {t(
-              preview.files === 1
-                ? 'skills.install.summaryOne'
-                : 'skills.install.summary',
-              '',
-              {
-                count: preview.files,
-                scope: scopeLabel,
-              },
-            )}
+            {preview.files === 1
+              ? t('skills.install.summaryOne', { scope: scopeLabel })
+              : t('skills.install.summary', {
+                  count: preview.files,
+                  scope: scopeLabel,
+                })}
           </p>
           {#if preview.warnings?.length}
             <Banner variant="warn"
@@ -307,13 +301,11 @@
                 checked={replace}
                 onChange={(value) => (replace = value)}
                 disabled={Boolean(busy)}
-                ariaLabel={t('skills.install.replace', '', {
+                ariaLabel={t('skills.install.replace', {
                   name: preview.name,
                 })}
               />
-              <span
-                >{t('skills.install.replace', '', { name: preview.name })}</span
-              >
+              <span>{t('skills.install.replace', { name: preview.name })}</span>
             </div>
             <p class="skills-field-help">{t('skills.install.replaceHelp')}</p>
           {/if}
@@ -335,20 +327,18 @@
   {/snippet}
   {#snippet footer()}
     <Button variant="secondary" disabled={Boolean(busy)} onClick={onClose}
-      >{t('common.cancel', 'Cancel')}</Button
+      >{t('common.cancel')}</Button
     >
     {#if preview}
       <Button
         variant="primary"
         disabled={Boolean(busy) || (needsReplace && !replace)}
         onClick={() => submit(false)}
-        >{t(
-          selected?.unchanged
-            ? 'skills.install.show'
-            : needsReplace
-              ? 'skills.install.replaceAction'
-              : 'skills.install.action',
-        )}</Button
+        >{selected?.unchanged
+          ? t('skills.install.show')
+          : needsReplace
+            ? t('skills.install.replaceAction')
+            : t('skills.install.action')}</Button
       >
     {:else}
       <Button

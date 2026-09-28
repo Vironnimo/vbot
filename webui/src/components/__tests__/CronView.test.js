@@ -265,7 +265,7 @@ describe('CronView', () => {
     );
     flushSync();
 
-    buttonByText(t('common.save', 'Save')).click();
+    buttonByText(t('common.save')).click();
 
     await waitForCondition(() => createCronJobMock.mock.calls.length === 1);
     expect(createCronJobMock).toHaveBeenCalledWith({
@@ -285,7 +285,7 @@ describe('CronView', () => {
       new Event('input', { bubbles: true }),
     );
     flushSync();
-    buttonByText(t('common.save', 'Save')).click();
+    buttonByText(t('common.save')).click();
 
     await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
     expect(updateCronJobMock).toHaveBeenCalledWith({
@@ -330,10 +330,7 @@ describe('CronView', () => {
     flushSync();
     const hourlyOption = Array.from(
       document.querySelectorAll('.dropdown-option'),
-    ).find(
-      (option) =>
-        option.textContent.trim() === t('cron.presets.hourly', 'hourly'),
-    );
+    ).find((option) => option.textContent.trim() === t('cron.presets.hourly'));
     expect(hourlyOption, 'preset option not found').toBeTruthy();
     hourlyOption.click();
     flushSync();
@@ -345,7 +342,7 @@ describe('CronView', () => {
       new Event('input', { bubbles: true }),
     );
     flushSync();
-    buttonByText(t('common.save', 'Save')).click();
+    buttonByText(t('common.save')).click();
     await waitForCondition(() => listCronJobsMock.mock.calls.length === 2);
     expect(createCronJobMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -360,10 +357,10 @@ describe('CronView', () => {
     await waitForCondition(() =>
       document.querySelector('[data-testid="cron-item-job-created"]'),
     );
-    buttonByText(t('common.save', 'Save')).click();
+    buttonByText(t('common.save')).click();
     await waitForCondition(() =>
       toastMock.mock.calls.some(
-        ([toast]) => toast.title === t('common.alreadySaved', 'Already saved'),
+        ([toast]) => toast.title === t('common.alreadySaved'),
       ),
     );
     expect(createCronJobMock).toHaveBeenCalledOnce();
@@ -398,7 +395,7 @@ describe('CronView', () => {
       new Event('input', { bubbles: true }),
     );
     flushSync();
-    buttonByText(t('common.save', 'Save')).click();
+    buttonByText(t('common.save')).click();
 
     await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
     expect(updateCronJobMock).toHaveBeenCalledWith({
@@ -518,14 +515,14 @@ describe('CronView', () => {
     // until the user confirms.
     buttonByTestId('cron-delete-job-delete').click();
     flushSync();
-    confirmDialog(t('common.cancel', 'Cancel'));
+    confirmDialog(t('common.cancel'));
     flushSync();
     expect(deleteCronJobMock).not.toHaveBeenCalled();
     expect(document.body.querySelector('.modal-footer')).toBeNull();
 
     buttonByTestId('cron-delete-job-delete').click();
     flushSync();
-    confirmDialog(t('common.delete', 'Delete'));
+    confirmDialog(t('common.delete'));
 
     await waitForCondition(() => deleteCronJobMock.mock.calls.length === 1);
     expect(deleteCronJobMock).toHaveBeenCalledWith('job-delete');

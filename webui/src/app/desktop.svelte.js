@@ -222,10 +222,7 @@ export function createAppDesktop(context) {
     // recording running rather than losing it.
     void stopVoiceRecording().catch((error) => {
       showToast({
-        title: t(
-          'voice.toast.stopRecordingFailedTitle',
-          'The recording could not be stopped',
-        ),
+        title: t('voice.toast.stopRecordingFailedTitle'),
         message: bridgeErrorMessage(error),
         variant: 'error',
       });
@@ -234,14 +231,8 @@ export function createAppDesktop(context) {
 
   const showVoiceErrorToast = (errorCode) => {
     showToast({
-      title: t('settings.voice.errorTitle', 'Voice needs attention'),
-      message: errorMessage(
-        errorCode,
-        t(
-          'voice.toast.errorMessage',
-          'Open Voice settings for details. The failure was written to the Desktop log.',
-        ),
-      ),
+      title: t('settings.voice.errorTitle'),
+      message: errorMessage(errorCode, t('voice.toast.errorMessage')),
       variant: 'error',
     });
   };
@@ -252,50 +243,35 @@ export function createAppDesktop(context) {
     switch (event.kind) {
       case 'sent':
         showToast({
-          title: t('voice.toast.sentTitle', 'Voice command sent'),
+          title: t('voice.toast.sentTitle'),
           variant: 'success',
         });
         break;
       case 'no_speech':
         showToast({
-          title: t('voice.toast.noSpeechTitle', 'No speech heard'),
-          message: t(
-            'voice.toast.noSpeechMessage',
-            'No command followed the wake phrase. Try again and speak after the cue.',
-          ),
+          title: t('voice.toast.noSpeechTitle'),
+          message: t('voice.toast.noSpeechMessage'),
           variant: 'warn',
         });
         break;
       case 'transcription_failed':
         showToast({
-          title: t(
-            'voice.toast.transcriptionFailedTitle',
-            'Voice command could not be transcribed',
-          ),
-          message: t(
-            'voice.toast.transcriptionFailedMessage',
-            'Check the Speech-to-text Model and the Desktop log, then try again.',
-          ),
+          title: t('voice.toast.transcriptionFailedTitle'),
+          message: t('voice.toast.transcriptionFailedMessage'),
           variant: 'error',
         });
         break;
       case 'command_failed':
         showToast({
-          title: t('voice.toast.commandFailedTitle', 'Voice command not sent'),
+          title: t('voice.toast.commandFailedTitle'),
           message: commandFailureMessage(event.error_code),
           variant: 'error',
         });
         break;
       case 'microphone_disconnected':
         showToast({
-          title: t(
-            'voice.toast.microphoneDisconnectedTitle',
-            'Microphone disconnected',
-          ),
-          message: t(
-            'voice.toast.microphoneDisconnectedMessage',
-            'Wake phrases are not heard until the microphone is back. The Desktop keeps trying to reconnect it.',
-          ),
+          title: t('voice.toast.microphoneDisconnectedTitle'),
+          message: t('voice.toast.microphoneDisconnectedMessage'),
           variant: 'warn',
           autoDismiss: true,
         });

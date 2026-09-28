@@ -30,7 +30,7 @@
     note = '',
     grouped = false,
     groupLabel = (family) => family ?? '',
-    ariaToggleLabel = (name) => t('access.toggle', 'Toggle {name}', { name }),
+    ariaToggleLabel = (name) => t('access.toggle', { name }),
     onToggle = noop,
     onSetAll = noop,
     onOpenExtensions = noop,
@@ -50,7 +50,7 @@
   let visibleItems = $derived(filterChipsByQuery(normalizedItems, query));
   let visibleGroups = $derived(groupVisibleItems());
   let placeholder = $derived(
-    searchPlaceholder || t('access.searchPlaceholder', 'Filter…'),
+    searchPlaceholder || t('access.searchPlaceholder'),
   );
 
   function attentionNeeded(item) {
@@ -120,17 +120,17 @@
         />
       </label>
       <span class="access-chips__count">
-        {t('access.count', '{on} / {total} on', {
+        {t('access.count', {
           on: onCount,
           total: totalCount,
         })}
       </span>
       <div class="access-chips__actions">
         <Button variant="tertiary" {disabled} onClick={() => onSetAll(true)}>
-          {t('access.allOn', 'Select all')}
+          {t('access.allOn')}
         </Button>
         <Button variant="tertiary" {disabled} onClick={() => onSetAll(false)}>
-          {t('access.allOff', 'Deselect all')}
+          {t('access.allOff')}
         </Button>
         {@render headerActions?.()}
       </div>
@@ -141,7 +141,7 @@
     {/if}
 
     {#if visibleItems.length === 0}
-      <p class="access-chips__empty">{t('access.noMatches', 'No matches.')}</p>
+      <p class="access-chips__empty">{t('access.noMatches')}</p>
     {:else}
       <div class="access-chips__groups">
         {#each visibleGroups as group (group.family ?? 'individual')}
@@ -165,7 +165,7 @@
                     >
                       <span class="access-chip__name">{item.name}</span>
                       <span class="access-chip__auto">
-                        {item.lockedLabel ?? t('access.lockedAuto', 'auto')}
+                        {item.lockedLabel ?? t('access.lockedAuto')}
                       </span>
                     </div>
                   {:else}
@@ -212,7 +212,7 @@
                       {#if item.warnings?.length}
                         <div class="access-chip__warnings">
                           <span class="access-chip__warnings-label">
-                            {t('agents.access.skillWarnings', 'Warnings')}
+                            {t('agents.access.skillWarnings')}
                           </span>
                           <ul>
                             {#each item.warnings as warning, index (`${item.name}-warning-${index}`)}

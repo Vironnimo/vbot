@@ -7,17 +7,16 @@ export function agentDisplayName(agentId, agents) {
 
 export function skillSourceLabel(entry, translate, agents) {
   if (entry.owner_id)
-    return translate('skills.ownerLabel', 'Agent: {name}', {
+    return translate('skills.ownerLabel', {
       name: agentDisplayName(entry.owner_id, agents),
     });
   if (entry.origin?.startsWith('project:'))
-    return translate('skills.projectLabel', 'Project: {name}', {
+    return translate('skills.projectLabel', {
       name: entry.origin.slice(8),
     });
-  if (entry.origin === 'bundled')
-    return translate('skills.library.bundled', 'Bundled');
-  return translate('skills.sourceLabel', 'Source: {name}', {
-    name: entry.source_label || translate('skills.library.global', 'Global'),
+  if (entry.origin === 'bundled') return translate('skills.library.bundled');
+  return translate('skills.sourceLabel', {
+    name: entry.source_label || translate('skills.library.global'),
   });
 }
 
@@ -32,22 +31,22 @@ export function skillCollections(entries, agents, translate) {
   const items = [
     {
       key: 'all',
-      label: translate('skills.library.all', 'All skills'),
+      label: translate('skills.library.all'),
       section: 'library',
     },
     {
       key: 'global',
-      label: translate('skills.library.global', 'Global'),
+      label: translate('skills.library.global'),
       section: 'library',
     },
     {
       key: 'bundled',
-      label: translate('skills.library.bundled', 'Bundled'),
+      label: translate('skills.library.bundled'),
       section: 'library',
     },
     {
       key: 'shared',
-      label: translate('skills.library.shared', 'Shared skills'),
+      label: translate('skills.library.shared'),
       section: 'library',
     },
     ...agents.map((agent) => ({
@@ -136,13 +135,13 @@ export function skillStatusVariant(entry) {
 export function skillStatusLabel(entry, translate) {
   switch (entry.status) {
     case 'available':
-      return translate('skills.status.available', 'Available');
+      return translate('skills.status.available');
     case 'unavailable':
-      return translate('skills.status.unavailable', 'Unavailable');
+      return translate('skills.status.unavailable');
     case 'disabled':
-      return translate('skills.status.disabled', 'Disabled');
+      return translate('skills.status.disabled');
     default:
-      return translate('skills.status.invalid', 'Invalid');
+      return translate('skills.status.invalid');
   }
 }
 

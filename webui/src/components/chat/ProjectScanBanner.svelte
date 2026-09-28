@@ -20,15 +20,8 @@
   );
   let message = $derived(
     findingCount > 0
-      ? t(
-          'chat.project.scanBannerCount',
-          'This project’s scan found {count} issues. Some agents may not work as expected.',
-          { count: findingCount },
-        )
-      : t(
-          'chat.project.scanBanner',
-          'This project’s scan found issues. Some agents may not work as expected.',
-        ),
+      ? t('chat.project.scanBannerCount', { count: findingCount })
+      : t('chat.project.scanBanner'),
   );
 </script>
 
@@ -45,7 +38,7 @@
       class="project-scan-banner__link"
       onClick={() => onNavigateToProjects()}
     >
-      {t('chat.project.scanBannerLink', 'Review in Projects')}
+      {t('chat.project.scanBannerLink')}
     </Button>
   </Banner>
 {/if}

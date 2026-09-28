@@ -2,19 +2,12 @@ import { t } from '$lib/i18n.js';
 import { formatActivityDate } from '$lib/statisticsView.js';
 
 export function rangeLabel(range) {
-  return t(`statistics.range.${range}`, range);
+  return t(`statistics.range.${range}`);
 }
 
 export function activityWindowLabel(reportRange, granularity) {
   if (reportRange !== 'all') return rangeLabel(reportRange);
-  return t(
-    `statistics.overview.activityWindow.${granularity}`,
-    granularity === 'month'
-      ? 'Last 12 months'
-      : granularity === 'week'
-        ? 'Last 16 weeks'
-        : 'Last 30 days',
-  );
+  return t(`statistics.overview.activityWindow.${granularity}`);
 }
 
 export function activityPeriodLabel(
@@ -27,7 +20,7 @@ export function activityPeriodLabel(
     long,
   });
   return granularity === 'week' && long
-    ? t('statistics.overview.weekOf', 'Week of {date}', { date: formatted })
+    ? t('statistics.overview.weekOf', { date: formatted })
     : formatted;
 }
 

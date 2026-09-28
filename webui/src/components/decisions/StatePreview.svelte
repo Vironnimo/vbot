@@ -5,10 +5,7 @@
   import Modal from '../ui/Modal.svelte';
   import TextArea from '../ui/TextArea.svelte';
 
-  let {
-    state: inputState,
-    label = t('jev.evaluatedState', 'Evaluated state'),
-  } = $props();
+  let { state: inputState, label = t('jev.evaluatedState') } = $props();
   let open = $state(false);
   let json = $derived(typeof inputState !== 'string');
   let text = $derived(
@@ -22,20 +19,16 @@
   <div class="jev-row">
     <strong>{label}</strong>
     <span class="jev-help"
-      >{json ? 'JSON' : t('jev.text', 'Text')} · {t(
-        'jev.characterCount',
-        '{count} characters',
-        { count: text.length.toLocaleString() },
-      )}</span
+      >{json ? 'JSON' : t('jev.text')} · {t('jev.characterCount', {
+        count: text.length.toLocaleString(),
+      })}</span
     >
   </div>
   <p class="jev-state-excerpt">
-    {excerpt || t('jev.emptyState', 'Empty state')}{text.length > 400
-      ? '…'
-      : ''}
+    {excerpt || t('jev.emptyState')}{text.length > 400 ? '…' : ''}
   </p>
   <Button variant="tertiary" onClick={() => (open = true)}
-    >{t('jev.viewState', 'View full state')}</Button
+    >{t('jev.viewState')}</Button
   >
 </section>
 
@@ -44,10 +37,7 @@
     {#snippet body()}
       <div class="jev-state-reader">
         <p class="jev-help">
-          {t(
-            'jev.stateSnapshotHelp',
-            'The exact state used for this decision. Later setup edits do not change it.',
-          )}
+          {t('jev.stateSnapshotHelp')}
         </p>
         <TextArea
           class="jev-state-full"
@@ -60,10 +50,8 @@
       </div>
     {/snippet}
     {#snippet footer()}
-      <CopyButton {text} label={t('jev.copyState', 'Copy full state')} />
-      <Button onClick={() => (open = false)}
-        >{t('common.close', 'Close')}</Button
-      >
+      <CopyButton {text} label={t('jev.copyState')} />
+      <Button onClick={() => (open = false)}>{t('common.close')}</Button>
     {/snippet}
   </Modal>
 {/if}

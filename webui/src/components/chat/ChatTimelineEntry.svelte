@@ -137,14 +137,14 @@
 
   function copyLabelForMessage(message) {
     return message?.role === 'assistant'
-      ? t('chat.copyAnswer', 'Copy answer')
-      : t('chat.copyUserMessage', 'Copy message');
+      ? t('chat.copyAnswer')
+      : t('chat.copyUserMessage');
   }
 
   function copiedLabelForMessage(message) {
     return message?.role === 'assistant'
-      ? t('chat.answerCopied', 'Answer copied')
-      : t('chat.userMessageCopied', 'Message copied');
+      ? t('chat.answerCopied')
+      : t('chat.userMessageCopied');
   }
 </script>
 
@@ -169,11 +169,11 @@
   >
     <div class="teb-section-header">
       <span class="teb-label">{label}</span>
-      {#if presentation.copyText !== t('chat.toolNoData', '—')}
+      {#if presentation.copyText !== t('chat.toolNoData')}
         <CopyButton
           text={presentation.copyText}
           class="chat-copy-action tool-detail-copy"
-          label={t('chat.copyToolField', 'Copy {label}', { label })}
+          label={t('chat.copyToolField', { label })}
         />
       {/if}
     </div>
@@ -198,7 +198,7 @@
             <span
               class="image-unavailable"
               role="img"
-              aria-label={t('chat.image.unavailable', 'Image not available')}
+              aria-label={t('chat.image.unavailable')}
             >
               <svg viewBox="0 0 32 24" aria-hidden="true"
                 ><rect x="1" y="1" width="30" height="22" rx="2" /><circle
@@ -207,7 +207,7 @@
                   r="2"
                 /><path d="m3 20 8-8 6 6 4-4 8 6M3 2l26 20" /></svg
               >
-              <span>{t('chat.image.unavailable', 'Image not available')}</span>
+              <span>{t('chat.image.unavailable')}</span>
             </span>
             <span>{image.filename}</span>
           </a>
@@ -326,10 +326,7 @@
     </div>
   {:else if isFileMentionContentBlock(block)}
     {@const statusLabel = fileMentionStatusLabel(block)}
-    <div
-      class="inline-file"
-      use:tooltip={t('chat.fileMention.label', 'Mentioned file')}
-    >
+    <div class="inline-file" use:tooltip={t('chat.fileMention.label')}>
       <svg
         class="inline-file-icon"
         viewBox="0 0 16 16"
@@ -393,8 +390,8 @@
           variant="tertiary"
           icon
           class="chat-edit-action message-edit"
-          ariaLabel={t('chat.editMessage', 'Edit message')}
-          tooltip={t('chat.editMessage', 'Edit message')}
+          ariaLabel={t('chat.editMessage')}
+          tooltip={t('chat.editMessage')}
           disabled={messageEditingDisabled}
           onClick={() => beginEditing(item.message)}
         >
@@ -415,7 +412,7 @@
             rows={3}
             autofocus
             disabled={editSaving}
-            ariaLabel={t('chat.editMessageInput', 'Edit message text')}
+            ariaLabel={t('chat.editMessageInput')}
             onkeydown={(event) => handleEditKeydown(event, item.message)}
           />
           <div class="message-edit-actions">
@@ -424,7 +421,7 @@
               disabled={editSaving}
               onClick={cancelEditing}
             >
-              {t('common.cancel', 'Cancel')}
+              {t('common.cancel')}
             </Button>
             <Button
               variant="primary"
@@ -432,14 +429,11 @@
               disabled={editedContent.trim().length === 0}
               onClick={() => submitEdit(item.message)}
             >
-              {t('chat.saveAndRestart', 'Save & restart')}
+              {t('chat.saveAndRestart')}
             </Button>
           </div>
           <span class="message-edit-hint">
-            {t(
-              'chat.editRestartHint',
-              'Later messages will be removed from the active conversation.',
-            )}
+            {t('chat.editRestartHint')}
           </span>
         </div>
       {:else}
@@ -482,7 +476,7 @@
             {#if errorPresentation.details}
               <details class="error-details">
                 <summary class="error-details-summary">
-                  {t('chat.errorDetails', 'Details')}
+                  {t('chat.errorDetails')}
                 </summary>
                 <pre
                   class="error-details-body">{errorPresentation.details}</pre>
@@ -552,7 +546,7 @@
           </summary>
           <div class="tool-event-body tool-event-details">
             {@render toolDetailSection(
-              t('chat.toolArgs', 'Args'),
+              t('chat.toolArgs'),
               toolCallFromEvent(item.event)?.arguments,
               false,
               false,
@@ -561,7 +555,7 @@
             )}
             {#if toolResultValueForEvent(item.event)}
               {@render toolDetailSection(
-                t('chat.toolResultLabel', 'Result'),
+                t('chat.toolResultLabel'),
                 toolResultValueForEvent(item.event),
                 isFailedToolEvent(item.event),
                 true,

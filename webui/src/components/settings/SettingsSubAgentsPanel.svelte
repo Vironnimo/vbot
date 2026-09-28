@@ -97,7 +97,7 @@
 
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -119,8 +119,7 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildSubAgentSettingsPayload(subAgentSettings),
-      successKey: 'settings.subagents.saveSuccess',
-      successFallback: 'Sub-agent settings updated.',
+      successTitle: t('settings.subagents.saveSuccess'),
       // Show the saved values (e.g. the default a cleared field saved) unless
       // the user kept editing while the request was in flight.
       getDraftSnapshot: () => subAgentSettings,
@@ -134,13 +133,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.subagents.maxDepth', 'Max sub-agent depth')}
+        {t('settings.subagents.maxDepth')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.subagents.maxDepthDescription',
-          'Maximum nesting level allowed when sub-agents spawn their own sub-agents.',
-        )}
+        {t('settings.subagents.maxDepthDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
@@ -149,7 +145,7 @@
         min="1"
         step="1"
         value={subAgentSettings.max_subagent_depth}
-        ariaLabel={t('settings.subagents.maxDepth', 'Max sub-agent depth')}
+        ariaLabel={t('settings.subagents.maxDepth')}
         onInput={(_next, event) =>
           handleSubAgentSettingChange('max_subagent_depth', event)}
       />
@@ -159,13 +155,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.subagents.maxPerTurn', 'Max sub-agents per turn')}
+        {t('settings.subagents.maxPerTurn')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.subagents.maxPerTurnDescription',
-          'Maximum number of sub-agent sessions one parent run may spawn.',
-        )}
+        {t('settings.subagents.maxPerTurnDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
@@ -174,10 +167,7 @@
         min="1"
         step="1"
         value={subAgentSettings.max_subagents_per_turn}
-        ariaLabel={t(
-          'settings.subagents.maxPerTurn',
-          'Max sub-agents per turn',
-        )}
+        ariaLabel={t('settings.subagents.maxPerTurn')}
         onInput={(_next, event) =>
           handleSubAgentSettingChange('max_subagents_per_turn', event)}
       />
@@ -187,13 +177,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
+        {t('settings.subagents.timeoutMinutes')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.subagents.timeoutMinutesDescription',
-          'Maximum wait time for foreground sub-agent calls before they fail.',
-        )}
+        {t('settings.subagents.timeoutMinutesDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
@@ -202,7 +189,7 @@
         min="1"
         step="1"
         value={subAgentSettings.subagent_timeout_minutes}
-        ariaLabel={t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
+        ariaLabel={t('settings.subagents.timeoutMinutes')}
         onInput={(_next, event) =>
           handleSubAgentSettingChange('subagent_timeout_minutes', event)}
       />

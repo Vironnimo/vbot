@@ -21,12 +21,12 @@ export const formatTime = (timestamp) => {
 export const formatDate = (timestamp) => {
   const dateKey = dateKeyForTimestamp(timestamp);
   if (isTodayDateKey(dateKey)) {
-    return t('chat.today', 'Today');
+    return t('chat.today');
   }
 
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) {
-    return t('chat.today', 'Today');
+    return t('chat.today');
   }
   return formatDateTimeInApplicationZone(date, activeLocaleTag(), {
     day: 'numeric',
@@ -47,21 +47,18 @@ export function dateKeyForTimestamp(timestamp) {
   return dateKeyForDate(date);
 }
 
-export function formatDurationMs(
-  durationMs,
-  i18nKey = 'chat.runDurationSeconds',
-) {
+export function formatDurationMs(durationMs) {
   if (!Number.isFinite(durationMs) || durationMs < 0) {
     return '';
   }
   const elapsedSeconds = durationMs / 1000;
   if (elapsedSeconds < 10) {
-    return t(i18nKey, '{seconds}s', {
+    return t('chat.durationSeconds', {
       seconds: elapsedSeconds.toFixed(1),
     });
   }
   if (elapsedSeconds < 60) {
-    return t(i18nKey, '{seconds}s', {
+    return t('chat.durationSeconds', {
       seconds: Math.round(elapsedSeconds),
     });
   }
@@ -70,12 +67,12 @@ export function formatDurationMs(
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   if (hours > 0) {
-    return t('chat.durationHoursMinutes', '{hours}h {minutes}m', {
+    return t('chat.durationHoursMinutes', {
       hours,
       minutes,
     });
   }
-  return t('chat.durationMinutesSeconds', '{minutes}m {seconds}s', {
+  return t('chat.durationMinutesSeconds', {
     minutes,
     seconds,
   });

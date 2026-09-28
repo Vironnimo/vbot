@@ -75,14 +75,8 @@ export function createPromptScope(context) {
   // only when project agents exist, so an identity-only install is unchanged.
   let previewAgentOptions = $derived(
     buildAgentTargetDropdownOptions(agents, projectTeams, {
-      identityGroupLabel: t(
-        'systemPrompt.preview.agentGroup.identity',
-        'Identity agents',
-      ),
-      projectGroupLabel: t(
-        'systemPrompt.preview.agentGroup.project',
-        'Project agents',
-      ),
+      identityGroupLabel: t('systemPrompt.preview.agentGroup.identity'),
+      projectGroupLabel: t('systemPrompt.preview.agentGroup.project'),
     }),
   );
 
@@ -101,10 +95,7 @@ export function createPromptScope(context) {
       selectedScopeKey = resolveScopeKey(selectedScopeKey);
       applyBlocks(promptsResult?.blocks);
     } catch {
-      context.showToast(
-        t('systemPrompt.error.loadFailed', 'Failed to load prompt data'),
-        'error',
-      );
+      context.showToast(t('systemPrompt.error.loadFailed'), 'error');
     } finally {
       isLoadingData = false;
     }
@@ -178,10 +169,7 @@ export function createPromptScope(context) {
       if (requestId !== scopeLoadRequestId) {
         return false;
       }
-      context.showToast(
-        t('systemPrompt.error.loadFailed', 'Failed to load prompt data'),
-        'error',
-      );
+      context.showToast(t('systemPrompt.error.loadFailed'), 'error');
       return false;
     } finally {
       if (requestId === scopeLoadRequestId) {
@@ -283,7 +271,7 @@ export function createPromptScope(context) {
     return {
       key: 'default',
       type: 'default',
-      label: t('systemPrompt.scope.default', 'Default'),
+      label: t('systemPrompt.scope.default'),
     };
   }
 
@@ -389,10 +377,7 @@ export function createPromptScope(context) {
       if (requestId !== previewRequestId) {
         return;
       }
-      previewError = t(
-        'systemPrompt.error.previewFailed',
-        'Failed to load preview',
-      );
+      previewError = t('systemPrompt.error.previewFailed');
     } finally {
       if (requestId === previewRequestId) {
         isRefreshingPreview = false;
@@ -407,12 +392,9 @@ export function createPromptScope(context) {
 
     try {
       await navigator.clipboard.writeText(previewText);
-      context.showToast(t('common.copied', 'Copied'), 'success');
+      context.showToast(t('common.copied'), 'success');
     } catch {
-      context.showToast(
-        t('systemPrompt.error.copyFailed', 'Failed to copy'),
-        'error',
-      );
+      context.showToast(t('systemPrompt.error.copyFailed'), 'error');
     }
   }
   function destroy() {

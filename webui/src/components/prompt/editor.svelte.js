@@ -69,14 +69,8 @@ export function createPromptEditor(context) {
   // or an Agent scope's inherited Default content, matching the scope in effect.
   let resetConfirmBody = $derived(
     context.isAgentScope
-      ? t(
-          'systemPrompt.fragmentEditor.resetAgentConfirm',
-          'Reset this Agent block to the current Default content? This cannot be undone.',
-        )
-      : t(
-          'systemPrompt.fragmentEditor.resetConfirm',
-          'Reset this block to its default? This cannot be undone.',
-        ),
+      ? t('systemPrompt.fragmentEditor.resetAgentConfirm')
+      : t('systemPrompt.fragmentEditor.resetConfirm'),
   );
 
   let isBusy = $derived(blocks.some((block) => block.isSaving || block.isBusy));
@@ -87,42 +81,26 @@ export function createPromptEditor(context) {
   // plain sentence explaining that render condition.
   function ownerHint(owner) {
     if (owner.startsWith('tool:')) {
-      return t(
-        'systemPrompt.blockList.ownerHint.tool',
-        'Requires the {name} Tool to be available.',
-        { name: owner.slice('tool:'.length) },
-      );
+      return t('systemPrompt.blockList.ownerHint.tool', {
+        name: owner.slice('tool:'.length),
+      });
     }
     if (owner.startsWith('extension:')) {
-      return t(
-        'systemPrompt.blockList.ownerHint.extension',
-        'Requires the {name} Extension to be active.',
-        { name: owner.slice('extension:'.length) },
-      );
+      return t('systemPrompt.blockList.ownerHint.extension', {
+        name: owner.slice('extension:'.length),
+      });
     }
     if (owner === 'memory') {
-      return t(
-        'systemPrompt.blockList.ownerHint.memory',
-        'Requires Memory in the System Prompt to be enabled.',
-      );
+      return t('systemPrompt.blockList.ownerHint.memory');
     }
     if (owner === 'channel') {
-      return t(
-        'systemPrompt.blockList.ownerHint.channel',
-        'Requires an enabled Channel for this Agent.',
-      );
+      return t('systemPrompt.blockList.ownerHint.channel');
     }
-    return t(
-      'systemPrompt.blockList.ownerHint.always',
-      'Included when enabled and non-empty.',
-    );
+    return t('systemPrompt.blockList.ownerHint.always');
   }
 
   function dataKindLabel() {
-    return t(
-      'systemPrompt.blockList.dataLabel',
-      'Generated content (read-only)',
-    );
+    return t('systemPrompt.blockList.dataLabel');
   }
 
   function isCustomBlock(block) {
@@ -270,15 +248,12 @@ export function createPromptEditor(context) {
         blocks[liveIndex].inheritance = result.inheritance;
       }
       if (showSuccessToast) {
-        context.showToast(t('common.saved', 'Saved'), 'success');
+        context.showToast(t('common.saved'), 'success');
       }
       context.schedulePreviewRefresh();
       return true;
     } catch {
-      context.showToast(
-        t('systemPrompt.error.saveFailed', 'Failed to save'),
-        'error',
-      );
+      context.showToast(t('systemPrompt.error.saveFailed'), 'error');
       return false;
     } finally {
       const liveIndex = blockIndexById(blockId);
@@ -298,7 +273,7 @@ export function createPromptEditor(context) {
       .map((block) => block.id);
 
     if (dirtyIds.length === 0) {
-      context.showToast(t('common.alreadySaved', 'Already saved'), 'success');
+      context.showToast(t('common.alreadySaved'), 'success');
       return;
     }
 
@@ -313,7 +288,7 @@ export function createPromptEditor(context) {
     );
 
     if (results.every(Boolean)) {
-      context.showToast(t('common.saved', 'Saved'), 'success');
+      context.showToast(t('common.saved'), 'success');
     }
   }
 
@@ -358,10 +333,7 @@ export function createPromptEditor(context) {
       }
       context.schedulePreviewRefresh();
     } catch {
-      context.showToast(
-        t('systemPrompt.error.resetFailed', 'Failed to reset'),
-        'error',
-      );
+      context.showToast(t('systemPrompt.error.resetFailed'), 'error');
     } finally {
       const liveIndex = blockIndexById(blockId);
       if (liveIndex !== -1) {
@@ -386,10 +358,7 @@ export function createPromptEditor(context) {
       );
       context.schedulePreviewRefresh();
     } catch {
-      context.showToast(
-        t('systemPrompt.error.layoutFailed', 'Failed to save layout'),
-        'error',
-      );
+      context.showToast(t('systemPrompt.error.layoutFailed'), 'error');
       // Re-sync from the server so the on-screen order/toggle matches what is
       // actually persisted after a failed write.
       await context.loadBlocksForScope(context.selectedScopeKey);
@@ -482,11 +451,10 @@ export function createPromptEditor(context) {
   }
 
   function announceReorder(position) {
-    reorderAnnouncement = t(
-      'systemPrompt.blockList.reorderAnnouncement',
-      'Moved to position {position} of {total}',
-      { position: position + 1, total: blocks.length },
-    );
+    reorderAnnouncement = t('systemPrompt.blockList.reorderAnnouncement', {
+      position: position + 1,
+      total: blocks.length,
+    });
   }
 
   function focusPendingHandle() {
@@ -511,12 +479,7 @@ export function createPromptEditor(context) {
 
   // -- Custom block create / remove (T1) -----------------------------------
   async function createCustomBlock() {
-    const slug = window.prompt(
-      t(
-        'systemPrompt.blockList.newBlockPrompt',
-        'Name for the new block (letters, digits, “-” or “_”):',
-      ),
-    );
+    const slug = window.prompt(t('systemPrompt.blockList.newBlockPrompt'));
     if (slug === null) {
       return;
     }
@@ -525,13 +488,7 @@ export function createPromptEditor(context) {
       return;
     }
     if (!SLUG_PATTERN.test(trimmed)) {
-      context.showToast(
-        t(
-          'systemPrompt.blockList.invalidSlug',
-          'Invalid name — use letters, digits, “-” or “_”, starting with a letter or digit.',
-        ),
-        'error',
-      );
+      context.showToast(t('systemPrompt.blockList.invalidSlug'), 'error');
       return;
     }
 
@@ -549,13 +506,7 @@ export function createPromptEditor(context) {
       }
       context.schedulePreviewRefresh();
     } catch {
-      context.showToast(
-        t(
-          'systemPrompt.blockList.createFailed',
-          'Failed to create block. The slug may be invalid or already used.',
-        ),
-        'error',
-      );
+      context.showToast(t('systemPrompt.blockList.createFailed'), 'error');
     }
   }
 
@@ -580,10 +531,7 @@ export function createPromptEditor(context) {
       await context.loadBlocksForScope(context.selectedScopeKey);
       context.schedulePreviewRefresh();
     } catch {
-      context.showToast(
-        t('systemPrompt.blockList.removeFailed', 'Failed to remove block'),
-        'error',
-      );
+      context.showToast(t('systemPrompt.blockList.removeFailed'), 'error');
     }
   }
 
@@ -603,10 +551,7 @@ export function createPromptEditor(context) {
       await context.loadBlocksForScope(context.selectedScopeKey);
       context.schedulePreviewRefresh();
     } catch {
-      context.showToast(
-        t('systemPrompt.error.layoutFailed', 'Failed to save layout'),
-        'error',
-      );
+      context.showToast(t('systemPrompt.error.layoutFailed'), 'error');
     }
   }
   function destroy() {

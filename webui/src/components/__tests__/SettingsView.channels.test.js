@@ -94,9 +94,7 @@ describe('SettingsView Channels', () => {
     expect(alert.textContent).toContain('channels offline');
 
     Array.from(alert.querySelectorAll('button'))
-      .find(
-        (button) => button.textContent.trim() === t('common.retry', 'Retry'),
-      )
+      .find((button) => button.textContent.trim() === t('common.retry'))
       .click();
     await waitForCondition(() => document.body.textContent.includes('tg-work'));
     expect(section.querySelector('[role="alert"]')).toBeNull();
@@ -166,8 +164,7 @@ describe('SettingsView Channels', () => {
     const aliceIdentity = () => buttonByAriaLabel('Use Alice as own identity');
     await waitForCondition(
       () =>
-        aliceIdentity().textContent.trim() ===
-        t('settings.channels.access.me', 'Me'),
+        aliceIdentity().textContent.trim() === t('settings.channels.access.me'),
     );
     expect(aliceIdentity().disabled).toBe(true);
     expect(buttonByAriaLabel('Make Alice a member').disabled).toBe(true);
@@ -227,12 +224,7 @@ describe('SettingsView Channels', () => {
 
     await waitForCondition(() => document.querySelector('.s-channel-denied'));
     const denied = document.querySelector('.s-channel-denied');
-    expect(denied.textContent).toContain(
-      t(
-        'settings.channels.denied.title',
-        'Recent requests from chats not on the allowlist',
-      ),
-    );
+    expect(denied.textContent).toContain(t('settings.channels.denied.title'));
     const rows = denied.querySelectorAll('.s-channel-denied-row');
     expect(rows).toHaveLength(1);
     expect(rows[0].textContent).toContain('Julian B.');

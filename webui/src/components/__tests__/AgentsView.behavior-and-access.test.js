@@ -30,9 +30,9 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: AgentsView } = await import('../AgentsView.svelte');
 
-const AGENT_MEMORY = () => t('agents.memory.scope.agent', 'Agent Memory');
-const USER_PROFILE = () => t('agents.memory.scope.user', 'User profile');
-const ADD_MEMORY = () => t('agents.memory.add', 'Add Memory');
+const AGENT_MEMORY = () => t('agents.memory.scope.agent');
+const USER_PROFILE = () => t('agents.memory.scope.user');
+const ADD_MEMORY = () => t('agents.memory.add');
 
 function toolAccessToggle(name) {
   const button = document.body.querySelector(
@@ -187,19 +187,11 @@ describe('AgentsView behavior and access', () => {
 
       if (hasCustomizations) {
         // The toggle only flips once the dialog is confirmed.
-        const dialog = getDialog(
-          t(
-            'agents.confirmDisableCustomPrompt.title',
-            'Disable custom system prompt?',
-          ),
-        );
+        const dialog = getDialog(t('agents.confirmDisableCustomPrompt.title'));
         expect(toggleState()).toBe('true');
         getButtonWithin(
           dialog,
-          t(
-            'agents.confirmDisableCustomPrompt.confirm',
-            'Disable custom prompt',
-          ),
+          t('agents.confirmDisableCustomPrompt.confirm'),
         ).click();
         flushSync();
         await flushAsyncUpdates();
@@ -219,8 +211,7 @@ describe('AgentsView behavior and access', () => {
     await waitForElement('button#agent-memory-prompt-mode');
 
     openSimpleDropdown('agent-memory-prompt-mode');
-    const modeLabel = (mode) =>
-      t(`agents.form.memoryPromptModeOption.${mode}`, mode);
+    const modeLabel = (mode) => t(`agents.form.memoryPromptModeOption.${mode}`);
     expect(simpleOptionLabels('agent-memory-prompt-mode')).toEqual(
       ['off', 'agent', 'agent_user'].map(modeLabel),
     );
@@ -249,7 +240,7 @@ describe('AgentsView behavior and access', () => {
 
     getButtonByAriaLabel('Manage Memory entries').click();
     flushSync();
-    await waitForText(t('agents.memory.emptyTitle', 'No memories'));
+    await waitForText(t('agents.memory.emptyTitle'));
     expect(rpcParams('memory.list')).toEqual({ agent_id: 'alpha' });
 
     const scopes = Array.from(
@@ -300,13 +291,13 @@ describe('AgentsView behavior and access', () => {
     await waitForText('Keep releases small.');
 
     const agentScope = memoryScopeNamed(AGENT_MEMORY());
-    getButtonWithin(agentScope, t('common.edit', 'Edit')).click();
+    getButtonWithin(agentScope, t('common.edit')).click();
     flushSync();
     typeInto(
       agentScope.querySelector('textarea[aria-label="Edit Memory entry"]'),
       'Keep releases focused.',
     );
-    getButtonWithin(agentScope, t('common.save', 'Save')).click();
+    getButtonWithin(agentScope, t('common.save')).click();
     await waitForText('Keep releases focused.');
 
     const userScope = memoryScopeNamed(USER_PROFILE());
@@ -319,10 +310,10 @@ describe('AgentsView behavior and access', () => {
 
     getButtonWithin(
       memoryScopeNamed(AGENT_MEMORY()),
-      t('common.delete', 'Delete'),
+      t('common.delete'),
     ).click();
     flushSync();
-    getButton(t('agents.memory.deleteConfirmAction', 'Delete Memory')).click();
+    getButton(t('agents.memory.deleteConfirmAction')).click();
     await waitForCondition(
       () => !document.body.textContent.includes('Keep releases focused.'),
       100,
@@ -409,7 +400,7 @@ describe('AgentsView behavior and access', () => {
     );
 
     mountedComponent = mount(AgentsView, { target: document.body });
-    await waitForText(t('agents.form.subagentTargets', 'Sub-Agent targets'));
+    await waitForText(t('agents.form.subagentTargets'));
 
     vi.useFakeTimers();
     toolAccessToggle('subagent').click();
@@ -466,7 +457,7 @@ describe('AgentsView behavior and access', () => {
     await waitForCondition(() => accessSections().length === 2, 100);
 
     expect(document.body.textContent).not.toContain(
-      t('agents.form.subagentTargets', 'Sub-Agent targets'),
+      t('agents.form.subagentTargets'),
     );
   });
 
@@ -670,14 +661,8 @@ describe('AgentsView behavior and access', () => {
   });
 
   it.each([
-    [
-      'agent_user',
-      () => t('toolAccess.activation.memoryOn', 'Automatic while Memory is on'),
-    ],
-    [
-      'off',
-      () => t('toolAccess.activation.memoryOff', 'Memory is currently off'),
-    ],
+    ['agent_user', () => t('toolAccess.activation.memoryOn')],
+    ['off', () => t('toolAccess.activation.memoryOff')],
   ])(
     'passes Memory mode %s to the automatic memory Tool while keeping its block control',
     async (memoryPromptMode, activationNote) => {
@@ -705,9 +690,7 @@ describe('AgentsView behavior and access', () => {
       expect(memoryChip.getAttribute('aria-label')).toBe('memory');
       expect(memoryChip.getAttribute('aria-checked')).toBe('true');
       expect(memoryChip.disabled).toBe(false);
-      expect(memoryChip.textContent).toContain(
-        t('toolAccess.automatic', 'Automatic'),
-      );
+      expect(memoryChip.textContent).toContain(t('toolAccess.automatic'));
       expect(document.body.textContent).toContain(activationNote());
     },
   );
@@ -780,7 +763,7 @@ describe('AgentsView behavior and access', () => {
         .classList.contains('is-unavailable'),
     ).toBe(true);
 
-    getButton(t('agents.tools.openExtensions', 'Open Extensions')).click();
+    getButton(t('agents.tools.openExtensions')).click();
     flushSync();
     expect(navigateMock).toHaveBeenCalledWith('extensions');
   });

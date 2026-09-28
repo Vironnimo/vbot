@@ -9,34 +9,34 @@ import {
 } from '$lib/cronView.js';
 
 export function displayValue(value) {
-  return value || t('cron.notAvailable', '—');
+  return value || t('cron.notAvailable');
 }
 
 export function listNextRun(job) {
   if (!job?.next_fire_at_display) {
-    return t('cron.list.noNextRun', 'No next Run');
+    return t('cron.list.noNextRun');
   }
 
-  return t('cron.list.nextRun', 'Next · {time}', {
+  return t('cron.list.nextRun', {
     time: job.next_fire_at_display,
   });
 }
 
 export function scheduleKindLabel(job) {
   if (job?.schedule_type === CRON_SCHEDULE_TYPE_ONCE) {
-    return t('cron.detail.kind.once', 'One-time schedule');
+    return t('cron.detail.kind.once');
   }
 
-  return t('cron.detail.kind.recurring', 'Recurring schedule');
+  return t('cron.detail.kind.recurring');
 }
 
 export function scheduleSummary(job) {
   if (!job) {
-    return t('cron.notAvailable', '—');
+    return t('cron.notAvailable');
   }
 
   if (job.schedule_type === CRON_SCHEDULE_TYPE_ONCE) {
-    return t('cron.form.scheduleType.once', 'Once');
+    return t('cron.form.scheduleType.once');
   }
   if (job.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
     return displayValue(job.schedule_description);
@@ -60,14 +60,12 @@ export function scheduleTechnicalValue(job) {
 }
 
 export function sessionSummary(job) {
-  return job?.session_id
-    ? job.session_id
-    : t('cron.detail.newSessionEachRun', 'New Session each Run');
+  return job?.session_id ? job.session_id : t('cron.detail.newSessionEachRun');
 }
 
 export function lastResultSupport(job) {
   if (!job?.last_completed_at_display) {
-    return t('cron.detail.waitingForFirstRun', 'Waiting for first execution');
+    return t('cron.detail.waitingForFirstRun');
   }
 
   return job.last_completed_at_display;
@@ -75,28 +73,28 @@ export function lastResultSupport(job) {
 
 export function remainingRunsLabel(job) {
   return job?.remaining_runs === null
-    ? t('cron.detail.unlimited', 'Unlimited')
+    ? t('cron.detail.unlimited')
     : String(job?.remaining_runs ?? 0);
 }
 
 export function statusLabel(status) {
   if (status === CRON_STATUS_ACTIVE) {
-    return t('cron.status.active', 'Active');
+    return t('cron.status.active');
   }
 
   if (status === 'paused') {
-    return t('cron.status.paused', 'Paused');
+    return t('cron.status.paused');
   }
 
   if (status === 'failed') {
-    return t('cron.status.failed', 'Failed');
+    return t('cron.status.failed');
   }
 
   if (status === CRON_STATUS_MISSED) {
-    return t('cron.status.missed', 'Missed');
+    return t('cron.status.missed');
   }
 
-  return t('cron.status.completed', 'Completed');
+  return t('cron.status.completed');
 }
 
 export function statusChipVariant(job) {
@@ -125,21 +123,21 @@ export function statusChipVariant(job) {
 
 export function outcomeLabel(outcome) {
   if (outcome === 'success') {
-    return t('cron.outcome.success', 'Succeeded');
+    return t('cron.outcome.success');
   }
   if (outcome === 'failed') {
-    return t('cron.outcome.failed', 'Failed');
+    return t('cron.outcome.failed');
   }
   if (outcome === 'cancelled') {
-    return t('cron.outcome.cancelled', 'Cancelled');
+    return t('cron.outcome.cancelled');
   }
   if (outcome === 'missed') {
-    return t('cron.outcome.missed', 'Missed');
+    return t('cron.outcome.missed');
   }
   if (outcome === 'unknown') {
-    return t('cron.outcome.unknown', 'Outcome unknown after restart');
+    return t('cron.outcome.unknown');
   }
-  return t('cron.notAvailable', '—');
+  return t('cron.notAvailable');
 }
 
 export function isTerminalJob(job) {

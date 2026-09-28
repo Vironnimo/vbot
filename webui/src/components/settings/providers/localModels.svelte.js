@@ -71,10 +71,7 @@ export function createLocalProviderModels(context) {
       const parsed = Number(trimmed);
       if (!Number.isInteger(parsed) || parsed <= 0) {
         context.onToast({
-          title: t(
-            'settings.providers.localContext.invalidValue',
-            'Context window must be a positive whole number',
-          ),
+          title: t('settings.providers.localContext.invalidValue'),
           variant: 'error',
         });
         return;

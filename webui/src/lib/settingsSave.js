@@ -17,8 +17,7 @@ import { t } from './i18n.js';
  * @param {(toast: object) => void} params.onToast - Shows a toast.
  * @param {(message: string) => void} params.onError - Sets/clears the error text.
  * @param {(saving: boolean) => void} params.setSaving - Drives the panel's saving flag.
- * @param {string} params.successKey - i18n key for the success toast title.
- * @param {string} params.successFallback - English fallback for the success title.
+ * @param {string} params.successTitle - Translated success toast title.
  * @param {(next: object) => void} [params.applyResult] - Optional: re-seed local state.
  * @param {() => unknown} [params.getDraftSnapshot] - Optional: reads the current local draft.
  */
@@ -28,8 +27,7 @@ export async function runSettingsSave({
   onToast,
   onError,
   setSaving,
-  successKey,
-  successFallback,
+  successTitle,
   applyResult,
   getDraftSnapshot,
   reason = 'manual',
@@ -52,12 +50,10 @@ export async function runSettingsSave({
       applyResult?.(nextSettings);
     }
     if (reason === 'manual')
-      onToast({ title: t(successKey, successFallback), variant: 'success' });
+      onToast({ title: successTitle, variant: 'success' });
     return true;
   } catch (error) {
-    onError(
-      `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-    );
+    onError(`${t('settings.saveError')} ${error.message}`);
     return false;
   } finally {
     setSaving(false);

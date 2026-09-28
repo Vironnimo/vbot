@@ -373,7 +373,7 @@ describe('AgentsView', () => {
     getButtonByAriaLabel('Create agent').click();
     flushSync();
 
-    const modal = getDialog(t('agents.create', 'Create agent'));
+    const modal = getDialog(t('agents.create'));
     expect(modal.querySelector('#agent-create-id')).toBeTruthy();
     expect(modal.querySelector('#agent-create-name')).toBeTruthy();
     expect(modal.querySelector('#agent-create-model')).toBeTruthy();
@@ -442,14 +442,14 @@ describe('AgentsView', () => {
     flushSync();
     await flushAsyncUpdates(1);
 
-    getDialog(t('agents.create', 'Create agent'));
+    getDialog(t('agents.create'));
     expect(
       document.body.querySelector('button.agent-item.active').textContent,
     ).toContain('Alpha');
     expect(textInputValue('agent-id')).toBe('alpha');
     expect(textInputValue('agent-name')).toBe('Alpha');
 
-    getButton(t('common.cancel', 'Cancel')).click();
+    getButton(t('common.cancel')).click();
     flushSync();
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
 
@@ -494,7 +494,7 @@ describe('AgentsView', () => {
     await waitForCondition(
       () =>
         triggerTextContent(getSearchableTrigger('agent-create-model')) ===
-        t('inherit.option', 'Inherited: {value} (global default)', {
+        t('inherit.option', {
           value: 'openai/gpt-5.2',
         }),
       100,
@@ -581,11 +581,7 @@ describe('AgentsView', () => {
     expect(
       document.body.querySelector('.agent-list-pane__sr-only').textContent,
     ).toContain(
-      t(
-        'agents.order.announcement',
-        'Moved {name} to position {position} of {total}',
-        { name: 'Bravo', position: 1, total: 2 },
-      ),
+      t('agents.order.announcement', { name: 'Bravo', position: 1, total: 2 }),
     );
     expect(document.activeElement.dataset.agentOrderHandle).toBe('bravo');
   });
@@ -643,9 +639,9 @@ describe('AgentsView', () => {
     onAgentSelected.mockClear();
     onAgentsChanged.mockClear();
 
-    getButton(t('agents.rename.action', 'Change ID')).click();
+    getButton(t('agents.rename.action')).click();
     flushSync();
-    const dialog = getDialog(t('agents.rename.title', 'Change Agent ID?'));
+    const dialog = getDialog(t('agents.rename.title'));
     setTextInputValueWithin(dialog, 0, 'researcher');
     dialog
       .querySelector('form')
@@ -666,8 +662,8 @@ describe('AgentsView', () => {
   });
 
   it.each([
-    [t('agents.workspaceMove.dontCopy', "Don't copy"), false],
-    [t('agents.workspaceMove.copy', 'Copy files'), true],
+    [t('agents.workspaceMove.dontCopy'), false],
+    [t('agents.workspaceMove.copy'), true],
   ])(
     'saves a Workspace change only after the "%s" decision',
     async (decision, copyIdentityFiles) => {
@@ -711,7 +707,7 @@ describe('AgentsView', () => {
 
     setWorkspace('D:/agents/draft');
     submitAgentForm();
-    getButton(t('common.cancel', 'Cancel')).click();
+    getButton(t('common.cancel')).click();
     flushSync();
 
     expect(getAgentUpdateCalls()).toHaveLength(0);
@@ -752,7 +748,7 @@ describe('AgentsView', () => {
     findSetToDefaultButton().click();
     flushSync();
 
-    getButton(t('agents.workspaceMove.dontCopy', "Don't copy")).click();
+    getButton(t('agents.workspaceMove.dontCopy')).click();
     flushSync();
 
     await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
@@ -830,7 +826,7 @@ describe('AgentsView', () => {
     });
     expect(toastMock).not.toHaveBeenCalled();
 
-    const saveButton = getButton(t('common.saved', 'Saved'));
+    const saveButton = getButton(t('common.saved'));
     expect(saveButton.disabled).toBe(false);
     saveButton.click();
     flushSync();

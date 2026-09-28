@@ -65,7 +65,7 @@
     },
   });
 
-  let label = $derived(ariaLabel || t('common.moreInfo', 'More information'));
+  let label = $derived(ariaLabel || t('common.moreInfo'));
   let paragraphs = $derived(
     String(text)
       .split(/\n{2,}/)

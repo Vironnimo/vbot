@@ -54,10 +54,7 @@
       return;
     }
     if (hasUnsavedDraft()) {
-      editNotice = t(
-        'queue.editPending',
-        'Save or cancel this edit before editing another message.',
-      );
+      editNotice = t('queue.editPending');
       focusEditor();
       return;
     }
@@ -86,7 +83,7 @@
     }
 
     if (!nextContent) {
-      editError = t('queue.editError', 'Queued message could not be edited.');
+      editError = t('queue.editError');
       return;
     }
 
@@ -108,7 +105,7 @@
     }
     editSaving = false;
     if (!saved) {
-      editError = t('queue.editError', 'Queued message could not be edited.');
+      editError = t('queue.editError');
       return;
     }
     if (editedContent.trim() === nextContent) {
@@ -122,14 +119,14 @@
     appearance="compact"
     class="queued-messages"
     role="complementary"
-    aria-label={t('queue.title', 'Queued messages')}
+    aria-label={t('queue.title')}
   >
     <ol>
       {#each queuedMessages as message (message.id)}
         <li class:editing={editingId === message.id}>
           {#if editingId === message.id}
             <textarea
-              aria-label={t('queue.editMessage', 'Edit queued message')}
+              aria-label={t('queue.editMessage')}
               class="queued-messages__editor"
               bind:this={editorElement}
               value={editedContent}
@@ -141,27 +138,27 @@
               <Button
                 variant="tertiary"
                 disabled={editSaving}
-                ariaLabel={t('queue.saveEdit', 'Save edit')}
+                ariaLabel={t('queue.saveEdit')}
                 onClick={saveEdit}
               >
-                {t('queue.saveEdit', 'Save')}
+                {t('queue.saveEdit')}
               </Button>
               <Button
                 variant="tertiary"
-                ariaLabel={t('queue.cancelEdit', 'Cancel edit')}
+                ariaLabel={t('queue.cancelEdit')}
                 onClick={cancelEdit}
               >
-                {t('queue.cancelEdit', 'Cancel')}
+                {t('queue.cancelEdit')}
               </Button>
               <Button
                 variant="tertiary"
-                ariaLabel={t('queue.removeMessage', 'Remove queued message')}
+                ariaLabel={t('queue.removeMessage')}
                 onClick={() => {
                   onRemoveQueuedMessage?.(message.id);
                   cancelEdit();
                 }}
               >
-                {t('common.remove', 'Remove')}
+                {t('common.remove')}
               </Button>
             </div>
             {#if editError}
@@ -197,23 +194,18 @@
                   disabled={!canSteer ||
                     message.steering ||
                     steeringIds.includes(message.id)}
-                  ariaLabel={t('queue.steer', 'Steer')}
-                  tooltip={t(
-                    'queue.steerHint',
-                    'Send to the active Run at its next iteration.',
-                  )}
+                  ariaLabel={t('queue.steer')}
+                  tooltip={t('queue.steerHint')}
                   onClick={() => steer(message.id)}
                 >
-                  {message.steering
-                    ? t('queue.steering', 'Steering…')
-                    : t('queue.steer', 'Steer')}
+                  {message.steering ? t('queue.steering') : t('queue.steer')}
                 </Button>
               {/if}
               {#if message.editable === true && !message.steering}
                 <Button
                   variant="tertiary"
                   disabled={editSaving}
-                  ariaLabel={t('queue.editMessage', 'Edit queued message')}
+                  ariaLabel={t('queue.editMessage')}
                   onClick={() => beginEdit(message)}
                 >
                   <svg
@@ -232,7 +224,7 @@
               {/if}
               <Button
                 variant="tertiary"
-                ariaLabel={t('queue.removeMessage', 'Remove queued message')}
+                ariaLabel={t('queue.removeMessage')}
                 onClick={() => onRemoveQueuedMessage?.(message.id)}
               >
                 <svg

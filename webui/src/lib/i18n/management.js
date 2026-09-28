@@ -293,6 +293,12 @@ export default Object.freeze({
   'agents.form.submitCreate': 'Create agent',
   'agents.form.submitUpdate': 'Save changes',
   'agents.form.required': 'This field is required.',
+  'agents.form.agentWildcardNote':
+    'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
+  'agents.form.agentAddressNote':
+    'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
+  'agents.form.modelSearchPlaceholder': 'Filter models…',
+  'agents.form.modelSearchEmpty': 'No models match',
   'agents.detail.newSubtitle': 'id assigned at creation',
   'agents.detail.idValue': 'id: {id}',
   'agents.detail.identity': 'Identity',
@@ -347,6 +353,15 @@ export default Object.freeze({
   'agents.access.notLoadable': 'not loadable',
 
   // Shared toggle-chip allow-list (tools/skills) — Agent editor + Projects.
+  'agents.access.projectTargetsLoadError':
+    'Some Project Agent targets could not be loaded.',
+  'agents.access.unavailableAgentTarget':
+    'This configured target is not present in the current Identity Agent or Project Team catalogs.',
+  'agents.access.toggleAgent': 'Toggle agent {name}',
+  'agents.access.identityAgents': 'Identity Agents',
+  'agents.access.noIdentityAgentTargets':
+    'No additional Identity Agents are available.',
+  'agents.access.projectAgents': 'Project Agents',
   'access.searchPlaceholder': 'Filter…',
   'access.count': '{on} / {total} on',
   'access.allOn': 'Select all',
@@ -528,6 +543,17 @@ export default Object.freeze({
     'All other tools follow the project tool whitelist.',
   'projects.team.sourceFile': 'Source: {path} ({format})',
   'projects.team.toggleExpand': 'Toggle {agent} details',
+  'projects.team.agentTargetsUnavailable':
+    'Sub-Agent tools are not available to this Agent.',
+  'projects.team.agentTargetsSelf':
+    'Can call only itself in a separate Session.',
+  'projects.team.agentTargetsAll':
+    'Can call itself and every other Agent on this Project Team.',
+  'projects.team.agentTargetsLimited': 'Can call itself plus: {agents}',
+  'projects.team.compactionPolicy': 'Compaction Policy',
+  'projects.team.customizeCompaction': 'Customize for this agent',
+  'projects.team.agentTargetsRepoOwned':
+    'Defined by the repository Agent config and read-only in vBot. Even full access stays inside this Project Team.',
   'projects.report.title': 'Scan report',
   'projects.report.findingCount': '{count} issues found',
   'projects.report.showDetails': 'Show details',
@@ -744,4 +770,15 @@ export default Object.freeze({
   'skills.shareError': 'Sharing could not be changed.',
   'skills.editLoadError': 'Skill content could not be loaded.',
   'agents.shared.sections': 'Default settings sections',
+  'agents.rename.action': 'Change ID',
+  'agents.rename.invalidId':
+    'Use 1–64 letters, numbers, hyphens, or underscores, starting with a letter or number.',
+  'agents.rename.sameId': 'Enter an ID different from the current one.',
+  'agents.rename.title': 'Change Agent ID?',
+  'agents.rename.body':
+    'The complete Identity Agent moves to the new ID, including Sessions, Memory, prompts, private Skills, and its internal Workspace. Live Channels, Cron jobs, delegation policies, and Sub-Agent navigation links are updated. Historical records keep the ID they were created with.',
+  'agents.rename.newId': 'New Agent ID',
+  'agents.rename.confirm': 'Change ID',
+  'agents.renamed': 'Agent ID changed.',
+  'agents.renameError': 'Could not change Agent ID.',
 });

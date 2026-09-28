@@ -30,7 +30,7 @@
   let saving = $state(false);
 
   let recallBackendOptions = $derived(
-    buildRecallBackendOptions(recallSettings, t),
+    buildRecallBackendOptions(recallSettings),
   );
   let saveDisabled = $derived(
     saving || recallSettingsMatch(recallSettings, getRecallSettings(settings)),
@@ -85,7 +85,7 @@
 
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -107,8 +107,7 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildRecallSettingsPayload(recallSettings),
-      successKey: 'settings.recall.saveSuccess',
-      successFallback: 'Recall backend updated.',
+      successTitle: t('settings.recall.saveSuccess'),
       getDraftSnapshot: () => recallSettings,
       applyResult: (next) => (recallSettings = getRecallSettings(next)),
     });
@@ -119,13 +118,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.recall.backend', 'Recall backend')}
+        {t('settings.recall.backend')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.recall.backendDescription',
-          'How the session search looks through stored conversations.',
-        )}
+        {t('settings.recall.backendDescription')}
       </div>
     </div>
     <div class="s-row-control">
@@ -133,7 +129,7 @@
         id="settings-recall-backend"
         value={recallSettings.backend}
         options={recallBackendOptions}
-        ariaLabel={t('settings.recall.backend', 'Recall backend')}
+        ariaLabel={t('settings.recall.backend')}
         triggerClass="settings-view__dropdown"
         listClass="settings-view__thinking-list"
         onValueChange={handleRecallBackendChange}
@@ -144,10 +140,7 @@
   {#if recallSettings.backend === 'vector'}
     <div class="s-group__block s-group__block--attached s-group__note">
       <p>
-        {t(
-          'settings.recall.vectorHint',
-          'Semantic search uses the embedding model configured below.',
-        )}
+        {t('settings.recall.vectorHint')}
       </p>
     </div>
   {/if}

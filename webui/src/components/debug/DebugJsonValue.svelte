@@ -42,11 +42,9 @@
         {/each}
         {#if entries.length > visibleCount}
           <button type="button" onclick={() => (visibleCount += 50)}
-            >{t(
-              'debug.showMoreFields',
-              'Show next fields ({count} remaining)',
-              { count: entries.length - visibleCount },
-            )}</button
+            >{t('debug.showMoreFields', {
+              count: entries.length - visibleCount,
+            })}</button
           >
         {/if}
       </div>

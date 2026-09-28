@@ -132,22 +132,22 @@ export const runFooterNotice = (assistantRun, nowMs = Date.now()) => {
     }
     const reason =
       request.error_kind === 'timeout'
-        ? t('chat.requestTimeout', 'Provider request timed out.')
+        ? t('chat.requestTimeout')
         : request.error_kind === 'rate_limit'
-          ? t('chat.requestRateLimit', 'Provider rate limit reached.')
+          ? t('chat.requestRateLimit')
           : request.error_kind === 'network_error'
-            ? t('chat.requestNetwork', 'Connection to the Provider failed.')
+            ? t('chat.requestNetwork')
             : request.error_kind
-              ? t('chat.requestFailed', 'Provider request failed.')
+              ? t('chat.requestFailed')
               : '';
     const status =
       request.state === 'retrying'
-        ? t('chat.requestRetrying', 'Retrying the Provider request.')
-        : t('chat.requestWaiting', 'Waiting for the Provider response.');
+        ? t('chat.requestRetrying')
+        : t('chat.requestWaiting');
     const attempt =
       Number.isInteger(request.attempt) &&
       Number.isInteger(request.max_attempts)
-        ? t('chat.requestAttempt', 'Attempt {attempt} of {total}.', {
+        ? t('chat.requestAttempt', {
             attempt: request.attempt,
             total: request.max_attempts,
           })
@@ -160,11 +160,7 @@ export const runFooterNotice = (assistantRun, nowMs = Date.now()) => {
     Number.isFinite(idleSeconds) &&
     idleSeconds >= PROVIDER_IDLE_NOTICE_THRESHOLD_SECONDS
   ) {
-    return t(
-      'chat.providerWorking',
-      'Provider connected · waiting {seconds}s for the next model chunk',
-      { seconds: Math.round(idleSeconds) },
-    );
+    return t('chat.providerWorking', { seconds: Math.round(idleSeconds) });
   }
   return '';
 };
@@ -248,8 +244,8 @@ export const changeStatsLabel = (stats) => {
   }
   const fileLabel =
     stats.files === 1
-      ? t('chat.changeStats.filesOne', '1 file changed')
-      : t('chat.changeStats.filesMany', '{count} files changed', {
+      ? t('chat.changeStats.filesOne')
+      : t('chat.changeStats.filesMany', {
           count: stats.files,
         });
   return `${fileLabel}, +${stats.added} -${stats.removed}`;
@@ -265,8 +261,8 @@ export const changeStatsParts = (stats) => {
   }
   const fileLabel =
     stats.files === 1
-      ? t('chat.changeStats.filesOne', '1 file changed')
-      : t('chat.changeStats.filesMany', '{count} files changed', {
+      ? t('chat.changeStats.filesOne')
+      : t('chat.changeStats.filesMany', {
           count: stats.files,
         });
   return [
@@ -546,7 +542,7 @@ function commandPreview(tool) {
     trimmedString(isPlainObject(args) ? args.command : '').replace(/\s+/g, ' '),
     MAX_BACKGROUND_BASH_LABEL_LENGTH,
   );
-  return command || t('chat.activity.bashFallback', 'Bash process');
+  return command || t('chat.activity.bashFallback');
 }
 
 // Status label for a handed-off Bash row. While the process runs the label
@@ -566,22 +562,19 @@ export const backgroundBashToolStatusLabel = (
   if (rowState.dotStatus === 'running') {
     return formatDurationMs(
       elapsedSinceTimestamp(toolStartedTimestamp(tool), nowMs),
-      'chat.toolDurationSeconds',
     );
   }
   const durationMs = backgroundBashDurationMs(rowState.terminal);
   if (rowState.dotStatus === 'cancelled') {
     return [
-      t('chat.toolCancelled', 'cancelled'),
-      durationMs !== null
-        ? formatDurationMs(durationMs, 'chat.toolDurationSeconds')
-        : '',
+      t('chat.toolCancelled'),
+      durationMs !== null ? formatDurationMs(durationMs) : '',
     ]
       .filter(Boolean)
       .join(' · ');
   }
   if (durationMs !== null) {
-    return formatDurationMs(durationMs, 'chat.toolDurationSeconds');
+    return formatDurationMs(durationMs);
   }
   return '';
 };
@@ -691,11 +684,11 @@ export const reflectionElapsedLabel = (startedAt, nowMs) => {
   }
   const elapsedMs = Math.max(0, nowMs - startedMs);
   if (elapsedMs < 60_000) {
-    return t('chat.activity.reflectionElapsedSeconds', '{count}s', {
+    return t('chat.activity.reflectionElapsedSeconds', {
       count: Math.floor(elapsedMs / 1000),
     });
   }
-  return t('chat.activity.reflectionElapsedMinutes', '{count}m', {
+  return t('chat.activity.reflectionElapsedMinutes', {
     count: Math.floor(elapsedMs / 60_000),
   });
 };
@@ -722,25 +715,25 @@ function labelForRunIterations(assistantRun) {
   if (!Number.isInteger(iterationCount) || iterationCount < 0) {
     return '';
   }
-  return t('chat.runIterations', '{count} iter', {
+  return t('chat.runIterations', {
     count: iterationCount,
   });
 }
 
 function runStatusLabel(status) {
   if (status === 'failed') {
-    return t('chat.runStatus.failed', 'Failed');
+    return t('chat.runStatus.failed');
   }
   if (status === 'cancelled') {
-    return t('chat.runStatus.cancelled', 'Cancelled');
+    return t('chat.runStatus.cancelled');
   }
   if (status === 'interrupted') {
-    return t('chat.runStatus.interrupted', 'Interrupted');
+    return t('chat.runStatus.interrupted');
   }
   if (status === 'completed' || status === 'success') {
-    return t('chat.runStatus.completed', 'Completed');
+    return t('chat.runStatus.completed');
   }
-  return t('chat.runStatus.running', 'Running');
+  return t('chat.runStatus.running');
 }
 
 // Clock time when the run ended (e.g. "7:20 PM"), shown once the run reached
@@ -755,10 +748,7 @@ function runEndTimeLabel(assistantRun) {
 }
 
 function formatRunDuration(assistantRun, nowMs = Date.now()) {
-  const durationFromTiming = formatDurationMs(
-    assistantRun.durationMs,
-    'chat.runDurationSeconds',
-  );
+  const durationFromTiming = formatDurationMs(assistantRun.durationMs);
   if (durationFromTiming) {
     return durationFromTiming;
   }
@@ -770,13 +760,10 @@ function formatRunDuration(assistantRun, nowMs = Date.now()) {
     return '';
   }
   if (assistantRun.status === 'running') {
-    return formatDurationMs(
-      Math.max(0, nowMs - start),
-      'chat.runDurationSeconds',
-    );
+    return formatDurationMs(Math.max(0, nowMs - start));
   }
   if (end === null || end < start) {
     return '';
   }
-  return formatDurationMs(end - start, 'chat.runDurationSeconds');
+  return formatDurationMs(end - start);
 }

@@ -24,8 +24,7 @@ function saveOptions(draft, applyResult) {
     onToast: vi.fn(),
     onError: vi.fn(),
     setSaving: vi.fn(),
-    successKey: 'settings.defaults.saveSuccess',
-    successFallback: 'Agent defaults updated.',
+    successTitle: 'Agent defaults updated.',
     applyResult,
   };
 }

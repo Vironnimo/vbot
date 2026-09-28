@@ -9,7 +9,7 @@
   import LogsEntry from './logs/LogsEntry.svelte';
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
   import { reconnectBackoffDelay } from '$lib/backoff.js';
-  import { t } from '$lib/i18n.js';
+  import { t, tOr } from '$lib/i18n.js';
   import {
     LOGS_STREAM_STATUS_CONNECTED,
     LOGS_STREAM_STATUS_CONNECTING,
@@ -51,10 +51,7 @@
   let sortOrderOptions = $derived(
     deriveSortOptions().map((value) => ({
       value,
-      label:
-        value === 'oldest'
-          ? t('logs.sort.oldest', 'Oldest first')
-          : t('logs.sort.newest', 'Newest first'),
+      label: value === 'oldest' ? t('logs.sort.oldest') : t('logs.sort.newest'),
     })),
   );
   let fileOptions = $derived(
@@ -67,9 +64,7 @@
     levelOptions.map((level) => ({
       value: level,
       label:
-        level === levelOptionValue()
-          ? t('logs.level.all', 'All levels')
-          : levelLabel(level),
+        level === levelOptionValue() ? t('logs.level.all') : levelLabel(level),
     })),
   );
   let hasFiles = $derived(viewState.files.length > 0);
@@ -141,7 +136,7 @@
         });
       }
     } catch (error) {
-      viewState.catalogError = `${t('logs.catalogLoadError', 'Log files could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
+      viewState.catalogError = `${t('logs.catalogLoadError')} ${errorMessageText(error, t('common.unknown'))}`;
       if (
         options.reconnecting === true &&
         !destroyed &&
@@ -183,7 +178,7 @@
         return;
       }
 
-      viewState.readError = `${t('logs.readError', 'Log file could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
+      viewState.readError = `${t('logs.readError')} ${errorMessageText(error, t('common.unknown'))}`;
       if (options.reconnecting === true && viewState.selectedFile === file) {
         viewState.streamStatus = LOGS_STREAM_STATUS_RECONNECTING;
         scheduleReconnect(file);
@@ -228,7 +223,7 @@
             return;
           }
 
-          viewState.streamError = `${t('logs.streamError', 'Live log updates failed.')} ${errorMessageText(error, t('logs.streamErrorUnknown', 'Connection closed unexpectedly.'))}`;
+          viewState.streamError = `${t('logs.streamError')} ${errorMessageText(error, t('logs.streamErrorUnknown'))}`;
           viewState.streamStatus = LOGS_STREAM_STATUS_ERROR;
         },
         onClose: () => {
@@ -351,15 +346,15 @@
   function streamStatusLabel(status) {
     switch (status) {
       case LOGS_STREAM_STATUS_CONNECTING:
-        return t('logs.stream.connecting', 'Connecting…');
+        return t('logs.stream.connecting');
       case LOGS_STREAM_STATUS_CONNECTED:
-        return t('logs.stream.connected', 'Live');
+        return t('logs.stream.connected');
       case LOGS_STREAM_STATUS_RECONNECTING:
-        return t('logs.stream.reconnecting', 'Reconnecting…');
+        return t('logs.stream.reconnecting');
       case LOGS_STREAM_STATUS_ERROR:
-        return t('logs.stream.error', 'Live update error');
+        return t('logs.stream.error');
       default:
-        return t('logs.stream.idle', 'Idle');
+        return t('logs.stream.idle');
     }
   }
 
@@ -378,10 +373,10 @@
 
   function levelLabel(level) {
     if (!level) {
-      return t('logs.level.unknown', 'UNKNOWN');
+      return t('logs.level.unknown');
     }
 
-    return t(`logs.level.${level}`, level.toUpperCase());
+    return tOr(`logs.level.${level}`, level.toUpperCase());
   }
 
   function errorMessageText(error, fallback) {
@@ -401,13 +396,10 @@
   <header class="logs-view__header view-header">
     <div class="view-header__intro">
       <h2 id="logs-title" class="logs-view__title view-header__title">
-        {t('logs.title', 'Logs')}
+        {t('logs.title')}
       </h2>
       <p class="logs-view__subtitle view-header__subtitle">
-        {t(
-          'logs.subtitle',
-          'The application’s technical log, useful when diagnosing problems. Read one daily file at a time with filtering and live updates.',
-        )}
+        {t('logs.subtitle')}
       </p>
     </div>
 
@@ -425,7 +417,7 @@
         variant="secondary"
         onClick={() => loadCatalogAndMaybeFile({ forceReload: true })}
       >
-        {t('common.retry', 'Retry')}
+        {t('common.retry')}
       </Button>
     </Banner>
   {/if}
@@ -434,7 +426,7 @@
     <Banner variant="error" aria-live="polite">
       <span>{viewState.readError}</span>
       <Button variant="secondary" onClick={retryCurrentFile}>
-        {t('common.retry', 'Retry')}
+        {t('common.retry')}
       </Button>
     </Banner>
   {/if}
@@ -450,11 +442,8 @@
       class="logs-view__input"
       type="search"
       value={viewState.searchText}
-      placeholder={t(
-        'logs.searchPlaceholder',
-        'Search timestamp, level, logger, or message…',
-      )}
-      aria-label={t('logs.search', 'Search')}
+      placeholder={t('logs.searchPlaceholder')}
+      aria-label={t('logs.search')}
       disabled={!hasFiles}
       oninput={handleSearchInput}
     />
@@ -470,13 +459,13 @@
           aria-expanded={filtersOpen}
           aria-controls="logs-filters"
           ariaLabel={changedFilterCount > 0
-            ? t('logs.filtersChanged', 'Filters, {count} changed', {
+            ? t('logs.filtersChanged', {
                 count: changedFilterCount,
               })
             : ''}
           onClick={() => (filtersOpen = !filtersOpen)}
         >
-          {t('logs.filters', 'Filters')}
+          {t('logs.filters')}
           {#if changedFilterCount > 0}
             <span class="logs-view__filters-count" aria-hidden="true"
               >{changedFilterCount}</span
@@ -503,14 +492,14 @@
     >
       <label class="logs-view__field logs-view__field--file">
         <span class="logs-view__field-label view-toolbar__label"
-          >{t('logs.file', 'File')}</span
+          >{t('logs.file')}</span
         >
         <Dropdown
           id="logs-file"
           value={viewState.selectedFile}
           options={fileOptions}
-          placeholder={t('logs.emptyOption', 'No log files')}
-          ariaLabel={t('logs.file', 'File')}
+          placeholder={t('logs.emptyOption')}
+          ariaLabel={t('logs.file')}
           disabled={!hasFiles ||
             viewState.loadingCatalog ||
             viewState.loadingEntries}
@@ -522,13 +511,13 @@
 
       <label class="logs-view__field logs-view__field--narrow">
         <span class="logs-view__field-label view-toolbar__label"
-          >{t('logs.levelFilter', 'Level')}</span
+          >{t('logs.levelFilter')}</span
         >
         <Dropdown
           id="logs-level-filter"
           value={viewState.levelFilter}
           options={levelDropdownOptions}
-          ariaLabel={t('logs.levelFilter', 'Level')}
+          ariaLabel={t('logs.levelFilter')}
           disabled={!hasFiles}
           triggerClass="logs-view__dropdown"
           listClass="logs-view__dropdown-list"
@@ -538,13 +527,13 @@
 
       <label class="logs-view__field logs-view__field--narrow">
         <span class="logs-view__field-label view-toolbar__label"
-          >{t('logs.sort', 'Order')}</span
+          >{t('logs.sort')}</span
         >
         <Dropdown
           id="logs-sort-order"
           value={viewState.sortOrder}
           options={sortOrderOptions}
-          ariaLabel={t('logs.sort', 'Order')}
+          ariaLabel={t('logs.sort')}
           disabled={!hasFiles}
           triggerClass="logs-view__dropdown"
           listClass="logs-view__dropdown-list"
@@ -555,7 +544,7 @@
       {#if !compactFilters}
         <label class="logs-view__field logs-view__field--search">
           <span class="logs-view__field-label view-toolbar__label"
-            >{t('logs.search', 'Search')}</span
+            >{t('logs.search')}</span
           >
           {@render searchInput()}
         </label>
@@ -565,14 +554,14 @@
     <div class="logs-view__summary view-toolbar__meta">
       <span>
         {filteredEntries.length === 1
-          ? t('logs.resultsCountOne', '1 visible entry')
-          : t('logs.resultsCount', '{count} visible entries', {
+          ? t('logs.resultsCountOne')
+          : t('logs.resultsCount', {
               count: filteredEntries.length,
             })}
       </span>
       {#if viewState.selectedFile}
         <span class="logs-view__summary-file">
-          {t('logs.currentFile', 'Current file: {file}', {
+          {t('logs.currentFile', {
             file: viewState.selectedFile,
           })}
         </span>
@@ -583,40 +572,27 @@
   {#if viewState.loadingCatalog || viewState.loadingEntries}
     <Banner variant="neutral">
       {viewState.loadingCatalog
-        ? t('logs.loadingCatalog', 'Loading log files…')
-        : t('logs.loadingFile', 'Loading log file…')}
+        ? t('logs.loadingCatalog')
+        : t('logs.loadingFile')}
     </Banner>
   {:else if !hasFiles}
     <EmptyState
       fill
-      title={t('logs.emptyTitle', 'No log files yet')}
-      description={t(
-        'logs.emptySubtitle',
-        'Application logs will appear here after the server writes daily files.',
-      )}
+      title={t('logs.emptyTitle')}
+      description={t('logs.emptySubtitle')}
     />
   {:else if filteredEntries.length === 0}
     <EmptyState
       fill
       title={hasActiveFilters
-        ? t('logs.noMatchesTitle', 'No entries match the current filters')
-        : t('logs.fileEmptyTitle', 'This log file is empty')}
+        ? t('logs.noMatchesTitle')
+        : t('logs.fileEmptyTitle')}
       description={hasActiveFilters
-        ? t(
-            'logs.noMatchesSubtitle',
-            'Try another level or broaden the search text.',
-          )
-        : t(
-            'logs.fileEmptySubtitle',
-            'Live updates will appear here when the file grows.',
-          )}
+        ? t('logs.noMatchesSubtitle')
+        : t('logs.fileEmptySubtitle')}
     />
   {:else}
-    <div
-      class="logs-view__list"
-      role="list"
-      aria-label={t('logs.entries', 'Log entries')}
-    >
+    <div class="logs-view__list" role="list" aria-label={t('logs.entries')}>
       <!-- Keyed by entry: appends and order changes keep each row, and so its
            expanded state, in place. -->
       {#each filteredEntries as entry (entry)}

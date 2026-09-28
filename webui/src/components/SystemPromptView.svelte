@@ -1,5 +1,5 @@
 <script>
-  import { t } from '$lib/i18n.js';
+  import { t, tOr } from '$lib/i18n.js';
   import Dropdown from './Dropdown.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import Button from './ui/Button.svelte';
@@ -38,15 +38,15 @@
   let promptFormat = $state('document');
 
   let tabs = $derived([
-    { id: 'prompt', label: t('systemPrompt.tabs.prompt', 'Prompt') },
-    { id: 'tools', label: t('systemPrompt.tabs.tools', 'Tools') },
-    { id: 'edit', label: t('systemPrompt.tabs.edit', 'Edit blocks') },
+    { id: 'prompt', label: t('systemPrompt.tabs.prompt') },
+    { id: 'tools', label: t('systemPrompt.tabs.tools') },
+    { id: 'edit', label: t('systemPrompt.tabs.edit') },
   ]);
   let formatTabs = $derived([
-    { id: 'document', label: t('systemPrompt.format.document', 'Document') },
+    { id: 'document', label: t('systemPrompt.format.document') },
     {
       id: 'original',
-      label: t('systemPrompt.format.original', 'Original text'),
+      label: t('systemPrompt.format.original'),
     },
   ]);
 
@@ -156,13 +156,10 @@
       <header class="sp-header view-header">
         <div class="view-header__intro">
           <h2 id="sp-title" class="sp-title view-header__title">
-            {t('systemPrompt.title', 'System Prompt')}
+            {t('systemPrompt.title')}
           </h2>
           <p class="sp-subtitle view-header__subtitle">
-            {t(
-              'systemPrompt.subtitle',
-              'Read the prompt, inspect available Tools, and adjust instructions.',
-            )}
+            {t('systemPrompt.subtitle')}
           </p>
         </div>
       </header>
@@ -170,17 +167,17 @@
       <div class="sp-context-bar">
         <div class="sp-preview-heading-row">
           <span class="sp-preview-heading">
-            {t('systemPrompt.preview.heading', 'Preview for')}
+            {t('systemPrompt.preview.heading')}
           </span>
           {#if scope.previewAgentOptions.length > 0}
             <span class="sp-agent-label" id="sp-agent-label">
-              {t('systemPrompt.preview.agentLabel', 'Agent')}
+              {t('systemPrompt.preview.agentLabel')}
             </span>
             <Dropdown
               id="sp-agent-select"
               value={scope.selectedAgentId}
               options={scope.previewAgentOptions}
-              ariaLabel={t('systemPrompt.preview.agentLabel', 'Agent')}
+              ariaLabel={t('systemPrompt.preview.agentLabel')}
               triggerClass="sp-agent-dropdown"
               listClass="sp-agent-dropdown-list"
               onValueChange={scope.selectPreviewAgent}
@@ -190,25 +187,19 @@
             {#if scope.previewToolTokens}
               <span
                 class="sp-token-count"
-                use:tooltip={t(
-                  'systemPrompt.preview.tokenBreakdownHint',
-                  'Estimated. Tools = the {count} tool definitions sent to the provider with every request alongside the system prompt.',
-                  { count: scope.previewToolCount ?? 0 },
-                )}
+                use:tooltip={t('systemPrompt.preview.tokenBreakdownHint', {
+                  count: scope.previewToolCount ?? 0,
+                })}
               >
-                {t(
-                  'systemPrompt.preview.tokenBreakdown',
-                  '~{prompt} prompt + ~{tools} tools = ~{total} tokens',
-                  {
-                    prompt: scope.previewTokens,
-                    tools: scope.previewToolTokens,
-                    total: scope.previewTokens + scope.previewToolTokens,
-                  },
-                )}
+                {t('systemPrompt.preview.tokenBreakdown', {
+                  prompt: scope.previewTokens,
+                  tools: scope.previewToolTokens,
+                  total: scope.previewTokens + scope.previewToolTokens,
+                })}
               </span>
             {:else}
               <span class="sp-token-count">
-                {t('systemPrompt.preview.tokenCount', '~{count} tokens', {
+                {t('systemPrompt.preview.tokenCount', {
                   count: scope.previewTokens,
                 })}
               </span>
@@ -222,7 +213,7 @@
             scope.isLoadingData ||
             !scope.canRefreshPreview()}
           onClick={scope.refreshPreview}
-          >{t('systemPrompt.preview.refresh', 'Refresh')}</Button
+          >{t('systemPrompt.preview.refresh')}</Button
         >
       </div>
       <div class="view-toolbar view-toolbar--tabs sp-navigation">
@@ -230,7 +221,7 @@
           items={tabs}
           value={activeTab}
           idPrefix="sp-content"
-          ariaLabel={t('systemPrompt.tabs.label', 'System Prompt views')}
+          ariaLabel={t('systemPrompt.tabs.label')}
           onChange={(value) => (activeTab = value)}
         />
       </div>
@@ -250,13 +241,13 @@
               class="sp-scope-label view-toolbar__label"
               id="sp-scope-label"
             >
-              {t('systemPrompt.scope.label', 'Prompt scope')}
+              {t('systemPrompt.scope.label')}
             </span>
             <Dropdown
               id="sp-scope-select"
               value={scope.selectedScopeKey}
               options={scope.scopeOptions}
-              ariaLabel={t('systemPrompt.scope.label', 'Prompt scope')}
+              ariaLabel={t('systemPrompt.scope.label')}
               triggerClass="sp-scope-dropdown"
               onValueChange={(value) => scope.selectScope(value)}
             />
@@ -268,17 +259,14 @@
                 class="sp-btn-sm"
                 onClick={editor.createCustomBlock}
               >
-                {t('systemPrompt.blockList.newBlock', 'New block')}
+                {t('systemPrompt.blockList.newBlock')}
               </Button>
               <Button
                 variant="secondary"
                 class="sp-btn-sm"
                 onClick={editor.resetLayout}
               >
-                {t(
-                  'systemPrompt.blockList.resetLayout',
-                  'Reset order & visibility',
-                )}
+                {t('systemPrompt.blockList.resetLayout')}
               </Button>
             </div>
           {/if}
@@ -286,7 +274,7 @@
 
         {#if scope.isLoadingData}
           <Banner variant="neutral">
-            {t('common.loading', 'Loading…')}
+            {t('common.loading')}
           </Banner>
         {:else}
           <details
@@ -295,36 +283,27 @@
           >
             <summary class="sp-blocklist-guide__intro">
               <span class="sp-blocklist-guide__eyebrow">
-                {t('systemPrompt.blockList.guide.label', 'How it works')}
+                {t('systemPrompt.blockList.guide.label')}
               </span>
               <h3 id="sp-blocklist-guide-title">
-                {t(
-                  'systemPrompt.blockList.guide.title',
-                  'These blocks become the System Prompt.',
-                )}
+                {t('systemPrompt.blockList.guide.title')}
               </h3>
             </summary>
             <div class="sp-blocklist-guide__details">
               <p>
                 <strong>
-                  {t('systemPrompt.blockList.guide.assemblyLabel', 'Assembly')}
+                  {t('systemPrompt.blockList.guide.assemblyLabel')}
                 </strong>
                 <span>
-                  {t(
-                    'systemPrompt.blockList.guide.assembly',
-                    'Blocks are read from top to bottom. Drag to reorder them, use the switches to include or exclude them, and edit their content directly.',
-                  )}
+                  {t('systemPrompt.blockList.guide.assembly')}
                 </span>
               </p>
               <p>
                 <strong>
-                  {t('systemPrompt.blockList.guide.scopeLabel', 'Scope')}
+                  {t('systemPrompt.blockList.guide.scopeLabel')}
                 </strong>
                 <span>
-                  {t(
-                    'systemPrompt.blockList.guide.scope',
-                    'Default applies to every Agent. Enable “Custom system prompt” in Agents to create an Agent-specific scope here.',
-                  )}
+                  {t('systemPrompt.blockList.guide.scope')}
                 </span>
               </p>
             </div>
@@ -346,11 +325,9 @@
                     class="sp-drag-handle"
                     draggable="true"
                     data-block-handle={block.id}
-                    aria-label={t(
-                      'systemPrompt.blockList.reorderHandle',
-                      'Reorder {id} (use arrow keys)',
-                      { id: block.id },
-                    )}
+                    aria-label={t('systemPrompt.blockList.reorderHandle', {
+                      id: block.id,
+                    })}
                     ondragstart={(event) =>
                       editor.handleDragStart(index, event)}
                     ondragend={editor.handleDragEnd}
@@ -375,7 +352,7 @@
 
                   <div class="sp-block-meta">
                     <strong class="sp-block-title"
-                      >{t(
+                      >{tOr(
                         `systemPrompt.blockTitle.${block.id}`,
                         block.id,
                       )}</strong
@@ -383,23 +360,20 @@
                     <div class="sp-block-id-row">
                       <span class="sp-block-id">{block.id}</span>
                       {#if !block.enabled}<Badge variant="neutral"
-                          >{t('systemPrompt.blockList.off', 'Off')}</Badge
+                          >{t('systemPrompt.blockList.off')}</Badge
                         >{/if}
                       {#if editor.isCustomBlock(block)}
                         <Badge variant="info">
-                          {t('systemPrompt.blockList.customBadge', 'custom')}
+                          {t('systemPrompt.blockList.customBadge')}
                         </Badge>
                       {/if}
                       {#if block.kind === 'data'}
                         <span
                           class="tooltip-anchor"
-                          use:tooltip={t(
-                            'systemPrompt.blockList.dataHint',
-                            'Generated content — rebuilt automatically, not editable.',
-                          )}
+                          use:tooltip={t('systemPrompt.blockList.dataHint')}
                         >
                           <Badge variant="neutral">
-                            {t('systemPrompt.blockList.dataBadge', 'auto')}
+                            {t('systemPrompt.blockList.dataBadge')}
                           </Badge>
                         </span>
                       {/if}
@@ -408,14 +382,10 @@
                           class="tooltip-anchor"
                           use:tooltip={t(
                             'systemPrompt.blockList.inheritedHint',
-                            'Inherited from the Default scope — editing creates an override.',
                           )}
                         >
                           <Badge variant="neutral">
-                            {t(
-                              'systemPrompt.blockList.inheritedBadge',
-                              'inherited',
-                            )}
+                            {t('systemPrompt.blockList.inheritedBadge')}
                           </Badge>
                         </span>
                       {:else if block.editable && block.isModified}
@@ -423,14 +393,10 @@
                           class="tooltip-anchor"
                           use:tooltip={t(
                             'systemPrompt.fragmentEditor.modifiedHint',
-                            'Edited — differs from the built-in default.',
                           )}
                         >
                           <Badge variant="info">
-                            {t(
-                              'systemPrompt.fragmentEditor.modifiedIndicator',
-                              'modified',
-                            )}
+                            {t('systemPrompt.fragmentEditor.modifiedIndicator')}
                           </Badge>
                         </span>
                       {/if}
@@ -439,14 +405,10 @@
                           class="tooltip-anchor"
                           use:tooltip={t(
                             'systemPrompt.fragmentEditor.dirtyIndicator',
-                            'Unsaved changes',
                           )}
                         >
                           <Badge variant="warn">
-                            {t(
-                              'systemPrompt.fragmentEditor.dirtyIndicator',
-                              'unsaved',
-                            )}
+                            {t('systemPrompt.fragmentEditor.dirtyIndicator')}
                           </Badge>
                         </span>
                       {/if}
@@ -465,10 +427,10 @@
                         (block.editorExpanded = !block.editorExpanded)}
                     >
                       {block.editorExpanded
-                        ? t('systemPrompt.blockList.close', 'Close')
+                        ? t('systemPrompt.blockList.close')
                         : block.editable
-                          ? t('systemPrompt.blockList.edit', 'Edit')
-                          : t('systemPrompt.blockList.inspect', 'Inspect')}
+                          ? t('systemPrompt.blockList.edit')
+                          : t('systemPrompt.blockList.inspect')}
                     </Button>
                     {#if block.editable && !(scope.isAgentScope && editor.isInherited(block) && !block.isModified)}
                       <Button
@@ -478,8 +440,8 @@
                         onClick={() => editor.resetBlock(block.id)}
                       >
                         {block.isBusy
-                          ? t('common.loading', 'Loading…')
-                          : t('systemPrompt.fragmentEditor.reset', 'Reset')}
+                          ? t('common.loading')
+                          : t('systemPrompt.fragmentEditor.reset')}
                       </Button>
                     {/if}
                     {#if editor.isCustomBlock(block)}
@@ -488,17 +450,15 @@
                         class="sp-btn-sm"
                         onClick={() => editor.removeCustomBlock(block.id)}
                       >
-                        {t('common.remove', 'Remove')}
+                        {t('common.remove')}
                       </Button>
                     {/if}
                     <Toggle
                       checked={block.enabled}
                       size="sm"
-                      ariaLabel={t(
-                        'systemPrompt.blockList.toggleAria',
-                        'Toggle {id}',
-                        { id: block.id },
-                      )}
+                      ariaLabel={t('systemPrompt.blockList.toggleAria', {
+                        id: block.id,
+                      })}
                       onChange={() => editor.toggleBlock(block.id)}
                     />
                   </div>
@@ -532,14 +492,8 @@
                             onclick={() => editor.togglePreview(block.id)}
                           >
                             {block.previewExpanded
-                              ? t(
-                                  'systemPrompt.blockList.hidePreview',
-                                  'Hide preview',
-                                )
-                              : t(
-                                  'systemPrompt.blockList.showPreview',
-                                  'Show preview',
-                                )}
+                              ? t('systemPrompt.blockList.hidePreview')
+                              : t('systemPrompt.blockList.showPreview')}
                           </button>
                         {/if}
                       </div>
@@ -547,10 +501,7 @@
                         <pre class="sp-data-preview">{block.preview}</pre>
                       {:else if !block.preview}
                         <span class="sp-data-empty">
-                          {t(
-                            'systemPrompt.blockList.dataEmpty',
-                            'No content for the current scope.',
-                          )}
+                          {t('systemPrompt.blockList.dataEmpty')}
                         </span>
                       {/if}
                     </div>
@@ -563,20 +514,12 @@
           {#if editor.blocks.length === 0}
             <EmptyState
               density="compact"
-              description={t(
-                'systemPrompt.blockList.empty',
-                'No prompt blocks for this scope.',
-              )}
+              description={t('systemPrompt.blockList.empty')}
             />
           {/if}
 
           <div class="sp-global-footer">
-            <span
-              >{t(
-                'systemPrompt.editor.autosave',
-                'Changes save automatically. The switches control inclusion; opening a block does not change it.',
-              )}</span
-            >
+            <span>{t('systemPrompt.editor.autosave')}</span>
             <Button
               variant="tertiary"
               class="sp-btn-sm"
@@ -584,8 +527,8 @@
               onClick={editor.handleManualSaveAll}
             >
               {editor.isBusy
-                ? t('common.saving', 'Saving…')
-                : t('systemPrompt.fragmentEditor.save', 'Save')}
+                ? t('common.saving')
+                : t('systemPrompt.fragmentEditor.save')}
             </Button>
           </div>
         {/if}
@@ -600,32 +543,22 @@
           aria-busy={scope.isRefreshingPreview}
         >
           <details class="sp-about">
-            <summary
-              >{t('systemPrompt.preview.about', 'About this preview')}</summary
-            >
+            <summary>{t('systemPrompt.preview.about')}</summary>
             <p class="sp-preview-note">
-              {t(
-                'systemPrompt.preview.baseline',
-                'Current Agent configuration. A running Session can also contain pinned context, additional Tools, and conversation results.',
-              )}
+              {t('systemPrompt.preview.baseline')}
             </p>
           </details>
           {#if scope.previewError}
             <Banner variant="error"
               >{scope.previewError}
               <Button variant="secondary" onClick={scope.refreshPreview}
-                >{t('common.retry', 'Retry')}</Button
+                >{t('common.retry')}</Button
               >
             </Banner>
           {:else if scope.isRefreshingPreview || scope.isLoadingData}
-            <Banner variant="neutral">{t('common.loading', 'Loading…')}</Banner>
+            <Banner variant="neutral">{t('common.loading')}</Banner>
           {:else if !scope.canRefreshPreview()}
-            <EmptyState
-              description={t(
-                'systemPrompt.preview.empty',
-                'Select an agent to preview its system prompt.',
-              )}
-            />
+            <EmptyState description={t('systemPrompt.preview.empty')} />
           {:else if activeTab === 'tools'}
             <ToolDefinitionsPanel tools={scope.previewTools} {onToast} />
           {:else}
@@ -636,14 +569,14 @@
                 appearance="segmented"
                 density="compact"
                 idPrefix="sp-format"
-                ariaLabel={t('systemPrompt.format.label', 'Prompt display')}
+                ariaLabel={t('systemPrompt.format.label')}
                 onChange={(value) => (promptFormat = value)}
               />
               <Button
                 variant="secondary"
                 disabled={!scope.previewText}
                 onClick={scope.copyPreview}
-                >{t('systemPrompt.preview.copy', 'Copy')}</Button
+                >{t('systemPrompt.preview.copy')}</Button
               >
             </div>
             <div
@@ -654,12 +587,7 @@
               tabindex="0"
             >
               {#if !scope.previewText}
-                <EmptyState
-                  description={t(
-                    'systemPrompt.preview.noText',
-                    'The current configuration produces an empty System Prompt.',
-                  )}
-                />
+                <EmptyState description={t('systemPrompt.preview.noText')} />
               {:else if promptFormat === 'original'}
                 <pre class="sp-preview-pre">{scope.previewText}</pre>
               {:else}
@@ -681,9 +609,9 @@
 
   {#if editor.resetConfirmBlockId}
     <ConfirmDialog
-      title={t('systemPrompt.fragmentEditor.resetConfirmTitle', 'Reset block')}
+      title={t('systemPrompt.fragmentEditor.resetConfirmTitle')}
       body={editor.resetConfirmBody}
-      confirmLabel={t('common.reset', 'Reset')}
+      confirmLabel={t('common.reset')}
       onConfirm={editor.confirmResetBlock}
       onCancel={editor.cancelResetBlock}
     />
@@ -691,12 +619,9 @@
 
   {#if editor.removeConfirmBlockId}
     <ConfirmDialog
-      title={t('systemPrompt.blockList.removeConfirmTitle', 'Remove block')}
-      body={t(
-        'systemPrompt.blockList.removeConfirm',
-        'Remove this custom block? This cannot be undone.',
-      )}
-      confirmLabel={t('common.remove', 'Remove')}
+      title={t('systemPrompt.blockList.removeConfirmTitle')}
+      body={t('systemPrompt.blockList.removeConfirm')}
+      confirmLabel={t('common.remove')}
       onConfirm={editor.confirmRemoveCustomBlock}
       onCancel={editor.cancelRemoveCustomBlock}
     />
@@ -704,15 +629,9 @@
 
   {#if editor.resetLayoutConfirmOpen}
     <ConfirmDialog
-      title={t(
-        'systemPrompt.blockList.resetLayoutConfirmTitle',
-        'Reset layout',
-      )}
-      body={t(
-        'systemPrompt.blockList.resetLayoutConfirm',
-        'Reset block order and visibility to the default? This cannot be undone.',
-      )}
-      confirmLabel={t('common.reset', 'Reset')}
+      title={t('systemPrompt.blockList.resetLayoutConfirmTitle')}
+      body={t('systemPrompt.blockList.resetLayoutConfirm')}
+      confirmLabel={t('common.reset')}
       onConfirm={editor.confirmResetLayout}
       onCancel={editor.cancelResetLayout}
     />

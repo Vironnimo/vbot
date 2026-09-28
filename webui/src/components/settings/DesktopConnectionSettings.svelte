@@ -60,10 +60,7 @@
       if (generation === loadGeneration) {
         loadError = errorMessage(
           error,
-          t(
-            'settings.desktop.connection.loadError',
-            'Saved servers could not be loaded.',
-          ),
+          t('settings.desktop.connection.loadError'),
         );
       }
     } finally {
@@ -81,10 +78,7 @@
     const normalizedHost = host.trim();
     const numericPort = Number(port);
     if (!normalizedHost) {
-      formError = t(
-        'settings.desktop.connection.hostRequired',
-        'Enter a server host.',
-      );
+      formError = t('settings.desktop.connection.hostRequired');
       return;
     }
     if (
@@ -92,10 +86,7 @@
       numericPort < 1 ||
       numericPort > 65535
     ) {
-      formError = t(
-        'settings.desktop.connection.portInvalid',
-        'Enter a port between 1 and 65535.',
-      );
+      formError = t('settings.desktop.connection.portInvalid');
       return;
     }
 
@@ -107,13 +98,13 @@
       label = '';
       await loadServers();
       onToast({
-        title: t('settings.desktop.connection.addSuccess', 'Server saved.'),
+        title: t('settings.desktop.connection.addSuccess'),
         variant: 'success',
       });
     } catch (error) {
       formError = errorMessage(
         error,
-        t('settings.desktop.connection.addError', 'Server could not be saved.'),
+        t('settings.desktop.connection.addError'),
       );
     } finally {
       adding = false;
@@ -134,10 +125,7 @@
     } catch (error) {
       operationError = errorMessage(
         error,
-        t(
-          'settings.desktop.connection.connectError',
-          'The Desktop app could not connect to that server.',
-        ),
+        t('settings.desktop.connection.connectError'),
       );
     } finally {
       connectingKey = '';
@@ -155,19 +143,13 @@
       await removeDesktopServer(server.host, server.port);
       servers = servers.filter((entry) => serverKey(entry) !== key);
       onToast({
-        title: t(
-          'settings.desktop.connection.removeSuccess',
-          'Server removed.',
-        ),
+        title: t('settings.desktop.connection.removeSuccess'),
         variant: 'success',
       });
     } catch (error) {
       operationError = errorMessage(
         error,
-        t(
-          'settings.desktop.connection.removeError',
-          'Server could not be removed.',
-        ),
+        t('settings.desktop.connection.removeError'),
       );
     } finally {
       removingKey = '';
@@ -191,13 +173,10 @@
 
   <div class="s-subhead desktop-connection-subhead">
     <h4 class="s-subhead__title">
-      {t('settings.desktop.connection.savedTitle', 'Saved servers')}
+      {t('settings.desktop.connection.savedTitle')}
     </h4>
     <p class="s-subhead__desc">
-      {t(
-        'settings.desktop.connection.savedDescription',
-        'The active server supplies this WebUI. Switching reloads the Desktop app without moving Sessions or Runs.',
-      )}
+      {t('settings.desktop.connection.savedDescription')}
     </p>
   </div>
 
@@ -205,21 +184,18 @@
     <Banner variant="error">
       <span>{loadError}</span>
       <Button variant="secondary" onClick={loadServers}>
-        {t('common.retry', 'Retry')}
+        {t('common.retry')}
       </Button>
     </Banner>
   {:else if loading}
     <Banner variant="neutral">
-      {t('settings.desktop.connection.loading', 'Loading saved servers…')}
+      {t('settings.desktop.connection.loading')}
     </Banner>
   {:else if servers.length === 0}
     <EmptyState
       density="compact"
-      title={t('settings.desktop.connection.emptyTitle', 'No saved servers')}
-      description={t(
-        'settings.desktop.connection.emptyDescription',
-        'Add a server below to make it available for this Desktop app.',
-      )}
+      title={t('settings.desktop.connection.emptyTitle')}
+      description={t('settings.desktop.connection.emptyDescription')}
     />
   {:else}
     <div class="s-group">
@@ -231,7 +207,7 @@
               <span class="s-row-label">{serverName(server)}</span>
               {#if server.active}
                 <StatusChip variant="success">
-                  {t('settings.desktop.connection.active', 'Connected')}
+                  {t('settings.desktop.connection.active')}
                 </StatusChip>
               {/if}
             </div>
@@ -248,8 +224,8 @@
                 onClick={() => handleConnect(server)}
               >
                 {connectingKey === key
-                  ? t('settings.desktop.connection.connecting', 'Connecting…')
-                  : t('settings.desktop.connection.connect', 'Connect')}
+                  ? t('settings.desktop.connection.connecting')
+                  : t('settings.desktop.connection.connect')}
               </Button>
               <Button
                 variant="danger"
@@ -257,7 +233,7 @@
                 disabled={Boolean(connectingKey || removingKey)}
                 onClick={() => handleRemove(server)}
               >
-                {t('common.remove', 'Remove')}
+                {t('common.remove')}
               </Button>
             </div>
           {/if}
@@ -268,13 +244,10 @@
 
   <div class="s-subhead">
     <h4 class="s-subhead__title">
-      {t('settings.desktop.connection.addTitle', 'Add server')}
+      {t('settings.desktop.connection.addTitle')}
     </h4>
     <p class="s-subhead__desc">
-      {t(
-        'settings.desktop.connection.addDescription',
-        'Save a local or remote vBot server for this Windows app.',
-      )}
+      {t('settings.desktop.connection.addDescription')}
     </p>
   </div>
 
@@ -282,7 +255,7 @@
     <div class="s-group__block desktop-server-form">
       <FormField
         controlId={hostControlId}
-        label={t('settings.desktop.connection.host', 'Host')}
+        label={t('settings.desktop.connection.host')}
         required
       >
         <TextField
@@ -295,7 +268,7 @@
       </FormField>
       <FormField
         controlId={portControlId}
-        label={t('settings.desktop.connection.port', 'Port')}
+        label={t('settings.desktop.connection.port')}
         required
       >
         <TextField
@@ -308,16 +281,13 @@
       </FormField>
       <FormField
         controlId={labelControlId}
-        label={t('settings.desktop.connection.label', 'Label (optional)')}
+        label={t('settings.desktop.connection.label')}
         full
       >
         <TextField
           id={labelControlId}
           value={label}
-          placeholder={t(
-            'settings.desktop.connection.labelPlaceholder',
-            'Home server',
-          )}
+          placeholder={t('settings.desktop.connection.labelPlaceholder')}
           disabled={adding}
           onInput={(next) => (label = next)}
         />
@@ -332,8 +302,8 @@
       <div class="desktop-server-form__actions">
         <Button type="submit" variant="primary" loading={adding}>
           {adding
-            ? t('common.saving', 'Saving…')
-            : t('settings.desktop.connection.addAction', 'Add server')}
+            ? t('common.saving')
+            : t('settings.desktop.connection.addAction')}
         </Button>
       </div>
     </div>

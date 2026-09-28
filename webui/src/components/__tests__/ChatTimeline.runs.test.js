@@ -661,7 +661,7 @@ describe('ChatTimeline Runs', () => {
       document.querySelector('.assistant-run .run-inline-banner.banner--info')
         .textContent,
     ).toContain(
-      t('chat.modelFallbackActivated', '', {
+      t('chat.modelFallbackActivated', {
         model: 'openrouter/anthropic/claude-sonnet-4',
       }),
     );
@@ -704,12 +704,8 @@ describe('ChatTimeline Runs', () => {
     ]);
     timeline.render(sessionState);
 
-    expect(detailRow('chat.toolStdout', 'Stdout').textContent).toContain(
-      'hello',
-    );
-    expect(detailRow('chat.toolStderr', 'Stderr').textContent).toContain(
-      'warn',
-    );
+    expect(detailRow('chat.toolStdout').textContent).toContain('hello');
+    expect(detailRow('chat.toolStderr').textContent).toContain('warn');
     const result = detailText('chat.toolResultLabel');
     expect(result).toContain('status: completed');
     expect(result).toContain('exit_code: 0');

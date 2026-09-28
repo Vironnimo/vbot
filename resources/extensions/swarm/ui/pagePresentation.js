@@ -31,8 +31,8 @@ export function participantDetails(participant) {
   return [
     participant.display_name,
     participant.model,
-    t(`swarm.state.${state}`, state),
-    `${participant.pending_count ?? 0} ${t('swarm.pending', 'pending')}`,
+    state,
+    `${participant.pending_count ?? 0} ${t('swarm.pending')}`,
   ].join(' · ');
 }
 
@@ -41,8 +41,8 @@ export const participantTotal = (profile) =>
 
 const participantCount = (count) =>
   count === 1
-    ? t('swarm.participantCount.one', '1 participant')
-    : t('swarm.participantCount', '{count} participants', { count });
+    ? t('swarm.participantCount.one')
+    : t('swarm.participantCount', { count });
 
 // Sidebar row tooltips: a Swarm's formation per Model, a Run's Swarm and size.
 export function profileTooltip(profile) {
@@ -67,9 +67,9 @@ export function runTooltip(swarm) {
   return {
     title: runTitle(swarm),
     rows: [
-      { label: t('swarm.profile', 'Swarm'), value: swarm.name },
+      { label: t('swarm.profile'), value: swarm.name },
       {
-        label: t('swarm.participants', 'Participants'),
+        label: t('swarm.participants'),
         value: swarm.participant_count,
       },
     ],
@@ -89,12 +89,11 @@ export const resumableParticipantState = (state) =>
   ['idle', 'failed', 'cancelled', 'interrupted'].includes(state);
 
 export function usageCount(value) {
-  if (!Number.isFinite(value))
-    return t('swarm.usage.unavailable', 'Unavailable');
+  if (!Number.isFinite(value)) return t('swarm.usage.unavailable');
   const units = [
-    [1e9, t('swarm.usage.billion', 'mrd')],
-    [1e6, t('swarm.usage.million', 'mio')],
-    [1e3, t('swarm.usage.thousand', 'k')],
+    [1e9, t('swarm.usage.billion')],
+    [1e6, t('swarm.usage.million')],
+    [1e3, t('swarm.usage.thousand')],
   ];
   const [scale, suffix] = units.find(([scale]) => Math.abs(value) >= scale) ?? [
     1,

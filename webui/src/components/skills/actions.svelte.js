@@ -49,11 +49,11 @@ export function createSkillActions(context) {
   let scopeOptions = $derived([
     {
       value: GLOBAL_SCOPE,
-      label: t('settings.skills.scopeGlobal', 'Global skills'),
+      label: t('settings.skills.scopeGlobal'),
     },
     ...context.agents.map((agent) => ({
       value: `agent:${agent.id}`,
-      label: t('settings.skills.scopeAgent', '{name} (private)', {
+      label: t('settings.skills.scopeAgent', {
         name: agent.name || agent.id,
       }),
     })),
@@ -89,14 +89,14 @@ export function createSkillActions(context) {
         content: createSkillDocument(newName, newDescription, newContent),
       });
       context.onToast({
-        title: t('settings.skills.created', 'Skill created.'),
+        title: t('settings.skills.created'),
         variant: 'success',
       });
       closeCreateModal();
       await context.loadInventory();
     } catch (error) {
       context.onToast({
-        title: `${t('settings.skills.createError', 'Skill could not be created.')} ${error.message}`,
+        title: `${t('settings.skills.createError')} ${error.message}`,
         variant: 'error',
       });
     } finally {
@@ -132,14 +132,14 @@ export function createSkillActions(context) {
         content: editContent,
       });
       context.onToast({
-        title: t('settings.skills.saved', 'Skill saved.'),
+        title: t('settings.skills.saved'),
         variant: 'success',
       });
       closeEditModal();
       await context.loadInventory();
     } catch (error) {
       context.onToast({
-        title: `${t('settings.skills.contentSaveError', 'Skill could not be saved.')} ${error.message}`,
+        title: `${t('settings.skills.contentSaveError')} ${error.message}`,
         variant: 'error',
       });
     } finally {
@@ -156,10 +156,10 @@ export function createSkillActions(context) {
       await setSkillDisabled(entry.name, !entry.disabled);
       context.onToast({
         title: entry.disabled
-          ? t('skills.enabledToast', 'Skill "{name}" enabled.', {
+          ? t('skills.enabledToast', {
               name: entry.name,
             })
-          : t('skills.disabledToast', 'Skill "{name}" disabled everywhere.', {
+          : t('skills.disabledToast', {
               name: entry.name,
             }),
         variant: 'success',
@@ -167,7 +167,7 @@ export function createSkillActions(context) {
       await context.loadInventory();
     } catch (error) {
       context.onToast({
-        title: `${t('skills.toggleError', 'The skill could not be changed.')} ${error.message}`,
+        title: `${t('skills.toggleError')} ${error.message}`,
         variant: 'error',
       });
     } finally {
@@ -217,7 +217,7 @@ export function createSkillActions(context) {
         shareReceivers,
       );
       context.onToast({
-        title: t('skills.sharedToast', 'Skill shared with {count} agents.', {
+        title: t('skills.sharedToast', {
           count: shareReceivers.length,
         }),
         variant: 'success',
@@ -226,7 +226,7 @@ export function createSkillActions(context) {
       await context.loadInventory();
     } catch (error) {
       context.onToast({
-        title: `${t('skills.shareError', 'Sharing could not be changed.')} ${error.message}`,
+        title: `${t('skills.shareError')} ${error.message}`,
         variant: 'error',
       });
     } finally {
@@ -253,7 +253,7 @@ export function createSkillActions(context) {
     try {
       await deleteSkillRequest(target.scope, target.name);
       context.onToast({
-        title: t('settings.skills.deleted', 'Skill deleted.'),
+        title: t('settings.skills.deleted'),
         variant: 'success',
       });
       if (editing?.name === target.name && editing?.scope === target.scope) {
@@ -262,7 +262,7 @@ export function createSkillActions(context) {
       await context.loadInventory();
     } catch (error) {
       context.onToast({
-        title: `${t('settings.skills.deleteError', 'Skill could not be deleted.')} ${error.message}`,
+        title: `${t('settings.skills.deleteError')} ${error.message}`,
         variant: 'error',
       });
     } finally {

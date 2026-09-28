@@ -362,7 +362,7 @@ describe('ChatTimeline Tools', () => {
       );
       expect(line.querySelector('.te-arg-mark, .te-primary-quote')).toBeNull();
       expect(line.querySelector('.te-fact').textContent).toBe(
-        t('chat.toolFact.matches', '', { count: 10 }),
+        t('chat.toolFact.matches', { count: 10 }),
       );
       expect(line.textContent).not.toContain('VERSION_[A-Z_]+');
       expect(line.textContent).not.toContain('src');
@@ -374,7 +374,7 @@ describe('ChatTimeline Tools', () => {
         [{ kind: 'line_range', start: 170, end: 280 }],
         [
           [
-            t('chat.toolFact.lines', 'lines {start}-{end}', {
+            t('chat.toolFact.lines', {
               start: 170,
               end: 280,
             }),

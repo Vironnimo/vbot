@@ -30,14 +30,12 @@ const { default: AppShell } = await import('../AppShell.svelte');
 const SIDEBAR_COLLAPSED_KEY = 'vbot.sidebar.collapsed.v1';
 const CHAT = {
   id: 'chat',
-  labelKey: 'navigation.chat',
-  labelFallback: 'Chat',
+  label: () => t('navigation.chat'),
   section: 'work',
 };
 const SETTINGS = {
   id: 'settings',
-  labelKey: 'navigation.settings',
-  labelFallback: 'Settings',
+  label: () => t('navigation.settings'),
   section: 'configure',
 };
 const originalMatchMedia = window.matchMedia;
@@ -77,7 +75,7 @@ const sidebarToggle = () =>
   document.querySelector('.app-shell__sidebar-toggle');
 const navItem = (item) =>
   [...document.querySelectorAll('.app-shell__nav-item')].find((element) =>
-    element.textContent.includes(t(item.labelKey, item.labelFallback)),
+    element.textContent.includes(item.label()),
   );
 
 describe('AppShell sidebar', () => {
@@ -130,7 +128,7 @@ describe('AppShell sidebar', () => {
     flushSync();
 
     expect(shell().dataset.sidebarCollapsed).toBe('true');
-    expect(navItem(CHAT).getAttribute('aria-label')).toBe(t(CHAT.labelKey));
+    expect(navItem(CHAT).getAttribute('aria-label')).toBe(CHAT.label());
     expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('true');
     expect(toggle.getAttribute('aria-label')).toBe(
       t('navigation.expandSidebar'),
@@ -153,8 +151,7 @@ describe('AppShell sidebar', () => {
       items: [
         {
           id: 'extension:swarm:swarms',
-          labelKey: '',
-          labelFallback: 'Swarms',
+          label: () => 'Swarms',
           section: 'work',
         },
       ],
@@ -611,9 +608,7 @@ describe('AppShell tablet navigation', () => {
     const toggle = mountAtWidth(800);
 
     expect(shell().dataset.sidebarCollapsed).toBe('true');
-    expect(navItem(SETTINGS).getAttribute('aria-label')).toBe(
-      t(SETTINGS.labelKey),
-    );
+    expect(navItem(SETTINGS).getAttribute('aria-label')).toBe(SETTINGS.label());
     expect(toggle.getAttribute('aria-label')).toBe(
       t('navigation.expandSidebar'),
     );

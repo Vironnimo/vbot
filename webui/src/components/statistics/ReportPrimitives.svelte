@@ -37,15 +37,9 @@
 {/snippet}
 
 {#snippet estimatedBadge()}
-  <span
-    class="tooltip-anchor"
-    use:tooltip={t(
-      'statistics.estimatedHint',
-      'Estimated tokens are approximated, not provider-reported.',
-    )}
-  >
+  <span class="tooltip-anchor" use:tooltip={t('statistics.estimatedHint')}>
     <Badge variant="warn">
-      {t('statistics.estimatedBadge', '~ estimated')}
+      {t('statistics.estimatedBadge')}
     </Badge>
   </span>
 {/snippet}
@@ -57,27 +51,18 @@
     {#if display.projectId}
       <span
         class="stats-agent__project tooltip-anchor"
-        use:tooltip={t(
-          'statistics.agent.projectBadgeTitle',
-          'Project: {project}',
-          {
-            project: display.projectId,
-          },
-        )}
+        use:tooltip={t('statistics.agent.projectBadgeTitle', {
+          project: display.projectId,
+        })}
       >
         <Badge variant="info">{display.projectId}</Badge>
       </span>
     {:else if display.extension}
       <span
         class="stats-agent__project tooltip-anchor"
-        use:tooltip={t(
-          'statistics.agent.extensionBadgeTitle',
-          'Sessions this Extension runs on its own, such as Swarm participants',
-        )}
+        use:tooltip={t('statistics.agent.extensionBadgeTitle')}
       >
-        <Badge variant="neutral"
-          >{t('statistics.agent.extensionBadge', 'Extension')}</Badge
-        >
+        <Badge variant="neutral">{t('statistics.agent.extensionBadge')}</Badge>
       </span>
     {/if}
   </span>
@@ -128,10 +113,7 @@
   <div class="stats-block stats-block--narrow">
     <h3 class="stats-block__title">{title}</h3>
     {#if entries.length === 0}
-      <EmptyState
-        density="compact"
-        description={t('statistics.none', 'None')}
-      />
+      <EmptyState density="compact" description={t('statistics.none')} />
     {:else}
       {@render barRows(
         topN(entries, 8).map((entry) => ({
@@ -143,7 +125,7 @@
       )}
       {#if entries.length > 8}<details class="stats-details">
           <summary
-            >{t('statistics.ranking.more', '{count} more', {
+            >{t('statistics.ranking.more', {
               count: formatInteger(entries.length - 8, activeLocaleTag()),
             })}</summary
           >{@render barRows(
@@ -163,10 +145,7 @@
   <div class="stats-block stats-block--narrow">
     <h3 class="stats-block__title">{title}</h3>
     {#if entries.length === 0}
-      <EmptyState
-        density="compact"
-        description={t('statistics.none', 'None')}
-      />
+      <EmptyState density="compact" description={t('statistics.none')} />
     {:else}
       <ul class="stats-bars">
         {#each topN(entries, 8) as entry (entry.key)}

@@ -25,10 +25,10 @@ import { t } from '../i18n.js';
 import { backgroundBashTool } from './chatTimelinePresentation.support.js';
 
 const status = (name) => t(`chat.runStatus.${name}`);
-const seconds = (value) => t('chat.runDurationSeconds', '', { seconds: value });
-const iterations = (count) => t('chat.runIterations', '', { count });
+const seconds = (value) => t('chat.durationSeconds', { seconds: value });
+const iterations = (count) => t('chat.runIterations', { count });
 const minutesSeconds = (minutes, secs) =>
-  t('chat.durationMinutesSeconds', '', { minutes, seconds: secs });
+  t('chat.durationMinutesSeconds', { minutes, seconds: secs });
 
 function editTool({ path, added, removed, name = 'edit' }) {
   const toolCall = { id: `call-${path}-${added}`, name };
@@ -113,7 +113,7 @@ describe('runFooterParts', () => {
       { status: 'completed', durationMs: 5071000 },
       () => [
         status('completed'),
-        t('chat.durationHoursMinutes', '', { hours: 1, minutes: 24 }),
+        t('chat.durationHoursMinutes', { hours: 1, minutes: 24 }),
       ],
     ],
     [
@@ -146,7 +146,7 @@ describe('runFooterParts', () => {
 });
 
 describe('runFooterNotice', () => {
-  const working = (secs) => t('chat.providerWorking', '', { seconds: secs });
+  const working = (secs) => t('chat.providerWorking', { seconds: secs });
 
   it.each([
     ['a Provider idle for over a minute', 75.4, 'running', working(75)],
@@ -185,7 +185,7 @@ describe('runFooterNotice', () => {
 
     expect(runFooterNotice(run, startedAt + 59_999)).toBe('');
     expect(runFooterNotice(run, startedAt + 60_000)).toBe(
-      t('chat.requestWaiting', 'Waiting for the Provider response.'),
+      t('chat.requestWaiting'),
     );
     expect(
       runFooterNotice({ ...run, status: 'completed' }, startedAt + 60_000),
@@ -193,39 +193,36 @@ describe('runFooterNotice', () => {
   });
 
   it.each([
-    ['retrying', 'chat.requestRetrying', 'Retrying the Provider request.'],
-    ['waiting', 'chat.requestWaiting', 'Waiting for the Provider response.'],
-  ])(
-    'reports a failed request immediately while %s',
-    (state, key, fallback) => {
-      const nowMs = Date.parse('2026-09-16T12:00:00Z');
+    ['retrying', 'chat.requestRetrying'],
+    ['waiting', 'chat.requestWaiting'],
+  ])('reports a failed request immediately while %s', (state, key) => {
+    const nowMs = Date.parse('2026-09-16T12:00:00Z');
 
-      expect(
-        runFooterNotice(
-          {
-            status: 'running',
-            providerRequestStatus: {
-              state,
-              error_kind: 'rate_limit',
-              attempt: 2,
-              max_attempts: 3,
-              timestamp: new Date(nowMs).toISOString(),
-            },
-          },
-          nowMs,
-        ),
-      ).toBe(
-        [
-          t('chat.requestRateLimit', 'Provider rate limit reached.'),
-          t(key, fallback),
-          t('chat.requestAttempt', 'Attempt {attempt} of {total}.', {
+    expect(
+      runFooterNotice(
+        {
+          status: 'running',
+          providerRequestStatus: {
+            state,
+            error_kind: 'rate_limit',
             attempt: 2,
-            total: 3,
-          }),
-        ].join(' '),
-      );
-    },
-  );
+            max_attempts: 3,
+            timestamp: new Date(nowMs).toISOString(),
+          },
+        },
+        nowMs,
+      ),
+    ).toBe(
+      [
+        t('chat.requestRateLimit'),
+        t(key),
+        t('chat.requestAttempt', {
+          attempt: 2,
+          total: 3,
+        }),
+      ].join(' '),
+    );
+  });
 });
 
 describe('change statistics', () => {
@@ -334,7 +331,7 @@ describe('change statistics', () => {
   it.each([
     [
       { files: 5, added: 151, removed: 15 },
-      () => t('chat.changeStats.filesMany', '', { count: 5 }),
+      () => t('chat.changeStats.filesMany', { count: 5 }),
     ],
     [{ files: 1, added: 2, removed: 0 }, () => t('chat.changeStats.filesOne')],
   ])('labels %o as one line and as colored parts', (stats, fileLabel) => {
@@ -708,10 +705,10 @@ describe('Reflection rows', () => {
     const start = '2026-08-24T10:00:00.000Z';
 
     expect(reflectionElapsedLabel(start, Date.parse(start) + 45_123)).toBe(
-      t('chat.activity.reflectionElapsedSeconds', '', { count: 45 }),
+      t('chat.activity.reflectionElapsedSeconds', { count: 45 }),
     );
     expect(reflectionElapsedLabel(start, Date.parse(start) + 125_000)).toBe(
-      t('chat.activity.reflectionElapsedMinutes', '', { count: 2 }),
+      t('chat.activity.reflectionElapsedMinutes', { count: 2 }),
     );
     expect(reflectionElapsedLabel('', Date.now())).toBe('');
     expect(reflectionElapsedLabel(start, Number.NaN)).toBe('');

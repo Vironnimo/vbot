@@ -1,5 +1,5 @@
 import { SvelteDate } from 'svelte/reactivity';
-import { t } from '$lib/i18n.js';
+import { t, tOr } from '$lib/i18n.js';
 import {
   getPendingAttachments,
   setPendingAttachments,
@@ -41,7 +41,7 @@ export function createComposerMedia(context) {
   let voiceStatus = $derived(
     recordingState === 'requesting'
       ? t('chat.voice.progress.microphone')
-      : t(
+      : tOr(
           `chat.voice.progress.${transcriptionProgress.phase}`,
           t('chat.voice.progress.transcribing'),
         ),
@@ -51,8 +51,8 @@ export function createComposerMedia(context) {
     voiceBusy
       ? voiceStatus
       : isRecording
-        ? t('chat.voice.stopRecording', 'Stop recording')
-        : t('chat.voice.startRecording', 'Start voice input'),
+        ? t('chat.voice.stopRecording')
+        : t('chat.voice.startRecording'),
   );
 
   let activeRecorder = null;
@@ -153,16 +153,14 @@ export function createComposerMedia(context) {
   };
 
   const showAttachmentUploadErrorToast = () => {
-    showComposerErrorToast(
-      t('chat.attachment.uploadFailed', 'Attachment upload failed.'),
-    );
+    showComposerErrorToast(t('chat.attachment.uploadFailed'));
   };
 
   const showTranscriptionError = (message) => {
     const normalizedMessage =
       typeof message === 'string' && message.length > 0
         ? message
-        : t('chat.voice.transcriptionFailed', 'Speech transcription failed.');
+        : t('chat.voice.transcriptionFailed');
     showComposerErrorToast(normalizedMessage);
     context.onTranscriptionError?.(normalizedMessage);
   };
@@ -313,7 +311,7 @@ export function createComposerMedia(context) {
       activeRecorder = null;
       recordingState = 'idle';
       showTranscriptionError(
-        `${t('chat.voice.startFailed', 'Microphone recording could not start.')} ${error.message ?? ''}`.trim(),
+        `${t('chat.voice.startFailed')} ${error.message ?? ''}`.trim(),
       );
     }
   };
@@ -352,7 +350,7 @@ export function createComposerMedia(context) {
         // Preserve the transcription error; cleanup was already requested.
       }
       showTranscriptionError(
-        `${t('chat.voice.transcriptionFailed', 'Speech transcription failed.')} ${error.message ?? ''}`.trim(),
+        `${t('chat.voice.transcriptionFailed')} ${error.message ?? ''}`.trim(),
       );
     } finally {
       if (requestGeneration === recorderRequestGeneration) {

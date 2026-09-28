@@ -58,7 +58,7 @@ export function isOAuthAccount(account) {
 
 export function accountDisplayName(account, translate) {
   if (account?.id === DEFAULT_ACCOUNT_ID) {
-    return translate('settings.providers.accounts.defaultLabel', 'Default');
+    return translate('settings.providers.accounts.defaultLabel');
   }
 
   return typeof account?.id === 'string' ? account.id : '';
@@ -66,18 +66,15 @@ export function accountDisplayName(account, translate) {
 
 export function describeAccountSource(account, translate) {
   if (account?.source === ACCOUNT_SOURCE_PROCESS_ENV) {
-    return translate(
-      'settings.providers.accounts.source.processEnv',
-      'Process env',
-    );
+    return translate('settings.providers.accounts.source.processEnv');
   }
 
   if (account?.source === ACCOUNT_SOURCE_DATA_DIR) {
-    return translate('settings.providers.accounts.source.dataDir', '.env file');
+    return translate('settings.providers.accounts.source.dataDir');
   }
 
   if (account?.source === ACCOUNT_SOURCE_OAUTH) {
-    return translate('settings.providers.accounts.source.oauth', 'OAuth');
+    return translate('settings.providers.accounts.source.oauth');
   }
 
   return '';
@@ -247,29 +244,16 @@ export function isSharedOpenCodeConnection(connection) {
 }
 
 export function describeSharedOpenCodeKey(translate) {
-  return translate(
-    'settings.providers.opencode.sharedKey',
-    'This Account key is shared by OpenCode Go and Zen. Replacing or removing it affects both. Each connection can be enabled separately.',
-  );
+  return translate('settings.providers.opencode.sharedKey');
 }
 
 export function describeProvider(provider, translate) {
   const fragments = [];
 
   if (provider?.id === 'opencode-go') {
-    fragments.push(
-      translate(
-        'settings.providers.opencode.go',
-        'Uses your OpenCode Go subscription. OpenCode may charge Zen credits if you enabled Use balance in your OpenCode account.',
-      ),
-    );
+    fragments.push(translate('settings.providers.opencode.go'));
   } else if (provider?.id === 'opencode-zen') {
-    fragments.push(
-      translate(
-        'settings.providers.opencode.zen',
-        'Paid Models use Zen credits. Free Models are restricted to the OpenCode app and cannot be used in vBot, even with another key.',
-      ),
-    );
+    fragments.push(translate('settings.providers.opencode.zen'));
   }
 
   if (
@@ -277,45 +261,29 @@ export function describeProvider(provider, translate) {
     provider.credential_key.length > 0
   ) {
     fragments.push(
-      translate(
-        'settings.providers.description.credentialKey',
-        'Credential key: {credentialKey}.',
-        {
-          credentialKey: provider.credential_key,
-        },
-      ),
+      translate('settings.providers.description.credentialKey', {
+        credentialKey: provider.credential_key,
+      }),
     );
   }
 
   if (typeof provider?.base_url === 'string' && provider.base_url.length > 0) {
     fragments.push(
-      translate(
-        'settings.providers.description.baseUrl',
-        'Endpoint: {baseUrl}.',
-        {
-          baseUrl: provider.base_url,
-        },
-      ),
+      translate('settings.providers.description.baseUrl', {
+        baseUrl: provider.base_url,
+      }),
     );
   }
 
   if (Number.isFinite(provider?.model_count)) {
     fragments.push(
-      translate(
-        'settings.providers.description.modelCount',
-        '{count} models available.',
-        {
-          count: provider.model_count,
-        },
-      ),
+      translate('settings.providers.description.modelCount', {
+        count: provider.model_count,
+      }),
     );
   }
 
   return (
-    fragments.join(' ') ||
-    translate(
-      'settings.providers.description.none',
-      'Provider metadata is not available yet.',
-    )
+    fragments.join(' ') || translate('settings.providers.description.none')
   );
 }

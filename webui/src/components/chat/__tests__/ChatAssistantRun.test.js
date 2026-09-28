@@ -587,7 +587,7 @@ describe('ChatAssistantRun', () => {
         { status: 'completed', durationMs: 8000, iterationCount: 3 },
         undefined,
         () =>
-          `${t('chat.runStatus.completed')} · 8.0s · ${t('chat.runIterations', '', { count: 3 })}`,
+          `${t('chat.runStatus.completed')} · 8.0s · ${t('chat.runIterations', { count: 3 })}`,
       ],
     ])('shows %s', (_case, fields, nowMs, label) => {
       run.mount({ item: assistantRun(fields), nowMs });
@@ -603,7 +603,7 @@ describe('ChatAssistantRun', () => {
         }),
       });
 
-      const notice = t('chat.providerWorking', '', { seconds: 75 });
+      const notice = t('chat.providerWorking', { seconds: 75 });
       expect(document.querySelector('.run-footer__notice').textContent).toBe(
         notice,
       );

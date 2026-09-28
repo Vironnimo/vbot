@@ -95,14 +95,8 @@
       onToast({
         title:
           phase === 'requesting'
-            ? t(
-                'terminals.voice.startFailed',
-                'Microphone recording could not start.',
-              )
-            : t(
-                'terminals.voice.transcriptionFailed',
-                'Speech transcription failed.',
-              ),
+            ? t('terminals.voice.startFailed')
+            : t('terminals.voice.transcriptionFailed'),
         message: error?.message ?? '',
         variant: 'error',
       });
@@ -257,16 +251,10 @@
     const wasRunning = !terminalIsFinished(item);
     void controller.closeTerminal(terminalId);
     onToast({
-      title: t('terminals.closedTitle', 'Terminal closed'),
+      title: t('terminals.closedTitle'),
       message: wasRunning
-        ? t(
-            'terminals.closedMessage',
-            'The Terminal Session was removed from the list and is being stopped.',
-          )
-        : t(
-            'terminals.closedMessageHistory',
-            'The Terminal Session was removed from the list.',
-          ),
+        ? t('terminals.closedMessage')
+        : t('terminals.closedMessageHistory'),
       variant: 'success',
     });
   }
@@ -397,11 +385,11 @@
 />
 <svelte:window onresize={closeGroupMenu} />
 
-<section class="terminals-view" aria-label={t('terminals.title', 'Terminals')}>
+<section class="terminals-view" aria-label={t('terminals.title')}>
   <header class="terminals-view__toolbar">
     <div
       class="terminals-view__group-tabs"
-      aria-label={t('terminals.groupsLabel', 'Groups')}
+      aria-label={t('terminals.groupsLabel')}
       onscroll={closeGroupMenu}
     >
       {#each viewState.groups as group (group.group_id)}
@@ -418,7 +406,7 @@
             aria-current={group.group_id === viewState.selectedGroupId
               ? 'true'
               : undefined}
-            aria-label={`${group.name}: ${t('terminals.count', '{count} terminals', { count: group.terminal_count })}`}
+            aria-label={`${group.name}: ${t('terminals.count', { count: group.terminal_count })}`}
             use:tooltip={{ text: group.name, whenTruncated: true }}
             onclick={() => controller.selectGroup(group.group_id)}
           >
@@ -434,8 +422,8 @@
               <Button
                 variant="tertiary"
                 icon
-                ariaLabel={t('terminals.new', 'New terminal')}
-                tooltip={t('terminals.new', 'New terminal')}
+                ariaLabel={t('terminals.new')}
+                tooltip={t('terminals.new')}
                 disabled={serverUnavailable}
                 onClick={() => dialogs.openStartDialog()}
               >
@@ -457,7 +445,7 @@
                 class="terminals-view__group-action-menu-trigger"
                 class:terminals-view__group-action-menu-trigger--open={openGroupMenuId ===
                   group.group_id}
-                aria-label={t('terminals.groupActions', 'Group actions')}
+                aria-label={t('terminals.groupActions')}
                 aria-haspopup="menu"
                 aria-expanded={openGroupMenuId === group.group_id}
                 onclick={(event) =>
@@ -488,7 +476,7 @@
                       dialogs.openRenameGroupDialog(group);
                     }}
                   >
-                    {t('terminals.renameGroupAction', 'Rename group')}
+                    {t('terminals.renameGroupAction')}
                   </button>
                   <button
                     type="button"
@@ -499,7 +487,7 @@
                       dialogs.openDeleteGroupDialog(group);
                     }}
                   >
-                    {t('terminals.deleteGroupAction', 'Delete group')}
+                    {t('terminals.deleteGroupAction')}
                   </button>
                 </div>
               {/if}
@@ -511,8 +499,8 @@
         <Button
           variant="tertiary"
           icon
-          ariaLabel={t('terminals.addGroup', 'Add group')}
-          tooltip={t('terminals.addGroup', 'Add group')}
+          ariaLabel={t('terminals.addGroup')}
+          tooltip={t('terminals.addGroup')}
           disabled={serverUnavailable}
           onClick={() => dialogs.openCreateGroupDialog()}
         >
@@ -523,7 +511,7 @@
       </span>
       {#if viewState.loading && viewState.groups.length === 0}
         <span class="terminals-view__group-status">
-          {t('terminals.loading', 'Loading terminal sessions…')}
+          {t('terminals.loading')}
         </span>
       {/if}
     </div>
@@ -532,14 +520,9 @@
   <div class="terminals-view__detail">
     {#if viewState.listError && !serverUnavailable}
       <Banner variant="error" class="terminals-view__feedback">
-        <span
-          >{t(
-            'terminals.listError',
-            'Terminal sessions could not be loaded.',
-          )}</span
-        >
+        <span>{t('terminals.listError')}</span>
         <Button variant="secondary" onClick={() => controller.loadTerminals()}>
-          {t('common.retry', 'Retry')}
+          {t('common.retry')}
         </Button>
       </Banner>
     {:else if hasTerminals}
@@ -553,7 +536,7 @@
         class="terminals-view__canvas"
         class:terminals-view__canvas--maximized={maximizedTerminalId !== ''}
         role="group"
-        aria-label={t('terminals.canvasLabel', 'Terminal canvas')}
+        aria-label={t('terminals.canvasLabel')}
         style="grid-template-columns: repeat({layout.columns}, minmax(0, 1fr)); grid-template-rows: repeat({layout.rows}, minmax(0, 1fr));"
       >
         {#each groupTerminals as item, itemIndex (item.terminal_id)}
@@ -576,8 +559,8 @@
             hasSpeech && viewState.speechState === 'recording'}
           {@const speechBusy = hasSpeech && !isRecording}
           {@const speechLabel = isRecording
-            ? t('terminals.voice.stop', 'Stop recording and insert text')
-            : t('terminals.voice.start', 'Dictate into terminal')}
+            ? t('terminals.voice.stop')
+            : t('terminals.voice.start')}
           {@const isDragged = draggedTerminalId === item.terminal_id}
           {@const isDropTarget = dragOverTerminalId === item.terminal_id}
           {@const gridMismatch = gridMismatchHint(item.terminal_id)}
@@ -639,10 +622,8 @@
                 {#if gridMismatch}
                   <span
                     class="terminals-view__grid-mismatch"
-                    use:tooltip={t(
-                      'terminals.gridMismatchHelp',
-                      'This tile shows its content at a different size than the terminal session uses. Try resizing the window or maximizing this tile once to reapply the session size.',
-                    )}>{gridMismatch}</span
+                    use:tooltip={t('terminals.gridMismatchHelp')}
+                    >{gridMismatch}</span
                   >
                 {/if}
                 {#if renderer.scrolledBack(item.terminal_id)}
@@ -654,7 +635,7 @@
                       scrollToLatest(item.terminal_id);
                     }}
                   >
-                    {t('terminals.scrollLatest', 'Jump to latest')}
+                    {t('terminals.scrollLatest')}
                   </button>
                 {/if}
                 <span
@@ -668,13 +649,10 @@
                     {#if hasSpeech}
                       <span class="terminals-view__speech-status" role="status">
                         {viewState.speechState === 'requesting'
-                          ? t(
-                              'terminals.voice.requesting',
-                              'Opening microphone…',
-                            )
+                          ? t('terminals.voice.requesting')
                           : isRecording
-                            ? t('voice.state.recording', 'Recording')
-                            : t('voice.state.transcribing', 'Transcribing')}
+                            ? t('voice.state.recording')
+                            : t('voice.state.transcribing')}
                       </span>
                     {/if}
                     <Button
@@ -709,14 +687,8 @@
                         variant="tertiary"
                         icon
                         class="terminals-view__tile-action"
-                        ariaLabel={t(
-                          'terminals.voice.cancel',
-                          'Discard voice input',
-                        )}
-                        tooltip={t(
-                          'terminals.voice.cancel',
-                          'Discard voice input',
-                        )}
+                        ariaLabel={t('terminals.voice.cancel')}
+                        tooltip={t('terminals.voice.cancel')}
                         onClick={() =>
                           controller.cancelSpeech(item.terminal_id)}
                       >
@@ -736,11 +708,11 @@
                     icon
                     class="terminals-view__tile-action"
                     ariaLabel={isMaximized
-                      ? t('terminals.restore', 'Restore')
-                      : t('terminals.maximize', 'Maximize')}
+                      ? t('terminals.restore')
+                      : t('terminals.maximize')}
                     tooltip={isMaximized
-                      ? t('terminals.restore', 'Restore')
-                      : t('terminals.maximize', 'Maximize')}
+                      ? t('terminals.restore')
+                      : t('terminals.maximize')}
                     onClick={() => toggleMaximize(item.terminal_id)}
                   >
                     {#if isMaximized}
@@ -767,8 +739,8 @@
                     variant="danger"
                     icon
                     class="terminals-view__tile-action"
-                    ariaLabel={t('terminals.close', 'Close terminal')}
-                    tooltip={t('terminals.close', 'Close terminal')}
+                    ariaLabel={t('terminals.close')}
+                    tooltip={t('terminals.close')}
                     onClick={() => void closeTerminal(item.terminal_id)}
                   >
                     <svg
@@ -787,10 +759,7 @@
               {#if stream.errorCode === 'gap' && !serverUnavailable}
                 <Banner variant="warn" class="terminals-view__tile-feedback">
                   <span>
-                    {t(
-                      'terminals.streamGap',
-                      'Terminal output continuity was lost; rebuilding the live screen.',
-                    )}
+                    {t('terminals.streamGap')}
                   </span>
                 </Banner>
               {/if}
@@ -805,14 +774,9 @@
                 class="terminals-view__tile-host"
                 role="group"
                 tabindex={isFinished ? -1 : 0}
-                aria-label={t(
-                  isFinished
-                    ? 'terminals.historyTerminalLabel'
-                    : 'terminals.liveTerminalLabel',
-                  isFinished
-                    ? 'Retained terminal history.'
-                    : 'Live terminal. Click to focus and type.',
-                )}
+                aria-label={isFinished
+                  ? t('terminals.historyTerminalLabel')
+                  : t('terminals.liveTerminalLabel')}
                 onpointerdown={(event) =>
                   activateTerminalFromPointer(event, item.terminal_id)}
                 onkeydown={(event) =>
@@ -829,8 +793,8 @@
               1}; grid-column: {appendSharesCell
               ? lastTileSpan.column + 1
               : lastTileSpan.column + lastTileSpan.columnSpan + 1};"
-            ariaLabel={t('terminals.new', 'New terminal')}
-            tooltip={t('terminals.new', 'New terminal')}
+            ariaLabel={t('terminals.new')}
+            tooltip={t('terminals.new')}
             disabled={serverUnavailable}
             onClick={() => dialogs.openStartDialog()}
           >
@@ -844,27 +808,21 @@
       <EmptyState
         fill
         title={selectedGroup
-          ? t('terminals.groupEmptyTitle', 'No terminals in this group')
-          : t('terminals.detailEmptyTitle', 'Open a terminal')}
+          ? t('terminals.groupEmptyTitle')
+          : t('terminals.detailEmptyTitle')}
         description={selectedGroup
-          ? t(
-              'terminals.groupEmptyDescription',
-              'Start a terminal in this group, or ask an agent to open one here.',
-            )
-          : t(
-              'terminals.detailEmptyDescription',
-              'Start the local default shell or choose a command such as codex. Agent terminals will appear here too.',
-            )}
+          ? t('terminals.groupEmptyDescription')
+          : t('terminals.detailEmptyDescription')}
       >
         {#snippet actions()}
           {#if canStartInGroup}
             <Button
               variant="primary"
-              ariaLabel={t('terminals.new', 'New terminal')}
+              ariaLabel={t('terminals.new')}
               disabled={serverUnavailable}
               onClick={() => dialogs.openStartDialog()}
             >
-              {t('terminals.new', 'New terminal')}
+              {t('terminals.new')}
             </Button>
           {/if}
         {/snippet}

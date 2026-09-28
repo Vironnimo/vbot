@@ -1,3 +1,5 @@
+import { t, tOr } from '../i18n.js';
+
 export const SETTINGS_LAYOUT_CLASS = 'settings-layout view active';
 
 // Presence rows for the General panel "Connected clients" list. Pure: passes
@@ -90,8 +92,7 @@ export function buildLanguageOptions(appearance) {
 
   return languageIds.map((languageId) => ({
     id: languageId,
-    labelKey: `settings.language.${languageId}`,
-    labelFallback: languageId,
+    label: tOr(`settings.language.${languageId}`, languageId),
   }));
 }
 
@@ -104,20 +105,18 @@ export function formatServerHost(server, translate) {
     return `${server.listen_host}:${server.listen_port}`;
   }
 
-  return translate('common.unknown', 'Unknown');
+  return translate('common.unknown');
 }
 
 export function getDataDirectoryValue(settings, translate) {
-  return (
-    settings?.general?.data_directory ?? translate('common.unknown', 'Unknown')
-  );
+  return settings?.general?.data_directory ?? translate('common.unknown');
 }
 
 export function getDefaultSkillDirectoryValue(settings, translate) {
   return (
     settings?.skills?.default_directory ??
     settings?.general?.default_skill_directory ??
-    translate('common.unknown', 'Unknown')
+    translate('common.unknown')
   );
 }
 
@@ -171,8 +170,7 @@ export function getPersistedChatWidth(settings) {
 export function buildChatWidthOptions() {
   return CHAT_WIDTH_OPTIONS.map((id) => ({
     id,
-    labelKey: `settings.appearance.chatWidth.${id}`,
-    labelFallback: id,
+    label: t(`settings.appearance.chatWidth.${id}`),
   }));
 }
 
@@ -186,8 +184,7 @@ export function getPersistedChatWorkingMode(settings) {
 export function buildChatWorkingModeOptions() {
   return CHAT_WORKING_MODE_OPTIONS.map((id) => ({
     id,
-    labelKey: `settings.appearance.chatWorkingMode.${id}`,
-    labelFallback: id,
+    label: t(`settings.appearance.chatWorkingMode.${id}`),
   }));
 }
 

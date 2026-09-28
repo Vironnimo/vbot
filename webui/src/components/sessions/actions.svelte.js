@@ -78,9 +78,7 @@ export function createSessionActions(context) {
       // fallback label when the name was cleared).
       await context.loadSessions();
     } catch (error) {
-      renameError =
-        error.message ||
-        t('sessions.rename_error', 'The session could not be renamed.');
+      renameError = error.message || t('sessions.rename_error');
     } finally {
       renameSaving = false;
     }
@@ -139,12 +137,7 @@ export function createSessionActions(context) {
       policyDraft = null;
       await context.loadSessions();
     } catch (error) {
-      policyError =
-        error.message ||
-        t(
-          'sessions.compactionSaveError',
-          'The Compaction Policy could not be saved.',
-        );
+      policyError = error.message || t('sessions.compactionSaveError');
     } finally {
       policySaving = false;
     }
@@ -158,17 +151,8 @@ export function createSessionActions(context) {
     }
     const name = session.display_name || sessionDisplayName(session);
     return session.is_channel_session
-      ? t(
-          'sessions.delete_confirm_channel',
-          'Delete session "{name}"? It is archived and can be restored. The channel ' +
-            'conversation will start fresh on the next incoming message.',
-          { name },
-        )
-      : t(
-          'sessions.delete_confirm',
-          'Delete session "{name}"? It is archived and can be restored.',
-          { name },
-        );
+      ? t('sessions.delete_confirm_channel', { name })
+      : t('sessions.delete_confirm', { name });
   });
 
   const cancelDelete = () => {
@@ -196,9 +180,7 @@ export function createSessionActions(context) {
       // the resource_changed round-trip.
       await context.loadSessions();
     } catch (error) {
-      actionError =
-        error.message ||
-        t('sessions.delete_error', 'The session could not be deleted.');
+      actionError = error.message || t('sessions.delete_error');
     } finally {
       deleting = false;
     }

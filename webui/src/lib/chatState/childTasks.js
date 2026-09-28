@@ -406,7 +406,7 @@ export function createChatChildTasks({
       });
       return true;
     } catch (error) {
-      sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
+      sessionState.actionError = `${translate('chat.cancelError')} ${errorMessage(error)}`;
       return false;
     }
   }
@@ -438,7 +438,6 @@ export function createChatChildTasks({
     } catch (error) {
       sessionState.actionError = `${translate(
         'chat.cancelBackgroundTaskError',
-        'Background task could not be cancelled.',
       )} ${errorMessage(error)}`;
       return false;
     }

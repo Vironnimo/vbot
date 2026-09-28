@@ -11,15 +11,13 @@
     code
     id={`${id}-exe`}
     value={command.argv[0]}
-    placeholder={t('jev.executablePlaceholder', 'Executable, e.g. python')}
+    placeholder={t('jev.executablePlaceholder')}
     onInput={(value) =>
       onChange({ ...command, argv: [value, ...command.argv.slice(1)] })}
   />
 </div>
 <div class="jev-field">
-  <label for={`${id}-args`}
-    >{t('jev.arguments', 'Arguments · one per line')}</label
-  ><TextArea
+  <label for={`${id}-args`}>{t('jev.arguments')}</label><TextArea
     id={`${id}-args`}
     rows={3}
     code
@@ -35,9 +33,7 @@
   />
 </div>
 <div class="jev-field">
-  <label for={`${id}-cwd`}
-    >{t('jev.cwd', 'Working directory on the vBot host')}</label
-  ><TextField
+  <label for={`${id}-cwd`}>{t('jev.cwd')}</label><TextField
     code
     id={`${id}-cwd`}
     value={command.cwd}

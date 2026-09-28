@@ -115,14 +115,12 @@ export function createCronEditor(context) {
 
   let detailTitle = $derived(
     isCreating
-      ? t('cron.detail.createTitle', 'Create schedule')
-      : selectedJob?.name || t('cron.detail.editTitle', 'Edit Scheduled Run'),
+      ? t('cron.detail.createTitle')
+      : selectedJob?.name || t('cron.detail.editTitle'),
   );
 
   let presetOptions = $derived(
-    buildCronPresetOptions((key) =>
-      t(`cron.presets.${key}`, key === CRON_PRESET_CUSTOM ? 'Custom' : key),
-    ),
+    buildCronPresetOptions((key) => t(`cron.presets.${key}`)),
   );
 
   function selectJob(job) {
@@ -256,10 +254,7 @@ export function createCronEditor(context) {
         (!isOnceSchedule || repeatValue === 1));
 
     if (!hasCoreValues || !hasScheduleValue || !hasValidRepeat) {
-      formErrorMessage = t(
-        'cron.errors.missingRequired',
-        'Agent, prompt, and valid schedule details are required. Repeat must be a positive integer; one-time schedules allow only 1.',
-      );
+      formErrorMessage = t('cron.errors.missingRequired');
       return false;
     }
 
@@ -274,8 +269,7 @@ export function createCronEditor(context) {
     }
 
     if (!isCreating && !isDirty) {
-      if (reason === 'manual')
-        context.showToast(t('common.alreadySaved', 'Already saved'));
+      if (reason === 'manual') context.showToast(t('common.alreadySaved'));
       return true;
     }
     const submitted = cronFormFingerprint(formValues);
@@ -291,11 +285,10 @@ export function createCronEditor(context) {
         if (targetJobId) {
           formValues.id = targetJobId;
         }
-        context.showToast(t('cron.messages.created', 'Cron job created.'));
+        context.showToast(t('cron.messages.created'));
       } else {
         await updateCronJob(buildUpdateCronPayload(formValues));
-        if (reason === 'manual')
-          context.showToast(t('cron.messages.updated', 'Cron job updated.'));
+        if (reason === 'manual') context.showToast(t('cron.messages.updated'));
       }
 
       if (context.destroyed) {
@@ -319,7 +312,7 @@ export function createCronEditor(context) {
       }
       return true;
     } catch (error) {
-      formErrorMessage = `${t('cron.errors.save', 'Cron job could not be saved.')} ${context.errorMessageText(error, t('common.unknown', 'Unknown'))}`;
+      formErrorMessage = `${t('cron.errors.save')} ${context.errorMessageText(error, t('common.unknown'))}`;
       return false;
     } finally {
       if (!context.destroyed) {
@@ -342,19 +335,15 @@ export function createCronEditor(context) {
     try {
       if (job.status === CRON_STATUS_ACTIVE) {
         await disableCronJob(job.id);
-        context.showToast(t('cron.messages.disabled', 'Cron job disabled.'));
+        context.showToast(t('cron.messages.disabled'));
       } else {
         await enableCronJob(job.id);
-        context.showToast(t('cron.messages.enabled', 'Cron job enabled.'));
+        context.showToast(t('cron.messages.enabled'));
       }
 
       await context.loadJobs({ silent: true });
     } catch (error) {
-      context.showToast(
-        t('cron.errors.toggle', 'Cron job status could not be updated.'),
-        'error',
-        error,
-      );
+      context.showToast(t('cron.errors.toggle'), 'error', error);
     } finally {
       mutatingJobId = '';
     }
@@ -382,17 +371,13 @@ export function createCronEditor(context) {
 
     try {
       await deleteCronJob(job.id);
-      context.showToast(t('cron.messages.deleted', 'Cron job deleted.'));
+      context.showToast(t('cron.messages.deleted'));
       if (selectedJobId === job.id) {
         selectedJobId = '';
       }
       await context.loadJobs({ silent: true });
     } catch (error) {
-      context.showToast(
-        t('cron.errors.delete', 'Cron job could not be deleted.'),
-        'error',
-        error,
-      );
+      context.showToast(t('cron.errors.delete'), 'error', error);
     } finally {
       mutatingJobId = '';
     }

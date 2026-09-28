@@ -72,7 +72,7 @@
   }
 
   function memoryPromptLabel(option) {
-    return t(`agents.form.memoryPromptModeOption.${option}`, option);
+    return t(`agents.form.memoryPromptModeOption.${option}`);
   }
 
   function toggleMemoryPanel() {
@@ -115,10 +115,7 @@
       if (destroyed || requestId !== memoryRequestId) {
         return;
       }
-      memoryError = viewErrorMessage(
-        error,
-        t('agents.memory.loadError', 'Memory entries could not be loaded.'),
-      );
+      memoryError = viewErrorMessage(error, t('agents.memory.loadError'));
     } finally {
       if (!destroyed && requestId === memoryRequestId) {
         memoriesLoading = false;
@@ -171,32 +168,26 @@
 
   function memoryScopeLabel(scope) {
     return scope === 'agent'
-      ? t('agents.memory.scope.agent', 'Agent Memory')
-      : t('agents.memory.scope.user', 'User profile');
+      ? t('agents.memory.scope.agent')
+      : t('agents.memory.scope.user');
   }
 
   function memoryScopeDescription(scope) {
     return scope === 'agent'
-      ? t(
-          'agents.memory.scope.agentDescription',
-          'Durable notes about this Agent’s work and behavior.',
-        )
-      : t(
-          'agents.memory.scope.userDescription',
-          'Durable facts and preferences about the user.',
-        );
+      ? t('agents.memory.scope.agentDescription')
+      : t('agents.memory.scope.userDescription');
   }
 
   function memoryScopeState(scope) {
     return memoryScopeActive(scope)
-      ? t('agents.memory.active', 'Active')
-      : t('agents.memory.inactive', 'Not active');
+      ? t('agents.memory.active')
+      : t('agents.memory.inactive');
   }
 
   function memoryCountLabel(count) {
     return count === 1
-      ? t('agents.memory.countOne', '1 entry')
-      : t('agents.memory.countMany', '{count} entries', { count });
+      ? t('agents.memory.countOne')
+      : t('agents.memory.countMany', { count });
   }
 
   function totalMemoryCount() {
@@ -225,13 +216,10 @@
       pendingMemoryResponse = null;
       memoriesLoaded = true;
       memoryDrafts[scope] = '';
-      showAgentToast(t('agents.memory.saved', 'Memory entry saved.'));
+      showAgentToast(t('agents.memory.saved'));
     } catch (error) {
       if (!destroyed) {
-        memoryError = viewErrorMessage(
-          error,
-          t('agents.memory.saveError', 'Memory entry could not be saved.'),
-        );
+        memoryError = viewErrorMessage(error, t('agents.memory.saveError'));
       }
     } finally {
       if (!destroyed) {
@@ -277,13 +265,10 @@
       pendingMemoryResponse = null;
       memoriesLoaded = true;
       editingMemory = null;
-      showAgentToast(t('agents.memory.updated', 'Memory entry updated.'));
+      showAgentToast(t('agents.memory.updated'));
     } catch (error) {
       if (!destroyed) {
-        memoryError = viewErrorMessage(
-          error,
-          t('agents.memory.saveError', 'Memory entry could not be saved.'),
-        );
+        memoryError = viewErrorMessage(error, t('agents.memory.saveError'));
       }
     } finally {
       if (!destroyed) {
@@ -328,13 +313,10 @@
       ) {
         editingMemory = null;
       }
-      showAgentToast(t('agents.memory.deleted', 'Memory entry deleted.'));
+      showAgentToast(t('agents.memory.deleted'));
     } catch (error) {
       if (!destroyed) {
-        memoryError = viewErrorMessage(
-          error,
-          t('agents.memory.deleteError', 'Memory entry could not be deleted.'),
-        );
+        memoryError = viewErrorMessage(error, t('agents.memory.deleteError'));
       }
     } finally {
       if (!destroyed) {
@@ -376,7 +358,7 @@
   <section class="s-section" aria-labelledby="agent-section-context">
     <header class="s-section__head">
       <h3 class="s-section__title" id="agent-section-context">
-        {t('agents.contextMemory', 'Context & Memory')}
+        {t('agents.contextMemory')}
       </h3>
     </header>
     <div class="s-section__body">
@@ -384,13 +366,10 @@
         <div class="s-row s-row--compact">
           <div class="s-row-info">
             <div class="s-row-label">
-              {t('agents.form.customSystemPrompt', 'Custom system prompt')}
+              {t('agents.form.customSystemPrompt')}
             </div>
             <div class="s-row-desc">
-              {t(
-                'agents.form.customPromptDescription',
-                'Gives this Agent its own editable copy of the System Prompt. Turning it off keeps the customized blocks but stops using them.',
-              )}
+              {t('agents.form.customPromptDescription')}
             </div>
             {#if formMode === AGENT_FORM_MODE_EDIT && formValues.custom_system_prompt_enabled}
               <Button
@@ -398,7 +377,7 @@
                 class="agents-view__row-link"
                 onClick={navigateToAgentPrompt}
               >
-                {t('agents.form.editAgentPrompt', "Edit this agent's prompt")}
+                {t('agents.form.editAgentPrompt')}
               </Button>
             {/if}
           </div>
@@ -406,10 +385,7 @@
             <Toggle
               class="agents-view__prompt-toggle"
               checked={formValues.custom_system_prompt_enabled}
-              ariaLabel={t(
-                'agents.form.customSystemPrompt',
-                'Custom system prompt',
-              )}
+              ariaLabel={t('agents.form.customSystemPrompt')}
               disabled={formMode === AGENT_FORM_MODE_CREATE}
               onChange={(next) => {
                 void handleCustomPromptToggle(next);
@@ -421,13 +397,10 @@
         <div class="s-row">
           <div class="s-row-info">
             <label class="s-row-label" for="agent-memory-prompt-mode">
-              {t('agents.form.memoryPromptMode', 'Memory')}
+              {t('agents.form.memoryPromptMode')}
             </label>
             <div class="s-row-desc" id="agent-memory-prompt-mode-help">
-              {t(
-                'agents.form.memoryModeHelp',
-                'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
-              )}
+              {t('agents.form.memoryModeHelp')}
             </div>
           </div>
           <div class="s-row-control">
@@ -435,7 +408,7 @@
               id="agent-memory-prompt-mode"
               value={formValues.memory_prompt_mode}
               options={memoryPromptOptions}
-              ariaLabel={t('agents.form.memoryPromptMode', 'Memory')}
+              ariaLabel={t('agents.form.memoryPromptMode')}
               ariaDescribedby="agent-memory-prompt-mode-help"
               triggerClass="agents-view__dropdown"
               listClass="agents-view__memory-list"
@@ -453,8 +426,8 @@
             aria-expanded={memoryPanelOpen}
             aria-controls="agent-memory-manager"
             aria-label={memoryPanelOpen
-              ? t('agents.memory.hide', 'Hide Memory entries')
-              : t('agents.memory.manage', 'Manage Memory entries')}
+              ? t('agents.memory.hide')
+              : t('agents.memory.manage')}
             onclick={toggleMemoryPanel}
           >
             <span class="s-row-label">
@@ -464,8 +437,8 @@
                 aria-hidden="true"
               ></span>
               {memoryPanelOpen
-                ? t('agents.memory.hide', 'Hide Memory entries')
-                : t('agents.memory.manage', 'Manage Memory entries')}
+                ? t('agents.memory.hide')
+                : t('agents.memory.manage')}
             </span>
             {#if memoriesLoaded}
               <span class="s-disclosure__meta agents-view__memory-total">
@@ -481,7 +454,7 @@
             >
               {#if memoriesLoading && !memoriesLoaded}
                 <Banner variant="neutral" aria-live="polite">
-                  {t('agents.memory.loading', 'Loading Memory entries…')}
+                  {t('agents.memory.loading')}
                 </Banner>
               {/if}
 
@@ -492,7 +465,7 @@
                     variant="secondary"
                     onClick={() => loadAgentMemoryEntries()}
                   >
-                    {t('common.retry', 'Retry')}
+                    {t('common.retry')}
                   </Button>
                 </Banner>
               {/if}
@@ -530,7 +503,7 @@
 
                     {#if entries.length === 0}
                       <p class="agents-view__memory-empty">
-                        {t('agents.memory.emptyTitle', 'No memories')}
+                        {t('agents.memory.emptyTitle')}
                       </p>
                     {:else}
                       <ol class="agents-view__memory-list">
@@ -544,10 +517,7 @@
                                 <TextArea
                                   rows={3}
                                   value={editingMemory.content}
-                                  ariaLabel={t(
-                                    'agents.memory.editLabel',
-                                    'Edit Memory entry',
-                                  )}
+                                  ariaLabel={t('agents.memory.editLabel')}
                                   onInput={(next) => {
                                     editingMemory.content = next;
                                   }}
@@ -559,7 +529,7 @@
                                     onClick={cancelEditingMemory}
                                     disabled={Boolean(memoryMutation)}
                                   >
-                                    {t('common.cancel', 'Cancel')}
+                                    {t('common.cancel')}
                                   </Button>
                                   <Button
                                     variant="primary"
@@ -569,7 +539,7 @@
                                     )}
                                     disabled={!editingMemory.content.trim()}
                                   >
-                                    {t('common.save', 'Save')}
+                                    {t('common.save')}
                                   </Button>
                                 </div>
                               </div>
@@ -584,7 +554,7 @@
                                     startEditingMemory(scope, entry)}
                                   disabled={Boolean(memoryMutation)}
                                 >
-                                  {t('common.edit', 'Edit')}
+                                  {t('common.edit')}
                                 </Button>
                                 <Button
                                   variant="tertiary"
@@ -593,7 +563,7 @@
                                     requestDeleteMemory(scope, entry)}
                                   disabled={Boolean(memoryMutation)}
                                 >
-                                  {t('common.delete', 'Delete')}
+                                  {t('common.delete')}
                                 </Button>
                               </div>
                             {/if}
@@ -606,15 +576,10 @@
                       <TextArea
                         rows={2}
                         value={memoryDrafts[scope]}
-                        placeholder={t(
-                          'agents.memory.addPlaceholder',
-                          'Add a durable fact…',
-                        )}
-                        ariaLabel={t(
-                          'agents.memory.addLabel',
-                          'New {category} entry',
-                          { category: memoryScopeLabel(scope) },
-                        )}
+                        placeholder={t('agents.memory.addPlaceholder')}
+                        ariaLabel={t('agents.memory.addLabel', {
+                          category: memoryScopeLabel(scope),
+                        })}
                         onInput={(next) => {
                           memoryDrafts[scope] = next;
                         }}
@@ -626,7 +591,7 @@
                         loading={memoryMutation === `add:${scope}`}
                         disabled={!memoryDrafts[scope].trim()}
                       >
-                        {t('agents.memory.add', 'Add Memory')}
+                        {t('agents.memory.add')}
                       </Button>
                     </div>
                   </section>
@@ -641,25 +606,22 @@
         <div class="s-row s-row--compact">
           <div class="s-row-info">
             <div class="s-row-label">
-              {t('agents.customCompaction', 'Custom compaction policy')}
+              {t('agents.customCompaction')}
             </div>
             <div class="s-row-desc">
-              {t(
-                'agents.customCompactionHelp',
-                'Turn on to customize how this Agent condenses long conversations.',
-              )}
+              {t('agents.customCompactionHelp')}
             </div>
             <Button
               variant="tertiary"
               class="agents-view__row-link"
               onClick={() => onNavigateToSettingsPanel('compaction')}
-              >{t('agents.shared.title', 'Shared defaults')}</Button
+              >{t('agents.shared.title')}</Button
             >
           </div>
           <div class="s-row-control">
             <Toggle
               checked={formValues.compaction_policy !== null}
-              ariaLabel={t('compaction.scope.agentOwn', 'Use an Agent Policy')}
+              ariaLabel={t('compaction.scope.agentOwn')}
               onChange={setOwnCompactionPolicy}
             />
           </div>
@@ -679,12 +641,9 @@
 
 {#if deletingMemory}
   <ConfirmDialog
-    title={t('agents.memory.deleteConfirmTitle', 'Delete Memory entry?')}
-    body={t(
-      'agents.memory.deleteConfirmBody',
-      'This permanently removes the selected Memory entry from the Agent’s Workspace.',
-    )}
-    confirmLabel={t('agents.memory.deleteConfirmAction', 'Delete Memory')}
+    title={t('agents.memory.deleteConfirmTitle')}
+    body={t('agents.memory.deleteConfirmBody')}
+    confirmLabel={t('agents.memory.deleteConfirmAction')}
     onConfirm={deleteMemoryEntry}
     onCancel={cancelDeleteMemory}
   />

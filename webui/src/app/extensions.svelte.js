@@ -43,8 +43,7 @@ export function createAppExtensions(context) {
     ...context.navigationItems,
     ...extensionPages.map((page) => ({
       id: page.route,
-      labelKey: '',
-      labelFallback: page.title,
+      label: () => page.title,
       section: 'work',
     })),
   ]);

@@ -83,9 +83,7 @@
   function payload() {
     const state = jsonMode ? JSON.parse(stateText) : stateText;
     if (jsonMode && (state === null || typeof state !== 'object'))
-      throw new Error(
-        t('jev.jsonStateError', 'JSON state must be an object or array.'),
-      );
+      throw new Error(t('jev.jsonStateError'));
     return { ...JSON.parse(JSON.stringify(draft)), state };
   }
 
@@ -254,10 +252,10 @@
   <div class="jev-editor-bar">
     <TabList
       idPrefix={`${componentId}-panels`}
-      ariaLabel={t('jev.experimentSections', 'Experiment sections')}
+      ariaLabel={t('jev.experimentSections')}
       items={[
-        { id: 'setup', label: t('jev.setup', 'Setup') },
-        { id: 'results', label: t('jev.results', 'Results') },
+        { id: 'setup', label: t('jev.setup') },
+        { id: 'results', label: t('jev.results') },
       ]}
       value={panel}
       onChange={(value) => {
@@ -270,8 +268,8 @@
         <Button disabled={busy} onClick={cancel}
           >{(selected?.id === active.id ? selected.snapshot.mode : mode) ===
           'control'
-            ? t('jev.stopControl', 'Stop control')
-            : t('jev.cancel', 'Cancel evaluation')}</Button
+            ? t('jev.stopControl')
+            : t('jev.cancel')}</Button
         >
       {:else}
         <Button
@@ -279,20 +277,16 @@
           disabled={busy || !available}
           onClick={evaluate}
           >{mode === 'control'
-            ? t('jev.startControl', 'Start control')
+            ? t('jev.startControl')
             : panel === 'results'
-              ? t('jev.evaluateSetup', 'Evaluate setup')
-              : t('jev.evaluate', 'Evaluate')}</Button
+              ? t('jev.evaluateSetup')
+              : t('jev.evaluate')}</Button
         >
       {/if}
     </div>
   </div>
   {#if error}<p class="jev-error" role="alert">{error}</p>{/if}
-  {#if conflict}<Button onClick={reloadSaved}
-      >{t(
-        'jev.reloadSaved',
-        'Discard local edits and reload saved version',
-      )}</Button
+  {#if conflict}<Button onClick={reloadSaved}>{t('jev.reloadSaved')}</Button
     >{/if}
   <div
     class="jev-inputs"
@@ -303,9 +297,7 @@
     tabindex="0"
   >
     <div class="jev-field">
-      <label for={`${componentId}-title`}
-        >{t('jev.title', 'Experiment title')}</label
-      ><TextField
+      <label for={`${componentId}-title`}>{t('jev.title')}</label><TextField
         id={`${componentId}-title`}
         value={draft.title}
         onInput={(value) => (draft.title = value)}
@@ -315,8 +307,7 @@
       <Button
         aria-pressed={mode === 'evaluate'}
         variant={mode === 'evaluate' ? 'secondary' : 'tertiary'}
-        onClick={() => (mode = 'evaluate')}
-        >{t('jev.questions', 'Questions')}</Button
+        onClick={() => (mode = 'evaluate')}>{t('jev.questions')}</Button
       >
       <Button
         aria-pressed={mode === 'control'}
@@ -334,7 +325,7 @@
             max_steps: 100,
             timeout_seconds: 10,
           };
-        }}>{t('jev.control', 'Application control')}</Button
+        }}>{t('jev.control')}</Button
       >
     </div>
     {#if mode === 'control'}
@@ -345,44 +336,36 @@
     {:else}
       <div class="jev-row">
         <h3>
-          <label for={`${componentId}-state`}
-            >{t('jev.stateInput', 'State · What Jev reads')}</label
-          >
+          <label for={`${componentId}-state`}>{t('jev.stateInput')}</label>
         </h3>
         <div class="jev-actions">
           <Button
             variant={jsonMode ? 'tertiary' : 'secondary'}
             aria-pressed={!jsonMode}
-            onClick={() => (jsonMode = false)}>{t('jev.text', 'Text')}</Button
+            onClick={() => (jsonMode = false)}>{t('jev.text')}</Button
           >
           <Button
             variant={jsonMode ? 'secondary' : 'tertiary'}
             aria-pressed={jsonMode}
-            onClick={() => (jsonMode = true)}>{t('jev.json', 'JSON')}</Button
+            onClick={() => (jsonMode = true)}>{t('jev.json')}</Button
           >
         </div>
       </div>
       <p class="jev-help">
-        {t(
-          'jev.stateHelp',
-          'The text or data to evaluate. Every question below refers to this same state. Edit it to try a different situation.',
-        )}
+        {t('jev.stateHelp')}
       </p>
       <TextArea
         id={`${componentId}-state`}
-        ariaLabel={t('jev.state', 'State')}
+        ariaLabel={t('jev.state')}
         class="jev-state-input"
         value={stateText}
         rows={6}
         code={jsonMode}
         onInput={(value) => (stateText = value)}
       />
-      <h3>{t('jev.questions', 'Questions')}</h3>
+      <h3>{t('jev.questions')}</h3>
       <p class="jev-help">
-        {t(
-          'jev.questionsAboutState',
-          'Each question is answered independently using the state above.',
-        )}
+        {t('jev.questionsAboutState')}
       </p>
       {#each draft.questions as question, index (index)}
         <QuestionEditor
@@ -398,28 +381,24 @@
       {/each}
       <div class="jev-actions">
         <Button onClick={() => addQuestion('choice')}
-          >+ {t('jev.choice', 'Choice')}</Button
+          >+ {t('jev.choice')}</Button
         >
-        <Button onClick={() => addQuestion('score')}
-          >+ {t('jev.score', 'Score')}</Button
-        >
-        <Button onClick={() => addQuestion('noul')}
-          >+ {t('jev.noul', 'Yes / no · Noul')}</Button
-        >
+        <Button onClick={() => addQuestion('score')}>+ {t('jev.score')}</Button>
+        <Button onClick={() => addQuestion('noul')}>+ {t('jev.noul')}</Button>
       </div>
     {/if}
     <div class="jev-row jev-submit">
       <span class="jev-help" role="status"
         >{saving
-          ? t('jev.saving', 'Saving…')
+          ? t('jev.saving')
           : !hasChanges() && saved
-            ? t('jev.saved', 'Saved')
+            ? t('jev.saved')
             : ''}</span
       >
       <Button
         variant="tertiary"
         onClick={() => autosave.participant.runSave('manual', { force: true })}
-        >{t('jev.save', 'Save')}</Button
+        >{t('jev.save')}</Button
       >
     </div>
   </div>
@@ -432,23 +411,14 @@
     tabindex="0"
   >
     {#if historyError}<p role="alert">{historyError}</p>
-      <Button onClick={() => loadHistory()}>{t('common.retry', 'Retry')}</Button
-      >{/if}
+      <Button onClick={() => loadHistory()}>{t('common.retry')}</Button>{/if}
     {#if !history.length && !historyError}<div class="jev-empty">
-        {t(
-          'jev.noResults',
-          'Evaluate your questions to see their answers here.',
-        )}
+        {t('jev.noResults')}
       </div>{/if}
     {#if history.length}<details class="jev-history-picker">
-        <summary
-          >{t('jev.history', 'Evaluation history')} · {history.length}</summary
-        >
+        <summary>{t('jev.history')} · {history.length}</summary>
         <p class="jev-help">
-          {t(
-            'jev.historyHelp',
-            'Each result keeps its original input and model. Compare two results, or reuse a previous input.',
-          )}
+          {t('jev.historyHelp')}
         </p>
         <div class="jev-history-list">
           {#each history as item (item.id)}
@@ -459,39 +429,33 @@
                 >{formatDateTimeInApplicationZone(item.created_at, undefined, {
                   dateStyle: 'short',
                   timeStyle: 'medium',
-                })} · {t(`jev.status.${item.status}`, item.status)}</Button
+                })} · {item.status}</Button
               >
               <Button
                 variant="tertiary"
                 disabled={selected?.id === item.id}
                 onClick={() => inspect(item.id, true)}
-                >{t('jev.compare', 'Compare')}</Button
+                >{t('jev.compare')}</Button
               >
             </div>
           {/each}
           {#if before}<Button
               variant="tertiary"
-              onClick={() => loadHistory(true)}
-              >{t('jev.loadMore', 'Load older results')}</Button
+              onClick={() => loadHistory(true)}>{t('jev.loadMore')}</Button
             >{/if}
         </div>
       </details>{/if}
     {#if selected}<div class="jev-actions">
-        <Button variant="tertiary" onClick={restore}
-          >{t('jev.reuse', 'Reuse this input')}</Button
+        <Button variant="tertiary" onClick={restore}>{t('jev.reuse')}</Button
         >{#if comparison}<Button
             variant="tertiary"
-            onClick={() => (comparison = null)}
-            >{t('jev.closeCompare', 'Close comparison')}</Button
+            onClick={() => (comparison = null)}>{t('jev.closeCompare')}</Button
           >{/if}
       </div>{/if}
     {#if comparison && selected && JSON.stringify(comparison.snapshot.questions) !== JSON.stringify(selected.snapshot.questions)}<p
         class="jev-help"
       >
-        {t(
-          'jev.changedQuestions',
-          'These evaluations use different questions or criteria. Compare each result against its own input.',
-        )}
+        {t('jev.changedQuestions')}
       </p>{/if}
     <div class:jev-comparison={comparison !== null}>
       <DecisionResults record={selected} />{#if comparison}<DecisionResults

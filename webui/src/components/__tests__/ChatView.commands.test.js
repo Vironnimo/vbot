@@ -440,12 +440,7 @@ describe('ChatView slash commands', () => {
       flushSync();
 
       await waitForCondition(
-        () =>
-          toastText() ===
-          t(
-            'queue.restartDiscardedOne',
-            '1 queued message was discarded because the server restarted.',
-          ),
+        () => toastText() === t('queue.restartDiscardedOne'),
       );
       expect(queuedTexts()).toEqual([]);
     });

@@ -65,8 +65,7 @@ describe('SkillDirectoryEditor', () => {
     flushSync();
     const addButtons = [...document.body.querySelectorAll('button')].filter(
       (button) =>
-        button.textContent.trim() ===
-        t('settings.skills.addDirectory', 'Add directory'),
+        button.textContent.trim() === t('settings.skills.addDirectory'),
     );
     expect(addButtons.length).toBe(1);
     addButtons[0].click();
@@ -95,7 +94,7 @@ describe('SkillDirectoryEditor', () => {
 
     await addDirectory('C:/manual');
     const saveButton = [...document.body.querySelectorAll('button')].find(
-      (button) => button.textContent.trim() === t('common.save', 'Save'),
+      (button) => button.textContent.trim() === t('common.save'),
     );
     saveButton.click();
     flushSync();
@@ -123,7 +122,7 @@ describe('SkillDirectoryEditor', () => {
     expect(updateCalls()).toHaveLength(0);
 
     const removeButton = [...document.body.querySelectorAll('button')].find(
-      (button) => button.textContent.trim() === t('common.remove', 'Remove'),
+      (button) => button.textContent.trim() === t('common.remove'),
     );
     removeButton.click();
     flushSync();

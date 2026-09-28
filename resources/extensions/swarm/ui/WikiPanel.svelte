@@ -52,10 +52,10 @@
     title: page.title,
     rows: [
       {
-        label: t('swarm.wiki.revisionLabel', 'Revision'),
+        label: t('swarm.wiki.revisionLabel'),
         value: page.revision,
       },
-      { label: t('swarm.wiki.author', 'Author'), value: page.author?.name },
+      { label: t('swarm.wiki.author'), value: page.author?.name },
     ],
     placement: 'right',
   });
@@ -211,7 +211,7 @@
     if (!hasChanges() && selected) return true;
     if (!selected && reason !== 'manual') return false;
     if (!title.trim()) {
-      error = t('swarm.wiki.titleRequired', 'Enter a page title.');
+      error = t('swarm.wiki.titleRequired');
       return false;
     }
     const payload = selected
@@ -305,20 +305,17 @@
     class="wiki-panel"
     role="tabpanel"
     tabindex="0"
-    aria-label={t('swarm.wiki.title', 'Wiki')}
+    aria-label={t('swarm.wiki.title')}
   >
     <div class="wiki-toolbar">
-      <h3>{t('swarm.wiki.title', 'Wiki')}</h3>
+      <h3>{t('swarm.wiki.title')}</h3>
       <Button variant="secondary" onClick={createPage}
-        >{t('swarm.wiki.new', 'New page')}</Button
+        >{t('swarm.wiki.new')}</Button
       >
     </div>
     {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
     {#if pendingTransition}<Banner variant="warn">
-        {t(
-          'swarm.wiki.unsaved',
-          'Your changes have not been saved. Save them or discard them before leaving.',
-        )}
+        {t('swarm.wiki.unsaved')}
         <Button
           variant="tertiary"
           onClick={async () => {
@@ -327,10 +324,10 @@
               pendingTransition = null;
               await requestTransition(action);
             }
-          }}>{t('common.save', 'Save')}</Button
+          }}>{t('common.save')}</Button
         >
         <Button variant="tertiary" onClick={discardAndContinue}
-          >{t('swarm.wiki.discard', 'Discard changes and continue')}</Button
+          >{t('swarm.wiki.discard')}</Button
         >
       </Banner>{/if}
     <div class="wiki-columns">
@@ -341,10 +338,7 @@
             void refresh();
           }}
         >
-          <FormField
-            controlId="wiki-search"
-            label={t('swarm.wiki.search', 'Search Wiki')}
-          >
+          <FormField controlId="wiki-search" label={t('swarm.wiki.search')}>
             <TextField
               id="wiki-search"
               onkeydown={(event) => {
@@ -358,7 +352,7 @@
             />
           </FormField>
           <Button onClick={() => refresh()} variant="tertiary"
-            >{t('common.search', 'Search')}</Button
+            >{t('common.search')}</Button
           >
         </form>
         <label
@@ -367,9 +361,9 @@
             bind:checked={includeDeleted}
             onchange={() => void refresh()}
           />
-          {t('swarm.wiki.showDeleted', 'Include deleted pages')}</label
+          {t('swarm.wiki.showDeleted')}</label
         >
-        <nav class="wiki-pages" aria-label={t('swarm.wiki.pages', 'Pages')}>
+        <nav class="wiki-pages" aria-label={t('swarm.wiki.pages')}>
           {#each entries as page (page.page_id)}
             <button
               class="secondary-list__item wiki-page-link"
@@ -383,36 +377,30 @@
               {#if page.number != null}<span class="wiki-number"
                   >{pageRef(page)}</span
                 >{/if}<span class="wiki-page-title">{page.title}</span>
-              {#if page.deleted}<small
-                  >{t('swarm.wiki.deleted', 'Deleted')}</small
-                >{/if}
+              {#if page.deleted}<small>{t('swarm.wiki.deleted')}</small>{/if}
             </button>
           {/each}
         </nav>
         {#if !loaded && !error}<p role="status">
-            {t('common.loading', 'Loading...')}
+            {t('common.loading')}
           </p>
         {:else if loaded && !entries.length}<p>
-            {t('swarm.wiki.empty', 'No pages found.')}
+            {t('swarm.wiki.empty')}
           </p>{/if}
         {#if next}<Button variant="tertiary" onClick={() => refresh(next)}
-            >{t('common.loadMore', 'Load more')}</Button
+            >{t('swarm.wiki.loadMore')}</Button
           >{/if}
       </aside>
       <article class="wiki-content">
         {#if editing}
-          <FormField
-            controlId="wiki-title"
-            label={t('swarm.wiki.pageTitle', 'Page title')}
+          <FormField controlId="wiki-title" label={t('swarm.wiki.pageTitle')}
             ><TextField
               id="wiki-title"
               value={title}
               onInput={(value) => (title = value)}
             /></FormField
           >
-          <FormField
-            controlId="wiki-content"
-            label={t('swarm.wiki.content', 'Markdown content')}
+          <FormField controlId="wiki-content" label={t('swarm.wiki.content')}
             ><TextArea
               id="wiki-content"
               value={content}
@@ -426,14 +414,14 @@
               onClick={() =>
                 requestTransition(() => {
                   editing = false;
-                })}>{t('swarm.wiki.preview', 'View page')}</Button
+                })}>{t('swarm.wiki.preview')}</Button
             >
             <Button
               variant="tertiary"
               loading={saving}
               onClick={() =>
                 autosave.participant.runSave('manual', { force: true })}
-              >{t('common.save', 'Save')}</Button
+              >{t('common.save')}</Button
             >
           </div>
         {:else if selected}
@@ -443,13 +431,13 @@
               >{/if}{selected.title}
           </h3>
           <p class="wiki-meta">
-            {t('swarm.wiki.revision', 'Revision {revision} · {author}', {
+            {t('swarm.wiki.revision', {
               revision: selected.revision,
               author: selected.author?.name,
             })}
           </p>
           <TextField
-            ariaLabel={t('swarm.wiki.reference', 'Page reference')}
+            ariaLabel={t('swarm.wiki.reference')}
             value={selected.link}
             readonly
           />
@@ -459,55 +447,48 @@
                 onClick={() => {
                   editing = true;
                   baseline = snapshot();
-                }}>{t('common.edit', 'Edit')}</Button
+                }}>{t('common.edit')}</Button
               >{/if}
             <Button variant="tertiary" onClick={() => loadHistory()}
-              >{t('swarm.wiki.history', 'Version history')}</Button
+              >{t('swarm.wiki.history')}</Button
             >
             {#if selected.deleted || selected.revision !== selected.current_revision}<Button
                 variant="secondary"
                 disabled={saving}
                 onClick={() => changePage('restore')}
-                >{t('swarm.wiki.restore', 'Restore this version')}</Button
+                >{t('swarm.wiki.restore')}</Button
               >
             {:else}<Button
                 variant="tertiary"
                 disabled={saving}
                 onClick={() => changePage('delete')}
-                >{t('swarm.wiki.delete', 'Delete page')}</Button
+                >{t('swarm.wiki.delete')}</Button
               >{/if}
           </div>
           {#if historyOpen}<div class="wiki-history">
               {#each history as version (version.revision)}<Button
                   variant="tertiary"
                   onClick={() => readPage(selected.page_id, version.revision)}
-                  >{t('swarm.wiki.revision', 'Revision {revision} · {author}', {
+                  >{t('swarm.wiki.revision', {
                     revision: version.revision,
                     author: version.author.name,
                   })}{version.deleted
-                    ? ` (${t('swarm.wiki.deleted', 'Deleted')})`
+                    ? ` (${t('swarm.wiki.deleted')})`
                     : ''}</Button
                 >{/each}
               {#if historyNext}<Button
                   variant="tertiary"
                   onClick={() => loadHistory(historyNext)}
-                  >{t('common.loadMore', 'Load more')}</Button
+                  >{t('swarm.wiki.loadMore')}</Button
                 >{/if}
             </div>{/if}
-          {#if selected.deleted}<Banner
-              >{t(
-                'swarm.wiki.deletedHelp',
-                'This page is deleted. Its content and earlier versions can still be restored.',
-              )}</Banner
+          {#if selected.deleted}<Banner>{t('swarm.wiki.deletedHelp')}</Banner
             >{/if}
           <div use:contentLinks>
             <MarkdownContent source={content} class="msg-markdown" />
           </div>
         {:else}<p>
-            {t(
-              'swarm.wiki.choose',
-              'Choose a page or create one. Everyone in this Run shares this Wiki.',
-            )}
+            {t('swarm.wiki.choose')}
           </p>{/if}
       </article>
     </div>

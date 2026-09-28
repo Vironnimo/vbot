@@ -17,9 +17,9 @@
   } = $props();
   let detailTab = $state('request');
   let tabs = $derived([
-    { id: 'request', label: t('debug.request', 'Request') },
-    { id: 'response', label: t('debug.response', 'Response') },
-    { id: 'metadata', label: t('debug.metadata', 'Metadata') },
+    { id: 'request', label: t('debug.request') },
+    { id: 'response', label: t('debug.response') },
+    { id: 'metadata', label: t('debug.metadata') },
   ]);
   let exchange = $derived(
     detailTab === 'response' ? trace?.response : trace?.request,
@@ -52,24 +52,21 @@
   }
 </script>
 
-<section
-  class="debug-view__detail-panel"
-  aria-label={t('debug.traceDetail', 'Trace detail')}
->
+<section class="debug-view__detail-panel" aria-label={t('debug.traceDetail')}>
   <div class="detail-back">
     <Button variant="tertiary" onClick={onBack}
-      >← {t('debug.backToTraces', 'Back to traces')}</Button
+      >← {t('debug.backToTraces')}</Button
     >
   </div>
   {#if loading}
     <div class="detail-message">
-      <Banner variant="neutral">{t('common.loading', 'Loading…')}</Banner>
+      <Banner variant="neutral">{t('common.loading')}</Banner>
     </div>
   {:else if error}
     <div class="detail-message">
       <Banner variant="error" aria-live="polite"
         ><span>{error}</span><Button variant="secondary" onClick={onRetry}
-          >{t('common.retry', 'Retry')}</Button
+          >{t('common.retry')}</Button
         ></Banner
       >
     </div>
@@ -77,17 +74,14 @@
     <header class="detail-header">
       <div class="detail-heading-row">
         <h3 class:detail-title--id={Boolean(trace.model_id)}>
-          {trace.model_id || t('debug.modelProbe', 'Model Probe')}
+          {trace.model_id || t('debug.modelProbe')}
         </h3>
-        <CopyButton
-          text={traceJson}
-          label={t('debug.copyTrace', 'Copy complete trace')}
-        />
+        <CopyButton text={traceJson} label={t('debug.copyTrace')} />
         <Button
           variant="tertiary"
           icon
-          ariaLabel={t('debug.downloadTrace', 'Download complete trace')}
-          tooltip={t('debug.downloadTrace', 'Download complete trace')}
+          ariaLabel={t('debug.downloadTrace')}
+          tooltip={t('debug.downloadTrace')}
           onClick={downloadTrace}
         >
           <svg
@@ -111,7 +105,7 @@
           data-tone={trace.error
             ? 'error'
             : traceStatusTone(trace.response?.status_code)}
-          >{t('debug.responseStatus', 'Status')}
+          >{t('debug.responseStatus')}
           {trace.response?.status_code ?? '—'}</span
         >
         <span>{duration}</span>
@@ -121,7 +115,7 @@
           >{trace.request?.url || '—'}</code
         ><CopyButton
           text={trace.request?.url || ''}
-          label={t('debug.copyUrl', 'Copy URL')}
+          label={t('debug.copyUrl')}
         />
       </div>
       {#if trace.error}<Banner variant="error"
@@ -131,7 +125,7 @@
     <TabList
       items={tabs}
       value={detailTab}
-      ariaLabel={t('debug.traceDetail', 'Trace detail')}
+      ariaLabel={t('debug.traceDetail')}
       idPrefix="debug-detail"
       class="debug-view__detail-tab-list"
       onChange={(value) => (detailTab = value)}
@@ -160,16 +154,13 @@
           <details class="detail-headers debug-view__detail-section">
             <summary
               ><span class="debug-view__detail-heading"
-                >{t('debug.requestHeaders', 'Headers')}</span
+                >{t('debug.requestHeaders')}</span
               ><span>{Object.keys(exchange?.headers ?? {}).length}</span
               ></summary
             >
             <div class="headers-content">
               <pre>{headers || '—'}</pre>
-              <CopyButton
-                text={headers}
-                label={t('debug.copyHeaders', 'Copy headers')}
-              />
+              <CopyButton text={headers} label={t('debug.copyHeaders')} />
             </div>
           </details>
           <DebugBody
@@ -191,12 +182,9 @@
         aria-hidden="true"
         ><path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18" /></svg
       >
-      <h3>{t('debug.selectTrace', 'Select a trace to inspect')}</h3>
+      <h3>{t('debug.selectTrace')}</h3>
       <p>
-        {t(
-          'debug.selectTraceHint',
-          'Read the request, inspect the response and access the complete captured payload.',
-        )}
+        {t('debug.selectTraceHint')}
       </p>
     </div>
   {/if}

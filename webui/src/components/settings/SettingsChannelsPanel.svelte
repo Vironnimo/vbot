@@ -100,7 +100,7 @@
       value: platformId,
       label:
         platformId === 'telegram'
-          ? t('sessions.platform_telegram', 'Telegram')
+          ? t('sessions.platform_telegram')
           : platformId,
     })),
   );
@@ -206,39 +206,33 @@
   function channelDmScopeLabel(dmScope) {
     switch (dmScope) {
       case 'main':
-        return t('settings.channels.dm_scope.main', 'Main');
+        return t('settings.channels.dm_scope.main');
       case 'per_peer':
-        return t('settings.channels.dm_scope.per_peer', 'Per peer');
+        return t('settings.channels.dm_scope.per_peer');
       case 'per_account_channel_peer':
-        return t(
-          'settings.channels.dm_scope.per_account_channel_peer',
-          'Per account + channel + peer',
-        );
+        return t('settings.channels.dm_scope.per_account_channel_peer');
       case 'per_conversation':
       default:
-        return t(
-          'settings.channels.dm_scope.per_conversation',
-          'Per conversation',
-        );
+        return t('settings.channels.dm_scope.per_conversation');
     }
   }
 
   function channelEnabledLabel(enabled) {
     return enabled
-      ? t('settings.channels.enabled', 'Enabled')
-      : t('settings.channels.disabled', 'Disabled');
+      ? t('settings.channels.enabled')
+      : t('settings.channels.disabled');
   }
 
   function channelRunningLabel(running) {
     if (running === true) {
-      return t('settings.channels.running', 'Running');
+      return t('settings.channels.running');
     }
 
     if (running === false) {
-      return t('settings.channels.stopped', 'Stopped');
+      return t('settings.channels.stopped');
     }
 
-    return t('common.unknown', 'Unknown');
+    return t('common.unknown');
   }
 
   async function loadChannelsPanel() {
@@ -290,7 +284,7 @@
       channelPanelState = {
         ...channelPanelState,
         loading: false,
-        error: `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`,
+        error: `${t('settings.loadError')} ${error.message}`,
       };
     }
   }
@@ -300,10 +294,7 @@
 
     if (!channelFormValues.agent_id) {
       clearChannelFeedback();
-      channelFormError = t(
-        'settings.channels.agent.required',
-        'Select an agent before saving.',
-      );
+      channelFormError = t('settings.channels.agent.required');
       return false;
     }
 
@@ -312,7 +303,7 @@
     if (!creating && submitted === channelBaseline) {
       if (reason === 'manual')
         onToast({
-          title: t('common.alreadySaved', 'Already saved'),
+          title: t('common.alreadySaved'),
           variant: 'success',
         });
       return true;
@@ -324,14 +315,14 @@
       if (channelFormMode === CHANNEL_FORM_MODE_CREATE) {
         await createChannel(buildChannelCreatePayload(channelFormValues));
         onToast({
-          title: t('settings.channels.createSuccess', 'Channel created.'),
+          title: t('settings.channels.createSuccess'),
           variant: 'success',
         });
       } else {
         await updateChannel(buildChannelUpdatePayload(channelFormValues));
         if (reason === 'manual')
           onToast({
-            title: t('settings.channels.updateSuccess', 'Channel updated.'),
+            title: t('settings.channels.updateSuccess'),
             variant: 'success',
           });
       }
@@ -346,9 +337,7 @@
       await loadChannelsPanel();
       return true;
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
       return false;
     } finally {
       channelBusy = false;
@@ -360,7 +349,7 @@
       if (channel.enabled) {
         await disableChannel(channel.id);
         onToast({
-          title: t('settings.channels.disableSuccess', 'Channel disabled.'),
+          title: t('settings.channels.disableSuccess'),
           variant: 'success',
         });
         return;
@@ -368,7 +357,7 @@
 
       await enableChannel(channel.id);
       onToast({
-        title: t('settings.channels.enableSuccess', 'Channel enabled.'),
+        title: t('settings.channels.enableSuccess'),
         variant: 'success',
       });
     });
@@ -388,7 +377,7 @@
         allowed_chat_ids: allowedChatIds,
       });
       onToast({
-        title: t('settings.channels.denied.allowSuccess', 'Chat allowed.'),
+        title: t('settings.channels.denied.allowSuccess'),
         variant: 'success',
       });
     });
@@ -398,10 +387,7 @@
     await runChannelAction(channel.id, async () => {
       await setChannelIdentity(channel.id, participant.user_id);
       onToast({
-        title: t(
-          'settings.channels.access.identitySuccess',
-          'Own identity updated.',
-        ),
+        title: t('settings.channels.access.identitySuccess'),
         variant: 'success',
       });
     });
@@ -423,7 +409,7 @@
         );
       }
       onToast({
-        title: t('settings.channels.access.roleSuccess', 'Group role updated.'),
+        title: t('settings.channels.access.roleSuccess'),
         variant: 'success',
       });
     });
@@ -432,8 +418,8 @@
   function deniedChatLabel(entry) {
     const kindLabel =
       entry.kind === 'group'
-        ? t('settings.channels.denied.group', 'Group')
-        : t('settings.channels.denied.direct', 'Direct');
+        ? t('settings.channels.denied.group')
+        : t('settings.channels.denied.direct');
     const namePart = entry.display_name ? `${entry.display_name} · ` : '';
     return `${namePart}${kindLabel} · ID ${entry.chat_id}`;
   }
@@ -456,7 +442,7 @@
     await runChannelAction(channel.id, async () => {
       await deleteChannelRequest(channel.id);
       onToast({
-        title: t('settings.channels.deleteSuccess', 'Channel deleted.'),
+        title: t('settings.channels.deleteSuccess'),
         variant: 'success',
       });
     });
@@ -481,9 +467,7 @@
       await action();
       await loadChannelsPanel();
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
     } finally {
       channelActionChannelId = '';
     }
@@ -496,7 +480,7 @@
     disabled={channelPanelBusy}
     onClick={startCreateChannel}
   >
-    {t('settings.channels.add', 'Add channel')}
+    {t('settings.channels.add')}
   </Button>
 {/snippet}
 
@@ -515,19 +499,16 @@
 
       <h3 class="s-channel-form-title">
         {channelFormMode === CHANNEL_FORM_MODE_CREATE
-          ? t('settings.channels.add', 'Add channel')
-          : t('common.edit', 'Edit')}
+          ? t('settings.channels.add')
+          : t('common.edit')}
       </h3>
 
       <div class="s-channel-form-grid">
         <FormField
           controlId="channel-id-input"
           required
-          label={t('sessions.link_channel_id', 'Channel ID')}
-          help={t(
-            'settings.channels.idHelp',
-            'A name you choose for this channel. It cannot be changed after creation.',
-          )}
+          label={t('sessions.link_channel_id')}
+          help={t('settings.channels.idHelp')}
         >
           <TextField
             id="channel-id-input"
@@ -540,13 +521,13 @@
 
         <FormField
           controlId="channel-platform-select"
-          label={t('settings.channels.platform', 'Platform')}
+          label={t('settings.channels.platform')}
         >
           <Dropdown
             id="channel-platform-select"
             value={channelFormValues.platform}
             options={channelPlatformOptions}
-            ariaLabel={t('settings.channels.platform', 'Platform')}
+            ariaLabel={t('settings.channels.platform')}
             disabled={channelBusy &&
               channelFormMode === CHANNEL_FORM_MODE_CREATE}
             triggerClass="settings-view__dropdown"
@@ -557,16 +538,16 @@
 
         <FormField
           controlId="channel-agent-select"
-          label={t('settings.channels.agent', 'Agent')}
+          label={t('settings.channels.agent')}
         >
           <Dropdown
             id="channel-agent-select"
             value={channelFormValues.agent_id}
             options={channelAgentOptions}
             placeholder={channelAgents.length > 0
-              ? t('settings.channels.agent.placeholder', 'Select agent')
-              : t('settings.channels.agent.none', 'No agents available')}
-            ariaLabel={t('settings.channels.agent', 'Agent')}
+              ? t('settings.channels.agent.placeholder')
+              : t('settings.channels.agent.none')}
+            ariaLabel={t('settings.channels.agent')}
             disabled={channelAgents.length === 0}
             triggerClass="settings-view__dropdown"
             listClass="settings-view__thinking-list"
@@ -576,19 +557,14 @@
 
         <FormField controlId="channel-dm-scope-select">
           {#snippet labelContent()}
-            {t('settings.channels.dm_scope', 'DM scope')}
-            <InfoHint
-              text={t(
-                'settings.channels.dm_scope.help',
-                'How direct messages are grouped into chat sessions:\n\nMain — all DMs share one session. Per peer — one session per person. Per conversation — one session per chat. Per account, channel & peer — one session per chat and person.\n\nGroup chats always share one session per group, regardless of this setting.',
-              )}
-            />
+            {t('settings.channels.dm_scope')}
+            <InfoHint text={t('settings.channels.dm_scope.help')} />
           {/snippet}
           <Dropdown
             id="channel-dm-scope-select"
             value={channelFormValues.dm_scope}
             options={channelDmScopeOptions}
-            ariaLabel={t('settings.channels.dm_scope', 'DM scope')}
+            ariaLabel={t('settings.channels.dm_scope')}
             disabled={channelBusy &&
               channelFormMode === CHANNEL_FORM_MODE_CREATE}
             triggerClass="settings-view__dropdown"
@@ -601,11 +577,8 @@
           <FormField
             controlId="channel-token-env-input"
             required
-            label={t('settings.channels.token_env_var', 'Token env var')}
-            help={t(
-              'settings.channels.token_env_var.help',
-              'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
-            )}
+            label={t('settings.channels.token_env_var')}
+            help={t('settings.channels.token_env_var.help')}
           >
             <TextField
               id="channel-token-env-input"
@@ -621,14 +594,8 @@
         {#if channelFormValues.platform === 'slack'}
           <FormField
             controlId="channel-app-token-env-input"
-            label={t(
-              'settings.channels.app_token_env',
-              'App token environment variable',
-            )}
-            help={t(
-              'settings.channels.app_token_help',
-              'Slack needs a second token for Socket Mode. Enter the name of the variable holding the xapp token with connections:write permission.',
-            )}
+            label={t('settings.channels.app_token_env')}
+            help={t('settings.channels.app_token_help')}
           >
             <TextField
               id="channel-app-token-env-input"
@@ -642,7 +609,7 @@
         {#if channelFormValues.platform === 'mattermost'}
           <FormField
             controlId="channel-server-url-input"
-            label={t('settings.channels.server_url', 'Mattermost server URL')}
+            label={t('settings.channels.server_url')}
           >
             <TextField
               id="channel-server-url-input"
@@ -657,13 +624,8 @@
 
         <FormField controlId="channel-allowed-chat-ids-input" full>
           {#snippet labelContent()}
-            {t('settings.channels.allowed_chat_ids', 'Allowed chat IDs')}
-            <InfoHint
-              text={t(
-                'settings.channels.allowed_chat_ids.help',
-                'Comma-separated chat IDs allowed to talk to this channel. An empty list allows nobody. Messages from chats not on the list are rejected and appear on the channel card below with a one-click Allow.',
-              )}
-            />
+            {t('settings.channels.allowed_chat_ids')}
+            <InfoHint text={t('settings.channels.allowed_chat_ids.help')} />
           {/snippet}
           <TextField
             id="channel-allowed-chat-ids-input"
@@ -671,10 +633,7 @@
             value={channelFormValues.allowed_chat_ids}
             disabled={channelBusy &&
               channelFormMode === CHANNEL_FORM_MODE_CREATE}
-            placeholder={t(
-              'settings.channels.allowed_chat_ids.placeholder',
-              '12345, -1009876543210',
-            )}
+            placeholder={t('settings.channels.allowed_chat_ids.placeholder')}
             onInput={(next) => setChannelFormField('allowed_chat_ids', next)}
           />
         </FormField>
@@ -682,7 +641,7 @@
 
       <div class="s-channel-form-actions">
         <Button variant="secondary" onClick={cancelChannelForm}>
-          {t('common.cancel', 'Cancel')}
+          {t('common.cancel')}
         </Button>
         <Button
           variant={channelFormMode === CHANNEL_FORM_MODE_CREATE
@@ -692,10 +651,10 @@
           disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
         >
           {channelBusy
-            ? t('common.saving', 'Saving…')
+            ? t('common.saving')
             : channelFormMode === CHANNEL_FORM_MODE_CREATE
-              ? t('common.create', 'Create')
-              : t('common.save', 'Save')}
+              ? t('common.create')
+              : t('common.save')}
         </Button>
       </div>
     </div>
@@ -706,7 +665,7 @@
      inside its row); only the first load shows the loading state. -->
 {#if channelPanelState.loading && channelPanelState.channels.length === 0}
   <Banner variant="neutral">
-    {t('common.loading', 'Loading…')}
+    {t('common.loading')}
   </Banner>
 {:else}
   {#if channelPanelState.error}
@@ -717,17 +676,14 @@
         disabled={channelPanelBusy}
         onClick={loadChannelsPanel}
       >
-        {t('common.retry', 'Retry')}
+        {t('common.retry')}
       </Button>
     </Banner>
   {/if}
 
   {#if !channelPanelState.error && channelPanelState.channels.length === 0}
     {#if !(channelFormVisible && channelFormMode === CHANNEL_FORM_MODE_CREATE)}
-      <EmptyState
-        density="compact"
-        description={t('settings.channels.empty', 'No channels configured.')}
-      >
+      <EmptyState density="compact" description={t('settings.channels.empty')}>
         {#snippet actions()}
           {@render addChannelButton()}
         {/snippet}
@@ -737,7 +693,7 @@
     <div class="s-group-toolbar s-list-toolbar">
       {#if channelPanelState.channels.length > 0}
         <span class="s-group-toolbar__meta">
-          {t('settings.channels.count', '{count} configured', {
+          {t('settings.channels.count', {
             count: channelPanelState.channels.length,
           })}
         </span>
@@ -762,21 +718,21 @@
           <div class="s-row-info">
             <div class="s-row-label">{channel.id}</div>
             <div class="s-row-desc">
-              {t('settings.channels.platform', 'Platform')}: {channel.platform}
-              · {t('settings.channels.agent', 'Agent')}: {channel.agent_id}
+              {t('settings.channels.platform')}: {channel.platform}
+              · {t('settings.channels.agent')}: {channel.agent_id}
             </div>
             <div class="s-row-desc">
-              {t('settings.channels.dm_scope', 'DM scope')}: {channelDmScopeLabel(
+              {t('settings.channels.dm_scope')}: {channelDmScopeLabel(
                 channel.dm_scope,
               )}
             </div>
             <div class="s-row-desc">
-              {t('settings.channels.token_env_var', 'Token env var')}: {channel.token_env_var}
+              {t('settings.channels.token_env_var')}: {channel.token_env_var}
             </div>
             <div class="s-row-desc">
-              {t('settings.channels.allowed_chat_ids', 'Allowed chat IDs')}: {formatAllowedChatIds(
+              {t('settings.channels.allowed_chat_ids')}: {formatAllowedChatIds(
                 channel.allowed_chat_ids,
-              ) || t('settings.channels.allowed_chat_ids.none', 'None')}
+              ) || t('settings.channels.allowed_chat_ids.none')}
             </div>
           </div>
 
@@ -794,42 +750,38 @@
               <Button
                 variant="secondary"
                 disabled={rowBusy}
-                ariaLabel={t('settings.channels.edit', 'Edit channel {id}', {
+                ariaLabel={t('settings.channels.edit', {
                   id: channel.id,
                 })}
                 onClick={() => startEditChannel(channel)}
               >
-                {t('common.edit', 'Edit')}
+                {t('common.edit')}
               </Button>
               <Button
                 variant="secondary"
                 disabled={rowBusy}
                 ariaLabel={channel.enabled
-                  ? t('settings.channels.disableAria', 'Disable channel {id}', {
+                  ? t('settings.channels.disableAria', {
                       id: channel.id,
                     })
-                  : t('settings.channels.enableAria', 'Enable channel {id}', {
+                  : t('settings.channels.enableAria', {
                       id: channel.id,
                     })}
                 onClick={() => toggleChannelEnabled(channel)}
               >
                 {channel.enabled
-                  ? t('settings.channels.disable', 'Disable')
-                  : t('settings.channels.enable', 'Enable')}
+                  ? t('settings.channels.disable')
+                  : t('settings.channels.enable')}
               </Button>
               <Button
                 variant="danger"
                 disabled={rowBusy}
-                ariaLabel={t(
-                  'settings.channels.delete',
-                  'Delete channel {id}',
-                  {
-                    id: channel.id,
-                  },
-                )}
+                ariaLabel={t('settings.channels.delete', {
+                  id: channel.id,
+                })}
                 onClick={() => deleteChannel(channel)}
               >
-                {t('common.delete', 'Delete')}
+                {t('common.delete')}
               </Button>
             </div>
           </div>
@@ -853,35 +805,29 @@
           <div class="s-channel-access">
             <div class="s-channel-access-heading">
               <div class="s-channel-part-title">
-                {t('settings.channels.access.title', 'Group access')}
+                {t('settings.channels.access.title')}
               </div>
               <div class="s-row-desc">
-                {t('settings.channels.access.identity', 'Own identity')}:
+                {t('settings.channels.access.identity')}:
                 {channel.access?.self_user_id ??
-                  t('settings.channels.access.identityUnset', 'Not set')}
+                  t('settings.channels.access.identityUnset')}
               </div>
             </div>
 
             {#if !channel.access?.groups?.length}
               <div class="s-row-desc">
-                {t(
-                  'settings.channels.access.empty',
-                  'No group participants have been seen yet.',
-                )}
+                {t('settings.channels.access.empty')}
               </div>
             {:else}
               {#each channel.access.groups as group (group.access_scope_id)}
                 <div class="s-channel-access-group">
                   <div class="s-channel-access-group-title">
-                    {t('settings.channels.access.group', 'Group')} · ID {group.access_scope_id}
+                    {t('settings.channels.access.group')} · ID {group.access_scope_id}
                   </div>
 
                   {#if group.participants.length === 0}
                     <div class="s-row-desc">
-                      {t(
-                        'settings.channels.access.noParticipants',
-                        'No seen participants.',
-                      )}
+                      {t('settings.channels.access.noParticipants')}
                     </div>
                   {:else}
                     {#each group.participants as participant (participant.user_id)}
@@ -902,8 +848,8 @@
                             : 'info'}
                         >
                           {participant.role === 'admin'
-                            ? t('settings.channels.access.admin', 'Admin')
-                            : t('settings.channels.access.member', 'Member')}
+                            ? t('settings.channels.access.admin')
+                            : t('settings.channels.access.member')}
                         </StatusChip>
                         <div class="s-entity__end">
                           <Button
@@ -911,32 +857,24 @@
                             disabled={rowBusy || isOwnIdentity}
                             ariaLabel={t(
                               'settings.channels.access.thisIsMeAria',
-                              'Use {name} as own identity',
                               { name: participant.display_name },
                             )}
                             onClick={() => setOwnIdentity(channel, participant)}
                           >
                             {isOwnIdentity
-                              ? t('settings.channels.access.me', 'Me')
-                              : t(
-                                  'settings.channels.access.thisIsMe',
-                                  'This is me',
-                                )}
+                              ? t('settings.channels.access.me')
+                              : t('settings.channels.access.thisIsMe')}
                           </Button>
                           <Button
                             variant="secondary"
                             disabled={rowBusy || isOwnIdentity}
                             ariaLabel={participant.role === 'admin'
-                              ? t(
-                                  'settings.channels.access.makeMemberAria',
-                                  'Make {name} a member',
-                                  { name: participant.display_name },
-                                )
-                              : t(
-                                  'settings.channels.access.makeAdminAria',
-                                  'Make {name} an admin',
-                                  { name: participant.display_name },
-                                )}
+                              ? t('settings.channels.access.makeMemberAria', {
+                                  name: participant.display_name,
+                                })
+                              : t('settings.channels.access.makeAdminAria', {
+                                  name: participant.display_name,
+                                })}
                             onClick={() =>
                               toggleParticipantRole(
                                 channel,
@@ -945,14 +883,8 @@
                               )}
                           >
                             {participant.role === 'admin'
-                              ? t(
-                                  'settings.channels.access.makeMember',
-                                  'Make member',
-                                )
-                              : t(
-                                  'settings.channels.access.makeAdmin',
-                                  'Make admin',
-                                )}
+                              ? t('settings.channels.access.makeMember')
+                              : t('settings.channels.access.makeAdmin')}
                           </Button>
                         </div>
                       </div>
@@ -966,10 +898,7 @@
           {#if channel.denied_chats?.length}
             <div class="s-channel-denied">
               <div class="s-channel-part-title">
-                {t(
-                  'settings.channels.denied.title',
-                  'Recent requests from chats not on the allowlist',
-                )}
+                {t('settings.channels.denied.title')}
               </div>
               {#each channel.denied_chats as deniedChat (deniedChat.chat_id)}
                 <div class="s-channel-denied-row">
@@ -979,14 +908,12 @@
                   <Button
                     variant="secondary"
                     disabled={rowBusy}
-                    ariaLabel={t(
-                      'settings.channels.denied.allowAria',
-                      'Allow chat {id}',
-                      { id: deniedChat.chat_id },
-                    )}
+                    ariaLabel={t('settings.channels.denied.allowAria', {
+                      id: deniedChat.chat_id,
+                    })}
                     onClick={() => allowDeniedChat(channel, deniedChat.chat_id)}
                   >
-                    {t('settings.channels.denied.allow', 'Allow')}
+                    {t('settings.channels.denied.allow')}
                   </Button>
                 </div>
               {/each}
@@ -1000,13 +927,11 @@
 
 {#if deleteConfirmChannel}
   <ConfirmDialog
-    title={t('settings.channels.delete_confirm_title', 'Delete channel')}
-    body={t(
-      'settings.channels.delete_confirm',
-      'Delete channel "{id}" permanently? vBot stops listening on it and its configuration is removed.',
-      { id: deleteConfirmChannel.id },
-    )}
-    confirmLabel={t('common.delete', 'Delete')}
+    title={t('settings.channels.delete_confirm_title')}
+    body={t('settings.channels.delete_confirm', {
+      id: deleteConfirmChannel.id,
+    })}
+    confirmLabel={t('common.delete')}
     onConfirm={confirmDeleteChannel}
     onCancel={cancelDeleteChannel}
   />

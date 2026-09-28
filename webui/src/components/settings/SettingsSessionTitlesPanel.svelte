@@ -48,10 +48,7 @@
       models: availableModels,
       connections: availableConnections,
       selectedModelValue: formValues.model,
-      emptyLabel: t(
-        'settings.sessionTitles.agentModel',
-        'Agent Model (default)',
-      ),
+      emptyLabel: t('settings.sessionTitles.agentModel'),
       translate: t,
     }),
   );
@@ -116,9 +113,7 @@
       availableModels = modelsResult.models;
       availableConnections = connectionsResult.connections;
     } catch (error) {
-      onError(
-        `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
-      );
+      onError(`${t('settings.models.loadError')} ${error.message}`);
     }
   }
 
@@ -152,8 +147,7 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildSessionTitleSettingsPayload(formValues),
-      successKey: 'settings.sessionTitles.saveSuccess',
-      successFallback: 'Session title settings updated.',
+      successTitle: t('settings.sessionTitles.saveSuccess'),
       getDraftSnapshot: () => formValues,
       applyResult: (next) => (formValues = normalizeSessionTitleSettings(next)),
     });
@@ -162,7 +156,7 @@
   function saveNow() {
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -176,22 +170,16 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.sessionTitles.enabled', 'Automatic Session titles')}
+        {t('settings.sessionTitles.enabled')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.sessionTitles.enabledDescription',
-          'Creates one additional Model request from a bounded excerpt of the first message in each new Session. When off, the first 40 normalized characters remain as the local title.',
-        )}
+        {t('settings.sessionTitles.enabledDescription')}
       </div>
     </div>
     <div class="s-row-control">
       <Toggle
         checked={formValues.enabled}
-        ariaLabel={t(
-          'settings.sessionTitles.enabled',
-          'Automatic Session titles',
-        )}
+        ariaLabel={t('settings.sessionTitles.enabled')}
         onChange={(enabled) => update({ enabled })}
       />
     </div>
@@ -200,13 +188,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.sessionTitles.model', 'Title model')}
+        {t('settings.sessionTitles.model')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.sessionTitles.modelDescription',
-          'Uses the active Agent Model when no separate Model is selected. A failed request keeps the local title and never triggers another paid Model request.',
-        )}
+        {t('settings.sessionTitles.modelDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--model">
@@ -215,16 +200,10 @@
         value={modelSelectValue}
         options={modelOptions}
         disabled={!formValues.enabled}
-        placeholder={t(
-          'settings.sessionTitles.agentModel',
-          'Agent Model (default)',
-        )}
-        searchPlaceholder={t(
-          'agents.form.modelSearchPlaceholder',
-          'Filter models…',
-        )}
-        emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-        ariaLabel={t('settings.sessionTitles.model', 'Title model')}
+        placeholder={t('settings.sessionTitles.agentModel')}
+        searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+        emptyLabel={t('agents.form.modelSearchEmpty')}
+        ariaLabel={t('settings.sessionTitles.model')}
         triggerClass="settings-view__dropdown"
         panelClass="settings-view__model-panel"
         footerActionLabel={modelFilterFooter}

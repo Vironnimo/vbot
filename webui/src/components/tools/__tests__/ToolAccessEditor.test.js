@@ -136,7 +136,7 @@ describe('ToolAccessEditor', () => {
       },
     });
     flushSync();
-    buttonWithText(t('toolAccess.selectAll', 'Select all')).click();
+    buttonWithText(t('toolAccess.selectAll')).click();
     const selected = onChange.mock.calls.at(-1)[0];
     expect(selected.mode).toBe('selected');
     expect(selected.allowed).toEqual(
@@ -163,7 +163,7 @@ describe('ToolAccessEditor', () => {
       props,
     });
     flushSync();
-    buttonWithText(t('toolAccess.deselectAll', 'Deselect all')).click();
+    buttonWithText(t('toolAccess.deselectAll')).click();
     flushSync();
     expect(onChange).toHaveBeenLastCalledWith({ mode: 'none' });
     await unmount(mountedComponent);
@@ -204,7 +204,7 @@ describe('ToolAccessEditor', () => {
     expect(
       document.getElementById(sessionRead.getAttribute('aria-describedby'))
         .textContent,
-    ).toBe(t('toolAccess.automatic', 'Automatic'));
+    ).toBe(t('toolAccess.automatic'));
     expect(toolChip('read').textContent.trim()).toBe('read');
     const readTip = toolTipWithText('Read a file from disk.');
     expect(readTip.textContent).toContain('Read a file from disk.');
@@ -219,11 +219,11 @@ describe('ToolAccessEditor', () => {
     expect(readTip.dataset.floatingOpen).toBe('true');
 
     expect(document.body.textContent).toContain(
-      t('toolAccess.activation.memoryOff', 'Memory is currently off'),
+      t('toolAccess.activation.memoryOff'),
     );
     expect(buttonByAriaLabel('Available with vision').disabled).toBe(true);
     expect(document.body.textContent).toContain(
-      t('toolAccess.family.individual', 'Individual Tools'),
+      t('toolAccess.family.individual'),
     );
     expect(document.body.textContent).not.toContain('Allow current');
     expect(document.body.textContent).not.toContain('Block current');
@@ -326,7 +326,7 @@ describe('ToolAccessEditor', () => {
       'ha_get_state',
     ]);
 
-    const bulkAction = buttonWithText(t('toolAccess.selectAll', 'Select all'));
+    const bulkAction = buttonWithText(t('toolAccess.selectAll'));
     bulkAction.focus();
     expect(document.activeElement).toBe(bulkAction);
     expect(document.querySelector('[role="radiogroup"]')).toBeNull();

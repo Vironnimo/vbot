@@ -94,7 +94,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 
 **Persisted formats are stable (Generation 1).** Durable databases and JSON documents evolve compatibly: additive changes only (new tables, nullable or defaulted columns, optional JSON fields); readers tolerate and writers preserve unknown fields; data backfills are named, idempotent migrations recorded in the database, and a migration that older versions cannot read declares so. Renames, type or meaning changes, removals and new constraints require a new format generation with an explicit converter run by the updater or CLI, never by normal startup. App code knows only the current generation: no fallback keys or old-field branches. Details: `database.md` (SQLite) and `settings.md` -> JSON Document Contract.
 
-**I18n:** All user-visible strings use i18n with English fallback: backend `utils/`, frontend `webui/src/lib/i18n.js`.
+**I18n:** All user-visible strings use i18n: backend `utils/` with English fallback; frontend `webui/src/lib/i18n.js`, whose English catalog is the only source of WebUI text (no call-site fallbacks).
 
 **Model-facing paths:** Render separators as `/` when vBot authors a known filesystem-path value for Model context (System Prompt, attachment note, Tool result, delivery note). Leave `pathlib.Path`, native OS calls, persisted values, incoming arguments, and arbitrary text unchanged; no global replacement.
 

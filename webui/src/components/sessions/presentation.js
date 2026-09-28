@@ -11,7 +11,7 @@ export const autofocusRename = (node) => {
 export const formatTimestamp = (value) => {
   const normalizedValue = asText(value);
   if (!normalizedValue) {
-    return t('common.unknown', 'Unknown');
+    return t('common.unknown');
   }
 
   const parsedValue = Date.parse(normalizedValue);
@@ -33,19 +33,19 @@ export const sessionHoverDetails = (session) => {
 
   if (session.agent_name) {
     rows.push({
-      label: t('sessions.agent', 'Agent'),
+      label: t('sessions.agent'),
       value: session.agent_name,
     });
   }
 
   rows.push({
-    label: t('sessions.last_active', 'Last active'),
+    label: t('sessions.last_active'),
     value: formatTimestamp(session.last_active_at ?? session.created_at),
   });
 
   if (session.source_channel_id) {
     rows.push({
-      label: t('sessions.source_channel', 'Source channel'),
+      label: t('sessions.source_channel'),
       value: session.source_channel_id,
       mono: true,
     });
@@ -53,7 +53,7 @@ export const sessionHoverDetails = (session) => {
 
   if (session.subagent_parent) {
     rows.push({
-      label: t('sessions.subagent_parent', 'Parent'),
+      label: t('sessions.subagent_parent'),
       value: `${session.subagent_parent.agent_id}/${session.subagent_parent.session_id}`,
       mono: true,
     });
@@ -68,14 +68,14 @@ export const sessionHoverDetails = (session) => {
 
 export const resolvePlatformLabel = (platform) => {
   if (platform === 'telegram') {
-    return t('sessions.platform_telegram', 'Telegram');
+    return t('sessions.platform_telegram');
   }
   if (platform === 'discord') {
-    return t('sessions.platform_discord', 'Discord');
+    return t('sessions.platform_discord');
   }
   const normalizedPlatform = asText(platform);
   if (!normalizedPlatform) {
-    return t('sessions.platform_channel', 'Channel');
+    return t('sessions.platform_channel');
   }
   return `${normalizedPlatform.slice(0, 1).toUpperCase()}${normalizedPlatform.slice(1)}`;
 };

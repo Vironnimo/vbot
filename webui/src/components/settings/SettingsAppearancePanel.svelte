@@ -48,19 +48,19 @@
   let languageDropdownOptions = $derived(
     availableLanguageOptions.map((language) => ({
       value: language.id,
-      label: t(language.labelKey, language.labelFallback),
+      label: language.label,
     })),
   );
   let chatWidthDropdownOptions = $derived(
     buildChatWidthOptions().map((option) => ({
       value: option.id,
-      label: t(option.labelKey, option.labelFallback),
+      label: option.label,
     })),
   );
   let chatWorkingModeDropdownOptions = $derived(
     buildChatWorkingModeOptions().map((option) => ({
       value: option.id,
-      label: t(option.labelKey, option.labelFallback),
+      label: option.label,
     })),
   );
   let persistedLanguageId = $derived(getPersistedLanguageId(settings));
@@ -133,7 +133,7 @@
 
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -175,14 +175,12 @@
       onCommit(nextSettings);
       if (reason === 'manual')
         onToast({
-          title: t('settings.appearance.saveSuccess', 'Appearance updated.'),
+          title: t('settings.appearance.saveSuccess'),
           variant: 'success',
         });
       return true;
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
       return false;
     } finally {
       saving = false;
@@ -194,10 +192,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.appearance.language', 'Language')}
+        {t('settings.appearance.language')}
       </div>
       <div class="s-row-desc">
-        {t('settings.appearance.languageDescription', 'Interface language.')}
+        {t('settings.appearance.languageDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--appearance">
@@ -205,7 +203,7 @@
         id="settings-appearance-language"
         value={selectedLanguageId}
         options={languageDropdownOptions}
-        ariaLabel={t('settings.appearance.language', 'Language')}
+        ariaLabel={t('settings.appearance.language')}
         disabled={availableLanguageOptions.length <= 1}
         triggerClass="settings-view__dropdown"
         listClass="settings-view__thinking-list"
@@ -217,13 +215,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.appearance.chatWidth.label', 'Chat width')}
+        {t('settings.appearance.chatWidth.label')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.appearance.chatWidth.description',
-          'Reading width of the chat column on wide screens.',
-        )}
+        {t('settings.appearance.chatWidth.description')}
       </div>
     </div>
     <div class="s-row-control s-row-control--appearance">
@@ -231,7 +226,7 @@
         id="settings-appearance-chat-width"
         value={selectedChatWidth}
         options={chatWidthDropdownOptions}
-        ariaLabel={t('settings.appearance.chatWidth.label', 'Chat width')}
+        ariaLabel={t('settings.appearance.chatWidth.label')}
         triggerClass="settings-view__dropdown"
         listClass="settings-view__thinking-list"
         onValueChange={handleChatWidthChange}
@@ -242,13 +237,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.appearance.chatWorkingMode.label', 'Work details')}
+        {t('settings.appearance.chatWorkingMode.label')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.appearance.chatWorkingMode.description',
-          'Show Thinking and Tool activity inline or group it into Working blocks.',
-        )}
+        {t('settings.appearance.chatWorkingMode.description')}
       </div>
     </div>
     <div class="s-row-control s-row-control--appearance">
@@ -256,10 +248,7 @@
         id="settings-appearance-chat-working-mode"
         value={selectedChatWorkingMode}
         options={chatWorkingModeDropdownOptions}
-        ariaLabel={t(
-          'settings.appearance.chatWorkingMode.label',
-          'Work details',
-        )}
+        ariaLabel={t('settings.appearance.chatWorkingMode.label')}
         triggerClass="settings-view__dropdown"
         listClass="settings-view__thinking-list"
         onValueChange={handleChatWorkingModeChange}

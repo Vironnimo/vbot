@@ -63,36 +63,79 @@
   const autosaveContext = useAutosaveContext();
   // Navigation follows user tasks; editor components do not define pages.
   const sections = [
-    ['appearance', 'settings.appearance.title', 'Appearance'],
-    ['session_titles', 'settings.sessionTitles.title', 'Session titles'],
-    ['preferences', 'settings.preferences.title', 'Region & setup'],
-    ['providers', 'settings.providers.title', 'Providers'],
-    ['voice_controls', 'settings.sections.voiceControls', 'Voice controls'],
-    ['speech_models', 'settings.sections.speechModels', 'Speech models'],
-    ['live_voice_model', 'settings.sections.liveVoice', 'Live voice'],
-    [
-      'live_voice_shortcut',
-      'settings.sections.liveVoiceShortcut',
-      'Live voice shortcut',
-    ],
-    ['recall', 'settings.sections.recall', 'Conversation search'],
-    [
-      'embedding_model',
-      'settings.specializedModels.embeddingModel',
-      'Embedding model',
-    ],
-    ['reflection', 'settings.reflection.title', 'Reflection'],
-    ['web_search', 'settings.webSearch.title', 'Web search'],
-    ['web_fetch', 'settings.webFetch.title', 'Web Fetch'],
-    ['media_models', 'settings.sections.mediaModels', 'Images, video & music'],
-    ['decision_model', 'settings.sections.evaluation', 'Evaluation'],
-    ['subagents', 'settings.sections.delegation', 'Sub-Agent limits'],
-    ['channels', 'settings.channels.title', 'Channels'],
-    ['extensions', 'settings.extensions.title', 'Extensions'],
-    ['server', 'settings.general.title', 'Server info'],
-    ['desktop_connection', 'settings.desktop.connection.title', 'Connection'],
-    ['debug', 'debug.settings', 'Debug'],
-  ].map(([id, key, fallback]) => ({ id, label: () => t(key, fallback) }));
+    {
+      id: 'appearance',
+      label: () => t('settings.appearance.title'),
+    },
+    {
+      id: 'session_titles',
+      label: () => t('settings.sessionTitles.title'),
+    },
+    {
+      id: 'preferences',
+      label: () => t('settings.preferences.title'),
+    },
+    {
+      id: 'providers',
+      label: () => t('settings.providers.title'),
+    },
+    {
+      id: 'voice_controls',
+      label: () => t('settings.sections.voiceControls'),
+    },
+    {
+      id: 'speech_models',
+      label: () => t('settings.sections.speechModels'),
+    },
+    {
+      id: 'live_voice_model',
+      label: () => t('settings.sections.liveVoice'),
+    },
+    {
+      id: 'live_voice_shortcut',
+      label: () => t('settings.sections.liveVoiceShortcut'),
+    },
+    {
+      id: 'recall',
+      label: () => t('settings.sections.recall'),
+    },
+    {
+      id: 'embedding_model',
+      label: () => t('settings.specializedModels.embeddingModel'),
+    },
+    {
+      id: 'reflection',
+      label: () => t('settings.reflection.title'),
+    },
+    {
+      id: 'web_search',
+      label: () => t('settings.webSearch.title'),
+    },
+    { id: 'web_fetch', label: () => t('settings.webFetch.title') },
+    {
+      id: 'media_models',
+      label: () => t('settings.sections.mediaModels'),
+    },
+    {
+      id: 'decision_model',
+      label: () => t('settings.sections.evaluation'),
+    },
+    {
+      id: 'subagents',
+      label: () => t('settings.sections.delegation'),
+    },
+    { id: 'channels', label: () => t('settings.channels.title') },
+    {
+      id: 'extensions',
+      label: () => t('settings.extensions.title'),
+    },
+    { id: 'server', label: () => t('settings.general.title') },
+    {
+      id: 'desktop_connection',
+      label: () => t('settings.desktop.connection.title'),
+    },
+    { id: 'debug', label: () => t('debug.settings') },
+  ];
   const panelById = new Map(sections.map((section) => [section.id, section]));
   const modelTasksBySection = {
     speech_models: ['speech_to_text', 'text_to_speech'],
@@ -109,32 +152,20 @@
   let pages = $derived([
     {
       id: 'general',
-      label: () => t('settings.pages.general', 'General'),
-      description: () =>
-        t(
-          'settings.pages.generalDescription',
-          'Display, conversation titles, and regional preferences.',
-        ),
+      label: () => t('settings.pages.general'),
+      description: () => t('settings.pages.generalDescription'),
       sections: ['appearance', 'session_titles', 'preferences'],
     },
     {
       id: 'providers',
-      label: () => t('settings.providers.title', 'Providers'),
-      description: () =>
-        t(
-          'settings.pages.providersDescription',
-          'Connect the services and local runtimes that supply your Models.',
-        ),
+      label: () => t('settings.providers.title'),
+      description: () => t('settings.pages.providersDescription'),
       sections: ['providers'],
     },
     {
       id: 'voice',
-      label: () => t('settings.voice.title', 'Voice'),
-      description: () =>
-        t(
-          'settings.pages.voiceDescription',
-          'Speaking, listening, live conversations, and voice activation.',
-        ),
+      label: () => t('settings.voice.title'),
+      description: () => t('settings.pages.voiceDescription'),
       sections: [
         'speech_models',
         'live_voice_model',
@@ -144,22 +175,14 @@
     },
     {
       id: 'memory',
-      label: () => t('settings.pages.memory', 'Memory'),
-      description: () =>
-        t(
-          'settings.pages.memoryDescription',
-          'Find past conversations and learn from them.',
-        ),
+      label: () => t('settings.pages.memory'),
+      description: () => t('settings.pages.memoryDescription'),
       sections: ['recall', 'embedding_model', 'reflection'],
     },
     {
       id: 'tools',
-      label: () => t('settings.pages.tools', 'Tools'),
-      description: () =>
-        t(
-          'settings.pages.toolsDescription',
-          'Web access, media, evaluation, and delegation.',
-        ),
+      label: () => t('settings.pages.tools'),
+      description: () => t('settings.pages.toolsDescription'),
       sections: [
         'web_search',
         'web_fetch',
@@ -170,22 +193,14 @@
     },
     {
       id: 'integrations',
-      label: () => t('settings.pages.integrations', 'Integrations'),
-      description: () =>
-        t(
-          'settings.pages.integrationsDescription',
-          'Messaging Channels, Extensions, and MCP connections.',
-        ),
+      label: () => t('settings.pages.integrations'),
+      description: () => t('settings.pages.integrationsDescription'),
       sections: ['channels', 'extensions'],
     },
     {
       id: 'system',
-      label: () => t('settings.pages.system', 'System'),
-      description: () =>
-        t(
-          'settings.pages.systemDescription',
-          'Server information, connections, and diagnostics.',
-        ),
+      label: () => t('settings.pages.system'),
+      description: () => t('settings.pages.systemDescription'),
       sections: [
         'server',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
@@ -422,7 +437,7 @@
       return;
     }
     onToast({
-      title: t('errors.appError', 'Error'),
+      title: t('errors.appError'),
       message,
       variant: 'error',
     });
@@ -463,9 +478,7 @@
   }
 
   function reportProviderRefreshError(error) {
-    reportSettingsError(
-      `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`,
-    );
+    reportSettingsError(`${t('settings.loadError')} ${error.message}`);
   }
 
   async function refreshProviderSettings() {
@@ -499,7 +512,7 @@
       const nextSettings = await getSettings();
       applySettings(nextSettings);
     } catch (error) {
-      loadError = `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`;
+      loadError = `${t('settings.loadError')} ${error.message}`;
     } finally {
       loading = false;
     }
@@ -637,16 +650,10 @@
   {/if}
 {/snippet}
 
-<section
-  class={SETTINGS_LAYOUT_CLASS}
-  aria-label={t('settings.title', 'Settings')}
->
-  <nav
-    class="settings-nav secondary-pane"
-    aria-label={t('settings.sections', 'Settings sections')}
-  >
+<section class={SETTINGS_LAYOUT_CLASS} aria-label={t('settings.title')}>
+  <nav class="settings-nav secondary-pane" aria-label={t('settings.sections')}>
     <div class="settings-nav-title secondary-pane__title">
-      {t('settings.title', 'Settings')}
+      {t('settings.title')}
     </div>
     <div class="settings-search">
       <input
@@ -656,8 +663,8 @@
         autocomplete="off"
         value={searchQuery}
         oninput={handleSearchInput}
-        placeholder={t('settings.search.placeholder', 'Search settings…')}
-        aria-label={t('settings.search.label', 'Search settings')}
+        placeholder={t('settings.search.placeholder')}
+        aria-label={t('settings.search.label')}
       />
     </div>
     <div class="settings-desktop-index">
@@ -678,7 +685,7 @@
         id="settings-mobile-section"
         value={activePageId}
         options={mobileSectionOptions}
-        ariaLabel={t('settings.sections', 'Settings sections')}
+        ariaLabel={t('settings.sections')}
         onValueChange={navigateToSection}
       />
     </div>
@@ -688,7 +695,7 @@
   <div
     class="settings-content"
     role="region"
-    aria-label={t('settings.content', 'Settings content')}
+    aria-label={t('settings.content')}
     tabindex="0"
     bind:this={scrollContainer}
     onscroll={handleContentScroll}
@@ -699,22 +706,20 @@
   >
     <div class="s-doc" bind:this={documentRoot}>
       {#if loading}
-        <Banner variant="neutral"
-          >{t('settings.loading', 'Loading settings…')}</Banner
-        >
+        <Banner variant="neutral">{t('settings.loading')}</Banner>
       {:else if loadError}
         <Banner variant="error"
           ><span>{loadError}</span><Button
             variant="secondary"
-            onClick={loadSettings}>{t('common.retry', 'Retry')}</Button
+            onClick={loadSettings}>{t('common.retry')}</Button
           ></Banner
         >
       {:else}
         {#if searchActive}
           <header class="settings-page-heading">
-            <h2>{t('settings.search.results', 'Search results')}</h2>
+            <h2>{t('settings.search.results')}</h2>
             <p role="status">
-              {t('settings.search.resultCount', 'Matching topics: {count}', {
+              {t('settings.search.resultCount', {
                 count: searchResults.length,
               })}
             </p>
@@ -728,26 +733,18 @@
                   panel ? navigateToSection(panelId) : navigateToDefaults()}
               >
                 <span class="settings-search-result__title"
-                  >{panel
-                    ? panel.label()
-                    : t('agents.shared.title', 'Shared defaults')}</span
+                  >{panel ? panel.label() : t('agents.shared.title')}</span
                 >
                 <span class="settings-search-result__description"
                   >{panel
                     ? pageForDestination(panelId)?.label()
-                    : t(
-                        'settings.agentShortcut.search',
-                        'Agents → Shared defaults · Model, Thinking, fallbacks and Compaction',
-                      )}</span
+                    : t('settings.agentShortcut.search')}</span
                 >
               </Button>
             {:else}
               <EmptyState
                 density="compact"
-                description={t(
-                  'settings.search.noMatches',
-                  'No settings match your search.',
-                )}
+                description={t('settings.search.noMatches')}
               />
             {/each}
           </div>
@@ -768,18 +765,13 @@
               </header>
               {#if page.id === 'providers'}
                 <div class="settings-related">
-                  <span
-                    >{t(
-                      'settings.agentShortcut.hint',
-                      'The chat Model, Thinking, and Compaction are configured in',
-                    )}</span
-                  >
+                  <span>{t('settings.agentShortcut.hint')}</span>
                   <Button
                     class="settings-defaults-link"
                     variant="tertiary"
                     onClick={navigateToDefaults}
                   >
-                    {t('agents.shared.title', 'Shared defaults')}
+                    {t('agents.shared.title')}
                     <span aria-hidden="true">↗</span>
                   </Button>
                 </div>

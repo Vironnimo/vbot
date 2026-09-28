@@ -522,14 +522,14 @@ describe('StatisticsView', () => {
       'Parser rework',
     );
     expect(groups[0].querySelector('summary').textContent).toContain(
-      t('statistics.extensions.groupSummary', undefined, {
+      t('statistics.extensions.groupSummary', {
         participants: 2,
         runs: 4,
       }),
     );
     // An untitled group is labelled by its start and a short id.
     expect(groups[1].querySelector('summary').textContent).toContain(
-      t('statistics.extensions.groupFallback', undefined, {
+      t('statistics.extensions.groupFallback', {
         date: formatDateTime('2026-06-12T08:00:00+00:00', activeLocaleTag()),
         id: 'titled',
       }),

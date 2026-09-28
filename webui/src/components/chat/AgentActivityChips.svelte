@@ -33,8 +33,8 @@
   let hiddenAgents = $derived(agents.slice(visibleCount));
   let moreLabel = $derived(
     hiddenAgents.length === 1
-      ? t('chat.agentChips.moreOne', '1 more agent with activity')
-      : t('chat.agentChips.more', '{count} more agents with activity', {
+      ? t('chat.agentChips.moreOne')
+      : t('chat.agentChips.more', {
           count: hiddenAgents.length,
         }),
   );
@@ -145,7 +145,7 @@
     class="agent-chips"
     class:agent-chips--compact={compact}
     role="group"
-    aria-label={t('chat.agentChips.label', 'Other agents with activity')}
+    aria-label={t('chat.agentChips.label')}
     style:flex-basis={naturalWidth > 0 ? `${naturalWidth}px` : undefined}
   >
     {#each visibleAgents as agent (agent.id)}

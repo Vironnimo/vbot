@@ -13,7 +13,7 @@ export function newQuestion(type, id) {
 export function experimentExample(kind = 'blank') {
   if (kind === 'triage')
     return {
-      title: t('jev.example.triage', 'Support triage'),
+      title: t('jev.example.triage'),
       state:
         'Since the update, the export button does nothing. I tried two browsers. Everything else still works, but I need the export for a report tomorrow.',
       questions: [
@@ -48,7 +48,7 @@ export function experimentExample(kind = 'blank') {
     };
   if (kind === 'routing')
     return {
-      title: t('jev.example.routing', 'Task requirements'),
+      title: t('jev.example.routing'),
       state:
         'Review a change to our payment retry logic. Check whether simultaneous retries could charge a customer twice and propose a fix with tests.',
       questions: [
@@ -78,7 +78,7 @@ export function experimentExample(kind = 'blank') {
       ],
     };
   return {
-    title: t('jev.newTitle', 'Untitled experiment'),
+    title: t('jev.newTitle'),
     state: '',
     questions: [newQuestion('noul', 'question_1')],
   };

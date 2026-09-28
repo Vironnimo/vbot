@@ -27,7 +27,7 @@
     <div class="voice-model-card__identity">
       <span class="voice-model-card__name">{name}</span>
       <Badge variant="warn" class="voice-model-card__problem-badge">
-        {t('settings.voice.phraseUnavailable', 'Not installed')}
+        {t('settings.voice.phraseUnavailable')}
       </Badge>
     </div>
   </div>
@@ -38,16 +38,12 @@
     <Button
       variant="tertiary"
       disabled={deactivateDisabled}
-      ariaLabel={t(
-        'settings.voice.deactivatePhraseAria',
-        'Stop listening for {name}',
-        {
-          name,
-        },
-      )}
+      ariaLabel={t('settings.voice.deactivatePhraseAria', {
+        name,
+      })}
       onClick={onDeactivate}
     >
-      {t('settings.voice.deactivatePhrase', 'Stop listening')}
+      {t('settings.voice.deactivatePhrase')}
     </Button>
   </div>
 </div>

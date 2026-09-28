@@ -7,7 +7,7 @@
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
-  import { t } from '$lib/i18n.js';
+  import { t, tOr } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
   import {
     buildWebFetchSettingsPayload,
@@ -36,11 +36,8 @@
       value: id,
       label:
         id === 'direct'
-          ? t('settings.webFetch.direct', 'Direct (no service)')
-          : t(
-              `settings.webSearch.providers.${id}`,
-              id === 'parallel' ? 'Parallel' : id,
-            ),
+          ? t('settings.webFetch.direct')
+          : tOr(`settings.webSearch.providers.${id}`, id),
     })),
   );
   const service = $derived(
@@ -49,11 +46,11 @@
   const modes = $derived([
     {
       value: 'fallback',
-      label: t('settings.webFetch.fallback', 'Only when direct fetch fails'),
+      label: t('settings.webFetch.fallback'),
     },
     {
       value: 'prefer',
-      label: t('settings.webFetch.prefer', 'Prefer this service'),
+      label: t('settings.webFetch.prefer'),
     },
   ]);
 
@@ -88,8 +85,7 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildWebFetchSettingsPayload(draft),
-      successKey: 'settings.webFetch.saveSuccess',
-      successFallback: 'Web fetch settings updated.',
+      successTitle: t('settings.webFetch.saveSuccess'),
       getDraftSnapshot: () => draft,
       applyResult: (next) => (draft = getWebFetchSettings(next)),
     });
@@ -99,7 +95,7 @@
     if (saving) return;
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -113,13 +109,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.webFetch.provider', 'Page extraction service')}
+        {t('settings.webFetch.provider')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.webFetch.description',
-          'Read pages directly, or use an optional service for difficult websites and JavaScript content.',
-        )}
+        {t('settings.webFetch.description')}
       </div>
     </div>
     <div class="s-row-control s-row-control--web-search">
@@ -127,7 +120,7 @@
         id="settings-web-fetch-provider"
         value={draft.provider}
         options={providers}
-        ariaLabel={t('settings.webFetch.provider', 'Page extraction service')}
+        ariaLabel={t('settings.webFetch.provider')}
         triggerClass="settings-view__dropdown"
         listClass="settings-view__thinking-list"
         onValueChange={(value) => change('provider', value)}
@@ -139,13 +132,10 @@
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.webFetch.mode', 'When to use it')}
+          {t('settings.webFetch.mode')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'settings.webFetch.modeDescription',
-            'Fallback uses the service for blocked, failed or unreadable pages. Prefer uses it first for page URLs and tries direct fetch if it fails.',
-          )}
+          {t('settings.webFetch.modeDescription')}
         </div>
       </div>
       <div class="s-row-control s-row-control--web-search">
@@ -153,7 +143,7 @@
           id="settings-web-fetch-mode"
           value={draft.mode}
           options={modes}
-          ariaLabel={t('settings.webFetch.mode', 'When to use it')}
+          ariaLabel={t('settings.webFetch.mode')}
           triggerClass="settings-view__dropdown"
           listClass="settings-view__thinking-list"
           onValueChange={(value) => change('mode', value)}
@@ -162,26 +152,20 @@
     </div>
     <div class="s-group__block s-group__note">
       <p>
-        {t(
-          'settings.webFetch.cost',
-          'The selected service receives requested URLs and may charge per page. Free allowances and prices vary. Reading or searching an already saved page makes no additional service request.',
-        )}
+        {t('settings.webFetch.cost')}
       </p>
       {#if service}
         <p>
           {service.configured
-            ? t('settings.webFetch.keyPresent', 'API key configured.')
-            : t('settings.webFetch.keyMissing', 'API key required:')}
+            ? t('settings.webFetch.keyPresent')
+            : t('settings.webFetch.keyMissing')}
           <code>{service.api_key_env}</code>
           {#if !service.configured}
-            {t(
-              'settings.webFetch.keyHint',
-              'Set this variable in the .env file in the vBot data directory.',
-            )}
+            {t('settings.webFetch.keyHint')}
             <code>{settings?.general?.data_directory ?? ''}</code>
           {/if}
           <a href={service.pricing_url} target="_blank" rel="noreferrer"
-            >{t('settings.webFetch.pricing', 'Service pricing')}</a
+            >{t('settings.webFetch.pricing')}</a
           >
         </p>
       {/if}

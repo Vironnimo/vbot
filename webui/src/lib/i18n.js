@@ -25,8 +25,11 @@ for (const catalog of [
 }
 export const englishCatalog = Object.freeze(mergedEnglish);
 
+// The core catalog plus the catalogs Extension pages register at startup.
+const englishText = { ...englishCatalog };
+
 const catalogs = Object.freeze({
-  [DEFAULT_LOCALE]: englishCatalog,
+  [DEFAULT_LOCALE]: englishText,
 });
 
 let activeLocale = DEFAULT_LOCALE;
@@ -49,16 +52,35 @@ function interpolate(template, values) {
   });
 }
 
-export function t(key, fallback, values) {
+function lookup(key) {
   const catalog = catalogs[activeLocale] ?? catalogs[DEFAULT_LOCALE];
   const translation = catalog[key] ?? catalogs[DEFAULT_LOCALE][key];
-  const template = hasText(translation)
-    ? translation
-    : hasText(fallback)
-      ? fallback
-      : key;
+  return hasText(translation) ? translation : null;
+}
 
-  return interpolate(template, values);
+// Renders the catalog text of `key` with its `{name}` placeholders filled from
+// `values`. A key without an entry renders as the key itself.
+export function t(key, values) {
+  return interpolate(lookup(key) ?? key, values);
+}
+
+// Resolves a composed key built from a server-sent code. A code without a
+// catalog entry renders `fallback` (usually the code itself) instead of the key.
+export function tOr(key, fallback, values) {
+  return interpolate(lookup(key) ?? fallback, values);
+}
+
+// Adds an Extension page's own English text. Keys the core catalog or an
+// earlier registration already defines are rejected, so a page cannot replace
+// existing text.
+export function registerCatalog(entries) {
+  const duplicates = Object.keys(entries).filter((key) =>
+    Object.hasOwn(englishText, key),
+  );
+  if (duplicates.length > 0) {
+    throw new Error(`Duplicate i18n keys: ${duplicates.join(', ')}`);
+  }
+  Object.assign(englishText, entries);
 }
 
 export function init(locale = DEFAULT_LOCALE) {

@@ -17,12 +17,7 @@
   let error = $derived(
     openError ||
       refreshError ||
-      (frameUnavailable
-        ? t(
-            'preview.unavailable',
-            'The page is unavailable. Live preview will retry when files change.',
-          )
-        : ''),
+      (frameUnavailable ? t('preview.unavailable') : ''),
   );
   let autoRefresh = $state(true);
   let frame = $state(null);
@@ -155,14 +150,12 @@
 <div class="html-preview" hidden={!active}>
   <div class="html-preview__toolbar">
     <span class="html-preview__filename"
-      >{pageLabel || preview?.filename || t('split.preview', 'Preview')}</span
+      >{pageLabel || preview?.filename || t('split.preview')}</span
     >
     {#if preview}
       <span class="html-preview__live" aria-live="polite">
         <span class:paused={!autoRefresh} class="html-preview__dot"></span>
-        {autoRefresh
-          ? t('preview.live', 'Live')
-          : t('preview.paused', 'Paused')}
+        {autoRefresh ? t('preview.live') : t('preview.paused')}
         {#if refreshCount}<span class="html-preview__count">{refreshCount}</span
           >{/if}
       </span>
@@ -170,13 +163,13 @@
         size="sm"
         checked={autoRefresh}
         onChange={(value) => (autoRefresh = value)}
-        ariaLabel={t('preview.autoRefresh', 'Automatically refresh preview')}
+        ariaLabel={t('preview.autoRefresh')}
       />
       <Button
         variant="tertiary"
         icon
-        ariaLabel={t('preview.reload', 'Reload preview')}
-        tooltip={t('preview.reload', 'Reload preview')}
+        ariaLabel={t('preview.reload')}
+        tooltip={t('preview.reload')}
         onClick={reload}
       >
         <svg
@@ -192,8 +185,8 @@
       <Button
         variant="tertiary"
         icon
-        ariaLabel={t('preview.home', 'Back to entry page')}
-        tooltip={t('preview.home', 'Back to entry page')}
+        ariaLabel={t('preview.home')}
+        tooltip={t('preview.home')}
         onClick={() => {
           currentUrl = preview.url;
           reload();
@@ -215,13 +208,13 @@
   </div>
   {#if error}
     <Banner variant="error" role="alert" class="html-preview__feedback">
-      {t('preview.failed', 'Preview could not be updated.')}
+      {t('preview.failed')}
       {error}
-      <Button onClick={() => void open()}>{t('common.retry', 'Retry')}</Button>
+      <Button onClick={() => void open()}>{t('common.retry')}</Button>
     </Banner>
   {:else if loading}
     <Banner class="html-preview__feedback" role="status"
-      >{t('preview.loading', 'Opening preview…')}</Banner
+      >{t('preview.loading')}</Banner
     >
   {/if}
   {#if preview}
@@ -230,7 +223,7 @@
         class:unavailable={frameUnavailable}
         bind:this={frame}
         src={frameUrl}
-        title={t('preview.frame', 'Website preview')}
+        title={t('preview.frame')}
         sandbox="allow-scripts allow-downloads"
         referrerpolicy="no-referrer"
         allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"
@@ -240,11 +233,8 @@
   {:else if !loading && !error}
     <EmptyState
       fill
-      title={t('preview.emptyTitle', 'Your website, beside the conversation')}
-      description={t(
-        'preview.emptyDescription',
-        'Choose an HTML file shared by the agent in the conversation to preview it here.',
-      )}
+      title={t('preview.emptyTitle')}
+      description={t('preview.emptyDescription')}
     >
       {#snippet icon()}<svg
           width="38"
