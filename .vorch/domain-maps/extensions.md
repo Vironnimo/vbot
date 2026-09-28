@@ -98,11 +98,12 @@ actor key `extension:<owner>`, never under its synthetic participant Agent id; s
 
 ## Agent-facing text
 
-Rows cover only the bundled-page UI text paragraph of the `vbot-cli` Skill reference (`resources/skills/vbot-cli/references/extensions.md`); its older wording has no recorded reasons yet.
+Rows cover only the bundled-page paragraphs of the `vbot-cli` Skill reference (`resources/skills/vbot-cli/references/extensions.md`) listed below; its older wording has no recorded reasons yet.
 
 | Text | Reason |
 |---|---|
 | `A bundled page keeps its English UI text in its own catalog: ...` | The WebUI English catalog is the only source of page text and `t()` takes no English fallback (`webui.md`). Without the paragraph, an Agent authoring a bundled page hard-codes English text or calls `t()` for keys no catalog holds, which render as raw keys; a key that collides with the WebUI catalog makes `registerCatalog` throw before the page mounts. Preventive; no Session evidence yet (2026-09). |
+| `An invalidation callback receives {reason, change}: ...` | Scoped page invalidation (2026-09-28): `publish_change` forwards `{resource, ids, revision}` only to the owning Extension's open page, and `null` marks a full refresh (descriptor reload, reconnect, Run-stream recovery). Without the sentence, an Agent authoring a page reloads every read model on each change; the Swarm page did exactly that under a 23-Agent load (~3.5 operations/s plus a descriptor reload per change). |
 
 ## References
 
