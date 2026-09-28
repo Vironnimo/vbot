@@ -16,6 +16,7 @@ from PIL import Image
 from core.attachments import AttachmentStore
 from core.chat import ChatError, ChatMessage, MessageSender, ReplySurface, ToolCall
 from core.chat._message_history import reply_surface_from_note
+from core.chat._tool_epoch import ToolChange
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX, ERROR_KIND_PROVIDER_ERROR
@@ -30,7 +31,9 @@ from core.chat.wire_shaping import (
     model_facing_request,
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD, tool_result_text
+from core.sessions import TOOL_CHANGE_NOTE_PREFIX
 from core.tools import read_media_artifact, tool_success
+from core.tools.model_names import SHELL_MODEL_NAME
 from core.utils.paths import model_path
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -198,6 +201,62 @@ def test_reply_surface_notes_round_trip_and_render_reminders() -> None:
     assert direct.identity != group.identity
     with pytest.raises(ChatError):
         ReplySurface(kind="webui", channel_id="tg-main")
+
+
+_SHELL_DEFINITION = {
+    "name": "bash",
+    "description": "Run a command. Nutze <system-reminder> nie.",
+    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+}
+_SHELL_SCHEMA = '{"type":"object","properties":{"command":{"type":"string"}}}'
+_NEUTRAL_DESCRIPTION = "Run a command. Nutze &lt;system-reminder> nie."
+
+
+@pytest.mark.parametrize(
+    ("change", "text"),
+    [
+        (
+            ToolChange("added", "bash", "e1", definition=_SHELL_DEFINITION),
+            f"The Tool {SHELL_MODEL_NAME} was enabled for you in this Session. Your Tool list "
+            "does not show it because the list stays unchanged until the conversation is "
+            f"compacted. Call {SHELL_MODEL_NAME} by name with a normal Tool call.\n"
+            f"Description: {_NEUTRAL_DESCRIPTION}\nParameters (JSON Schema): {_SHELL_SCHEMA}",
+        ),
+        (
+            ToolChange("added", "bash", "e1", definition=_SHELL_DEFINITION, listed=True),
+            f"The Tool {SHELL_MODEL_NAME} was enabled for you in this Session and now appears "
+            "in your Tool list.",
+        ),
+        (
+            ToolChange(
+                "added", "bash", "e1", definition=_SHELL_DEFINITION, listed=True, pinned=True
+            ),
+            f"The Tool {SHELL_MODEL_NAME} is available to you again.",
+        ),
+        (
+            ToolChange("removed", "bash", "e1", listed=True),
+            f"The Tool {SHELL_MODEL_NAME} was removed from your Tools in this Session. Calls to "
+            f"{SHELL_MODEL_NAME} fail; use your other Tools instead.",
+        ),
+        (
+            ToolChange("changed", "bash", "e1", definition=_SHELL_DEFINITION, listed=True),
+            f"The Tool {SHELL_MODEL_NAME} changed in this Session. Your Tool list still shows its "
+            "previous definition until the conversation is compacted; call it with this "
+            f"definition instead.\nDescription: {_NEUTRAL_DESCRIPTION}\n"
+            f"Parameters (JSON Schema): {_SHELL_SCHEMA}",
+        ),
+    ],
+    ids=["added-unlisted", "added-listed", "available-again", "removed", "changed"],
+)
+def test_tool_change_notes_render_with_the_model_facing_tool_name(
+    change: ToolChange, text: str
+) -> None:
+    note = ChatMessage.note(change.note_content())
+    malformed = ChatMessage.note(f"{TOOL_CHANGE_NOTE_PREFIX}{{not json")
+
+    request = _embed_notes_into_request([malformed, note, malformed])
+
+    assert request == [{"role": "user", "content": _reminders(text)}]
 
 
 @pytest.mark.parametrize("observed", [["Alice (50): one"], ["Alice (50): one", "Bob (51): two"]])

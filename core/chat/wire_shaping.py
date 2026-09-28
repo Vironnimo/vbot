@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from core.chat._message_history import reply_surface_from_note
+from core.chat._tool_epoch import render_tool_change, tool_change_from_note
 from core.chat.errors import ChatMessageValidationError, ImageBudgetExceededError
 from core.chat.messages import (
     COMPACTION_SKILL_NOTE_PREFIX,
@@ -55,6 +56,7 @@ from core.sessions import (
     SKILL_AVAILABLE_NOTE_PREFIX,
     is_channel_message_note,
     is_skill_context_note,
+    is_tool_change_note,
     skill_context_note_payload,
 )
 from core.tools import model_tool_name, registry_tool_name, tool_failure
@@ -712,8 +714,8 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
     user message at its chronological position — the trigger carrier rendered in
     place, right where the activation happened. Passive channel observations become
     separate, explicitly untrusted quoted-context user messages, never system
-    reminders. A malformed skill note is dropped from the request (it stays in
-    canonical Session history for debugging).
+    reminders. A malformed skill or Tool-change note is dropped from the request
+    (it stays in canonical Session history for debugging).
     """
     request_messages: list[JsonObject] = []
     note_run: list[ChatMessage] = []
@@ -732,6 +734,8 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
 
     for note in notes:
         if not note.content:
+            continue
+        if is_tool_change_note(note) and tool_change_from_note(note) is None:
             continue
         if is_skill_context_note(note):
             payload = skill_context_note_payload(note)
@@ -789,6 +793,9 @@ def _system_reminder_body(message: ChatMessage) -> str:
     content = message.content
     if not isinstance(content, str):
         raise ChatMessageValidationError(f"{message.role} messages content must be a string")
+    tool_change = tool_change_from_note(message)
+    if tool_change is not None:
+        return render_tool_change(tool_change)
     reply_surface = reply_surface_from_note(message)
     if reply_surface is not None:
         content = reply_surface.reminder_text()
