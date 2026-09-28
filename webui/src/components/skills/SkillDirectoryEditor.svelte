@@ -39,7 +39,7 @@
   }
 
   let defaultSkillDirectoryValue = $derived(
-    getDefaultSkillDirectoryValue(settings, t),
+    getDefaultSkillDirectoryValue(settings),
   );
   let saveDisabled = $derived(
     saving || directoriesMatch(skillDirectories, getSkillDirectories(settings)),

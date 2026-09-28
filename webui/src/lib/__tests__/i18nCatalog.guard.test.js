@@ -13,8 +13,7 @@ import { englishCatalog } from '../i18n.js';
 // no call passes an English fallback, every catalog entry is used, and each
 // entry's `{name}` placeholders are supplied by the call's params object.
 //
-// Calls are `t(key, params)`, an injected `translate(key, params)`, and
-// `tOr(key, fallback, params)`. A key is a string literal, or a template
+// Calls are `t(key, params)` and `tOr(key, fallback, params)`. A key is a string literal, or a template
 // literal documented in COMPOSED_KEYS below.
 
 const REPO_DIR = join(
@@ -161,7 +160,7 @@ function walk(node, onCall) {
   if (
     node.type === 'CallExpression' &&
     node.callee.type === 'Identifier' &&
-    ['t', 'tOr', 'translate'].includes(node.callee.name)
+    ['t', 'tOr'].includes(node.callee.name)
   ) {
     onCall(node);
   }
@@ -205,7 +204,7 @@ function paramNames(node) {
   return names;
 }
 
-// Every t/tOr/translate call with its location, scope, key and params.
+// Every t/tOr call with its location, scope, key and params.
 function scanCalls(sources) {
   const calls = [];
   for (const { file, scope, source } of sources) {

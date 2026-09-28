@@ -103,7 +103,7 @@
   let showInstall = $state(false);
   let installScope = $state('global');
   let directoryEditor = $state();
-  let collections = $derived(skillCollections(inventory, agents, t));
+  let collections = $derived(skillCollections(inventory, agents));
   let collection = $derived(collections.find((item) => item.key === scope));
   let filtered = $derived(
     filterSkills(inventory, searchQuery, scope, statusFilter, agents),
@@ -633,14 +633,14 @@
                           <span class="skills-row-name">{entry.name}</span>
                           {#if entry.status !== 'available'}<StatusChip
                               variant={skillStatusVariant(entry)}
-                              >{skillStatusLabel(entry, t)}</StatusChip
+                              >{skillStatusLabel(entry)}</StatusChip
                             >
                           {:else if skillDiagnosticLines(entry).length}<Badge
                               variant="warn">{t('skills.notes')}</Badge
                             >{/if}
                         </span>
                         <span class="skills-row-source">
-                          {skillSourceLabel(entry, t, agents)}{#if entry.shared}
+                          {skillSourceLabel(entry, agents)}{#if entry.shared}
                             <span
                               class="skills-source-divider"
                               aria-hidden="true">·</span
@@ -692,7 +692,7 @@
                 onClick={closeDetail}>← {t('skills.backToList')}</Button
               >
               <StatusChip variant={skillStatusVariant(selected)}
-                >{skillStatusLabel(selected, t)}</StatusChip
+                >{skillStatusLabel(selected)}</StatusChip
               >
             </div>
             <header class="skills-detail-header">
@@ -703,7 +703,7 @@
                 {selected.name}
               </h3>
               <p class="skills-detail-source">
-                {skillSourceLabel(selected, t, agents)}
+                {skillSourceLabel(selected, agents)}
               </p>
               {@render skillActions(selected, true)}
             </header>

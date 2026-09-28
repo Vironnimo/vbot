@@ -293,7 +293,7 @@
 
   function connectionDescription(connection) {
     if (isSharedOpenCodeConnection(connection)) {
-      return describeSharedOpenCodeKey(t);
+      return describeSharedOpenCodeKey();
     }
     if (!isConnectionEnabled(connection)) {
       return t('settings.providers.disabledDescription');
@@ -608,7 +608,7 @@
                 {providerDisplayName(provider)}
               </div>
               <div class="s-row-desc">
-                {describeProvider(provider, t)}
+                {describeProvider(provider)}
               </div>
             </div>
             <div class="s-entity__end">
@@ -699,7 +699,7 @@
                         {#each getConnectionAccounts(connection) as account (account.id)}
                           <li class="s-connection-account-row">
                             <span class="s-connection-account-id">
-                              {accountDisplayName(account, t)}
+                              {accountDisplayName(account)}
                             </span>
                             <StatusChip
                               variant={isAccountUsable(account)
@@ -711,7 +711,7 @@
                                 : t('settings.providers.accounts.notUsable')}
                             </StatusChip>
                             <span class="s-connection-account-source">
-                              {describeAccountSource(account, t)}
+                              {describeAccountSource(account)}
                             </span>
                             <div class="s-connection-account-actions">
                               {#if isOAuthDeviceFlowConnection(connection) && isOAuthAccount(account)}

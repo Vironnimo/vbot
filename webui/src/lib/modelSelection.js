@@ -97,30 +97,25 @@ export function filterModelSelectOptions(
 export function modelFilterFooterLabel({
   showAll = false,
   hiddenCount = 0,
-  translate = t,
 } = {}) {
   if (showAll) {
-    return translate('models.filter.showSuitable');
+    return t('models.filter.showSuitable');
   }
 
   if (hiddenCount <= 0) {
     return '';
   }
 
-  return translate('models.filter.showAll', {
+  return t('models.filter.showAll', {
     count: hiddenCount,
   });
 }
 
-function suitabilityBadgeLabel(reasons, translate) {
+function suitabilityBadgeLabel(reasons) {
   const labels = {
-    [SUITABILITY_REASON_NO_TOOLS]: translate('models.filter.noTools'),
-    [SUITABILITY_REASON_BELOW_MIN_CONTEXT]: translate(
-      'models.filter.belowMinContext',
-    ),
-    [SUITABILITY_REASON_CONTEXT_UNKNOWN]: translate(
-      'models.filter.contextUnknown',
-    ),
+    [SUITABILITY_REASON_NO_TOOLS]: t('models.filter.noTools'),
+    [SUITABILITY_REASON_BELOW_MIN_CONTEXT]: t('models.filter.belowMinContext'),
+    [SUITABILITY_REASON_CONTEXT_UNKNOWN]: t('models.filter.contextUnknown'),
   };
 
   return reasons
@@ -129,13 +124,13 @@ function suitabilityBadgeLabel(reasons, translate) {
     .join(' · ');
 }
 
-function suitabilityFields(model, translate) {
+function suitabilityFields(model) {
   const { suitable, reasons } = modelSuitability(model);
   // A known-down local endpoint (model.list `reachable: false`, e.g. Ollama
   // not running) badges the option but never hides it — the model stays
   // selectable so agents can be configured ahead of starting the service.
   const unreachableLabel =
-    model?.reachable === false ? translate('models.filter.unreachable') : '';
+    model?.reachable === false ? t('models.filter.unreachable') : '';
 
   if (suitable) {
     return unreachableLabel
@@ -147,7 +142,7 @@ function suitabilityFields(model, translate) {
       : { suitable: true, suitabilityReasons: [] };
   }
 
-  const badge = suitabilityBadgeLabel(reasons, translate);
+  const badge = suitabilityBadgeLabel(reasons);
   return {
     suitable: false,
     suitabilityReasons: reasons,
@@ -162,7 +157,6 @@ export function buildModelSelectOptions({
   modelOnly = false,
   selectedModelValue = '',
   emptyLabel = '',
-  translate = t,
 } = {}) {
   const connectionsByProvider = usableConnectionsByProvider(connections);
   const selectedModel = parseModelSelectionValue(selectedModelValue);
@@ -190,7 +184,7 @@ export function buildModelSelectOptions({
           label: selectedModel.model,
           code: true,
           isUnavailable: false,
-          ...suitabilityFields(selectedCatalogModel, translate),
+          ...suitabilityFields(selectedCatalogModel),
         }
       : null;
   const emptyOption = {
@@ -206,7 +200,7 @@ export function buildModelSelectOptions({
           label: model.id,
           code: true,
           isUnavailable: false,
-          ...suitabilityFields(model, translate),
+          ...suitabilityFields(model),
         },
       ];
     }
@@ -216,12 +210,7 @@ export function buildModelSelectOptions({
     );
 
     return providerConnections.flatMap((connection) =>
-      connectionModelOptions(
-        model,
-        connection,
-        providerConnections.length,
-        translate,
-      ),
+      connectionModelOptions(model, connection, providerConnections.length),
     );
   });
 
@@ -246,7 +235,6 @@ export function buildModelSelectOptions({
         selectedModel.model,
         selectedConnectionId,
         connections,
-        translate,
       ),
       isUnavailable: true,
     },
@@ -323,15 +311,10 @@ export function modelShortName(modelValue) {
   return segments.at(-1) ?? '';
 }
 
-function connectionModelOptions(
-  model,
-  connection,
-  providerConnectionCount,
-  translate,
-) {
+function connectionModelOptions(model, connection, providerConnectionCount) {
   const localId = connectionLocalIdFromConnectionId(connection.id);
   const usableAccounts = usableConnectionAccounts(connection);
-  const suitability = suitabilityFields(model, translate);
+  const suitability = suitabilityFields(model);
 
   if (usableAccounts.length <= 1) {
     return [
@@ -355,7 +338,6 @@ function connectionModelOptions(
       connection,
       account.id,
       providerConnectionCount,
-      translate,
     ),
     code: true,
     isUnavailable: false,
@@ -457,9 +439,8 @@ function accountModelOptionLabel(
   connection,
   accountId,
   providerConnectionCount,
-  translate,
 ) {
-  const accountName = accountDisplayName(accountId, translate);
+  const accountName = accountDisplayName(accountId);
 
   if (providerConnectionCount <= 1) {
     return `${model.id} (${accountName})`;
@@ -468,33 +449,28 @@ function accountModelOptionLabel(
   return `${model.id} (${connection.label} – ${accountName})`;
 }
 
-function accountDisplayName(accountId, translate) {
+function accountDisplayName(accountId) {
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    return translate('settings.providers.accounts.defaultLabel');
+    return t('settings.providers.accounts.defaultLabel');
   }
 
   return accountId;
 }
 
-function unavailableModelOptionLabel(
-  model,
-  connectionId,
-  connections,
-  translate,
-) {
+function unavailableModelOptionLabel(model, connectionId, connections) {
   if (!connectionId) {
-    return translate('agents.form.modelUnavailableOption', {
+    return t('agents.form.modelUnavailableOption', {
       model,
     });
   }
 
-  return translate('agents.form.modelUnavailableConnectionOption', {
-    connection: connectionDisplayLabel(connectionId, connections, translate),
+  return t('agents.form.modelUnavailableConnectionOption', {
+    connection: connectionDisplayLabel(connectionId, connections),
     model,
   });
 }
 
-function connectionDisplayLabel(connectionId, connections, translate) {
+function connectionDisplayLabel(connectionId, connections) {
   const { baseConnectionId, accountId } =
     splitAccountFromConnectionId(connectionId);
   const connection = connections.find((item) => item.id === baseConnectionId);
@@ -504,7 +480,7 @@ function connectionDisplayLabel(connectionId, connections, translate) {
     return baseLabel;
   }
 
-  return `${baseLabel} – ${accountDisplayName(accountId, translate)}`;
+  return `${baseLabel} – ${accountDisplayName(accountId)}`;
 }
 
 function splitAccountFromConnectionId(connectionId) {

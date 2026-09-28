@@ -3,7 +3,6 @@ import {
   fuzzyFilterFiles,
   isMentionTokenChar,
 } from '$lib/fileMentions.js';
-import { t } from '$lib/i18n.js';
 import {
   buildModelSelectOptions,
   filterModelSelectOptions,
@@ -101,7 +100,6 @@ export function createComposerPicker(context) {
     return buildModelSelectOptions({
       models: modelCatalog.models,
       connections: modelCatalog.connections,
-      translate: t,
     }).filter((option) => option.value !== '');
   });
 
@@ -113,7 +111,6 @@ export function createComposerPicker(context) {
     modelFilterFooterLabel({
       showAll: showAllModels,
       hiddenCount: allModelOptions.length - modelOptions.length,
-      translate: t,
     }),
   );
 

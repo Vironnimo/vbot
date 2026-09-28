@@ -51,7 +51,6 @@
     modelFilterFooterLabel({
       showAll: showAllModels,
       hiddenCount: allModelOptions.length - modelOptions.length,
-      translate: t,
     }),
   );
 
@@ -144,7 +143,6 @@
       connections: availableConnections,
       selectedModelValue,
       emptyLabel,
-      translate: t,
     });
   }
 

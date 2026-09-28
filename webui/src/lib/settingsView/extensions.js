@@ -1,3 +1,4 @@
+import { t } from '../i18n.js';
 import { textOrEmpty, textOrFallback } from './values.js';
 
 // --- Extensions ---------------------------------------------------------------
@@ -116,7 +117,7 @@ export function extensionStatusChipVariant(status) {
 // One entry per capability kind: a translated `label` plus the code-like
 // `value` it lists (event names, Tool names, commands), or an empty value for
 // flag-only capabilities such as startup/shutdown.
-export function extensionCapabilityParts(capabilities, translate) {
+export function extensionCapabilityParts(capabilities) {
   const normalized =
     capabilities && Array.isArray(capabilities.hooks)
       ? capabilities
@@ -125,7 +126,7 @@ export function extensionCapabilityParts(capabilities, translate) {
 
   if (normalized.hooks.length > 0) {
     parts.push({
-      label: translate('settings.extensions.hooks'),
+      label: t('settings.extensions.hooks'),
       value: normalized.hooks
         .map((hook) => `${hook.event}(${hook.count})`)
         .join(', '),
@@ -133,7 +134,7 @@ export function extensionCapabilityParts(capabilities, translate) {
   }
   if (normalized.tools.length > 0) {
     parts.push({
-      label: translate('settings.extensions.tools'),
+      label: t('settings.extensions.tools'),
       value: normalized.tools
         .map((tool) => (typeof tool === 'string' ? tool : tool.name))
         .join(', '),
@@ -141,7 +142,7 @@ export function extensionCapabilityParts(capabilities, translate) {
   }
   if (normalized.commands.length > 0) {
     parts.push({
-      label: translate('settings.extensions.commands'),
+      label: t('settings.extensions.commands'),
       value: normalized.commands
         .map((command) => `/${command.name}`)
         .join(', '),
@@ -149,19 +150,19 @@ export function extensionCapabilityParts(capabilities, translate) {
   }
   if (normalized.recallBackends.length > 0) {
     parts.push({
-      label: translate('settings.extensions.recallBackends'),
+      label: t('settings.extensions.recallBackends'),
       value: normalized.recallBackends.join(', '),
     });
   }
   if (normalized.startup) {
     parts.push({
-      label: translate('settings.extensions.startup'),
+      label: t('settings.extensions.startup'),
       value: '',
     });
   }
   if (normalized.shutdown) {
     parts.push({
-      label: translate('settings.extensions.shutdown'),
+      label: t('settings.extensions.shutdown'),
       value: '',
     });
   }
@@ -175,11 +176,11 @@ export function extensionCapabilityParts(capabilities, translate) {
  * declares unset secret fields, a line naming them by label:
  *   { hint, waitingFor }  // waitingFor is null when no unset secret is known
  */
-export function describeExtensionWaiting(extension, translate) {
+export function describeExtensionWaiting(extension) {
   if (!extension || extension.readyState !== 'waiting') {
     return null;
   }
-  const hint = translate('settings.extensions.waiting');
+  const hint = t('settings.extensions.waiting');
   const unsetSecretLabels = Array.isArray(extension.settingsSchema)
     ? extension.settingsSchema
         .filter((field) => field.type === 'secret' && field.set === false)
@@ -190,7 +191,7 @@ export function describeExtensionWaiting(extension, translate) {
   }
   return {
     hint,
-    waitingFor: translate('settings.extensions.waitingFor', {
+    waitingFor: t('settings.extensions.waitingFor', {
       fields: unsetSecretLabels.join(', '),
     }),
   };

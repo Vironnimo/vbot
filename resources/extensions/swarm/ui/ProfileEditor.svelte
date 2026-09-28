@@ -236,7 +236,6 @@
       modelOnly: true,
       selectedModelValue: value,
       emptyLabel: t('swarm.profile.selectModel'),
-      translate: t,
     });
   }
   function effortOptions(model) {
@@ -301,7 +300,6 @@
       modelOnly: true,
       selectedModelValue: compactionPolicy?.strategy.summary_model ?? '',
       emptyLabel: t('swarm.profile.summaryModelDefault'),
-      translate: t,
     }),
   );
   function setCustomCompaction(enabled) {
@@ -521,7 +519,6 @@
                   footerActionLabel={modelFilterFooterLabel({
                     showAll: showAllModels,
                     hiddenCount: allOptions.length - visibleOptions.length,
-                    translate: t,
                   })}
                   onFooterAction={() => (showAllModels = !showAllModels)}
                   onValueChange={(value) => selectModel(row, value)}

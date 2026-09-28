@@ -103,7 +103,7 @@
           <tbody>
             {#each usage.kinds as row (row.kind)}
               <tr>
-                <td>{modelCallKindLabel(row.kind, t)}</td>
+                <td>{modelCallKindLabel(row.kind)}</td>
                 <td class="num">{formatInteger(row.calls, locale)}</td>
                 <td class="num"
                   >{formatInteger(row.unreported_calls, locale)}</td

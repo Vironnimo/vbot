@@ -37,7 +37,6 @@
   let projectsState = $state(createProjectsState());
   const projectsController = createProjectsController({
     state: untrack(() => projectsState),
-    translate: t,
     onProjectSelected: (projectId) => onProjectSelected(projectId),
     onToast: (toast) => onToast(toast),
   });

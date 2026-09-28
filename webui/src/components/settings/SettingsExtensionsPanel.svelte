@@ -465,8 +465,8 @@
       {@const capabilityParts =
         extension.name === 'mcp' && extension.status === 'loaded'
           ? []
-          : extensionCapabilityParts(extension.capabilities, t)}
-      {@const waiting = describeExtensionWaiting(extension, t)}
+          : extensionCapabilityParts(extension.capabilities)}
+      {@const waiting = describeExtensionWaiting(extension)}
       {@const configExpanded = expandedConfigNames.has(extension.name)}
       <div class="s-ext-card s-entity">
         <div class="s-ext-head s-entity__head">

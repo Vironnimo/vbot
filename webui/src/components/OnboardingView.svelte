@@ -86,7 +86,6 @@
       connections: connections.filter(
         (connection) => connection.provider_id === connectedProvider,
       ),
-      translate: t,
     })
       .filter((option) => option.value)
       .map((option) => {
@@ -125,7 +124,6 @@
     modelFilterFooterLabel({
       showAll: showAllModels,
       hiddenCount: allModelOptions.length - suitableOptions.length,
-      translate: t,
     }),
   );
   let canStart = $derived(

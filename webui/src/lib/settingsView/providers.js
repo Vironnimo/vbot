@@ -1,3 +1,5 @@
+import { t } from '../i18n.js';
+
 export function getProviderItems(settings) {
   return Array.isArray(settings?.providers?.items)
     ? settings.providers.items
@@ -56,25 +58,25 @@ export function isOAuthAccount(account) {
   return account?.source === ACCOUNT_SOURCE_OAUTH;
 }
 
-export function accountDisplayName(account, translate) {
+export function accountDisplayName(account) {
   if (account?.id === DEFAULT_ACCOUNT_ID) {
-    return translate('settings.providers.accounts.defaultLabel');
+    return t('settings.providers.accounts.defaultLabel');
   }
 
   return typeof account?.id === 'string' ? account.id : '';
 }
 
-export function describeAccountSource(account, translate) {
+export function describeAccountSource(account) {
   if (account?.source === ACCOUNT_SOURCE_PROCESS_ENV) {
-    return translate('settings.providers.accounts.source.processEnv');
+    return t('settings.providers.accounts.source.processEnv');
   }
 
   if (account?.source === ACCOUNT_SOURCE_DATA_DIR) {
-    return translate('settings.providers.accounts.source.dataDir');
+    return t('settings.providers.accounts.source.dataDir');
   }
 
   if (account?.source === ACCOUNT_SOURCE_OAUTH) {
-    return translate('settings.providers.accounts.source.oauth');
+    return t('settings.providers.accounts.source.oauth');
   }
 
   return '';
@@ -243,17 +245,17 @@ export function isSharedOpenCodeConnection(connection) {
   );
 }
 
-export function describeSharedOpenCodeKey(translate) {
-  return translate('settings.providers.opencode.sharedKey');
+export function describeSharedOpenCodeKey() {
+  return t('settings.providers.opencode.sharedKey');
 }
 
-export function describeProvider(provider, translate) {
+export function describeProvider(provider) {
   const fragments = [];
 
   if (provider?.id === 'opencode-go') {
-    fragments.push(translate('settings.providers.opencode.go'));
+    fragments.push(t('settings.providers.opencode.go'));
   } else if (provider?.id === 'opencode-zen') {
-    fragments.push(translate('settings.providers.opencode.zen'));
+    fragments.push(t('settings.providers.opencode.zen'));
   }
 
   if (
@@ -261,7 +263,7 @@ export function describeProvider(provider, translate) {
     provider.credential_key.length > 0
   ) {
     fragments.push(
-      translate('settings.providers.description.credentialKey', {
+      t('settings.providers.description.credentialKey', {
         credentialKey: provider.credential_key,
       }),
     );
@@ -269,7 +271,7 @@ export function describeProvider(provider, translate) {
 
   if (typeof provider?.base_url === 'string' && provider.base_url.length > 0) {
     fragments.push(
-      translate('settings.providers.description.baseUrl', {
+      t('settings.providers.description.baseUrl', {
         baseUrl: provider.base_url,
       }),
     );
@@ -277,13 +279,11 @@ export function describeProvider(provider, translate) {
 
   if (Number.isFinite(provider?.model_count)) {
     fragments.push(
-      translate('settings.providers.description.modelCount', {
+      t('settings.providers.description.modelCount', {
         count: provider.model_count,
       }),
     );
   }
 
-  return (
-    fragments.join(' ') || translate('settings.providers.description.none')
-  );
+  return fragments.join(' ') || t('settings.providers.description.none');
 }

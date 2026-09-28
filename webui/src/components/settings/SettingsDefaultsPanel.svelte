@@ -95,7 +95,6 @@
     modelFilterFooterLabel({
       showAll: showAllModels,
       hiddenCount: allDefaultModelOptions.length - defaultModelOptions.length,
-      translate: t,
     }),
   );
   let defaultModelSelectValue = $derived(
@@ -237,7 +236,6 @@
       connections: availableConnections,
       selectedModelValue,
       emptyLabel,
-      translate: t,
     });
   }
 
