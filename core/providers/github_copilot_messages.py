@@ -96,9 +96,9 @@ def build_copilot_messages_payload(
 
 
 def normalize_copilot_messages_response(response: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a Copilot Messages response to canonical assistant fields."""
+    """Normalize a Copilot Messages response, whose ``content`` is a list, to canonical fields."""
 
-    content_blocks = response.get("content", [])
+    content_blocks = response["content"]
     normalized: dict[str, Any] = {
         "role": "assistant",
         "content": _extract_messages_text(content_blocks),
@@ -550,7 +550,7 @@ def _safe_max_tokens_value(value: Any) -> int | None:
     return None
 
 
-def _extract_messages_text(content_blocks: Any) -> str | None:
+def _extract_messages_text(content_blocks: list[Any]) -> str | None:
     text_parts = [
         block["text"]
         for block in _content_blocks(content_blocks)
@@ -559,7 +559,7 @@ def _extract_messages_text(content_blocks: Any) -> str | None:
     return "".join(text_parts) if text_parts else None
 
 
-def _extract_messages_reasoning(content_blocks: Any) -> str | None:
+def _extract_messages_reasoning(content_blocks: list[Any]) -> str | None:
     reasoning_parts = [
         reasoning_text
         for block in _content_blocks(content_blocks)
@@ -570,7 +570,7 @@ def _extract_messages_reasoning(content_blocks: Any) -> str | None:
     return "".join(reasoning_parts) if reasoning_parts else None
 
 
-def _extract_messages_reasoning_meta(content_blocks: Any) -> dict[str, Any] | None:
+def _extract_messages_reasoning_meta(content_blocks: list[Any]) -> dict[str, Any] | None:
     reasoning_blocks = [
         safe_block
         for safe_block in (
@@ -626,9 +626,7 @@ def _extract_messages_usage(response: dict[str, Any]) -> dict[str, Any] | None:
     return normalized
 
 
-def _content_blocks(content_blocks: Any) -> list[dict[str, Any]]:
-    if not isinstance(content_blocks, list):
-        return []
+def _content_blocks(content_blocks: list[Any]) -> list[dict[str, Any]]:
     return [block for block in content_blocks if isinstance(block, dict)]
 
 

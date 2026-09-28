@@ -593,7 +593,7 @@ def _scan_preview(state: Any, project: Project) -> JsonObject:
     result = resolver.scan_project_report(project)
     result = ScanResult(
         team=result.team,
-        report=result.report.with_tool_findings(_unavailable_project_tool_findings(state, project)),
+        report=result.report.with_findings(_unavailable_project_tool_findings(state, project)),
     )
     response = _scan_response(resolver, result, project)
     response["skills"] = _project_skill_pool(state, project.project_id)

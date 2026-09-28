@@ -163,25 +163,11 @@ class OAuthTokenGetter:
         self._oauth_config = oauth_config
         self._account_id = account_id
         self._client = client
-        self._owns_client = client is None
         self._lock = token_store.refresh_lock(
             provider_id,
             local_connection_id,
             account_id=account_id,
         )
-
-    async def __aenter__(self) -> OAuthTokenGetter:
-        return self
-
-    async def __aexit__(self, *_exc_info: object) -> None:
-        await self.aclose()
-
-    async def aclose(self) -> None:
-        """Close the internally-owned HTTP client, if one was created."""
-
-        if self._client is not None and self._owns_client:
-            await self._client.aclose()
-            self._client = None
 
     async def __call__(self) -> str:
         """Return a valid OAuth-backed API token, refreshing when needed."""
@@ -243,7 +229,7 @@ class OAuthTokenGetter:
         if token_exchange_url and github_oauth_token:
             return await self._refresh_token_exchange(token, token_exchange_url, github_oauth_token)
         if token.refresh_token:
-            return await self._refresh_oauth_token(token)
+            return await self._refresh_oauth_token(token, token.refresh_token)
         _LOGGER.warning(
             "OAuth token expired with no refresh path (provider=%s connection=%s) — "
             "reconnect required",
@@ -280,24 +266,16 @@ class OAuthTokenGetter:
         )
         return self._save_refreshed_token(token, refreshed_token)
 
-    async def _refresh_oauth_token(self, token: OAuthToken) -> str:
-        if not token.refresh_token:
-            _LOGGER.warning(
-                "OAuth refresh requested without a refresh token "
-                "(provider=%s connection=%s) — reconnect required",
-                self._provider_id,
-                self._local_connection_id,
-            )
-            raise ProviderAuthError("OAuth token expired — please reconnect")
+    async def _refresh_oauth_token(self, token: OAuthToken, stored_refresh_token: str) -> str:
         now = datetime.now(UTC)
         try:
             if self._oauth_config.device_flow in ROTATING_REFRESH_DEVICE_FLOWS:
                 # These providers rotate refresh tokens. Retrying a POST after
                 # an ambiguous transport failure can replay the retired token,
                 # whose auth rejection would then clear the stored login.
-                response_data = await self._post_refresh_token(token.refresh_token)
+                response_data = await self._post_refresh_token(stored_refresh_token)
             else:
-                response_data = await retry_async(self._post_refresh_token, token.refresh_token)
+                response_data = await retry_async(self._post_refresh_token, stored_refresh_token)
             if (
                 self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
                 and response_data.get("status") != "success"
@@ -327,7 +305,7 @@ class OAuthTokenGetter:
             refreshed_token = OAuthToken(
                 access_token=access_token,
                 refresh_token=(
-                    refresh_token if isinstance(refresh_token, str) else token.refresh_token
+                    refresh_token if isinstance(refresh_token, str) else stored_refresh_token
                 ),
                 expires_at=expires_at,
                 extra=extra,

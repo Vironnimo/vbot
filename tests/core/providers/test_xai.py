@@ -413,13 +413,13 @@ async def test_xai_403_recovers_only_exact_oauth_token_rejection(
         method=method, url=(connection.base_url or provider.base_url).rstrip("/") + endpoint
     ).mock(side_effect=[rejection, rejection if outcome == "rejected_again" else success])
 
-    async with OAuthTokenGetter(store, "xai", "subscription", connection.oauth) as getter:
-        credential: TokenGetter | str = "test-key" if outcome == "static_key" else getter
-        if outcome == "success":
-            assert await _invoke(consumer, provider, connection, credential, tmp_path)
-        else:
-            with pytest.raises((ProviderAuthError, ModelDiscoveryError)):
-                await _invoke(consumer, provider, connection, credential, tmp_path)
+    getter = OAuthTokenGetter(store, "xai", "subscription", connection.oauth)
+    credential: TokenGetter | str = "test-key" if outcome == "static_key" else getter
+    if outcome == "success":
+        assert await _invoke(consumer, provider, connection, credential, tmp_path)
+    else:
+        with pytest.raises((ProviderAuthError, ModelDiscoveryError)):
+            await _invoke(consumer, provider, connection, credential, tmp_path)
 
     assert route.call_count == (2 if renews else 1)
     assert refresh.call_count == (1 if renews else 0)

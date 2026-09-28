@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -118,47 +117,25 @@ def test_unslugifiable_name_becomes_finding() -> None:
     assert findings[0].source_path == Path("/repo/***.md")
 
 
-@pytest.mark.parametrize(
-    ("enrich", "finding"),
-    [
-        pytest.param(
-            ScanReport.with_model_findings,
-            ScanFinding(
-                type=FindingType.BAD_MODEL,
-                detail="model 'opencode-go/glm-5.1' not configured",
-                agent_id="builder",
-                source_path=Path("/repo/builder.md"),
-            ),
-            id="model",
-        ),
-        pytest.param(
-            ScanReport.with_pointer_findings,
-            ScanFinding(
-                type=FindingType.ORPHAN,
-                detail="default-agent 'gone' is not in the scanned team",
-                agent_id="gone",
-            ),
-            id="pointer",
-        ),
-        pytest.param(
-            ScanReport.with_tool_findings,
-            ScanFinding(
-                type=FindingType.UNAVAILABLE_TOOL,
-                detail="tool 'extension_tool' is not currently registered",
-            ),
-            id="tool",
-        ),
-    ],
-)
-def test_enrichment_returns_a_new_report_with_appended_findings(
-    enrich: Callable[[ScanReport, list[ScanFinding]], ScanReport], finding: ScanFinding
-) -> None:
+def test_enrichment_returns_a_new_report_with_appended_findings() -> None:
     _, report = build_scan_report(
         [_ranked(0, _agent("builder", "opencode", Path("/repo/builder.md")))]
     )
+    findings = [
+        ScanFinding(
+            type=FindingType.BAD_MODEL,
+            detail="model 'opencode-go/glm-5.1' not configured",
+            agent_id="builder",
+            source_path=Path("/repo/builder.md"),
+        ),
+        ScanFinding(
+            type=FindingType.ORPHAN,
+            detail="default-agent 'gone' is not in the scanned team",
+            agent_id="gone",
+        ),
+    ]
 
-    enriched = enrich(report, [finding])
+    enriched = report.with_findings(findings)
 
     assert report.is_clean  # the original report is immutable
-    assert not enriched.is_clean
-    assert enriched.findings_of(finding.type) == (finding,)
+    assert enriched.findings == tuple(findings)

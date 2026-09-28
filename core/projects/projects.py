@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
@@ -415,26 +415,26 @@ class Project:
     cwd: str
     created_at: str
     updated_at: str
-    default_agent: str = DEFAULT_DEFAULT_AGENT
-    default_model: str = DEFAULT_DEFAULT_MODEL
-    default_temperature: float | None = DEFAULT_DEFAULT_TEMPERATURE
-    default_thinking_effort: str | None = DEFAULT_DEFAULT_THINKING_EFFORT
+    default_agent: str
+    default_model: str
+    default_temperature: float | None
+    default_thinking_effort: str | None
     # The project's single source format (GLOSSARY → Source Format): which
     # coding-agent ecosystem its Team agents and project skills come from
     # (".opencode/" vs ".claude/"). Exactly one per project — every consumer
     # (scan, skills, autocomplete, prompt preview) sees only this format's set.
-    source_format: str = DEFAULT_PROJECT_SOURCE_FORMAT
-    auto_load: list[str] = field(default_factory=list)
+    source_format: str
+    auto_load: list[str]
     # The Project Tool Whitelist — the hard ceiling for this project's config
-    # agents (GLOSSARY → Project Tool Whitelist). Defaults to the base list; an
-    # explicit empty list is a real value (every tool off) and is preserved.
-    allowed_tools: list[str] = field(default_factory=lambda: list(PROJECT_DEFAULT_ALLOWED_TOOLS))
+    # agents (GLOSSARY → Project Tool Whitelist). ``build_project`` defaults it to
+    # the base list; an explicit empty list is a real value (every tool off).
+    allowed_tools: list[str]
     # The Project Skill Whitelist as a rule, not a resolved set (decision 3): which
     # bundled and global skills are opted in, and which project skills are exceptionally
     # off. All empty by default → only the project's own scanned skills are active.
-    skills_bundled_enabled: list[str] = field(default_factory=list)
-    skills_global_enabled: list[str] = field(default_factory=list)
-    skills_project_disabled: list[str] = field(default_factory=list)
+    skills_bundled_enabled: list[str]
+    skills_global_enabled: list[str]
+    skills_project_disabled: list[str]
     # Per-agent overrides keyed by scanned ``agent_id`` → an override object with
     # optional ``model`` (user-facing ``<provider>/<model-id>[::connection]``),
     # ``temperature`` (number), and ``thinking_effort`` (effort string, ``""`` = force
@@ -445,7 +445,7 @@ class Project:
     # (``set_override`` / ``clear_override``), not the generic ``project.set`` field
     # surface. An empty override object is an entry holding only fields this vBot does
     # not model: it overrides nothing, and the writer keeps those fields on disk.
-    overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
+    overrides: dict[str, dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable mapping persisted to ``project.json``."""

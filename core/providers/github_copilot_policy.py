@@ -269,11 +269,6 @@ class GitHubCopilotModelPolicy:
         # payload contract; keep its existing omission behavior.
         return False
 
-    def allows_reasoning_effort(self, effort: str) -> bool:
-        if not effort or effort == "none":
-            return True
-        return effort in self.allowed_reasoning_efforts
-
     def closest_reasoning_effort(self, effort: Any) -> str | None:
         normalized_effort = normalize_thinking_effort(effort)
         if not normalized_effort:

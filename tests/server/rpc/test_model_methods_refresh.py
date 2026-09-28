@@ -550,19 +550,11 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
             self.args = (token_store, provider_id, connection_id, config)
             refreshed["account_id"] = account_id
 
-        async def __aenter__(self) -> StubOAuthTokenGetter:
-            refreshed["entered"] = True
-            return self
-
-        async def __aexit__(self, *_exc_info: object) -> None:
-            refreshed["closed"] = True
-
         async def __call__(self) -> str:
             refreshed["getter_args"] = self.args
             return "fresh-runtime-token"
 
     async def fake_refresh(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        assert not refreshed.get("closed")
         assert isinstance(_args[1], StubOAuthTokenGetter)
         refreshed["credential"] = await _args[1]()
         refreshed["connection"] = _kwargs["credential_connection"]
@@ -579,8 +571,6 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
 
     assert refreshed["credential"] == "fresh-runtime-token"
     assert refreshed["connection"].id == "oauth"
-    assert refreshed["entered"] is True
-    assert refreshed["closed"] is True
     assert refreshed["account_id"] == account_id
     assert refreshed["connection"].base_url == "https://api.enterprise.githubcopilot.com"
 

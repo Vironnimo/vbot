@@ -516,12 +516,11 @@ class AgentResolver:
 
         This is the project-scoped scan the open/re-scan path uses: it runs the
         structural scan, then appends one ``BAD_MODEL`` finding per config agent
-        whose declared model is not configured in this instance (via the
-        :meth:`ScanReport.with_model_findings` seam) and one ``ORPHAN`` finding per
-        anchor pointer — the project's ``default_agent`` and every session-owning
-        agent under the anchor — that names an agent the scan did not produce (via
-        :meth:`ScanReport.with_pointer_findings`). Both checks happen **here, at
-        scan time** — not lazily at first run.
+        whose declared model is not configured in this instance and one ``ORPHAN``
+        finding per anchor pointer — the project's ``default_agent`` and every
+        session-owning agent under the anchor — that names an agent the scan did
+        not produce (both via :meth:`ScanReport.with_findings`). Both checks happen
+        **here, at scan time** — not lazily at first run.
         """
         result = scan_project(
             _project_root(project),
@@ -530,9 +529,7 @@ class AgentResolver:
         )
         model_findings = self._model_findings(result.team)
         pointer_findings = self._pointer_findings(project, result.team)
-        report = result.report.with_model_findings(model_findings).with_pointer_findings(
-            pointer_findings
-        )
+        report = result.report.with_findings(model_findings + pointer_findings)
         return ScanResult(team=result.team, report=report)
 
     def team_for_project(self, project_id: str) -> list[ScannedAgent]:

@@ -168,7 +168,6 @@ def _music_payload(
         if value is not None:
             payload[name] = value
     merge_extra_options(payload, options)
-    payload["stream"] = True
     return payload
 
 

@@ -139,20 +139,18 @@ async def test_openai_subscription_catalog_renews_a_rejected_token_once(
     )
     resources_dir = tmp_path / "resources"
 
-    async with OAuthTokenGetter(store, "openai", "subscription", oauth) as getter:
-        if (initial_status, retry_status) == (401, 200):
-            result = await refresh_models(
-                config, getter, resources_dir, credential_connection=connection
-            )
-            assert result["model_count"] == 1
-            assert ModelRegistry.load(resources_dir).get("openai", "test-model")
-        else:
-            with pytest.raises(ModelDiscoveryError) as caught:
-                await refresh_models(
-                    config, getter, resources_dir, credential_connection=connection
-                )
-            assert isinstance(caught.value.__cause__, ProviderAuthError)
-            assert not (resources_dir / "models" / "openai.json").exists()
+    getter = OAuthTokenGetter(store, "openai", "subscription", oauth)
+    if (initial_status, retry_status) == (401, 200):
+        result = await refresh_models(
+            config, getter, resources_dir, credential_connection=connection
+        )
+        assert result["model_count"] == 1
+        assert ModelRegistry.load(resources_dir).get("openai", "test-model")
+    else:
+        with pytest.raises(ModelDiscoveryError) as caught:
+            await refresh_models(config, getter, resources_dir, credential_connection=connection)
+        assert isinstance(caught.value.__cause__, ProviderAuthError)
+        assert not (resources_dir / "models" / "openai.json").exists()
 
     assert catalog_route.call_count == expected_catalog_calls
     assert refresh_route.call_count == expected_refresh_calls

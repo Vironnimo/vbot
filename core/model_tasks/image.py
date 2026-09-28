@@ -776,19 +776,14 @@ def load_image_inputs(
 
 
 def _ensure_analysis_total_size(total_bytes: int, max_total_bytes: int | None) -> None:
-    """Reject an analysis payload whose cumulative source bytes exceed its limit."""
+    """Reject an analysis payload whose cumulative source bytes exceed its whole-MiB limit."""
 
     if max_total_bytes is None or total_bytes <= max_total_bytes:
         return
-    mebibytes, remainder = divmod(max_total_bytes, 1024 * 1024)
-    limit_label = (
-        f"{mebibytes} MiB ({max_total_bytes} bytes)"
-        if mebibytes > 0 and remainder == 0
-        else f"{max_total_bytes} bytes"
-    )
+    mebibytes = max_total_bytes // (1024 * 1024)
     raise ImageTooLargeError(
-        f"Image analysis input totals {total_bytes} bytes, exceeding the {limit_label} limit. "
-        "Pass fewer or smaller images and try again."
+        f"Image analysis input totals {total_bytes} bytes, exceeding the {mebibytes} MiB "
+        f"({max_total_bytes} bytes) limit. Pass fewer or smaller images and try again."
     )
 
 
