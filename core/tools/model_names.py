@@ -8,8 +8,9 @@ PowerShell host. Chat renames at the Provider boundary in both directions, and
 Model-facing text uses ``model_tool_name``.
 
 Models also call Tools by names they were trained on elsewhere (``Read``,
-``functions.bash``, ``Grep``, ``Task``). ``called_tool_name`` maps such a name to
-the offered Tool it clearly means, so the call runs instead of failing.
+``functions.bash``, ``Grep``, ``Task``) or misspell them (``powerhell``).
+``called_tool_name`` maps such a name to the offered Tool it clearly means, so
+the call runs instead of failing.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ _REGISTRY_NAMES = {model: name for name, model in _MODEL_NAMES.items()}
 # Namespaces some Models put in front of a function name.
 _WRAPPER_PREFIXES = ("functions.", "function.", "default_api.", "default_api:", "tools.", "tool.")
 _SEPARATORS = re.compile(r"[\s_.:/-]+")
+# One typo in a shorter name (read, bash) too often spells a different word.
+_TYPO_MIN_LENGTH = 5
 
 # Names other agent harnesses give the same capability, keyed by their spelling
 # without case and separators. A name maps only to a Tool offered in the Model
@@ -194,7 +197,8 @@ def called_tool_name(
     registered name is never remapped, even when it was not offered: it names a
     real Tool, and dispatch explains why that Tool cannot run. Otherwise a
     namespace prefix, case and separators are ignored, and a name another
-    harness uses for the same capability maps to the offered vBot Tool.
+    harness uses for the same capability maps to the offered vBot Tool. Any
+    other name maps to the one offered Tool it misspells by a single character.
     """
     if name in offered or name in registered:
         return name
@@ -215,8 +219,44 @@ def called_tool_name(
     if same_spelling:
         return same_spelling.pop() if len(same_spelling) == 1 else name
     target = _HARNESS_NAMES.get(key)
-    return target if target is not None and target in offered else name
+    if target is not None:
+        return target if target in offered else name
+    misspelled = {
+        tool
+        for tool in offered
+        if any(
+            len(spelling) >= _TYPO_MIN_LENGTH and _one_edit_apart(key, spelling)
+            for spelling in (_spelling_key(tool), _spelling_key(model_tool_name(tool)))
+        )
+    }
+    return misspelled.pop() if len(misspelled) == 1 else name
 
 
 def _spelling_key(name: str) -> str:
     return _SEPARATORS.sub("", name).casefold()
+
+
+def _one_edit_apart(first: str, second: str) -> bool:
+    """Whether one inserted, removed, replaced or swapped character separates the two."""
+    if first == second or abs(len(first) - len(second)) > 1:
+        return False
+    if len(first) == len(second):
+        differ = [
+            index
+            for index, pair in enumerate(zip(first, second, strict=True))
+            if pair[0] != pair[1]
+        ]
+        if len(differ) == 1:
+            return True
+        return (
+            len(differ) == 2
+            and differ[1] == differ[0] + 1
+            and first[differ[0]] == second[differ[1]]
+            and first[differ[1]] == second[differ[0]]
+        )
+    shorter, longer = sorted((first, second), key=len)
+    index = next(
+        (index for index, character in enumerate(shorter) if character != longer[index]),
+        len(shorter),
+    )
+    return shorter[index:] == longer[index + 1 :]

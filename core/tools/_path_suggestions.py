@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from difflib import SequenceMatcher
 from itertools import islice
 from pathlib import Path
@@ -14,6 +15,11 @@ from core.tools.search import display_search_path
 _SCAN_LIMIT = 200
 _RESULT_LIMIT = 5
 _MIN_RATIO = 0.55
+# The same name elsewhere is searched below the working directory, shallow levels
+# first, within this many directory entries and levels.
+_TREE_SCAN_LIMIT = 5000
+_TREE_DEPTH = 6
+_SKIPPED = frozenset({"node_modules", "__pycache__"})
 
 EntryKind = Literal["any", "files", "dirs"]
 
@@ -69,8 +75,10 @@ def corrected_paths(missing: Path, cwd: Path) -> list[Path]:
     """Return existing paths that a missing absolute path most likely means.
 
     Covers a relative path that repeats the end of the working directory (such
-    as project/src from inside project), a misspelled name at any level, and
-    similar names beside the missing one.
+    as project/src from inside project), a misspelled name at any level, for a
+    name missing from an existing directory the same name in another directory
+    below the working directory (corpus.py for tests/corpus.py), and similar
+    names beside the missing one.
     """
     suggestions: list[Path] = []
     try:
@@ -86,8 +94,51 @@ def corrected_paths(missing: Path, cwd: Path) -> list[Path]:
     repaired = _repair_components(missing)
     if repaired is not None:
         suggestions.append(repaired)
+    # Only a missing name in an existing folder is looked for elsewhere; a
+    # missing folder is a misspelling or no path at all (example.com/cat.png).
+    if relative and missing.parent.is_dir():
+        suggestions.extend(_same_name_below(cwd, missing.name))
     suggestions.extend(similar_entries(missing))
     return list(dict.fromkeys(suggestions))[:_RESULT_LIMIT]
+
+
+def _same_name_below(root: Path, name: str) -> list[Path]:
+    """Return entries named ``name`` below ``root``, shallow levels first.
+
+    Hidden directories, dependency folders and levels past the bound are not
+    searched; the walk stops after a bounded number of entries.
+    """
+    wanted = name.casefold()
+    found: list[Path] = []
+    level = [root]
+    scanned = 0
+    for _ in range(_TREE_DEPTH):
+        below: list[Path] = []
+        for directory in level:
+            if scanned >= _TREE_SCAN_LIMIT:
+                return found
+            try:
+                with os.scandir(directory) as listing:
+                    entries = sorted(
+                        islice(listing, _TREE_SCAN_LIMIT - scanned),
+                        key=lambda entry: entry.name.casefold(),
+                    )
+            except OSError:
+                continue
+            scanned += len(entries)
+            for entry in entries:
+                if entry.name.casefold() == wanted:
+                    found.append(Path(entry.path))
+                    if len(found) == _RESULT_LIMIT:
+                        return found
+                try:
+                    walk = entry.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if walk and not entry.name.startswith(".") and entry.name not in _SKIPPED:
+                    below.append(Path(entry.path))
+        level = below
+    return found
 
 
 def _repair_components(missing: Path) -> Path | None:

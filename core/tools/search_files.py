@@ -92,6 +92,19 @@ def _repair_argument_array(value: Any) -> Any:
     )
 
 
+def _repair_name_list(value: Any) -> Any:
+    """Read a path or glob list sent as JSON text, such as '["src", "tests"]'."""
+    if not isinstance(value, str) or not re.match(r'^\s*\[\s*"', value):
+        return value
+    try:
+        decoded = _load_json_value(value)
+    except (ValueError, ToolContractError):
+        return value
+    if isinstance(decoded, list) and decoded and all(isinstance(item, str) for item in decoded):
+        return decoded
+    return value
+
+
 # Names other search Tools and command-line habits use for the same fields.
 _FIELD_ALIASES = _SpellingAliases(
     {
@@ -321,7 +334,12 @@ def normalize_search_arguments(arguments: Any) -> Any:
         _repair_contract(),
         arguments,
         field_aliases=_FIELD_ALIASES,
-        field_normalizers={"args": _repair_argument_array, "output": _normalize_output},
+        field_normalizers={
+            "args": _repair_argument_array,
+            "path": _repair_name_list,
+            "glob": _repair_name_list,
+            "output": _normalize_output,
+        },
         empty_as_omitted=("pattern", "path", "glob", "output", "context"),
     )
     if not isinstance(normalized, dict):

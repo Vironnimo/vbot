@@ -144,12 +144,41 @@ def test_read_gutters_are_removed_without_corrupting_added_lines(tmp_path, hunk)
         "@@\n-alpha\n+1| first\n+3| third",
     ],
 )
-def test_damaged_continuation_or_partial_gutters_fail_closed(tmp_path, hunk):
+def test_damaged_continuation_or_inconsistent_gutters_fail_closed(tmp_path, hunk):
     path = tmp_path / "file.txt"
     path.write_bytes(b"alpha\nold\nomega\n")
     result = apply(tmp_path, update(hunk))
     assert result["error"]["code"] == "line_numbered_content"
     assert path.read_bytes() == b"alpha\nold\nomega\n"
+
+
+@pytest.mark.parametrize(
+    ("patch", "name", "after"),
+    [
+        (
+            "*** Add File: new.txt\n+Rows:\n+10|ann |100.0\n+11|bob | 90.0\n+Done.\n*** End Patch",
+            "new.txt",
+            b"Rows:\n10|ann |100.0\n11|bob | 90.0\nDone.\n",
+        ),
+        (
+            update("@@\n alpha\n-old\n+Rows:\n+10|ann\n+11|bob\n omega"),
+            "file.txt",
+            b"alpha\nRows:\n10|ann\n11|bob\nomega\n",
+        ),
+    ],
+)
+def test_some_gutter_shaped_added_lines_are_written_as_content(tmp_path, patch, name, after):
+    (tmp_path / "file.txt").write_bytes(b"alpha\nold\nomega\n")
+
+    result = apply(tmp_path, patch)
+    missing = apply(tmp_path, update("@@\n-absent\n+Rows:\n+10|ann\n+11|bob"))
+
+    assert result["ok"], result
+    assert (tmp_path / name).read_bytes() == after
+    assert "2 added lines start with a number and | like read output, such as '10|ann" in (
+        text(result)
+    )
+    assert missing["error"]["code"] == "text_not_found"
 
 
 @pytest.mark.asyncio

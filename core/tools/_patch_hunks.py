@@ -37,6 +37,10 @@ from core.tools.fuzzy_match import (
 from core.tools.tools import JsonObject
 
 _GUTTER_WARNING = "Removed read-output line-number prefixes before applying the hunk."
+_GUTTER_KEPT_NOTE = (
+    "{count} added lines start with a number and | like read output, such as {example!r}; "
+    "they were written as sent. If they are copied line numbers, remove them with another patch."
+)
 _ESCAPE_WARNING = "Normalized escaped patch text after the literal text did not match."
 _EOF_WARNING = (
     "The lines before *** End of File are not at the end of the file; the hunk was applied "
@@ -277,10 +281,16 @@ def _unescape(text: str, *, replacement_for: str | None = None) -> str:
     return _ESCAPE.sub(decode, text)
 
 
+def _located_by_gutters(hunk: _Hunk) -> bool:
+    """Whether unchanged or removed lines carry read gutters; added lines never locate."""
+    return any(_GUTTER.match(text) for prefix, text in hunk.lines if prefix in " -")
+
+
 def _clean_additions(hunk: _Hunk, path: object) -> tuple[_Hunk, list[str]]:
-    # Existing literal gutter-shaped context is authoritative. New standalone
-    # additions require complete-block gutter recovery.
-    if any(_GUTTER.match(text) for prefix, text in hunk.lines if prefix in " -"):
+    # Existing literal gutter-shaped context is authoritative. A run of added
+    # lines is copied read output only when every line carries a gutter; a few
+    # gutter-shaped lines among others are content, such as N|value data rows.
+    if _located_by_gutters(hunk):
         return hunk, []
     lines = list(hunk.lines)
     warnings = []
@@ -293,12 +303,15 @@ def _clean_additions(hunk: _Hunk, path: object) -> tuple[_Hunk, list[str]]:
         while end < len(lines) and lines[end][0] == "+":
             end += 1
         texts = [text for _, text in lines[start:end]]
-        if sum(bool(_GUTTER.match(text)) for text in texts) >= 2:
+        shaped = [text for text in texts if _GUTTER.match(text)]
+        if len(shaped) >= 2 and len(shaped) == len(texts):
             candidates = line_number_gutter_candidates("\n".join(texts), allow_continuations=False)
             if not candidates:
                 raise _PatchError("line_numbered_content", path=path, label=hunk.label)
             lines[start:end] = [("+", text) for text in candidates[0].split("\n")]
             warnings.append(_GUTTER_WARNING)
+        elif len(shaped) >= 2:
+            warnings.append(_GUTTER_KEPT_NOTE.format(count=len(shaped), example=shaped[0]))
         start = end
     return replace(hunk, lines=lines), warnings
 
@@ -715,7 +728,7 @@ def _apply_hunk(
         candidate_match = _match(window, candidate_old, candidate_new, eof=hunk.eof)
         hunk, old, new, found = normalized, candidate_old, candidate_new, candidate_match
         warnings.append(_GUTTER_WARNING)
-    if found is None and any(_GUTTER.match(t) for _, t in hunk.lines):
+    if found is None and _located_by_gutters(hunk):
         raise _PatchError(
             "line_numbered_content",
             path=path,
@@ -827,7 +840,7 @@ def _apply_hunk(
             if edited != content:
                 return edited, [*warnings, _EOF_WARNING, *placed]
     if found is None:
-        if any(_GUTTER.match(t) for _, t in hunk.lines):
+        if _located_by_gutters(hunk):
             raise _PatchError(
                 "line_numbered_content",
                 path=path,

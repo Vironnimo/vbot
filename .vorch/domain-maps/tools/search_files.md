@@ -30,7 +30,9 @@ literal even when they resemble other flags.
 A call without any pattern or operand lists files (`{}` lists the working
 directory; `glob`/`path` narrow it). `--files`, `--dirs`, and `--entries` select
 file, directory, and combined discovery explicitly; they are mutually exclusive,
-all operands are roots, and `-g` filters names. `output: "count"` and `context`
+all operands are roots, and `-g` filters names. A `pattern` or `-e` beside one of
+them rejects, naming the field that was sent and pointing to `glob` for names or
+to dropping the selector for contents. `output: "count"` and `context`
 without a pattern reject with the correction. Directory discovery includes empty
 directories. No roots means `effective_cwd`; explicit empty roots and stdin reject.
 Relative roots use that cwd, absolute roots are allowed, and symlink spelling stays
@@ -42,7 +44,8 @@ is missing, the call fails with `path_not_found`, naming the root relative to th
 working directory when it lies inside it. Each missing root names up to five
 existing suggestions from `core/tools/_path_suggestions.py` (shared with `read`):
 a relative path that repeats the end of the working directory, per-component
-spelling repair, and similar sibling names. Suggestions are never applied, and roots
+spelling repair, for a name missing from an existing folder the same name in
+other folders below the working directory, and similar sibling names. Suggestions are never applied, and roots
 are never reinterpreted as patterns or replaced by the working directory. When the
 pattern came from the first `args` operand, the diagnostic shows how to search the
 missing operand as another pattern (`pattern "a|b"`, or repeated `-e` with `-F`).
@@ -96,7 +99,9 @@ no backslash splits like a command line, with quotes grouping words
 (`"-F computeDamage( src"`); backslashes would be shell escapes there but regex
 escapes here, so such a string stays one item and the parser asks for one argument
 per item with the split list as example. Other scalar strings stay one pattern,
-and quotes are never stripped from a scalar search pattern.
+and quotes are never stripped from a scalar search pattern. A `path` or `glob`
+string that is valid JSON for a nonempty list of strings (`'["docs", "src"]'`) is
+that list; any other string stays one path or glob.
 
 ## Selection Contract
 
