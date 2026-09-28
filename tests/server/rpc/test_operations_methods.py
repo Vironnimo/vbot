@@ -27,6 +27,7 @@ from core.prompts import (
     SystemPromptManager,
 )
 from core.tools import ToolAccess, ToolRegistry
+from core.utils.log_viewer import LogViewer
 from core.utils.paths import model_path
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.methods import dispatch_rpc
@@ -264,7 +265,7 @@ def _log_state(tmp_path: Path) -> Any:
     (logs_dir / "2026-05-11").write_text(
         "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\ntrace line", encoding="utf-8"
     )
-    return SimpleNamespace(runtime=SimpleNamespace(storage=SimpleNamespace(data_dir=tmp_path)))
+    return SimpleNamespace(log_viewer=LogViewer(tmp_path))
 
 
 @pytest.mark.asyncio

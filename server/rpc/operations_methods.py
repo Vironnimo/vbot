@@ -343,12 +343,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _log_viewer(state: Any) -> LogViewer:
-    log_viewer = getattr(state, "log_viewer", None)
-    if log_viewer is not None:
-        return cast(LogViewer, log_viewer)
-    log_viewer = LogViewer(state.runtime.storage.data_dir)
-    state.log_viewer = log_viewer
-    return log_viewer
+    return cast(LogViewer, state.log_viewer)
 
 
 def _prompt_manager(state: Any) -> SystemPromptManager:

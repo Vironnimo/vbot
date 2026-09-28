@@ -116,11 +116,9 @@ async def _shutdown_live_calls(state: Any, logger: logging.Logger) -> None:
 
 
 def _register_run_event_bridge(state: Any) -> Any:
-    chat_runs = _app_chat_runs(state)
-    add_callback = getattr(chat_runs, "add_run_started_callback", None)
-    if not callable(add_callback):
-        return None
-    return add_callback(lambda run: bridge_run_to_event_bus(state, run))
+    return _app_chat_runs(state).add_run_started_callback(
+        lambda run: bridge_run_to_event_bus(state, run)
+    )
 
 
 def _start_statistics_warmup(state: Any) -> asyncio.Task[None] | None:

@@ -35,6 +35,7 @@ from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
+from server.file_delivery import FileDelivery
 from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.server.rpc_test_support_common import (
     StubAgent,
@@ -555,6 +556,7 @@ def make_state(
         ),
         event_bus=ServerEventBus(),
         run_event_bridge_run_ids=OrderedDict(),
+        file_delivery=FileDelivery(),
         agent_delete_lock=asyncio.Lock(),
         server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
     )

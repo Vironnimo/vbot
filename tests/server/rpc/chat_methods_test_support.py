@@ -11,6 +11,7 @@ from typing import Any
 from core.chat import ChatMessage, CommandDispatcher
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run
 from server.events import ServerEventBus
+from server.file_delivery import FileDelivery
 from tests.server.rpc_test_support import call, resource_changes
 
 JsonObject = dict[str, Any]
@@ -152,6 +153,7 @@ def chat_state(
         command_dispatcher=CommandDispatcher(ChatRunManager()),
         event_bus=ServerEventBus(),
         run_event_bridge_run_ids=OrderedDict(),
+        file_delivery=FileDelivery(),
         runtime=SimpleNamespace(chat_sessions=_InlineSessionPool(), **runtime),
     )
 

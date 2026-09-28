@@ -20,6 +20,7 @@ from core.runs import ChatRunManager, RunAdmission, RunKind
 from core.sessions import ChatSession
 from core.settings.normalizers import normalize_compaction_settings
 from core.tools.tools import tool_success
+from server.file_delivery import FileDelivery
 from server.rpc import chat_methods
 from tests.core.sessions.history_fixtures import append_tool_fixture, complete_run, seed_history
 from tests.server.rpc.chat_methods_test_support import call
@@ -78,6 +79,7 @@ def history(tmp_path: Path) -> Iterator[_History]:
             chat_sessions=sessions,
         ),
         chat_runs=ChatRunManager(persistence=sessions),
+        file_delivery=FileDelivery(),
     )
     try:
         yield _History(state, sessions, agents)

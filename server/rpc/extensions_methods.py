@@ -190,8 +190,7 @@ def _command_is_registered(
     extension_name: str,
     command_name: str,
 ) -> bool:
-    owner = getattr(state.command_dispatcher, "extension_command_owner", None)
-    return callable(owner) and owner(command_name) == extension_name
+    return bool(state.command_dispatcher.extension_command_owner(command_name) == extension_name)
 
 
 def _tool_is_ready(state: Any, tool_name: str) -> bool:

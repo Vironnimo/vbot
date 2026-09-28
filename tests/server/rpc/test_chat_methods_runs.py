@@ -14,6 +14,7 @@ from core.database import write_bootstrap_marker
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools import ToolContext, tool_success
+from server.file_delivery import FileDelivery
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_RUN_NOT_FOUND
 from tests.core.sessions.history_fixtures import complete_run
 from tests.server.rpc.chat_methods_test_support import call
@@ -31,7 +32,7 @@ async def _held_run() -> tuple[SimpleNamespace, Run]:
     manager = ChatRunManager()
     run = await manager.start(ADDRESS, _hold_until_cancelled)
     await asyncio.sleep(0)
-    return SimpleNamespace(chat_runs=manager), run
+    return SimpleNamespace(chat_runs=manager, file_delivery=FileDelivery()), run
 
 
 @pytest.mark.asyncio

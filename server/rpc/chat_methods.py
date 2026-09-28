@@ -204,7 +204,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             _run_response(
                 active_run_object,
                 sse_url=f"/api/runs/{active_run_object.id}/events",
-                file_delivery=getattr(state, "file_delivery", None),
+                file_delivery=state.file_delivery,
             )
             if active_run_object is not None
             else None
@@ -216,7 +216,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             else await _CHAT_RPC_WORKERS.run(
                 _project_chat_history,
                 history,
-                file_delivery=getattr(state, "file_delivery", None),
+                file_delivery=state.file_delivery,
             )
         )
     except Exception as exc:
@@ -692,7 +692,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     return _run_response(
         submission,
         final_message=assistant_message,
-        file_delivery=getattr(state, "file_delivery", None),
+        file_delivery=state.file_delivery,
     )
 
 
@@ -708,7 +708,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     return _run_response(
         submission,
         sse_url=f"/api/runs/{submission.id}/events",
-        file_delivery=getattr(state, "file_delivery", None),
+        file_delivery=state.file_delivery,
     )
 
 
@@ -740,7 +740,7 @@ async def _edit_chat(state: Any, params: JsonObject) -> JsonObject:
     return _run_response(
         run,
         sse_url=f"/api/runs/{run.id}/events",
-        file_delivery=getattr(state, "file_delivery", None),
+        file_delivery=state.file_delivery,
     )
 
 
@@ -762,7 +762,7 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
         run = await state.chat_runs.cancel(run_id, reason=reason)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(run, file_delivery=getattr(state, "file_delivery", None))
+    return _run_response(run, file_delivery=state.file_delivery)
 
 
 async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
