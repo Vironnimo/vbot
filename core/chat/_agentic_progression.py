@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from core.chat._boundaries import _finish_visible_boundary
 from core.chat._queued_input import persist_steering_input, rebuild_after_steering
-from core.chat._request_builder import _run_prompt_method
 from core.chat._run_state import _AssistantStep, _RequestState
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
@@ -203,10 +202,8 @@ class AgenticProgression:
                 and registry.revision != tool_catalog_revision
             ):
                 tool_catalog_revision = registry.revision
-                refreshed = await _run_prompt_method(
-                    self._dependencies.get_system_prompts(),
-                    "provider_tool_definitions_async",
-                    "provider_tool_definitions",
+                system_prompts = self._dependencies.get_system_prompts()
+                refreshed = await system_prompts.provider_tool_definitions_async(
                     agent,
                     session_tool_grants=state.session_tool_grants,
                 )

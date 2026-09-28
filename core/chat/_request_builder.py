@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -69,24 +68,6 @@ if TYPE_CHECKING:
     from core.skills.skills import SkillRegistry
 
 _LOGGER = get_logger("chat")
-
-
-async def _run_prompt_method(
-    manager: Any,
-    async_name: str,
-    sync_name: str,
-    *arguments: Any,
-    **keyword_arguments: Any,
-) -> Any:
-    """Prefer a prompt-owned async boundary and preserve sync test doubles."""
-    async_method = getattr(manager, async_name, None)
-    if callable(async_method) and inspect.iscoroutinefunction(async_method):
-        return await async_method(*arguments, **keyword_arguments)
-    return await _CHAT_TRANSFORM_WORKERS.run(
-        getattr(manager, sync_name),
-        *arguments,
-        **keyword_arguments,
-    )
 
 
 def _finalize_compaction_checkpoint(
@@ -310,12 +291,7 @@ class RequestBuilder:
             else list(inputs.session_messages_override)
         )
         system_prompts = self._dependencies.get_system_prompts()
-        base_tools = await _run_prompt_method(
-            system_prompts,
-            "provider_tool_definitions_async",
-            "provider_tool_definitions",
-            agent,
-        )
+        base_tools = await system_prompts.provider_tool_definitions_async(agent)
         history_grants: tuple[str, ...] = (
             (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
         )
@@ -334,10 +310,7 @@ class RequestBuilder:
             else _model_input_modalities(self._dependencies, agent)
         )
         tools = (
-            await _run_prompt_method(
-                system_prompts,
-                "provider_tool_definitions_async",
-                "provider_tool_definitions",
+            await system_prompts.provider_tool_definitions_async(
                 agent,
                 session_tool_grants=session_tool_grants,
             )
@@ -418,10 +391,7 @@ class RequestBuilder:
                 )
             request_block_definitions = tuple(rendered_blocks)
         prompt_read_paths: list[Path] = []
-        system_prompt = await _run_prompt_method(
-            system_prompts,
-            "build_system_prompt_async",
-            "build_system_prompt",
+        system_prompt = await system_prompts.build_system_prompt_async(
             agent,
             agent_body=inputs.agent_body,
             project_context=inputs.project_context,
@@ -567,10 +537,7 @@ class RequestBuilder:
         self, agent: Any, *, session_tool_grants: Sequence[str] = ()
     ) -> list[JsonObject]:
         """Apply the production Tool-route rules without starting a Run or calling a Model."""
-        tools = await _run_prompt_method(
-            self._dependencies.get_system_prompts(),
-            "provider_tool_definitions_async",
-            "provider_tool_definitions",
+        tools = await self._dependencies.get_system_prompts().provider_tool_definitions_async(
             agent,
             session_tool_grants=session_tool_grants,
         )

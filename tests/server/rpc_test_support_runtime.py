@@ -134,6 +134,14 @@ class StubPrompts:
             session_grants=session_tool_grants,
         )
 
+    async def build_system_prompt_async(self, agent: StubAgent, **options: Any) -> str:
+        return self.build_system_prompt(agent, **options)
+
+    async def provider_tool_definitions_async(
+        self, agent: StubAgent, **options: Any
+    ) -> list[JsonObject]:
+        return self.provider_tool_definitions(agent, **options)
+
 
 @dataclass(frozen=True)
 class StubSkill:
