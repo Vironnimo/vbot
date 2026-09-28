@@ -77,8 +77,6 @@ def _candidate(files: dict[str, PackageFile], path: str, fallback: str) -> dict[
         body=body,
         parse_warnings=[*warnings, *parse_warnings],
     )
-    if not validation.valid:
-        raise PackageError("Invalid Skill metadata: " + "; ".join(validation.warnings))
     try:
         metadata = fields.get("metadata")
         parse_vbot_requirements(metadata if isinstance(metadata, dict) else {})

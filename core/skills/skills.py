@@ -615,9 +615,6 @@ def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, Valida
         body=body,
         parse_warnings=[*document_warnings, *parse_warnings],
     )
-    if not result.valid:
-        return None, result
-
     name = _field_to_string(fields.get("name"))
     description = _field_to_string(fields.get("description"))
     metadata = _optional_mapping(fields.get("metadata"))
