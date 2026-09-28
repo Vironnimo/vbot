@@ -482,7 +482,16 @@
     );
   });
 
+  // A read acknowledgement tells every connected app, including the vBot tray,
+  // that the user has seen the result, so only a page the user is looking at
+  // (visible and focused) sends it. Attention is read live; regaining focus or
+  // visibility bumps the revision so the displayed Session is checked again.
+  let pageAttentionRevision = $state(0);
+  const pageAttended = () =>
+    document.visibilityState === 'visible' && document.hasFocus();
+
   $effect(() => {
+    void pageAttentionRevision;
     const sessionState = target.activeSessionState;
     const unreadRunId = sessionState?.unreadRunId ?? '';
     if (
@@ -493,7 +502,8 @@
         sessionState.agentId,
         sessionState.sessionId,
       ) ||
-      !sessionHasTerminalRun(sessionState, unreadRunId)
+      !sessionHasTerminalRun(sessionState, unreadRunId) ||
+      !pageAttended()
     ) {
       return;
     }
@@ -512,7 +522,11 @@
 
   onMount(() => {
     loadAgents({ preferredAgentId: sharedSelectedAgentId });
+    const onPageAttentionChange = () => {
+      pageAttentionRevision += 1;
+    };
     const onVisibilityChange = () => {
+      onPageAttentionChange();
       if (document.visibilityState !== 'visible') {
         return;
       }
@@ -531,8 +545,10 @@
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onPageAttentionChange);
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', onPageAttentionChange);
       chatController.destroy();
     };
   });

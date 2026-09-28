@@ -48,6 +48,15 @@ function roster() {
         connected_at: '2026-06-20T11:00:00+00:00',
         status: 'connected',
       },
+      {
+        id: 'reg-3',
+        connection_id: 'tray-1',
+        accessor: 'tray',
+        browser: 'Unknown',
+        os: 'Windows',
+        connected_at: '2026-06-20T12:00:00+00:00',
+        status: 'connected',
+      },
     ],
   };
 }
@@ -79,7 +88,7 @@ describe('SettingsGeneralPanel', () => {
     document.body.innerHTML = '';
   });
 
-  it('renders the connected-clients roster and marks the own window', async () => {
+  it('renders the connected-clients roster with accessor labels and marks the own window', async () => {
     listClientsMock.mockResolvedValue(roster());
 
     mountedComponent = mount(SettingsGeneralPanel, {
@@ -91,7 +100,14 @@ describe('SettingsGeneralPanel', () => {
 
     expect(document.body.textContent).toContain('Chrome');
 
-    expect(document.body.querySelectorAll('.s-client-row')).toHaveLength(2);
+    const rows = document.body.querySelectorAll('.s-client-row');
+    expect(
+      Array.from(rows, (row) => row.querySelector('.s-row-label').textContent),
+    ).toEqual([
+      t('settings.general.clients.accessor.browser'),
+      t('settings.general.clients.accessor.desktop'),
+      t('settings.general.clients.accessor.tray'),
+    ]);
     expect(document.body.querySelectorAll('.s-client-row--own')).toHaveLength(
       1,
     );

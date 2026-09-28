@@ -10,6 +10,7 @@ import pytest
 from server.clients import (
     ACCESSOR_BROWSER,
     ACCESSOR_DESKTOP,
+    ACCESSOR_TRAY,
     ACCESSOR_UNKNOWN,
     CLIENT_STATUS_CONNECTED,
     UNKNOWN_LABEL,
@@ -33,17 +34,24 @@ _EDGE_WINDOWS = (
 
 def test_register_lists_each_connection_with_the_row_contract_oldest_first() -> None:
     at = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
-    clock = iter((at + timedelta(hours=1), at, at + timedelta(minutes=30)))
+    clock = iter(
+        (at + timedelta(hours=1), at, at + timedelta(minutes=30), at + timedelta(minutes=45))
+    )
     registry = ClientRegistry(now_provider=lambda: next(clock))
 
     desktop = registry.register(connection_id="tab-b", accessor="desktop", user_agent=_SAFARI_MAC)
     unknown = registry.register(connection_id="tab-a", accessor="cli", user_agent="")
     # A reconnect overlap from the same client id is a second, distinct entry.
     overlap = registry.register(connection_id="tab-a", accessor="browser", user_agent="")
+    tray = registry.register(connection_id="tray-a", accessor="tray", user_agent="")
 
-    assert registry.list() == [unknown, overlap, desktop]
+    assert registry.list() == [unknown, overlap, tray, desktop]
     assert unknown.id != overlap.id
-    assert (unknown.accessor, overlap.accessor) == (ACCESSOR_UNKNOWN, ACCESSOR_BROWSER)
+    assert (unknown.accessor, overlap.accessor, tray.accessor) == (
+        ACCESSOR_UNKNOWN,
+        ACCESSOR_BROWSER,
+        ACCESSOR_TRAY,
+    )
     assert desktop.to_dict() == {
         "id": desktop.id,
         "connection_id": "tab-b",

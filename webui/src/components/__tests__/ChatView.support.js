@@ -105,12 +105,34 @@ function resetMock(mock, value) {
   mock.mockResolvedValue(value);
 }
 
+// Chat acknowledges results only while the page is visible and focused. jsdom
+// reports a visible page without focus, so every test starts on an attended
+// page; `setPageAttention` changes what the page reports.
+const pageAttention = { visible: true, focused: true };
+
+export function setPageAttention({ visible = true, focused = true } = {}) {
+  pageAttention.visible = visible;
+  pageAttention.focused = focused;
+}
+
 export function setupChatViewTestSuite() {
   let mountedComponent = null;
+  let pageAttentionSpies = [];
 
   beforeEach(() => {
     document.body.innerHTML = '';
     init('en');
+    setPageAttention();
+    pageAttentionSpies = [
+      vi
+        .spyOn(document, 'visibilityState', 'get')
+        .mockImplementation(() =>
+          pageAttention.visible ? 'visible' : 'hidden',
+        ),
+      vi
+        .spyOn(document, 'hasFocus')
+        .mockImplementation(() => pageAttention.focused),
+    ];
     rpcMock.mockReset();
     // A fresh subscription object per call, so close() assertions never
     // cross between subscriptions or tests.
@@ -147,6 +169,8 @@ export function setupChatViewTestSuite() {
     document.body.innerHTML = '';
     vi.clearAllTimers();
     vi.useRealTimers();
+    for (const spy of pageAttentionSpies) spy.mockRestore();
+    pageAttentionSpies = [];
   });
 
   return {

@@ -25,6 +25,7 @@ import {
   sendComposerMessage,
   serveProject,
   serveSessionActivity,
+  setPageAttention,
   setupChatViewTestSuite,
   streamResponses,
   teamTab,
@@ -288,6 +289,64 @@ describe('ChatView Agent activity', () => {
       ).toBeNull();
       resolveMarkRead();
     });
+
+    // The acknowledgement tells other apps (the vBot tray) the result was
+    // seen, so a page that is not looked at must not send it.
+    it.each([
+      [
+        'unfocused',
+        { focused: false },
+        () => window.dispatchEvent(new Event('focus')),
+      ],
+      [
+        'hidden',
+        { visible: false },
+        () => document.dispatchEvent(new Event('visibilitychange')),
+      ],
+    ])(
+      'acknowledges a displayed result only once the %s page is attended again',
+      async (_case, unattended, regainAttention) => {
+        rpcMock.mockImplementation(createChatRpcMock());
+        await chat.mountChat({
+          sharedAgents: [createAgent()],
+          sharedSelectedAgentId: 'alpha',
+        });
+        setPageAttention(unattended);
+
+        const run = {
+          run_id: 'run-unseen',
+          agent_id: 'alpha',
+          session_id: 'session-1',
+        };
+        testRunStreamRefs[0].handleServerEvents(
+          runServerEvent('run_started', {
+            ...run,
+            sequence: 1,
+            output: { status: 'running' },
+          }),
+        );
+        testRunStreamRefs[0].handleServerEvents(
+          runServerEvent('run_completed', {
+            ...run,
+            sequence: 2,
+            status: 'completed',
+          }),
+        );
+        const sessionState = () =>
+          testChatStateRefs[0].sessions['alpha::session-1'];
+        await waitForCondition(
+          () => sessionState()?.unreadRunId === 'run-unseen',
+        );
+
+        expect(markedRead('alpha', 'session-1', 'run-unseen')).toBe(false);
+
+        setPageAttention();
+        regainAttention();
+        await waitForCondition(() =>
+          markedRead('alpha', 'session-1', 'run-unseen'),
+        );
+      },
+    );
   });
 
   describe('Project Team members', () => {
