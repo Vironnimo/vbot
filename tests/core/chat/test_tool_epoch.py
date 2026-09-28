@@ -96,11 +96,17 @@ def test_plan_announces_additions_removals_and_schema_changes_once() -> None:
     assert view.request_tools(list_announced=False) == [kept, removed]
     assert view.request_tools(list_announced=True) == [kept, removed, added]
 
+    # A changed Tool is pinned only when the pinned list shows its previous definition.
     changed = _definition("kept", count={"type": "integer"})
-    back = _catalog(changed, removed, added)
-    assert _plan(view, back) == [("changed", "kept", True, True), ("added", "removed", True, True)]
+    reshaped = _definition("added", path={"type": "integer"})
+    back = _catalog(changed, removed, reshaped)
+    assert _plan(view, back) == [
+        ("changed", "kept", True, True),
+        ("added", "removed", True, True),
+        ("changed", "added", False, False),
+    ]
     view = view.with_changes(view.plan(back, unlisted_tool_calls=True))
-    assert view.definitions() == [changed, removed, added]
+    assert view.definitions() == [changed, removed, reshaped]
     assert _plan(view, back) == []
 
 

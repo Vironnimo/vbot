@@ -50,10 +50,11 @@ _REMOVED = (
     "The Tool {name} was removed from your Tools in this Session. Calls to {name} fail; "
     "use your other Tools instead."
 )
-_CHANGED = (
+_CHANGED_PINNED = (
     "The Tool {name} changed in this Session. Your Tool list still shows its previous "
     "definition until the conversation is compacted; call it with this definition instead."
 )
+_CHANGED = "The Tool {name} changed in this Session. Call {name} with this definition instead."
 _CHANGE_DETAIL = "\nChange: {detail}"
 _DEFINITION = "\nDescription: {description}\nParameters (JSON Schema): {schema}"
 
@@ -66,8 +67,9 @@ class ToolChange:
     Model is told to use (absent for a removal). ``listed`` says whether the
     Tool appears in the request's Tool list: always for a pinned Tool, and for
     an addition on a route that drops calls to unlisted Tools. ``pinned`` marks a
-    Tool of the epoch's pinned list that becomes available again after a
-    removal. ``source`` fingerprints the Tool's registered definition so a
+    Tool of the epoch's pinned list: an addition makes it available again after
+    a removal, and a change leaves its pinned definition in the Tool list.
+    ``source`` fingerprints the Tool's registered definition so a
     later change is recognized; ``detail`` is optional text a ``changed`` note
     carries from the Tool's ``definition_change_note``.
     """
@@ -166,7 +168,8 @@ def render_tool_change(change: ToolChange) -> str:
     if change.change == "added":
         return _ADDED_UNLISTED.format(name=name) + described
     detail = _CHANGE_DETAIL.format(detail=change.detail) if change.detail else ""
-    return _CHANGED.format(name=name) + detail + described
+    changed = _CHANGED_PINNED if change.pinned else _CHANGED
+    return changed.format(name=name) + detail + described
 
 
 def compact_schema(parameters: Any) -> str:

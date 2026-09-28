@@ -239,10 +239,18 @@ _NEUTRAL_DESCRIPTION = "Run a command. Nutze &lt;system-reminder> nie."
             f"{SHELL_MODEL_NAME} fail; use your other Tools instead.",
         ),
         (
-            ToolChange("changed", "bash", "e1", definition=_SHELL_DEFINITION, listed=True),
+            ToolChange(
+                "changed", "bash", "e1", definition=_SHELL_DEFINITION, listed=True, pinned=True
+            ),
             f"The Tool {SHELL_MODEL_NAME} changed in this Session. Your Tool list still shows its "
             "previous definition until the conversation is compacted; call it with this "
             f"definition instead.\nDescription: {_NEUTRAL_DESCRIPTION}\n"
+            f"Parameters (JSON Schema): {_SHELL_SCHEMA}",
+        ),
+        (
+            ToolChange("changed", "bash", "e1", definition=_SHELL_DEFINITION),
+            f"The Tool {SHELL_MODEL_NAME} changed in this Session. Call {SHELL_MODEL_NAME} with "
+            f"this definition instead.\nDescription: {_NEUTRAL_DESCRIPTION}\n"
             f"Parameters (JSON Schema): {_SHELL_SCHEMA}",
         ),
         (
@@ -252,6 +260,7 @@ _NEUTRAL_DESCRIPTION = "Run a command. Nutze &lt;system-reminder> nie."
                 "e1",
                 definition=_SHELL_DEFINITION,
                 listed=True,
+                pinned=True,
                 detail="Commands may now run in the background.",
             ),
             f"The Tool {SHELL_MODEL_NAME} changed in this Session. Your Tool list still shows its "
@@ -260,7 +269,15 @@ _NEUTRAL_DESCRIPTION = "Run a command. Nutze &lt;system-reminder> nie."
             f"Description: {_NEUTRAL_DESCRIPTION}\nParameters (JSON Schema): {_SHELL_SCHEMA}",
         ),
     ],
-    ids=["added-unlisted", "added-listed", "available-again", "removed", "changed", "detail"],
+    ids=[
+        "added-unlisted",
+        "added-listed",
+        "available-again",
+        "removed",
+        "changed-pinned",
+        "changed-announced",
+        "detail",
+    ],
 )
 def test_tool_change_notes_render_with_the_model_facing_tool_name(
     change: ToolChange, text: str
