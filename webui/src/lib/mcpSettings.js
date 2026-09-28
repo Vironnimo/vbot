@@ -3,6 +3,7 @@ import { t } from './i18n.js';
 
 export const MCP_REFRESH_MS = 3000;
 const DEFAULT_TIMEOUT_SECONDS = 120;
+export const MCP_DESCRIPTION_MAX_LENGTH = 200;
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const mappings = [
   'environment',
@@ -18,6 +19,7 @@ export function mcpDraft(configuration = null) {
   };
   return {
     ...clone(source),
+    description: source.description ?? '',
     command: source.command ?? '',
     args: [...(source.args ?? [])],
     cwd: source.cwd ?? '',
@@ -40,6 +42,8 @@ export function mcpDraft(configuration = null) {
 export function mcpConfiguration(draft) {
   const record = clone(draft);
   record.timeout = Number(draft.timeout);
+  record.description = (draft.description ?? '').trim();
+  if (!record.description) delete record.description;
   for (const field of mappings) {
     const entries = draft[field].map(({ name, value }) => [name.trim(), value]);
     if (

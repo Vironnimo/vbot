@@ -8,6 +8,7 @@ import {
 
 const configuration = {
   id: 'example',
+  description: 'Blender on the studio workstation',
   transport: 'stdio',
   command: 'python',
   args: ['', 'a b', 'ümlaut'],
@@ -86,6 +87,13 @@ describe('MCP settings', () => {
   });
   it('preserves complete configuration and exact arguments on edit', () => {
     expect(mcpConfiguration(mcpDraft(configuration))).toEqual(configuration);
+  });
+  it('trims the description and leaves an empty one out', () => {
+    const draft = mcpDraft(configuration);
+    draft.description = '  Studio Blender  ';
+    expect(mcpConfiguration(draft).description).toBe('Studio Blender');
+    draft.description = '   ';
+    expect(mcpConfiguration(draft)).not.toHaveProperty('description');
   });
   it('removes local-only settings when switching to HTTP', () => {
     const draft = mcpDraft(configuration);
