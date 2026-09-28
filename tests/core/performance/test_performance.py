@@ -15,6 +15,7 @@ from core.performance import (
     PerformanceService,
     RecordingActiveError,
     RecordingInactiveError,
+    count,
     measure,
     record_duration,
     record_span,
@@ -26,7 +27,15 @@ from core.performance.performance import (
     MAX_METRIC_NAMES,
 )
 
-SNAPSHOT_KEYS = {"started_at", "uptime_seconds", "metrics", "gauges", "stalls", "recording"}
+SNAPSHOT_KEYS = {
+    "started_at",
+    "uptime_seconds",
+    "metrics",
+    "gauges",
+    "counters",
+    "stalls",
+    "recording",
+}
 STATUS_KEYS = {
     "recording_id",
     "label",
@@ -97,6 +106,8 @@ async def test_record_duration_span_and_gauges_feed_the_snapshot(tmp_path: Path)
     record_span("test.span", time.perf_counter() - 0.002)
     set_gauge("test.gauge", 3)
     set_gauge("test.gauge", 5)
+    count("test.count")
+    count("test.count", 2)
 
     snapshot = await service.snapshot()
 
@@ -104,6 +115,7 @@ async def test_record_duration_span_and_gauges_feed_the_snapshot(tmp_path: Path)
     assert snapshot["metrics"]["test.duration"]["max_ms"] == 4.0
     assert snapshot["metrics"]["test.span"]["count"] == 1
     assert snapshot["gauges"]["test.gauge"] == 5
+    assert snapshot["counters"] == {"test.count": 3}
     assert snapshot["recording"] is None
     assert snapshot["stalls"] == []
     assert snapshot["uptime_seconds"] >= 0
@@ -143,6 +155,7 @@ async def test_recording_start_status_and_stop_result_follow_the_contract(
         with measure("chat.run", track="main/ses_1", name="run", args={"run_id": "run_1"}):
             await asyncio.sleep(0)
         set_gauge("runs.active", 1)
+        count("events.test", track="events", args={"subscribers": 2})
         result = await service.stop_recording()
 
     assert set(status) == STATUS_KEYS
@@ -153,11 +166,14 @@ async def test_recording_start_status_and_stop_result_follow_the_contract(
     assert set(result) == STOP_KEYS
     assert result["recording_id"] == status["recording_id"]
     assert result["stopped_reason"] == "requested"
-    assert set(result["summary"]) == {"metrics", "gauges_max", "stalls"}
+    assert set(result["summary"]) == {"metrics", "gauges_max", "counters", "stalls"}
     assert result["summary"]["metrics"]["chat.run"]["count"] == 1
+    assert result["summary"]["counters"] == {"events.test": 1}
     assert result["summary"]["gauges_max"]["runs.active"] == 1
     span = next(span for span in _complete_spans(result) if span["name"] == "run")
     assert span["cat"] == "chat" and span["args"] == {"run_id": "run_1"}
+    instant = next(event for event in _trace_events(result) if event["ph"] == "i")
+    assert instant["name"] == "events.test" and instant["args"] == {"subscribers": 2}
     summary_file = Path(result["trace_path"].replace(".trace.json", ".summary.json"))
     assert json.loads(summary_file.read_text(encoding="utf-8"))["stopped_reason"] == "requested"
     assert service.recording_status() is None

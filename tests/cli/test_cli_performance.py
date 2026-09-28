@@ -35,6 +35,7 @@ def test_status_shows_slowest_metrics_gauges_stalls_and_recording(
                 "sqlite.write": {**METRIC, "p99_ms": 3.0, "sum_ms": 900.0},
             },
             "gauges": {"process.rss_mb": 210.4, "runs.active": 1, "worker_pool.x.active": 0},
+            "counters": {"events.resource_changed": 40, "events.sse": 900},
             "stalls": [
                 {
                     "started_at": "2026-09-24T10:01:00+00:00",
@@ -76,6 +77,9 @@ def test_status_shows_slowest_metrics_gauges_stalls_and_recording(
         "top metrics by total time:",
         SQLITE_ROW,
         RPC_CHAT_ROW,
+        "top counters:",
+        "- events.sse=900",
+        "- events.resource_changed=40",
         "recent stalls (newest first, 1 retained):",
         "- started_at=2026-09-24T10:01:00+00:00 duration_ms=320.0 gc_ms=250.0 samples=6",
         "    core/x.py:10 work",
@@ -105,6 +109,7 @@ def test_status_reports_an_idle_server_without_samples(rpc: FakeRpc, run_cli: Ru
         "gauges: -",
         "top metrics by p99: -",
         "top metrics by total time: -",
+        "top counters: -",
         "recent stalls: none",
     ]
 

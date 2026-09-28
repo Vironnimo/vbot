@@ -83,6 +83,7 @@ async def test_snapshot_reports_metrics_gauges_stalls_and_recording(
         "uptime_seconds",
         "metrics",
         "gauges",
+        "counters",
         "stalls",
         "recording",
     }
@@ -113,7 +114,7 @@ async def test_recording_start_stop_and_list_follow_the_contract(
     assert snapshot["recording"]["recording_id"] == status["recording_id"]
     assert set(stopped) == LIST_KEYS | {"summary"}
     assert stopped["stopped_reason"] == "requested"
-    assert set(stopped["summary"]) == {"metrics", "gauges_max", "stalls"}
+    assert set(stopped["summary"]) == {"metrics", "gauges_max", "counters", "stalls"}
     trace_path = Path(stopped["trace_path"])
     assert trace_path.is_absolute() and "\\" not in stopped["trace_path"]
     events = json.loads(trace_path.read_text(encoding="utf-8"))["traceEvents"]

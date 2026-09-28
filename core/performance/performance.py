@@ -2,14 +2,15 @@
 
 Instrumented code records through module-level functions into one
 process-wide sink, the same way it logs: ``record_duration``, ``record_span``,
-``set_gauge`` and the ``measure`` context manager. This is the documented
+``set_gauge``, ``count`` and the ``measure`` context manager. This is the documented
 exception to constructor injection; the sink holds only measurements, never
 behavior other code depends on.
 
 Durations are milliseconds in log-scale histograms; gauges keep their last
-value. Metric names are low-cardinality dotted lowercase words and never carry
-ids or content. While a recording is active, measurements given a ``track``
-also become Chrome Trace Event spans for Perfetto.
+value; counters add up occurrences (``count``). Metric names are
+low-cardinality dotted lowercase words and never carry ids or content. While a
+recording is active, measurements given a ``track`` also become Chrome Trace
+Event spans (counters: instant events) for Perfetto.
 
 The Runtime-owned :class:`PerformanceService` runs the Event Loop monitor and
 stall watchdog and owns recordings and their files.
@@ -97,6 +98,14 @@ class _Sink:
         recording = self.recording
         if recording is not None:
             recording.observe(metric, ms)
+
+    def count(self, name: str, amount: int) -> None:
+        if not self.metrics.add(name, amount):
+            self.drop()
+            return
+        recording = self.recording
+        if recording is not None:
+            recording.count(name, amount)
 
     def set_gauge(self, name: str, value: float, track: str | None) -> None:
         if not self.metrics.set_gauge(name, value):
@@ -188,6 +197,28 @@ def record_duration(metric: str, ms: float) -> None:
 def set_gauge(name: str, value: float, *, track: str | None = None) -> None:
     """Store the latest value of one gauge; ``track`` places its trace counter."""
     _SINK.set_gauge(name, value, track)
+
+
+def count(
+    metric: str,
+    amount: int = 1,
+    *,
+    track: str | None = None,
+    args: dict[str, Any] | None = None,
+) -> None:
+    """Add ``amount`` occurrences to the ``metric`` counter.
+
+    With ``track`` and an active recording, the occurrence also becomes an
+    instant event named ``metric``.
+    """
+    _SINK.count(metric, amount)
+    if track is None:
+        return
+    recording = _SINK.recording
+    if recording is not None:
+        recording.add_instant(
+            track, perf_counter(), name=metric, category=_category(metric), args=args
+        )
 
 
 def measure(
@@ -316,7 +347,7 @@ class PerformanceService:
         self._workers.shutdown(wait=False)
 
     async def snapshot(self) -> dict[str, Any]:
-        """Return process-wide metrics, gauges, recent stalls and recording status."""
+        """Return process-wide metrics, gauges, counters, recent stalls and recording status."""
         return await self._workers.run(self._snapshot)
 
     async def heap_census(self, *, top: int = DEFAULT_HEAP_TOP) -> dict[str, Any]:
@@ -389,6 +420,7 @@ class PerformanceService:
             "uptime_seconds": round(perf_counter() - _SINK.started_perf, 3),
             "metrics": _SINK.metrics.histogram_summaries(),
             "gauges": _SINK.metrics.gauges(),
+            "counters": _SINK.metrics.counters(),
             "stalls": stalls,
             "recording": self.recording_status(),
         }

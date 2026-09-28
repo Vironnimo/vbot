@@ -53,6 +53,7 @@ def performance_status(instance: ServerInstance) -> CommandResult:
         _gauge_line(gauges),
         *_metric_section("top metrics by p99", metrics, "p99_ms", _TOP_METRICS),
         *_metric_section("top metrics by total time", metrics, "sum_ms", _TOP_METRICS),
+        *_counter_section(_mapping(payload.data.get("counters"))),
         *_stall_section(stalls),
     ]
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
@@ -201,6 +202,14 @@ def _metric_section(title: str, metrics: Mapping[str, Any], key: str, limit: int
         return [f"{title}: -"]
     rows.sort(key=lambda row: (-row[1][key], row[0]))
     return [f"{title}:", *(_metric_row(name, values) for name, values in rows[:limit])]
+
+
+def _counter_section(counters: Mapping[str, Any]) -> list[str]:
+    rows = [(name, value) for name, value in counters.items() if isinstance(value, int)]
+    if not rows:
+        return ["top counters: -"]
+    rows.sort(key=lambda row: (-row[1], row[0]))
+    return ["top counters:", *(f"- {name}={value}" for name, value in rows[:_TOP_METRICS])]
 
 
 def _metric_row(name: str, values: Mapping[str, Any]) -> str:

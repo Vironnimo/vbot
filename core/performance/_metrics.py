@@ -1,9 +1,10 @@
-"""Thread-safe log-scale duration histograms and last-value gauges.
+"""Thread-safe log-scale duration histograms, last-value gauges and counters.
 
 Durations are milliseconds. Buckets grow by a fixed factor (about 10% relative
 width) from ``MIN_BUCKET_MS`` to ``MAX_BUCKET_MS``, with one underflow and one
 overflow bucket, so percentiles cost no per-observation storage. A registry
-caps its distinct names; callers decide how a rejected new name is reported.
+caps its distinct names per kind; callers decide how a rejected new name is
+reported.
 """
 
 from __future__ import annotations
@@ -104,13 +105,14 @@ def _rounded(value: float) -> float:
 
 
 class MetricRegistry:
-    """Named histograms and gauges guarded by one lock, with a distinct-name cap."""
+    """Named histograms, gauges and counters guarded by one lock, with a distinct-name cap."""
 
     def __init__(self, *, max_names: int) -> None:
         self._max_names = max_names
         self._lock = threading.Lock()
         self._histograms: dict[str, HistogramData] = {}
         self._gauges: dict[str, float] = {}
+        self._counters: dict[str, int] = {}
 
     def observe(self, name: str, ms: float) -> bool:
         """Add one duration; return False when a new name exceeds the cap."""
@@ -146,6 +148,23 @@ class MetricRegistry:
             elif value > current:
                 self._gauges[name] = value
         return True
+
+    def add(self, name: str, amount: int) -> bool:
+        """Add to one counter; return False when a new name exceeds the cap."""
+        with self._lock:
+            current = self._counters.get(name)
+            if current is None:
+                if len(self._counters) >= self._max_names:
+                    return False
+                current = 0
+            self._counters[name] = current + amount
+        return True
+
+    def counters(self) -> dict[str, int]:
+        """Return the counter totals sorted by name."""
+        with self._lock:
+            values = dict(self._counters)
+        return {name: values[name] for name in sorted(values)}
 
     def histogram_summaries(self) -> dict[str, dict[str, float | int]]:
         """Return per-name summaries sorted by name, computed outside the lock."""
