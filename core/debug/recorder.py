@@ -22,6 +22,8 @@ from functools import partial
 from typing import Any
 from uuid import uuid4
 
+import httpx
+
 from core.debug.redaction import redact_headers, redact_url
 from core.debug.store import DebugTraceStore
 from core.utils.logging import get_logger
@@ -97,11 +99,13 @@ class _TraceCapture:
     """Accumulates one trace and persists it on :meth:`finalize`.
 
     Body bytes (for both streaming and non-streaming responses) arrive
-    through :meth:`feed_body`. On finalize, the complete raw aggregate
-    body — every byte of a streamed SSE response, the raw JSON of a
-    non-streaming response, or the raw text of an error response — is
-    stored under ``response.body``. No per-frame split is produced; the
-    canonical trace is one request and one response.
+    through :meth:`feed_body` exactly as they crossed the socket. On
+    finalize, the complete aggregate body — every byte of a streamed SSE
+    response, the JSON of a non-streaming response, or the text of an
+    error response — is stored under ``response.body`` with its
+    ``Content-Encoding`` undone, so it reads as the payload the Adapter
+    received. No per-frame split is produced; the canonical trace is one
+    request and one response.
     """
 
     def __init__(
@@ -127,6 +131,7 @@ class _TraceCapture:
         self._response: dict[str, Any] | None = None
         self._error: dict[str, str] | None = None
         self._body_chunks: list[bytes] = []
+        self._content_encoding: str | None = None
         self._finalized = False
 
     def record_response_head(self, status_code: int, headers: dict[str, str]) -> None:
@@ -136,6 +141,7 @@ class _TraceCapture:
             "headers": redact_headers(headers),
             "body": None,
         }
+        self._content_encoding = httpx.Headers(headers).get("content-encoding")
 
     def feed_body(self, chunk: bytes) -> None:
         """Accumulate one raw response body chunk as it is read."""
@@ -165,6 +171,7 @@ class _TraceCapture:
                 response=self._response,
                 error=self._error,
                 body_chunks=tuple(self._body_chunks),
+                content_encoding=self._content_encoding,
             )
             if not self._store.save_trace_in_background(self._trace_id, build_trace):
                 _logger.warning("Debug trace dropped: earlier traces are still being written")
@@ -183,10 +190,15 @@ class _TraceCapture:
         response: dict[str, Any] | None,
         error: dict[str, str] | None,
         body_chunks: tuple[bytes, ...],
+        content_encoding: str | None,
     ) -> dict[str, Any]:
-        body_text = _decode_body(b"".join(body_chunks)) if body_chunks else None
+        body_text = (
+            _decode_body(_decode_content(b"".join(body_chunks), content_encoding))
+            if body_chunks
+            else None
+        )
 
-        # The complete raw aggregate body — including every byte of an SSE
+        # The complete aggregate body — including every byte of an SSE
         # stream — lives in response.body. We never split it into per-frame
         # metadata; the canonical trace is one request and one response. When
         # no response head was recorded, the whole response stays None.
@@ -222,6 +234,23 @@ class _TraceCapture:
             "iteration_number": self._context.iteration_number,
             "streaming": self._context.streaming,
         }
+
+
+def _decode_content(body: bytes, content_encoding: str | None) -> bytes:
+    """Undo a response ``Content-Encoding`` exactly as httpx does for the Adapter.
+
+    Encodings httpx does not support stay as received, as they do for the
+    Adapter. Bytes that fail to decode are kept raw: the trace then shows
+    what arrived, and the Adapter meets the same decoding error.
+    """
+    if not content_encoding:
+        return body
+    try:
+        return httpx.Response(
+            200, headers={"content-encoding": content_encoding}, content=body
+        ).content
+    except httpx.DecodingError:
+        return body
 
 
 def _decode_body(body: bytes | None) -> str | None:
