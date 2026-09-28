@@ -127,7 +127,7 @@ export function resolveMoveActionFromResponse(response) {
 // Decide the target world for a `/agent` move from its outside address.
 // `agent@projekt` → project world; a bare id → identity world. The split uses
 // the shared `parseAgentAddress` seam so the `@` grammar is never re-derived.
-export function resolveMoveTarget(targetAddress) {
+function resolveMoveTarget(targetAddress) {
   const address = typeof targetAddress === 'string' ? targetAddress.trim() : '';
   const { agentId, projectId } = parseAgentAddress(address);
   const isProjectTarget = typeof projectId === 'string' && projectId.length > 0;

@@ -53,8 +53,8 @@ afterEach(() => {
 });
 
 describe('connect()', () => {
-  it('starts reconnecting from an empty cursor', () => {
-    expect(createConnectionState()).toMatchObject({
+  it('starts reconnecting from an empty cursor with only public fields', () => {
+    expect(createConnectionState()).toEqual({
       status: CONNECTION_STATUS_RECONNECTING,
       lastSequence: 0,
       epoch: '',

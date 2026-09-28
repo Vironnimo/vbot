@@ -19,7 +19,6 @@ import { t } from '$lib/i18n.js';
 import { formatDurationMs, elapsedSinceTimestamp } from './time.js';
 import { trimmedString } from './values.js';
 import { isPlainObject } from '$lib/values.js';
-import { toolNameHasHiddenArguments } from '$lib/chatToolDetails.js';
 import { subAgentToolLabel } from './subagents.js';
 
 const TOOL_DISPLAY_ARGS = {
@@ -54,10 +53,6 @@ export const DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS = 64;
 const TOOL_PATH_SEGMENT_LIMIT = 3;
 
 const SUBAGENT_TOOL_NAMES = new Set(['subagent']);
-
-export const toolArgumentForEvent = (event) => {
-  return toolArgumentSummary(toolRowFromEvent(event));
-};
 
 export const toolRowFromEvent = (event) => {
   const resultEvent = event?.type === 'tool_call_result' ? event : null;
@@ -108,13 +103,6 @@ export const toolStatusLabel = (tool, nowMs = Date.now()) => {
       .join(' · ');
   }
   return duration;
-};
-
-export const toolArgumentSummary = (tool) => {
-  return toolRowPresentation(tool)
-    .primary.map((part) => part.text)
-    .filter(Boolean)
-    .join(' · ');
 };
 
 export const toolRowPresentation = (tool) => {
@@ -257,7 +245,7 @@ function toolFactPresentation(fact) {
   return { kind: 'count', text: label, variant: 'neutral' };
 }
 
-export function compactToolPath(value) {
+function compactToolPath(value) {
   const normalized = trimmedString(value).replaceAll('\\', '/');
   if (!normalized) {
     return '';
@@ -274,7 +262,7 @@ export function compactToolPath(value) {
   return `…/${segments.slice(-TOOL_PATH_SEGMENT_LIMIT).join('/')}`;
 }
 
-export function truncateSemanticValue(
+function truncateSemanticValue(
   value,
   mode,
   maxCharacters = DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS,
@@ -396,9 +384,6 @@ function humanReadableToolLabel(toolName, argumentsValue) {
     }
   }
 
-  if (toolNameHasHiddenArguments(toolName)) {
-    return '';
-  }
   return '';
 }
 

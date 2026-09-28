@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  addServerQueuedMessage,
   appendRunEvent,
   createChatState,
   currentSessionState,
@@ -13,8 +12,6 @@ import {
   resolveAgentAddressing,
   selectedAgent,
   setAgents,
-  syncQueueFromServer,
-  updateQueuedMessageContent,
 } from '../chatState.js';
 import { setupController } from './chatState.support.js';
 
@@ -65,25 +62,20 @@ describe('Session state', () => {
     expect(currentSessionState(state)).toBe(createdSessionState);
   });
 
-  it('classifies only loaded sessions without conversation activity as empty', () => {
-    const state = createChatState();
-    const sessionState = ensureSessionState(state, 'alpha', 'session-one');
+  it('classifies only loaded sessions without conversation activity as empty', async () => {
+    const { chatState, controller, listQueue } = setupController();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
 
     expect(isSessionEmpty(sessionState)).toBe(false);
 
     loadHistory(sessionState, []);
     expect(isSessionEmpty(sessionState)).toBe(true);
 
-    addServerQueuedMessage(sessionState, {
-      id: 'queue-one',
-      content: 'Waiting message',
-      created_at: '2026-05-22T01:00:00+00:00',
-      steerable: false,
-      steering: false,
-    });
+    await controller.syncSessionQueue(sessionState);
     expect(isSessionEmpty(sessionState)).toBe(false);
 
-    syncQueueFromServer(sessionState, []);
+    listQueue.mockResolvedValueOnce({ items: [] });
+    await controller.syncSessionQueue(sessionState);
     loadHistory(sessionState, [
       { id: 'message-one', role: 'user', content: 'Hello' },
     ]);
@@ -92,12 +84,7 @@ describe('Session state', () => {
 });
 
 describe('Queue projection', () => {
-  it('projects server Queue items: append, authoritative replace, edit and remove', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
+  it('projects server Queue items: append, authoritative replace, edit and remove', async () => {
     const first = {
       id: 'queue-1',
       content: 'First message',
@@ -115,46 +102,71 @@ describe('Queue projection', () => {
       steering: false,
     };
 
-    addServerQueuedMessage(sessionState, { id: 'queue-old', content: 'Old' });
-    addServerQueuedMessage(sessionState, { id: 'queue-new', content: 'New' });
+    const startChatRun = vi
+      .fn()
+      .mockResolvedValueOnce({
+        queued: true,
+        item: { id: 'queue-old', content: 'Old' },
+      })
+      .mockResolvedValueOnce({
+        queued: true,
+        item: { id: 'queue-new', content: 'New' },
+      });
+    const { chatState, controller } = setupController({
+      operationOverrides: {
+        startChatRun,
+        listQueue: vi.fn().mockResolvedValue({ items: [first, second] }),
+        updateQueueItem: vi.fn().mockResolvedValue({ ok: true }),
+      },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+
+    await controller.sendMessage(sessionState, 'Old');
+    await controller.sendMessage(sessionState, 'New');
     expect(sessionState.queue.map((item) => item.id)).toEqual([
       'queue-old',
       'queue-new',
     ]);
 
-    syncQueueFromServer(sessionState, [first, second]);
+    await controller.syncSessionQueue(sessionState);
     expect(sessionState.queue).toEqual([first, second]);
 
-    expect(
-      updateQueuedMessageContent(sessionState, 'queue-1', 'Edited', {
-        editable: false,
-      }),
-    ).toBe(true);
+    await controller.updateQueued(sessionState, 'queue-1', 'Edited', [
+      'notes.md',
+    ]);
     expect(sessionState.queue[0]).toMatchObject({
       content: 'Edited',
       editable: false,
     });
-    expect(
-      updateQueuedMessageContent(sessionState, 'queue-missing', 'Anything'),
-    ).toBe(false);
+    // An edit the server accepted for an item this client no longer holds
+    // leaves the projection unchanged.
+    await controller.updateQueued(sessionState, 'queue-missing', 'Anything');
+    expect(sessionState.queue.map((item) => item.content)).toEqual([
+      'Edited',
+      'Second message',
+    ]);
 
     expect(removeQueuedMessage(sessionState, 'queue-1')).toBe(true);
     expect(removeQueuedMessage(sessionState, 'queue-missing')).toBe(false);
     expect(sessionState.queue).toEqual([second]);
   });
 
-  it('does not resurrect delivered steering input from an older Queue response', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
+  it('does not resurrect delivered steering input from an older Queue response', async () => {
     const queued = {
       id: 'queue-steer',
       content: 'Correction',
       steerable: true,
     };
-    addServerQueuedMessage(sessionState, queued);
+    const { chatState, controller } = setupController({
+      operationOverrides: {
+        startChatRun: vi.fn().mockResolvedValue({ queued: true, item: queued }),
+        listQueue: vi.fn().mockResolvedValue({
+          items: [queued, { id: 'queue-later', content: 'Later' }],
+        }),
+      },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    await controller.sendMessage(sessionState, queued.content);
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
       sequence: 2,
@@ -165,21 +177,14 @@ describe('Queue projection', () => {
     });
     expect(sessionState.queue).toEqual([]);
 
-    syncQueueFromServer(sessionState, [
-      queued,
-      { id: 'queue-later', content: 'Later' },
-    ]);
+    await controller.syncSessionQueue(sessionState);
     expect(sessionState.queue.map((item) => item.id)).toEqual(['queue-later']);
   });
 
-  it('loads history without losing the visible queue', () => {
-    const state = createChatState();
-    const sessionState = ensureSessionState(state, 'alpha', 'session-one');
-    addServerQueuedMessage(sessionState, {
-      id: 'queue-one',
-      content: 'queued work',
-      created_at: '2026-05-22T00:00:00+00:00',
-    });
+  it('loads history without losing the visible queue', async () => {
+    const { chatState, controller } = setupController();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    await controller.syncSessionQueue(sessionState);
 
     loadHistory(sessionState, [
       { id: 'message-one', role: 'user', content: 'Hi' },

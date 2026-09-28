@@ -38,10 +38,7 @@
     taskModelBindingsMatch,
     visibleFieldOptions,
   } from '$lib/taskModelSettings.js';
-  import {
-    SURFACE_FORM,
-    shouldApplyReloadNow,
-  } from '$lib/resourceInvalidation.js';
+  import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
 
   const noop = () => {};
 
@@ -239,7 +236,7 @@
   $effect(() => {
     if (
       pendingTaskModelReload &&
-      shouldApplyReloadNow(SURFACE_FORM, { savePending: taskSurfaceBusy })
+      shouldApplyReloadNow({ savePending: taskSurfaceBusy })
     ) {
       pendingTaskModelReload = false;
       void loadTaskModelPanel();

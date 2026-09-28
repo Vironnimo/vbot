@@ -27,10 +27,7 @@
     buildAgentDefaultsPayload,
     normalizeAgentDefaultsSettings,
   } from '$lib/settingsView.js';
-  import {
-    SURFACE_FORM,
-    shouldApplyReloadNow,
-  } from '$lib/resourceInvalidation.js';
+  import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
 
   const noop = () => {};
   const AGENT_THINKING_EFFORT_OPTIONS = Object.freeze([
@@ -224,7 +221,7 @@
       return;
     }
     if (
-      shouldApplyReloadNow(SURFACE_FORM, {
+      shouldApplyReloadNow({
         dropdownOpen: modelDropdownOpenCount > 0,
       })
     ) {

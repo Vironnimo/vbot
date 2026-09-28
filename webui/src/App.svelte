@@ -382,7 +382,6 @@
   const loadDataStoreStatus = async () => {
     try {
       const result = await getDataStoreStatus();
-      appControllerState.dataStoreHealth = result ?? null;
       appControllerState.dataStoreIncident = result?.incidents?.[0] ?? null;
     } catch {
       // Preserve the last durable incident projection during a transient RPC failure.
@@ -396,7 +395,6 @@
     }
     try {
       const result = await acknowledgeDataStoreIncident(incidentId);
-      appControllerState.dataStoreHealth = result ?? null;
       appControllerState.dataStoreIncident = result?.incidents?.[0] ?? null;
     } catch (error) {
       desktop.showToast({
@@ -481,48 +479,6 @@
     onLoadDataStoreStatus: loadDataStoreStatus,
     onSetOnboardingAside: setup.dismissOnboarding,
   });
-
-  // Exposed for tests so the routing in `handleServerEvent` can be verified
-  // without depending on ChatView's internal state. Production code reads
-  // `connectionSnapshot` via the `<ChatView connectionSnapshot={...} />` prop
-  // binding above.
-  export function getConnectionSnapshot() {
-    return appControllerState.connectionSnapshot;
-  }
-
-  // Exposed for tests so the `resource_changed` routing in `handleServerEvent`
-  // can be verified without reaching into a child view's reload behavior.
-  export function getModelsRefreshToken() {
-    return appControllerState.modelsRefreshToken;
-  }
-
-  export function getProjects() {
-    return selection.projects;
-  }
-
-  export function getSessionsRefreshToken() {
-    return appControllerState.sessionsRefreshToken;
-  }
-
-  export function getSessionInvalidations() {
-    return appControllerState.sessionInvalidations;
-  }
-
-  export function getQueueInvalidation() {
-    return appControllerState.queueInvalidation;
-  }
-
-  export function getClientsRefreshToken() {
-    return appControllerState.clientsRefreshToken;
-  }
-
-  export function getChannelsRefreshToken() {
-    return appControllerState.channelsRefreshToken;
-  }
-
-  export function getDebugTracesRefreshToken() {
-    return appControllerState.debugTracesRefreshToken;
-  }
 
   onMount(() => {
     let cancelled = false;

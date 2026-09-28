@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CHAT_STATUS_COMPLETED,
   CHAT_STATUS_RUNNING,
@@ -6,11 +6,13 @@ import {
   createChatState,
   ensureSessionState,
   loadHistory,
-  prependHistory,
   startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
-import { reportedMultiStepMessages } from './chatState.support.js';
+import {
+  reportedMultiStepMessages,
+  setupController,
+} from './chatState.support.js';
 
 describe('History projection', () => {
   it('does not expose internal continuation data as client state', () => {
@@ -120,31 +122,32 @@ describe('History projection', () => {
     );
   });
 
-  it('prepends older history without duplicating loaded messages', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
+  it('prepends older history without duplicating loaded messages', async () => {
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [
+          { id: 'message-three', role: 'user', content: 'Three' },
+          { id: 'message-four', role: 'assistant', content: 'Four' },
+        ],
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { id: 'message-one', role: 'user', content: 'One' },
+          { id: 'message-two', role: 'assistant', content: 'Two' },
+          { id: 'message-three', role: 'user', content: 'Three duplicate' },
+          { id: 'note-one', role: 'note', content: 'Internal note' },
+        ],
+        has_more: false,
+      });
+    const { chatState, controller } = setupController({
+      operationOverrides: { loadChatHistory },
+    });
+    await controller.loadHistoryForSession('alpha', 'session-one');
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
 
-    loadHistory(
-      sessionState,
-      [
-        { id: 'message-three', role: 'user', content: 'Three' },
-        { id: 'message-four', role: 'assistant', content: 'Four' },
-      ],
-      { hasMore: true },
-    );
-    prependHistory(
-      sessionState,
-      [
-        { id: 'message-one', role: 'user', content: 'One' },
-        { id: 'message-two', role: 'assistant', content: 'Two' },
-        { id: 'message-three', role: 'user', content: 'Three duplicate' },
-        { id: 'note-one', role: 'note', content: 'Internal note' },
-      ],
-      { hasMore: false },
-    );
+    expect(await controller.loadOlderHistory(sessionState)).toBe(true);
 
     expect(sessionState.messages.map((message) => message.id)).toEqual([
       'message-one',
@@ -637,27 +640,42 @@ describe('authoritative Timeline synchronization', () => {
       payload,
     });
 
-  it('retains older pages and distinct occurrences of the same checkpoint on an incremental read', () => {
-    const session = state();
+  it('retains older pages and distinct occurrences of the same checkpoint on an incremental read', async () => {
     const checkpoint = {
       id: 'same-checkpoint',
       role: 'compaction_checkpoint',
       content: 'Summary',
     };
-    loadHistory(session, [{ ...checkpoint, history_sequence: 2 }], {
-      generation: 'g',
-      nextAfter: 'cursor-3',
-      hasMore: true,
-      nextBefore: 'before-2',
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ ...checkpoint, history_sequence: 2 }],
+        history_generation: 'g',
+        next_after: 'cursor-3',
+        has_more: true,
+        next_before: 'before-2',
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          saved(0, null, 'user', 'Earlier'),
+          { ...checkpoint, history_sequence: 1 },
+        ],
+      })
+      .mockResolvedValueOnce({
+        messages: [saved(3, 'new', 'user', 'New')],
+        history_generation: 'g',
+        incremental: true,
+        next_after: 'cursor-4',
+      });
+    const { chatState, controller } = setupController({
+      operationOverrides: { loadChatHistory },
     });
-    prependHistory(session, [
-      saved(0, null, 'user', 'Earlier'),
-      { ...checkpoint, history_sequence: 1 },
-    ]);
-    loadHistory(session, [saved(3, 'new', 'user', 'New')], {
-      generation: 'g',
-      incremental: true,
-      nextAfter: 'cursor-4',
+    await controller.loadHistoryForSession('agent@project', 'session');
+    const session = ensureSessionState(chatState, 'agent@project', 'session');
+    expect(await controller.loadOlderHistory(session)).toBe(true);
+    await controller.loadHistoryForSession('agent@project', 'session');
+    expect(loadChatHistory.mock.calls[2][0]).toMatchObject({
+      after: 'cursor-3',
     });
     expect(session.messages.map((message) => message.history_sequence)).toEqual(
       [0, 1, 2, 3],

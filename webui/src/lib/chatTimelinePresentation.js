@@ -2,17 +2,12 @@
 // child-Run and activity projections without changing consumer imports.
 export {
   DEFAULT_TOOL_PRIMARY_MAX_CHARACTERS,
-  toolArgumentForEvent,
   toolRowFromEvent,
   toolStatusLabel,
-  toolArgumentSummary,
   toolRowPresentation,
-  compactToolPath,
-  truncateSemanticValue,
 } from './chatTimelinePresentation/toolRows.js';
 export {
   subAgentRunDurationMs,
-  subAgentRunStartedAt,
   subAgentLastToolName,
   subAgentToolStatusLabel,
   isSubAgentSpawnTool,
@@ -44,16 +39,13 @@ export {
   changeStatsLabel,
   changeStatsParts,
   changeStatsTooltip,
-  assistantRunNeedsLiveClock,
   liveClockCadenceMs,
   isRowCancellable,
   backgroundTasks,
   backgroundBashRowState,
   backgroundBashToolStatusLabel,
   backgroundBashDisplayResult,
-  REFLECTION_RUN_KIND_SCOPES,
   isReflectionRunKind,
-  reflectionScopeForRunKind,
   reflectionTaskRows,
   reflectionElapsedLabel,
 } from './chatTimelinePresentation/activity.js';
@@ -97,7 +89,6 @@ export {
   avatarForItem,
   metaForEvent,
   isToolEvent,
-  isRunningToolEvent,
   isFailedToolEvent,
   isTerminalEvent,
 } from './chatTimelinePresentation/messages.js';

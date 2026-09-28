@@ -17,10 +17,7 @@
   import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
   import { t } from '$lib/i18n.js';
   import { createModelCatalogLoader } from '$lib/modelSelection.js';
-  import {
-    SURFACE_FORM,
-    shouldApplyReloadNow,
-  } from '$lib/resourceInvalidation.js';
+  import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
 
   import AgentCreateModal from './agents/AgentCreateModal.svelte';
   import AgentEditor from './agents/AgentEditor.svelte';
@@ -279,7 +276,7 @@
       return;
     }
     if (
-      shouldApplyReloadNow(SURFACE_FORM, {
+      shouldApplyReloadNow({
         dropdownOpen: modelDropdownOpenCount > 0,
       })
     ) {

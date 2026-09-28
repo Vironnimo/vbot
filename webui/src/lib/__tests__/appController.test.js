@@ -371,10 +371,7 @@ describe('App controller', () => {
   it('reloads the data-store projection on connect and invalidation', async () => {
     const onLoadDataStoreStatus = vi.fn().mockResolvedValue(undefined);
     const { controller, state } = setup({ onLoadDataStoreStatus });
-    expect(state).toMatchObject({
-      dataStoreHealth: null,
-      dataStoreIncident: null,
-    });
+    expect(state).toMatchObject({ dataStoreIncident: null });
 
     await controller.handleServerEvent({
       type: 'connection_ready',

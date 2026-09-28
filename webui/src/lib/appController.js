@@ -152,7 +152,6 @@ export function createAppControllerState(activeViewId) {
     // Full Session-list refresh, bumped only when continuity is uncertain
     // (replay gap or server restart).
     sessionsRefreshToken: 0,
-    dataStoreHealth: null,
     dataStoreIncident: null,
     settingsPanelTarget: '',
     settingsPanelTargetRequestId: 0,

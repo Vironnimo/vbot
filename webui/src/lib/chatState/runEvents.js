@@ -285,7 +285,7 @@ function beginRunFromEvent(sessionState, event) {
   sessionState.streamingPhase = 0;
 }
 
-export function finishRun(sessionState, event) {
+function finishRun(sessionState, event) {
   const type = event?.type;
   const status = event?.payload?.status;
   const completedRunId = event?.run_id ?? '';

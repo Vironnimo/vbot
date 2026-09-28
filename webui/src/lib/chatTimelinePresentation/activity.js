@@ -348,47 +348,6 @@ function toolChangePath(tool) {
   return '';
 }
 
-export const assistantRunNeedsLiveClock = (
-  assistantRun,
-  subAgentStatuses = {},
-  backgroundBashProcesses = {},
-) => {
-  if (
-    assistantRun?.status === 'running' &&
-    timestampToMs(assistantRun.startTimestamp ?? assistantRun.timestamp) !==
-      null
-  ) {
-    return true;
-  }
-  return (assistantRun?.items ?? []).some((tool) => {
-    if (tool?.type !== 'tool_call') {
-      return false;
-    }
-    if (isSubAgentSpawnTool(tool)) {
-      return (
-        subAgentDotStatus(tool, subAgentStatuses) === 'running' &&
-        timestampToMs(subAgentRunStartedAt(tool, subAgentStatuses)) !== null
-      );
-    }
-    const bashRowState = backgroundBashRowState(
-      tool,
-      {},
-      backgroundBashProcesses,
-    );
-    if (bashRowState) {
-      return (
-        bashRowState.dotStatus === 'running' &&
-        timestampToMs(toolStartedTimestamp(tool)) !== null
-      );
-    }
-    return (
-      toolStatus(tool) === 'running' &&
-      !isToolPreparing(tool) &&
-      timestampToMs(toolStartedTimestamp(tool)) !== null
-    );
-  });
-};
-
 export const liveClockCadenceMs = (
   timelineItems,
   subAgentStatuses = {},
@@ -679,7 +638,7 @@ function backgroundBashDotStatus(status) {
 // the reviewed source session. These helpers map the run-kind vocabulary onto
 // Activity-panel presentation and project the per-source tracking entries
 // written by chatRunStream into sortable panel rows.
-export const REFLECTION_RUN_KIND_SCOPES = {
+const REFLECTION_RUN_KIND_SCOPES = {
   memory_reflection: 'memory',
   skill_reflection: 'skill',
   reflection: 'combined',
@@ -688,7 +647,7 @@ export const REFLECTION_RUN_KIND_SCOPES = {
 export const isReflectionRunKind = (runKind) =>
   typeof runKind === 'string' && runKind in REFLECTION_RUN_KIND_SCOPES;
 
-export const reflectionScopeForRunKind = (runKind) =>
+const reflectionScopeForRunKind = (runKind) =>
   isReflectionRunKind(runKind) ? REFLECTION_RUN_KIND_SCOPES[runKind] : '';
 
 export const reflectionTaskRows = (sessionState) => {

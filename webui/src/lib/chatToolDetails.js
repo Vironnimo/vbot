@@ -73,9 +73,6 @@ export function toolDetailImages(
   });
 }
 
-export const toolNameHasHiddenArguments = (toolName) =>
-  Boolean(TOOL_ARGUMENT_HIDDEN_KEYS[toolName]);
-
 export const compactToolValue = (
   value,
   { preferPayload = false, toolName = '', tool = null } = {},
