@@ -12,8 +12,8 @@ answered from the ``[[perf ...]]`` directive in its latest real User message
   measure end-to-end delta latency on the same machine. A ``markdown=1``
   directive streams a Markdown answer instead, without markers.
 - Requests without Tools or without a directive (Session titles, background
-  reflection, other utility calls) get a short plain answer and are recorded as
-  ``aux``.
+  reflection, other utility calls) and Compaction requests get a short plain
+  answer and are recorded as ``aux``.
 - Requests that offer ``swarm_board`` come from Swarm participants and follow
   :mod:`scripts.perf_load_suite.swarm_script`; a participant without a turn to
   take answers plain text recorded as ``idle``.
@@ -71,6 +71,11 @@ AUX_RESPONSE_TEXT = "[title=Perf load session] Acknowledged."
 MARKER_PATTERN = re.compile(r"⟦t=(\d+(?:\.\d+)?)⟧")
 _WORD_PATTERN = re.compile(r"\S+\s*")
 _SYSTEM_REMINDER_PREFIX = "<system-reminder>"
+# Compaction appends its instruction as the last message, a System Reminder that
+# opens with these words (resources/prompts/compaction*.md).
+_COMPACTION_INSTRUCTION = re.compile(
+    re.escape(_SYSTEM_REMINDER_PREFIX) + r"\s*Create (?:a context|the next compaction) checkpoint\b"
+)
 _FILLER_WORDS = (
     "load",
     "stream",
@@ -216,6 +221,8 @@ def plan_response(
     messages = body.get("messages")
     if not isinstance(messages, list):
         raise PlanError("request has no messages array")
+    if _is_compaction_request(messages):
+        return PlannedResponse(kind="aux")
     schemas = offered_tool_schemas(body)
     if not schemas:
         return PlannedResponse(kind="aux")
@@ -309,6 +316,16 @@ def _plan_swarm_response(
         directive=directive,
         tool_calls=calls,
         participant=position.participant,
+    )
+
+
+def _is_compaction_request(messages: list[Any]) -> bool:
+    """Whether the request asks for a Compaction summary (it keeps the Tools)."""
+    last = messages[-1] if messages else None
+    return (
+        isinstance(last, dict)
+        and last.get("role") == "user"
+        and _COMPACTION_INSTRUCTION.match(message_text(last).lstrip()) is not None
     )
 
 

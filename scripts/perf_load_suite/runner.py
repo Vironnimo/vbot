@@ -44,6 +44,7 @@ from scripts.perf_load_suite.driver import (
     SessionTarget,
     Workload,
     drive_turns,
+    run_command,
     seed_workload,
 )
 from scripts.perf_load_suite.fixture import write_fixture_project
@@ -92,6 +93,10 @@ WARMUP_CHUNK_TOKENS = 20_000
 UI_HISTORY_STEPS = 4
 UI_HISTORY_TOKENS = 300
 UI_HISTORY_PROGRESS_TURNS = 50
+# Automatic Compaction trigger for ui_history_turns runs, as on a 200k-token
+# Model: it bounds every seeding request, so seeding time grows linearly with
+# the turn count, and the History gets a checkpoint about every 40 turns.
+UI_HISTORY_COMPACTION_TOKENS = 200_000
 PROBE_MARGIN_SECONDS = 300
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "perf-results"
 T = TypeVar("T")
@@ -367,9 +372,9 @@ def run_level(
         data_dir=data_dir,
         log_dir=level_dir,
         provider_api_base_url=fake.api_base_url,
-        # A seeded long History must not be compacted: every N keeps the same
-        # timeline shape, and no Compaction falls into the measured phase.
-        auto_compaction=config.ui_history_turns is None,
+        compaction_trigger_tokens=(
+            UI_HISTORY_COMPACTION_TOKENS if config.ui_history_turns is not None else None
+        ),
     )
     try:
         log(f"[{agents} agent(s)] starting vBot on {server.base_url}")
@@ -694,7 +699,10 @@ def seed_ui_history(context: LevelContext, target: SessionTarget) -> dict[str, A
     """Give the watched Session ``ui_history_turns`` completed turns before measuring.
 
     The turns go through the real pipeline (``chat.stream``, fake Provider,
-    real Tools) unpaced, so the stored History has the shape real turns have.
+    real Tools) unpaced, so the stored History has the shape real turns have,
+    including the Compaction checkpoints automatic Compaction adds. A final
+    ``/compact`` gives every N the same small Context for the load phase, which
+    then cannot reach the Compaction trigger.
     """
     config, agents = context.config, context.agents
     total = config.ui_history_turns or 0
@@ -716,6 +724,17 @@ def seed_ui_history(context: LevelContext, target: SessionTarget) -> dict[str, A
             f"[{agents} agent(s)] UI history: {done}/{total} turns "
             f"({time.monotonic() - started:.0f} s)"
         )
+    if total:
+        error = asyncio.run(
+            run_command(
+                context.server.base_url,
+                target,
+                "/compact",
+                timeout_seconds=config.run_timeout_seconds,
+            )
+        )
+        if error is not None:
+            raise LevelError(f"UI history Compaction failed: {error}")
     return {"turns": total, "seed_seconds": round(time.monotonic() - started, 1)}
 
 

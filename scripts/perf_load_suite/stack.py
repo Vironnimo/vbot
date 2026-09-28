@@ -100,12 +100,27 @@ def child_environment(source: dict[str, str] | None = None) -> dict[str, str]:
     return environment
 
 
-def provider_settings(provider_base_url: str, *, auto_compaction: bool = True) -> dict[str, Any]:
+def provider_settings(
+    provider_base_url: str, *, compaction_trigger_tokens: int | None = None
+) -> dict[str, Any]:
     """``settings.json`` registering the fake Provider as the default Agent Model.
 
-    ``auto_compaction=False`` also turns off automatic Compaction.
+    ``compaction_trigger_tokens`` also lets automatic Compaction start at that
+    many estimated Context tokens instead of only at 80% of the context window.
     """
-    compaction = {} if auto_compaction else {"compaction": {"enabled": False}}
+    compaction = (
+        {}
+        if compaction_trigger_tokens is None
+        else {
+            "compaction": {
+                "trigger": {
+                    "type": "context_ratio",
+                    "threshold": 0.8,
+                    "tokens": compaction_trigger_tokens,
+                }
+            }
+        }
+    )
     return {
         "format_version": 1,
         "defaults": {"agent": {"model": AGENT_MODEL}},
@@ -283,10 +298,10 @@ class VbotServer:
         data_dir: Path,
         log_dir: Path,
         provider_api_base_url: str,
-        auto_compaction: bool = True,
+        compaction_trigger_tokens: int | None = None,
     ) -> None:
         self.data_dir = data_dir
-        self._auto_compaction = auto_compaction
+        self._compaction_trigger_tokens = compaction_trigger_tokens
         self.port = free_port()
         self.base_url = f"http://{LOOPBACK}:{self.port}"
         self.console_log = log_dir / "server-console.log"
@@ -310,7 +325,8 @@ class VbotServer:
         (self.data_dir / "settings.json").write_text(
             json.dumps(
                 provider_settings(
-                    self._provider_api_base_url, auto_compaction=self._auto_compaction
+                    self._provider_api_base_url,
+                    compaction_trigger_tokens=self._compaction_trigger_tokens,
                 ),
                 indent=2,
             )

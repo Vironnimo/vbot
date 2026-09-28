@@ -195,6 +195,40 @@ async def run_turn(
     return record
 
 
+async def run_command(
+    base_url: str, target: SessionTarget, command: str, *, timeout_seconds: float
+) -> str | None:
+    """Send a slash command that starts a Run (like ``/compact``) and follow it.
+
+    Returns why the Run did not complete, or ``None`` when it did.
+    """
+    client = AsyncRpcClient(base_url, max_connections=2)
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            response = await client.call(
+                "chat.stream",
+                {"agent_id": target.agent_id, "session_id": target.session_id, "content": command},
+            )
+            if "sse_url" not in response:
+                return f"{command} started no Run: {response.get('reply') or response}"
+            async for event in client.events(str(response["sse_url"])):
+                status = TERMINAL_EVENTS.get(event.event)
+                if status is None:
+                    continue
+                if status == "completed":
+                    return None
+                payload = json.loads(event.data).get("payload") or {}
+                reason = payload.get("error") or payload.get("cause") or payload.get("reason")
+                return f"{command} Run {status}: {reason or event.event}"
+            return f"{command} Run stream closed without a terminal event"
+    except TimeoutError:
+        return f"{command} Run did not end within {timeout_seconds:.0f}s"
+    except (RpcCallError, httpx.HTTPError, ValueError) as exc:
+        return f"{command}: {type(exc).__name__}: {exc}"
+    finally:
+        await client.aclose()
+
+
 async def _cancel_run(client: AsyncRpcClient, run_id: str) -> str | None:
     """Cancel a timed-out Run; return why that failed, if it did."""
     try:
