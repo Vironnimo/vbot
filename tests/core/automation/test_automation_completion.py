@@ -623,7 +623,7 @@ async def test_completion_fallback_prunes_persisted_subagent_batch(tmp_path: Pat
     )
     tracker = SubAgentBatchTracker(trigger_service)
     parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register(parent_key, "worker", "child-session", "child-run")
+    tracker.register_reserved(parent_key, "worker", "child-session", "child-run")
 
     tracker.on_sub_agent_complete(parent_key, "child-run", {"result": "finished work"})
     # The fallback note is persisted on a Session worker, off the Event Loop.

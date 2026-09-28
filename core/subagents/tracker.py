@@ -81,29 +81,6 @@ class SubAgentBatchTracker:
 
         return new_id("sub", claim=claim)
 
-    def register(
-        self,
-        parent_key: ParentKey,
-        sub_agent_id: str,
-        sub_session_id: str,
-        sub_run_id: str,
-        project_id: str | None = None,
-        activity_file: str | None = None,
-        *,
-        work_id: str | None = None,
-    ) -> None:
-        """Register one spawned sub-agent run under a parent run batch."""
-        work_id = work_id or sub_run_id
-        batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
-        batch.entries[work_id] = _SubAgentEntry(
-            work_id=work_id,
-            agent_id=sub_agent_id,
-            project_id=project_id,
-            session_id=sub_session_id,
-            run_id=sub_run_id,
-            activity_file=activity_file,
-        )
-
     def reserve_slot(
         self,
         parent_key: ParentKey,
@@ -245,28 +222,6 @@ class SubAgentBatchTracker:
             return
         self._prune_if_empty(parent_key, batch)
         self._prune_if_finished(parent_key, batch)
-
-    def queued_entry_for_session(
-        self,
-        parent_key: ParentKey,
-        sub_session_id: str,
-        *,
-        sub_agent_id: str | None = None,
-        project_id: str | None = None,
-    ) -> _SubAgentEntry | None:
-        """Return the latest queued entry for a sub-agent session, if any."""
-        batch = self._batches.get(parent_key)
-        if batch is None:
-            return None
-        for entry in reversed(list(batch.entries.values())):
-            if (
-                entry.session_id == sub_session_id
-                and entry.run_id is None
-                and not entry.complete
-                and _entry_matches_target(entry, sub_agent_id, project_id)
-            ):
-                return entry
-        return None
 
     def on_sub_agent_complete(
         self,
@@ -412,7 +367,7 @@ class SubAgentBatchTracker:
         self,
         parent_key: ParentKey,
         sub_session_id: str,
-        sub_run_id: str | None = None,
+        sub_run_id: str,
         *,
         sub_agent_id: str | None = None,
         project_id: str | None = None,
@@ -422,20 +377,8 @@ class SubAgentBatchTracker:
         if batch is None:
             return
 
-        target_run_id = sub_run_id or self.run_id_for_session(
-            parent_key,
-            sub_session_id,
-            sub_agent_id=sub_agent_id,
-            project_id=project_id,
-        )
-        if target_run_id is None:
-            return
         entry = next(
-            (
-                candidate
-                for candidate in batch.entries.values()
-                if candidate.run_id == target_run_id
-            ),
+            (candidate for candidate in batch.entries.values() if candidate.run_id == sub_run_id),
             None,
         )
         if (
@@ -477,27 +420,6 @@ class SubAgentBatchTracker:
         )
         entry.completion_notice_id = None
 
-    def run_id_for_session(
-        self,
-        parent_key: ParentKey,
-        sub_session_id: str,
-        *,
-        sub_agent_id: str | None = None,
-        project_id: str | None = None,
-    ) -> str | None:
-        """Return the registered run id for a sub-agent session in a parent batch."""
-        batch = self._batches.get(parent_key)
-        if batch is None:
-            return None
-        for entry in reversed(list(batch.entries.values())):
-            if (
-                entry.session_id == sub_session_id
-                and entry.run_id is not None
-                and _entry_matches_target(entry, sub_agent_id, project_id)
-            ):
-                return entry.run_id
-        return None
-
     def owned_entries(
         self,
         parent_agent_id: str,
@@ -533,35 +455,6 @@ class SubAgentBatchTracker:
             if entry is not None:
                 return parent_key, entry
         return None
-
-    def activity_file_for_session(
-        self,
-        parent_key: ParentKey,
-        sub_session_id: str,
-        *,
-        sub_run_id: str | None = None,
-        sub_agent_id: str | None = None,
-        project_id: str | None = None,
-    ) -> str | None:
-        """Return the matching queued or live entry's activity-file path."""
-        batch = self._batches.get(parent_key)
-        if batch is None:
-            return None
-        for entry in reversed(list(batch.entries.values())):
-            if (
-                entry.session_id == sub_session_id
-                and (sub_run_id is None or entry.run_id == sub_run_id)
-                and _entry_matches_target(entry, sub_agent_id, project_id)
-            ):
-                return entry.activity_file
-        return None
-
-    def spawn_count(self, parent_key: ParentKey) -> int:
-        """Return the number of sub-agents spawned by the parent run."""
-        batch = self._batches.get(parent_key)
-        if batch is None:
-            return 0
-        return self._spawn_count(batch)
 
     def references_identity_agent(self, agent_id: str) -> bool:
         """Return whether an open batch still addresses an Identity Agent.
