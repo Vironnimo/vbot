@@ -275,20 +275,28 @@ describe('Swarm Board posts', () => {
     }
   });
 
-  it('shows newest Board posts first and appends earlier pages below them', async () => {
+  it('shows newest Board posts first, appends earlier pages below and reads only newer posts on a change', async () => {
     const { bridge, operation } = createBridge();
     const posts = (ids) =>
       ids.map((id) => ({
         id: `post-${id}`,
+        sequence: id,
         text: `message-${id}`,
         sender_id: 'prt-a',
         created_at: '2026-09-08T09:00:00+00:00',
       }));
+    // Posts after a number arrive oldest first, in bounded pages.
+    const newer = { 4: [[5, 6], true], 6: [[7], false], 7: [[], false] };
     overrideOperations(operation, {
-      'board.read': (args) =>
-        args.cursor
+      'board.read': (args) => {
+        if ('after' in args) {
+          const [ids, hasMore] = newer[args.after];
+          return { entries: posts(ids), has_more: hasMore };
+        }
+        return args.cursor
           ? { entries: posts([1, 2]), cursor: null, has_more: false }
-          : { entries: posts([3, 4]), cursor: 'older-page', has_more: true },
+          : { entries: posts([3, 4]), cursor: 'older-page', has_more: true };
+      },
     });
     await render(bridge);
     button('Investigate').click();
@@ -316,6 +324,25 @@ describe('Swarm Board posts', () => {
       limit: 100,
       cursor: 'older-page',
     });
+    expect(button(more)).toBeUndefined();
+    const reads = callsTo(operation, 'board.read').length;
+    bridge.invalidate({ resource: 'posts', ids: [swarm.id], revision: 2 });
+    await vi.waitFor(() =>
+      expect(messages()).toEqual(
+        [7, 6, 5, 4, 3, 2, 1].map((id) => `message-${id}`),
+      ),
+    );
+    expect(callsTo(operation, 'board.read').slice(reads)).toEqual(
+      [4, 6].map((after) => [
+        'board.read',
+        {
+          swarm_id: swarm.id,
+          discussion_id: swarm.main_discussion_id,
+          after,
+          limit: 100,
+        },
+      ]),
+    );
     expect(button(more)).toBeUndefined();
   });
 

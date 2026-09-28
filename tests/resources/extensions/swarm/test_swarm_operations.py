@@ -111,6 +111,13 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
     assert discussions["entries"][0]["id"] == board.swarm["main_discussion_id"]
     page = await operations.invoke("board.read", {"swarm_id": board.swarm["id"]})
     assert page["entries"][-1]["text"] == "operator note"
+    # A page showing the posts up to a number reads only the newer ones.
+    newer = await operations.invoke(
+        "board.read",
+        {"swarm_id": board.swarm["id"], "after": page["entries"][-1]["sequence"] - 1},
+    )
+    assert [post["text"] for post in newer["entries"]] == ["operator note"]
+    assert newer["has_more"] is False and "cursor" not in newer
     saved = await operations.invoke(
         "profiles.save", {"profile": profile["profile"], "expected_revision": 1}
     )
@@ -118,9 +125,10 @@ async def test_management_profiles_and_swarm_snapshots_are_owner_operations(boar
         "profiles.delete",
         {"profile_id": saved["profile"]["id"], "expected_revision": saved["profile"]["revision"]},
     )
-    # Each mutation names the changed record, so the page reloads only what shows it.
+    # Each mutation names what changed, so the page reloads only what shows it.
     assert {(resource, tuple(ids)) for resource, ids, _revision in changes} == {
-        ("swarms", (board.swarm["id"],)),
+        ("posts", (board.swarm["id"],)),
+        ("wiki", (board.swarm["id"],)),
         ("profiles", (saved["profile"]["id"],)),
     }
 

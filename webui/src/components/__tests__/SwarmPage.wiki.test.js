@@ -301,34 +301,42 @@ describe('Swarm Wiki drafts and refresh', () => {
   it('retains Wiki entries and the open page across tabs while refreshing quietly', async () => {
     const fixture = wikiBridge();
     await openWiki(fixture);
+    vi.useFakeTimers();
     const reads = () =>
       fixture.operation.mock.calls.filter(
         ([name, args]) => name === 'wiki' && args.action === 'read',
       ).length;
     const count = reads();
     const wikiCalls = callsTo(fixture.operation, 'wiki').length;
-    // Changes of another Swarm or of profiles leave the Wiki alone.
-    fixture.bridge.invalidate({
-      resource: 'swarms',
-      ids: ['swr-b'],
-      revision: 2,
-    });
-    fixture.bridge.invalidate({
-      resource: 'profiles',
-      ids: ['prf-a'],
-      revision: 2,
-    });
-    await settle(160);
+    // Only changes of this Swarm's Wiki reload it.
+    for (const [resource, id] of [
+      ['wiki', 'swr-b'],
+      ['profiles', 'prf-a'],
+      ['posts', 'swr-a'],
+      ['participants', 'swr-a'],
+    ])
+      fixture.bridge.invalidate({ resource, ids: [id], revision: 2 });
+    await vi.advanceTimersByTimeAsync(160);
     expect(callsTo(fixture.operation, 'wiki')).toHaveLength(wikiCalls);
+    fixture.bridge.invalidate({
+      resource: 'wiki',
+      ids: ['swr-a'],
+      revision: 2,
+    });
+    // It follows the pass that just ran, so it waits for that pass's second.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(callsTo(fixture.operation, 'wiki').length).toBeGreaterThan(
+      wikiCalls,
+    );
     fixture.bridge.invalidate();
-    await settle(160);
+    await vi.advanceTimersByTimeAsync(160);
     expect(reads()).toBe(count);
     button(BOARD).click();
     await tick();
     expect(document.querySelector('.wiki-panel')).toBeNull();
     const calls = callsTo(fixture.operation, 'wiki').length;
     fixture.bridge.invalidate();
-    await settle(160);
+    await vi.advanceTimersByTimeAsync(160);
     expect(callsTo(fixture.operation, 'wiki')).toHaveLength(calls);
     let finishList;
     holdWiki(fixture, 'list', (resolve) => (finishList = resolve));

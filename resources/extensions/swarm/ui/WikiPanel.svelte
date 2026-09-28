@@ -66,9 +66,9 @@
     hasChanges,
     save: persist,
   });
-  // Changes of other Swarms or of profiles leave this Wiki as it is.
+  // Only changes of this Swarm's Wiki reload it.
   const backgroundRefresh = createPageRefresh(async (changes) => {
-    if (!active || !swarmChanged(changes, swarmId)) return;
+    if (!active || !swarmChanged(changes, swarmId, 'wiki')) return;
     const selection = readGeneration;
     await refresh();
     if (

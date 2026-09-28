@@ -42,7 +42,8 @@ def _call_request_id(context: ToolContext) -> str:
 
 def _management_page(page: Page) -> Json:
     result: Json = {"entries": list(page.entries), "has_more": page.has_more}
-    if page.has_more:
+    # A read after a post number continues with a new number, not a cursor.
+    if page.has_more and page.cursor is not None:
         result["cursor"] = page.cursor
     return result
 

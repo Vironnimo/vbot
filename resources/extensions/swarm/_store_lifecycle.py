@@ -59,10 +59,14 @@ def _fail_startup(db: SwarmDatabase, swarm_id: str, expected_epoch: int) -> Json
     return db._write(operation)
 
 
-def _refresh_swarm_state(db: SwarmDatabase, connection: sqlite3.Connection, swarm_id: str) -> None:
+def _refresh_swarm_state(db: SwarmDatabase, connection: sqlite3.Connection, swarm_id: str) -> bool:
+    """Derive an open Swarm's state from its participants; return whether it changed.
+
+    The state shows in the Swarm list, so callers publish a list change only then.
+    """
     row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
     if row is None or row["state"] not in {"running", "idle", "needs_attention"}:
-        return
+        return False
     states = {
         str(item["state"])
         for item in connection.execute(
@@ -77,7 +81,10 @@ def _refresh_swarm_state(db: SwarmDatabase, connection: sqlite3.Connection, swar
         state = "idle"
     else:
         state = "running"
+    if state == row["state"]:
+        return False
     connection.execute("UPDATE swarms SET state=? WHERE id=?", (state, swarm_id))
+    return True
 
 
 def _set_participant_state(
@@ -182,13 +189,20 @@ def _record_run_started(
                 "participant_id": participant_id,
                 "run_id": run_id,
                 "state": participant["state"],
+                "recorded": False,
+                "swarm_state_changed": False,
             }
         connection.execute(
             "UPDATE participants SET state='running',lifecycle_run_id=? WHERE id=?",
             (run_id, participant_id),
         )
-        _refresh_swarm_state(db, connection, swarm_id)
-        return {"participant_id": participant_id, "run_id": run_id, "state": "running"}
+        return {
+            "participant_id": participant_id,
+            "run_id": run_id,
+            "state": "running",
+            "recorded": True,
+            "swarm_state_changed": _refresh_swarm_state(db, connection, swarm_id),
+        }
 
     return db._write(operation)
 
@@ -208,8 +222,12 @@ def _reconcile_run_finished(
             raise SwarmStoreError("stale_run")
         state = "idle" if outcome == "completed" else outcome
         connection.execute("UPDATE participants SET state=? WHERE id=?", (state, participant_id))
-        _refresh_swarm_state(db, connection, swarm_id)
-        return {"participant_id": participant_id, "run_id": run_id, "state": state}
+        return {
+            "participant_id": participant_id,
+            "run_id": run_id,
+            "state": state,
+            "swarm_state_changed": _refresh_swarm_state(db, connection, swarm_id),
+        }
 
     return db._write(operation)
 

@@ -317,6 +317,23 @@ async def test_human_board_reads_and_posts_need_no_participant_or_receipt(
     assert (
         await store.read_human_posts(swarm_id, message_id=posted["post_id"])
     ).entries == entries.entries
+    # Posts after a number arrive oldest first, bounded like a page; more repeat the
+    # read after the last one instead of following a cursor.
+    for index in range(3):
+        await store.post_human(swarm_id, text=f"later {index}", request_id=f"later-{index}")
+    newer = await store.read_human_posts(swarm_id, after=entries.entries[0]["sequence"], limit=2)
+    assert [post["text"] for post in newer.entries] == ["later 0", "later 1"]
+    assert newer.has_more and newer.cursor is None
+    rest = await store.read_human_posts(swarm_id, after=newer.entries[-1]["sequence"], limit=2)
+    assert [post["text"] for post in rest.entries] == ["later 2"] and not rest.has_more
+    for arguments in (
+        {"after": -1},
+        {"after": 0, "cursor": newer.entries[0]["id"]},
+        {"after": 0, "message_id": posted["post_id"]},
+    ):
+        with pytest.raises(SwarmStoreError) as invalid:
+            await store.read_human_posts(swarm_id, **arguments)
+        assert invalid.value.code == "invalid_arguments"
 
 
 @pytest.mark.asyncio

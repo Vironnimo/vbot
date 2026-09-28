@@ -127,41 +127,61 @@ describe('SwarmPage overview', () => {
   });
 
   const changed = (resource, id) => ({ resource, ids: [id], revision: 2 });
+  // Reads by kind; a Board read after a post number fetches only newer posts.
+  const reads = {
+    'profiles.list': ([name]) => name === 'profiles.list',
+    'swarms.list': ([name]) => name === 'swarms.list',
+    'swarms.get': ([name]) => name === 'swarms.get',
+    'board.list': ([name]) => name === 'board.list',
+    'board.read': ([name, args]) => name === 'board.read' && !('after' in args),
+    'board.read after': ([name, args]) =>
+      name === 'board.read' && 'after' in args,
+  };
+  const none = Object.fromEntries(Object.keys(reads).map((name) => [name, 0]));
   const everything = {
+    ...none,
     'profiles.list': 1,
     'swarms.list': 1,
     'swarms.get': 1,
     'board.list': 1,
     'board.read': 1,
   };
-  const listOnly = { ...everything, 'profiles.list': 0, 'swarms.get': 0 };
+  const open = { ...none, 'swarms.get': 1 };
   it.each([
     [
-      'the open Swarm',
+      "the open Swarm's list entry",
       [changed('swarms', 'swr-a')],
-      { ...everything, 'profiles.list': 0 },
+      { ...open, 'swarms.list': 1 },
+    ],
+    ["the open Swarm's participants", [changed('participants', 'swr-a')], open],
+    [
+      "the open Swarm's posts",
+      [changed('posts', 'swr-a')],
+      { ...open, 'board.read after': 1 },
     ],
     [
-      'another Swarm',
-      [changed('swarms', 'swr-b')],
-      { ...listOnly, 'board.list': 0, 'board.read': 0 },
+      "the open Swarm's discussions",
+      [changed('discussions', 'swr-a')],
+      { ...open, 'board.list': 1 },
     ],
+    ["the open Swarm's hidden Wiki", [changed('wiki', 'swr-a')], open],
+    [
+      "another Swarm's list entry",
+      [changed('swarms', 'swr-b')],
+      { ...none, 'swarms.list': 1 },
+    ],
+    ["another Swarm's posts", [changed('posts', 'swr-b')], none],
     [
       'a profile',
       [changed('profiles', 'prf-a')],
-      {
-        'profiles.list': 1,
-        'swarms.list': 0,
-        'swarms.get': 0,
-        'board.list': 0,
-        'board.read': 0,
-      },
+      { ...none, 'profiles.list': 1 },
     ],
     [
       'a burst of another Swarm and a profile',
       [changed('swarms', 'swr-b'), changed('profiles', 'prf-a')],
-      { ...listOnly, 'profiles.list': 1, 'board.list': 0, 'board.read': 0 },
+      { ...none, 'swarms.list': 1, 'profiles.list': 1 },
     ],
+    ['an unknown resource', [changed('logs', 'swr-a')], everything],
     ['unnamed records', [null], everything],
   ])(
     'reloads only what shows a change of %s',
@@ -171,13 +191,14 @@ describe('SwarmPage overview', () => {
       await settle(150);
       const counts = () =>
         Object.fromEntries(
-          Object.keys(expected).map((name) => [
+          Object.entries(reads).map(([name, matches]) => [
             name,
-            callsTo(operation, name).length,
+            operation.mock.calls.filter(matches).length,
           ]),
         );
       const before = counts();
       for (const change of changes) bridge.invalidate(change);
+      await settle(150);
       await vi.waitFor(() =>
         expect(
           Object.fromEntries(

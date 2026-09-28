@@ -92,6 +92,14 @@ _TOOL_PARAMETERS = (
 # for wake pacing.
 _BOARD_READS = frozenset({"list", "read"})
 _WIKI_READS = frozenset({"list", "read", "history"})
+# What each Board mutation changes for the open page (``SwarmExtension._changed``).
+# Creating a discussion also posts its opening and the main-discussion announcement.
+_BOARD_CHANGES = {
+    "post": ("posts",),
+    "create": ("discussions", "posts"),
+    "join": ("discussions",),
+    "leave": ("discussions",),
+}
 # Accepted without being offered: a Participant's own identity copied from its
 # reminders, the single action of the inbox and state Tools, and explicit Board
 # recipients, which "@" before names in the post text replaces.
@@ -266,8 +274,8 @@ class SwarmExtension:
                 arguments["recipients"] = recipients.ids
                 notes.extend(recipients.notes)
             data = await getattr(call, action)(arguments)
-            if action in {"post", "create", "join", "leave"}:
-                self._changed(binding.group_id, swarm["settings_revision"])
+            for resource in _BOARD_CHANGES.get(action, ()):
+                self._changed(resource, binding.group_id, swarm["settings_revision"])
             if action in {"post", "create"}:
                 self._enqueue_wakes(binding.group_id)
             return tool_success(with_notes(data, notes))
@@ -372,7 +380,7 @@ class SwarmExtension:
             )
             data, changed = await call.run(arguments)
             if changed:
-                self._changed(binding.group_id, swarm["settings_revision"])
+                self._changed("wiki", binding.group_id, swarm["settings_revision"])
             return tool_success(with_notes(data, notes))
         except AgentCallError as error:
             return tool_failure(error.code, error.message)
@@ -390,18 +398,24 @@ class SwarmExtension:
             raise
         if values["action"] in MUTATIONS and not data.get("replayed") and not data.get("unchanged"):
             swarm = await self._store().get_swarm(sid)
-            self._changed(sid, swarm["settings_revision"])
+            self._changed("wiki", sid, swarm["settings_revision"])
         return data
 
-    # The open page reloads only what shows the changed record: a Swarm
-    # (``swarms``) or a profile (``profiles``).
-    def _changed(self, swarm_id: str, revision: int) -> None:
+    # The open page reloads only what shows a change, so each change names what
+    # changed. ``profiles`` names a profile id; the other resources name a Swarm
+    # id: ``swarms`` its entry in the Swarm list (created, deleted, state, title,
+    # settings), ``participants`` their Runs, states and pending messages,
+    # ``posts`` new Board posts, ``discussions`` discussions and their members,
+    # ``wiki`` its Wiki pages.
+    def _changed(self, resource: str, record_id: str, revision: int = 0) -> None:
         if self.host is not None and self.host.publish_change is not None:
-            self.host.publish_change("swarms", [swarm_id], revision)
+            self.host.publish_change(resource, [record_id], revision)
 
-    def _profile_changed(self, profile_id: str, revision: int) -> None:
-        if self.host is not None and self.host.publish_change is not None:
-            self.host.publish_change("profiles", [profile_id], revision)
+    def _participants_changed(self, swarm_id: str, result: Json, revision: int = 0) -> None:
+        """Publish a participant change and, when it changed the Swarm's state, its entry."""
+        self._changed("participants", swarm_id, revision)
+        if result.get("swarm_state_changed"):
+            self._changed("swarms", swarm_id, revision)
 
     async def operation(self, name: str, arguments: Json) -> Json:
         """Run a management operation without exposing runtime services to the page."""
@@ -504,7 +518,7 @@ class SwarmExtension:
         if expected is not None and type(expected) is not int:
             raise SwarmStoreError("invalid_arguments", field="expected_revision")
         saved = await self._store().save_profile(profile, expected_revision=expected)
-        self._profile_changed(saved["id"], saved["revision"])
+        self._changed("profiles", saved["id"], saved["revision"])
         return {"profile": saved}
 
     async def _profiles_delete(self, arguments: Json) -> Json:
@@ -512,7 +526,7 @@ class SwarmExtension:
         profile_id = _string(arguments, "profile_id")
         revision = _integer(arguments, "expected_revision", minimum=1)
         await self._store().delete_profile(profile_id, expected_revision=revision)
-        self._profile_changed(profile_id, revision)
+        self._changed("profiles", profile_id, revision)
         return {"profile_id": profile_id, "deleted": True}
 
     async def _swarms_list(self, arguments: Json) -> Json:
@@ -576,7 +590,7 @@ class SwarmExtension:
             request_id=_string(arguments, "request_id"),
             actor="user",
         )
-        self._changed(swarm_id, result["revision"])
+        self._changed("swarms", swarm_id, result["revision"])
         self._enqueue_wakes(swarm_id)
         return result
 
@@ -584,7 +598,7 @@ class SwarmExtension:
         _exact(arguments, {"swarm_id"})
         swarm_id = _string(arguments, "swarm_id")
         if await self._store().begin_delete(swarm_id):
-            self._changed(swarm_id, 0)
+            self._changed("swarms", swarm_id)
             task = self._wake_tasks.get(swarm_id)
             if task is not None:
                 task.cancel()
@@ -596,7 +610,7 @@ class SwarmExtension:
                 raise SwarmStoreError("swarm_closed")
             await host.temporary_agents.delete_group(swarm_id)
             await self._store().delete_swarm(swarm_id)
-        self._changed(swarm_id, 0)
+        self._changed("swarms", swarm_id)
         return {"swarm_id": swarm_id, "deleted": True}
 
     async def _swarms_stop(self, arguments: Json) -> Json:
@@ -627,7 +641,7 @@ class SwarmExtension:
             actor="user",
             drain_report=report,
         )
-        self._changed(result["swarm_id"], 0)
+        self._changed("swarms", result["swarm_id"])
         return finished
 
     async def _swarms_start(self, arguments: Json) -> Json:
@@ -733,7 +747,7 @@ class SwarmExtension:
     async def _board_read(self, arguments: Json) -> Json:
         _exact(
             arguments,
-            {"swarm_id", "discussion_id", "message_id", "cursor", "limit"},
+            {"swarm_id", "discussion_id", "message_id", "cursor", "limit", "after"},
             required={"swarm_id"},
         )
         kwargs = {key: value for key, value in arguments.items() if key != "swarm_id"}
@@ -766,7 +780,7 @@ class SwarmExtension:
                     "Swarm message saved but resume failed (swarm=%s)", swarm_id, exc_info=True
                 )
                 result["resume_failed"] = True
-        self._changed(swarm_id, snapshot["settings_revision"])
+        self._changed("posts", swarm_id, snapshot["settings_revision"])
         self._enqueue_wakes(swarm_id)
         return result
 
@@ -805,7 +819,7 @@ class SwarmExtension:
         if host is None or host.temporary_agents is None:
             return
         await host.temporary_agents.title_group(swarm_id, prompt)
-        self._changed(swarm_id, revision)
+        self._changed("swarms", swarm_id, revision)
 
     def _observe_title_task(self, task: asyncio.Task[None]) -> None:
         self._title_tasks.discard(task)
@@ -848,7 +862,7 @@ class SwarmExtension:
             swarm = await self._store().get_swarm(swarm_id)
             if swarm["state"] in {"running", "idle", "needs_attention"}:
                 await self._store().set_swarm_state(swarm_id, "needs_attention")
-                self._changed(swarm_id, swarm["settings_revision"])
+                self._changed("swarms", swarm_id, swarm["settings_revision"])
         except SwarmStoreError as error:
             if error.code not in {"swarm_closed", "swarm_not_found", "stale_epoch"}:
                 raise
@@ -908,14 +922,14 @@ class SwarmExtension:
                             f"wake:{swarm['epoch']}:{wake['participant_id']}:{wake['announced_sequence']}",
                         ),
                     )
-                    await self._store().mark_wake_admitted(
+                    admitted = await self._store().mark_wake_admitted(
                         swarm_id,
                         wake["participant_id"],
                         expected_epoch=swarm["epoch"],
                         run_id=admission.run_id,
                         boundary=claim["boundary"],
                     )
-                    self._changed(swarm_id, swarm["settings_revision"])
+                    self._participants_changed(swarm_id, admitted, swarm["settings_revision"])
                 if claimed_count == 0 or len(page.entries) < 100:
                     break
 
@@ -992,7 +1006,7 @@ class SwarmExtension:
             await group.close_group(snapshot["id"])
             await self._store().fail_startup(snapshot["id"], expected_epoch=snapshot["epoch"])
             raise
-        self._changed(snapshot["id"], snapshot["settings_revision"])
+        self._changed("swarms", snapshot["id"], snapshot["settings_revision"])
         result = await self._store().finish_admission(
             snapshot["id"], request_id=request_id, kind="start", runs=admissions
         )
@@ -1089,7 +1103,7 @@ class SwarmExtension:
                 )
                 await self._store().set_participant_state(swarm_id, participant_id, "failed")
                 admissions.append({"participant_id": participant_id, "error": type(error).__name__})
-        self._changed(swarm_id, snapshot["settings_revision"])
+        self._changed("swarms", swarm_id, snapshot["settings_revision"])
         return await self._store().finish_admission(
             swarm_id, request_id=request_id, kind="resume", runs=admissions
         )
@@ -1124,12 +1138,17 @@ class SwarmExtension:
         if owner is None or owner.extension != "swarm" or binding.group_id != owner.group_id:
             raise SwarmStoreError("participant_inactive")
         swarm = await self._store().get_swarm(binding.group_id)
-        await self._store().record_run_started(
+        started = await self._store().record_run_started(
             binding.group_id,
             binding.participant_id,
             run_id=context.run_id,
             expected_epoch=swarm["epoch"],
         )
+        # Start, resume and wake admission record their Runs themselves; a Run
+        # recorded here (another Run, or a wake Run whose first request beats its
+        # admission) changes what the open page shows.
+        if started["recorded"]:
+            self._participants_changed(binding.group_id, started, swarm["settings_revision"])
         prepared = await self._store().prepare_automatic_delivery(
             binding.group_id,
             binding.participant_id,
@@ -1158,7 +1177,7 @@ class SwarmExtension:
     ) -> None:
         if not await self._store().reconcile_delivery(delivery.delivery_id):
             raise SwarmStoreError("delivery_unacknowledged")
-        self._changed(context.binding.group_id, 0)
+        self._changed("participants", context.binding.group_id)
 
     async def _reconcile_tool_batch(
         self,
@@ -1180,7 +1199,7 @@ class SwarmExtension:
             if not await self._store().reconcile_delivery(receipt_id):
                 raise SwarmStoreError("delivery_unacknowledged")
         if receipts:
-            self._changed(context.binding.group_id, 0)
+            self._changed("participants", context.binding.group_id)
         return ToolBatchDecision(end=turn_end_requested)
 
     async def _run_finished(self, context: SessionRequestContext, *, outcome: str) -> None:
@@ -1191,7 +1210,7 @@ class SwarmExtension:
         snapshot = await self._store().get_swarm(binding.group_id)
         terminal_outcome = {"success": "completed", "error": "failed"}.get(outcome, outcome)
         try:
-            await self._store().reconcile_run_finished(
+            finished = await self._store().reconcile_run_finished(
                 binding.group_id,
                 binding.participant_id,
                 run_id=context.run_id,
@@ -1212,4 +1231,4 @@ class SwarmExtension:
         )
         if terminal_outcome == "completed":
             self._enqueue_wakes(binding.group_id)
-        self._changed(binding.group_id, snapshot["settings_revision"])
+        self._participants_changed(binding.group_id, finished, snapshot["settings_revision"])

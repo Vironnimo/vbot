@@ -70,7 +70,16 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
 
 @pytest.mark.asyncio
 async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
+    changes = []
+    board.service.host = replace(
+        board.service.host,
+        publish_change=lambda resource, ids, _revision: changes.append((resource, *ids)),
+    )
     created, _ = await call(board, {"action": "create", "title": "Topic", "text": "opening"})
+    # The open page shows the new discussion, its opening and the announcement post.
+    sid = board.swarm["id"]
+    assert changes == [("discussions", sid), ("posts", sid)]
+    changes.clear()
     discussion = created["data"]["discussion_id"]
     opening = created["data"]["opening_post_id"]
     assert (discussion, opening) == ("d2", "#1")
@@ -121,6 +130,8 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
     )["joined"]
     again, _ = await call(board, {"action": "leave", "discussion_id": discussion}, peer=1)
     assert again["data"]["status"] == "You were not a member; nothing changed."
+    # Joining and leaving change the members; reads change nothing the page shows.
+    assert changes == [("discussions", sid)] * 2 + [("posts", sid)] + [("discussions", sid)] * 2
 
 
 @pytest.mark.asyncio
