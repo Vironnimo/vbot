@@ -940,3 +940,44 @@ describe('Runs of Sessions that are not displayed', () => {
     ]);
   });
 });
+
+describe('retained server event window', () => {
+  it('handles every new event as the window grows and slides past what it saw', () => {
+    const harness = makeStreamHarness();
+    const background = ensureSessionState(
+      harness.chatState,
+      'alpha',
+      'background',
+    );
+    background.historyLoaded = true;
+    const run = (runId) => ({
+      run_id: runId,
+      agent_id: 'alpha',
+      session_id: 'background',
+    });
+    const first = [
+      serverRunEvent('run_started', 1, run('first')),
+      serverRunEvent('tool_call_started', 2, run('first')),
+      serverRunEvent('run_completed', 3, {
+        ...run('first'),
+        status: 'completed',
+      }),
+    ];
+    const second = serverRunEvent('run_started', 1, run('second'));
+    const sequences = () =>
+      background.runEvents.map((event) => `${event.run_id}:${event.sequence}`);
+
+    harness.stream.handleServerEvents(null, first.slice(0, 1));
+    // Several events can arrive between two applications of the window.
+    harness.stream.handleServerEvents(null, first);
+    expect(sequences()).toEqual(['first:1', 'first:2', 'first:3']);
+    expect(background.status).toBe('completed');
+
+    // A window that dropped every event seen so far is visited in full.
+    harness.stream.handleServerEvents(null, [second]);
+    expect(background.currentRun).toMatchObject({
+      runId: 'second',
+      status: 'running',
+    });
+  });
+});
