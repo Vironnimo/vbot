@@ -11,7 +11,7 @@
   import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
   import { tooltip } from '../../../../webui/src/lib/tooltip.js';
   import { requestId } from './pagePresentation.js';
-  import { createPageRefresh } from './pageRefresh.js';
+  import { createPageRefresh, swarmChanged } from './pageRefresh.js';
 
   let {
     swarmId,
@@ -66,8 +66,9 @@
     hasChanges,
     save: persist,
   });
-  const backgroundRefresh = createPageRefresh(async () => {
-    if (!active) return;
+  // Changes of other Swarms or of profiles leave this Wiki as it is.
+  const backgroundRefresh = createPageRefresh(async (changes) => {
+    if (!active || !swarmChanged(changes, swarmId)) return;
     const selection = readGeneration;
     await refresh();
     if (
@@ -106,8 +107,8 @@
     return autosave.cancelPendingTimer;
   });
   onMount(() =>
-    client.onInvalidation(() => {
-      if (active) backgroundRefresh.schedule();
+    client.onInvalidation((invalidation) => {
+      if (active) backgroundRefresh.schedule(invalidation?.change ?? null);
     }),
   );
   onDestroy(() => {

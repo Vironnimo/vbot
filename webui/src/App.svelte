@@ -459,6 +459,7 @@
     onAgentIdChanged: selection.remapIdentityAgentId,
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
+    onExtensionPageChange: extensions.publishPageChange,
     onLoadDataStoreStatus: loadDataStoreStatus,
     onSetOnboardingAside: setup.dismissOnboarding,
   });
@@ -628,13 +629,7 @@
           theme={{ ...extensions.extensionPageTheme }}
           locale={setup.settings?.appearance?.language ?? 'en'}
           timezone={dateTimePrefs.timeZone}
-          invalidation={page
-            ? {
-                owner: page.extension,
-                page: page.page,
-                revision: extensions.extensionPageInvalidationRevision,
-              }
-            : null}
+          subscribeInvalidations={extensions.subscribePageInvalidations}
           onRouteChange={(route) => {
             extensions.extensionPageRoute = route;
           }}

@@ -14,8 +14,19 @@
   let theme = $state(initialContext.theme ?? {});
   let locale = $state(initialContext.locale ?? 'en');
   let timezone = $state(initialContext.timezone ?? 'UTC');
-  let invalidation = $state(initialContext.invalidation ?? null);
+  const invalidationListeners = [];
   if (autosaveContext) provideAutosaveContext(autosaveContext);
+
+  function subscribeInvalidations(listener) {
+    invalidationListeners.push(listener);
+    return () =>
+      invalidationListeners.splice(invalidationListeners.indexOf(listener), 1);
+  }
+
+  // Delivers one App invalidation (`{owner, change, revision}`) to the page.
+  export function invalidate(invalidation) {
+    for (const listener of [...invalidationListeners]) listener(invalidation);
+  }
 
   export function update(next) {
     if ('descriptor' in next) descriptor = next.descriptor;
@@ -23,7 +34,6 @@
     if ('theme' in next) theme = next.theme;
     if ('locale' in next) locale = next.locale;
     if ('timezone' in next) timezone = next.timezone;
-    if ('invalidation' in next) invalidation = next.invalidation;
   }
 </script>
 
@@ -33,7 +43,7 @@
   {theme}
   {locale}
   {timezone}
-  {invalidation}
+  {subscribeInvalidations}
   {onRouteChange}
   {onToast}
 />

@@ -35,7 +35,7 @@
     theme = {},
     locale = 'en',
     timezone = 'UTC',
-    invalidation = null,
+    subscribeInvalidations = null,
     onRouteChange = () => {},
     onToast = () => {},
   } = $props();
@@ -43,7 +43,6 @@
   let frameContext = $state.raw(null);
   let disposed = false;
   let observedDescriptor = '';
-  let observedInvalidation = null;
   const runSubscriptions = new SvelteMap();
   const unregisterAutosave = useAutosaveContext().register({
     hasPending: () => frameContext?.autosavePending === true,
@@ -473,24 +472,49 @@
     if (context?.ready) post(context, contextPayload(context));
   });
 
-  $effect(() => {
-    const next = invalidation;
+  function validChange(change) {
+    return (
+      isPlainObject(change) &&
+      typeof change.resource === 'string' &&
+      change.resource.length > 0 &&
+      Array.isArray(change.ids) &&
+      change.ids.every((id) => typeof id === 'string' && id.length > 0) &&
+      Number.isInteger(change.revision) &&
+      change.revision >= 0
+    );
+  }
+
+  // An invalidation without `owner` refreshes whichever page is open. One
+  // with `owner` reaches only that Extension's page, carrying the records it
+  // changed as `change`; an unusable change degrades to a full refresh.
+  function forwardInvalidation(next) {
     const context = frameContext;
-    if (!next || next === observedInvalidation || !context?.ready) return;
-    observedInvalidation = next;
-    if (
-      next.owner === context.descriptor.owner &&
-      next.page === context.descriptor.page
-    )
-      post(context, {
-        type: 'vbot.extension.invalidate',
-        version: BRIDGE_VERSION,
-        nonce: context.nonce,
-        epoch: context.descriptor.epoch,
-        descriptor: context.descriptor,
-        revision: next.revision ?? null,
-      });
-  });
+    if (!context?.ready) return;
+    if (next.owner != null && next.owner !== context.descriptor.owner) return;
+    const message = {
+      type: 'vbot.extension.invalidate',
+      version: BRIDGE_VERSION,
+      nonce: context.nonce,
+      epoch: context.descriptor.epoch,
+      descriptor: context.descriptor,
+      revision: next.revision ?? null,
+    };
+    const change = validChange(next.change)
+      ? {
+          resource: next.change.resource,
+          ids: next.change.ids,
+          revision: next.change.revision,
+        }
+      : null;
+    post(
+      context,
+      change && valid({ ...message, change }, MAX_HOST_MESSAGE_BYTES)
+        ? { ...message, change }
+        : message,
+    );
+  }
+
+  $effect(() => subscribeInvalidations?.(forwardInvalidation));
 
   onMount(() => window.addEventListener('message', onMessage));
   onDestroy(() => {

@@ -178,30 +178,37 @@ describe('Swarm Usage refresh', () => {
     expect(document.querySelector('[role="status"]')).toBeNull();
   });
 
-  it('refreshes Usage without inserting progress text or hiding the last report', async () => {
+  it('reloads a visible report at most every 10 seconds without hiding it, but at once when opened', async () => {
     const { bridge, operation } = createBridge();
     await openSwarm(bridge);
+    vi.useFakeTimers();
     button(USAGE).click();
     await vi.waitFor(() =>
       expect(document.querySelector('.usage-summary')).not.toBeNull(),
     );
     const report = document.querySelector('.usage-summary');
     const before = report.textContent;
-    let finishUsage;
+    const finishes = [];
     overrideOperations(operation, {
-      'swarms.usage': () =>
-        new Promise((resolve) => {
-          finishUsage = resolve;
-        }),
+      'swarms.usage': () => new Promise((resolve) => finishes.push(resolve)),
     });
-    bridge.invalidate();
-    await vi.waitFor(() => expect(finishUsage).toBeTypeOf('function'));
+    const reads = callsTo(operation, 'swarms.get').length;
+    // Changes keep refreshing the Swarm; Usage waits for one trailing reload
+    // 10 seconds after the last one.
+    for (let second = 0; second < 9; second++) {
+      bridge.invalidate({ resource: 'swarms', ids: ['swr-a'], revision: 2 });
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(callsTo(operation, 'swarms.get').length).toBeGreaterThan(reads);
+    expect(finishes).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(finishes).toHaveLength(1);
     expect(document.querySelector('.usage-summary')).toBe(report);
     expect(report.textContent).toBe(before);
     expect(
       report.closest('[role="tabpanel"]').querySelector('[role="status"]'),
     ).toBeNull();
-    finishUsage({
+    finishes[0]({
       usage: {
         usage: { totals: { input_tokens: 987654 }, models: [] },
         tools: { total_calls: 42 },
@@ -209,6 +216,11 @@ describe('Swarm Usage refresh', () => {
       },
     });
     await vi.waitFor(() => expect(report.textContent).not.toBe(before));
+    button(t('swarm.tabs.board')).click();
+    await tick();
+    button(USAGE).click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finishes).toHaveLength(2);
   });
 
   it('ignores a late Usage report from the previously selected Swarm', async () => {

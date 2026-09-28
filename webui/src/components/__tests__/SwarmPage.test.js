@@ -126,6 +126,71 @@ describe('SwarmPage overview', () => {
     expect(runGroup(INACTIVE_RUNS).textContent).toContain('goal-running');
   });
 
+  const changed = (resource, id) => ({ resource, ids: [id], revision: 2 });
+  const everything = {
+    'profiles.list': 1,
+    'swarms.list': 1,
+    'swarms.get': 1,
+    'board.list': 1,
+    'board.read': 1,
+  };
+  const listOnly = { ...everything, 'profiles.list': 0, 'swarms.get': 0 };
+  it.each([
+    [
+      'the open Swarm',
+      [changed('swarms', 'swr-a')],
+      { ...everything, 'profiles.list': 0 },
+    ],
+    [
+      'another Swarm',
+      [changed('swarms', 'swr-b')],
+      { ...listOnly, 'board.list': 0, 'board.read': 0 },
+    ],
+    [
+      'a profile',
+      [changed('profiles', 'prf-a')],
+      {
+        'profiles.list': 1,
+        'swarms.list': 0,
+        'swarms.get': 0,
+        'board.list': 0,
+        'board.read': 0,
+      },
+    ],
+    [
+      'a burst of another Swarm and a profile',
+      [changed('swarms', 'swr-b'), changed('profiles', 'prf-a')],
+      { ...listOnly, 'profiles.list': 1, 'board.list': 0, 'board.read': 0 },
+    ],
+    ['unnamed records', [null], everything],
+  ])(
+    'reloads only what shows a change of %s',
+    async (_name, changes, expected) => {
+      const { bridge, operation } = createBridge();
+      await openSwarm(bridge);
+      await settle(150);
+      const counts = () =>
+        Object.fromEntries(
+          Object.keys(expected).map((name) => [
+            name,
+            callsTo(operation, name).length,
+          ]),
+        );
+      const before = counts();
+      for (const change of changes) bridge.invalidate(change);
+      await vi.waitFor(() =>
+        expect(
+          Object.fromEntries(
+            Object.entries(counts()).map(([name, count]) => [
+              name,
+              count - before[name],
+            ]),
+          ),
+        ).toEqual(expected),
+      );
+    },
+  );
+
   it('describes a Swarm by participants per Model and a Run by its Swarm and size', async () => {
     const formation = {
       ...profile,
