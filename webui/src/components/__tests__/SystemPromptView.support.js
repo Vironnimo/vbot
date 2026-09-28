@@ -2,9 +2,6 @@ const { mount, flushSync, unmount } = await import('svelte');
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, vi } from 'vitest';
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { join, dirname } from 'node:path';
 import { init } from '../../lib/i18n.js';
 
 import { rpcBackedApiMock } from './apiMock.support.js';
@@ -28,21 +25,6 @@ vi.mock('$lib/api.js', () =>
 
 const { default: SystemPromptView } =
   await import('../SystemPromptView.svelte');
-
-const COMPONENT_SOURCE_PATH = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../SystemPromptView.svelte',
-);
-
-function componentSource() {
-  return [
-    COMPONENT_SOURCE_PATH,
-    join(dirname(COMPONENT_SOURCE_PATH), 'prompt/scope.svelte.js'),
-    join(dirname(COMPONENT_SOURCE_PATH), 'prompt/editor.svelte.js'),
-  ]
-    .map((path) => readFileSync(path, 'utf-8'))
-    .join('\n');
-}
 
 function baseBlocks() {
   return [
@@ -398,7 +380,6 @@ export {
   listProjectsMock,
   showProjectMock,
   SystemPromptView,
-  componentSource,
   baseBlocks,
   createRpcMock,
   inheritedBadges,
