@@ -230,12 +230,8 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
 
 def _queues_snapshot(state: Any) -> list[JsonObject]:
     """Build the public Queue snapshot for the connection-ready hello frame."""
-    all_queued = getattr(_app_chat_runs(state), "all_queued", None)
-    if not callable(all_queued):
-        return []
-
     grouped: dict[SessionAddress, list[JsonObject]] = {}
-    for address, item in all_queued():
+    for address, item in _app_chat_runs(state).all_queued():
         if item.internal:
             continue
         grouped.setdefault(address, []).append(item.to_dict())
