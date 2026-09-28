@@ -336,10 +336,7 @@ export function createComposerMedia(context) {
       activeRecorder = null;
       const result = await transcribeSpeech(audioBlob, {
         signal: abort.signal,
-        filename:
-          typeof recorder.filename === 'function'
-            ? recorder.filename()
-            : 'recording.webm',
+        filename: recorder.filename(),
         onProgress: (progress) => {
           if (!destroyed && requestGeneration === recorderRequestGeneration)
             transcriptionProgress = progress;
