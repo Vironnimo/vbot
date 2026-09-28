@@ -538,7 +538,19 @@ _LIST = "args contains a malformed encoded list"
     [
         # Contradictory modes and filters.
         ({"args": ["--files", "--dirs"]}, "invalid_arguments", "Choose one of --files, --dirs"),
-        ({"args": ["--files", "-e", "needle"]}, "invalid_arguments", "not -e content patterns"),
+        (
+            {"args": ["--files", "-e", "needle"]},
+            "invalid_arguments",
+            "--files lists files by name and does not search file contents, so it cannot be "
+            'combined with -e. To select names, pass glob (such as "tmp*"); to search '
+            "contents, remove --files.",
+        ),
+        (
+            {"pattern": "^tmp", "args": ["--dirs"]},
+            "invalid_arguments",
+            "--dirs lists directories by name and does not search file contents, so it cannot "
+            "be combined with pattern.",
+        ),
         ({"args": ["--files", "-c"]}, "invalid_arguments", "-c searches contents"),
         ({"args": ["--dirs", "-tpy"]}, "invalid_arguments", "they cannot select directories"),
         ({"args": ["needle", "-C", "2", "-l"]}, "invalid_arguments", _CONTEXT),

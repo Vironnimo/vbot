@@ -101,7 +101,14 @@ def parse_search_args(
 
     operands.extend(roots)
     if kind and found:
-        raise ValueError("Path discovery takes roots and -g name filters, not -e content patterns.")
+        selector = next(flag for flag, selected in _ENTRY_SELECTORS.items() if selected == kind)
+        listed = "files and directories" if kind == "all" else kind
+        source = "pattern" if patterns else "-e"
+        raise ValueError(
+            f"{selector} lists {listed} by name and does not search file contents, so it "
+            f'cannot be combined with {source}. To select names, pass glob (such as "tmp*"); '
+            f"to search contents, remove {selector}."
+        )
     pattern_operand = False
     if not kind and not reference and not found:
         if operands and len(operands) > len(roots):

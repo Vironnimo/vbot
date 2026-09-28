@@ -30,7 +30,9 @@ literal even when they resemble other flags.
 A call without any pattern or operand lists files (`{}` lists the working
 directory; `glob`/`path` narrow it). `--files`, `--dirs`, and `--entries` select
 file, directory, and combined discovery explicitly; they are mutually exclusive,
-all operands are roots, and `-g` filters names. `output: "count"` and `context`
+all operands are roots, and `-g` filters names. A `pattern` or `-e` beside one of
+them rejects, naming the field that was sent and pointing to `glob` for names or
+to dropping the selector for contents. `output: "count"` and `context`
 without a pattern reject with the correction. Directory discovery includes empty
 directories. No roots means `effective_cwd`; explicit empty roots and stdin reject.
 Relative roots use that cwd, absolute roots are allowed, and symlink spelling stays
