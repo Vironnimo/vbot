@@ -5,7 +5,7 @@ remain in `extensions.md`; Swarm policy belongs under `resources/extensions/swar
 
 Private Session Tools use owner-selected call repair before scoped execution (`_tool_calls.py`; details under the Board section), including encoded counts and known wrappers. Bound identities remain exact; optional values are not erased merely because their schema rejects them. Field aliases are explicit lists (the `limti` typo among them); there is no general nearest-name matching of field names. Inbox and State accept their single action under common synonyms (`receive`, `status`) and reject other actions with a message naming the Swarm Tool that has them. Recognizable wrappers and explicit identities matching the bound Session are accepted (the identity fields and redundant action labels are declared `unadvertised_parameters`, so dispatch validates them without offering them); unsupported operations and scope mismatches remain failures. The probe executes the Model's emitted arguments, compares them with independently prescribed conformance inputs, and verifies canonical receipts.
 
-Swarm Activity uses live `run_active` as authoritative over an older persisted Session status. Failed/interrupted participants remain visible in an overview warning, and partial Resume failures name the affected participants after refresh. `swarms.get` inspects every participant's lifecycle Run with one batched `temporary_agents.owned_runs` read; only a Run id without an owned record counts as inactive, and unexpected host failures propagate instead of looking idle. Completion callbacks arriving after Stop or a newer lifecycle epoch quietly defer to that lifecycle outcome (`test_swarm_stop_resume.py`, `SwarmPage.test.activity-and-usage.test.js`). Temporary participants inherit the Runtime streaming loop; request diagnostics use the shared Chat timeline.
+Swarm Activity uses live `run_active` as authoritative over an older persisted Session status. Failed/interrupted participants remain visible in an overview warning, and partial Resume failures name the affected participants after refresh. `swarms.get` inspects every participant's lifecycle Run with one batched `temporary_agents.owned_runs` read; only a Run id without an owned record counts as inactive, and unexpected host failures propagate instead of looking idle. Completion callbacks arriving after Stop or a newer lifecycle epoch quietly defer to that lifecycle outcome (`test_swarm_stop_resume.py`, `SwarmPage.test.js`, `SwarmPage.activity.test.js`). Temporary participants inherit the Runtime streaming loop; request diagnostics use the shared Chat timeline.
 
 ## Terms
 
@@ -58,7 +58,7 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   existing profiles are not backfilled and runtime adds no fallback.
   Omitted effort uses the Provider default, not shared Agent defaults.
   All/None Tool actions materialize a selected policy through `toolAccess.js`.
-  Tests: `SwarmPage.test.js` and `test_swarm_store_profiles.py`.
+  Tests: `SwarmPage.profiles.test.js` and `test_swarm_store_profiles.py`.
 
 Profiles select every additional System Prompt block explicitly; Tool Call Style
 and Skills start enabled, other blocks (including Runtime and Working Project)
@@ -69,7 +69,7 @@ persisted in temporary Agent bindings and each started Swarm's profile snapshot.
 read-only prompt inspection with the same Project ceilings and Model Tool routing.
 It returns rendered block details and separately transmitted Tool definitions;
 draft changes invalidate the displayed preview. Evidence:
-`test_runtime_extension_host.py`, `test_prompts_layouts_overrides.py`, `SwarmPage.test.js`.
+`test_runtime_extension_host.py`, `test_prompts_layouts_overrides.py`, `SwarmPage.profiles.test.js`.
 
 Delivery and explicit Resume guidance are individually
 switchable in the snapshot. Their complete wording is inspectable in the editor.
@@ -78,7 +78,7 @@ continuation receipts add no Model-visible reminder. Existing Session history is
 not rewritten. Evidence: `extension.py`, `test_swarm_store_profiles.py`,
 `test_swarm_wakes.py`, `test_swarm_stop_resume.py`.
 
-Profiles expose all four private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_start.py`, `SwarmPage.test.profiles.test.js`).
+Profiles expose all four private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_start.py`, `SwarmPage.profiles.test.js`).
 `swarm_inbox` is offered only when some route (`main`, `discussion`, `ping`) can hold messages back, i.e. its mode is not `all`: with every route on `all` (the default), pending posts reach the next Model request anyway, and Inbox-only requests cost 3-10% of input in the eight analyzed Runs (Sessions, 2026-09). `_participant_config` decides from the profile (snapshot) delivery and denies it through `_tool_access` when a Session is created (start, Resume of a missing participant, preview). Live `swarms.settings` changes do not add or remove it from existing Sessions; Agent texts check `_inbox_available(binding)` (`test_swarm_inbox_is_offered_only_when_a_route_can_wait`).
 
 Profiles carry an optional `compaction_policy`. `null` (materialized on save) or an
@@ -93,7 +93,7 @@ Compaction (`agent.md`, `compaction.md`). Edits apply to future Runs; Resume cre
 missing participants from the saved snapshot. The editor's Overview Compaction
 section reuses the shared `CompactionPolicyEditor`; turning the override on starts
 from the WebUI default Policy because the catalog carries no global Policy
-(`test_swarm_store_profiles.py`, `test_swarm_start.py`, `SwarmPage.test.profiles.test.js`).
+(`test_swarm_store_profiles.py`, `test_swarm_start.py`, `SwarmPage.profiles.test.js`).
 
 ## Invariants that affect changes
 
@@ -241,7 +241,7 @@ below it; this presentation does not change the Store or Tool read order.
 Ordinary post bodies use the shared `MarkdownContent.svelte` renderer and Chat
 typography, including fenced-code Copy actions. Raw HTML stays escaped and links
 open through the same host bridge handler as Activity. Discussion announcements
-retain their dedicated navigation action (`SwarmPage.test.js`).
+retain their dedicated navigation action (`SwarmPage.board.test.js`).
 Coverage: `test_swarm_board_tool.py` and the production `swarm_tool` probe.
 
 Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
@@ -281,7 +281,7 @@ reads additionally resolve the discussion target from its creation request outco
 so the page can render a localized navigation action without parsing message text.
 Ordinary posts cannot acquire that action by copying an announcement's content.
 Saved posts and profile snapshots are not rewritten. Evidence: `agent_text.py`,
-`test_swarm_store_board.py`, and `SwarmPage.test.js`.
+`test_swarm_store_board.py`, and `SwarmPage.board.test.js`.
 
 Audience snapshots survive later join/leave changes. Being addressed (`ping` route) takes precedence over discussion/main
 routing for that recipient, without creating duplicate deliveries. Board Tool posts
@@ -297,7 +297,7 @@ carrier is saved. Successful automatic and Tool delivery acknowledgments publish
 a page invalidation, so pending counts refresh during an active Run without
 waiting for another Board mutation or Run completion. Failed acknowledgments
 retain pending state; empty Tool batches do not invalidate the page. Evidence:
-`test_swarm_inbox_delivery.py`, `test_swarm_wakes.py`, `SwarmPage.test.js`.
+`test_swarm_inbox_delivery.py`, `test_swarm_wakes.py`, `SwarmPage.activity.test.js`.
 Delivery mode and idle wake permission are independent. A wake
 always delivers actual pending Board content, including pull-mode messages on a
 wake-enabled route; it never asks the Agent to fetch the first batch. Bounded
@@ -488,7 +488,8 @@ Internal Extension source routing: `extension.py` owns the live Swarm service an
   checks durable effects independently of the Model's emitted arguments.
   The probe purges cached Extension modules before loading its own checkout.
 - Rendered business controls: `webui/src/components/__tests__/SwarmPage.test.js`
-  and `SwarmWiki.test.js`;
+  (overview, Run start and controls) and its `SwarmPage.<area>.test.js`
+  companions for board, activity, streaming, usage, profiles and wiki;
   generic iframe isolation is tested by ExtensionPage and server asset tests.
 
 Use the Sessions, Runs, Chat and Statistics maps before changing their owning
@@ -515,7 +516,7 @@ Start validates the effective directory and catalog before creating Sessions.
 The stored profile and profile snapshot stay unchanged; `effective_configuration`
 records the Run directory and Project selection for Resume and request replay.
 Evidence: `SwarmPage.test.js` and `test_swarm_start.py`.
-Activity forwards running Tool Call cancellation through the generic page bridge with the exact Swarm group, Run and Tool Call ids. The host verifies current page registration and canonical Run ownership before requesting call-local cancellation; failures stay visible and the Run continues (`SwarmPage.test.activity-and-usage.test.js`, `test_extensions_methods.py`).
+Activity forwards running Tool Call cancellation through the generic page bridge with the exact Swarm group, Run and Tool Call ids. The host verifies current page registration and canonical Run ownership before requesting call-local cancellation; failures stay visible and the Run continues (`SwarmPage.activity.test.js`, `test_extensions_methods.py`).
 Participant selection opens Activity and disposes the previous Run subscription;
 late history/subscription replies cannot replace a newer participant selection.
 Terminal Run events reload canonical history so non-streamed final output appears
@@ -524,13 +525,14 @@ and reattach an active Run when its id is unchanged. Activity loads older canoni
 History pages through `next_before`, retaining the loaded page depth on refresh.
 Board, discussion, audit and Usage replies commit only for the current selection
 and request; delayed reads cannot overwrite newer navigation.
-Evidence: `SwarmPage.test.js` and `test_swarm_store_board.py`.
+Evidence: `SwarmPage.activity.test.js`, `SwarmPage.board.test.js`,
+`SwarmPage.usage.test.js` and `test_swarm_store_board.py`.
 
 Board reads retain each post's saved UTC timestamp. The page formats it in the
 host-provided timezone and separates the author/time header from the body.
 Board and participant lists share ID-derived avatar colors and name initials;
 the full author name remains visible independently of color. The presentation is
-stable across page remounts (`SwarmPage.test.js`) and does not change saved posts.
+stable across page remounts (`SwarmPage.board.test.js`) and does not change saved posts.
 The header shows the snapshot Swarm name and state. The Board holds the single
 collapsible user request and working directory. Compact participant buttons show
 names, identity colors and execution dots; Model/status/pending details are in
@@ -549,16 +551,16 @@ newest post or page, which `swarms.get` reports as `newest_post_sequence` and
 author and opening, or the page's title and opening, on first hover or focus.
 A post link opens the post's discussion on the Board, loads earlier pages until the
 post appears and scrolls to and focuses it; `#0` opens the user request
-(`SwarmPage.test.js`, `SwarmWiki.test.js`, `test_swarm_operations.py`).
+(`SwarmPage.board.test.js`, `SwarmPage.wiki.test.js`, `test_swarm_operations.py`).
 Post backgrounds and left borders share the stable author color. The Swarm id
-stays under Usage (`SwarmPage.test.js`, `test_swarm_store_board.py`).
+stays under Usage (`SwarmPage.board.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
-and at most one locale-formatted decimal (SwarmPage.test.js).
+and at most one locale-formatted decimal (`SwarmPage.usage.test.js`).
 The Usage page combines measured and estimated input/output counts as "Tokens used"
 at total and Model-row scope. Tool Calls come from each participant's canonical
 report and span its Model rows once, including participants without Model usage.
 This is a Swarm presentation choice; canonical usage remains separated
-(`SwarmPage.svelte`, `SwarmPage.test.js`).
+(`SwarmPage.svelte`, `SwarmPage.usage.test.js`).
 
 Management Resume accepts an optional participant id. Store validation and
 request replay bind that exact target; reopening a closed epoch resets only the
@@ -597,7 +599,7 @@ beside the goal form's Swarm selector, after the same kind of confirmation (fail
 stay in the dialog for retry). Existing Runs keep their profile snapshots. Deletion
 sends the latest saved revision and closes the editor without the navigation flush,
 so an unsaved draft of the deleted profile is discarded, not saved again
-(`SwarmPage.test.profiles.test.js`).
+(`SwarmPage.profiles.test.js`).
 
 Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_bundled_management.py` and `tests/cli/test_extensions_operations.py`.
 
@@ -611,10 +613,11 @@ a tab loads its current data independently of hidden reports. Activity retains
 the existing History and live subscription while its participant's Run identity
 and active state are unchanged. A new Run or terminal state reconciles History through the generation/sequence append cursor, preserving older loaded pages;
 subscription failures remain retryable on a later invalidation. Coverage:
-`SwarmPage.test.performance.test.js` and `SwarmPage.test.reconciliation.test.js`.
+`pageRefresh.test.js`, `SwarmPage.streaming.test.js`, `SwarmPage.activity.test.js`
+and `SwarmPage.wiki.test.js`.
 
 WikiPanel.svelte shows each page's number in the list and page header and opens
-`#wiki/w3` links by number. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes SwarmWiki.test.js and `webui/src/components/__tests__/SwarmPage.test.js` plus the bundled-page build test.
+`#wiki/w3` links by number. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
 
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are
@@ -634,8 +637,8 @@ opening a long-running Session therefore does not visibly replay its old steps.
 The shared Chat Timeline uses explicit complete Run descriptors to retire retained live output; stale History or active
 snapshots cannot erase newer output or restart a settled subscription. In-flight
 inspection survives peer invalidations, and Thinking disclosure state belongs to
-the inspected Session. Tests: `SwarmPage.test.streaming.test.js` and the existing
-Activity/reconciliation suites. The generic bridge only relays the replay
+the inspected Session. Tests: `SwarmPage.streaming.test.js` and
+`SwarmPage.activity.test.js`. The generic bridge only relays the replay
 watermark (`ExtensionPage.test.js`, `test_extensions_methods.py`).
 Activity and Board reuse the same compact participant chips; Activity retains
 all Swarm participants and marks the selected Session with a pressed state.
@@ -644,7 +647,7 @@ The human page omits the Delivery audit tab; internal events and canonical recei
 remain available for diagnosis. Usage requests one combined group report, including
 participant breakdowns, and shares an in-flight request across refreshes. It retains
 the last report while refreshing silently, without transient progress text. Evidence:
-`SwarmPage.test.activity-and-usage.test.js`, `SwarmPage.test.reconciliation.test.js`.
+`SwarmPage.usage.test.js`.
 
 Pending Board reads, automatic delivery, and participant counts use the partial
 `recipients_pending_participant` index, so delivered history does not dominate
