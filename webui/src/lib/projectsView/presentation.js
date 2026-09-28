@@ -84,8 +84,7 @@ export function createProjectsState({ selectedProjectId = '' } = {}) {
 
 // Pure view helpers for the Projects tab. Business and normalization logic
 // lives here so the Svelte component stays a thin display/input/orchestration
-// layer (see webui.md → Conventions). Every export is unit-tested in
-// __tests__/projectsView.test.js.
+// layer (see webui.md → Conventions).
 //
 // The shapes mirror the verified backend contract (server/rpc/project_methods):
 //   project: { project_id, display_name, cwd, cwd_exists, default_agent,
@@ -168,7 +167,7 @@ export const PROJECT_THINKING_EFFORT_OPTIONS = Object.freeze([
 ]);
 
 // Build the project.add payload from the add-form values. cwd is required (the
-// thin api wrapper enforces it too); the optional pointers are only included
+// thin api wrapper enforces it too); the optional display name is only included
 // when the user actually typed something, matching the backend's
 // "non-empty string" rule for these params.
 export function buildAddProjectPayload(formValues) {
@@ -181,38 +180,11 @@ export function buildAddProjectPayload(formValues) {
     payload.display_name = displayName;
   }
 
-  const defaultAgent = optionalText(formValues?.default_agent);
-  if (defaultAgent !== null) {
-    payload.default_agent = defaultAgent;
-  }
-
-  const defaultModel = optionalText(formValues?.default_model);
-  if (defaultModel !== null) {
-    payload.default_model = defaultModel;
-  }
-
   // Only send an explicit, known format — absent means the server auto-detects
   // from the repo (exactly one format present → that one, else opencode).
   const sourceFormat = asText(formValues?.source_format).trim();
   if (PROJECT_SOURCE_FORMATS.includes(sourceFormat)) {
     payload.source_format = sourceFormat;
-  }
-
-  // Only include the knobs when the form carries a real value: a number for
-  // temperature, and a level or '' (provider default) for thinking effort. The
-  // "no default" sentinel / empty temperature box means "omit" at add time.
-  const defaultTemperature = normalizeProjectTemperature(
-    formValues?.default_temperature,
-  );
-  if (defaultTemperature !== null) {
-    payload.default_temperature = defaultTemperature;
-  }
-
-  const defaultThinkingEffort = normalizeProjectThinkingEffortForPayload(
-    formValues?.default_thinking_effort,
-  );
-  if (defaultThinkingEffort !== null) {
-    payload.default_thinking_effort = defaultThinkingEffort;
   }
 
   const autoLoad = normalizeAutoLoad(formValues?.auto_load);
@@ -304,28 +276,28 @@ export function buildManageProjectPayload(formValues, project) {
 // name for a stable display. Each row carries the tool's readiness fields
 // (`ready`/`readiness_hint`/`extension`) so a not-ready tool renders the shared
 // "currently unavailable" notice (its toggle stays functional — the whitelist is
-// independent of readiness). A string catalog entry has no readiness metadata, so
-// it defaults to ready.
+// independent of readiness).
 export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
   const enabled = new Set(normalizeStringList(allowedTools));
   const byName = new Map();
   for (const tool of Array.isArray(catalog) ? catalog : []) {
-    const isObject = tool !== null && typeof tool === 'object';
-    const name = asText(isObject ? tool?.name : tool).trim();
-    const projectConfigurable =
-      !isObject || tool?.project_configurable !== false;
-    if (name.length === 0 || !projectConfigurable || byName.has(name)) {
+    const name = asText(tool.name).trim();
+    if (
+      name.length === 0 ||
+      tool.project_configurable === false ||
+      byName.has(name)
+    ) {
       continue;
     }
     byName.set(name, {
       name,
-      family: isObject ? (tool.family ?? null) : null,
-      family_label: isObject ? (tool.family_label ?? null) : null,
-      description: isObject ? (tool.description ?? '') : '',
+      family: tool.family ?? null,
+      family_label: tool.family_label ?? null,
+      description: tool.description,
       enabled: enabled.has(name),
-      ready: isObject ? tool.ready !== false : true,
-      readiness_hint: isObject ? (tool.readiness_hint ?? null) : null,
-      extension: isObject ? (tool.extension ?? null) : null,
+      ready: tool.ready !== false,
+      readiness_hint: tool.readiness_hint ?? null,
+      extension: tool.extension ?? null,
     });
   }
 
@@ -577,20 +549,15 @@ export function normalizeProjects(projects) {
 // The three per-agent overridable / effective run fields, in display order. Each is
 // resolved through the config-agent chain (override → agent file → project default →
 // global default) and reported by the scan as `effective[field] = {value, source}`.
-export const TEAM_EFFECTIVE_FIELDS = Object.freeze([
+const TEAM_EFFECTIVE_FIELDS = Object.freeze([
   'model',
   'temperature',
   'thinking_effort',
 ]);
 
-// The winning-source discriminants the scan reports on `effective[field].source`.
-export const EFFECTIVE_SOURCE_OVERRIDE = 'override';
-
-export const EFFECTIVE_SOURCE_AGENT = 'agent';
-
-export const EFFECTIVE_SOURCE_PROJECT_DEFAULT = 'project_default';
-
-export const EFFECTIVE_SOURCE_GLOBAL_DEFAULT = 'global_default';
+// The winning-source discriminant the scan reports on `effective[field].source`
+// when a per-agent override wins.
+const EFFECTIVE_SOURCE_OVERRIDE = 'override';
 
 // Project the scan's team into a stable, display-ready list. The repo is the
 // source of truth (no copy drift) — this only shapes what the view renders. Each
@@ -819,9 +786,6 @@ function normalizeAutoLoad(value) {
 // settingsView.js' normalizeAgentDefaultsTemperature: an empty/non-numeric box
 // is "no value" (null), so the chain falls through.
 function normalizeProjectTemperature(value) {
-  if (value === null || value === undefined) {
-    return null;
-  }
   const normalized = String(value).trim();
   if (normalized.length === 0) {
     return null;
@@ -832,13 +796,10 @@ function normalizeProjectTemperature(value) {
 
 // Form thinking effort (sentinel|''|level) → null|''|level for the payload.
 // Mirrors settingsView.js' normalizeAgentDefaultsThinkingEffortForPayload: the
-// sentinel and a missing value mean "no default" (null), '' means "provider
-// default", and only a known level passes through (an unknown one → null).
+// sentinel means "no default" (null), '' means "provider default", and only a
+// known level passes through (anything else → null).
 function normalizeProjectThinkingEffortForPayload(value) {
   if (value === PROJECT_THINKING_EFFORT_NO_DEFAULT) {
-    return null;
-  }
-  if (value === null || value === undefined) {
     return null;
   }
   const normalized = String(value).trim();

@@ -2,7 +2,6 @@
 // dialog workflows and pure form/team/scan projections.
 export { createProjectsController } from './projectsView/controller.js';
 export {
-  createProjectAddForm,
   createProjectEditForm,
   createProjectsState,
   FINDING_TYPE_SLUG_COLLISION,
@@ -30,11 +29,6 @@ export {
   buildRePointPayload,
   normalizeProject,
   normalizeProjects,
-  TEAM_EFFECTIVE_FIELDS,
-  EFFECTIVE_SOURCE_OVERRIDE,
-  EFFECTIVE_SOURCE_AGENT,
-  EFFECTIVE_SOURCE_PROJECT_DEFAULT,
-  EFFECTIVE_SOURCE_GLOBAL_DEFAULT,
   projectTeam,
   projectAgentTargetSummary,
   memberFieldIsOverridden,
