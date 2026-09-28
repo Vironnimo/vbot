@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any, cast
 
 from core.providers.reasoning import (
+    DEFAULT_REASONING_REPLAY_POLICY,
     ReasoningReplayPolicy,
 )
 from core.utils.tokens import estimate_request_input_tokens
@@ -43,6 +44,9 @@ class StubAdapter:
         self, response: JsonObject, *, model_id: str | None = None
     ) -> JsonObject:
         return response
+
+    def reasoning_replay_policy(self, _model_id: str) -> ReasoningReplayPolicy:
+        return DEFAULT_REASONING_REPLAY_POLICY
 
     def wire_media_support(self, _model_id: str) -> frozenset[str]:
         return self._wire_media_types

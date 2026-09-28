@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING, Any, cast
 from core.chat._request_builder import (
     RequestBuilder,
     _finalize_compaction_checkpoint,
-    _resolve_reasoning_replay_policy,
-    _resolve_wire_media_support,
     _resolved_model_reference,
 )
 from core.chat._run_state import (
@@ -135,7 +133,7 @@ class ChatCompactionHost:
             active_provider_id=active_provider_id,
         )
 
-    def resolve_context_window(self, agent: Any, target: Any | None = None) -> int | None:
+    def resolve_context_window(self, agent: Any, target: Any) -> int | None:
         return self._requests.resolve_context_window(agent, target)
 
     def resolve_temperature(self, provider_id: str, model_id: str) -> float | None:
@@ -223,7 +221,7 @@ class ChatCompactionHost:
                 skill_project_id=skill_project_id,
             )
             inputs = RequestBuildInputs(
-                replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+                replay_policy=adapter.reasoning_replay_policy(model_id),
                 reasoning_scope_model=_resolved_model_reference(
                     self._dependencies,
                     provider_id,
@@ -235,7 +233,7 @@ class ChatCompactionHost:
                     provider_id,
                     model_id,
                 ),
-                wire_media_types=_resolve_wire_media_support(adapter, model_id),
+                wire_media_types=adapter.wire_media_support(model_id),
                 max_image_bytes=self._requests._image_size_limit(adapter, model_id),
                 agent_body=runtime_agent_body(agent),
                 project_context=prompt_context,
