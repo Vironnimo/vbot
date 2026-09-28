@@ -10,6 +10,7 @@ whose root fails to load, including one from a newer vBot, is never overwritten.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -39,10 +40,13 @@ CONNECTION_ID_PATTERN = r"^[a-z][a-z0-9_]{0,31}$"
 ENVIRONMENT_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
 DEFAULT_TIMEOUT_SECONDS = 120
 MAX_TIMEOUT_SECONDS = 86400
+# The user's one-line description of a connection, shown in its Tool description.
+MAX_DESCRIPTION_CHARACTERS = 200
 CONNECTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "id": {"type": "string", "pattern": CONNECTION_ID_PATTERN},
+        "description": {"type": "string", "maxLength": MAX_DESCRIPTION_CHARACTERS},
         "transport": {"enum": ["stdio", "http", "sse"]},
         "command": {"type": "string", "minLength": 1},
         "args": {"type": "array", "items": {"type": "string"}},
@@ -72,6 +76,12 @@ def validate_connection(value: Any) -> dict[str, Any]:
         paths = ["/".join(map(str, error.absolute_path)) or "connection" for error in errors]
         raise ValueError(f"Invalid MCP configuration at: {', '.join(paths)}")
     record = dict(value)
+    if "description" in record:
+        description = record.pop("description").strip()
+        if any(unicodedata.category(character) in {"Cc", "Zl", "Zp"} for character in description):
+            raise ValueError("MCP connection description must be a single line")
+        if description:
+            record["description"] = description
     if record["transport"] == "stdio":
         if not record.get("command") or record.get("url") or record.get("oauth"):
             raise ValueError("A stdio connection requires a command and cannot use a URL or OAuth")

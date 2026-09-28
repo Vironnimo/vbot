@@ -1,4 +1,4 @@
-"""MCP: discovery through the fixed connection Tool keeps Tool definitions stable."""
+"""MCP: the connection Tool lists its remote Tools, which discovery finds and describes."""
 
 from __future__ import annotations
 
@@ -8,11 +8,13 @@ import logging
 
 import pytest
 
+from core.extensions import ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.tools.availability import ToolAccess
 from core.tools.tools import ToolDefinitionProfileContext
 from resources.extensions.mcp.client import ConnectionRunner
-from resources.extensions.mcp.extension import register, remote_tool_name
+from resources.extensions.mcp.extension import MCP_GUIDANCE, register, remote_tool_name
+from tests.core.prompts.prompts_test_support import _agent, _manager
 from tests.resources.extensions.mcp.mcp_test_support import (
     dispatch,
     model_text,
@@ -25,8 +27,15 @@ from tests.resources.extensions.mcp.mcp_test_support import (
 _PROFILE = ToolDefinitionProfileContext(agent_id="alice")
 
 
+_USAGE = "Describe a tool for its arguments schema, then call it."
+
+
 def _definitions(registry):
     return registry.provider_definitions(profile_context=_PROFILE, allowed_tools=["mcp_example"])
+
+
+def _tool(name):
+    return {"name": name, "description": "test-owned", "inputSchema": {"type": "object"}}
 
 
 def test_remote_names_are_stable_unique_and_provider_safe():
@@ -36,12 +45,16 @@ def test_remote_names_are_stable_unique_and_provider_safe():
 
 
 @pytest.mark.asyncio
-async def test_catalog_changes_and_disconnects_keep_definitions_identical(context_service):
+async def test_connection_description_lists_remote_tool_names_through_disconnects(
+    context_service,
+):
     service, registry, runner, calls = context_service
     before = _definitions(registry)
+    assert before[0]["description"] == f"MCP connection example. {_USAGE} Tools: inspect"
+    runner.catalog["server_info"] = {"name": "blender-mcp", "title": "Blender"}
     runner.catalog["tools"].extend(
         {
-            "name": f"tool_{index}",
+            "name": f"tool_{index:03d}",
             "description": "long external description " * 100,
             "inputSchema": {"type": "object", "properties": {"field": {"type": "string"}}},
         }
@@ -50,20 +63,92 @@ async def test_catalog_changes_and_disconnects_keep_definitions_identical(contex
     service._publish(runner, runner.catalog)
     after = _definitions(registry)
 
-    assert after == before
+    # The parameters stay fixed; the description names the server and lists the Tools
+    # in server order, cut to about 3000 characters with the count of the rest.
     assert [entry["name"] for entry in after] == ["mcp_example"]
+    assert after[0]["parameters"] == before[0]["parameters"]
+    heading, listing = after[0]["description"].split(" Tools: ", 1)
+    assert heading == f"MCP connection example: Blender. {_USAGE}"
+    *shown, more = listing.split(", ")
+    names = [tool["name"] for tool in runner.catalog["tools"]]
+    assert shown == names[: len(shown)]
+    assert len(", ".join(shown)) <= 3000 < len(", ".join(names[: len(shown) + 1]))
+    assert more == f"... and {len(names) - len(shown)} more; search lists all."
     assert len(registry.list_tools()) == 502
     assert [tool.name for tool in registry.list_tools(include_catalog_hidden=False)] == [
         "mcp_example"
     ]
     assert service.api.operations.catalog_visible_tool_names == ("mcp_example",)
     assert registry.prompt_definitions(profile_context=_PROFILE, allowed_tools=["mcp_example"]) == [
-        {"name": before[0]["name"], "description": before[0]["description"]}
+        {"name": after[0]["name"], "description": after[0]["description"]}
     ]
 
+    # A disconnect keeps the names; only a new catalog changes them.
     await service.manage("disconnect", {"id": "example"})
 
-    assert _definitions(registry) == before
+    assert _definitions(registry) == after
+
+
+@pytest.mark.asyncio
+async def test_connection_tool_announces_added_and_removed_tool_names(context_service):
+    service, registry, runner, calls = context_service
+    note = registry.get("mcp_example").definition_change_note
+
+    def published(**catalog):
+        runner.catalog.update(catalog)
+        service._publish(runner, runner.catalog)
+        return _definitions(registry)[0]
+
+    first = _definitions(registry)[0]
+    added = published(tools=[_tool("inspect"), _tool("render")])
+    assert note(first, added) == "Tools added on this connection: render."
+    # A new server title or user description alone is not announced.
+    titled = published(server_info={"name": "Blender"})
+    assert titled["description"] != added["description"]
+    assert note(added, titled) is None
+    reordered = published(tools=[_tool("render"), _tool("inspect")])
+    assert note(titled, reordered) is None
+    changed = published(tools=[_tool("render"), _tool("snapshot")])
+    assert note(reordered, changed) == (
+        "Tools added on this connection: snapshot. Tools removed: inspect."
+    )
+    assert note(changed, published(tools=[])) == "Tools removed: render, snapshot."
+
+    # A description published before a restart is read from its own Tool list. Added
+    # names need its complete list; removed names are those it shows.
+    current = published(tools=[_tool("inspect"), _tool("render")])
+    earlier = f"MCP connection example: Tools: fake. {_USAGE} Tools: inspect, old_tool"
+    assert note({**first, "description": earlier}, current) == (
+        "Tools added on this connection: render. Tools removed: old_tool."
+    )
+    cut_short = (
+        f"MCP connection example. {_USAGE} Tools: old_tool, ... and 3 more; search lists all."
+    )
+    assert note({**first, "description": cut_short}, current) == "Tools removed: old_tool."
+    legacy = "Discover and use this MCP connection's tools, resources, and prompts."
+    assert note({**first, "description": legacy}, current) is None
+
+
+def test_guidance_block_renders_while_a_connection_tool_is_listed(tmp_path):
+    declarations = ExtensionDeclarations()
+    register(ExtensionAPI("mcp", declarations, config={}, logger=logging.getLogger("test.mcp")))
+    extensions = ExtensionRegistry()
+    extensions._records.append(
+        ExtensionRecord(
+            "mcp", tmp_path, tmp_path / "extension.py", "loaded", declarations=declarations
+        )
+    )
+    manager = _manager(tmp_path, block_definitions=extensions.prompt_block_declarations())
+    agent = _agent(tmp_path)
+
+    def prompt(*tools):
+        return manager.build_system_prompt(
+            agent, effective_tool_definitions=[{"name": name} for name in tools]
+        )
+
+    assert MCP_GUIDANCE in prompt("read_file", "mcp_blender", "mcp_godot")
+    assert prompt("read_file", "mcp_blender").count("## MCP connections") == 1
+    assert "## MCP connections" not in prompt("read_file")
 
 
 @pytest.mark.asyncio
@@ -318,7 +403,7 @@ async def test_tool_disabled_during_connection_does_not_disclose_catalog(
 
 
 @pytest.mark.asyncio
-async def test_no_match_fallback_does_not_reveal_denied_tools(context_service, host):
+async def test_denied_tools_stay_out_of_search_and_are_refused_by_name(context_service, host):
     service, registry, runner, calls = context_service
     host.resolve_agent(None, "alice").tool_access = ToolAccess(
         granted=("mcp_example",), denied=[remote_tool_name("example", "inspect")]
@@ -333,8 +418,16 @@ async def test_no_match_fallback_does_not_reveal_denied_tools(context_service, h
         host,
         {"action": "call", "target": "inspect", "arguments": {"value": "sentinel"}},
     )
-    assert denied["error"]["code"] == "mcp_unknown_target"
-    assert "tool:inspect" not in denied["error"]["message"]
+    # The connection description lists the name, so the refusal gives its real cause.
+    assert denied["error"] == {
+        "code": "mcp_access_denied",
+        "message": (
+            "This Agent's Tool settings do not allow this MCP tool, so nothing was run. "
+            "Tell the user if it is needed."
+        ),
+    }
+    described = await dispatch(registry, host, {"action": "describe", "target": "tool:inspect"})
+    assert described["error"]["code"] == "mcp_access_denied"
     assert calls == []
 
 

@@ -33,10 +33,11 @@ from core.utils.config import VBOT_ROOT
 from core.utils.ids import new_id
 
 from ._arguments import browse_normalizer
+from ._catalog import CatalogSummaries, catalog_summary
 from ._definitions import (
     GUIDANCE_PREVIEW_CHARACTERS,
     MAX_FINISHED_JOBS,
-    MCP_DESCRIPTION,
+    MCP_GUIDANCE,
     MCP_MESSAGES,
     MCP_OPERATION_DESCRIPTIONS,
     MCP_OPERATIONS,
@@ -60,7 +61,7 @@ __all__ = [
     "GUIDANCE_PREVIEW_CHARACTERS",
     "MAX_FINISHED_JOBS",
     "MCPService",
-    "MCP_DESCRIPTION",
+    "MCP_GUIDANCE",
     "MCP_MESSAGES",
     "MCP_OPERATIONS",
     "MCP_OPERATION_DESCRIPTIONS",
@@ -129,6 +130,8 @@ class MCPService:
         self._runner_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         # Per connection, the targets its results have shown, most recently seen last.
         self._published: dict[str, OrderedDict[str, None]] = {}
+        # Per connection, the server title and Tool names its description shows.
+        self.catalogs = CatalogSummaries(api.logger)
         self._closed = False
         self._startup_error: str | None = None
 
@@ -148,6 +151,8 @@ class MCPService:
             self.api.logger.warning(
                 "MCP configuration issue: %s", json.dumps(issue, ensure_ascii=True)
             )
+        # Saved summaries first, so each connection Tool starts with its known names.
+        await self.catalogs.open(host)
         for config in self.connections.values():
             self._runner(config)
             if config["enabled"]:
@@ -160,6 +165,7 @@ class MCPService:
         await asyncio.gather(*self.jobs.values(), return_exceptions=True)
         await asyncio.gather(*(runner.close() for runner in self.runners.values()))
         self.runners.clear()
+        await self.catalogs.close()
 
     def _host(self) -> ExtensionHost:
         if self.host is None or self._closed:
@@ -172,7 +178,7 @@ class MCPService:
             self.runners[identifier] = ConnectionRunner(
                 config, self._host(), self.inputs, self._publish, authorize=self._authorize
             )
-            self._publish(self.runners[identifier], {"tools": []})
+            self._publish(self.runners[identifier], None)
         return self.runners[identifier]
 
     def _connection(self, identifier: str) -> dict[str, Any]:
@@ -181,14 +187,22 @@ class MCPService:
             raise ValueError(f"Unknown MCP connection: {identifier}")
         return config
 
-    def _publish(self, runner: ConnectionRunner, catalog: dict[str, Any]) -> None:
+    def _publish(self, runner: ConnectionRunner, catalog: dict[str, Any] | None) -> None:
+        """Publish the connection Tool and the remote Tools of *catalog*.
+
+        ``None`` means no catalog has arrived yet on this runner: the description
+        keeps the last known Tool names and no remote Tool is registered.
+        """
         if self._closed or self.runners.get(runner.id) is not runner:
             return
+        if catalog is not None:
+            self.catalogs.record(runner.id, catalog_summary(catalog))
         parent = f"mcp_{runner.id}"
+        about = self.connections.get(runner.id, runner.config).get("description")
         declarations = [
             {
                 "name": parent,
-                "description": MCP_DESCRIPTION,
+                "description": self.catalogs.description(runner.id, about),
                 "parameters": MCP_PARAMETERS,
                 "handler": self._handler(runner.id),
                 "ready": lambda: bool(self.connections.get(runner.id, {}).get("enabled")),
@@ -196,9 +210,10 @@ class MCPService:
                 "open_input_schema": True,
                 "requires_opt_in": True,
                 "argument_normalizer": browse_normalizer(parent),
+                "definition_change_note": self.catalogs.change_note(runner.id),
             }
         ]
-        for tool in catalog["tools"]:
+        for tool in (catalog or {}).get("tools", []):
             description = tool.get("description") or tool.get("title") or tool["name"]
             parameters = tool["inputSchema"]
             declarations.append(
@@ -337,7 +352,10 @@ class MCPService:
                 scored.append((-score, order[entry["kind"]], entry["name"], entry))
         return [item[3] for item in sorted(scored, key=lambda item: item[:3])]
 
-    def _entries(self, runner: ConnectionRunner, allowed: tuple[str, ...]) -> list[dict[str, Any]]:
+    def _entries(
+        self, runner: ConnectionRunner, allowed: tuple[str, ...] | None
+    ) -> list[dict[str, Any]]:
+        """The connection's items; with *allowed*, only the remote Tools it contains."""
         entries = []
         for kind, field in (
             ("tool", "tools"),
@@ -349,7 +367,11 @@ class MCPService:
                 name = (
                     definition.get("name") or definition.get("uri") or definition.get("uriTemplate")
                 )
-                if kind == "tool" and remote_tool_name(runner.id, name) not in allowed:
+                if (
+                    kind == "tool"
+                    and allowed is not None
+                    and remote_tool_name(runner.id, name) not in allowed
+                ):
                     continue
                 entries.append(
                     {
@@ -445,12 +467,31 @@ class MCPService:
             return await self._search(runner, context, arguments, entries)
         entry, note, failure = self._resolve(runner.id, entries, arguments)
         if failure is not None:
+            if failure["error"]["code"] == "mcp_unknown_target" and self._names_denied_tool(
+                runner, arguments, allowed
+            ):
+                return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
             return failure
         assert entry is not None
         if action == "describe":
             return await self._describe(runner, context, entry, note)
         result = await self._call_target(runner, context, entry, arguments, allowed)
         return result if note is None else self._noted(result, note)
+
+    def _names_denied_tool(
+        self, runner: ConnectionRunner, arguments: dict[str, Any], allowed: tuple[str, ...]
+    ) -> bool:
+        """Whether an unresolved target names a remote Tool this Agent may not use.
+
+        The connection Tool's description lists every remote Tool name, so such a
+        target is refused for its real cause instead of reading as unknown.
+        """
+        denied = [
+            entry
+            for entry in self._entries(runner, None)
+            if entry["kind"] == "tool" and remote_tool_name(runner.id, entry["name"]) not in allowed
+        ]
+        return bool(denied) and self._resolve(runner.id, denied, arguments)[0] is not None
 
     def _remember(self, connection: str, entries: list[dict[str, Any]]) -> None:
         """Record the application targets this connection can show, within a bound.
@@ -997,14 +1038,26 @@ class MCPService:
     async def _save(self, value: dict[str, Any]) -> dict[str, Any]:
         config = validate_connection(value)
         async with self._lock, self._runner_locks[config["id"]]:
+            previous = self.connections.get(config["id"])
             records = {**self.connections, config["id"]: config}
             if self.store is None:
                 raise RuntimeError("MCP store was not initialized")
             await run_tool_worker(self.store.save, records)
-            await self._stop(config["id"])
-            self.connections = records
-            if config["enabled"]:
-                self._runner(config).start()
+            runner = self.runners.get(config["id"])
+            if (
+                runner is not None
+                and previous is not None
+                and _without_description(previous) == _without_description(config)
+            ):
+                # Only the description changed: republish it and keep the connection.
+                self.connections = records
+                runner.config = config
+                self._publish(runner, runner.catalog or None)
+            else:
+                await self._stop(config["id"])
+                self.connections = records
+                if config["enabled"]:
+                    self._runner(config).start()
         self.api.logger.info("MCP connection configured (connection=%s)", config["id"])
         return self._status(config["id"])
 
@@ -1024,6 +1077,7 @@ class MCPService:
             self.connections = records
             if operation == "remove":
                 self._published.pop(identifier, None)
+                self.catalogs.forget(identifier)
             if operation in {"disable", "remove"}:
                 await self._stop(identifier)
             elif config["enabled"]:
@@ -1135,6 +1189,10 @@ class MCPService:
         return {"job_id": identifier, "state": state, "result": result}
 
 
+def _without_description(config: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in config.items() if key != "description"}
+
+
 # Management calls run outside a Session and return complete payloads inline,
 # so they have no saved result to read.
 _EXPLORE_PROPERTIES: dict[str, Any] = {
@@ -1157,6 +1215,7 @@ def register(api: ExtensionAPI) -> None:
     api.operations.pending_inputs = service.inputs.list
     api.operations.input_response_operation = "respond"
     api.on_shutdown(service.close)
+    api.register_prompt_block("mcp_guidance", default_text=MCP_GUIDANCE, requires_tool="mcp_*")
     base = {"id": {"type": "string"}}
     descriptions = {
         "list": "List saved connections, live connection state, and effective Agent access.",

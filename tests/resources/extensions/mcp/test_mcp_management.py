@@ -4,17 +4,37 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 
 import pytest
 
+from core.database import write_bootstrap_marker
+from core.extensions import ExtensionRegistrationIdentity
+from core.extensions.databases import ExtensionDatabases
 from core.tools.tools import tool_success
 from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.config import validate_connection
+from resources.extensions.mcp.extension import remote_tool_name
 from tests.resources.extensions.mcp.mcp_test_support import dispatch, start_service
+
+_USAGE = "Describe a tool for its arguments schema, then call it."
+_NO_TOOLS = "No tools reported yet; search lists them."
+_CONNECTION = {"id": "example", "transport": "stdio", "command": "unused"}
+_CATALOG = {
+    "server_info": {"name": "blender-mcp", "title": "Blender"},
+    "tools": [
+        {"name": "get_scene_info", "inputSchema": {"type": "object"}},
+        {"name": "execute_blender_code", "inputSchema": {"type": "object"}},
+    ],
+}
 
 
 def _tool_names(registry) -> list[str]:
     return [tool.name for tool in registry.list_tools()]
+
+
+def _description(registry) -> str:
+    return str(registry.get("mcp_example").description)
 
 
 @pytest.mark.asyncio
@@ -124,3 +144,75 @@ async def test_save_serializes_runner_access_until_replacement_is_ready(host, mo
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_description_only_save_republishes_without_reconnecting(host, monkeypatch):
+    started = []
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: started.append(runner))
+    service, registry = await start_service(host)
+    try:
+        await service.manage("save", {"connection": _CONNECTION})
+        runner = service.runners["example"]
+        runner.catalog = dict(_CATALOG)
+        service._publish(runner, runner.catalog)
+        described = {**_CONNECTION, "description": "  Studio Blender.  "}
+
+        await service.manage("save", {"connection": described})
+
+        assert service.runners["example"] is runner
+        assert started == [runner]
+        assert service.store.load()["example"]["description"] == "Studio Blender."
+        assert _description(registry) == (
+            f"MCP connection example: Studio Blender. {_USAGE} "
+            "Tools: get_scene_info, execute_blender_code"
+        )
+        assert registry.get(remote_tool_name("example", "get_scene_info")) is not None
+
+        # Any other change replaces the connection; its Tool names stay until a new catalog.
+        await service.manage("save", {"connection": {**_CONNECTION, "command": "other"}})
+
+        assert service.runners["example"] is not runner
+        assert _description(registry) == (
+            f"MCP connection example: Blender. {_USAGE} Tools: get_scene_info, execute_blender_code"
+        )
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(host, monkeypatch):
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
+    write_bootstrap_marker(host.data_dir)
+    databases = ExtensionDatabases(host.data_dir)
+    owners = []
+
+    async def restart():
+        owner = ExtensionRegistrationIdentity("mcp", f"registration-{len(owners)}")
+        owners.append(owner)
+        return await start_service(replace(host, open_database=databases.opener(owner)))
+
+    async def stop(service):
+        await service.close()
+        await databases.release(owners[-1])
+
+    try:
+        service, registry = await restart()
+        await service.manage("save", {"connection": _CONNECTION})
+        assert _description(registry) == f"MCP connection example. {_USAGE} {_NO_TOOLS}"
+        service._publish(service.runners["example"], _CATALOG)
+        known = _description(registry)
+        assert known.endswith("Tools: get_scene_info, execute_blender_code")
+        await stop(service)
+
+        service, registry = await restart()
+        assert _description(registry) == known
+        await service.manage("remove", {"id": "example"})
+        await stop(service)
+
+        service, registry = await restart()
+        await service.manage("save", {"connection": _CONNECTION})
+        assert _description(registry) == f"MCP connection example. {_USAGE} {_NO_TOOLS}"
+        await stop(service)
+    finally:
+        databases.close()
