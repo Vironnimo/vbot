@@ -406,8 +406,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   the relative check misaligned hanging and aligned continuation lines
   (Sessions, 2026-09). A reading needs at
   least one remaining context/removal line and applies only through precise
-  matching (`precise_only`), so the file must hold the surrounding lines
-  adjacent; a failing reading falls back to the original error. A re-read run
+  matching (`precise_only`: no `copy_match`), so the file must hold the
+  surrounding lines adjacent; a failing reading falls back to the original error. A re-read run
   with no context/removal line after it (or before it) is placed on one side
   only, so the reading is dropped when the file continues on that side with one
   of the run's lines or a near copy (similarity >= 0.80, `_repeats_neighbors`):
