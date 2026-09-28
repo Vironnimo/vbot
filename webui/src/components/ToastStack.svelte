@@ -23,7 +23,7 @@
         <button
           class="toast-close"
           type="button"
-          aria-label={t('common.close', 'Close')}
+          aria-label={t('common.close')}
           onclick={() => onDismiss?.(toast.id)}
         >
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"

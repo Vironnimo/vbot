@@ -62,7 +62,7 @@ describe('ChatView', () => {
         expect(
           document.querySelector('.chat-view').getAttribute('data-chat-width'),
         ).toBe(rendered);
-        expect(findButtonByText(t('sessions.title', 'Sessions'))).toBeTruthy();
+        expect(findButtonByText(t('sessions.title'))).toBeTruthy();
         expect(findNewSessionButton()).toBeTruthy();
         expect(document.querySelector('.chat-refresh')).toBeNull();
       },
@@ -156,7 +156,7 @@ describe('ChatView', () => {
 
     it('waits before showing initial History feedback', async () => {
       const HISTORY_LOADING_FEEDBACK_DELAY_MS = 300;
-      const loading = t('loading.history', 'Loading chat history…');
+      const loading = t('loading.history');
       let resolveHistory;
       const defaultRpc = createChatRpcMock();
       rpcMock.mockImplementation((method, params) =>

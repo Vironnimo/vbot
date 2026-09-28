@@ -87,10 +87,7 @@
         sharedSettings = result;
     } catch (error) {
       if (!destroyed && requestId === defaultsRequestId)
-        sharedSettingsError = viewErrorMessage(
-          error,
-          t('settings.loadError', 'Settings could not be loaded.'),
-        );
+        sharedSettingsError = viewErrorMessage(error, t('settings.loadError'));
     } finally {
       if (!destroyed && requestId === defaultsRequestId)
         sharedSettingsLoading = false;
@@ -105,7 +102,7 @@
   function sharedSettingsFailure(message) {
     if (message)
       onToast({
-        title: t('errors.appError', 'Error'),
+        title: t('errors.appError'),
         message,
         variant: 'error',
       });
@@ -231,16 +228,13 @@
     projectCatalogError = catalog.projectError
       ? viewErrorMessage(
           catalog.projectError,
-          t('agents.form.projectLoadError', 'Projects could not be loaded.'),
+          t('agents.form.projectLoadError'),
         )
       : '';
     agentTargetCatalogError =
       projectCatalogError ||
       (catalog.failedProjects.length
-        ? t(
-            'agents.access.projectTargetsLoadError',
-            'Some Project Agent targets could not be loaded.',
-          )
+        ? t('agents.access.projectTargetsLoadError')
         : '');
   }
 
@@ -381,10 +375,7 @@
     } catch (error) {
       agents = previousAgents;
       onToast({
-        title: viewErrorMessage(
-          error,
-          t('agents.order.saveError', 'Agent order could not be saved.'),
-        ),
+        title: viewErrorMessage(error, t('agents.order.saveError')),
         variant: 'error',
       });
       await loadAgents({
@@ -503,11 +494,7 @@
   }
 
   function viewErrorMessage(error, fallback) {
-    return (
-      error?.message ||
-      fallback ||
-      t('errors.generic', 'Something went wrong. Try again.')
-    );
+    return error?.message || fallback || t('errors.generic');
   }
 </script>
 
@@ -564,50 +551,41 @@
             <div class="detail-top agent-shared-title">
               <div>
                 <h2 class="detail-heading">
-                  {t('agents.shared.title', 'Shared defaults')}
+                  {t('agents.shared.title')}
                 </h2>
                 <p class="agent-shared-scope">
-                  {t(
-                    'agents.shared.scope',
-                    'Used by Agents and Projects that inherit these values. Explicit choices on an Agent or Project stay in place.',
-                  )}
+                  {t('agents.shared.scope')}
                 </p>
               </div>
               <Button
                 variant="secondary"
                 onClick={() => selectAgent(selectedAgentId)}
-                >{t('agents.shared.back', 'Back to Agent')}</Button
+                >{t('agents.shared.back')}</Button
               >
             </div>
             <nav
               class="agent-shared-jumps"
-              aria-label={t(
-                'agents.shared.sections',
-                'Default settings sections',
-              )}
+              aria-label={t('agents.shared.sections')}
             >
               <Button
                 variant="tertiary"
                 onClick={() => jumpToDefaultsSection('defaults')}
-                >{t('agents.shared.modelTitle', 'Model & Thinking')}</Button
+                >{t('agents.shared.modelTitle')}</Button
               >
               <Button
                 variant="tertiary"
                 onClick={() => jumpToDefaultsSection('compaction')}
-                >{t('settings.compaction.title', 'Compaction')}</Button
+                >{t('settings.compaction.title')}</Button
               >
             </nav>
           </div>
           {#if sharedSettingsLoading}
-            <Banner variant="neutral"
-              >{t('settings.loading', 'Loading settings…')}</Banner
-            >
+            <Banner variant="neutral">{t('settings.loading')}</Banner>
           {:else if sharedSettingsError}
             <Banner variant="error"
               >{sharedSettingsError}<Button
                 variant="secondary"
-                onClick={loadSharedSettings}
-                >{t('common.retry', 'Retry')}</Button
+                onClick={loadSharedSettings}>{t('common.retry')}</Button
               ></Banner
             >
           {:else if sharedSettings}
@@ -618,14 +596,11 @@
             >
               <header class="s-section__head">
                 <h3 class="s-section__title" id="agent-shared-model-title">
-                  {t('agents.shared.modelTitle', 'Model & Thinking')}
+                  {t('agents.shared.modelTitle')}
                 </h3>
               </header>
               <p class="s-section__desc">
-                {t(
-                  'agents.shared.modelDescription',
-                  'Choose the common starting point. Individual Agents can override it.',
-                )}
+                {t('agents.shared.modelDescription')}
               </p>
               <div class="s-section__body">
                 <SettingsDefaultsPanel
@@ -645,14 +620,11 @@
             >
               <header class="s-section__head">
                 <h3 class="s-section__title" id="agent-shared-compaction-title">
-                  {t('settings.compaction.title', 'Compaction')}
+                  {t('settings.compaction.title')}
                 </h3>
               </header>
               <p class="s-section__desc">
-                {t(
-                  'agents.shared.compactionDescription',
-                  'The inherited policy for keeping long conversations within the Model context.',
-                )}
+                {t('agents.shared.compactionDescription')}
               </p>
               <div id="agent-shared-compaction" class="s-section__body">
                 <SettingsCompactionPanel

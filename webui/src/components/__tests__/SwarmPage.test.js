@@ -20,21 +20,21 @@ import {
 } from './SwarmPage.support.js';
 import { t } from '../../lib/i18n.js';
 
-const NEW_RUN = t('swarm.newRun', 'New run');
-const NEW_SWARM = t('swarm.newProfile', 'New Swarm');
-const START_RUN = t('swarm.startButton', 'Start Run');
-const DELETE_RUN = t('swarm.deleteRun.title', 'Delete Run');
-const RESUME = t('swarm.resume', 'Resume');
-const STOP = t('swarm.stop', 'Stop');
-const ACTIVE_RUNS = t('swarm.runs.active', 'Active runs');
-const INACTIVE_RUNS = t('swarm.runs.inactive', 'Inactive runs');
+const NEW_RUN = t('swarm.newRun');
+const NEW_SWARM = t('swarm.newProfile');
+const START_RUN = t('swarm.startButton');
+const DELETE_RUN = t('swarm.deleteRun.title');
+const RESUME = t('swarm.resume');
+const STOP = t('swarm.stop');
+const ACTIVE_RUNS = t('swarm.runs.active');
+const INACTIVE_RUNS = t('swarm.runs.inactive');
 
 const runGroup = (label) =>
   document.querySelector(`nav[aria-label="${label}"]`);
 const dialog = () => document.querySelector('[role="dialog"]');
 const confirmDelete = () =>
   [...dialog().querySelectorAll('button')].find(
-    (node) => node.textContent.trim() === t('common.delete', 'Delete'),
+    (node) => node.textContent.trim() === t('common.delete'),
   );
 
 describe('SwarmPage overview', () => {
@@ -49,7 +49,7 @@ describe('SwarmPage overview', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     flushSync();
     expect(document.querySelector('[role="alert"]')).not.toBeNull();
-    expect(button(t('common.refresh', 'Refresh')).disabled).toBe(false);
+    expect(button(t('common.refresh')).disabled).toBe(false);
     bridge.show();
     await vi.advanceTimersByTimeAsync(0);
     flushSync();
@@ -83,8 +83,8 @@ describe('SwarmPage overview', () => {
       runGroup(label).querySelector('p')?.textContent.trim();
     const rows = (label) => runGroup(label).querySelectorAll('button');
     for (const [label, empty] of [
-      [ACTIVE_RUNS, t('swarm.runs.noActive', 'No active runs')],
-      [INACTIVE_RUNS, t('swarm.runs.noInactive', 'No inactive runs')],
+      [ACTIVE_RUNS, t('swarm.runs.noActive')],
+      [INACTIVE_RUNS, t('swarm.runs.noInactive')],
     ]) {
       const section = runGroup(label).closest('section');
       expect(
@@ -113,7 +113,7 @@ describe('SwarmPage overview', () => {
     expect(emptyText(ACTIVE_RUNS)).toBeUndefined();
     expect(emptyText(INACTIVE_RUNS)).toBeUndefined();
     const profileRow = document.querySelector(
-      `nav[aria-label="${t('swarm.profiles', 'Swarms')}"] button`,
+      `nav[aria-label="${t('swarm.profiles')}"] button`,
     );
     expect(profileRow.textContent.trim()).toBe('Research (2)');
     expect(profileRow.children).toHaveLength(1);
@@ -164,11 +164,8 @@ describe('SwarmPage overview', () => {
       'Research',
     );
     expect(rows()).toEqual([
-      [
-        t('swarm.participantCount', '{count} participants', { count: 3 }),
-        'demo/model',
-      ],
-      [t('swarm.participantCount.one', '1 participant'), 'demo/other'],
+      [t('swarm.participantCount', { count: 3 }), 'demo/model'],
+      [t('swarm.participantCount.one'), 'demo/other'],
     ]);
     button('Investigate').focus();
     await vi.waitFor(() =>
@@ -177,8 +174,8 @@ describe('SwarmPage overview', () => {
       ),
     );
     expect(rows()).toEqual([
-      [t('swarm.profile', 'Swarm'), 'Research'],
-      [t('swarm.participants', 'Participants'), '4'],
+      [t('swarm.profile'), 'Research'],
+      [t('swarm.participants'), '4'],
     ]);
   });
 
@@ -389,13 +386,8 @@ describe('Swarm Run controls', () => {
       await settle();
       button(DELETE_RUN).click();
       await tick();
-      expect(dialog().textContent).toContain(
-        t(
-          'swarm.deleteRun.body',
-          'Permanently delete this Run, its Board, Wiki and participant Sessions? The Swarm will be kept. This cannot be undone.',
-        ),
-      );
-      button(t('common.cancel', 'Cancel')).click();
+      expect(dialog().textContent).toContain(t('swarm.deleteRun.body'));
+      button(t('common.cancel')).click();
       await tick();
       expect(callsTo(operation, 'swarms.delete')).toHaveLength(0);
       button(DELETE_RUN).click();
@@ -522,9 +514,7 @@ describe('Swarm Run controls', () => {
     await openSwarm(bridge);
     await tick();
     flushSync();
-    button(
-      t('swarm.communication.title', 'Change communication settings'),
-    ).click();
+    button(t('swarm.communication.title')).click();
     flushSync();
     const select = document.querySelector('.communication select');
     select.value = 'pull';
@@ -532,9 +522,9 @@ describe('Swarm Run controls', () => {
     await tick();
     expect(callsTo(operation, 'swarms.settings')).toHaveLength(0);
     expect(document.body.textContent).toContain(
-      t('swarm.communication.proposed', 'Proposed changes'),
+      t('swarm.communication.proposed'),
     );
-    button(t('swarm.apply', 'Apply changes')).click();
+    button(t('swarm.apply')).click();
     await settle();
     expect(operation).toHaveBeenCalledWith(
       'swarms.settings',

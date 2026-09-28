@@ -30,117 +30,39 @@
   const caption = $derived(voice.captions.at(-1) ?? null);
 
   const MESSAGES = {
-    not_configured: () =>
-      t(
-        'live.error.notConfigured',
-        'Choose a Live voice Model in Settings → Voice first.',
-      ),
-    not_usable: () =>
-      t(
-        'live.error.notUsable',
-        'The Live voice Model cannot be used right now. Check its Provider connection in Settings.',
-      ),
-    invalid_offer: () =>
-      t(
-        'live.error.invalidOffer',
-        'The browser audio setup was rejected. Reload the page and start again.',
-      ),
-    access_denied: () =>
-      t(
-        'live.error.access',
-        'The Provider rejected access to the Live voice Model. Check your account and its access to this Model.',
-      ),
-    rate_limited: () =>
-      t(
-        'live.error.rateLimited',
-        'The Provider is limiting requests. Wait a moment, then start again.',
-      ),
-    outcome_unknown: () =>
-      t(
-        'live.error.unknown',
-        'The Provider may have started the call, but it could not be confirmed. The request was not repeated.',
-      ),
-    provider_error: () =>
-      t(
-        'live.error.provider',
-        'The Provider could not start or continue the call. Try again later.',
-      ),
-    control_failed: () =>
-      t(
-        'live.error.control',
-        'vBot could not take control of the call, so it was ended. Start again.',
-      ),
-    microphone_denied: () =>
-      t('live.error.permission', 'Allow microphone access, then start again.'),
-    microphone_unavailable: () =>
-      t(
-        'live.error.microphone',
-        'Live voice needs a working microphone and a page opened over HTTPS or localhost.',
-      ),
-    connection_timeout: () =>
-      t(
-        'live.error.timeout',
-        'Live voice did not connect in time. Check your network and start again.',
-      ),
-    connection_failed: () =>
-      t(
-        'live.error.connection',
-        'Live voice could not connect. Check your network and start again.',
-      ),
-    connection_lost: () =>
-      t(
-        'live.error.connectionLost',
-        'The Live voice connection was lost. Start again to continue.',
-      ),
-    call_failed: () =>
-      t(
-        'live.error.callFailed',
-        'Live voice stopped because of a problem. Start again to continue.',
-      ),
-    playback_blocked: () =>
-      t(
-        'live.error.playback',
-        'Audio playback was blocked. Allow audio for this app and start Live again.',
-      ),
-    audio_unsupported: () =>
-      t(
-        'live.error.audioUnsupported',
-        'This browser cannot play Live voice audio for this Model. Use a current browser and start again.',
-      ),
-    media_mismatch: () =>
-      t(
-        'live.error.mediaMismatch',
-        'The Live voice Model changed while starting. Start again.',
-      ),
-    desktop_restart_required: () =>
-      t(
-        'live.error.desktopRestart',
-        'Restart the vBot Desktop app to use the microphone with this server.',
-      ),
-    ui_action_failed: () =>
-      t(
-        'live.error.uiAction',
-        'Live voice could not change the view as requested.',
-      ),
-    notification_failed: () =>
-      t(
-        'live.error.notification',
-        'Live voice could not announce a finished Run. Check the chat for its result.',
-      ),
-    replaced: () =>
-      t('live.notice.replaced', 'Live voice continues in another window.'),
-    ended: () => t('live.notice.ended', 'Live voice ended.'),
+    not_configured: () => t('live.error.notConfigured'),
+    not_usable: () => t('live.error.notUsable'),
+    invalid_offer: () => t('live.error.invalidOffer'),
+    access_denied: () => t('live.error.access'),
+    rate_limited: () => t('live.error.rateLimited'),
+    outcome_unknown: () => t('live.error.unknown'),
+    provider_error: () => t('live.error.provider'),
+    control_failed: () => t('live.error.control'),
+    microphone_denied: () => t('live.error.permission'),
+    microphone_unavailable: () => t('live.error.microphone'),
+    connection_timeout: () => t('live.error.timeout'),
+    connection_failed: () => t('live.error.connection'),
+    connection_lost: () => t('live.error.connectionLost'),
+    call_failed: () => t('live.error.callFailed'),
+    playback_blocked: () => t('live.error.playback'),
+    audio_unsupported: () => t('live.error.audioUnsupported'),
+    media_mismatch: () => t('live.error.mediaMismatch'),
+    desktop_restart_required: () => t('live.error.desktopRestart'),
+    ui_action_failed: () => t('live.error.uiAction'),
+    notification_failed: () => t('live.error.notification'),
+    replaced: () => t('live.notice.replaced'),
+    ended: () => t('live.notice.ended'),
   };
   const TOAST_VARIANTS = { error: 'error', warn: 'warn', info: 'info' };
 
   function showNotice({ code, severity = 'error' }) {
     const message =
       MESSAGES[code]?.() ??
-      t('live.error.generic', 'Live voice reported a problem ({code}).', {
+      t('live.error.generic', {
         code,
       });
     onToast({
-      title: t('live.title', 'Live voice'),
+      title: t('live.title'),
       message,
       variant: TOAST_VARIANTS[severity] ?? 'error',
     });
@@ -209,20 +131,18 @@
   }
 
   const toggleLabel = $derived(
-    running
-      ? t('live.stopButton', 'Stop Live')
-      : t('live.startButton', 'Start Live'),
+    running ? t('live.stopButton') : t('live.startButton'),
   );
-  const muteLabel = $derived(t('live.mute', 'Mute microphone'));
-  const busyLabel = $derived(t('live.busy', 'Working…'));
+  const muteLabel = $derived(t('live.mute'));
+  const busyLabel = $derived(t('live.busy'));
   const captionText = $derived(
     voice.phase === 'connecting'
-      ? t('live.state.connecting', 'Connecting…')
+      ? t('live.state.connecting')
       : voice.phase === 'closing'
-        ? t('live.state.closing', 'Stopping…')
+        ? t('live.state.closing')
         : voice.held
-          ? t('live.state.held', 'Paused for a voice command')
-          : (caption?.text ?? t('live.state.listening', 'Listening…')),
+          ? t('live.state.held')
+          : (caption?.text ?? t('live.state.listening')),
   );
 </script>
 

@@ -44,15 +44,15 @@
   }
   function familyLabel(group) {
     const labels = {
-      files: t('toolAccess.family.files', 'Files'),
-      execution: t('toolAccess.family.execution', 'Execution'),
-      web: t('toolAccess.family.web', 'Web'),
-      sessions: t('toolAccess.family.sessions', 'Sessions'),
-      skills: t('toolAccess.family.skills', 'Skills'),
-      media: t('toolAccess.family.media', 'Media'),
+      files: t('toolAccess.family.files'),
+      execution: t('toolAccess.family.execution'),
+      web: t('toolAccess.family.web'),
+      sessions: t('toolAccess.family.sessions'),
+      skills: t('toolAccess.family.skills'),
+      media: t('toolAccess.family.media'),
     };
     return !group.family
-      ? t('toolAccess.family.individual', 'Individual Tools')
+      ? t('toolAccess.family.individual')
       : (labels[group.id] ??
           group.members.find((tool) => tool.family_label)?.family_label ??
           group.id);
@@ -63,17 +63,14 @@
   function toolStatus(tool, group) {
     if (tool.ready === false && !familyUnavailable(group))
       return {
-        text: t('toolAccess.unavailable', 'Currently unavailable'),
+        text: t('toolAccess.unavailable'),
         unavailable: true,
       };
     if (tool.requires_opt_in && !tool.allowed)
       return {
-        text: t(
-          'toolAccess.explicitPermission',
-          'Explicit permission required',
-        ),
+        text: t('toolAccess.explicitPermission'),
       };
-    if (tool.automatic) return { text: t('toolAccess.automatic', 'Automatic') };
+    if (tool.automatic) return { text: t('toolAccess.automatic') };
     return null;
   }
   function familyUnavailable(group) {
@@ -91,7 +88,7 @@
   <div class="tool-catalog-toolbar">
     <div class="tool-catalog-actions">{@render toolbar?.()}</div>
     <span class="tool-catalog-summary">
-      {t('toolAccess.selectionCount', '{enabled} of {total} allowed', {
+      {t('toolAccess.selectionCount', {
         enabled: enabledCount,
         total: items.length,
       })}
@@ -100,16 +97,13 @@
       <input
         type="search"
         bind:value={search}
-        placeholder={t('toolAccess.searchPlaceholder', 'Filter Tools…')}
-        aria-label={t('toolAccess.searchLabel', 'Filter Tools')}
+        placeholder={t('toolAccess.searchPlaceholder')}
+        aria-label={t('toolAccess.searchLabel')}
       />
     </label>
   </div>
   {#if groups.length === 0}
-    <EmptyState
-      density="compact"
-      title={t('toolAccess.empty', 'No matching Tools.')}
-    />
+    <EmptyState density="compact" title={t('toolAccess.empty')} />
   {/if}
   <div class="s-check-groups">
     {#each groups as group (group.id ?? 'individual')}
@@ -121,7 +115,7 @@
               class="tool-access-family-toggle"
               checked={state === 'on'}
               indeterminate={state === 'mixed'}
-              ariaLabel={t('toolAccess.family.all', 'All {family} Tools', {
+              ariaLabel={t('toolAccess.family.all', {
                 family: familyLabel(group),
               })}
               data-tool-family={group.id}
@@ -132,7 +126,7 @@
           <h4 class="s-check-group__title">{familyLabel(group)}</h4>
           {#if familyUnavailable(group)}
             <span class="tool-catalog-unavailable tool-catalog-family-status"
-              >{t('toolAccess.unavailable', 'Currently unavailable')}</span
+              >{t('toolAccess.unavailable')}</span
             >
           {/if}
           <span class="s-check-group__count"

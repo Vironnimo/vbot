@@ -125,7 +125,7 @@ export function extensionCapabilityParts(capabilities, translate) {
 
   if (normalized.hooks.length > 0) {
     parts.push({
-      label: translate('settings.extensions.hooks', 'Hooks'),
+      label: translate('settings.extensions.hooks'),
       value: normalized.hooks
         .map((hook) => `${hook.event}(${hook.count})`)
         .join(', '),
@@ -133,7 +133,7 @@ export function extensionCapabilityParts(capabilities, translate) {
   }
   if (normalized.tools.length > 0) {
     parts.push({
-      label: translate('settings.extensions.tools', 'Tools'),
+      label: translate('settings.extensions.tools'),
       value: normalized.tools
         .map((tool) => (typeof tool === 'string' ? tool : tool.name))
         .join(', '),
@@ -141,7 +141,7 @@ export function extensionCapabilityParts(capabilities, translate) {
   }
   if (normalized.commands.length > 0) {
     parts.push({
-      label: translate('settings.extensions.commands', 'Commands'),
+      label: translate('settings.extensions.commands'),
       value: normalized.commands
         .map((command) => `/${command.name}`)
         .join(', '),
@@ -149,19 +149,19 @@ export function extensionCapabilityParts(capabilities, translate) {
   }
   if (normalized.recallBackends.length > 0) {
     parts.push({
-      label: translate('settings.extensions.recallBackends', 'Recall backends'),
+      label: translate('settings.extensions.recallBackends'),
       value: normalized.recallBackends.join(', '),
     });
   }
   if (normalized.startup) {
     parts.push({
-      label: translate('settings.extensions.startup', 'startup'),
+      label: translate('settings.extensions.startup'),
       value: '',
     });
   }
   if (normalized.shutdown) {
     parts.push({
-      label: translate('settings.extensions.shutdown', 'shutdown'),
+      label: translate('settings.extensions.shutdown'),
       value: '',
     });
   }
@@ -179,10 +179,7 @@ export function describeExtensionWaiting(extension, translate) {
   if (!extension || extension.readyState !== 'waiting') {
     return null;
   }
-  const hint = translate(
-    'settings.extensions.waiting',
-    'On, waiting for configuration',
-  );
+  const hint = translate('settings.extensions.waiting');
   const unsetSecretLabels = Array.isArray(extension.settingsSchema)
     ? extension.settingsSchema
         .filter((field) => field.type === 'secret' && field.set === false)
@@ -193,11 +190,9 @@ export function describeExtensionWaiting(extension, translate) {
   }
   return {
     hint,
-    waitingFor: translate(
-      'settings.extensions.waitingFor',
-      'Waiting for: {fields}',
-      { fields: unsetSecretLabels.join(', ') },
-    ),
+    waitingFor: translate('settings.extensions.waitingFor', {
+      fields: unsetSecretLabels.join(', '),
+    }),
   };
 }
 

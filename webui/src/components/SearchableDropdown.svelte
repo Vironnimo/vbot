@@ -19,9 +19,9 @@
     name = '',
     value = '',
     options = [],
-    placeholder = t('dropdown.placeholder', 'Select an option'),
-    searchPlaceholder = t('dropdown.searchPlaceholder', 'Filter options…'),
-    emptyLabel = t('dropdown.empty', 'No options match'),
+    placeholder = t('dropdown.placeholder'),
+    searchPlaceholder = t('dropdown.searchPlaceholder'),
+    emptyLabel = t('dropdown.empty'),
     // Default filter the search box carries: the panel opens with this term
     // already applied and returns to it on close. Empty for every caller that
     // does not pass it, so the historical "opens unfiltered" behavior is kept.

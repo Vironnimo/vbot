@@ -64,66 +64,42 @@
 
 <div class="whatsapp-setup">
   <p>
-    {t(
-      'settings.channels.whatsapp.help',
-      'Link your existing WhatsApp account and talk to vBot in your self chat. Other conversations cannot trigger Runs. This uses an unofficial connection; WhatsApp may restrict the account. Node.js 22 or newer is required on the vBot server.',
-    )}
+    {t('settings.channels.whatsapp.help')}
   </p>
   {#if error || status?.error}<Banner variant="error"
       >{error || status.error}</Banner
     >{/if}
   {#if status?.setup === 'installing'}
     <p role="status">
-      {t(
-        'settings.channels.whatsapp.installing',
-        'Installing WhatsApp support…',
-      )}
+      {t('settings.channels.whatsapp.installing')}
     </p>
   {:else if status && !status.installed}
     <Button disabled={busy} onClick={() => act('setup')}
-      >{t(
-        'settings.channels.whatsapp.install',
-        'Install WhatsApp support',
-      )}</Button
+      >{t('settings.channels.whatsapp.install')}</Button
     >
   {:else if status?.state === 'connected'}
     <p role="status">
-      {t(
-        'settings.channels.whatsapp.connected',
-        'WhatsApp connected. Send a message to yourself to talk to your Agent.',
-      )}
+      {t('settings.channels.whatsapp.connected')}
     </p>
   {:else if status?.qr_image}
     <p>
-      {t(
-        'settings.channels.whatsapp.scan',
-        'In WhatsApp, open Settings → Linked devices → Link a device, then scan this QR code.',
-      )}
+      {t('settings.channels.whatsapp.scan')}
     </p>
     <img
       src={status.qr_image}
-      alt={t(
-        'settings.channels.whatsapp.qr',
-        'WhatsApp device linking QR code',
-      )}
+      alt={t('settings.channels.whatsapp.qr')}
       width="256"
       height="256"
     />
   {:else if status?.installed}
     <p role="status">
-      {t(
-        'settings.channels.whatsapp.waiting',
-        'Connect to show a QR code or restore your linked device.',
-      )}
+      {t('settings.channels.whatsapp.waiting')}
     </p>
     <Button disabled={busy} onClick={() => act('pair')}
-      >{t('settings.channels.whatsapp.connect', 'Connect WhatsApp')}</Button
+      >{t('settings.channels.whatsapp.connect')}</Button
     >
     <Button variant="tertiary" disabled={busy} onClick={() => act('pair', true)}
-      >{t(
-        'settings.channels.whatsapp.repair',
-        'Link again with a new QR code',
-      )}</Button
+      >{t('settings.channels.whatsapp.repair')}</Button
     >
   {/if}
 </div>

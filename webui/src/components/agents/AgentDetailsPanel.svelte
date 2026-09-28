@@ -63,7 +63,7 @@
       aria-hidden="true"
     ></span>
     <h3 class="s-section__title">
-      {t('agents.storageDetails', 'Workspace & advanced')}
+      {t('agents.storageDetails')}
     </h3>
   </summary>
   <div class="s-section__body">
@@ -71,13 +71,10 @@
       <div class="s-row">
         <div class="s-row-info">
           <label class="s-row-label" for="agent-id">
-            {t('agents.form.id', 'Agent ID')}
+            {t('agents.form.id')}
           </label>
           <div class="s-row-desc" id="agent-id-help">
-            {t(
-              'agents.form.idHelp',
-              'Used to address this Identity Agent in Sessions, Channels, Cron jobs, and delegation.',
-            )}
+            {t('agents.form.idHelp')}
           </div>
           {#if formErrors.id}
             <p class="agents-view__row-error" id="agent-id-error" role="alert">
@@ -103,7 +100,7 @@
               onClick={openRenameDialog}
               disabled={isSaving || isDeleting}
             >
-              {t('agents.rename.action', 'Change ID')}
+              {t('agents.rename.action')}
             </Button>
           {/if}
         </div>
@@ -112,18 +109,12 @@
       <div class="s-row s-row--stacked">
         <div class="s-row-info">
           <label class="s-row-label" for="agent-workspace">
-            {t('agents.form.workspace', 'Workspace')}
+            {t('agents.form.workspace')}
           </label>
           <div class="s-row-desc" id="agent-workspace-help">
             {formMode === AGENT_FORM_MODE_CREATE
-              ? t(
-                  'agents.form.workspaceAssignedByServer',
-                  'Workspace is assigned by the server when the agent is created.',
-                )
-              : t(
-                  'agents.form.workspaceEditableHelp',
-                  "Home of this agent's identity and memory files (SOUL.md, USER.md, MEMORY.md); the memory tool works here. File tools follow the session's working directory instead — the project repository in project sessions.",
-                )}
+              ? t('agents.form.workspaceAssignedByServer')
+              : t('agents.form.workspaceEditableHelp')}
           </div>
           {#if formErrors.workspace}
             <p
@@ -154,7 +145,7 @@
               disabled={isSaving || isDeleting}
               onClick={resetWorkspaceToDefault}
             >
-              {t('agents.form.workspaceSetToDefault', 'Set to default')}
+              {t('agents.form.workspaceSetToDefault')}
             </Button>
           {/if}
         </div>
@@ -165,7 +156,7 @@
       <div class="s-row s-row--compact">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('agents.detail.sessionId', 'Current session ID')}
+            {t('agents.detail.sessionId')}
           </div>
         </div>
         <div
@@ -176,7 +167,7 @@
       </div>
       <div class="s-row s-row--compact">
         <div class="s-row-info">
-          <div class="s-row-label">{t('agents.detail.created', 'Created')}</div>
+          <div class="s-row-label">{t('agents.detail.created')}</div>
         </div>
         <div class="s-row-control agents-view__meta-value">
           {displayTimestamp(agent?.created_at)}
@@ -184,7 +175,7 @@
       </div>
       <div class="s-row s-row--compact">
         <div class="s-row-info">
-          <div class="s-row-label">{t('agents.detail.updated', 'Updated')}</div>
+          <div class="s-row-label">{t('agents.detail.updated')}</div>
         </div>
         <div class="s-row-control agents-view__meta-value">
           {displayTimestamp(agent?.updated_at)}
@@ -197,18 +188,12 @@
         <div class="s-row s-row--compact">
           <div class="s-row-info">
             <div class="s-row-label">
-              {t('agents.deleteTitle', 'Delete this Agent')}
+              {t('agents.deleteTitle')}
             </div>
             <div class="s-row-desc">
               {canDeleteSelectedAgent
-                ? t(
-                    'agents.deleteDescription',
-                    'Moves the Agent to the archive. An Agent that is still referenced or has active Runs cannot be deleted.',
-                  )
-                : t(
-                    'agents.deleteDisabledMinimum',
-                    'The last remaining agent cannot be deleted.',
-                  )}
+                ? t('agents.deleteDescription')
+                : t('agents.deleteDisabledMinimum')}
             </div>
           </div>
           <div class="s-row-control">
@@ -217,9 +202,7 @@
               disabled={isDeleting || !canDeleteSelectedAgent}
               onClick={deleteSelectedAgent}
             >
-              {isDeleting
-                ? t('common.loading', 'Loading…')
-                : t('agents.delete', 'Delete agent')}
+              {isDeleting ? t('common.loading') : t('agents.delete')}
             </Button>
           </div>
         </div>

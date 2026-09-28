@@ -16,8 +16,8 @@ import {
 } from './SwarmPage.support.js';
 import { t } from '../../lib/i18n.js';
 
-const RESUME_PARTICIPANT = t('swarm.resumeParticipant', 'Resume participant');
-const LOAD_OLDER = t('swarm.loadOlderMessages', 'Load older messages');
+const RESUME_PARTICIPANT = t('swarm.resumeParticipant');
+const LOAD_OLDER = t('swarm.loadOlderMessages');
 
 describe('Swarm participant Activity', () => {
   it('opens participant Activity from the Board and detaches its Run silently when leaving', async () => {
@@ -36,7 +36,7 @@ describe('Swarm participant Activity', () => {
     );
     expect(
       document.querySelector('[role="tab"][aria-selected="true"]').textContent,
-    ).toContain(t('swarm.tabs.activity', 'Activity'));
+    ).toContain(t('swarm.tabs.activity'));
     expect(bridge.subscribeRun).toHaveBeenCalledWith('swr-a', 'run-live-test');
     bridge.emitRun('subscription-live-test', {
       type: 'model_step_usage',
@@ -48,7 +48,7 @@ describe('Swarm participant Activity', () => {
     expect(document.querySelector('.context-usage').textContent).toContain(
       '~2,468',
     );
-    button(t('swarm.newRun', 'New run')).click();
+    button(t('swarm.newRun')).click();
     await tick();
     expect(bridge.unsubscribeRun).toHaveBeenCalledWith(
       'subscription-live-test',
@@ -62,7 +62,7 @@ describe('Swarm participant Activity', () => {
     const { bridge, operation } = createBridge();
     await openParticipant(bridge);
     await tick();
-    button(t('swarm.tabs.activity', 'Activity')).click();
+    button(t('swarm.tabs.activity')).click();
     await tick();
     const link = document.querySelector('.history a[href]');
     expect(link).not.toBeNull();
@@ -97,7 +97,7 @@ describe('Swarm participant Activity', () => {
         },
       },
     });
-    const cancel = t('chat.cancelToolCallAria', 'Cancel running tool call');
+    const cancel = t('chat.cancelToolCallAria');
     await vi.waitFor(() => expect(button(cancel)).toBeDefined());
     button(cancel).click();
     await vi.waitFor(() =>

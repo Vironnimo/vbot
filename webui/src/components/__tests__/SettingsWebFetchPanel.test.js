@@ -15,9 +15,9 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 const { default: Panel } =
   await import('../settings/SettingsWebFetchPanel.svelte');
 
-const TAVILY = () => t('settings.webSearch.providers.tavily', 'tavily');
-const PARALLEL = () => t('settings.webSearch.providers.parallel', 'Parallel');
-const PREFER = () => t('settings.webFetch.prefer', 'Prefer this service');
+const TAVILY = () => t('settings.webSearch.providers.tavily');
+const PARALLEL = () => t('settings.webSearch.providers.parallel');
+const PREFER = () => t('settings.webFetch.prefer');
 
 const settings = {
   web_fetch: {
@@ -66,17 +66,10 @@ describe('Web Fetch settings', () => {
   it('starts with direct fetching and exposes cost, credential and pricing information on opt-in', async () => {
     component = mount(Panel, { target: document.body, props: { settings } });
     flushSync();
-    expect(document.body.textContent).toContain(
-      t('settings.webFetch.direct', 'Direct (no service)'),
-    );
+    expect(document.body.textContent).toContain(t('settings.webFetch.direct'));
     expect(document.getElementById('settings-web-fetch-mode')).toBeNull();
     await choose('settings-web-fetch-provider', TAVILY());
-    expect(document.body.textContent).toContain(
-      t(
-        'settings.webFetch.cost',
-        'The selected service receives requested URLs and may charge per page. Free allowances and prices vary. Reading or searching an already saved page makes no additional service request.',
-      ),
-    );
+    expect(document.body.textContent).toContain(t('settings.webFetch.cost'));
     expect(document.body.textContent).toContain('TAVILY_API_KEY');
     expect(document.body.textContent).toContain('/vbot-data');
     expect(document.querySelector('a').href).toBe(

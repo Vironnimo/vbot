@@ -225,10 +225,7 @@ describe('sidebar Live control', () => {
     expect(onToast.mock.calls.map(([shown]) => shown)).toEqual([
       ...Object.values(messageKeys).map((key) => toast(t(key), 'error')),
       // Codes without a dedicated message still identify the problem.
-      toast(
-        t('live.error.generic', '', { code: 'announcement_failed' }),
-        'warn',
-      ),
+      toast(t('live.error.generic', { code: 'announcement_failed' }), 'warn'),
       toast(t('live.notice.replaced'), 'info'),
     ]);
   });

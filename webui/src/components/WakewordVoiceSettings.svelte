@@ -47,11 +47,11 @@
   const SESSION_BEHAVIOR_OPTIONS = Object.freeze([
     {
       value: 'active',
-      label: t('settings.voice.sessionBehaviorActive', 'Use active Session'),
+      label: t('settings.voice.sessionBehaviorActive'),
     },
     {
       value: 'new',
-      label: t('settings.voice.sessionBehaviorNew', 'New Session each time'),
+      label: t('settings.voice.sessionBehaviorNew'),
     },
   ]);
 
@@ -141,7 +141,7 @@
     })),
   );
   let defaultAgentOptions = $derived([
-    { value: '', label: t('settings.voice.noDefaultAgent', 'None') },
+    { value: '', label: t('settings.voice.noDefaultAgent') },
     ...agentOptions,
     ...(draft?.default_agent_id &&
     !agentOptions.some((option) => option.value === draft.default_agent_id)
@@ -149,10 +149,7 @@
           {
             value: draft.default_agent_id,
             label: draft.default_agent_id,
-            secondaryLabel: t(
-              'settings.voice.agentUnavailable',
-              'Not on this server',
-            ),
+            secondaryLabel: t('settings.voice.agentUnavailable'),
             disabled: true,
           },
         ]
@@ -168,7 +165,7 @@
   let microphoneOptions = $derived([
     {
       value: '',
-      label: t('settings.voice.systemAutomaticMic', 'Automatic selection'),
+      label: t('settings.voice.systemAutomaticMic'),
       secondaryLabel: status?.active_microphone?.name || '',
     },
     ...(draft?.microphone && !configuredMicrophoneDevice
@@ -176,10 +173,7 @@
           {
             value: UNAVAILABLE_MICROPHONE_VALUE,
             label: draft.microphone.name,
-            secondaryLabel: t(
-              'settings.voice.configuredMicUnavailable',
-              'Configured device unavailable',
-            ),
+            secondaryLabel: t('settings.voice.configuredMicUnavailable'),
             disabled: true,
           },
         ]
@@ -188,8 +182,8 @@
       value: String(device.index),
       label: device.name,
       secondaryLabel: device.supported
-        ? t('settings.voice.compatibleMic', 'Compatible')
-        : t('settings.voice.incompatibleMic', 'Unsupported format'),
+        ? t('settings.voice.compatibleMic')
+        : t('settings.voice.incompatibleMic'),
       disabled: !device.supported,
     })),
   ]);
@@ -223,11 +217,8 @@
     if (!draft.echo_cancellation)
       return {
         variant: 'neutral',
-        label: t('settings.voice.echoOff', 'Off'),
-        detail: t(
-          'settings.voice.echoOffDetail',
-          'Speaker output can trigger wake phrases and end up in command recordings.',
-        ),
+        label: t('settings.voice.echoOff'),
+        detail: t('settings.voice.echoOffDetail'),
       };
     // The saved setting is on; the state describes the running capture.
     if (!status.echo_cancellation.enabled) return null;
@@ -235,38 +226,26 @@
       case 'starting':
         return {
           variant: 'neutral',
-          label: t('settings.voice.echoStarting', 'Starting'),
-          detail: t(
-            'settings.voice.echoStartingDetail',
-            'Echo cancellation is still loading. Until it is ready, the microphone signal is used unprocessed.',
-          ),
+          label: t('settings.voice.echoStarting'),
+          detail: t('settings.voice.echoStartingDetail'),
         };
       case 'active':
         return {
           variant: 'success',
-          label: t('settings.voice.echoActive', 'Active'),
-          detail: t(
-            'settings.voice.echoActiveDetail',
-            'Speaker output is removed from the microphone signal before phrases are detected and commands are recorded.',
-          ),
+          label: t('settings.voice.echoActive'),
+          detail: t('settings.voice.echoActiveDetail'),
         };
       case 'no_reference':
         return {
           variant: 'warn',
-          label: t('settings.voice.echoNoReference', 'No speaker signal'),
-          detail: t(
-            'settings.voice.echoNoReferenceDetail',
-            'The Desktop cannot capture the speaker output, so the microphone signal is used unprocessed.',
-          ),
+          label: t('settings.voice.echoNoReference'),
+          detail: t('settings.voice.echoNoReferenceDetail'),
         };
       case 'unavailable':
         return {
           variant: 'warn',
-          label: t('settings.voice.echoUnavailable', 'Unavailable'),
-          detail: t(
-            'settings.voice.echoUnavailableDetail',
-            'Echo cancellation is not installed in this Desktop app, so the microphone signal is used unprocessed.',
-          ),
+          label: t('settings.voice.echoUnavailable'),
+          detail: t('settings.voice.echoUnavailableDetail'),
         };
       default:
         return null;
@@ -381,7 +360,7 @@
 
   function errorToast(error, title = null) {
     onToast({
-      title: title ?? t('errors.generic', 'Something went wrong. Try again.'),
+      title: title ?? t('errors.generic'),
       message: bridgeErrorMessage(error),
       variant: 'error',
     });
@@ -495,13 +474,7 @@
       if (!(await voiceAutosave.flush())) return;
       adoptStatus(await startVoiceCalibration(modelId));
     } catch (error) {
-      errorToast(
-        error,
-        t(
-          'settings.voice.calibrationStartFailed',
-          'Calibration could not start.',
-        ),
-      );
+      errorToast(error, t('settings.voice.calibrationStartFailed'));
     } finally {
       calibrationStarting = null;
     }
@@ -548,14 +521,8 @@
 
     if (file.size > MAX_CUSTOM_WAKEWORD_MODEL_BYTES) {
       onToast({
-        title: t(
-          'settings.voice.importTooLargeTitle',
-          'Wakeword model is too large.',
-        ),
-        message: t(
-          'settings.voice.importTooLargeMessage',
-          'Choose a TFLite model no larger than 20 MiB.',
-        ),
+        title: t('settings.voice.importTooLargeTitle'),
+        message: t('settings.voice.importTooLargeMessage'),
         variant: 'error',
       });
       return;
@@ -569,14 +536,8 @@
       await refreshAfterModelChange();
       onToast({
         title: imported?.activated
-          ? t(
-              'settings.voice.importSuccessActive',
-              'Wakeword model imported and activated.',
-            )
-          : t(
-              'settings.voice.importSuccessInactive',
-              'Wakeword model imported. Activate it to listen for it.',
-            ),
+          ? t('settings.voice.importSuccessActive')
+          : t('settings.voice.importSuccessInactive'),
         variant: 'success',
       });
     } catch (error) {
@@ -597,7 +558,7 @@
       await deleteWakewordModel(model.id);
       await refreshAfterModelChange();
       onToast({
-        title: t('settings.voice.deleteSuccess', 'Wakeword model removed.'),
+        title: t('settings.voice.deleteSuccess'),
         variant: 'success',
       });
     } catch (error) {
@@ -634,10 +595,7 @@
       microphones = await listMicrophones();
       await desktopVoice?.refresh();
     } catch (error) {
-      errorToast(
-        error,
-        t('settings.voice.retryFailed', 'Voice could not restart.'),
-      );
+      errorToast(error, t('settings.voice.retryFailed'));
     }
   }
 </script>
@@ -655,18 +613,12 @@
       <div class="s-row">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.enabled', 'Wakeword listening')}
+            {t('settings.voice.enabled')}
           </div>
           <div class="s-row-desc">
             {updateRequired
-              ? t(
-                  'settings.voice.desktopUpdateRequired',
-                  'Update the vBot Desktop app to use Voice with this server.',
-                )
-              : t(
-                  'settings.voice.desktopOnly',
-                  'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
-                )}
+              ? t('settings.voice.desktopUpdateRequired')
+              : t('settings.voice.desktopOnly')}
           </div>
         </div>
       </div>
@@ -676,16 +628,10 @@
       <Banner variant="error" class="voice-attention-banner" role="alert">
         <div class="voice-attention-copy">
           <strong>
-            {t(
-              'settings.voice.statusUnavailableTitle',
-              'Desktop Voice status unavailable',
-            )}
+            {t('settings.voice.statusUnavailableTitle')}
           </strong>
           <p>
-            {t(
-              'settings.voice.statusUnavailableMessage',
-              'The Desktop bridge did not return Voice settings. Retrying automatically…',
-            )}
+            {t('settings.voice.statusUnavailableMessage')}
           </p>
         </div>
       </Banner>
@@ -697,13 +643,10 @@
       <div class="s-row s-row--compact">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.enabled', 'Wakeword listening')}
+            {t('settings.voice.enabled')}
           </div>
           <div class="s-row-desc">
-            {t(
-              'settings.voice.enabledDescription',
-              'Listen on this device for wake phrases that send a spoken command to an Agent or start Live voice.',
-            )}
+            {t('settings.voice.enabledDescription')}
           </div>
         </div>
         <div class="s-row-control">
@@ -715,10 +658,7 @@
               modelActionBusy ||
               calibrating ||
               (!status.enabled && status.mode === 'unavailable')}
-            ariaLabel={t(
-              'settings.voice.enabledAria',
-              'Enable wakeword listening',
-            )}
+            ariaLabel={t('settings.voice.enabledAria')}
           />
         </div>
       </div>
@@ -726,10 +666,7 @@
       {#if status?.mode === 'mock'}
         <div class="s-group__block s-group__block--attached">
           <div class="voice-mock-warning" role="alert">
-            {t(
-              'settings.voice.mockWarning',
-              'Voice is running in demo mode. State changes are simulated; no microphone is heard and no command is sent. Restart Desktop without --mock-wakeword for real detection.',
-            )}
+            {t('settings.voice.mockWarning')}
           </div>
         </div>
       {/if}
@@ -737,7 +674,7 @@
       <div class="s-row s-row--compact">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.state', 'Status')}
+            {t('settings.voice.state')}
           </div>
         </div>
         <div class="s-row-control">
@@ -761,11 +698,8 @@
             <div class="voice-attention-copy">
               <strong>
                 {attention.warn
-                  ? t(
-                      'settings.voice.microphoneDisconnectedTitle',
-                      'Microphone disconnected',
-                    )
-                  : t('settings.voice.errorTitle', 'Voice needs attention')}
+                  ? t('settings.voice.microphoneDisconnectedTitle')
+                  : t('settings.voice.errorTitle')}
               </strong>
               <p>{errorMessage(attention.code)}</p>
             </div>
@@ -775,7 +709,7 @@
                 class="voice-retry"
                 onClick={handleRetry}
               >
-                {t('settings.voice.retry', 'Retry listening')}
+                {t('settings.voice.retry')}
               </Button>
             {/if}
           </Banner>
@@ -787,13 +721,10 @@
       <div class="s-row s-row--stacked">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.models', 'Wake phrases')}
+            {t('settings.voice.models')}
           </div>
           <div class="s-row-desc">
-            {t(
-              'settings.voice.modelDescription',
-              'Choose the phrases to listen for. Each active phrase has its own sensitivity and action; Calibrate measures the room and your voice to set its sensitivity while listening is on.',
-            )}
+            {t('settings.voice.modelDescription')}
           </div>
         </div>
         <div class="s-row-control voice-model-control">
@@ -860,14 +791,10 @@
           <div class="voice-model-actions">
             <span class="voice-model-limit">
               {#if maxActivePhrases !== null}
-                {t(
-                  'settings.voice.phraseLimit',
-                  '{count} of {max} phrases active',
-                  {
-                    count: draft?.active_model_ids.length ?? 0,
-                    max: maxActivePhrases,
-                  },
-                )}
+                {t('settings.voice.phraseLimit', {
+                  count: draft?.active_model_ids.length ?? 0,
+                  max: maxActivePhrases,
+                })}
               {/if}
             </span>
             <input
@@ -883,7 +810,7 @@
               disabled={captureLocked}
               onClick={chooseWakewordModelFile}
             >
-              {t('settings.voice.importModel', 'Import TFLite model')}
+              {t('settings.voice.importModel')}
             </Button>
           </div>
         </div>
@@ -893,20 +820,17 @@
       <div class="s-row">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.defaultAgent', 'Default Agent')}
+            {t('settings.voice.defaultAgent')}
           </div>
           <div class="s-row-desc">
-            {t(
-              'settings.voice.defaultAgentDescription',
-              'Receives the spoken commands of phrases without their own Agent. Applies to the server this Desktop app is connected to.',
-            )}
+            {t('settings.voice.defaultAgentDescription')}
           </div>
         </div>
         <div class="s-row-control">
           <Dropdown
             value={draft?.default_agent_id ?? ''}
             options={defaultAgentOptions}
-            ariaLabel={t('settings.voice.defaultAgent', 'Default Agent')}
+            ariaLabel={t('settings.voice.defaultAgent')}
             onValueChange={(value) =>
               editDraft({ default_agent_id: value || null })}
             disabled={routingLocked}
@@ -917,23 +841,17 @@
       <div class="s-row">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.defaultSession', 'Default Session behavior')}
+            {t('settings.voice.defaultSession')}
           </div>
           <div class="s-row-desc">
-            {t(
-              'settings.voice.defaultSessionDescription',
-              'Whether commands continue the Agent’s active Session or start a new one, unless a phrase chooses otherwise.',
-            )}
+            {t('settings.voice.defaultSessionDescription')}
           </div>
         </div>
         <div class="s-row-control">
           <Dropdown
             value={draft?.default_session_behavior ?? 'active'}
             options={SESSION_BEHAVIOR_OPTIONS}
-            ariaLabel={t(
-              'settings.voice.defaultSession',
-              'Default Session behavior',
-            )}
+            ariaLabel={t('settings.voice.defaultSession')}
             onValueChange={(value) =>
               editDraft({ default_session_behavior: value })}
             disabled={routingLocked}
@@ -944,14 +862,14 @@
       <div class="s-row">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.microphone', 'Microphone')}
+            {t('settings.voice.microphone')}
           </div>
         </div>
         <div class="s-row-control">
           <Dropdown
             value={selectedMicrophoneValue}
             options={microphoneOptions}
-            ariaLabel={t('settings.voice.microphone', 'Microphone')}
+            ariaLabel={t('settings.voice.microphone')}
             triggerClass="voice-microphone-dropdown"
             onValueChange={handleMicrophoneChange}
             disabled={captureLocked || microphones.length === 0}
@@ -962,14 +880,10 @@
       <div class="s-row">
         <div class="s-row-info">
           <div class="s-row-label">
-            {t('settings.voice.echoCancellation', 'Echo cancellation')}
+            {t('settings.voice.echoCancellation')}
           </div>
           <div class="s-row-desc">
-            {echo?.detail ??
-              t(
-                'settings.voice.echoCancellationDescription',
-                'Removes speaker output such as Live voice or read-aloud replies from the microphone signal.',
-              )}
+            {echo?.detail ?? t('settings.voice.echoCancellationDescription')}
           </div>
         </div>
         <div class="s-row-control voice-echo-control">
@@ -980,26 +894,17 @@
             checked={draft?.echo_cancellation ?? true}
             onChange={(checked) => editDraft({ echo_cancellation: checked })}
             disabled={captureLocked}
-            ariaLabel={t(
-              'settings.voice.echoCancellationAria',
-              'Use echo cancellation',
-            )}
+            ariaLabel={t('settings.voice.echoCancellationAria')}
           />
         </div>
       </div>
 
       <div class="s-group__block s-group__note">
         <p>
-          {t(
-            'settings.voice.privacyNote',
-            'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is sent unless a wake phrase matches. After a match, the command recording—including up to 320 ms of locally buffered audio immediately before detection—is sent to your configured vBot speech backend for transcription.',
-          )}
+          {t('settings.voice.privacyNote')}
         </p>
         <p>
-          {t(
-            'settings.voice.cancelPhrases',
-            'Say “abbrechen” or “vergiss es” at the end of the same recording to discard the entire command before it starts a Run.',
-          )}
+          {t('settings.voice.cancelPhrases')}
         </p>
       </div>
     </div>
@@ -1010,23 +915,19 @@
      Desktop Voice configuration both save as they change. -->
 <div class="s-footer voice-save-state" aria-live="polite">
   {#if voiceSaveStatus === 'saving'}
-    {t('common.saving', 'Saving…')}
+    {t('common.saving')}
   {:else if voiceSaveStatus === 'error'}
-    {t('common.saveFailed', 'Not saved')}
+    {t('common.saveFailed')}
   {:else if voiceSaveStatus === 'saved'}
-    {t('common.saved', 'Saved')}
+    {t('common.saved')}
   {/if}
 </div>
 
 {#if deleteConfirmModel}
   <ConfirmDialog
-    title={t('settings.voice.deleteConfirmTitle', 'Remove wakeword model')}
-    body={t(
-      'settings.voice.deleteConfirm',
-      'Remove “{name}” permanently from this Desktop? The TFLite file stored by vBot will be deleted.',
-      { name: deleteConfirmModel.label },
-    )}
-    confirmLabel={t('common.delete', 'Delete')}
+    title={t('settings.voice.deleteConfirmTitle')}
+    body={t('settings.voice.deleteConfirm', { name: deleteConfirmModel.label })}
+    confirmLabel={t('common.delete')}
     onConfirm={confirmDeleteWakewordModel}
     onCancel={() => (deleteConfirmModel = null)}
   />

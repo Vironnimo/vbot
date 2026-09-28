@@ -77,9 +77,7 @@ export const toolRowFromEvent = (event) => {
 export const toolStatusLabel = (tool, nowMs = Date.now()) => {
   if (toolStatus(tool) === 'cancelled') {
     const duration = formatDurationMs(toolDurationMs(tool));
-    return [t('chat.toolCancelled', 'cancelled'), duration]
-      .filter(Boolean)
-      .join(' · ');
+    return [t('chat.toolCancelled'), duration].filter(Boolean).join(' · ');
   }
   if (toolStatus(tool) === 'running') {
     if (isToolPreparing(tool)) {
@@ -91,9 +89,7 @@ export const toolStatusLabel = (tool, nowMs = Date.now()) => {
   }
   const duration = formatDurationMs(toolDurationMs(tool));
   if (toolStatus(tool) === 'partial') {
-    return [t('chat.toolPartial', 'partial'), duration]
-      .filter(Boolean)
-      .join(' · ');
+    return [t('chat.toolPartial'), duration].filter(Boolean).join(' · ');
   }
   return duration;
 };
@@ -169,24 +165,24 @@ function toolPrimaryPart(part) {
 // Singular and plural label of each counted tool-fact unit.
 const COUNT_FACT_LABELS = {
   edits: [
-    (count) => t('chat.toolFact.edit', '{count} edit', { count }),
-    (count) => t('chat.toolFact.edits', '{count} edits', { count }),
+    (count) => t('chat.toolFact.edit', { count }),
+    (count) => t('chat.toolFact.edits', { count }),
   ],
   failures: [
-    (count) => t('chat.toolFact.failure', '{count} failed', { count }),
-    (count) => t('chat.toolFact.failures', '{count} failed', { count }),
+    (count) => t('chat.toolFact.failure', { count }),
+    (count) => t('chat.toolFact.failures', { count }),
   ],
   files: [
-    (count) => t('chat.toolFact.file', '{count} file', { count }),
-    (count) => t('chat.toolFact.files', '{count} files', { count }),
+    (count) => t('chat.toolFact.file', { count }),
+    (count) => t('chat.toolFact.files', { count }),
   ],
   matches: [
-    (count) => t('chat.toolFact.match', '{count} match', { count }),
-    (count) => t('chat.toolFact.matches', '{count} matches', { count }),
+    (count) => t('chat.toolFact.match', { count }),
+    (count) => t('chat.toolFact.matches', { count }),
   ],
   results: [
-    (count) => t('chat.toolFact.result', '{count} result', { count }),
-    (count) => t('chat.toolFact.results', '{count} results', { count }),
+    (count) => t('chat.toolFact.result', { count }),
+    (count) => t('chat.toolFact.results', { count }),
   ],
 };
 
@@ -201,7 +197,7 @@ function toolFactPresentation(fact) {
   ) {
     return {
       kind: 'line_range',
-      text: t('chat.toolFact.lines', 'lines {start}-{end}', {
+      text: t('chat.toolFact.lines', {
         start: fact.start,
         end: fact.end,
       }),

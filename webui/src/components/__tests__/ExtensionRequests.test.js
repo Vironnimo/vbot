@@ -17,9 +17,9 @@ const { default: ExtensionRequests } =
   await import('../ExtensionRequests.svelte');
 
 init('en');
-const REVIEW = t('extensions.reviewInput', 'Review request');
-const SEND = t('extensions.sendResponse', 'Send response');
-const DECLINE = t('extensions.declineInput', 'Decline');
+const REVIEW = t('extensions.reviewInput');
+const SEND = t('extensions.sendResponse');
+const DECLINE = t('extensions.declineInput');
 const namePayload = {
   message: 'test-owned-question',
   requestedSchema: {
@@ -111,21 +111,17 @@ describe('Extension requests', () => {
       },
     });
     expect(document.body.textContent).toContain(
-      t(
-        'extensions.inputWaiting',
-        '{count} Extension requests need your response.',
-        {
-          count: 1,
-        },
-      ),
+      t('extensions.inputWaiting', {
+        count: 1,
+      }),
     );
     expect(dialog.textContent).toContain(
-      t('extensions.inputTitle', 'Request from {name}', { name: 'blender' }),
+      t('extensions.inputTitle', { name: 'blender' }),
     );
     expect(dialog.textContent).toContain('test-owned-question');
     type(dialog, 'Name', 'sentinel');
     type(dialog, 'count', '0');
-    choose(dialog, 'selected', t('common.no', 'No'));
+    choose(dialog, 'selected', t('common.no'));
     type(dialog, 'values', '["a","b"]');
     button(SEND).click();
     await vi.waitFor(closed);

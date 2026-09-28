@@ -40,22 +40,13 @@
 
   function errorMessage(code) {
     if (code === 'hotkey_in_use') {
-      return t(
-        'settings.liveShortcut.error.inUse',
-        'Another app already uses this key combination. Choose a different one.',
-      );
+      return t('settings.liveShortcut.error.inUse');
     }
     if (code === 'hotkey_invalid') {
-      return t(
-        'settings.liveShortcut.error.invalid',
-        'This key combination cannot be used. Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win.',
-      );
+      return t('settings.liveShortcut.error.invalid');
     }
     if (code) {
-      return t(
-        'settings.liveShortcut.error.failed',
-        'Windows could not register the shortcut. Choose another key combination or restart the Desktop app.',
-      );
+      return t('settings.liveShortcut.error.failed');
     }
     return '';
   }
@@ -90,7 +81,7 @@
       if (!destroyed) applyStatus(status);
     } catch (error) {
       onToast({
-        title: t('errors.generic', 'Something went wrong. Try again.'),
+        title: t('errors.generic'),
         message: error?.message || '',
         variant: 'error',
       });
@@ -131,13 +122,10 @@
     <div class="s-group__block">
       <Banner variant="error" role="alert">
         <span>
-          {t(
-            'settings.liveShortcut.loadError',
-            'The Desktop app did not return the shortcut settings.',
-          )}
+          {t('settings.liveShortcut.loadError')}
         </span>
         <Button variant="secondary" onClick={load}>
-          {t('common.retry', 'Retry')}
+          {t('common.retry')}
         </Button>
       </Banner>
     </div>
@@ -145,13 +133,10 @@
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.liveShortcut.enabled', 'Global shortcut')}
+          {t('settings.liveShortcut.enabled')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'settings.liveShortcut.description',
-            'Start or stop Live voice with a key combination, even while another app is in front.',
-          )}
+          {t('settings.liveShortcut.description')}
         </div>
       </div>
       <div class="s-row-control">
@@ -159,10 +144,7 @@
           checked={shortcut?.enabled === true}
           onChange={(enabled) => update({ enabled })}
           disabled={controlsDisabled}
-          ariaLabel={t(
-            'settings.liveShortcut.enabledAria',
-            'Enable the Live voice shortcut',
-          )}
+          ariaLabel={t('settings.liveShortcut.enabledAria')}
         />
       </div>
     </div>
@@ -170,18 +152,12 @@
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.liveShortcut.combination', 'Key combination')}
+          {t('settings.liveShortcut.combination')}
         </div>
         <div class="s-row-desc" aria-live="polite">
           {capturing
-            ? t(
-                'settings.liveShortcut.captureHint',
-                'Press the new key combination. Escape cancels.',
-              )
-            : t(
-                'settings.liveShortcut.combinationDescription',
-                'Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win. F13 to F24 also work alone.',
-              )}
+            ? t('settings.liveShortcut.captureHint')
+            : t('settings.liveShortcut.combinationDescription')}
         </div>
       </div>
       <div class="s-row-control">
@@ -190,23 +166,16 @@
           class="live-shortcut__capture"
           disabled={controlsDisabled}
           ariaLabel={capturing
-            ? t(
-                'settings.liveShortcut.capturingAria',
-                'Recording a new key combination',
-              )
-            : t(
-                'settings.liveShortcut.changeAria',
-                'Change the key combination, currently {combination}',
-                { combination: combinationLabel },
-              )}
+            ? t('settings.liveShortcut.capturingAria')
+            : t('settings.liveShortcut.changeAria', {
+                combination: combinationLabel,
+              })}
           aria-pressed={capturing}
           onkeydown={handleCaptureKeydown}
           onblur={() => (capturing = false)}
           onClick={toggleCapture}
         >
-          {capturing
-            ? t('settings.liveShortcut.capturing', 'Press keys…')
-            : combinationLabel}
+          {capturing ? t('settings.liveShortcut.capturing') : combinationLabel}
         </Button>
       </div>
     </div>
@@ -214,10 +183,7 @@
     {#if shortcut?.supported === false}
       <div class="s-group__block s-group__block--attached">
         <Banner variant="neutral" role="status">
-          {t(
-            'settings.liveShortcut.unsupported',
-            'Global shortcuts are available in the vBot Desktop app on Windows.',
-          )}
+          {t('settings.liveShortcut.unsupported')}
         </Banner>
       </div>
     {:else if errorText}

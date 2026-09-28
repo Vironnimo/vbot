@@ -37,11 +37,9 @@ export function createProfilePromptPreview(context) {
   }
   // Tool guidance blocks the core catalog has no title for.
   const toolBlockTitles = {
-    'tool:project': () =>
-      t('swarm.profile.promptBlock.project', 'Project Tool guidance'),
-    'tool:subagent': () =>
-      t('swarm.profile.promptBlock.subagent', 'Subagent Tool guidance'),
-    'tool:bash': () => t('swarm.profile.promptBlock.bash', 'Bash environment'),
+    'tool:project': () => t('swarm.profile.promptBlock.project'),
+    'tool:subagent': () => t('swarm.profile.promptBlock.subagent'),
+    'tool:bash': () => t('swarm.profile.promptBlock.bash'),
   };
   const blockTitle = (id) =>
     tOr(`systemPrompt.blockTitle.${id}`, toolBlockTitles[id]?.() ?? id);

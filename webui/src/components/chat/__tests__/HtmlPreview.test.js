@@ -128,9 +128,7 @@ describe('HtmlPreview', () => {
     open.mockRejectedValue(new Error('Test-owned unavailable sentinel'));
     await mountPreview({ source: '/api/files/missing-token' });
 
-    expect(alertBanner().textContent).toContain(
-      t('preview.failed', 'Preview could not be updated.'),
-    );
+    expect(alertBanner().textContent).toContain(t('preview.failed'));
     expect(alertBanner().textContent).toContain(
       'Test-owned unavailable sentinel',
     );
@@ -160,9 +158,7 @@ describe('HtmlPreview', () => {
     ready(assetUrl('/api/rpc'));
     ready(result.url, window);
     document
-      .querySelector(
-        `button[aria-label="${t('preview.reload', 'Reload preview')}"]`,
-      )
+      .querySelector(`button[aria-label="${t('preview.reload')}"]`)
       .click();
     await settle();
     const replacement = frame();

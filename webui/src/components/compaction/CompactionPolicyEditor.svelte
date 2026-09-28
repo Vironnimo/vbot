@@ -25,29 +25,23 @@
   const triggerOptions = $derived([
     {
       value: 'context_ratio',
-      label: t('compaction.trigger.contextRatio', 'Context window ratio'),
+      label: t('compaction.trigger.contextRatio'),
     },
     {
       value: 'input_tokens',
-      label: t('compaction.trigger.inputTokens', 'Absolute input tokens'),
+      label: t('compaction.trigger.inputTokens'),
     },
   ]);
   const strategyOptions = $derived([
     {
       value: 'continuation',
-      label: t('compaction.strategy.continuation', 'Classic'),
-      description: t(
-        'compaction.strategy.continuationDescription',
-        'Summarize the conversation with the active Model. Continue from the summary.',
-      ),
+      label: t('compaction.strategy.continuation'),
+      description: t('compaction.strategy.continuationDescription'),
     },
     {
       value: 'summary_tail',
-      label: t('compaction.strategy.summaryTail', 'With tail'),
-      description: t(
-        'compaction.strategy.summaryTailDescription',
-        'Summarize older messages and keep the most recent messages unchanged.',
-      ),
+      label: t('compaction.strategy.summaryTail'),
+      description: t('compaction.strategy.summaryTailDescription'),
     },
   ]);
 
@@ -98,7 +92,7 @@
   >
     <fieldset class="compaction-rows__fieldset" {disabled}>
       <legend class="s-row-label">
-        {t('compaction.strategy.label', 'Compaction mode')}
+        {t('compaction.strategy.label')}
       </legend>
       <div class="compaction-rows__choices">
         {#each strategyOptions as option (option.value)}
@@ -123,13 +117,10 @@
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('compaction.strategy.tailTokens', 'Verbatim tail tokens')}
+          {t('compaction.strategy.tailTokens')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'compaction.strategy.tailTokensDescription',
-            'Recent conversation kept word for word instead of summarized.',
-          )}
+          {t('compaction.strategy.tailTokensDescription')}
         </div>
       </div>
       <div class="s-row-control s-row-control--number">
@@ -137,10 +128,7 @@
           type="number"
           value={policy.strategy.tail_tokens}
           {disabled}
-          ariaLabel={t(
-            'compaction.strategy.tailTokens',
-            'Verbatim tail tokens',
-          )}
+          ariaLabel={t('compaction.strategy.tailTokens')}
           onInput={(next) => changeStrategyField('tail_tokens', next)}
         />
       </div>
@@ -148,13 +136,10 @@
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('compaction.strategy.summaryModel', 'Summary model')}
+          {t('compaction.strategy.summaryModel')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'compaction.strategy.summaryModelDescription',
-            'Model that writes the summary. Empty uses the active Model.',
-          )}
+          {t('compaction.strategy.summaryModelDescription')}
         </div>
       </div>
       <div class="s-row-control">
@@ -165,32 +150,26 @@
   <div class="s-row s-row--compact">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('compaction.enabled', 'Automatic compaction')}
+        {t('compaction.enabled')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'compaction.enabledDescription',
-          'Compact automatically when a limit is reached. Manual Compaction remains available when this is off.',
-        )}
+        {t('compaction.enabledDescription')}
       </div>
     </div>
     <div class="s-row-control">
       <Toggle
         checked={policy.enabled}
         {disabled}
-        ariaLabel={t('compaction.enabled', 'Automatic compaction')}
+        ariaLabel={t('compaction.enabled')}
         onChange={changeEnabled}
       />
     </div>
   </div>
   <div class="s-row">
     <div class="s-row-info">
-      <div class="s-row-label">{t('compaction.trigger.label', 'Trigger')}</div>
+      <div class="s-row-label">{t('compaction.trigger.label')}</div>
       <div class="s-row-desc">
-        {t(
-          'compaction.trigger.description',
-          'The limit that starts automatic compaction.',
-        )}
+        {t('compaction.trigger.description')}
       </div>
     </div>
     <div class="s-row-control">
@@ -199,7 +178,7 @@
         value={policy.trigger.type}
         options={triggerOptions}
         {disabled}
-        ariaLabel={t('compaction.trigger.label', 'Trigger')}
+        ariaLabel={t('compaction.trigger.label')}
         onValueChange={changeTriggerType}
       />
     </div>
@@ -208,13 +187,10 @@
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('compaction.trigger.tokens', 'Input tokens')}
+          {t('compaction.trigger.tokens')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'compaction.trigger.tokensDescription',
-            'Compacts when a request reaches this many input tokens.',
-          )}
+          {t('compaction.trigger.tokensDescription')}
         </div>
       </div>
       <div class="s-row-control s-row-control--number">
@@ -222,7 +198,7 @@
           type="number"
           value={policy.trigger.tokens}
           {disabled}
-          ariaLabel={t('compaction.trigger.tokens', 'Input tokens')}
+          ariaLabel={t('compaction.trigger.tokens')}
           onInput={(next) => changeTriggerField('tokens', next)}
         />
       </div>
@@ -231,13 +207,10 @@
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('compaction.trigger.threshold', 'Context ratio')}
+          {t('compaction.trigger.threshold')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'compaction.trigger.thresholdDescription',
-            'Share of the context window, between 0 and 1. 0.8 compacts at 80%.',
-          )}
+          {t('compaction.trigger.thresholdDescription')}
         </div>
       </div>
       <div class="s-row-control s-row-control--number">
@@ -245,7 +218,7 @@
           inputmode="decimal"
           value={policy.trigger.threshold}
           {disabled}
-          ariaLabel={t('compaction.trigger.threshold', 'Context ratio')}
+          ariaLabel={t('compaction.trigger.threshold')}
           onInput={(next) => changeTriggerField('threshold', next)}
         />
       </div>
@@ -253,13 +226,10 @@
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('compaction.trigger.maxTokens', 'Maximum input tokens (optional)')}
+          {t('compaction.trigger.maxTokens')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'compaction.trigger.maxTokensDescription',
-            'Also compacts at this many input tokens, even below the ratio.',
-          )}
+          {t('compaction.trigger.maxTokensDescription')}
         </div>
       </div>
       <div class="s-row-control s-row-control--number">
@@ -267,11 +237,8 @@
           type="number"
           value={policy.trigger.tokens ?? ''}
           {disabled}
-          placeholder={t('compaction.trigger.noTokenCap', 'No token cap')}
-          ariaLabel={t(
-            'compaction.trigger.maxTokens',
-            'Maximum input tokens (optional)',
-          )}
+          placeholder={t('compaction.trigger.noTokenCap')}
+          ariaLabel={t('compaction.trigger.maxTokens')}
           onInput={(next) => changeTriggerField('tokens', next)}
         />
       </div>
@@ -280,7 +247,7 @@
 {:else}
   <div class="compaction-policy-editor" data-testid={`${idPrefix}-editor`}>
     <fieldset class="compaction-policy-editor__mode" {disabled}>
-      <legend>{t('compaction.strategy.label', 'Compaction mode')}</legend>
+      <legend>{t('compaction.strategy.label')}</legend>
       <div class="compaction-policy-editor__choices">
         {#each strategyOptions as option (option.value)}
           <label
@@ -310,23 +277,16 @@
       hidden={policy.strategy.type !== 'summary_tail'}
     >
       {#if policy.strategy.type === 'summary_tail'}
-        <FormField
-          label={t('compaction.strategy.tailTokens', 'Verbatim tail tokens')}
-        >
+        <FormField label={t('compaction.strategy.tailTokens')}>
           <TextField
             type="number"
             value={policy.strategy.tail_tokens}
             {disabled}
-            ariaLabel={t(
-              'compaction.strategy.tailTokens',
-              'Verbatim tail tokens',
-            )}
+            ariaLabel={t('compaction.strategy.tailTokens')}
             onInput={(next) => changeStrategyField('tail_tokens', next)}
           />
         </FormField>
-        <FormField
-          label={t('compaction.strategy.summaryModel', 'Summary model')}
-        >
+        <FormField label={t('compaction.strategy.summaryModel')}>
           {@render summaryModelControl()}
         </FormField>
       {/if}
@@ -335,70 +295,59 @@
     <div class="compaction-policy-editor__enabled">
       <div>
         <div class="compaction-policy-editor__label">
-          {t('compaction.enabled', 'Automatic compaction')}
+          {t('compaction.enabled')}
         </div>
         <div class="compaction-policy-editor__description">
-          {t(
-            'compaction.enabledDescription',
-            'Compact automatically when a limit is reached. Manual Compaction remains available when this is off.',
-          )}
+          {t('compaction.enabledDescription')}
         </div>
       </div>
       <Toggle
         checked={policy.enabled}
         {disabled}
-        ariaLabel={t('compaction.enabled', 'Automatic compaction')}
+        ariaLabel={t('compaction.enabled')}
         onChange={changeEnabled}
       />
     </div>
 
     <div class="compaction-policy-editor__grid">
-      <FormField label={t('compaction.trigger.label', 'Trigger')}>
+      <FormField label={t('compaction.trigger.label')}>
         <Dropdown
           id={`${idPrefix}-trigger`}
           value={policy.trigger.type}
           options={triggerOptions}
           {disabled}
-          ariaLabel={t('compaction.trigger.label', 'Trigger')}
+          ariaLabel={t('compaction.trigger.label')}
           onValueChange={changeTriggerType}
         />
       </FormField>
 
       {#if policy.trigger.type === 'input_tokens'}
-        <FormField label={t('compaction.trigger.tokens', 'Input tokens')}>
+        <FormField label={t('compaction.trigger.tokens')}>
           <TextField
             type="number"
             value={policy.trigger.tokens}
             {disabled}
-            ariaLabel={t('compaction.trigger.tokens', 'Input tokens')}
+            ariaLabel={t('compaction.trigger.tokens')}
             onInput={(next) => changeTriggerField('tokens', next)}
           />
         </FormField>
       {:else}
-        <FormField label={t('compaction.trigger.threshold', 'Context ratio')}>
+        <FormField label={t('compaction.trigger.threshold')}>
           <TextField
             inputmode="decimal"
             value={policy.trigger.threshold}
             {disabled}
-            ariaLabel={t('compaction.trigger.threshold', 'Context ratio')}
+            ariaLabel={t('compaction.trigger.threshold')}
             onInput={(next) => changeTriggerField('threshold', next)}
           />
         </FormField>
-        <FormField
-          label={t(
-            'compaction.trigger.maxTokens',
-            'Maximum input tokens (optional)',
-          )}
-        >
+        <FormField label={t('compaction.trigger.maxTokens')}>
           <TextField
             type="number"
             value={policy.trigger.tokens ?? ''}
             {disabled}
-            placeholder={t('compaction.trigger.noTokenCap', 'No token cap')}
-            ariaLabel={t(
-              'compaction.trigger.maxTokens',
-              'Maximum input tokens (optional)',
-            )}
+            placeholder={t('compaction.trigger.noTokenCap')}
+            ariaLabel={t('compaction.trigger.maxTokens')}
             onInput={(next) => changeTriggerField('tokens', next)}
           />
         </FormField>
@@ -414,16 +363,10 @@
       value={summaryModelSelectValue}
       options={summaryModelOptions}
       {disabled}
-      placeholder={t(
-        'settings.compaction.summaryModelPlaceholder',
-        'Active agent model',
-      )}
-      searchPlaceholder={t(
-        'agents.form.modelSearchPlaceholder',
-        'Filter models…',
-      )}
-      emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-      ariaLabel={t('compaction.strategy.summaryModel', 'Summary model')}
+      placeholder={t('settings.compaction.summaryModelPlaceholder')}
+      searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+      emptyLabel={t('agents.form.modelSearchEmpty')}
+      ariaLabel={t('compaction.strategy.summaryModel')}
       onOpenChange={onSummaryModelOpenChange}
       onValueChange={onSummaryModelSelect}
     />
@@ -431,8 +374,8 @@
     <TextField
       value={policy.strategy.summary_model ?? ''}
       {disabled}
-      placeholder={t('compaction.strategy.activeModel', 'Active Model')}
-      ariaLabel={t('compaction.strategy.summaryModel', 'Summary model')}
+      placeholder={t('compaction.strategy.activeModel')}
+      ariaLabel={t('compaction.strategy.summaryModel')}
       onInput={(next) => changeStrategyField('summary_model', next)}
     />
   {/if}

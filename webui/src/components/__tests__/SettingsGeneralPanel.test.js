@@ -165,15 +165,13 @@ describe('SettingsGeneralPanel', () => {
     await flushAsync();
 
     expect(document.body.textContent).toContain(
-      t('settings.general.setupGuide', 'Setup guide'),
+      t('settings.general.setupGuide'),
     );
 
     const setupButton = Array.from(
       document.body.querySelectorAll('button'),
     ).find((button) =>
-      button.textContent.includes(
-        t('settings.general.setupGuideAction', 'Open setup guide'),
-      ),
+      button.textContent.includes(t('settings.general.setupGuideAction')),
     );
     expect(setupButton).toBeTruthy();
 

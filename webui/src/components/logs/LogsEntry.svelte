@@ -78,7 +78,7 @@
     variant="tertiary"
     icon
     class="logs-entry__toggle"
-    ariaLabel={t('logs.entryDetails', 'Entry details')}
+    ariaLabel={t('logs.entryDetails')}
     aria-expanded={expanded}
     aria-controls={expanded ? detailId : undefined}
     onClick={() => (expanded = !expanded)}
@@ -97,15 +97,15 @@
       text: entry.logger_name,
       mono: true,
       whenTruncated: true,
-    }}>{entry.logger_name || t('common.unknown', 'Unknown')}</span
+    }}>{entry.logger_name || t('common.unknown')}</span
   >
   <span class="logs-entry__message">
     <span class="logs-entry__summary">{summary}</span>
     {#if continuationLineCount > 0}
       <span class="logs-entry__more"
         >{continuationLineCount === 1
-          ? t('logs.moreLinesOne', '+1 line')
-          : t('logs.moreLines', '+{count} lines', {
+          ? t('logs.moreLinesOne')
+          : t('logs.moreLines', {
               count: continuationLineCount,
             })}</span
       >
@@ -114,8 +114,8 @@
   <CopyButton
     class="logs-entry__copy"
     text={copyText}
-    label={t('logs.copyEntry', 'Copy log line')}
-    copiedLabel={t('logs.copied', 'Copied')}
+    label={t('logs.copyEntry')}
+    copiedLabel={t('logs.copied')}
   />
   {#if expanded}
     <pre id={detailId} class="logs-entry__detail">{body}</pre>

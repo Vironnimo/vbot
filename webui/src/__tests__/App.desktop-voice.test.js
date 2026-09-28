@@ -80,14 +80,8 @@ const toasts = (variant) =>
   }));
 const toast = (title, message = '') => ({ title, message });
 // The English catalog has no entry for these keys; the UI shows the fallback.
-const VOICE_ERROR_TITLE = t(
-  'settings.voice.errorTitle',
-  'Voice needs attention',
-);
-const MICROPHONE_UNAVAILABLE = t(
-  'settings.voice.error.microphone',
-  'No compatible microphone is available. Connect a microphone or choose another input device, then retry.',
-);
+const VOICE_ERROR_TITLE = t('settings.voice.errorTitle');
+const MICROPHONE_UNAVAILABLE = t('settings.voice.error.microphone');
 
 describe('App Desktop Voice feedback', () => {
   let mountedComponent;

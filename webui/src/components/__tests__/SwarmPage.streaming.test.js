@@ -182,7 +182,7 @@ describe('Swarm streaming continuity', () => {
     expect(document.querySelector('.reasoning-block')).toBe(disclosure);
     expect(disclosure.open).toBe(true);
     expect(disclosure.textContent.split('chunk-150')).toHaveLength(2);
-    button(t('swarm.newRun', 'New run')).click();
+    button(t('swarm.newRun')).click();
     await tick();
     expect(bridge.unsubscribeRun).toHaveBeenCalledWith('stream');
     expect(document.querySelector('.history')).toBeNull();

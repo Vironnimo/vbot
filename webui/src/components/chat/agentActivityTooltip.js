@@ -23,15 +23,13 @@ export function agentActivityTooltip(
     title: activityLabel,
     rows: [
       {
-        label: t('chat.agentActivity.model', 'Model'),
+        label: t('chat.agentActivity.model'),
         value: model,
         mono: true,
       },
       {
-        label: t('chat.agentActivity.thinkingEffort', 'Thinking effort'),
-        value:
-          effort ||
-          t('chat.agentActivity.thinkingEffortDefault', 'Provider default'),
+        label: t('chat.agentActivity.thinkingEffort'),
+        value: effort || t('chat.agentActivity.thinkingEffortDefault'),
         mono: Boolean(effort),
       },
     ],

@@ -4,67 +4,67 @@
   export const NAVIGATION_ITEMS = Object.freeze([
     {
       id: 'chat',
-      label: () => t('navigation.chat', 'Chat'),
+      label: () => t('navigation.chat'),
       section: 'work',
     },
     {
       id: 'terminals',
-      label: () => t('navigation.terminals', 'Terminals'),
+      label: () => t('navigation.terminals'),
       section: 'work',
     },
     {
       id: 'agents',
-      label: () => t('navigation.agents', 'Agents'),
+      label: () => t('navigation.agents'),
       section: 'work',
     },
     {
       id: 'projects',
-      label: () => t('navigation.projects', 'Projects'),
+      label: () => t('navigation.projects'),
       section: 'work',
     },
     {
       id: 'calendar',
-      label: () => t('navigation.calendar', 'Calendar'),
+      label: () => t('navigation.calendar'),
       section: 'work',
     },
     {
       id: 'jev',
-      label: () => t('navigation.jev', 'Jev'),
+      label: () => t('navigation.jev'),
       section: 'work',
     },
     {
       id: 'skills',
-      label: () => t('navigation.skills', 'Skills'),
+      label: () => t('navigation.skills'),
       section: 'configure',
     },
     {
       id: 'cron',
-      label: () => t('navigation.cron', 'Cron'),
+      label: () => t('navigation.cron'),
       section: 'configure',
     },
     {
       id: 'system-prompt',
-      label: () => t('navigation.systemPrompt', 'System Prompt'),
+      label: () => t('navigation.systemPrompt'),
       section: 'configure',
     },
     {
       id: 'settings',
-      label: () => t('navigation.settings', 'Settings'),
+      label: () => t('navigation.settings'),
       section: 'configure',
     },
     {
       id: 'statistics',
-      label: () => t('navigation.statistics', 'Statistics'),
+      label: () => t('navigation.statistics'),
       section: 'insights',
     },
     {
       id: 'logs',
-      label: () => t('navigation.logs', 'Logs'),
+      label: () => t('navigation.logs'),
       section: 'insights',
     },
     {
       id: 'debug',
-      label: () => t('navigation.debug', 'Debug'),
+      label: () => t('navigation.debug'),
       section: 'insights',
     },
   ]);
@@ -386,13 +386,8 @@
       appControllerState.dataStoreIncident = result?.incidents?.[0] ?? null;
     } catch (error) {
       desktop.showToast({
-        title: t(
-          'dataStore.acknowledgeFailedTitle',
-          'Recovery notice still needs attention',
-        ),
-        message:
-          error?.message ??
-          t('dataStore.acknowledgeFailed', 'Refresh the status and try again.'),
+        title: t('dataStore.acknowledgeFailedTitle'),
+        message: error?.message ?? t('dataStore.acknowledgeFailed'),
         variant: 'error',
       });
     }
@@ -455,7 +450,7 @@
     isOperational: () => setup.operational,
     onAppError: (message) => {
       desktop.showToast({
-        title: t('errors.appError', 'Error'),
+        title: t('errors.appError'),
         message,
         variant: 'error',
       });
@@ -541,13 +536,10 @@
   {#if setup.showFinishSetup}
     <Banner variant="info" class="app-finish-setup">
       <span class="app-finish-setup__text">
-        {t(
-          'onboarding.finishSetupHint',
-          'Connect an AI service to start chatting.',
-        )}
+        {t('onboarding.finishSetupHint')}
       </span>
       <Button variant="secondary" onClick={setup.reopenOnboarding}>
-        {t('onboarding.finishSetup', 'Finish setup')}
+        {t('onboarding.finishSetup')}
       </Button>
     </Banner>
   {/if}
@@ -564,23 +556,20 @@
   {#if dataStoreIncident}
     <Banner variant="error" role="alert" class="app-data-store-incident">
       <div class="app-data-store-incident__copy">
-        <strong>{t('dataStore.recoveredTitle', 'Data recovered')}</strong>
+        <strong>{t('dataStore.recoveredTitle')}</strong>
         <span>
-          {t(
-            'dataStore.recoveredMessage',
-            'A damaged database was restored from a verified data snapshot. Recent changes may be missing.',
-          )}
+          {t('dataStore.recoveredMessage')}
         </span>
         <span class="app-data-store-incident__meta">
-          {t('dataStore.database', 'Database')}: {dataStoreIncident.database}
-          · {t('dataStore.snapshot', 'Snapshot')}: {dataStoreIncident.restored_snapshot_id}
-          · {t('dataStore.possibleLoss', 'Possible loss')}: {dataStoreIncident
+          {t('dataStore.database')}: {dataStoreIncident.database}
+          · {t('dataStore.snapshot')}: {dataStoreIncident.restored_snapshot_id}
+          · {t('dataStore.possibleLoss')}: {dataStoreIncident
             .possible_loss_interval?.start}
           → {dataStoreIncident.possible_loss_interval?.end}
         </span>
       </div>
       <Button variant="secondary" onClick={acknowledgeDataStoreRecovery}>
-        {t('dataStore.acknowledge', 'Acknowledge')}
+        {t('dataStore.acknowledge')}
       </Button>
     </Banner>
   {/if}
@@ -756,7 +745,7 @@
 
 {#if autosaveFailureOpen}
   <Modal
-    title={t('autosave.transitionFailureTitle', 'Changes could not be saved')}
+    title={t('autosave.transitionFailureTitle')}
     labelledById="autosave-transition-failure-title"
     closeDisabled={true}
     onClose={() => {}}
@@ -764,10 +753,7 @@
     {#snippet body()}
       <div class="modal-body">
         <p>
-          {t(
-            'autosave.transitionFailureBody',
-            'Your changes are still open. Try saving again, or discard them and continue.',
-          )}
+          {t('autosave.transitionFailureBody')}
         </p>
       </div>
     {/snippet}
@@ -777,16 +763,14 @@
         disabled={autosaveTransitionSaving}
         onClick={retryAutosaveTransition}
       >
-        {autosaveTransitionSaving
-          ? t('common.saving', 'Saving…')
-          : t('common.retry', 'Retry')}
+        {autosaveTransitionSaving ? t('common.saving') : t('common.retry')}
       </Button>
       <Button
         variant="danger"
         disabled={autosaveTransitionSaving}
         onClick={discardAutosaveTransition}
       >
-        {t('autosave.discardAndContinue', 'Discard and continue')}
+        {t('autosave.discardAndContinue')}
       </Button>
     {/snippet}
   </Modal>
@@ -794,7 +778,7 @@
 
 {#if serverSwitcherOpen}
   <Modal
-    title={t('settings.desktop.switchModalTitle', 'Switch server')}
+    title={t('settings.desktop.switchModalTitle')}
     labelledById="desktop-server-switch-title"
     class="desktop-server-switch-modal"
     onClose={() => (serverSwitcherOpen = false)}

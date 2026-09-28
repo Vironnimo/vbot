@@ -25,7 +25,7 @@ import {
   runningSubAgentTool,
 } from './chatTimelinePresentation.support.js';
 
-const seconds = (value) => t('chat.durationSeconds', '', { seconds: value });
+const seconds = (value) => t('chat.durationSeconds', { seconds: value });
 
 function blockingSubAgentTool(overrides = {}) {
   return runningSubAgentTool({

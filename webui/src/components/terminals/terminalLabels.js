@@ -4,28 +4,27 @@ import { formatTerminalCommandLine } from '$lib/terminalsView.js';
 export function launchHistoryLabel(entry) {
   return (
     formatTerminalCommandLine(entry?.command, entry?.args) ||
-    t('terminals.commandPlaceholder', 'Default shell')
+    t('terminals.commandPlaceholder')
   );
 }
 
 export function launchHistoryWorkdir(entry) {
   return (
-    String(entry?.workdir || '').trim() ||
-    t('terminals.workdirPlaceholder', 'User home directory')
+    String(entry?.workdir || '').trim() || t('terminals.workdirPlaceholder')
   );
 }
 
 export function groupKindLabel(kind) {
   if (kind === 'user') {
-    return t('terminals.kind.user', 'My group');
+    return t('terminals.kind.user');
   }
   if (kind === 'agent') {
-    return t('terminals.kind.agent', 'Agent');
+    return t('terminals.kind.agent');
   }
   if (kind === 'finished') {
-    return t('terminals.kind.finished', 'Finished');
+    return t('terminals.kind.finished');
   }
-  return t('terminals.kind.manual', 'Manual');
+  return t('terminals.kind.manual');
 }
 
 export function groupCanEdit(group) {
@@ -34,7 +33,7 @@ export function groupCanEdit(group) {
 
 export function terminalTarget(item) {
   if (!item?.owner) {
-    return t('terminals.manualOwner', 'Manual');
+    return t('terminals.manualOwner');
   }
   const agentId = item?.owner?.agent_id || '—';
   const projectId = item?.owner?.project_id;
@@ -82,5 +81,5 @@ export function launchedCommand(item) {
 }
 
 export function terminalError(message) {
-  return message || t('terminals.unknownError', 'Unknown terminal error');
+  return message || t('terminals.unknownError');
 }

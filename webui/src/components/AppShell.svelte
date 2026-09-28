@@ -84,8 +84,8 @@
 
   const sidebarToggleLabel = $derived(
     railCompact
-      ? t('navigation.expandSidebar', 'Expand sidebar')
-      : t('navigation.collapseSidebar', 'Collapse sidebar'),
+      ? t('navigation.expandSidebar')
+      : t('navigation.collapseSidebar'),
   );
 
   const setSidebarCollapsed = (collapsed) => {
@@ -186,9 +186,9 @@
   // from each item's `section` field (set in App.svelte); a group with no
   // visible items renders neither its label nor its gap.
   const NAV_SECTIONS = [
-    { id: 'work', label: () => t('nav.section.work', 'Work') },
-    { id: 'configure', label: () => t('nav.section.configure', 'Configure') },
-    { id: 'insights', label: () => t('nav.section.insights', 'Insights') },
+    { id: 'work', label: () => t('nav.section.work') },
+    { id: 'configure', label: () => t('nav.section.configure') },
+    { id: 'insights', label: () => t('nav.section.insights') },
   ];
 
   const navGroups = $derived(
@@ -208,18 +208,18 @@
 
   const statusLabel = $derived(
     connectionStatus === CONNECTION_STATUS_CONNECTED
-      ? t('status.connected', 'Connected')
+      ? t('status.connected')
       : connectionStatus === CONNECTION_STATUS_DISCONNECTED
-        ? t('status.notReachable', 'Not reachable')
-        : t('status.reconnecting', 'Reconnecting…'),
+        ? t('status.notReachable')
+        : t('status.reconnecting'),
   );
 
   const statusAriaLabel = $derived(
     connectionStatus === CONNECTION_STATUS_CONNECTED
-      ? t('status.connected', 'Connected')
+      ? t('status.connected')
       : connectionStatus === CONNECTION_STATUS_DISCONNECTED
-        ? t('status.notReachable', 'Not reachable')
-        : t('status.reconnecting', 'Reconnecting…'),
+        ? t('status.notReachable')
+        : t('status.reconnecting'),
   );
 
   // Voice indicator — lives in the sidebar footer so it is visible across
@@ -310,12 +310,9 @@
     ></div>
   {/if}
 
-  <aside
-    class="app-shell__sidebar"
-    aria-label={t('navigation.primary', 'Primary navigation')}
-  >
+  <aside class="app-shell__sidebar" aria-label={t('navigation.primary')}>
     <div class="app-shell__sidebar-header">
-      <div class="app-shell__brand" aria-label={t('app.title', 'vBot')}>
+      <div class="app-shell__brand" aria-label={t('app.title')}>
         <img
           class="app-shell__brand-mark"
           src="/brand/vbot-mark-transparent.png"
@@ -324,7 +321,7 @@
           height="30"
         />
         <div>
-          <h1>{t('app.title', 'vBot')}</h1>
+          <h1>{t('app.title')}</h1>
         </div>
       </div>
       <Button
@@ -350,7 +347,7 @@
     <nav
       bind:this={navigationElement}
       class="app-shell__navigation"
-      aria-label={t('navigation.sections', 'Sections')}
+      aria-label={t('navigation.sections')}
     >
       {#each navGroups as group (group.id)}
         <div
@@ -462,9 +459,7 @@
           {/if}
         </svg>
         <span class="app-shell__nav-label">
-          {mobileNavOpen
-            ? t('common.close', 'Close')
-            : t('navigation.more', 'More')}
+          {mobileNavOpen ? t('common.close') : t('navigation.more')}
         </span>
       </button>
     </nav>
@@ -537,33 +532,24 @@
       <div class="server-availability-notice__content">
         <p class="server-availability-notice__eyebrow">
           {serverRestored
-            ? t('status.connectionRestored', 'Connection restored')
-            : t('status.connectionInterrupted', 'Connection interrupted')}
+            ? t('status.connectionRestored')
+            : t('status.connectionInterrupted')}
         </p>
         <h2>
           {serverRestored
-            ? t('status.serverRestoredTitle', 'Server is reachable again')
-            : t('status.serverUnavailableTitle', 'Server is not reachable')}
+            ? t('status.serverRestoredTitle')
+            : t('status.serverUnavailableTitle')}
         </h2>
         <p class="server-availability-notice__message">
           {serverRestored
-            ? t(
-                'status.serverRestoredMessage',
-                'The current view has been refreshed.',
-              )
-            : t(
-                'status.serverUnavailableMessage',
-                'vBot is trying to restore the connection automatically.',
-              )}
+            ? t('status.serverRestoredMessage')
+            : t('status.serverUnavailableMessage')}
         </p>
         {#if !serverRestored}
           <details class="server-availability-notice__details">
-            <summary>{t('common.details', 'Details')}</summary>
+            <summary>{t('common.details')}</summary>
             <p>
-              {t(
-                'status.serverUnavailableDetails',
-                'The browser connection to the vBot server was interrupted. Features that need the server are temporarily unavailable.',
-              )}
+              {t('status.serverUnavailableDetails')}
             </p>
           </details>
         {/if}
@@ -571,11 +557,11 @@
       {#if !serverRestored}
         <div class="server-availability-notice__actions">
           <Button variant="secondary" onClick={onRetryConnection}>
-            {t('status.retryNow', 'Retry now')}
+            {t('status.retryNow')}
           </Button>
           {#if canSwitchServer}
             <Button variant="primary" onClick={onSwitchServer}>
-              {t('status.switchServer', 'Switch server')}
+              {t('status.switchServer')}
             </Button>
           {/if}
         </div>
@@ -589,7 +575,7 @@
       class="desktop-context-menu"
       role="menu"
       tabindex="-1"
-      aria-label={t('desktop.contextMenu.label', 'Context menu')}
+      aria-label={t('desktop.contextMenu.label')}
       style={`left: ${menu.contextMenu.x}px; top: ${menu.contextMenu.y}px; visibility: ${menu.contextMenu.positioned ? 'visible' : 'hidden'};`}
       onkeydown={menu.handleContextMenuKeydown}
     >

@@ -17,8 +17,8 @@ import {
 } from './SwarmPage.support.js';
 import { t } from '../../lib/i18n.js';
 
-const WRITE_POST = t('swarm.board.openComposer', 'Write post');
-const POST = t('swarm.board.submit', 'Post');
+const WRITE_POST = t('swarm.board.openComposer');
+const POST = t('swarm.board.submit');
 
 const board = () => document.querySelector('.board');
 function selectDiscussion(id) {
@@ -190,7 +190,7 @@ describe('Swarm Board posts', () => {
       roster.compareDocumentPosition(board()) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    button(t('swarm.tabs.usage', 'Usage')).click();
+    button(t('swarm.tabs.usage')).click();
     await tick();
     expect(document.querySelector('.swarm-identity dd').textContent).toBe(
       'swr-a',
@@ -300,7 +300,7 @@ describe('Swarm Board posts', () => {
         el.textContent.trim(),
       );
     expect(messages()).toEqual(['message-4', 'message-3']);
-    const more = t('swarm.board.more', 'Load earlier messages');
+    const more = t('swarm.board.more');
     button(more).click();
     await vi.waitFor(() =>
       expect(messages()).toEqual([
@@ -541,10 +541,7 @@ describe('Swarm Board discussions', () => {
         (select) => select.value === 'dsc-unlisted',
       ),
     ).toBe(true);
-    const moreDiscussions = t(
-      'swarm.board.moreDiscussions',
-      'Load more discussions',
-    );
+    const moreDiscussions = t('swarm.board.moreDiscussions');
     button(moreDiscussions).click();
     await vi.waitFor(() => expect(button(moreDiscussions)).toBeUndefined());
     expect(

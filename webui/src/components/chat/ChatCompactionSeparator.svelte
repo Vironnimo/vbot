@@ -44,12 +44,12 @@
     </summary>
     <div class="compaction-detail">
       <div class="compaction-detail__header">
-        <span>{t('chat.compactionContext', 'Compaction context')}</span>
+        <span>{t('chat.compactionContext')}</span>
         <CopyButton
           text={summaryText}
           class="chat-copy-action compaction-copy"
-          label={t('chat.copyCompaction', 'Copy compaction context')}
-          copiedLabel={t('chat.compactionCopied', 'Compaction context copied')}
+          label={t('chat.copyCompaction')}
+          copiedLabel={t('chat.compactionCopied')}
         />
       </div>
       <pre class="compaction-detail__text">{summaryText}</pre>

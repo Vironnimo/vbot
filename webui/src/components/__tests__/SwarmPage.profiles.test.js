@@ -16,17 +16,17 @@ import {
   render,
   fixtureState,
 } from './SwarmPage.support.js';
-import { t } from '../../lib/i18n.js';
+import { t, tOr } from '../../lib/i18n.js';
 
-const EDIT = t('common.edit', 'Edit');
-const NEW_SWARM = t('swarm.newProfile', 'New Swarm');
-const SAVE_SWARM = t('swarm.profile.save', 'Save Swarm');
-const SAVED = t('common.saved', 'Saved');
-const SYSTEM_PROMPT = t('swarm.profile.systemPrompt', 'System Prompt');
-const TOOLS = t('swarm.profile.access', 'Tools & Skills');
-const COMMUNICATION = t('swarm.profile.communication', 'Communication');
-const GENERATE_PREVIEW = t('swarm.profile.generatePreview', 'Generate preview');
-const DELETE_SWARM = t('swarm.delete.title', 'Delete Swarm');
+const EDIT = t('common.edit');
+const NEW_SWARM = t('swarm.newProfile');
+const SAVE_SWARM = t('swarm.profile.save');
+const SAVED = t('common.saved');
+const SYSTEM_PROMPT = t('swarm.profile.systemPrompt');
+const TOOLS = t('swarm.profile.access');
+const COMMUNICATION = t('swarm.profile.communication');
+const GENERATE_PREVIEW = t('swarm.profile.generatePreview');
+const DELETE_SWARM = t('swarm.delete.title');
 
 async function openEditor(bridge) {
   await render(bridge);
@@ -49,7 +49,7 @@ const lastSaved = (operation) =>
   callsTo(operation, 'profiles.save').at(-1)[1].profile;
 const toggle = (name) =>
   document.querySelector(`[role="switch"][aria-label="${name}"]`);
-const blockTitle = (id) => t(`systemPrompt.blockTitle.${id}`, id);
+const blockTitle = (id) => tOr(`systemPrompt.blockTitle.${id}`, id);
 const panel = (id) => document.getElementById(`swarm-profile-panel-${id}`);
 const dialog = () => document.querySelector('[role="dialog"]');
 
@@ -61,7 +61,7 @@ describe('Swarm profile prompt', () => {
     await tick();
     const runtime = blockTitle('core:runtime');
     const project = blockTitle('core:working_project');
-    const resume = t('swarm.profile.reminderResume', 'When you resume work');
+    const resume = t('swarm.profile.reminderResume');
     for (const [block, checked] of [
       ['core:tools', 'true'],
       ['core:skills', 'true'],
@@ -201,7 +201,7 @@ describe('Swarm profile settings', () => {
     button(SAVE_SWARM).click();
     await settle(20);
     expect(document.body.textContent).not.toContain(
-      t('swarm.profile.nameRequired', 'Enter a Swarm name.'),
+      t('swarm.profile.nameRequired'),
     );
     expect(operation).toHaveBeenCalledWith(
       'profiles.save',
@@ -241,7 +241,7 @@ describe('Swarm profile settings', () => {
     await choose('swarm-effort-0', 'high');
     await choose('swarm-model-0', 'demo/plain');
     expect(document.getElementById('swarm-effort-0').textContent.trim()).toBe(
-      t('swarm.profile.providerDefault', 'Provider default'),
+      t('swarm.profile.providerDefault'),
     );
   });
 
@@ -252,7 +252,7 @@ describe('Swarm profile settings', () => {
     button(TOOLS).click();
     await settle();
     expect(panel('access').hidden).toBe(false);
-    button(t('toolAccess.selectAll', 'Select all')).click();
+    button(t('toolAccess.selectAll')).click();
     await tick();
     saveButton().click();
     await tick();
@@ -268,7 +268,7 @@ describe('Swarm profile settings', () => {
     await settle();
     button(TOOLS).click();
     await tick();
-    button(t('toolAccess.deselectAll', 'Deselect all')).click();
+    button(t('toolAccess.deselectAll')).click();
     await tick();
     saveButton().click();
     await tick();
@@ -326,10 +326,7 @@ describe('Swarm profile settings', () => {
   it('switches working-directory sources without sending stale fields', async () => {
     const { bridge, operation } = createBridge();
     await openEditor(bridge);
-    await choose(
-      'swarm-directory-source',
-      t('swarm.profile.projectOption', 'Project'),
-    );
+    await choose('swarm-directory-source', t('swarm.profile.projectOption'));
     await choose('swarm-project', 'Project A');
     saveButton().click();
     await tick();
@@ -343,8 +340,7 @@ describe('Swarm profile settings', () => {
   it('overrides the Compaction Policy for participants and returns to inheritance', async () => {
     const { bridge, operation } = createBridge();
     await openEditor(bridge);
-    const custom = () =>
-      toggle(t('swarm.profile.customCompaction', 'Custom compaction policy'));
+    const custom = () => toggle(t('swarm.profile.customCompaction'));
     const editor = () =>
       document.querySelector('[data-testid="swarm-compaction-editor"]');
     // A profile saved without the field inherits and is not dirty on open.
@@ -357,7 +353,7 @@ describe('Swarm profile settings', () => {
     flushSync();
     expect(editor()).not.toBeNull();
     const tail = editor().querySelector(
-      `input[aria-label="${t('compaction.strategy.tailTokens', 'Verbatim tail tokens')}"]`,
+      `input[aria-label="${t('compaction.strategy.tailTokens')}"]`,
     );
     tail.value = '9000';
     tail.dispatchEvent(new Event('input', { bubbles: true }));
@@ -445,7 +441,7 @@ describe('Swarm profile saving', () => {
     fill('swarm-profile-name', 'Renamed profile');
     await tick();
     flushSync();
-    expect(label()).toBe(t('common.save', 'Save'));
+    expect(label()).toBe(t('common.save'));
     expect(saveButton().classList).not.toContain('save-button--saved');
     saveButton().click();
     await vi.waitFor(() => expect(label()).toBe(SAVED));
@@ -454,7 +450,7 @@ describe('Swarm profile saving', () => {
     fill('swarm-profile-name', 'Research');
     await tick();
     flushSync();
-    expect(label()).toBe(t('common.save', 'Save'));
+    expect(label()).toBe(t('common.save'));
   });
 
   it('flushes newer edits made during an in-flight save with the returned revision', async () => {
@@ -498,7 +494,7 @@ describe('Swarm profile saving', () => {
     button(COMMUNICATION).click();
     await vi.waitFor(() => expect(dialog()).not.toBeNull());
     expect(panel('overview').hidden).toBe(false);
-    button(t('autosave.discardAndContinue', 'Discard and continue')).click();
+    button(t('autosave.discardAndContinue')).click();
     await tick();
     expect(panel('communication').hidden).toBe(false);
     expect(document.getElementById('swarm-profile-name').value).toBe(
@@ -518,11 +514,9 @@ describe('Swarm profile saving', () => {
     expect(document.getElementById('swarm-profile-name')).toBe(input);
     expect(input.value).toBe('Draft survives');
     expect(
-      document.querySelector(
-        `nav[aria-label="${t('swarm.profiles', 'Swarms')}"]`,
-      ),
+      document.querySelector(`nav[aria-label="${t('swarm.profiles')}"]`),
     ).not.toBeNull();
-    expect(button(t('common.refresh', 'Refresh'))).toBeUndefined();
+    expect(button(t('common.refresh'))).toBeUndefined();
     expect(callsTo(operation, 'profiles.save')).toHaveLength(0);
   });
 
@@ -569,7 +563,7 @@ describe('Swarm profile saving', () => {
 describe('Swarm profile deletion', () => {
   const confirm = () =>
     [...dialog().querySelectorAll('button')].find(
-      (node) => node.textContent.trim() === t('common.delete', 'Delete'),
+      (node) => node.textContent.trim() === t('common.delete'),
     );
 
   it('deletes the open Swarm from its editor without saving the discarded draft', async () => {
@@ -602,7 +596,7 @@ describe('Swarm profile deletion', () => {
     button(DELETE_SWARM).click();
     await tick();
     expect(dialog().textContent).toContain(
-      t('swarm.delete.body', 'Delete {name}? Existing Runs remain available.', {
+      t('swarm.delete.body', {
         name: 'Saved rename',
       }),
     );

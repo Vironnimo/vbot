@@ -579,15 +579,8 @@
     onRestartQueueDiscarded: (count) => {
       actions.showChatToast(
         count === 1
-          ? t(
-              'queue.restartDiscardedOne',
-              '1 queued message was discarded because the server restarted.',
-            )
-          : t(
-              'queue.restartDiscardedMany',
-              '{count} queued messages were discarded because the server restarted.',
-              { count },
-            ),
+          ? t('queue.restartDiscardedOne')
+          : t('queue.restartDiscardedMany', { count }),
       );
     },
   });
@@ -646,19 +639,17 @@
          selected and chatted just like an identity agent. -->
     <div
       class="chat-view__project-team"
-      aria-label={t('chat.project.teamLabel', 'Project team')}
+      aria-label={t('chat.project.teamLabel')}
     >
       <div class="chat-view__project-team-inner">
         <span
           class="chat-view__project-team-name"
-          use:tooltip={t(
-            'chat.project.teamBarHint',
-            'Agents discovered in this project’s repository.',
-          )}>{target.selectedProjectName}</span
+          use:tooltip={t('chat.project.teamBarHint')}
+          >{target.selectedProjectName}</span
         >
         {#if target.loadingProjectTeam}
           <span class="chat-view__project-team-empty">
-            {t('loading.agents', 'Loading agents…')}
+            {t('loading.agents')}
           </span>
         {:else if target.projectScanError}
           <span class="chat-view__project-team-error"
@@ -666,7 +657,7 @@
           >
         {:else if target.projectTeam.length === 0}
           <span class="chat-view__project-team-empty">
-            {t('chat.project.teamEmpty', 'This project has no agents yet.')}
+            {t('chat.project.teamEmpty')}
           </span>
         {:else}
           {#each target.projectTeam as member (member.agent_id)}
@@ -675,14 +666,14 @@
               target.projectAgentStatuses[member.agent_id] ?? 'idle'}
             {@const memberActivityLabel =
               memberStatus === 'running'
-                ? t('chat.agentActivity.running', '{name}: Running', {
+                ? t('chat.agentActivity.running', {
                     name: memberName,
                   })
                 : memberStatus === 'unread'
-                  ? t('chat.agentActivity.unread', '{name}: Unread result', {
+                  ? t('chat.agentActivity.unread', {
                       name: memberName,
                     })
-                  : t('chat.agentActivity.idle', '{name}: Idle', {
+                  : t('chat.agentActivity.idle', {
                       name: memberName,
                     })}
             {@const memberActivityTooltip = agentActivityTooltip(
@@ -714,19 +705,16 @@
 
   {#if chatState.loadingAgents}
     <Banner variant="neutral" class="chat-view__state-banner">
-      {t('loading.agents', 'Loading agents…')}
+      {t('loading.agents')}
     </Banner>
   {:else if chatState.agents.length === 0}
     <EmptyState
       fill
-      title={t('chat.noAgents', 'No agents are available yet.')}
+      title={t('chat.noAgents')}
       description={chatState.agentsError}
     />
   {:else if !target.activeAgent}
-    <EmptyState
-      fill
-      title={t('chat.noAgentSelected', 'Choose an agent to start chatting.')}
-    />
+    <EmptyState fill title={t('chat.noAgentSelected')} />
   {:else}
     <div class="chat-view__content-shell">
       <div
@@ -750,14 +738,14 @@
                 ?.focus({ preventScroll: true });
             }}
           >
-            {t('sessions.title', 'Sessions')}
+            {t('sessions.title')}
           </Button>
           <Button
             variant="secondary"
             icon
             class="chat-view__new-session-fab"
-            ariaLabel={t('chat.newSession', 'New session')}
-            tooltip={t('chat.newSession', 'New session')}
+            ariaLabel={t('chat.newSession')}
+            tooltip={t('chat.newSession')}
             disabled={chatState.loadingHistory || !target.activeSessionState}
             loading={navigation.creatingSession}
             onClick={navigation.handleNewSession}
@@ -844,7 +832,7 @@
               aria-live="polite"
             >
               <strong>
-                {t('chat.subagentSessionNotice', 'Viewing a sub-agent session')}
+                {t('chat.subagentSessionNotice')}
               </strong>
               <Button
                 variant="tertiary"
@@ -853,11 +841,8 @@
                 onClick={navigation.handleReturnToCurrentSession}
               >
                 {navigation.subAgentParentTarget
-                  ? t('chat.returnToParentSession', 'Return to parent session')
-                  : t(
-                      'chat.returnToCurrentSession',
-                      'Return to current session',
-                    )}
+                  ? t('chat.returnToParentSession')
+                  : t('chat.returnToCurrentSession')}
               </Button>
             </Banner>
           {/if}
@@ -868,14 +853,14 @@
               aria-live="polite"
             >
               <strong>
-                {t('chat.noProvider.title', 'Connect a provider to start')}
+                {t('chat.noProvider.title')}
               </strong>
               <Button
                 variant="tertiary"
                 class="chat-view__no-provider-action"
                 onClick={onConnectProvider}
               >
-                {t('chat.noProvider.action', 'Connect a provider')}
+                {t('chat.noProvider.action')}
               </Button>
             </Banner>
           {:else if agentModelMissing}
@@ -885,14 +870,14 @@
               aria-live="polite"
             >
               <strong>
-                {t('chat.noModel.title', 'Pick a model to start')}
+                {t('chat.noModel.title')}
               </strong>
               <Button
                 variant="tertiary"
                 class="chat-view__no-model-action"
                 onClick={onPickModel}
               >
-                {t('chat.noModel.action', 'Choose a model')}
+                {t('chat.noModel.action')}
               </Button>
             </Banner>
           {/if}
@@ -910,10 +895,7 @@
               <div class="chat-view__measure chat-view__feedback-inner">
                 {#if chatState.historyError}
                   <Banner variant="error">
-                    {t(
-                      'chat.historyLoadError',
-                      'Chat history could not be loaded.',
-                    )}
+                    {t('chat.historyLoadError')}
                     {chatState.historyError}
                   </Banner>
                 {/if}
@@ -984,10 +966,7 @@
             {:else}
               <Banner appearance="compact" class="chat-view__footer-banner">
                 <p>
-                  {t(
-                    'split.sameSession',
-                    'This Session is open in the other area. Choose another Session or start a new one to chat here.',
-                  )}
+                  {t('split.sameSession')}
                 </p>
               </Banner>
             {/if}

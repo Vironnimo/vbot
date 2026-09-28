@@ -31,16 +31,13 @@ import {
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
-const SUB_AGENT_NOTICE = () =>
-  t('chat.subagentSessionNotice', 'Viewing a sub-agent session');
+const SUB_AGENT_NOTICE = () => t('chat.subagentSessionNotice');
 const returnToCurrentButton = () =>
-  findButtonByText(
-    t('chat.returnToCurrentSession', 'Return to current session'),
-  );
+  findButtonByText(t('chat.returnToCurrentSession'));
 const returnToParentButton = () =>
-  findButtonByText(t('chat.returnToParentSession', 'Return to parent session'));
+  findButtonByText(t('chat.returnToParentSession'));
 const composerInput = () => document.querySelector('.msg-input');
-const sessionsButton = () => findButtonByText(t('sessions.title', 'Sessions'));
+const sessionsButton = () => findButtonByText(t('sessions.title'));
 
 // Serves `session.get` point reads from `sessions` keyed `address::sessionId`.
 function serveSessions(sessions) {
@@ -463,10 +460,7 @@ describe('ChatView Sessions', () => {
       // errors or locks the healthy view.
       releaseChildHistory();
       await waitForCondition(
-        () =>
-          !document.body.textContent.includes(
-            t('loading.history', 'Loading chat history…'),
-          ),
+        () => !document.body.textContent.includes(t('loading.history')),
       );
       expect(
         subscribeRunEventsMock.mock.calls.filter(

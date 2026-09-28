@@ -42,28 +42,25 @@
   });
   let blocked = $derived(state.busy || Boolean(state.job));
   let transportOptions = $derived([
-    { value: 'stdio', label: t('mcp.local', 'Local program') },
-    { value: 'http', label: t('mcp.http', 'Server URL (HTTP)') },
-    { value: 'sse', label: t('mcp.sse', 'Server URL (legacy SSE)') },
+    { value: 'stdio', label: t('mcp.local') },
+    { value: 'http', label: t('mcp.http') },
+    { value: 'sse', label: t('mcp.sse') },
   ]);
   let mappingFields = $derived([
     {
       key: 'environment',
-      label: t('mcp.environment', 'Environment variables'),
-      value: t('mcp.value', 'Value (non-secret)'),
+      label: t('mcp.environment'),
+      value: t('mcp.value'),
     },
     {
       key: 'credential_environment',
-      label: t(
-        'mcp.credentialEnvironment',
-        'Credentials for environment variables',
-      ),
-      value: t('mcp.credentialName', 'Credential name'),
+      label: t('mcp.credentialEnvironment'),
+      value: t('mcp.credentialName'),
     },
     {
       key: 'credential_headers',
-      label: t('mcp.credentialHeaders', 'Credentials for HTTP headers'),
-      value: t('mcp.credentialName', 'Credential name'),
+      label: t('mcp.credentialHeaders'),
+      value: t('mcp.credentialName'),
     },
   ]);
 
@@ -117,13 +114,13 @@
   }
   function status(connection) {
     if (!connection.configuration.enabled)
-      return { label: t('mcp.disabled', 'Disabled'), variant: 'neutral' };
+      return { label: t('mcp.disabled'), variant: 'neutral' };
     const states = {
-      connected: { label: t('mcp.connected', 'Connected'), variant: 'success' },
-      connecting: { label: t('mcp.connecting', 'Connecting'), variant: 'warn' },
-      failed: { label: t('mcp.failed', 'Connection failed'), variant: 'error' },
+      connected: { label: t('mcp.connected'), variant: 'success' },
+      connecting: { label: t('mcp.connecting'), variant: 'warn' },
+      failed: { label: t('mcp.failed'), variant: 'error' },
       disconnected: {
-        label: t('mcp.disconnected', 'Disconnected'),
+        label: t('mcp.disconnected'),
         variant: 'neutral',
       },
     };
@@ -138,21 +135,18 @@
 
 <!-- A sub-topic of the Extensions section: the MCP Extension's connections
      under a sub-heading, as one group of connection rows. -->
-<section class="mcp-panel" aria-label={t('mcp.title', 'MCP connections')}>
+<section class="mcp-panel" aria-label={t('mcp.title')}>
   <div class="s-subhead mcp-subhead">
     <div>
-      <h4 class="s-subhead__title">{t('mcp.title', 'MCP connections')}</h4>
+      <h4 class="s-subhead__title">{t('mcp.title')}</h4>
       <p class="s-subhead__desc">
-        {t(
-          'mcp.host',
-          'Programs and application add-ons run on the machine hosting vBot.',
-        )}
+        {t('mcp.host')}
       </p>
     </div>
     <Button
       variant="secondary"
       disabled={blocked || state.loading}
-      onClick={() => edit()}>{t('mcp.add', 'Add MCP connection')}</Button
+      onClick={() => edit()}>{t('mcp.add')}</Button
     >
   </div>
   {#if state.error && !draft && !secretConnection}
@@ -161,7 +155,7 @@
       <Button
         variant="secondary"
         disabled={state.busy}
-        onClick={controller.refresh}>{t('common.retry', 'Retry')}</Button
+        onClick={controller.refresh}>{t('common.retry')}</Button
       >
     </Banner>
   {/if}
@@ -171,28 +165,21 @@
     >{/if}
   {#if state.job}
     <Banner variant="warn" role="status">
-      {t(
-        'mcp.testing',
-        'Testing {name}. Complete any sign-in or question shown by vBot.',
-        { name: state.job.connection },
-      )}
+      {t('mcp.testing', { name: state.job.connection })}
       <Button
         variant="secondary"
         disabled={state.busy}
-        onClick={controller.cancel}>{t('mcp.cancelTest', 'Cancel test')}</Button
+        onClick={controller.cancel}>{t('mcp.cancelTest')}</Button
       >
     </Banner>
   {/if}
   {#if state.loading}
-    <Banner variant="neutral">{t('common.loading', 'Loading…')}</Banner>
+    <Banner variant="neutral">{t('common.loading')}</Banner>
   {:else if !state.connections.length && !state.error}
     <EmptyState
       density="compact"
-      title={t('mcp.empty', 'No MCP connections yet')}
-      description={t(
-        'mcp.emptyHint',
-        'Add a local program or a server URL from your MCP setup instructions.',
-      )}
+      title={t('mcp.empty')}
+      description={t('mcp.emptyHint')}
     />
   {:else}
     <div class="s-group mcp-connections">
@@ -213,17 +200,13 @@
               </p>
               {#if connection.counts}
                 <p class="mcp-catalog-counts">
-                  {t(
-                    'mcp.catalogCounts',
-                    'Tools: {tools} · Resources: {resources} · Prompts: {prompts}',
-                    {
-                      tools: connection.counts.tools ?? 0,
-                      resources:
-                        (connection.counts.resources ?? 0) +
-                        (connection.counts.resource_templates ?? 0),
-                      prompts: connection.counts.prompts ?? 0,
-                    },
-                  )}
+                  {t('mcp.catalogCounts', {
+                    tools: connection.counts.tools ?? 0,
+                    resources:
+                      (connection.counts.resources ?? 0) +
+                      (connection.counts.resource_templates ?? 0),
+                    prompts: connection.counts.prompts ?? 0,
+                  })}
                 </p>
               {/if}
             </div>
@@ -231,7 +214,7 @@
               <Toggle
                 checked={connection.configuration.enabled}
                 disabled={blocked}
-                ariaLabel={t('mcp.enabledFor', 'Enable {name}', {
+                ariaLabel={t('mcp.enabledFor', {
                   name: connection.id,
                 })}
                 onChange={(enabled) =>
@@ -252,26 +235,25 @@
                 onClick={() => {
                   capabilityQuery = '';
                   void controller.inspect(connection.id);
-                }}>{t('mcp.capabilities', 'Capabilities & access')}</Button
+                }}>{t('mcp.capabilities')}</Button
               >
               <Button
                 variant="tertiary"
                 disabled={blocked}
-                onClick={() => edit(connection)}
-                >{t('common.edit', 'Edit')}</Button
+                onClick={() => edit(connection)}>{t('common.edit')}</Button
               >
               <Button
                 variant="tertiary"
                 disabled={blocked || !connection.configuration.enabled}
                 onClick={() => controller.test(connection.id)}
-                >{t('mcp.test', 'Test connection')}</Button
+                >{t('mcp.test')}</Button
               >
               <Button
                 variant="tertiary"
                 disabled={blocked ||
                   !mcpCredentialNames(connection.configuration).length}
                 onClick={() => openCredentials(connection)}
-                >{t('mcp.credentials', 'Credentials')}</Button
+                >{t('mcp.credentials')}</Button
               >
               <Button
                 variant="danger"
@@ -279,7 +261,7 @@
                 disabled={blocked}
                 onClick={() => {
                   removal = connection;
-                }}>{t('common.remove', 'Remove')}</Button
+                }}>{t('common.remove')}</Button
               >
             </div>
           </div>
@@ -291,7 +273,7 @@
 
 {#if state.inspector}
   <Modal
-    title={t('mcp.inspectTitle', 'Capabilities & access: {name}', {
+    title={t('mcp.inspectTitle', {
       name: state.inspector.id,
     })}
     onClose={controller.closeInspector}
@@ -309,28 +291,25 @@
           }}
         >
           <TextField
-            ariaLabel={t('mcp.searchTools', 'Search Tools')}
-            placeholder={t('mcp.searchTools', 'Search Tools')}
+            ariaLabel={t('mcp.searchTools')}
+            placeholder={t('mcp.searchTools')}
             value={capabilityQuery}
             onInput={(value) => {
               capabilityQuery = value;
             }}
           />
-          <Button type="submit" variant="secondary"
-            >{t('common.search', 'Search')}</Button
+          <Button type="submit" variant="secondary">{t('common.search')}</Button
           >
           <Button
             variant="secondary"
             onClick={() => {
               capabilityQuery = '';
               void controller.inspect(state.inspector.id);
-            }}>{t('mcp.showAll', 'Show all')}</Button
+            }}>{t('mcp.showAll')}</Button
           >
         </form>
         {#if state.inspector.loading}
-          <Banner variant="neutral" role="status"
-            >{t('common.loading', 'Loading…')}</Banner
-          >
+          <Banner variant="neutral" role="status">{t('common.loading')}</Banner>
         {:else if state.inspector.error}
           <Banner variant="error" role="alert">
             {state.inspector.error}
@@ -340,17 +319,14 @@
                 controller.inspect(state.inspector.id, {
                   query: state.inspector.query,
                   offset: state.inspector.offset,
-                })}>{t('common.retry', 'Retry')}</Button
+                })}>{t('common.retry')}</Button
             >
           </Banner>
         {:else if state.inspector.data}
           {@const catalog = state.inspector.data}
           <div class="mcp-heading">
             <p>
-              {t(
-                'mcp.accessHelp',
-                'Enable this connection in the Agent or Swarm Tool settings. It is off by default, including in All Tools mode.',
-              )}
+              {t('mcp.accessHelp')}
             </p>
             <StatusChip variant={status(catalog).variant}
               >{status(catalog).label}</StatusChip
@@ -359,23 +335,15 @@
           {#if !catalog.catalog_available}
             <EmptyState
               density="compact"
-              title={t('mcp.catalogMissing', 'No catalog discovered yet')}
-              description={t(
-                'mcp.catalogMissingHint',
-                'Close this view and test the connection to load its capabilities.',
-              )}
+              title={t('mcp.catalogMissing')}
+              description={t('mcp.catalogMissingHint')}
             />
           {:else}
             {#if catalog.state !== 'connected'}
-              <Banner variant="warn"
-                >{t(
-                  'mcp.catalogStale',
-                  'Showing the last discovered catalog. The connection is currently unavailable.',
-                )}</Banner
-              >
+              <Banner variant="warn">{t('mcp.catalogStale')}</Banner>
             {/if}
             <h4>
-              {t('mcp.availableTools', 'Tools ({count})', {
+              {t('mcp.availableTools', {
                 count: catalog.total,
               })}
             </h4>
@@ -392,12 +360,7 @@
                     </p>
                     {#if tool.description.length > 160}
                       <details>
-                        <summary
-                          >{t(
-                            'mcp.fullDescription',
-                            'Full description',
-                          )}</summary
-                        >
+                        <summary>{t('mcp.fullDescription')}</summary>
                         <p class="mcp-guidance">{tool.description}</p>
                       </details>
                     {/if}
@@ -412,7 +375,7 @@
                     controller.inspect(catalog.id, {
                       query: state.inspector.query,
                       offset: catalog.previous_offset,
-                    })}>{t('common.previous', 'Previous')}</Button
+                    })}>{t('common.previous')}</Button
                 >
                 <Button
                   variant="secondary"
@@ -421,28 +384,25 @@
                     controller.inspect(catalog.id, {
                       query: state.inspector.query,
                       offset: catalog.next_offset,
-                    })}>{t('common.next', 'Next')}</Button
+                    })}>{t('common.next')}</Button
                 >
               </div>
             {:else}
               <EmptyState
                 density="compact"
-                title={t('mcp.noToolsFound', 'No Tools found')}
-                description={t(
-                  'mcp.noToolsFoundHint',
-                  'Search checks names and descriptions. Show all Tools to inspect general-purpose capabilities.',
-                )}
+                title={t('mcp.noToolsFound')}
+                description={t('mcp.noToolsFoundHint')}
               />
             {/if}
             {#if catalog.instructions}
               <details>
-                <summary>{t('mcp.serverGuidance', 'Server guidance')}</summary>
+                <summary>{t('mcp.serverGuidance')}</summary>
                 <p class="mcp-guidance">{catalog.instructions}</p>
               </details>
             {/if}
             {#if catalog.prompts.length}
               <details>
-                <summary>{t('mcp.serverPrompts', 'Server prompts')}</summary>
+                <summary>{t('mcp.serverPrompts')}</summary>
                 <ul class="mcp-capability-list">
                   {#each catalog.prompts as prompt (prompt.name)}<li>
                       <strong>{prompt.name}</strong>
@@ -460,9 +420,7 @@
 
 {#if draft}
   <Modal
-    title={original
-      ? t('mcp.edit', 'Edit MCP connection')
-      : t('mcp.add', 'Add MCP connection')}
+    title={original ? t('mcp.edit') : t('mcp.add')}
     closeDisabled={state.busy}
     onClose={() => {
       draft = null;
@@ -481,12 +439,9 @@
         <div class="mcp-grid">
           <FormField
             controlId={`${componentId}-name`}
-            label={t('mcp.name', 'Connection name')}
+            label={t('mcp.name')}
             required
-            help={t(
-              'mcp.nameHelp',
-              'Lowercase letters, numbers and underscores; start with a letter.',
-            )}
+            help={t('mcp.nameHelp')}
           >
             {#snippet children(field)}<TextField
                 id={field.controlId}
@@ -500,14 +455,14 @@
           </FormField>
           <FormField
             controlId={`${componentId}-transport`}
-            label={t('mcp.connectionType', 'Connection type')}
+            label={t('mcp.connectionType')}
           >
             {#snippet children(field)}<Dropdown
                 id={field.controlId}
                 value={draft.transport}
                 options={transportOptions}
                 disabled={state.busy}
-                ariaLabel={t('mcp.connectionType', 'Connection type')}
+                ariaLabel={t('mcp.connectionType')}
                 onValueChange={(value) => set('transport', value)}
               />{/snippet}
           </FormField>
@@ -515,12 +470,9 @@
         {#if draft.transport === 'stdio'}
           <FormField
             controlId={`${componentId}-command`}
-            label={t('mcp.program', 'Program')}
+            label={t('mcp.program')}
             required
-            help={t(
-              'mcp.programHelp',
-              'Executable on the vBot host, for example uvx, npx or an absolute path.',
-            )}
+            help={t('mcp.programHelp')}
           >
             {#snippet children(field)}<TextField
                 id={field.controlId}
@@ -532,12 +484,12 @@
               />{/snippet}
           </FormField>
           <div class="mcp-group">
-            <h4>{t('mcp.arguments', 'Arguments')}</h4>
+            <h4>{t('mcp.arguments')}</h4>
             {#each draft.args as argument, index (index)}
               <div class="mcp-entry">
                 <FormField
                   controlId={`${componentId}-arg-${index}`}
-                  label={t('mcp.argument', 'Argument {number}', {
+                  label={t('mcp.argument', {
                     number: index + 1,
                   })}
                 >
@@ -557,16 +509,12 @@
                 <Button
                   variant="tertiary"
                   disabled={state.busy}
-                  ariaLabel={t(
-                    'mcp.removeArgument',
-                    'Remove argument {number}',
-                    { number: index + 1 },
-                  )}
+                  ariaLabel={t('mcp.removeArgument', { number: index + 1 })}
                   onClick={() =>
                     set(
                       'args',
                       draft.args.filter((_, position) => position !== index),
-                    )}>{t('common.remove', 'Remove')}</Button
+                    )}>{t('common.remove')}</Button
                 >
               </div>
             {/each}
@@ -574,13 +522,13 @@
               variant="secondary"
               disabled={state.busy}
               onClick={() => set('args', [...draft.args, ''])}
-              >{t('mcp.addArgument', 'Add argument')}</Button
+              >{t('mcp.addArgument')}</Button
             >
           </div>
         {:else}
           <FormField
             controlId={`${componentId}-url`}
-            label={t('mcp.url', 'Server URL')}
+            label={t('mcp.url')}
             required
           >
             {#snippet children(field)}<TextField
@@ -592,32 +540,26 @@
                 onInput={(value) => set('url', value)}
               />{/snippet}
           </FormField>
-          <FormField
-            controlId={`${componentId}-oauth`}
-            label={t('mcp.oauth', 'Sign in with OAuth')}
-          >
+          <FormField controlId={`${componentId}-oauth`} label={t('mcp.oauth')}>
             {#snippet children(field)}<Toggle
                 id={field.controlId}
                 checked={draft.oauth}
                 disabled={state.busy}
-                ariaLabel={t('mcp.oauth', 'Sign in with OAuth')}
+                ariaLabel={t('mcp.oauth')}
                 onChange={(value) => set('oauth', value)}
               />{/snippet}
           </FormField>
         {/if}
         <p>
-          {t(
-            'mcp.accessHelp',
-            'Enable this connection in the Agent or Swarm Tool settings. It is off by default, including in All Tools mode.',
-          )}
+          {t('mcp.accessHelp')}
         </p>
         <details class="mcp-advanced">
-          <summary>{t('mcp.advanced', 'Advanced settings')}</summary>
+          <summary>{t('mcp.advanced')}</summary>
           <div class="mcp-editor">
             <div class="mcp-grid">
               <FormField
                 controlId={`${componentId}-timeout`}
-                label={t('mcp.timeout', 'Timeout (seconds)')}
+                label={t('mcp.timeout')}
               >
                 {#snippet children(field)}<TextField
                     id={field.controlId}
@@ -633,13 +575,13 @@
               </FormField>
               <FormField
                 controlId={`${componentId}-enabled`}
-                label={t('mcp.enabled', 'Enabled')}
+                label={t('mcp.enabled')}
               >
                 {#snippet children(field)}<Toggle
                     id={field.controlId}
                     checked={draft.enabled}
                     disabled={state.busy}
-                    ariaLabel={t('mcp.enabled', 'Enabled')}
+                    ariaLabel={t('mcp.enabled')}
                     onChange={(value) => set('enabled', value)}
                   />{/snippet}
               </FormField>
@@ -647,7 +589,7 @@
             {#if draft.transport === 'stdio'}
               <FormField
                 controlId={`${componentId}-cwd`}
-                label={t('mcp.directory', 'Working directory')}
+                label={t('mcp.directory')}
               >
                 {#snippet children(field)}<TextField
                     id={field.controlId}
@@ -659,7 +601,7 @@
             {:else if draft.oauth}
               <FormField
                 controlId={`${componentId}-redirect`}
-                label={t('mcp.redirect', 'OAuth redirect URL (optional)')}
+                label={t('mcp.redirect')}
               >
                 {#snippet children(field)}<TextField
                     id={field.controlId}
@@ -677,7 +619,7 @@
                   <div class="mcp-entry mcp-mapping">
                     <FormField
                       controlId={`${componentId}-${mapping.key}-${index}-name`}
-                      label={t('mcp.entryName', 'Name')}
+                      label={t('mcp.entryName')}
                     >
                       {#snippet children(field)}<TextField
                           id={field.controlId}
@@ -704,18 +646,17 @@
                     <Button
                       variant="tertiary"
                       disabled={state.busy}
-                      ariaLabel={t(
-                        'mcp.removeEntry',
-                        'Remove {group} entry {number}',
-                        { group: mapping.label, number: index + 1 },
-                      )}
+                      ariaLabel={t('mcp.removeEntry', {
+                        group: mapping.label,
+                        number: index + 1,
+                      })}
                       onClick={() =>
                         set(
                           mapping.key,
                           draft[mapping.key].filter(
                             (_, position) => position !== index,
                           ),
-                        )}>{t('common.remove', 'Remove')}</Button
+                        )}>{t('common.remove')}</Button
                     >
                   </div>
                 {/each}
@@ -727,25 +668,19 @@
                       ...draft[mapping.key],
                       { name: '', value: '' },
                     ])}
-                  >{t('mcp.addEntry', 'Add {group}', {
+                  >{t('mcp.addEntry', {
                     group: mapping.label,
                   })}</Button
                 >
               </div>
             {/each}
             <p>
-              {t(
-                'mcp.secretsHelp',
-                'Use credential names here, not secret values. After saving, open Credentials to set their values.',
-              )}
+              {t('mcp.secretsHelp')}
             </p>
           </div>
         </details>
         <p>
-          {t(
-            'mcp.saveHelp',
-            'Saving applies the connection on the vBot host. Editing its settings interrupts the current connection.',
-          )}
+          {t('mcp.saveHelp')}
         </p>
       </form>
     {/snippet}
@@ -755,14 +690,14 @@
         disabled={state.busy}
         onClick={() => {
           draft = null;
-        }}>{t('common.cancel', 'Cancel')}</Button
+        }}>{t('common.cancel')}</Button
       >
       <Button
         variant="primary"
         type="submit"
         form={`${componentId}-form`}
         disabled={state.busy}
-        loading={state.busy}>{t('mcp.save', 'Save connection')}</Button
+        loading={state.busy}>{t('mcp.save')}</Button
       >
     {/snippet}
   </Modal>
@@ -770,7 +705,7 @@
 
 {#if secretConnection}
   <Modal
-    title={t('mcp.credentialsFor', 'Credentials for {name}', {
+    title={t('mcp.credentialsFor', {
       name: secretConnection.id,
     })}
     closeDisabled={state.busy}
@@ -791,14 +726,14 @@
           >{/if}
         <FormField
           controlId={`${componentId}-key`}
-          label={t('mcp.credentialName', 'Credential name')}
+          label={t('mcp.credentialName')}
         >
           {#snippet children(field)}<Dropdown
               id={field.controlId}
               value={secretKey}
               options={mcpCredentialNames(secretConnection.configuration)}
               disabled={state.busy}
-              ariaLabel={t('mcp.credentialName', 'Credential name')}
+              ariaLabel={t('mcp.credentialName')}
               onValueChange={(value) => {
                 secretKey = value;
                 secretValue = '';
@@ -807,11 +742,8 @@
         </FormField>
         <FormField
           controlId={`${componentId}-value`}
-          label={t('mcp.secretValue', 'New secret value')}
-          help={t(
-            'mcp.secretHelp',
-            'Saved values are never displayed. This named credential may also be used by other connections.',
-          )}
+          label={t('mcp.secretValue')}
+          help={t('mcp.secretHelp')}
         >
           {#snippet children(field)}<TextField
               id={field.controlId}
@@ -831,32 +763,27 @@
       <Button
         variant="danger"
         disabled={state.busy}
-        onClick={() => saveCredential('')}
-        >{t('mcp.clearCredential', 'Clear credential')}</Button
+        onClick={() => saveCredential('')}>{t('mcp.clearCredential')}</Button
       >
       <Button
         variant="secondary"
         disabled={state.busy}
-        onClick={closeCredentials}>{t('common.cancel', 'Cancel')}</Button
+        onClick={closeCredentials}>{t('common.cancel')}</Button
       >
       <Button
         variant="primary"
         type="submit"
         form={`${componentId}-secret`}
-        disabled={state.busy || !secretValue}
-        >{t('mcp.saveCredential', 'Save credential')}</Button
+        disabled={state.busy || !secretValue}>{t('mcp.saveCredential')}</Button
       >
     {/snippet}
   </Modal>
 {/if}
 {#if removal}
   <ConfirmDialog
-    title={t('mcp.removeTitle', 'Remove {name}?', { name: removal.id })}
-    body={t(
-      'mcp.removeBody',
-      'Agents will lose access to this connection. The external application and installed software will remain.',
-    )}
-    confirmLabel={t('common.remove', 'Remove')}
+    title={t('mcp.removeTitle', { name: removal.id })}
+    body={t('mcp.removeBody')}
+    confirmLabel={t('common.remove')}
     onConfirm={remove}
     onCancel={() => {
       removal = null;

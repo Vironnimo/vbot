@@ -26,10 +26,10 @@
       await navigator.clipboard.writeText(
         JSON.stringify(selected.definition, null, 2),
       );
-      onToast({ title: t('common.copied', 'Copied'), variant: 'success' });
+      onToast({ title: t('common.copied'), variant: 'success' });
     } catch {
       onToast({
-        title: t('systemPrompt.error.copyFailed', 'Failed to copy'),
+        title: t('systemPrompt.error.copyFailed'),
         variant: 'error',
       });
     }
@@ -38,18 +38,12 @@
 
 <div class="tool-inspector">
   <p class="tool-context-note">
-    {t(
-      'systemPrompt.tools.note',
-      'These definitions accompany the System Prompt. MCP exposes a connection Tool here; individual functions are discovered later during the conversation.',
-    )}
+    {t('systemPrompt.tools.note')}
   </p>
   {#if tools.length === 0}
     <EmptyState
-      title={t('systemPrompt.tools.empty', 'No Tools in this preview')}
-      description={t(
-        'systemPrompt.tools.emptyHint',
-        'The selected Agent currently has no available Tool definitions.',
-      )}
+      title={t('systemPrompt.tools.empty')}
+      description={t('systemPrompt.tools.emptyHint')}
     />
   {:else}
     <div class="tool-inspector-layout">
@@ -58,19 +52,16 @@
           type="search"
           value={query}
           onInput={(value) => (query = value)}
-          ariaLabel={t('systemPrompt.tools.search', 'Search Tools')}
-          placeholder={t('systemPrompt.tools.search', 'Search Tools')}
+          ariaLabel={t('systemPrompt.tools.search')}
+          placeholder={t('systemPrompt.tools.search')}
         />
         <span class="tool-index-count"
-          >{t('systemPrompt.tools.matches', '{shown} of {total} Tools', {
+          >{t('systemPrompt.tools.matches', {
             shown: filtered.length,
             total: tools.length,
           })}</span
         >
-        <nav
-          class="tool-list"
-          aria-label={t('systemPrompt.tools.list', 'Tool definitions')}
-        >
+        <nav class="tool-list" aria-label={t('systemPrompt.tools.list')}>
           {#each filtered as entry (entry.definition.name)}
             <Button
               variant="secondary"
@@ -82,7 +73,7 @@
             >
               <span class="tool-name">{entry.definition.name}</span>
               <span class="tool-size"
-                >{t('systemPrompt.preview.tokenCount', '~{count} tokens', {
+                >{t('systemPrompt.preview.tokenCount', {
                   count: entry.tokens,
                 })}</span
               >
@@ -96,20 +87,20 @@
             <div>
               <h3>{selected.definition.name}</h3>
               <span class="tool-size"
-                >{t('systemPrompt.preview.tokenCount', '~{count} tokens', {
+                >{t('systemPrompt.preview.tokenCount', {
                   count: selected.tokens,
                 })}</span
               >
             </div>
             <Button variant="secondary" onClick={copyDefinition}
-              >{t('systemPrompt.tools.copy', 'Copy definition')}</Button
+              >{t('systemPrompt.tools.copy')}</Button
             >
           </header>
           <div class="tool-detail-body">
-            <h4>{t('systemPrompt.tools.description', 'Description')}</h4>
+            <h4>{t('systemPrompt.tools.description')}</h4>
             <p class="tool-description">{selected.definition.description}</p>
             <h4>
-              {t('systemPrompt.tools.parameters', 'Parameters · JSON Schema')}
+              {t('systemPrompt.tools.parameters')}
             </h4>
             <pre class="tool-schema">{JSON.stringify(
                 selected.definition.parameters,
@@ -117,12 +108,7 @@
                 2,
               )}</pre>
             <details class="tool-original">
-              <summary
-                >{t(
-                  'systemPrompt.tools.original',
-                  'Complete definition · JSON',
-                )}</summary
-              >
+              <summary>{t('systemPrompt.tools.original')}</summary>
               <pre class="tool-schema">{JSON.stringify(
                   selected.definition,
                   null,
@@ -133,11 +119,8 @@
         </article>
       {:else}
         <EmptyState
-          title={t('systemPrompt.tools.noMatches', 'No matching Tools')}
-          description={t(
-            'systemPrompt.tools.searchHint',
-            'Try a Tool name or a word from its description.',
-          )}
+          title={t('systemPrompt.tools.noMatches')}
+          description={t('systemPrompt.tools.searchHint')}
         />
       {/if}
     </div>

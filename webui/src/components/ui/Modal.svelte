@@ -27,7 +27,7 @@
     title = '',
     labelledById = '',
     closeDisabled = false,
-    closeLabel = t('common.close', 'Close'),
+    closeLabel = t('common.close'),
     class: className = '',
     onClose = noop,
     body,

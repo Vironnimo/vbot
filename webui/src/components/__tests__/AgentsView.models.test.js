@@ -48,8 +48,7 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 const { default: AgentsView } = await import('../AgentsView.svelte');
 
 const ANTHROPIC_MODEL = 'anthropic/claude-sonnet-4-20250219';
-const PROVIDER_DEFAULT = () =>
-  t('inherit.optionProviderDefault', 'Inherit (provider default)');
+const PROVIDER_DEFAULT = () => t('inherit.optionProviderDefault');
 
 function reasoningModel(reasoning) {
   return {
@@ -105,11 +104,11 @@ describe('AgentsView models', () => {
         (label) => label.textContent.trim(),
       ),
     ).toEqual([
-      t('agents.form.model', 'Model'),
-      t('agents.form.thinkingEffort', 'Thinking effort'),
-      t('agents.modelOptions', 'Temperature & fallback models'),
-      t('agents.form.temperature', 'Temperature'),
-      t('agents.form.fallbackModels', 'Fallback models'),
+      t('agents.form.model'),
+      t('agents.form.thinkingEffort'),
+      t('agents.modelOptions'),
+      t('agents.form.temperature'),
+      t('agents.form.fallbackModels'),
     ]);
     expect(document.querySelectorAll('#agent-model')).toHaveLength(1);
     // An empty chain renders no row dropdowns, only the single add affordance.
@@ -142,7 +141,7 @@ describe('AgentsView models', () => {
     toggle.click();
     flushSync();
     expect(options.hidden).toBe(true);
-    getButton(t('common.save', 'Save')).click();
+    getButton(t('common.save')).click();
     await waitForCondition(() => document.activeElement === temperature);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(options.hidden).toBe(false);
@@ -240,11 +239,9 @@ describe('AgentsView models', () => {
   });
 
   it('preserves a saved unavailable model value in the searchable dropdown', async () => {
-    const unavailable = t(
-      'agents.form.modelUnavailableOption',
-      'Unavailable / custom: {model}',
-      { model: 'legacy/custom-model' },
-    );
+    const unavailable = t('agents.form.modelUnavailableOption', {
+      model: 'legacy/custom-model',
+    });
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         agents: [{ ...baseAgent(), model: 'legacy/custom-model' }],
@@ -293,7 +290,7 @@ describe('AgentsView models', () => {
     expect(modelOptionLabels).toContain('openai/gpt-5.2 (ChatGPT Plus/Pro)');
     expect(modelOptionLabels).toContain('openai/gpt-5.2 (API Key)');
     expect(modelOptionLabels).not.toContain(
-      t('agents.form.modelUnavailableOption', 'Unavailable / custom: {model}', {
+      t('agents.form.modelUnavailableOption', {
         model: 'openai/gpt-5.2',
       }),
     );
@@ -395,10 +392,7 @@ describe('AgentsView models', () => {
     openSimpleDropdown('agent-thinking-effort');
     selectSimpleOption('agent-thinking-effort', PROVIDER_DEFAULT());
 
-    const notConfigured = t(
-      'inherit.optionNotConfigured',
-      'Inherit (not configured)',
-    );
+    const notConfigured = t('inherit.optionNotConfigured');
     await openSearchableDropdown('agent-model');
     selectSearchableOption('agent-model', notConfigured);
     await waitForCondition(() => modelTriggerLabel() === notConfigured, 100);
@@ -436,12 +430,7 @@ describe('AgentsView models', () => {
     expect(getSimpleTrigger('agent-thinking-effort').disabled).toBe(true);
     expect(
       document.body.querySelector('#agent-thinking-effort-help').textContent,
-    ).toContain(
-      t(
-        'agents.form.thinkingEffortUnsupported',
-        'This model does not support reasoning.',
-      ),
-    );
+    ).toContain(t('agents.form.thinkingEffortUnsupported'));
   });
 
   it('offers exactly the reasoning ladder of the model and applies a selected effort', async () => {
@@ -499,8 +488,7 @@ describe('AgentsView models', () => {
         ],
       }),
     );
-    const inherited = (value) =>
-      t('inherit.option', 'Inherited: {value} (global default)', { value });
+    const inherited = (value) => t('inherit.option', { value });
 
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();

@@ -51,7 +51,7 @@ async function waitForCondition(predicate, attempts = 50) {
 }
 
 function showView(view) {
-  const label = t(`calendar.view.${view}`, view);
+  const label = t(`calendar.view.${view}`);
   [...document.querySelectorAll('[role="tab"]')]
     .find((tab) => tab.textContent.trim() === label)
     .click();
@@ -201,7 +201,7 @@ describe('CalendarView', () => {
     it('opens the create form from the toolbar or an empty day in a padded modal with labelled controls', async () => {
       mountedComponent = await mountCalendarView();
 
-      button(t('calendar.newEvent', 'New event')).click();
+      button(t('calendar.newEvent')).click();
       flushSync();
 
       // The Modal shell renders body snippets directly; callers own the padded
@@ -222,7 +222,7 @@ describe('CalendarView', () => {
         '2026-09-23',
       );
 
-      button(t('common.cancel', 'Cancel')).click();
+      button(t('common.cancel')).click();
       flushSync();
       expect(document.querySelector('.calendar-form')).toBeNull();
 
@@ -236,7 +236,7 @@ describe('CalendarView', () => {
 
     it('creates a weekly recurring event through the shared choice fields', async () => {
       mountedComponent = await mountCalendarView();
-      button(t('calendar.newEvent', 'New event')).click();
+      button(t('calendar.newEvent')).click();
       flushSync();
 
       // The labels still name the Dropdown triggers.
@@ -251,26 +251,20 @@ describe('CalendarView', () => {
       expect(document.querySelector('.calendar-weekday-picker')).toBeNull();
 
       typeInto('calendar-form-title-input', 'Standup');
-      const weekly = t('calendar.form.freqWeekly', 'Weekly');
+      const weekly = t('calendar.form.freqWeekly');
       chooseOption('calendar-form-freq', weekly);
       expect(freqTrigger.textContent.trim()).toBe(weekly);
       expect(document.querySelector('.calendar-weekday-picker')).not.toBeNull();
-      chooseOption(
-        'calendar-form-end-mode',
-        t('calendar.form.endsUntil', 'On date'),
-      );
+      chooseOption('calendar-form-end-mode', t('calendar.form.endsUntil'));
       expect(
         document.querySelector('.calendar-form-ends input[type="date"]'),
       ).not.toBeNull();
-      chooseOption(
-        'calendar-form-end-mode',
-        t('calendar.form.endsCount', 'After'),
-      );
+      chooseOption('calendar-form-end-mode', t('calendar.form.endsCount'));
       expect(
         document.querySelector('.calendar-form-ends input[type="number"]'),
       ).not.toBeNull();
 
-      button(t('calendar.form.create', 'Create event')).click();
+      button(t('calendar.form.create')).click();
       await waitForCondition(
         () => document.querySelector('.calendar-form') === null,
       );
@@ -340,7 +334,7 @@ describe('CalendarView', () => {
       expect(document.querySelector('.calendar-detail')).not.toBeNull();
       expect(document.querySelector('.calendar-form')).toBeNull();
 
-      button(t('common.edit', 'Edit')).click();
+      button(t('common.edit')).click();
       flushSync();
       // 07:00 UTC is 09:00 in Berlin; the form presents that wall clock.
       expect(document.getElementById('calendar-form-date').value).toBe(
@@ -348,7 +342,7 @@ describe('CalendarView', () => {
       );
       expect(document.getElementById('calendar-form-time').value).toBe('09:00');
 
-      button(t('common.save', 'Save')).click();
+      button(t('common.save')).click();
       await waitForCondition(() => rpcCalls('calendar.update').length === 1);
 
       // Regression: resaving without edits must not shift the event by the
@@ -396,14 +390,14 @@ describe('CalendarView', () => {
       document.querySelector('.calendar-cell .calendar-entry').click();
       flushSync();
 
-      button(t('common.delete', 'Delete')).click();
+      button(t('common.delete')).click();
       flushSync();
       document
         .querySelectorAll('.calendar-delete-choice input[type="radio"]')[1]
         .click();
       flushSync();
       button(
-        t('calendar.deleteOccurrence', 'Only this occurrence'),
+        t('calendar.deleteOccurrence'),
         document.querySelector('.modal-footer'),
       ).click();
       await waitForCondition(() => rpcCalls('calendar.add_exdate').length > 0);

@@ -23,7 +23,7 @@
   let container = $state();
   let renderedDocument = $derived.by(() => {
     const options = {
-      plainLanguageLabel: t('chat.codeLanguagePlain', 'text'),
+      plainLanguageLabel: t('chat.codeLanguagePlain'),
     };
     if (reasoning) {
       return streaming
@@ -56,8 +56,8 @@
           target: slot,
           props: {
             text: codeBlock.text,
-            label: t('chat.copyCode', 'Copy code'),
-            copiedLabel: t('chat.codeCopied', 'Code copied'),
+            label: t('chat.copyCode'),
+            copiedLabel: t('chat.codeCopied'),
             class: 'msg-code__copy',
           },
         }),
@@ -101,11 +101,7 @@
         if (!/\.html?$/i.test(filename)) continue;
         link.dataset.previewFile = href;
         const external = document.createElement('a');
-        const externalLabel = t(
-          'preview.openExternal',
-          'Open {filename} in browser',
-          { filename },
-        );
+        const externalLabel = t('preview.openExternal', { filename });
         external.href = href;
         external.target = '_blank';
         external.rel = 'noopener noreferrer';

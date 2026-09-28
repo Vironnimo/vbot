@@ -55,9 +55,9 @@
   const startVisible = $derived(!model.editor && !model.selectedSwarm);
   // Same route names as the profile editor's delivery settings.
   const routeLabels = $derived({
-    main: t('swarm.profile.mainMessages', 'Main discussion'),
-    discussion: t('swarm.profile.joinedMessages', 'Joined discussions'),
-    ping: t('swarm.profile.mentions', 'Direct mentions'),
+    main: t('swarm.profile.mainMessages'),
+    discussion: t('swarm.profile.joinedMessages'),
+    ping: t('swarm.profile.mentions'),
   });
 </script>
 
@@ -91,7 +91,7 @@
   </Button>
 {/snippet}
 
-<svelte:head><title>{t('swarm.title', 'Swarms')}</title></svelte:head>
+<svelte:head><title>{t('swarm.title')}</title></svelte:head>
 {#snippet actionIcon(kind)}
   <svg
     width="16"
@@ -130,12 +130,12 @@
 <main class="swarm-page">
   <aside class="secondary-pane">
     <div class="secondary-pane__header">
-      <span class="secondary-pane__title">{t('swarm.profiles', 'Swarms')}</span>
+      <span class="secondary-pane__title">{t('swarm.profiles')}</span>
       <Button
         variant="tertiary"
         icon
-        ariaLabel={t('swarm.newProfile', 'New Swarm')}
-        tooltip={t('swarm.newProfile', 'New Swarm')}
+        ariaLabel={t('swarm.newProfile')}
+        tooltip={t('swarm.newProfile')}
         loading={model.pending === 'profile'}
         onClick={() => model.navigate(() => model.openProfile())}
         >{@render actionIcon('plus')}</Button
@@ -148,12 +148,11 @@
         class:active={startVisible}
         aria-current={startVisible ? 'page' : undefined}
         onclick={() => model.newSwarm()}
-        >{@render actionIcon('play')}<span>{t('swarm.newRun', 'New run')}</span
-        ></button
+        >{@render actionIcon('play')}<span>{t('swarm.newRun')}</span></button
       >
     </div>
     <div class="secondary-pane__scroll">
-      <nav class="secondary-list" aria-label={t('swarm.profiles', 'Swarms')}>
+      <nav class="secondary-list" aria-label={t('swarm.profiles')}>
         {#each model.profiles as profile (profile.id)}
           <button
             class="secondary-list__item"
@@ -168,16 +167,12 @@
           </button>
         {:else}<EmptyState
             density="compact"
-            title={t('swarm.noProfiles', 'No Swarms yet.')}
-            description={t(
-              'swarm.noProfilesHelp',
-              'Create a Swarm to start a Run.',
-            )}
+            title={t('swarm.noProfiles')}
+            description={t('swarm.noProfilesHelp')}
           />{/each}
         {#if model.profilesCursor}<Button
             variant="tertiary"
-            onClick={model.loadMoreProfiles}
-            >{t('swarm.profiles.more', 'Load more Swarms')}</Button
+            onClick={model.loadMoreProfiles}>{t('swarm.profiles.more')}</Button
           >{/if}
       </nav>
       {#each model.runGroups as group (group.id)}
@@ -205,8 +200,7 @@
       {/each}
       {#if model.swarmsCursor}<Button
           variant="tertiary"
-          onClick={model.loadMoreSwarms}
-          >{t('swarm.swarms.more', 'Load more runs')}</Button
+          onClick={model.loadMoreSwarms}>{t('swarm.swarms.more')}</Button
         >{/if}
     </div>
   </aside>
@@ -214,7 +208,7 @@
     {#if model.error}<Banner variant="error" role="alert">{model.error}</Banner
       >{/if}
     {#if model.loading}<Banner variant="info" role="status"
-        >{t('swarm.loading', 'Loading Swarms…')}</Banner
+        >{t('swarm.loading')}</Banner
       >{/if}
     {#if model.editor}
       {#key model.editorKey}
@@ -235,7 +229,7 @@
               <div class="swarm-heading-title">
                 <h2 class="view-header__title">
                   {model.selectedSwarm.profile_snapshot?.name ||
-                    t('swarm.profile', 'Swarm')}
+                    t('swarm.profile')}
                 </h2>
                 <StatusChip variant={model.working ? 'warn' : 'neutral'}>
                   {model.selectedSwarm.state}
@@ -248,55 +242,42 @@
                   loading={model.pending === 'stop'}
                   onClick={() => model.lifecycle('stop')}
                   >{@render actionIcon('stop')}{model.pending === 'stop'
-                    ? t('swarm.stopping', 'Stopping...')
-                    : t('swarm.stop', 'Stop')}</Button
+                    ? t('swarm.stopping')
+                    : t('swarm.stop')}</Button
                 >{:else if model.canResume}<Button
                   variant="primary"
                   loading={model.pending === 'resume'}
                   disabled={!!model.pending}
                   onClick={() => model.lifecycle('resume')}
                   >{@render actionIcon('play')}{model.pending === 'resume'
-                    ? t('swarm.resuming', 'Resuming...')
-                    : t('swarm.resume', 'Resume')}</Button
+                    ? t('swarm.resuming')
+                    : t('swarm.resume')}</Button
                 >{/if}<Button
                 variant="danger"
                 disabled={!!model.pending || model.working}
                 tooltip={model.working
-                  ? t(
-                      'swarm.deleteRun.stopFirst',
-                      'Stop the Swarm before deleting it.',
-                    )
-                  : t('swarm.deleteRun.title', 'Delete Run')}
+                  ? t('swarm.deleteRun.stopFirst')
+                  : t('swarm.deleteRun.title')}
                 onClick={() => {
                   model.deleteError = '';
                   model.swarmDeleteCandidate = model.selectedSwarm;
                 }}
-                ariaLabel={t('swarm.deleteRun.title', 'Delete Run')}
+                ariaLabel={t('swarm.deleteRun.title')}
                 icon>{@render actionIcon('trash')}</Button
               ><Button
                 variant="secondary"
                 onClick={() => (model.profileSnapshotOpen = true)}
                 icon
-                ariaLabel={t(
-                  'swarm.inspectProfileSnapshot',
-                  'Inspect Swarm snapshot',
-                )}
-                tooltip={t(
-                  'swarm.inspectProfileSnapshot',
-                  'Inspect Swarm snapshot',
-                )}>{@render actionIcon('document')}</Button
+                ariaLabel={t('swarm.inspectProfileSnapshot')}
+                tooltip={t('swarm.inspectProfileSnapshot')}
+                >{@render actionIcon('document')}</Button
               ><Button
                 variant="tertiary"
                 icon
                 onClick={model.openDelivery}
-                ariaLabel={t(
-                  'swarm.changeCommunication',
-                  'Change communication settings',
-                )}
-                tooltip={t(
-                  'swarm.changeCommunication',
-                  'Change communication settings',
-                )}>{@render actionIcon('settings')}</Button
+                ariaLabel={t('swarm.changeCommunication')}
+                tooltip={t('swarm.changeCommunication')}
+                >{@render actionIcon('settings')}</Button
               >
             </div>
           </header>
@@ -304,25 +285,21 @@
             <TabList
               items={model.tabs}
               value={model.activeTab}
-              ariaLabel={t('swarm.details', 'Swarm details')}
+              ariaLabel={t('swarm.details')}
               onChange={(next) =>
                 model.navigate(() => (model.activeTab = next))}
             />
           </div>
           {#if model.selectedSwarm.participants?.some( (participant) => ['failed', 'interrupted'].includes(participant.state) )}
             <Banner variant="error" role="alert">
-              {t(
-                'swarm.participants.failed',
-                'Participants need attention: {names}. Open their Activity for details; Resume retries their work.',
-                {
-                  names: model.selectedSwarm.participants
-                    .filter((participant) =>
-                      ['failed', 'interrupted'].includes(participant.state),
-                    )
-                    .map((participant) => participant.display_name)
-                    .join(', '),
-                },
-              )}
+              {t('swarm.participants.failed', {
+                names: model.selectedSwarm.participants
+                  .filter((participant) =>
+                    ['failed', 'interrupted'].includes(participant.state),
+                  )
+                  .map((participant) => participant.display_name)
+                  .join(', '),
+              })}
             </Banner>
           {/if}
           {#key model.selectedSwarm.id}<WikiPanel
@@ -339,7 +316,7 @@
               <div class="section-head board-toolbar">
                 <FormField
                   controlId="swarm-discussion"
-                  label={t('swarm.board.discussion', 'Discussion')}
+                  label={t('swarm.board.discussion')}
                   ><select
                     class="s-input"
                     id="swarm-discussion"
@@ -360,20 +337,13 @@
                       model.loadDiscussions(
                         model.selectedSwarm,
                         model.discussionCursor,
-                      )}
-                    >{t(
-                      'swarm.board.moreDiscussions',
-                      'Load more discussions',
-                    )}</Button
+                      )}>{t('swarm.board.moreDiscussions')}</Button
                   >{/if}
                 <Button
                   variant="secondary"
                   onClick={() => (model.composeOpen = true)}
                 >
-                  {@render actionIcon('edit')}{t(
-                    'swarm.board.openComposer',
-                    'Write post',
-                  )}
+                  {@render actionIcon('edit')}{t('swarm.board.openComposer')}
                 </Button>
               </div>
               <div class="board-context">
@@ -381,9 +351,7 @@
                   class="swarm-goal-post"
                   use:model.contentLinks={{ references: false }}
                 >
-                  <summary
-                    >{t('swarm.board.goal', 'Pinned user request')}</summary
-                  >
+                  <summary>{t('swarm.board.goal')}</summary>
                   <MarkdownContent
                     source={model.selectedSwarm.prompt}
                     class="msg-markdown"
@@ -407,10 +375,10 @@
               </div>
               <section
                 class="participant-pane"
-                aria-label={t('swarm.participants', 'Participants')}
+                aria-label={t('swarm.participants')}
               >
                 <p class="section-label">
-                  {t('swarm.participants', 'Participants')}
+                  {t('swarm.participants')}
                   <span class="participant-count"
                     >{model.discussionParticipants.length}</span
                   >
@@ -419,18 +387,13 @@
                   {#each model.discussionParticipants as participant (participant.id)}
                     {@render participantChip(participant)}
                   {:else}
-                    <span class="muted"
-                      >{t(
-                        'swarm.board.noParticipants',
-                        'No participants in this discussion.',
-                      )}</span
-                    >
+                    <span class="muted">{t('swarm.board.noParticipants')}</span>
                   {/each}
                 </div>
               </section>
               {#if model.board.length === 0}<EmptyState
                   density="compact"
-                  title={t('swarm.board.empty', 'No Board messages yet.')}
+                  title={t('swarm.board.empty')}
                 />{:else}<ol class="board" use:model.contentLinks>
                   {#each model.board as post (post.id)}<li
                       data-post-number={post.sequence}
@@ -449,7 +412,7 @@
                           <strong
                             >{post.author_name ??
                               post.author?.name ??
-                              t('swarm.participant', 'Participant')}</strong
+                              t('swarm.participant')}</strong
                           >
                         </div>
                         <span class="post-meta"
@@ -463,11 +426,9 @@
                       {#if post.discussion_announcement}
                         <div class="discussion-announcement">
                           <p>
-                            {t(
-                              'swarm.board.discussionOpened',
-                              '{name} opened a discussion.',
-                              { name: post.author.name },
-                            )}
+                            {t('swarm.board.discussionOpened', {
+                              name: post.author.name,
+                            })}
                           </p>
                           <Button
                             variant="secondary"
@@ -485,16 +446,16 @@
                         />{/if}
                       {#if post.reply_sequence != null}<small
                           ><a href="#post/{post.reply_sequence}"
-                            >{t('swarm.board.reply', 'Reply to {id}', {
+                            >{t('swarm.board.reply', {
                               id: `#${post.reply_sequence}`,
                             })}</a
                           ></small
                         >{:else if post.reply_to}<small
-                          >{t('swarm.board.reply', 'Reply to {id}', {
+                          >{t('swarm.board.reply', {
                             id: post.reply_to,
                           })}</small
                         >{/if}{#if post.recipients?.length}<small
-                          >{t('swarm.board.addressed', 'To: {names}', {
+                          >{t('swarm.board.addressed', {
                             names: post.recipients
                               .map(
                                 (id) =>
@@ -514,15 +475,14 @@
                         model.selectedSwarm,
                         model.selectedDiscussion,
                         model.boardCursor,
-                      )}
-                    >{t('swarm.board.more', 'Load earlier messages')}</Button
+                      )}>{t('swarm.board.more')}</Button
                   >{/if}{/if}
             </section>
           {:else if model.activeTab === 'participants'}<section
               class="panel"
               role="tabpanel"
             >
-              <h3>{t('swarm.participants', 'Participants')}</h3>
+              <h3>{t('swarm.participants')}</h3>
               <div class="participants participant-row">
                 {#each model.selectedSwarm.participants ?? [] as participant (participant.id)}
                   {@render participantChip(
@@ -538,15 +498,12 @@
                   <div class="section-head">
                     <h3>
                       {activity.history.participant.display_name}
-                      {t('swarm.activity', 'activity')}
+                      {t('swarm.activity')}
                     </h3>
                     <div class="actions">
                       <button
                         class="context-usage"
-                        aria-label={t(
-                          'chat.contextRingLabel',
-                          'Context window usage',
-                        )}
+                        aria-label={t('chat.contextRingLabel')}
                         use:tooltip={activity.activityContextTooltip}
                       >
                         <svg
@@ -573,7 +530,7 @@
                             transform="rotate(-90 9 9)"
                           /></svg
                         >
-                        {t('swarm.context', 'Context')}: {activity.contextTokens}
+                        {t('swarm.context')}: {activity.contextTokens}
                       </button>
                       {#if model.canResume && activity.selectedParticipant && !activity.selectedParticipant.run_active && resumableParticipantState(activity.selectedParticipant.state)}
                         <Button
@@ -583,18 +540,14 @@
                             model.lifecycle(
                               'resume',
                               activity.selectedParticipant.id,
-                            )}
-                          >{t(
-                            'swarm.resumeParticipant',
-                            'Resume participant',
-                          )}</Button
+                            )}>{t('swarm.resumeParticipant')}</Button
                         >
                       {/if}
                       <Button
                         variant="tertiary"
                         icon
-                        ariaLabel={t('common.close', 'Close')}
-                        tooltip={t('common.close', 'Close')}
+                        ariaLabel={t('common.close')}
+                        tooltip={t('common.close')}
                         onClick={activity.leaveActivity}
                         >{@render actionIcon('close')}</Button
                       >
@@ -606,7 +559,7 @@
                       disabled={activity.historyLoading}
                       onClick={activity.loadEarlierActivity}
                     >
-                      {t('swarm.loadOlderMessages', 'Load older messages')}
+                      {t('swarm.loadOlderMessages')}
                     </Button>
                   {/if}
                   {#each activity.activityTimeline as item (item.id)}
@@ -623,7 +576,7 @@
                       />{/if}
                   {:else}<EmptyState
                       density="compact"
-                      title={t('swarm.noActivity', 'No retained activity yet.')}
+                      title={t('swarm.noActivity')}
                     />{/each}
                 </article>{/if}
             </section>
@@ -631,20 +584,20 @@
               class="panel"
               role="tabpanel"
             >
-              <h3>{t('swarm.usage', 'Usage')}</h3>
+              <h3>{t('swarm.usage')}</h3>
               <dl class="swarm-identity">
-                <dt>{t('swarm.id', 'Swarm ID')}</dt>
+                <dt>{t('swarm.id')}</dt>
                 <dd>{model.selectedSwarm.id}</dd>
               </dl>
               {#if model.usage?.usage}<dl class="usage-summary">
                   <div>
                     <dt>
-                      {t('swarm.usage.tokensUsed', 'Tokens used')}
+                      {t('swarm.usage.tokensUsed')}
                     </dt>
                     <dd>{tokensUsed(model.usage.usage.usage?.totals)}</dd>
                   </div>
                   <div>
-                    <dt>{t('swarm.usage.toolCalls', 'Tool Calls')}</dt>
+                    <dt>{t('swarm.usage.toolCalls')}</dt>
                     <dd>
                       {usageCount(model.usage.usage.tools?.total_calls)}
                     </dd>
@@ -654,11 +607,11 @@
                     <table>
                       <thead>
                         <tr>
-                          <th>{t('swarm.usage.participant', 'Participant')}</th>
-                          <th>{t('swarm.usage.model', 'Model')}</th>
-                          <th>{t('swarm.usage.tokensUsed', 'Tokens used')}</th>
-                          <th>{t('swarm.usage.toolCalls', 'Tool Calls')}</th>
-                          <th>{t('swarm.usage.runs', 'Runs')}</th>
+                          <th>{t('swarm.usage.participant')}</th>
+                          <th>{t('swarm.usage.model')}</th>
+                          <th>{t('swarm.usage.tokensUsed')}</th>
+                          <th>{t('swarm.usage.toolCalls')}</th>
+                          <th>{t('swarm.usage.runs')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -683,10 +636,7 @@
                     </table>
                   </div>{/if}{:else if !model.usageLoading}<EmptyState
                   density="compact"
-                  title={t(
-                    'swarm.usageEmpty',
-                    'Usage is unavailable until the Swarm has recorded Run activity.',
-                  )}
+                  title={t('swarm.usageEmpty')}
                 />{/if}
             </section>
           {/if}
@@ -694,21 +644,18 @@
             <header class="view-header">
               <div class="view-header__intro">
                 <h2 class="view-header__title">
-                  {t('swarm.startTitle', 'Give the group a goal')}
+                  {t('swarm.startTitle')}
                 </h2>
                 <p class="view-header__subtitle">
-                  {t(
-                    'swarm.startHelp',
-                    'The request is pinned on the Board. Participants use the collaboration Tools enabled in this Swarm; if Board access is disabled, they receive the request directly.',
-                  )}
+                  {t('swarm.startHelp')}
                 </p>
               </div>
               <div class="view-header__actions">
                 <Button
                   variant="tertiary"
                   icon
-                  ariaLabel={t('common.refresh', 'Refresh')}
-                  tooltip={t('common.refresh', 'Refresh')}
+                  ariaLabel={t('common.refresh')}
+                  tooltip={t('common.refresh')}
                   disabled={model.loading}
                   onClick={() => model.refresh()}
                   >{@render actionIcon('refresh')}</Button
@@ -718,11 +665,11 @@
             <div class="start-profile">
               <FormField
                 controlId="swarm-start-profile"
-                label={t('swarm.profile', 'Swarm')}
+                label={t('swarm.profile')}
               >
                 <Dropdown
                   id="swarm-start-profile"
-                  ariaLabel={t('swarm.profile', 'Swarm')}
+                  ariaLabel={t('swarm.profile')}
                   value={model.selectedProfile?.id ?? ''}
                   options={model.profiles.map((profile) => ({
                     value: profile.id,
@@ -737,8 +684,8 @@
               <Button
                 variant="tertiary"
                 icon
-                ariaLabel={t('common.edit', 'Edit')}
-                tooltip={t('swarm.editProfile', 'Edit Swarm')}
+                ariaLabel={t('common.edit')}
+                tooltip={t('swarm.editProfile')}
                 disabled={!model.selectedProfile}
                 onClick={() => model.openProfile(model.selectedProfile)}
                 >{@render actionIcon('edit')}</Button
@@ -746,8 +693,8 @@
               <Button
                 variant="tertiary"
                 icon
-                ariaLabel={t('common.delete', 'Delete')}
-                tooltip={t('swarm.delete.title', 'Delete Swarm')}
+                ariaLabel={t('common.delete')}
+                tooltip={t('swarm.delete.title')}
                 disabled={!model.selectedProfile}
                 onClick={() =>
                   model.confirmProfileDelete(model.selectedProfile)}
@@ -756,7 +703,7 @@
             </div>
             <FormField
               controlId="swarm-start-directory"
-              label={t('swarm.profile.directoryHeading', 'Working directory')}
+              label={t('swarm.profile.directoryHeading')}
             >
               <TextField
                 id="swarm-start-directory"
@@ -768,16 +715,13 @@
                 onInput={(value) => (model.runDirectory = value)}
               />
             </FormField>
-            <FormField controlId="swarm-goal" label={t('swarm.goal', 'Goal')}>
+            <FormField controlId="swarm-goal" label={t('swarm.goal')}>
               <TextArea
                 id="swarm-goal"
                 value={model.goal}
                 onInput={(value) => (model.goal = value)}
                 rows="6"
-                placeholder={t(
-                  'swarm.goalPlaceholder',
-                  'Describe the work the group should do',
-                )}
+                placeholder={t('swarm.goalPlaceholder')}
               />
             </FormField><Button
               variant="primary"
@@ -787,8 +731,8 @@
                 !model.runDirectory.trim()}
               onClick={model.startSwarm}
               >{@render actionIcon('play')}{model.pending === 'start'
-                ? t('swarm.starting', 'Starting…')
-                : t('swarm.startButton', 'Start Run')}</Button
+                ? t('swarm.starting')
+                : t('swarm.startButton')}</Button
             >
           </section>{/if}
       </section>
@@ -797,7 +741,7 @@
 </main>
 
 {#if model.composeOpen && model.selectedSwarm}<Modal
-    title={t('swarm.board.openComposer', 'Write post')}
+    title={t('swarm.board.openComposer')}
     closeDisabled={model.posting}
     onClose={() => (model.composeOpen = false)}
   >
@@ -805,23 +749,16 @@
         {#if model.error}<Banner variant="error" role="alert"
             >{model.error}</Banner
           >{/if}
-        <FormField
-          controlId="swarm-post"
-          label={t('swarm.board.post', 'Post to the Board')}
+        <FormField controlId="swarm-post" label={t('swarm.board.post')}
           ><textarea
             class="text-area text-area--default"
             id="swarm-post"
             bind:value={model.postText}
             rows="3"
-            placeholder={t(
-              'swarm.board.placeholder',
-              'Share a finding or ask the group a question',
-            )}></textarea></FormField
+            placeholder={t('swarm.board.placeholder')}></textarea></FormField
         >
         <div class="post-options">
-          <FormField
-            controlId="swarm-reply"
-            label={t('swarm.board.replyTo', 'Reply to post number (optional)')}
+          <FormField controlId="swarm-reply" label={t('swarm.board.replyTo')}
             ><input
               class="s-input"
               id="swarm-reply"
@@ -830,10 +767,7 @@
             /></FormField
           ><FormField
             controlId="swarm-pings"
-            label={t(
-              'swarm.board.recipients',
-              'To participant IDs (optional, comma-separated)',
-            )}
+            label={t('swarm.board.recipients')}
             ><input
               class="s-input"
               id="swarm-pings"
@@ -845,26 +779,22 @@
     {#snippet footer()}<Button
         variant="secondary"
         disabled={model.posting}
-        onClick={() => (model.composeOpen = false)}
-        >{t('common.cancel', 'Cancel')}</Button
+        onClick={() => (model.composeOpen = false)}>{t('common.cancel')}</Button
       ><Button
         variant="primary"
         loading={model.posting}
         disabled={!model.postText.trim()}
-        onClick={model.post}>{t('swarm.board.submit', 'Post')}</Button
+        onClick={model.post}>{t('swarm.board.submit')}</Button
       >{/snippet}
   </Modal>{/if}
 {#if model.swarmDeleteCandidate}<Modal
-    title={t('swarm.deleteRun.title', 'Delete Run')}
+    title={t('swarm.deleteRun.title')}
     closeDisabled={model.pending === 'delete'}
     onClose={() => (model.swarmDeleteCandidate = null)}
     >{#snippet body()}<div class="modal-copy swarm-page-modal-copy">
         <p>{model.swarmDeleteCandidate.prompt}</p>
         <p>
-          {t(
-            'swarm.deleteRun.body',
-            'Permanently delete this Run, its Board, Wiki and participant Sessions? The Swarm will be kept. This cannot be undone.',
-          )}
+          {t('swarm.deleteRun.body')}
         </p>
         {#if model.deleteError}<Banner variant="error"
             >{model.deleteError}</Banner
@@ -873,24 +803,20 @@
         variant="secondary"
         disabled={model.pending === 'delete'}
         onClick={() => (model.swarmDeleteCandidate = null)}
-        >{t('common.cancel', 'Cancel')}</Button
+        >{t('common.cancel')}</Button
       ><Button
         variant="danger"
         loading={model.pending === 'delete'}
-        onClick={model.deleteSwarm}>{t('common.delete', 'Delete')}</Button
+        onClick={model.deleteSwarm}>{t('common.delete')}</Button
       >{/snippet}</Modal
   >{/if}
 {#if model.deleteCandidate}<Modal
-    title={t('swarm.delete.title', 'Delete Swarm')}
+    title={t('swarm.delete.title')}
     closeDisabled={model.pending === 'delete'}
     onClose={() => (model.deleteCandidate = null)}
     >{#snippet body()}<div class="modal-copy swarm-page-modal-copy">
         <p>
-          {t(
-            'swarm.delete.body',
-            'Delete {name}? Existing Runs remain available.',
-            { name: model.deleteCandidate.name },
-          )}
+          {t('swarm.delete.body', { name: model.deleteCandidate.name })}
         </p>
         {#if model.deleteError}<Banner variant="error"
             >{model.deleteError}</Banner
@@ -899,15 +825,15 @@
         variant="secondary"
         disabled={model.pending === 'delete'}
         onClick={() => (model.deleteCandidate = null)}
-        >{t('common.cancel', 'Cancel')}</Button
+        >{t('common.cancel')}</Button
       ><Button
         variant="danger"
         loading={model.pending === 'delete'}
-        onClick={model.deleteProfile}>{t('common.delete', 'Delete')}</Button
+        onClick={model.deleteProfile}>{t('common.delete')}</Button
       >{/snippet}</Modal
   >{/if}
 {#if model.settingsOpen}<Modal
-    title={t('swarm.communication.title', 'Change communication settings')}
+    title={t('swarm.communication.title')}
     closeDisabled={model.pending === 'settings'}
     onClose={() => (model.settingsOpen = false)}
     >{#snippet body()}<div class="communication swarm-page-communication">
@@ -915,7 +841,7 @@
             <h3>{routeLabels[route]}</h3>
             <FormField
               controlId={`live-delivery-${route}`}
-              label={t('swarm.delivery.mode', 'Mode')}
+              label={t('swarm.delivery.mode')}
               ><select
                 class="s-input"
                 value={model.deliveryDraft[route].mode}
@@ -925,15 +851,9 @@
                     'mode',
                     event.currentTarget.value,
                   )}
-                ><option value="all"
-                  >{t('swarm.delivery.all', 'All messages')}</option
-                ><option value="idle"
-                  >{t('swarm.delivery.idle', 'When idle')}</option
-                ><option value="pull"
-                  >{t(
-                    'swarm.delivery.pull',
-                    'On request or when waking',
-                  )}</option
+                ><option value="all">{t('swarm.delivery.all')}</option><option
+                  value="idle">{t('swarm.delivery.idle')}</option
+                ><option value="pull">{t('swarm.delivery.pull')}</option
                 ></select
               ></FormField
             ><label class="check"
@@ -947,15 +867,15 @@
                     event.currentTarget.checked,
                   )}
               />
-              {t('swarm.delivery.wake', 'Wake idle participants')}</label
+              {t('swarm.delivery.wake')}</label
             >
           </section>{/each}
         <section>
-          <h3>{t('swarm.communication.advanced', 'Advanced')}</h3>
+          <h3>{t('swarm.communication.advanced')}</h3>
           <div class="advanced-settings">
             <FormField
               controlId="live-coalesce"
-              label={t('swarm.delivery.coalesce', 'Coalesce messages (ms)')}
+              label={t('swarm.delivery.coalesce')}
               ><input
                 class="s-input"
                 id="live-coalesce"
@@ -972,7 +892,7 @@
             >
             <FormField
               controlId="live-batch-messages"
-              label={t('swarm.delivery.batchMessages', 'Messages per batch')}
+              label={t('swarm.delivery.batchMessages')}
               ><input
                 class="s-input"
                 id="live-batch-messages"
@@ -989,7 +909,7 @@
             >
             <FormField
               controlId="live-batch-chars"
-              label={t('swarm.delivery.batchChars', 'Characters per batch')}
+              label={t('swarm.delivery.batchChars')}
               ><input
                 class="s-input"
                 id="live-batch-chars"
@@ -1007,39 +927,36 @@
           </div>
         </section>
         <section>
-          <h3>{t('swarm.communication.proposed', 'Proposed changes')}</h3>
+          <h3>{t('swarm.communication.proposed')}</h3>
           {#if model.settingChanges.length}<ul>
               {#each model.settingChanges as change (`${change.route}-${change.field}`)}<li
                 >
                   {change.route} · {change.field}: <s>{change.before}</s> → {change.after}
                 </li>{/each}
             </ul>{:else}<p>
-              {t('swarm.communication.noChanges', 'No changes to apply.')}
+              {t('swarm.communication.noChanges')}
             </p>{/if}
           <p>
-            {t(
-              'swarm.communication.effect',
-              'Changes affect pending and future delivery only. Already delivered message bodies are not replayed.',
-            )}
+            {t('swarm.communication.effect')}
           </p>
         </section>
       </div>{/snippet}{#snippet footer()}<Button
         variant="secondary"
         disabled={model.pending === 'settings'}
         onClick={() => (model.settingsOpen = false)}
-        >{t('common.cancel', 'Cancel')}</Button
+        >{t('common.cancel')}</Button
       ><Button
         variant="primary"
         loading={model.pending === 'settings'}
         disabled={model.settingChanges.length === 0}
         onClick={model.applyDelivery}
         >{model.pending === 'settings'
-          ? t('swarm.applying', 'Applying…')
-          : t('swarm.apply', 'Apply changes')}</Button
+          ? t('swarm.applying')
+          : t('swarm.apply')}</Button
       >{/snippet}</Modal
   >{/if}
 {#if model.profileSnapshotOpen}<Modal
-    title={t('swarm.profileSnapshot', 'Swarm snapshot')}
+    title={t('swarm.profileSnapshot')}
     onClose={() => (model.profileSnapshotOpen = false)}
     >{#snippet body()}<div class="modal-copy swarm-page-modal-copy">
         <pre>{JSON.stringify(
@@ -1052,6 +969,6 @@
       </div>{/snippet}{#snippet footer()}<Button
         variant="primary"
         onClick={() => (model.profileSnapshotOpen = false)}
-        >{t('common.close', 'Close')}</Button
+        >{t('common.close')}</Button
       >{/snippet}</Modal
   >{/if}

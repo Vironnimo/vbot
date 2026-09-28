@@ -12,10 +12,7 @@
     const entries = Object.entries(control.actions);
     entries[index] = [key, value];
     if (new Set(entries.map(([name]) => name)).size !== entries.length) {
-      keyError = t(
-        'jev.duplicateId',
-        'This ID is already in use. Choose a unique ID.',
-      );
+      keyError = t('jev.duplicateId');
       if (event) event.target.value = Object.keys(control.actions)[index];
       return;
     }
@@ -40,38 +37,28 @@
 {#if keyError}<p class="jev-error" role="alert">{keyError}</p>{/if}
 
 <p class="jev-help">
-  {t(
-    'jev.controlHelp',
-    'Read the application state, let Jev select an action, then execute its assigned command. Commands run on the vBot host. Switching tabs or closing this page does not stop the control.',
-  )}
+  {t('jev.controlHelp')}
 </p>
 <div class="jev-field">
-  <label for={`${id}-goal`}>{t('jev.goal', 'What should Jev achieve?')}</label
-  ><TextArea
+  <label for={`${id}-goal`}>{t('jev.goal')}</label><TextArea
     id={`${id}-goal`}
     value={control.instructions}
     rows={3}
     onInput={(value) => patch({ instructions: value })}
   />
 </div>
-<h3>{t('jev.observe', 'Read state')}</h3>
+<h3>{t('jev.observe')}</h3>
 <p class="jev-help">
-  {t(
-    'jev.observeHelp',
-    'Write UTF-8 JSON to stdout: {"state": your text or JSON, "done": false}. Return done: true when the application is finished. Each call must exit. Send diagnostic messages to stderr.',
-  )}
+  {t('jev.observeHelp')}
 </p>
 <CommandEditor
   command={control.observe}
-  label={t('jev.observerCommand', 'State-reading executable')}
+  label={t('jev.observerCommand')}
   onChange={(command) => patch({ observe: command })}
 />
-<h3>{t('jev.actions', 'Actions')}</h3>
+<h3>{t('jev.actions')}</h3>
 <p class="jev-help">
-  {t(
-    'jev.actionsHelp',
-    'Jev sees the action descriptions and chooses an ID. It cannot create or change commands. Arguments are literal; shell syntax requires an explicitly chosen shell executable.',
-  )}
+  {t('jev.actionsHelp')}
 </p>
 {#each Object.entries(control.actions) as [key, action], index (index)}
   <article class="jev-question">
@@ -83,20 +70,17 @@
             actions: Object.fromEntries(
               Object.entries(control.actions).filter((_, i) => i !== index),
             ),
-          })}>{t('jev.remove', 'Remove')}</Button
+          })}>{t('jev.remove')}</Button
       >
     </div>
     <TextField
-      ariaLabel={t('jev.actionId', 'Action ID')}
+      ariaLabel={t('jev.actionId')}
       value={key}
       onInput={(value, event) => changeAction(index, value, action, event)}
     />
     <div class="jev-field">
       <label for={`${id}-description-${index}`}
-        >{t(
-          'jev.actionDescription',
-          'When should Jev choose this action?',
-        )}</label
+        >{t('jev.actionDescription')}</label
       ><TextArea
         id={`${id}-description-${index}`}
         rows={2}
@@ -108,20 +92,17 @@
     {#if action.command}
       <CommandEditor
         command={action.command}
-        label={t('jev.actionCommand', 'Action executable')}
+        label={t('jev.actionCommand')}
         onChange={(command) => changeAction(index, key, { ...action, command })}
       />
       <Button
         variant="tertiary"
         onClick={() => changeAction(index, key, { ...action, command: null })}
-        >{t('jev.makeNoop', 'Make this a no-op action')}</Button
+        >{t('jev.makeNoop')}</Button
       >
     {:else}
       <p class="jev-help">
-        {t(
-          'jev.noopHelp',
-          'This action leaves the application unchanged, then reads a fresh state.',
-        )}
+        {t('jev.noopHelp')}
       </p>
       <Button
         variant="tertiary"
@@ -129,14 +110,14 @@
           changeAction(index, key, {
             ...action,
             command: { argv: [''], cwd: control.observe.cwd },
-          })}>{t('jev.assignCommand', 'Assign a command')}</Button
+          })}>{t('jev.assignCommand')}</Button
       >
     {/if}
   </article>
 {/each}
-<Button onClick={addAction}>{t('jev.addAction', 'Add action')}</Button>
-<h3>{t('jev.timing', 'Execution')}</h3>
-{#each [{ key: 'interval_ms', label: t('jev.interval', 'Delay after each action (ms)') }, { key: 'max_steps', label: t('jev.maxSteps', 'Maximum steps (0 = until stopped)') }, { key: 'timeout_seconds', label: t('jev.timeout', 'Command timeout (seconds)') }] as field (field.key)}
+<Button onClick={addAction}>{t('jev.addAction')}</Button>
+<h3>{t('jev.timing')}</h3>
+{#each [{ key: 'interval_ms', label: t('jev.interval') }, { key: 'max_steps', label: t('jev.maxSteps') }, { key: 'timeout_seconds', label: t('jev.timeout') }] as field (field.key)}
   <div class="jev-field">
     <label for={`${id}-${field.key}`}>{field.label}</label><TextField
       id={`${id}-${field.key}`}
@@ -148,8 +129,5 @@
   </div>
 {/each}
 <p class="jev-help">
-  {t(
-    'jev.executionHelp',
-    'Steps run in sequence. Command errors, invalid state or Provider failures stop execution without retrying actions. Actual speed depends on observation, Jev and the action. Changes apply to the next start.',
-  )}
+  {t('jev.executionHelp')}
 </p>

@@ -36,55 +36,53 @@ const senderDisplayName = (message) =>
 
 export const labelForMessage = (message) => {
   if (message.role === 'user') {
-    return (
-      senderDisplayName(message) || t('chat.role.user', 'You')
-    ).toUpperCase();
+    return (senderDisplayName(message) || t('chat.role.user')).toUpperCase();
   }
   if (message.role === 'assistant') {
-    return t('chat.role.assistant', 'Assistant').toUpperCase();
+    return t('chat.role.assistant').toUpperCase();
   }
   if (message.role === 'system') {
-    return t('chat.role.system', 'System').toUpperCase();
+    return t('chat.role.system').toUpperCase();
   }
   if (message.role === 'tool') {
-    return t('chat.event.toolResult', 'Tool result').toUpperCase();
+    return t('chat.event.toolResult').toUpperCase();
   }
   if (message.role === 'error') {
-    return t('chat.role.error', 'Error').toUpperCase();
+    return t('chat.role.error').toUpperCase();
   }
-  return t('common.unknown', 'Unknown').toUpperCase();
+  return t('common.unknown').toUpperCase();
 };
 
 export const labelForEvent = (event) => {
   if (event.type === 'reasoning') {
-    return t('chat.event.thinking', 'Thinking').toUpperCase();
+    return t('chat.event.thinking').toUpperCase();
   }
   if (event.type === 'tool_call_started') {
-    return t('chat.event.toolStarted', 'Tool started').toUpperCase();
+    return t('chat.event.toolStarted').toUpperCase();
   }
   if (event.type === 'tool_call_result') {
-    return t('chat.event.toolResult', 'Tool result').toUpperCase();
+    return t('chat.event.toolResult').toUpperCase();
   }
   if (event.type === 'assistant_output') {
-    return t('chat.role.assistant', 'Assistant').toUpperCase();
+    return t('chat.role.assistant').toUpperCase();
   }
   if (event.type === 'run_completed') {
-    return t('chat.event.completed', 'Run completed');
+    return t('chat.event.completed');
   }
   if (event.type === 'run_failed') {
-    return t('chat.event.failed', 'Run failed');
+    return t('chat.event.failed');
   }
   if (event.type === 'run_cancelled') {
-    return t('chat.event.cancelled', 'Run cancelled');
+    return t('chat.event.cancelled');
   }
   if (event.type === 'run_interrupted') {
-    return t('chat.event.interrupted', 'Run interrupted');
+    return t('chat.event.interrupted');
   }
   if (event.type === 'user_message_persisted') {
     const displayName = senderDisplayName(messageFromEvent(event));
-    return (displayName || t('chat.role.user', 'You')).toUpperCase();
+    return (displayName || t('chat.role.user')).toUpperCase();
   }
-  return t('common.unknown', 'Unknown').toUpperCase();
+  return t('common.unknown').toUpperCase();
 };
 
 export const textFromMessage = (message) => {
@@ -156,7 +154,7 @@ function embeddedSummaryMessage(providerMessage, metadata) {
   if (!providerName || base.includes(providerName)) {
     return base;
   }
-  return `${base} ${t('chat.errorViaProvider', '(via {name})', { name: providerName })}`;
+  return `${base} ${t('chat.errorViaProvider', { name: providerName })}`;
 }
 
 function embeddedErrorMessage(value) {
@@ -212,19 +210,13 @@ export const isFileMentionContentBlock = (block) =>
 // the chip itself says the file rode along.
 export const fileMentionStatusLabel = (block) => {
   if (block?.status === 'too_large') {
-    return t(
-      'chat.fileMention.tooLarge',
-      'too large to attach — referenced by path',
-    );
+    return t('chat.fileMention.tooLarge');
   }
   if (block?.status === 'not_text') {
-    return t(
-      'chat.fileMention.notText',
-      'not a text file — referenced by path',
-    );
+    return t('chat.fileMention.notText');
   }
   if (block?.status === 'missing') {
-    return t('chat.fileMention.missing', 'file was not found at send time');
+    return t('chat.fileMention.missing');
   }
   return '';
 };
@@ -233,13 +225,12 @@ export const attachmentUrlForBlock = (block) =>
   attachmentUrlForId(block?.attachment_id);
 
 export const attachmentFilename = (block) =>
-  trimmedString(block?.filename) ||
-  t('chat.attachment.fileLabel', 'Attached file');
+  trimmedString(block?.filename) || t('chat.attachment.fileLabel');
 
 export const imageReferenceLabel = (block) => {
   const reference = block?.image_reference;
   if (Number.isInteger(reference) && reference > 0) {
-    return t('chat.attachment.imageReference', 'Image {number}', {
+    return t('chat.attachment.imageReference', {
       number: reference,
     });
   }
@@ -247,8 +238,7 @@ export const imageReferenceLabel = (block) => {
 };
 
 export const attachmentPreviewLabel = (block) =>
-  trimmedString(block?.filename) ||
-  t('chat.attachment.preview', 'Preview attachment');
+  trimmedString(block?.filename) || t('chat.attachment.preview');
 
 export const hasReadableReasoning = (message) =>
   message.role === 'assistant' && Boolean(message.reasoning);
@@ -279,7 +269,7 @@ export const textFromEvent = (event) => {
 export const toolNameForEvent = (event) => {
   const toolCall = toolCallFromEvent(event);
   const message = messageFromEvent(event);
-  return toolCall?.name ?? message?.name ?? t('common.unknown', 'Unknown');
+  return toolCall?.name ?? message?.name ?? t('common.unknown');
 };
 
 export const toolResultValueForEvent = (event) =>
@@ -400,9 +390,9 @@ function transientCardAnchorIndex(items, createdAt) {
 export const takeoverSeparatorLabel = (message) => {
   const { from, to } = parseTakeoverContent(message?.content);
   if (from && to) {
-    return t('chat.takenOver', 'Taken over by {from} → {to}', { from, to });
+    return t('chat.takenOver', { from, to });
   }
-  return t('chat.takenOverGeneric', 'Session taken over');
+  return t('chat.takenOverGeneric');
 };
 
 // Compact Context token display: 254224 -> "254k", 1500000 -> "1.5m". The
@@ -422,16 +412,10 @@ const formatCompactTokens = (value) => {
 
 export const compactionSeparatorLabel = (item) => {
   if (item?.status === 'failed') {
-    return t(
-      'chat.compactionFailed',
-      'Compaction failed. Context unchanged. Check application logs for details.',
-    );
+    return t('chat.compactionFailed');
   }
   if (item?.status === 'running') {
-    return t(
-      'chat.compactingCurrentConversation',
-      'Compacting current conversation…',
-    );
+    return t('chat.compactingCurrentConversation');
   }
 
   const usage = item?.message?.usage ?? {};
@@ -442,28 +426,24 @@ export const compactionSeparatorLabel = (item) => {
   const afterLabel = formatCompactTokens(after);
   const durationLabel = formatDurationMs(item?.durationMs);
   if (durationLabel && beforeLabel && afterLabel) {
-    return t(
-      'chat.compactedWithTimingTokens',
-      'Context compacted in {duration} · ~{before} → ~{after}',
-      { duration: durationLabel, before: beforeLabel, after: afterLabel },
-    );
+    return t('chat.compactedWithTimingTokens', {
+      duration: durationLabel,
+      before: beforeLabel,
+      after: afterLabel,
+    });
   }
   if (durationLabel) {
-    return t('chat.compactedWithTiming', 'Context compacted in {duration}', {
+    return t('chat.compactedWithTiming', {
       duration: durationLabel,
     });
   }
   if (beforeLabel && afterLabel) {
-    return t(
-      'chat.compactedWithTokens',
-      'Context compacted · ~{before} → ~{after}',
-      {
-        before: beforeLabel,
-        after: afterLabel,
-      },
-    );
+    return t('chat.compactedWithTokens', {
+      before: beforeLabel,
+      after: afterLabel,
+    });
   }
-  return t('chat.compacted', 'Context compacted');
+  return t('chat.compacted');
 };
 
 export const compactionSummaryText = (item) =>
@@ -482,26 +462,26 @@ function parseTakeoverContent(content) {
 
 export const avatarForItem = (item) => {
   if (isUserItem(item)) {
-    return t('chat.role.userAvatar', 'Y');
+    return t('chat.role.userAvatar');
   }
   if (isAssistantItem(item)) {
-    return t('chat.role.assistantAvatar', 'A');
+    return t('chat.role.assistantAvatar');
   }
-  return t('chat.role.systemAvatar', 'S');
+  return t('chat.role.systemAvatar');
 };
 
 export const metaForEvent = (event) => {
   if (event.type === 'run_failed') {
-    return t('chat.runStatus.failed', 'Failed');
+    return t('chat.runStatus.failed');
   }
   if (event.type === 'run_cancelled') {
-    return t('chat.runStatus.cancelled', 'Cancelled');
+    return t('chat.runStatus.cancelled');
   }
   if (event.type === 'run_completed') {
-    return t('chat.runStatus.completed', 'Completed');
+    return t('chat.runStatus.completed');
   }
   if (event.type === 'run_interrupted') {
-    return t('chat.runStatus.interrupted', 'Interrupted');
+    return t('chat.runStatus.interrupted');
   }
   return '';
 };

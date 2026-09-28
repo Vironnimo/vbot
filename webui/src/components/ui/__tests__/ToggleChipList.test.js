@@ -49,7 +49,7 @@ describe('ToggleChipList', () => {
 
     expect(
       clippedHost.querySelector('.access-chips__count').textContent.trim(),
-    ).toBe(t('access.count', '{on} / {total} on', { on: 2, total: 3 }));
+    ).toBe(t('access.count', { on: 2, total: 3 }));
     const search = clippedHost.querySelector('.access-chips__search-input');
     const visibleChips = (query) => {
       search.value = query;

@@ -245,7 +245,7 @@ async function openModelPicker() {
 }
 
 function connectedCount(count) {
-  return t('onboarding.service.connectedCount', '{count} connected', {
+  return t('onboarding.service.connectedCount', {
     count,
   });
 }

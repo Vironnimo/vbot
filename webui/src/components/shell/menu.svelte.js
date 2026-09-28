@@ -153,12 +153,12 @@ export function createDesktopContextMenu(context) {
         {
           id: 'copy-link',
           group: 'link',
-          label: t('desktop.contextMenu.copyLinkAddress', 'Copy link address'),
+          label: t('desktop.contextMenu.copyLinkAddress'),
         },
         {
           id: 'open-link',
           group: 'link',
-          label: t('desktop.contextMenu.openInBrowser', 'Open in browser'),
+          label: t('desktop.contextMenu.openInBrowser'),
         },
       );
     }
@@ -167,28 +167,28 @@ export function createDesktopContextMenu(context) {
         actions.push({
           id: 'cut',
           group: 'edit',
-          label: t('desktop.contextMenu.cut', 'Cut'),
+          label: t('desktop.contextMenu.cut'),
         });
       }
       if (selectedText?.text) {
         actions.push({
           id: 'copy',
           group: 'edit',
-          label: t('common.copy', 'Copy'),
+          label: t('common.copy'),
         });
       }
       if (editable.writable) {
         actions.push({
           id: 'paste',
           group: 'edit',
-          label: t('desktop.contextMenu.paste', 'Paste'),
+          label: t('desktop.contextMenu.paste'),
         });
       }
     } else if (selectedText?.text) {
       actions.push({
         id: 'copy',
         group: 'selection',
-        label: t('common.copy', 'Copy'),
+        label: t('common.copy'),
       });
     }
 
@@ -259,14 +259,8 @@ export function createDesktopContextMenu(context) {
 
   const notifyContextMenuFailure = () => {
     context.onToast({
-      title: t(
-        'desktop.contextMenu.actionFailedTitle',
-        'Desktop action failed',
-      ),
-      message: t(
-        'desktop.contextMenu.actionFailedMessage',
-        'The clipboard or default browser could not complete the action.',
-      ),
+      title: t('desktop.contextMenu.actionFailedTitle'),
+      message: t('desktop.contextMenu.actionFailedMessage'),
       variant: 'warn',
     });
   };

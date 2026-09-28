@@ -291,7 +291,7 @@ describe('ProjectsView Team', () => {
       onToast.mock.calls.some((call) => call[0]?.variant === 'error'),
     );
     expect(onToast).toHaveBeenCalledWith({
-      title: `${t('projects.team.overrideError', 'The override could not be saved.')} model not usable`,
+      title: `${t('projects.team.overrideError')} model not usable`,
       variant: 'error',
       sticky: true,
     });
@@ -451,9 +451,7 @@ describe('ProjectsView Team', () => {
       },
     );
     await waitForCondition(() =>
-      document.body.textContent.includes(
-        t('projects.team.toolOverrideActive', 'Override active'),
-      ),
+      document.body.textContent.includes(t('projects.team.toolOverrideActive')),
     );
 
     buttonWithTextContent('Reset to repository policy').click();
@@ -501,34 +499,15 @@ describe('ProjectsView Team', () => {
       );
     // The calling Agent is implicit; the list names only the other members.
     expect(lines('restricted')).toEqual([
-      t('projects.team.agentTargetsLimited', 'Can call itself plus: {agents}', {
+      t('projects.team.agentTargetsLimited', {
         agents: 'open',
       }),
-      t(
-        'projects.team.deniedToolsBaseline',
-        'Repository baseline blocks: {tools}',
-        {
-          tools: 'bash, process',
-        },
-      ),
+      t('projects.team.deniedToolsBaseline', {
+        tools: 'bash, process',
+      }),
     ]);
-    expect(lines('open')).toEqual([
-      t(
-        'projects.team.agentTargetsAll',
-        'Can call itself and every other Agent on this Project Team.',
-      ),
-    ]);
-    expect(lines('observer')).toEqual([
-      t(
-        'projects.team.agentTargetsSelf',
-        'Can call only itself in a separate Session.',
-      ),
-    ]);
-    expect(lines('solo')).toEqual([
-      t(
-        'projects.team.agentTargetsUnavailable',
-        'Sub-Agent tools are not available to this Agent.',
-      ),
-    ]);
+    expect(lines('open')).toEqual([t('projects.team.agentTargetsAll')]);
+    expect(lines('observer')).toEqual([t('projects.team.agentTargetsSelf')]);
+    expect(lines('solo')).toEqual([t('projects.team.agentTargetsUnavailable')]);
   });
 });

@@ -133,7 +133,7 @@ describe('SettingsSpecializedModelsPanel', () => {
     ).toBeTruthy();
     await waitForCondition(() => onError.mock.calls.length > 1);
     expect(onError).toHaveBeenLastCalledWith(
-      `${t('settings.specializedModels.loadError', 'Specialized model targets could not be loaded.')} targets offline`,
+      `${t('settings.specializedModels.loadError')} targets offline`,
     );
     const before = api.listTaskModelTargets.mock.calls.length;
 

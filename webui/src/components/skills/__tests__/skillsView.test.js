@@ -441,7 +441,7 @@ describe('Skills manager', () => {
       const dialog = document.querySelector('[role="dialog"]');
       expect(dialog.querySelectorAll('[role="switch"]')).toHaveLength(1);
       click(dialog.querySelector('[role="switch"]'));
-      click(button(t('common.save', 'Save'), dialog));
+      click(button(t('common.save'), dialog));
       await settle();
       expect(rpcMock).toHaveBeenCalledWith('skill.share', {
         agent_id: 'main',
@@ -623,7 +623,7 @@ describe('Skills manager', () => {
       '.skills-detail-header [role="switch"]',
     );
     expect(enable.getAttribute('aria-label')).toBe(
-      t('skills.enabledNamed', '', { name: 'deploy' }),
+      t('skills.enabledNamed', { name: 'deploy' }),
     );
     expect(enable.closest('label').textContent.trim()).toBe(
       t('skills.enabled'),
@@ -651,7 +651,7 @@ describe('Skills manager', () => {
       document
         .querySelector('[role="tab"][aria-selected="true"]')
         .textContent.trim(),
-    ).toBe(t('skills.original', 'Original text'));
+    ).toBe(t('skills.original'));
     click(button('Back to list'));
     await settle();
     expect(document.activeElement.dataset.skillId).toBe('private');

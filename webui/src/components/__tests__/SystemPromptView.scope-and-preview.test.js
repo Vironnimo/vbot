@@ -31,7 +31,7 @@ import {
 
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
-const DEFAULT_SCOPE = () => t('systemPrompt.scope.default', 'Default');
+const DEFAULT_SCOPE = () => t('systemPrompt.scope.default');
 const AGENT_SCOPE = { type: 'agent', agent_id: 'agent-1' };
 
 function hasCall(method, predicate = () => true) {
@@ -103,7 +103,7 @@ describe('SystemPromptView scope and preview', () => {
     await waitForCondition(() => inheritedBadges().length > 0, 100);
     expect(inheritedBadges()).toHaveLength(3);
     expect(inheritedBadges()[0].textContent.trim()).toBe(
-      t('systemPrompt.blockList.inheritedBadge', 'inherited'),
+      t('systemPrompt.blockList.inheritedBadge'),
     );
 
     // The Agent picker stays available and the preview carries the scope.
@@ -235,17 +235,16 @@ describe('SystemPromptView scope and preview', () => {
       'with Tools',
       { tokens: 1234, tool_tokens: 456, tool_count: 12 },
       () =>
-        t(
-          'systemPrompt.preview.tokenBreakdown',
-          '~{prompt} prompt + ~{tools} tools = ~{total} tokens',
-          { prompt: 1234, tools: 456, total: 1690 },
-        ),
+        t('systemPrompt.preview.tokenBreakdown', {
+          prompt: 1234,
+          tools: 456,
+          total: 1690,
+        }),
     ],
     [
       'without Tools',
       { tokens: 200, tool_tokens: 0, tool_count: 0 },
-      () =>
-        t('systemPrompt.preview.tokenCount', '~{count} tokens', { count: 200 }),
+      () => t('systemPrompt.preview.tokenCount', { count: 200 }),
     ],
   ])(
     'loads the first Agent preview on mount and shows its token count %s',
@@ -270,12 +269,10 @@ describe('SystemPromptView scope and preview', () => {
         agent_id: 'agent-1',
       });
       expect(document.body.textContent).toContain(
-        t('systemPrompt.preview.heading', 'Preview for'),
+        t('systemPrompt.preview.heading'),
       );
       expect(documentText()).toContain('You are an agent named Alpha');
-      expect(
-        buttonByText(t('systemPrompt.preview.refresh', 'Refresh')),
-      ).toBeTruthy();
+      expect(buttonByText(t('systemPrompt.preview.refresh'))).toBeTruthy();
       if (!tokens.tool_count) {
         expect(document.body.textContent).not.toContain('= ~');
       }
@@ -303,7 +300,7 @@ describe('SystemPromptView scope and preview', () => {
 
     openDropdown(agentTrigger());
     expect(document.body.textContent).toContain(
-      t('systemPrompt.preview.agentGroup.project', 'Project agents'),
+      t('systemPrompt.preview.agentGroup.project'),
     );
     agentTrigger().click();
     flushSync();
@@ -353,7 +350,7 @@ describe('SystemPromptView scope and preview', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     flushSync();
     expect(documentText()).toContain('NEW-AGENT');
-    clickTab(t('systemPrompt.tabs.tools', 'Tools'));
+    clickTab(t('systemPrompt.tabs.tools'));
     expect(document.querySelector('.tool-detail')).toBeNull();
   });
 
@@ -375,7 +372,7 @@ describe('SystemPromptView scope and preview', () => {
     );
     expect(document.querySelector('.sp-editor').hidden).toBe(true);
     expect(document.querySelector('external')).toBeNull();
-    clickTab(t('systemPrompt.format.original', 'Original text'));
+    clickTab(t('systemPrompt.format.original'));
     expect(document.querySelector('.sp-preview-pre').textContent).toBe(text);
     document.querySelector('.sp-document-toolbar button.btn-secondary').click();
     await waitForCondition(() => writeText.mock.calls.length > 0, 100);
@@ -414,7 +411,7 @@ describe('SystemPromptView scope and preview', () => {
     await waitForCondition(() => document.querySelector('.sp-document'), 100);
     expect(documentText()).not.toContain('TEST-MCP-DESCRIPTION');
     expect(lastCall('prompt.preview')[1].include_tools).toBe(true);
-    clickTab(t('systemPrompt.tabs.tools', 'Tools'));
+    clickTab(t('systemPrompt.tabs.tools'));
     expect(document.querySelector('.tool-description').textContent).toBe(
       definition.description,
     );
@@ -433,7 +430,7 @@ describe('SystemPromptView scope and preview', () => {
     flushSync();
     expect(document.querySelector('.tool-detail')).toBeNull();
     expect(document.body.textContent).toContain(
-      t('systemPrompt.tools.noMatches', 'No matching Tools'),
+      t('systemPrompt.tools.noMatches'),
     );
   });
 
@@ -445,7 +442,7 @@ describe('SystemPromptView scope and preview', () => {
         ? Promise.reject(new Error('test outage'))
         : base(method, params),
     );
-    const retryButton = () => buttonByText(t('common.retry', 'Retry'));
+    const retryButton = () => buttonByText(t('common.retry'));
     mountView();
     await waitForCondition(retryButton, 100);
     expect(document.querySelector('.sp-document')).toBeNull();

@@ -52,25 +52,22 @@ function interpolate(template, values) {
   });
 }
 
-export function t(key, fallback, values) {
+function lookup(key) {
   const catalog = catalogs[activeLocale] ?? catalogs[DEFAULT_LOCALE];
   const translation = catalog[key] ?? catalogs[DEFAULT_LOCALE][key];
-  const template = hasText(translation)
-    ? translation
-    : hasText(fallback)
-      ? fallback
-      : key;
+  return hasText(translation) ? translation : null;
+}
 
-  return interpolate(template, values);
+// Renders the catalog text of `key` with its `{name}` placeholders filled from
+// `values`. A key without an entry renders as the key itself.
+export function t(key, values) {
+  return interpolate(lookup(key) ?? key, values);
 }
 
 // Resolves a composed key built from a server-sent code. A code without a
 // catalog entry renders `fallback` (usually the code itself) instead of the key.
 export function tOr(key, fallback, values) {
-  const catalog = catalogs[activeLocale] ?? catalogs[DEFAULT_LOCALE];
-  const translation = catalog[key] ?? catalogs[DEFAULT_LOCALE][key];
-
-  return interpolate(hasText(translation) ? translation : fallback, values);
+  return interpolate(lookup(key) ?? fallback, values);
 }
 
 // Adds an Extension page's own English text. Keys the core catalog or an

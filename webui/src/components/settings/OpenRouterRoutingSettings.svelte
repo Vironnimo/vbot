@@ -24,27 +24,15 @@
   const MODE_OPTIONS = [
     {
       value: 'automatic',
-      label: () =>
-        t(
-          'settings.providers.openrouter.mode.automatic',
-          'Automatic (OpenRouter managed)',
-        ),
+      label: () => t('settings.providers.openrouter.mode.automatic'),
     },
     {
       value: 'allowed',
-      label: () =>
-        t(
-          'settings.providers.openrouter.mode.allowed',
-          'Only allowed providers',
-        ),
+      label: () => t('settings.providers.openrouter.mode.allowed'),
     },
     {
       value: 'ordered',
-      label: () =>
-        t(
-          'settings.providers.openrouter.mode.ordered',
-          'Preferred provider order',
-        ),
+      label: () => t('settings.providers.openrouter.mode.ordered'),
     },
   ];
   const noop = () => {};
@@ -243,10 +231,7 @@
       .toLowerCase();
     if (!PROVIDER_SLUG_PATTERN.test(normalized)) {
       onToast({
-        title: t(
-          'settings.providers.openrouter.invalidSlug',
-          'Enter a valid OpenRouter provider slug.',
-        ),
+        title: t('settings.providers.openrouter.invalidSlug'),
         variant: 'error',
       });
       return;
@@ -317,11 +302,9 @@
 
   function validatePolicy(policy, label, globallyBlocked = []) {
     if (policy.mode !== 'automatic' && policy.providers.length === 0) {
-      return t(
-        'settings.providers.openrouter.providerRequired',
-        '{scope} needs at least one provider for this routing mode.',
-        { scope: label },
-      );
+      return t('settings.providers.openrouter.providerRequired', {
+        scope: label,
+      });
     }
     for (const slug of policy.providers) {
       const blocked = [...policy.blocked, ...globallyBlocked].some(
@@ -329,11 +312,10 @@
           slug === blockedSlug || slug.startsWith(`${blockedSlug}/`),
       );
       if (blocked) {
-        return t(
-          'settings.providers.openrouter.providerConflict',
-          '{provider} is both selected and blocked in {scope}.',
-          { provider: slug, scope: label },
-        );
+        return t('settings.providers.openrouter.providerConflict', {
+          provider: slug,
+          scope: label,
+        });
       }
     }
     return '';
@@ -342,7 +324,7 @@
   function validateRouting(value) {
     const defaultError = validatePolicy(
       value.default,
-      t('settings.providers.openrouter.globalScope', 'Global routing'),
+      t('settings.providers.openrouter.globalScope'),
     );
     if (defaultError) {
       return defaultError;
@@ -360,7 +342,7 @@
     if (!dirty) {
       if (reason === 'manual')
         onToast({
-          title: t('common.alreadySaved', 'Already saved'),
+          title: t('common.alreadySaved'),
           variant: 'success',
         });
       return true;
@@ -377,21 +359,13 @@
       if (JSON.stringify(routing) === submitted) dirty = false;
       if (reason === 'manual')
         onToast({
-          title: t(
-            'settings.providers.openrouter.saved',
-            'OpenRouter routing settings saved.',
-          ),
+          title: t('settings.providers.openrouter.saved'),
           variant: 'success',
         });
       return true;
     } catch (error) {
       onToast({
-        title:
-          error?.message ||
-          t(
-            'settings.providers.openrouter.saveError',
-            'OpenRouter routing settings could not be saved.',
-          ),
+        title: error?.message || t('settings.providers.openrouter.saveError'),
         variant: 'error',
       });
       return false;
@@ -404,30 +378,21 @@
 <div class="openrouter-routing">
   <div class="s-row-info">
     <div class="s-provider-connection-label">
-      {t('settings.providers.openrouter.title', 'Routing')}
+      {t('settings.providers.openrouter.title')}
     </div>
     <div class="s-row-desc">
-      {t(
-        'settings.providers.openrouter.description',
-        'Control which upstream providers OpenRouter may use. vBot sends a stable Session identifier so OpenRouter can apply Sticky Routing.',
-      )}
+      {t('settings.providers.openrouter.description')}
     </div>
   </div>
 
   <Banner variant="info">
-    {t(
-      'settings.providers.openrouter.stabilityHint',
-      'Sticky Routing is best effort. To prevent provider switches, allow one exact endpoint and turn provider fallbacks off.',
-    )}
+    {t('settings.providers.openrouter.stabilityHint')}
   </Banner>
 
   <FormField
     controlId="openrouter-routing-model"
-    label={t('settings.providers.openrouter.scopeLabel', 'Scope')}
-    help={t(
-      'settings.providers.openrouter.scopeHelp',
-      'Global routing applies to every OpenRouter model unless that model has an override.',
-    )}
+    label={t('settings.providers.openrouter.scopeLabel')}
+    help={t('settings.providers.openrouter.scopeHelp')}
     full
   >
     {#snippet children({ controlId, describedBy })}
@@ -437,21 +402,12 @@
         options={[
           {
             value: '',
-            label: t(
-              'settings.providers.openrouter.globalScope',
-              'Global routing',
-            ),
+            label: t('settings.providers.openrouter.globalScope'),
           },
           ...modelOptions,
         ]}
-        placeholder={t(
-          'settings.providers.openrouter.globalScope',
-          'Global routing',
-        )}
-        searchPlaceholder={t(
-          'settings.providers.openrouter.modelSearch',
-          'Find an OpenRouter model…',
-        )}
+        placeholder={t('settings.providers.openrouter.globalScope')}
+        searchPlaceholder={t('settings.providers.openrouter.modelSearch')}
         disabled={loadingModels}
         ariaDescribedby={describedBy}
         onValueChange={(value) => {
@@ -466,28 +422,20 @@
     <div class="openrouter-routing__override-row">
       <div class="s-row-info">
         <div class="s-provider-connection-label">
-          {t('settings.providers.openrouter.modelOverride', 'Model override')}
+          {t('settings.providers.openrouter.modelOverride')}
         </div>
         <div class="s-row-desc">
           {selectedHasOverride
-            ? t(
-                'settings.providers.openrouter.modelOverrideOn',
-                'This model has its own routing policy. Global blocks still apply.',
-              )
-            : t(
-                'settings.providers.openrouter.modelOverrideOff',
-                'This model inherits the global routing policy.',
-              )}
+            ? t('settings.providers.openrouter.modelOverrideOn')
+            : t('settings.providers.openrouter.modelOverrideOff')}
         </div>
       </div>
       <Toggle
         checked={selectedHasOverride}
         onChange={setModelOverride}
-        ariaLabel={t(
-          'settings.providers.openrouter.modelOverrideAria',
-          'Use a routing override for {model}',
-          { model: selectedModelId },
-        )}
+        ariaLabel={t('settings.providers.openrouter.modelOverrideAria', {
+          model: selectedModelId,
+        })}
       />
     </div>
   {/if}
@@ -495,7 +443,7 @@
   <div class:openrouter-routing__disabled={!selectedHasOverride}>
     <FormField
       controlId="openrouter-routing-mode"
-      label={t('settings.providers.openrouter.modeLabel', 'Routing mode')}
+      label={t('settings.providers.openrouter.modeLabel')}
       full
     >
       {#snippet children({ controlId })}
@@ -511,10 +459,7 @@
 
     {#if currentPolicy.mode === 'ordered'}
       <Banner variant="warn">
-        {t(
-          'settings.providers.openrouter.orderWarning',
-          'A manual provider order overrides OpenRouter Sticky Routing. OpenRouter tries the listed providers first, but automatic cache affinity is disabled.',
-        )}
+        {t('settings.providers.openrouter.orderWarning')}
       </Banner>
     {/if}
 
@@ -522,26 +467,16 @@
       <div class="openrouter-routing__list-block">
         <div class="s-provider-connection-label">
           {currentPolicy.mode === 'ordered'
-            ? t(
-                'settings.providers.openrouter.preferredProviders',
-                'Provider priority',
-              )
-            : t(
-                'settings.providers.openrouter.allowedProviders',
-                'Allowed providers',
-              )}
+            ? t('settings.providers.openrouter.preferredProviders')
+            : t('settings.providers.openrouter.allowedProviders')}
         </div>
         <div class="openrouter-routing__add-row">
           <SearchableDropdown
             value=""
             options={addableProviderOptions}
-            placeholder={t(
-              'settings.providers.openrouter.addProvider',
-              'Add provider…',
-            )}
+            placeholder={t('settings.providers.openrouter.addProvider')}
             searchPlaceholder={t(
               'settings.providers.openrouter.providerSearch',
-              'Find a provider…',
             )}
             disabled={!selectedHasOverride || loadingProviders}
             onValueChange={(value) => addProvider(value, 'providers')}
@@ -558,11 +493,9 @@
                       variant="tertiary"
                       icon
                       disabled={!selectedHasOverride || index === 0}
-                      ariaLabel={t(
-                        'settings.providers.openrouter.moveUp',
-                        'Move {provider} up',
-                        { provider: slug },
-                      )}
+                      ariaLabel={t('settings.providers.openrouter.moveUp', {
+                        provider: slug,
+                      })}
                       onClick={() => moveProvider(index, -1)}>↑</Button
                     >
                     <Button
@@ -570,11 +503,9 @@
                       icon
                       disabled={!selectedHasOverride ||
                         index === currentPolicy.providers.length - 1}
-                      ariaLabel={t(
-                        'settings.providers.openrouter.moveDown',
-                        'Move {provider} down',
-                        { provider: slug },
-                      )}
+                      ariaLabel={t('settings.providers.openrouter.moveDown', {
+                        provider: slug,
+                      })}
                       onClick={() => moveProvider(index, 1)}>↓</Button
                     >
                   {/if}
@@ -584,7 +515,6 @@
                     disabled={!selectedHasOverride}
                     ariaLabel={t(
                       'settings.providers.openrouter.removeProvider',
-                      'Remove {provider}',
                       { provider: slug },
                     )}
                     onClick={() => removeProvider(slug, 'providers')}>×</Button
@@ -600,27 +530,15 @@
     <div class="openrouter-routing__list-block">
       <div class="s-provider-connection-label">
         {selectedModelId
-          ? t(
-              'settings.providers.openrouter.blockedProvidersModel',
-              'Additionally blocked for this model',
-            )
-          : t(
-              'settings.providers.openrouter.blockedProviders',
-              'Blocked providers',
-            )}
+          ? t('settings.providers.openrouter.blockedProvidersModel')
+          : t('settings.providers.openrouter.blockedProviders')}
       </div>
       <div class="openrouter-routing__add-row">
         <SearchableDropdown
           value=""
           options={addableProviderOptions}
-          placeholder={t(
-            'settings.providers.openrouter.blockProvider',
-            'Block provider…',
-          )}
-          searchPlaceholder={t(
-            'settings.providers.openrouter.providerSearch',
-            'Find a provider…',
-          )}
+          placeholder={t('settings.providers.openrouter.blockProvider')}
+          searchPlaceholder={t('settings.providers.openrouter.providerSearch')}
           disabled={!selectedHasOverride || loadingProviders}
           onValueChange={(value) => addProvider(value, 'blocked')}
         />
@@ -634,11 +552,9 @@
                 variant="tertiary"
                 icon
                 disabled={!selectedHasOverride}
-                ariaLabel={t(
-                  'settings.providers.openrouter.unblockProvider',
-                  'Unblock {provider}',
-                  { provider: slug },
-                )}
+                ariaLabel={t('settings.providers.openrouter.unblockProvider', {
+                  provider: slug,
+                })}
                 onClick={() => removeProvider(slug, 'blocked')}>×</Button
               >
             </div>
@@ -649,14 +565,8 @@
 
     <FormField
       controlId="openrouter-custom-provider"
-      label={t(
-        'settings.providers.openrouter.customProvider',
-        'Custom provider slug',
-      )}
-      help={t(
-        'settings.providers.openrouter.customProviderHelp',
-        'Use an exact endpoint tag such as google-vertex/europe when it is not in the fetched list.',
-      )}
+      label={t('settings.providers.openrouter.customProvider')}
+      help={t('settings.providers.openrouter.customProviderHelp')}
       full
     >
       {#snippet children({ controlId, describedBy })}
@@ -666,7 +576,6 @@
             value={customProviderSlug}
             placeholder={t(
               'settings.providers.openrouter.customProviderPlaceholder',
-              'google-vertex/europe',
             )}
             aria-describedby={describedBy}
             disabled={!selectedHasOverride}
@@ -677,7 +586,7 @@
             disabled={!selectedHasOverride || customProviderSlug.trim() === ''}
             onClick={() => addProvider(customProviderSlug, 'blocked')}
           >
-            {t('settings.providers.openrouter.block', 'Block')}
+            {t('settings.providers.openrouter.block')}
           </Button>
           {#if currentPolicy.mode !== 'automatic'}
             <Button
@@ -686,7 +595,7 @@
                 customProviderSlug.trim() === ''}
               onClick={() => addProvider(customProviderSlug, 'providers')}
             >
-              {t('settings.providers.openrouter.select', 'Select')}
+              {t('settings.providers.openrouter.select')}
             </Button>
           {/if}
         </div>
@@ -696,23 +605,17 @@
     <div class="openrouter-routing__fallback-row">
       <div class="s-row-info">
         <div class="s-provider-connection-label">
-          {t('settings.providers.openrouter.fallbacks', 'Provider fallbacks')}
+          {t('settings.providers.openrouter.fallbacks')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'settings.providers.openrouter.fallbacksHelp',
-            'When disabled, OpenRouter returns an error instead of trying a backup provider when the primary is unavailable.',
-          )}
+          {t('settings.providers.openrouter.fallbacksHelp')}
         </div>
       </div>
       <Toggle
         checked={currentPolicy.allow_fallbacks}
         disabled={!selectedHasOverride}
         onChange={(value) => updateCurrentPolicy({ allow_fallbacks: value })}
-        ariaLabel={t(
-          'settings.providers.openrouter.fallbacksAria',
-          'Allow OpenRouter provider fallbacks',
-        )}
+        ariaLabel={t('settings.providers.openrouter.fallbacksAria')}
       />
     </div>
   </div>
@@ -728,9 +631,7 @@
       loading={saving}
       onClick={() => autosave.participant.runSave('manual', { force: true })}
     >
-      {saving
-        ? t('common.saving', 'Saving…')
-        : t('settings.providers.openrouter.save', 'Save routing')}
+      {saving ? t('common.saving') : t('settings.providers.openrouter.save')}
     </Button>
   </div>
 </div>

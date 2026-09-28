@@ -107,9 +107,7 @@ export const subAgentToolStatusLabel = (
     const duration = formatDurationMs(
       subAgentRunDurationMs(tool, subAgentStatuses),
     );
-    return [t('chat.toolCancelled', 'cancelled'), duration]
-      .filter(Boolean)
-      .join(' · ');
+    return [t('chat.toolCancelled'), duration].filter(Boolean).join(' · ');
   }
   if (dotStatus === 'running') {
     return formatDurationMs(
@@ -187,7 +185,7 @@ const subAgentSessionId = (tool) => {
 };
 
 export const subAgentAgentId = (tool) => {
-  return subAgentTargetAddress(tool) || t('common.unknown', 'Unknown');
+  return subAgentTargetAddress(tool) || t('common.unknown');
 };
 
 // The child's outside address. Current results carry `agent@projekt` in

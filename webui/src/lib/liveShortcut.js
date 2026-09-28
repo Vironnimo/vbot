@@ -50,7 +50,7 @@ function keyLabel(code, layoutMap) {
   }
   const digit = DIGIT_CODE.exec(code);
   if (digit) return digit[1];
-  if (code === 'Space') return t('settings.liveShortcut.space', 'Space');
+  if (code === 'Space') return t('settings.liveShortcut.space');
   return code;
 }
 

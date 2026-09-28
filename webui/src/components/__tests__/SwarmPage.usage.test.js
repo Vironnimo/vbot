@@ -14,8 +14,8 @@ import {
 } from './SwarmPage.support.js';
 import { t } from '../../lib/i18n.js';
 
-const USAGE = t('swarm.tabs.usage', 'Usage');
-const UNAVAILABLE = t('swarm.usage.unavailable', 'Unavailable');
+const USAGE = t('swarm.tabs.usage');
+const UNAVAILABLE = t('swarm.usage.unavailable');
 
 const summary = () =>
   [...document.querySelectorAll('.usage-summary dd')].map((el) =>
@@ -68,9 +68,7 @@ describe('Swarm Usage', () => {
       ['Alpha', 'demo/model', '65', '4', '1'],
       ['Beta', 'demo/fallback', '65', '0', '1'],
     ]);
-    expect(document.body.textContent).toContain(
-      t('swarm.usage.toolCalls', 'Tool Calls'),
-    );
+    expect(document.body.textContent).toContain(t('swarm.usage.toolCalls'));
     expect(operation).toHaveBeenCalledWith('swarms.usage', {
       swarm_id: 'swr-a',
     });
@@ -166,7 +164,7 @@ describe('Swarm Usage refresh', () => {
     button(USAGE).click();
     await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
     expect(document.querySelector('[role="status"]')).toBeNull();
-    button(t('swarm.tabs.board', 'Board')).click();
+    button(t('swarm.tabs.board')).click();
     await tick();
     button(USAGE).click();
     bridge.invalidate();

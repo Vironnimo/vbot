@@ -108,11 +108,7 @@
     const parsed = Number(normalized);
     if (!Number.isInteger(parsed) || parsed <= 0) {
       throw new Error(
-        t(
-          'settings.providers.custom.validationPositiveInteger',
-          '{label} must be a positive whole number.',
-          { label },
-        ),
+        t('settings.providers.custom.validationPositiveInteger', { label }),
       );
     }
     return parsed;
@@ -123,12 +119,7 @@
     try {
       parsed = new URL(value);
     } catch {
-      throw new Error(
-        t(
-          'settings.providers.custom.validationBaseUrl',
-          'Enter an absolute HTTP(S) endpoint URL.',
-        ),
-      );
+      throw new Error(t('settings.providers.custom.validationBaseUrl'));
     }
     if (
       !['http:', 'https:'].includes(parsed.protocol) ||
@@ -137,54 +128,32 @@
       parsed.search ||
       parsed.hash
     ) {
-      throw new Error(
-        t(
-          'settings.providers.custom.validationBaseUrl',
-          'Enter an absolute HTTP(S) endpoint URL.',
-        ),
-      );
+      throw new Error(t('settings.providers.custom.validationBaseUrl'));
     }
   }
 
   function buildProvider() {
     const id = providerId.trim();
     if (!PROVIDER_ID_PATTERN.test(id)) {
-      throw new Error(
-        t(
-          'settings.providers.custom.validationId',
-          'Provider id must use lowercase letters and digits in hyphen-separated segments.',
-        ),
-      );
+      throw new Error(t('settings.providers.custom.validationId'));
     }
     if (!name.trim()) {
-      throw new Error(
-        t('settings.providers.custom.validationName', 'Enter a Provider name.'),
-      );
+      throw new Error(t('settings.providers.custom.validationName'));
     }
     validateBaseUrl(baseUrl.trim());
 
     const modelMap = {};
     for (const [index, model] of models.entries()) {
-      const modelLabel = t(
-        'settings.providers.custom.modelNumber',
-        'Model {number}',
-        { number: index + 1 },
-      );
+      const modelLabel = t('settings.providers.custom.modelNumber', {
+        number: index + 1,
+      });
       const modelId = model.modelId.trim();
       if (!modelId || modelId.includes('::')) {
-        throw new Error(
-          t(
-            'settings.providers.custom.validationModelId',
-            'Every Model needs a wire id without "::".',
-          ),
-        );
+        throw new Error(t('settings.providers.custom.validationModelId'));
       }
       if (modelMap[modelId]) {
         throw new Error(
-          t(
-            'settings.providers.custom.validationDuplicateModel',
-            'Model ids must be unique.',
-          ),
+          t('settings.providers.custom.validationDuplicateModel'),
         );
       }
       modelMap[modelId] = {
@@ -193,14 +162,12 @@
           model.contextWindow,
           `${modelLabel} ${t(
             'settings.providers.custom.contextWindow',
-            'context window',
           ).toLocaleLowerCase()}`,
         ),
         max_output_tokens: optionalPositiveInteger(
           model.maxOutputTokens,
           `${modelLabel} ${t(
             'settings.providers.custom.maxOutput',
-            'max output tokens',
           ).toLocaleLowerCase()}`,
         ),
         capabilities: {
@@ -253,7 +220,7 @@
       }
       await saveCustomProvider(params);
       onToast({
-        title: t('settings.providers.custom.saved', 'Custom Provider saved.'),
+        title: t('settings.providers.custom.saved'),
         variant: 'success',
       });
       await onSaved();
@@ -261,7 +228,6 @@
     } catch (error) {
       errorMessage = `${t(
         'settings.providers.custom.saveError',
-        'Custom Provider could not be saved.',
       )} ${error.message}`;
     } finally {
       saving = false;
@@ -271,8 +237,8 @@
 
 <Modal
   title={editing
-    ? t('settings.providers.custom.editTitle', 'Edit Custom Provider')
-    : t('settings.providers.custom.addTitle', 'Add Custom Provider')}
+    ? t('settings.providers.custom.editTitle')
+    : t('settings.providers.custom.addTitle')}
   labelledById="custom-provider-modal-title"
   class="custom-provider-modal"
   closeDisabled={saving}
@@ -286,24 +252,18 @@
     >
       <div class="custom-provider-form__intro">
         <span class="custom-provider-form__eyebrow">
-          {t('settings.providers.custom.eyebrow', 'OpenAI-compatible endpoint')}
+          {t('settings.providers.custom.eyebrow')}
         </span>
         <p>
-          {t(
-            'settings.providers.custom.intro',
-            'Connect an endpoint you control and describe the Models it exposes. Secrets are stored separately in the data-directory .env.',
-          )}
+          {t('settings.providers.custom.intro')}
         </p>
       </div>
 
       <div class="custom-provider-form__grid">
         <FormField
           controlId="custom-provider-id"
-          label={t('settings.providers.custom.id', 'Provider id')}
-          help={t(
-            'settings.providers.custom.idHint',
-            'Stable id used in Model references, for example local-ai.',
-          )}
+          label={t('settings.providers.custom.id')}
+          help={t('settings.providers.custom.idHint')}
           required
         >
           {#snippet children(field)}
@@ -323,7 +283,7 @@
 
         <FormField
           controlId="custom-provider-name"
-          label={t('settings.providers.custom.name', 'Name')}
+          label={t('settings.providers.custom.name')}
           required
         >
           <TextField
@@ -339,7 +299,7 @@
 
         <FormField
           controlId="custom-provider-adapter"
-          label={t('settings.providers.custom.adapter', 'Adapter')}
+          label={t('settings.providers.custom.adapter')}
         >
           <select
             id="custom-provider-adapter"
@@ -348,17 +308,14 @@
             disabled={saving}
           >
             <option value="openai_compatible">
-              {t(
-                'settings.providers.custom.adapterOpenAiCompatible',
-                'OpenAI compatible',
-              )}
+              {t('settings.providers.custom.adapterOpenAiCompatible')}
             </option>
           </select>
         </FormField>
 
         <FormField
           controlId="custom-provider-auth"
-          label={t('settings.providers.custom.auth', 'Authentication')}
+          label={t('settings.providers.custom.auth')}
         >
           <select
             id="custom-provider-auth"
@@ -367,10 +324,10 @@
             disabled={saving}
           >
             <option value="api_key">
-              {t('settings.providers.custom.authApiKey', 'Bearer API key')}
+              {t('settings.providers.custom.authApiKey')}
             </option>
             <option value="none">
-              {t('settings.providers.custom.authNone', 'No API key')}
+              {t('settings.providers.custom.authNone')}
             </option>
           </select>
         </FormField>
@@ -378,11 +335,8 @@
 
       <FormField
         controlId="custom-provider-base-url"
-        label={t('settings.providers.custom.baseUrl', 'Endpoint URL')}
-        help={t(
-          'settings.providers.custom.baseUrlHint',
-          'Base URL including the API prefix, for example http://127.0.0.1:8080/v1.',
-        )}
+        label={t('settings.providers.custom.baseUrl')}
+        help={t('settings.providers.custom.baseUrlHint')}
         required
         full
       >
@@ -390,10 +344,7 @@
           id="custom-provider-base-url"
           code
           value={baseUrl}
-          placeholder={t(
-            'settings.providers.custom.baseUrlPlaceholder',
-            'http://127.0.0.1:8080/v1',
-          )}
+          placeholder={t('settings.providers.custom.baseUrlPlaceholder')}
           disabled={saving}
           onInput={(value) => {
             baseUrl = value;
@@ -405,14 +356,8 @@
       <div class="custom-provider-form__grid">
         <FormField
           controlId="custom-provider-models-endpoint"
-          label={t(
-            'settings.providers.custom.modelsEndpoint',
-            'Model discovery path',
-          )}
-          help={t(
-            'settings.providers.custom.modelsEndpointHint',
-            'Optional OpenAI-compatible path. Leave empty to use manual Models only.',
-          )}
+          label={t('settings.providers.custom.modelsEndpoint')}
+          help={t('settings.providers.custom.modelsEndpointHint')}
         >
           <TextField
             id="custom-provider-models-endpoint"
@@ -420,7 +365,6 @@
             value={modelsEndpoint}
             placeholder={t(
               'settings.providers.custom.modelsEndpointPlaceholder',
-              '/models',
             )}
             disabled={saving}
             onInput={(value) => {
@@ -434,15 +378,9 @@
           <FormField
             controlId="custom-provider-api-key"
             label={editing
-              ? t(
-                  'settings.providers.custom.replaceApiKey',
-                  'Replace API key (optional)',
-                )
-              : t('settings.providers.custom.apiKey', 'API key (optional)')}
-            help={t(
-              'settings.providers.custom.apiKeyHint',
-              'Write-only. Leave empty to keep the existing key or connect it later.',
-            )}
+              ? t('settings.providers.custom.replaceApiKey')
+              : t('settings.providers.custom.apiKey')}
+            help={t('settings.providers.custom.apiKeyHint')}
           >
             <TextField
               id="custom-provider-api-key"
@@ -463,26 +401,20 @@
         <div class="custom-models__head">
           <div>
             <h4 id="custom-models-title">
-              {t('settings.providers.custom.modelsTitle', 'Manual Models')}
+              {t('settings.providers.custom.modelsTitle')}
             </h4>
             <p>
-              {t(
-                'settings.providers.custom.modelsHint',
-                'Manual facts override discovered Models with the same wire id.',
-              )}
+              {t('settings.providers.custom.modelsHint')}
             </p>
           </div>
           <Button variant="secondary" disabled={saving} onClick={addModel}>
-            {t('settings.providers.custom.addModel', 'Add Model')}
+            {t('settings.providers.custom.addModel')}
           </Button>
         </div>
 
         {#if models.length === 0}
           <div class="custom-models__empty">
-            {t(
-              'settings.providers.custom.noModels',
-              'No manual Models. Use discovery or add one here.',
-            )}
+            {t('settings.providers.custom.noModels')}
           </div>
         {/if}
 
@@ -490,7 +422,7 @@
           <article class="custom-model-card">
             <div class="custom-model-card__head">
               <span>
-                {t('settings.providers.custom.modelNumber', 'Model {number}', {
+                {t('settings.providers.custom.modelNumber', {
                   number: index + 1,
                 })}
               </span>
@@ -499,14 +431,14 @@
                 disabled={saving}
                 onClick={() => removeModel(index)}
               >
-                {t('common.remove', 'Remove')}
+                {t('common.remove')}
               </Button>
             </div>
 
             <div class="custom-provider-form__grid">
               <FormField
                 controlId={`custom-model-${index}-id`}
-                label={t('settings.providers.custom.modelId', 'Wire id')}
+                label={t('settings.providers.custom.modelId')}
                 required
               >
                 <TextField
@@ -518,7 +450,7 @@
               </FormField>
               <FormField
                 controlId={`custom-model-${index}-name`}
-                label={t('settings.providers.custom.modelName', 'Display name')}
+                label={t('settings.providers.custom.modelName')}
               >
                 <TextField
                   id={`custom-model-${index}-name`}
@@ -529,10 +461,7 @@
               </FormField>
               <FormField
                 controlId={`custom-model-${index}-context`}
-                label={t(
-                  'settings.providers.custom.contextWindow',
-                  'Context window',
-                )}
+                label={t('settings.providers.custom.contextWindow')}
               >
                 <TextField
                   id={`custom-model-${index}-context`}
@@ -546,10 +475,7 @@
               </FormField>
               <FormField
                 controlId={`custom-model-${index}-output`}
-                label={t(
-                  'settings.providers.custom.maxOutput',
-                  'Max output tokens',
-                )}
+                label={t('settings.providers.custom.maxOutput')}
               >
                 <TextField
                   id={`custom-model-${index}-output`}
@@ -563,14 +489,8 @@
               </FormField>
               <FormField
                 controlId={`custom-model-${index}-input-modalities`}
-                label={t(
-                  'settings.providers.custom.inputModalities',
-                  'Input modalities',
-                )}
-                help={t(
-                  'settings.providers.custom.inputModalitiesHint',
-                  'Comma-separated: text, image, audio, file, video',
-                )}
+                label={t('settings.providers.custom.inputModalities')}
+                help={t('settings.providers.custom.inputModalitiesHint')}
               >
                 <TextField
                   id={`custom-model-${index}-input-modalities`}
@@ -582,14 +502,8 @@
               </FormField>
               <FormField
                 controlId={`custom-model-${index}-output-modalities`}
-                label={t(
-                  'settings.providers.custom.outputModalities',
-                  'Output modalities',
-                )}
-                help={t(
-                  'settings.providers.custom.outputModalitiesHint',
-                  'Comma-separated: text, image, speech, transcription, embeddings',
-                )}
+                label={t('settings.providers.custom.outputModalities')}
+                help={t('settings.providers.custom.outputModalitiesHint')}
               >
                 <TextField
                   id={`custom-model-${index}-output-modalities`}
@@ -601,11 +515,8 @@
               </FormField>
               <FormField
                 controlId={`custom-model-${index}-tasks`}
-                label={t('settings.providers.custom.taskTypes', 'Task types')}
-                help={t(
-                  'settings.providers.custom.taskTypesHint',
-                  'Optional comma-separated explicit task types',
-                )}
+                label={t('settings.providers.custom.taskTypes')}
+                help={t('settings.providers.custom.taskTypesHint')}
               >
                 <TextField
                   id={`custom-model-${index}-tasks`}
@@ -616,14 +527,8 @@
               </FormField>
               <FormField
                 controlId={`custom-model-${index}-parameters`}
-                label={t(
-                  'settings.providers.custom.parameters',
-                  'Supported parameters',
-                )}
-                help={t(
-                  'settings.providers.custom.parametersHint',
-                  'Optional comma-separated wire parameter names',
-                )}
+                label={t('settings.providers.custom.parameters')}
+                help={t('settings.providers.custom.parametersHint')}
               >
                 <TextField
                   id={`custom-model-${index}-parameters`}
@@ -635,14 +540,8 @@
               </FormField>
               <FormField
                 controlId={`custom-model-${index}-voices`}
-                label={t(
-                  'settings.providers.custom.voices',
-                  'Supported voices',
-                )}
-                help={t(
-                  'settings.providers.custom.voicesHint',
-                  'Optional comma-separated voice ids',
-                )}
+                label={t('settings.providers.custom.voices')}
+                help={t('settings.providers.custom.voicesHint')}
               >
                 <TextField
                   id={`custom-model-${index}-voices`}
@@ -655,27 +554,21 @@
             </div>
 
             <div class="custom-model-card__capabilities">
-              {#each [['tools', t('settings.providers.custom.tools', 'Tools'), model.tools], ['vision', t('settings.providers.custom.vision', 'Vision'), model.vision], ['jsonMode', t('settings.providers.custom.jsonMode', 'JSON mode'), model.jsonMode], ['reasoning', t('settings.providers.custom.reasoning', 'Reasoning'), model.reasoning]] as capability (capability[0])}
+              {#each [['tools', t('settings.providers.custom.tools'), model.tools], ['vision', t('settings.providers.custom.vision'), model.vision], ['jsonMode', t('settings.providers.custom.jsonMode'), model.jsonMode], ['reasoning', t('settings.providers.custom.reasoning'), model.reasoning]] as capability (capability[0])}
                 <div class="custom-model-capability">
                   <span>{capability[1]}</span>
                   <Toggle
                     size="sm"
                     checked={capability[2]}
                     disabled={saving}
-                    ariaLabel={t(
-                      'settings.providers.custom.capabilityAria',
-                      '{capability} for {model}',
-                      {
-                        capability: capability[1],
-                        model:
-                          model.modelId ||
-                          t(
-                            'settings.providers.custom.modelNumber',
-                            'Model {number}',
-                            { number: index + 1 },
-                          ),
-                      },
-                    )}
+                    ariaLabel={t('settings.providers.custom.capabilityAria', {
+                      capability: capability[1],
+                      model:
+                        model.modelId ||
+                        t('settings.providers.custom.modelNumber', {
+                          number: index + 1,
+                        }),
+                    })}
                     onChange={(checked) =>
                       updateModel(index, { [capability[0]]: checked })}
                   />
@@ -696,7 +589,7 @@
 
   {#snippet footer()}
     <Button variant="secondary" disabled={saving} onClick={onClose}>
-      {t('common.cancel', 'Cancel')}
+      {t('common.cancel')}
     </Button>
     <Button
       type="submit"
@@ -704,7 +597,7 @@
       variant="primary"
       disabled={saving}
     >
-      {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
+      {saving ? t('common.saving') : t('common.save')}
     </Button>
   {/snippet}
 </Modal>

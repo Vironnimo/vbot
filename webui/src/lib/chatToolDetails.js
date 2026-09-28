@@ -39,7 +39,7 @@ export function toolDetailImages(
           filename:
             typeof image.filename === 'string' && image.filename
               ? image.filename
-              : t('chat.attachment.preview', 'Preview attachment'),
+              : t('chat.attachment.preview'),
         },
       ];
     });
@@ -67,7 +67,7 @@ export function toolDetailImages(
         filename:
           typeof item.filename === 'string' && item.filename
             ? item.filename
-            : t('chat.attachment.preview', 'Preview attachment'),
+            : t('chat.attachment.preview'),
       },
     ];
   });
@@ -88,7 +88,7 @@ export const toolDetailPresentation = (
       );
 
   if (!hasMeaningfulToolDetail(processed)) {
-    const emptyText = t('chat.toolNoData', '—');
+    const emptyText = t('chat.toolNoData');
     return { copyText: emptyText, fields: [], kind: 'empty', text: emptyText };
   }
 
@@ -140,7 +140,7 @@ function toolDisplay(tool) {
 }
 
 function toolNameForRunTool(tool) {
-  return tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
+  return tool.name || tool.toolCall?.name || t('chat.toolPendingName');
 }
 
 function sanitizeToolDetailNode(

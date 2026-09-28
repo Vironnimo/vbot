@@ -141,13 +141,10 @@
   // The row's secondary line; the group already names the target kind.
   function agentTargetDescription(target) {
     if (target.unavailable) {
-      return t(
-        'agents.access.unavailableAgentTarget',
-        'This configured target is not present in the current Identity Agent or Project Team catalogs.',
-      );
+      return t('agents.access.unavailableAgentTarget');
     }
     if (target.kind === 'project') {
-      return t('agents.access.projectAgentDetail', '{agent} · {project}', {
+      return t('agents.access.projectAgentDetail', {
         agent: target.displayName || target.name,
         project: target.projectName || target.projectId,
       });
@@ -156,7 +153,7 @@
   }
 
   function agentToggleLabel(name) {
-    return t('agents.access.toggleAgent', 'Toggle agent {name}', { name });
+    return t('agents.access.toggleAgent', { name });
   }
 
   function updateAgentTargetAccessItem(itemName, isAllowed) {
@@ -241,14 +238,11 @@
   <section class="s-section" aria-labelledby="agent-section-tools">
     <header class="s-section__head">
       <h3 class="s-section__title" id="agent-section-tools">
-        {t('agents.form.toolAccess', 'Tool access')}
+        {t('agents.form.toolAccess')}
       </h3>
     </header>
     <p class="s-section__desc">
-      {t(
-        'agents.form.toolAccessHelp',
-        'Choose which Tools this Agent may use. Automatic Tools become available when their condition is met; permission does not guarantee current availability.',
-      )}
+      {t('agents.form.toolAccessHelp')}
     </p>
     <div class="s-section__body">
       <ToolAccessEditor
@@ -264,41 +258,31 @@
   <section class="s-section" aria-labelledby="agent-section-skills">
     <header class="s-section__head">
       <h3 class="s-section__title" id="agent-section-skills">
-        {t('agents.form.skills', 'Skills')}
+        {t('agents.form.skills')}
       </h3>
     </header>
     <p class="s-section__desc">
       {skillsAreWildcard && skillItems.length > 0
-        ? t(
-            'agents.form.wildcardNote',
-            'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
-          )
-        : t(
-            'agents.form.skillsDescription',
-            'Skills this Agent may load. Selecting all also allows Skills added later.',
-          )}
+        ? t('agents.form.wildcardNote')
+        : t('agents.form.skillsDescription')}
     </p>
     <div class="s-section__body">
       {#if skillItems.length > 1}
         {@render filterToolbar(
           skillQuery,
           (next) => (skillQuery = next),
-          t('agents.access.filterSkills', 'Filter Skills'),
-          t('agents.access.filterSkillsPlaceholder', 'Filter Skills…'),
+          t('agents.access.filterSkills'),
+          t('agents.access.filterSkillsPlaceholder'),
         )}
       {/if}
       <AgentSelectionGroup
-        title={t('agents.form.allowedSkills', 'Allowed skills')}
+        title={t('agents.form.allowedSkills')}
         titleId="agent-skills-label"
         items={skillItems}
         query={skillQuery}
-        allLabel={t('agents.access.allSkills', 'All Skills')}
-        toggleLabel={(name) =>
-          t('agents.access.toggleSkill', 'Toggle skill {name}', { name })}
-        emptyLabel={t(
-          'agents.access.noSkills',
-          'No loadable skills are available.',
-        )}
+        allLabel={t('agents.access.allSkills')}
+        toggleLabel={(name) => t('agents.access.toggleSkill', { name })}
+        emptyLabel={t('agents.access.noSkills')}
         onToggle={(name, next) =>
           updateAccessItem('allowed_skills', name, next)}
         onSetAll={(next) =>
@@ -307,7 +291,7 @@
       {#if invalidSkills.length > 0}
         <div class="s-subhead">
           <h4 class="s-subhead__title">
-            {t('agents.access.invalidSkillsTitle', 'Unavailable skills')}
+            {t('agents.access.invalidSkillsTitle')}
           </h4>
         </div>
         <div class="s-group agents-view__invalid-skills">
@@ -315,8 +299,7 @@
             <div class="s-row s-row--compact">
               <div class="s-row-info">
                 <div class="agents-view__invalid-skill-name">
-                  {item.name ||
-                    t('agents.access.unknownSkillName', 'Unknown skill')}
+                  {item.name || t('agents.access.unknownSkillName')}
                 </div>
                 {#if item.path}
                   <div class="agents-view__invalid-skill-path">
@@ -333,7 +316,7 @@
               </div>
               <div class="s-row-control">
                 <StatusChip variant="warn">
-                  {t('agents.access.notLoadable', 'not loadable')}
+                  {t('agents.access.notLoadable')}
                 </StatusChip>
               </div>
             </div>
@@ -347,40 +330,31 @@
     <section class="s-section" aria-labelledby="agent-section-subagents">
       <header class="s-section__head">
         <h3 class="s-section__title" id="agent-section-subagents">
-          {t('agents.form.subagentTargets', 'Sub-Agent targets')}
+          {t('agents.form.subagentTargets')}
         </h3>
       </header>
       <p class="s-section__desc">
         {agentsAreWildcard && visibleAgentTargetItems.length > 0
-          ? t(
-              'agents.form.agentWildcardNote',
-              'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
-            )
-          : t(
-              'agents.form.agentAddressNote',
-              'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
-            )}
+          ? t('agents.form.agentWildcardNote')
+          : t('agents.form.agentAddressNote')}
       </p>
       <div class="s-section__body">
         {#if agentTargetItems.length > 1}
           {@render filterToolbar(
             agentQuery,
             (next) => (agentQuery = next),
-            t('agents.access.filterAgents', 'Filter Agents'),
-            t('agents.access.filterAgentsPlaceholder', 'Filter Agents…'),
+            t('agents.access.filterAgents'),
+            t('agents.access.filterAgentsPlaceholder'),
           )}
         {/if}
         <AgentSelectionGroup
-          title={t('agents.access.identityAgents', 'Identity Agents')}
+          title={t('agents.access.identityAgents')}
           titleId="agent-identity-targets-label"
           items={identityAgentItems}
           query={agentQuery}
-          allLabel={t('agents.access.allIdentityAgents', 'All Identity Agents')}
+          allLabel={t('agents.access.allIdentityAgents')}
           toggleLabel={agentToggleLabel}
-          emptyLabel={t(
-            'agents.access.noIdentityAgentTargets',
-            'No additional Identity Agents are available.',
-          )}
+          emptyLabel={t('agents.access.noIdentityAgentTargets')}
           onToggle={(name, next) =>
             updateAccessItem('allowed_agents', name, next)}
           onSetAll={(next) => setAgentGroupAccess(identityAgentItems, next)}
@@ -388,11 +362,11 @@
         {#if projectAgentItems.length > 0}
           <AgentSelectionGroup
             class="agents-view__project-targets"
-            title={t('agents.access.projectAgents', 'Project Agents')}
+            title={t('agents.access.projectAgents')}
             titleId="agent-project-targets-label"
             items={projectAgentItems}
             query={agentQuery}
-            allLabel={t('agents.access.allProjectAgents', 'All Project Agents')}
+            allLabel={t('agents.access.allProjectAgents')}
             toggleLabel={agentToggleLabel}
             collapsible
             open={projectAgentsOpen}

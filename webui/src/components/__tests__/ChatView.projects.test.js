@@ -77,7 +77,7 @@ describe('ChatView Projects', () => {
             '.chat-header__project-dropdown .dropdown-primitive__trigger-label',
           )
           .textContent.trim(),
-      ).toBe(t('chat.project.none', 'No project selected'));
+      ).toBe(t('chat.project.none'));
       expect(document.querySelector('.chat-view__project-team')).toBeNull();
       expect(showProjectMock).not.toHaveBeenCalled();
       expect(rpcMock).toHaveBeenCalledWith('chat.history', {
@@ -187,9 +187,7 @@ describe('ChatView Projects', () => {
       );
       const teamBar = document.querySelector('.chat-view__project-team');
       expect(teamBar.querySelector('.agent-tab')).toBeNull();
-      expect(teamBar.textContent).toContain(
-        t('chat.project.teamEmpty', 'This project has no agents yet.'),
-      );
+      expect(teamBar.textContent).toContain(t('chat.project.teamEmpty'));
       expect(document.querySelector('.chat-view__error')).toBeNull();
       expect(selectedPersonalAgentName()).toBe('Alpha');
     });
@@ -499,7 +497,7 @@ describe('ChatView Projects', () => {
         limit: 100,
       });
       expect(document.body.textContent).toContain(
-        t('chat.subagentSessionNotice', 'Viewing a sub-agent session'),
+        t('chat.subagentSessionNotice'),
       );
     });
 
@@ -550,10 +548,7 @@ describe('ChatView Projects', () => {
       await chat.mountChat(projectChatProps({ navigateToSubAgent }), {
         ready: null,
       });
-      const openLabel = t(
-        'chat.subagent.openSession',
-        'Open Sub-Agent Session',
-      );
+      const openLabel = t('chat.subagent.openSession');
       await waitForCondition(() =>
         document.querySelector(`button[aria-label="${openLabel}"]`),
       );
@@ -593,7 +588,7 @@ describe('ChatView Projects', () => {
         ready: 'Builder project reply',
       });
 
-      findButtonByText(t('sessions.title', 'Sessions')).click();
+      findButtonByText(t('sessions.title')).click();
       await waitForCondition(
         () => document.querySelectorAll('.session-row__select').length === 2,
       );
@@ -612,14 +607,8 @@ describe('ChatView Projects', () => {
         limit: 100,
       });
       // Session selection is ordinary navigation: no return banner.
-      expect(
-        findButtonByText(
-          t('chat.returnToCurrentSession', 'Return to current session'),
-        ),
-      ).toBeFalsy();
-      expect(document.body.textContent).toContain(
-        t('chat.noProvider.title', 'Connect a provider to start'),
-      );
+      expect(findButtonByText(t('chat.returnToCurrentSession'))).toBeFalsy();
+      expect(document.body.textContent).toContain(t('chat.noProvider.title'));
     });
 
     it('releases a deleted Project Agent Session so reopening the Agent lands elsewhere', async () => {
@@ -657,7 +646,7 @@ describe('ChatView Projects', () => {
       });
       await chat.mountChat(projectChatProps(), { ready: 'Newest reply' });
 
-      findButtonByText(t('sessions.title', 'Sessions')).click();
+      findButtonByText(t('sessions.title')).click();
       await waitForCondition(
         () => document.querySelectorAll('.session-row').length === 2,
       );
@@ -668,7 +657,7 @@ describe('ChatView Projects', () => {
       flushSync();
       document.querySelector('.session-row__menu-item--danger').click();
       flushSync();
-      findButtonByText(t('common.delete', 'Delete')).click();
+      findButtonByText(t('common.delete')).click();
       await waitForText('Older reply');
       const deletedReads = historyReads('builder-session');
 

@@ -416,10 +416,7 @@ export function createChatRunStream({
         expectedSequence: buffer?.nextSequence ?? null,
         receivedSequence: pending.terminalSequence ?? null,
       });
-      sessionState.streamError = t(
-        'errors.streamClosed',
-        'The live stream closed before the run finished. Waiting for server status.',
-      );
+      sessionState.streamError = t('errors.streamClosed');
       closeRunSubscription(sessionKey);
       void reconcileRunHistory(sessionState, runId);
     }, TERMINAL_RECONCILIATION_DELAY_MS);
@@ -539,10 +536,7 @@ export function createChatRunStream({
     });
 
     if (retryAttempt < MAX_SSE_RECONNECT_ATTEMPTS) {
-      sessionState.streamError = t(
-        'errors.streamReconnecting',
-        'The live stream closed. Reconnecting...',
-      );
+      sessionState.streamError = t('errors.streamReconnecting');
       if (pendingReconnects[sessionKey] !== undefined) {
         return;
       }
@@ -567,7 +561,6 @@ export function createChatRunStream({
 
     sessionState.streamError = `${t(
       'errors.streamClosed',
-      'The live stream closed before the run finished. Waiting for server status.',
     )} ${error?.message ?? ''}`;
     closeRunSubscription(sessionState.key);
     void reconcileRunHistory(sessionState, currentRun.runId);
@@ -886,10 +879,7 @@ export function createChatRunStream({
       ) {
         closeSubscriptionFor(sessionState.key);
         if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
-          sessionState.streamError = t(
-            'errors.streamClosed',
-            'The live stream closed before the run finished. Waiting for server status.',
-          );
+          sessionState.streamError = t('errors.streamClosed');
           void reconcileRunHistory(sessionState, currentRunId);
         } else {
           resetStaleRun(sessionState);

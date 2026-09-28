@@ -129,10 +129,7 @@
       }
       historyError = errorMessageText(
         error,
-        t(
-          'statistics.limits.historyLoadError',
-          'Limit history could not be loaded.',
-        ),
+        t('statistics.limits.historyLoadError'),
       );
     } finally {
       if (!destroyed && generation === historyGeneration) {
@@ -161,10 +158,7 @@
       activityReport = null;
       activityError = errorMessageText(
         error,
-        t(
-          'statistics.limits.activityLoadError',
-          'vBot activity could not be loaded.',
-        ),
+        t('statistics.limits.activityLoadError'),
       );
     } finally {
       if (!destroyed && generation === activityGeneration) {
@@ -191,19 +185,14 @@
       };
       selectedIntervalId = null;
       activityReport = null;
-      historyNotice = t(
-        'statistics.limits.historyCleared',
-        '{count} historical snapshots deleted.',
-        { count: formatInteger(result?.deleted_samples ?? 0, locale) },
-      );
+      historyNotice = t('statistics.limits.historyCleared', {
+        count: formatInteger(result?.deleted_samples ?? 0, locale),
+      });
     } catch (error) {
       if (!destroyed) {
         historyError = errorMessageText(
           error,
-          t(
-            'statistics.limits.historyClearError',
-            'Limit history could not be deleted.',
-          ),
+          t('statistics.limits.historyClearError'),
         );
       }
     } finally {
@@ -222,22 +211,22 @@
   function rangeLabel(value) {
     switch (value) {
       case '24h':
-        return t('statistics.limits.range24h', '24 hours');
+        return t('statistics.limits.range24h');
       case '30d':
-        return t('statistics.limits.range30d', '30 days');
+        return t('statistics.limits.range30d');
       case 'all':
-        return t('statistics.limits.rangeAll', 'All');
+        return t('statistics.limits.rangeAll');
       default:
-        return t('statistics.limits.range7d', '7 days');
+        return t('statistics.limits.range7d');
     }
   }
 
   function intervalKindLabel(interval) {
     if (interval.kind === 'gap') {
-      return t('statistics.limits.gap', 'Data gap');
+      return t('statistics.limits.gap');
     }
     if (interval.kind === 'reset') {
-      return t('statistics.limits.reset', 'Reset / discontinuity');
+      return t('statistics.limits.reset');
     }
     return formatUsageDelta(interval.delta, locale);
   }
@@ -286,13 +275,10 @@
   <div class="limit-history__head">
     <div>
       <h3 id="limit-history-title">
-        {t('statistics.limits.historyTitle', 'Limit history')}
+        {t('statistics.limits.historyTitle')}
       </h3>
       <p>
-        {t(
-          'statistics.limits.historyDescription',
-          'Hourly local snapshots. Changes are correlated with vBot Runs, never presented as proof of cause.',
-        )}
+        {t('statistics.limits.historyDescription')}
       </p>
     </div>
     <Button
@@ -301,7 +287,7 @@
       loading={clearing}
       onClick={() => (clearConfirmOpen = true)}
     >
-      {t('statistics.limits.deleteHistory', 'Delete history')}
+      {t('statistics.limits.deleteHistory')}
     </Button>
   </div>
 
@@ -309,7 +295,7 @@
     <div
       class="limit-history__range"
       role="group"
-      aria-label={t('statistics.limits.historyRange', 'History range')}
+      aria-label={t('statistics.limits.historyRange')}
     >
       {#each USAGE_HISTORY_RANGES as value (value)}
         <button
@@ -328,7 +314,7 @@
     </div>
     {#if historySummary.lastSample}
       <span class="limit-history__last">
-        {t('statistics.limits.lastSnapshot', 'Last snapshot {time}', {
+        {t('statistics.limits.lastSnapshot', {
           time: formatDateTime(historySummary.lastSample, locale),
         })}
       </span>
@@ -339,7 +325,7 @@
     <Banner variant="error" aria-live="polite">
       <span>{historyError}</span>
       <Button variant="secondary" onClick={() => loadHistory(range)}>
-        {t('common.retry', 'Retry')}
+        {t('common.retry')}
       </Button>
     </Banner>
   {/if}
@@ -349,36 +335,30 @@
 
   {#if historyLoading && historyReport === null}
     <p class="limit-history__loading">
-      {t('statistics.limits.historyLoading', 'Loading limit history…')}
+      {t('statistics.limits.historyLoading')}
     </p>
   {:else if historySummary.samples === 0}
     <EmptyState
       density="compact"
-      title={t(
-        'statistics.limits.noHistoryTitle',
-        'The flight recorder is ready',
-      )}
-      description={t(
-        'statistics.limits.noHistory',
-        'The first automatic snapshot appears when a supported Subscription is available. Further points are recorded at most once per hour.',
-      )}
+      title={t('statistics.limits.noHistoryTitle')}
+      description={t('statistics.limits.noHistory')}
     />
   {:else}
     <dl class="limit-history__summary">
       <div>
-        <dt>{t('statistics.limits.snapshots', 'Snapshots')}</dt>
+        <dt>{t('statistics.limits.snapshots')}</dt>
         <dd>{formatInteger(historySummary.samples, locale)}</dd>
       </div>
       <div>
-        <dt>{t('statistics.limits.connections', 'Connections')}</dt>
+        <dt>{t('statistics.limits.connections')}</dt>
         <dd>{formatInteger(historySummary.targets, locale)}</dd>
       </div>
       <div>
-        <dt>{t('statistics.limits.unavailableSamples', 'Unavailable')}</dt>
+        <dt>{t('statistics.limits.unavailableSamples')}</dt>
         <dd>{formatInteger(historySummary.unavailable, locale)}</dd>
       </div>
       <div>
-        <dt>{t('statistics.limits.since', 'Since')}</dt>
+        <dt>{t('statistics.limits.since')}</dt>
         <dd>{formatDateTime(historySummary.firstSample, locale)}</dd>
       </div>
     </dl>
@@ -386,10 +366,7 @@
     {#if seriesList.length === 0}
       <EmptyState
         density="compact"
-        description={t(
-          'statistics.limits.noSuccessfulHistory',
-          'Snapshots exist, but none contains a usable limit window in this range.',
-        )}
+        description={t('statistics.limits.noSuccessfulHistory')}
       />
     {:else}
       <div class="limit-history__traces">
@@ -421,15 +398,11 @@
                 viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
                 preserveAspectRatio="none"
                 role="img"
-                aria-label={t(
-                  'statistics.limits.traceAria',
-                  '{provider} {window} usage history, latest {percent} percent used.',
-                  {
-                    provider: series.displayName,
-                    window: series.label,
-                    percent: Math.round(latest.usedPercent),
-                  },
-                )}
+                aria-label={t('statistics.limits.traceAria', {
+                  provider: series.displayName,
+                  window: series.label,
+                  percent: Math.round(latest.usedPercent),
+                })}
               >
                 {#each CHART_TICKS as tick (tick)}
                   <line
@@ -467,14 +440,8 @@
       {#if intervals.length === 0}
         <EmptyState
           density="compact"
-          title={t(
-            'statistics.limits.waitingForComparison',
-            'Waiting for a second snapshot',
-          )}
-          description={t(
-            'statistics.limits.waitingForComparisonDescription',
-            'A single point establishes the baseline. Changes and correlated Runs appear after the next hourly observation.',
-          )}
+          title={t('statistics.limits.waitingForComparison')}
+          description={t('statistics.limits.waitingForComparisonDescription')}
         />
       {:else}
         <div class="limit-history__analysis">
@@ -485,16 +452,10 @@
             <div class="limit-history__section-head">
               <div>
                 <h4 id="limit-intervals-title">
-                  {t(
-                    'statistics.limits.largestChanges',
-                    'Largest observed changes',
-                  )}
+                  {t('statistics.limits.largestChanges')}
                 </h4>
                 <p>
-                  {t(
-                    'statistics.limits.largestChangesNote',
-                    'Comparable windows rank by percentage-point increase; resets and gaps break the series.',
-                  )}
+                  {t('statistics.limits.largestChangesNote')}
                 </p>
               </div>
             </div>
@@ -527,7 +488,7 @@
             <div class="limit-history__section-head">
               <div>
                 <h4 id="limit-activity-title">
-                  {t('statistics.limits.vbotActivity', 'vBot activity')}
+                  {t('statistics.limits.vbotActivity')}
                 </h4>
                 {#if selectedInterval}
                   <p>
@@ -545,10 +506,7 @@
             </div>
 
             <Banner variant="info">
-              {t(
-                'statistics.limits.correlationNotice',
-                'These Runs overlap the observation interval. Parallel use outside vBot may also change the Subscription.',
-              )}
+              {t('statistics.limits.correlationNotice')}
             </Banner>
 
             {#if activityError}
@@ -556,26 +514,23 @@
               >
             {:else if activityLoading}
               <p class="limit-history__loading">
-                {t(
-                  'statistics.limits.activityLoading',
-                  'Loading vBot activity…',
-                )}
+                {t('statistics.limits.activityLoading')}
               </p>
             {:else if activityReport}
               <dl class="limit-activity__summary">
                 <div>
-                  <dt>{t('statistics.limits.runs', 'Runs')}</dt>
+                  <dt>{t('statistics.limits.runs')}</dt>
                   <dd>{formatInteger(activityTotals.runs, locale)}</dd>
                 </div>
                 <div>
                   <dt>
-                    {t('statistics.limits.measuredTokens', 'Measured tokens')}
+                    {t('statistics.limits.measuredTokens')}
                   </dt>
                   <dd>{formatTokens(activityTotals.measuredTokens, locale)}</dd>
                 </div>
                 <div>
                   <dt>
-                    {t('statistics.limits.estimatedTokens', 'Estimated tokens')}
+                    {t('statistics.limits.estimatedTokens')}
                   </dt>
                   <dd>
                     {formatTokens(activityTotals.estimatedTokens, locale)}
@@ -585,20 +540,14 @@
 
               {#if activityReport.truncated}
                 <Banner variant="warn">
-                  {t(
-                    'statistics.limits.activityTruncated',
-                    'Only the newest 200 overlapping Runs are shown.',
-                  )}
+                  {t('statistics.limits.activityTruncated')}
                 </Banner>
               {/if}
 
               {#if activityReport.runs.length === 0}
                 <EmptyState
                   density="compact"
-                  description={t(
-                    'statistics.limits.noRunsInInterval',
-                    'No persisted vBot Runs overlap this interval.',
-                  )}
+                  description={t('statistics.limits.noRunsInInterval')}
                 />
               {:else}
                 <ol class="limit-runs">
@@ -617,13 +566,9 @@
                         <span>{formatDateTime(run.started_at, locale)}</span>
                         <span>{formatDurationMs(run.duration_ms)}</span>
                         <span>
-                          {t(
-                            'statistics.limits.toolCalls',
-                            '{count} Tool calls',
-                            {
-                              count: formatInteger(run.tool_calls, locale),
-                            },
-                          )}
+                          {t('statistics.limits.toolCalls', {
+                            count: formatInteger(run.tool_calls, locale),
+                          })}
                         </span>
                       </div>
                       <div class="limit-run__models">
@@ -633,12 +578,12 @@
                       </div>
                       <div class="limit-run__tokens">
                         <span>
-                          {t('statistics.limits.measuredShort', 'Measured')}
+                          {t('statistics.limits.measuredShort')}
                           {formatTokens(runMeasuredTokens(run), locale)}
                         </span>
                         {#if runEstimatedTokens(run) > 0}
                           <span>
-                            {t('statistics.limits.estimatedShort', 'Estimated')}
+                            {t('statistics.limits.estimatedShort')}
                             ~{formatTokens(runEstimatedTokens(run), locale)}
                           </span>
                         {/if}
@@ -657,12 +602,9 @@
 
 {#if clearConfirmOpen}
   <ConfirmDialog
-    title={t('statistics.limits.deleteHistoryTitle', 'Delete limit history?')}
-    body={t(
-      'statistics.limits.deleteHistoryBody',
-      'All stored hourly Subscription snapshots will be permanently deleted. Live limit cards and Provider connections are not affected.',
-    )}
-    confirmLabel={t('statistics.limits.deleteHistoryConfirm', 'Delete history')}
+    title={t('statistics.limits.deleteHistoryTitle')}
+    body={t('statistics.limits.deleteHistoryBody')}
+    confirmLabel={t('statistics.limits.deleteHistoryConfirm')}
     onConfirm={clearHistory}
     onCancel={() => (clearConfirmOpen = false)}
   />

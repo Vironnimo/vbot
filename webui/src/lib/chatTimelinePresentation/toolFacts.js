@@ -39,7 +39,7 @@ export const streamingPreviewArguments = (tool) =>
     : undefined;
 
 export const toolNameForRunTool = (tool) =>
-  tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
+  tool.name || tool.toolCall?.name || t('chat.toolPendingName');
 
 export function toolDurationMs(tool) {
   if (Number.isFinite(tool?.durationMs) && tool.durationMs >= 0) {

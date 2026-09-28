@@ -90,7 +90,7 @@ export function contextLimitWarning(
   if (fillRatio >= CONTEXT_CRITICAL_RATIO) {
     return {
       level: 'critical',
-      message: t('chat.contextCard.atLimit', 'Context almost full'),
+      message: t('chat.contextCard.atLimit'),
     };
   }
   const compactionRatio = automaticCompactionRatio(
@@ -101,20 +101,14 @@ export function contextLimitWarning(
     return fillRatio >= CONTEXT_LIMIT_WARNING_RATIO
       ? {
           level: 'high',
-          message: t(
-            'chat.contextCard.nearContextLimit',
-            'Approaching the context limit',
-          ),
+          message: t('chat.contextCard.nearContextLimit'),
         }
       : { level: 'normal', message: '' };
   }
   if (fillRatio >= compactionRatio) {
     return {
       level: 'high',
-      message: t(
-        'chat.contextCard.compactionThresholdReached',
-        'Automatic Compaction threshold reached',
-      ),
+      message: t('chat.contextCard.compactionThresholdReached'),
     };
   }
   if (
@@ -123,10 +117,7 @@ export function contextLimitWarning(
   ) {
     return {
       level: 'high',
-      message: t(
-        'chat.contextCard.nearLimit',
-        'Approaching automatic Compaction',
-      ),
+      message: t('chat.contextCard.nearLimit'),
     };
   }
   return { level: 'normal', message: '' };
@@ -174,28 +165,16 @@ function contextCardSection(contextUsage, format) {
   const providerOutput = finiteOrNull(contextUsage.provider_output_tokens);
   const estimatedDelta = finiteOrNull(contextUsage.estimated_delta_tokens);
   if (providerInput !== null) {
-    rows.push(
-      row(
-        t('chat.contextCard.providerInput', 'Provider input'),
-        format(providerInput),
-      ),
-    );
+    rows.push(row(t('chat.contextCard.providerInput'), format(providerInput)));
   }
   if (providerOutput !== null) {
     rows.push(
-      row(
-        t('chat.contextCard.providerOutput', 'Provider output'),
-        format(providerOutput),
-      ),
+      row(t('chat.contextCard.providerOutput'), format(providerOutput)),
     );
   }
   if (estimatedDelta !== null) {
     rows.push(
-      row(
-        t('chat.contextCard.requestChanges', 'Estimated request changes'),
-        format(estimatedDelta),
-        true,
-      ),
+      row(t('chat.contextCard.requestChanges'), format(estimatedDelta), true),
     );
   }
   return { id: 'context', title: '', meta: '', rows, notes: [] };
@@ -218,32 +197,26 @@ function lastTurnCardSection(usage, format) {
 
   const rows = [
     row(
-      t('chat.contextCard.input', 'Input'),
+      t('chat.contextCard.input'),
       `${inputEstimated ? '~' : ''}${format(input)}`,
     ),
   ];
   if (cacheRead !== null) {
     rows.push(
       row(
-        t('chat.contextCard.cacheRead', 'Read from cache'),
+        t('chat.contextCard.cacheRead'),
         cacheShareValue(cacheRead, input, format),
         true,
       ),
     );
   }
   if (cacheWrite !== null) {
-    rows.push(
-      row(
-        t('chat.contextCard.cacheWrite', 'Written to cache'),
-        format(cacheWrite),
-        true,
-      ),
-    );
+    rows.push(row(t('chat.contextCard.cacheWrite'), format(cacheWrite), true));
   }
   if (cacheRead !== null || cacheWrite !== null) {
     rows.push(
       row(
-        t('chat.contextCard.uncached', 'Uncached'),
+        t('chat.contextCard.uncached'),
         format(Math.max(0, input - (cacheRead ?? 0) - (cacheWrite ?? 0))),
         true,
       ),
@@ -251,45 +224,24 @@ function lastTurnCardSection(usage, format) {
   }
   rows.push(
     row(
-      t('chat.contextCard.output', 'Output'),
+      t('chat.contextCard.output'),
       `${outputEstimated ? '~' : ''}${format(output)}`,
     ),
   );
   if (reasoning !== null) {
-    rows.push(
-      row(
-        t('chat.contextCard.reasoning', 'Reasoning'),
-        format(reasoning),
-        true,
-      ),
-    );
+    rows.push(row(t('chat.contextCard.reasoning'), format(reasoning), true));
   }
   const notes = [];
   if (inputEstimated && outputEstimated) {
-    notes.push(
-      t(
-        'chat.tokenTooltipEstimated',
-        'Estimated (provider sent no usage data)',
-      ),
-    );
+    notes.push(t('chat.tokenTooltipEstimated'));
   } else if (inputEstimated) {
-    notes.push(
-      t(
-        'chat.tokenTooltipInputEstimated',
-        'Input estimated (provider omitted input usage)',
-      ),
-    );
+    notes.push(t('chat.tokenTooltipInputEstimated'));
   } else if (outputEstimated) {
-    notes.push(
-      t(
-        'chat.tokenTooltipOutputEstimated',
-        'Output estimated (provider omitted output usage)',
-      ),
-    );
+    notes.push(t('chat.tokenTooltipOutputEstimated'));
   }
   return {
     id: 'last-turn',
-    title: t('chat.tokenTooltipLastTurn', 'Last turn'),
+    title: t('chat.tokenTooltipLastTurn'),
     meta: '',
     rows,
     notes,
@@ -309,21 +261,21 @@ function sessionCardSection(sessionUsage, format) {
   const reasoningTurns = nonNegative(sessionUsage.reasoning_turns);
   const reasoning = nonNegative(sessionUsage.reasoning_tokens);
 
-  const rows = [row(t('chat.contextCard.input', 'Input'), format(input))];
+  const rows = [row(t('chat.contextCard.input'), format(input))];
   if (cacheTurns > 0) {
     rows.push(
       row(
-        t('chat.contextCard.cacheRead', 'Read from cache'),
+        t('chat.contextCard.cacheRead'),
         cacheShareValue(cacheRead, input, format),
         true,
       ),
     );
   }
-  rows.push(row(t('chat.contextCard.output', 'Output'), format(output)));
+  rows.push(row(t('chat.contextCard.output'), format(output)));
   if (reasoningTurns > 0) {
     rows.push(
       row(
-        t('chat.contextCard.reasoningTurns', 'Reasoning ({turns} turns)', {
+        t('chat.contextCard.reasoningTurns', {
           turns: format(reasoningTurns),
         }),
         format(reasoning),
@@ -334,7 +286,7 @@ function sessionCardSection(sessionUsage, format) {
   if (cacheTurns > 0) {
     rows.push(
       row(
-        t('chat.contextCard.avgCacheRead', 'Avg cache read per turn'),
+        t('chat.contextCard.avgCacheRead'),
         format(Math.round(cacheRead / cacheTurns)),
       ),
     );
@@ -342,17 +294,15 @@ function sessionCardSection(sessionUsage, format) {
   const notes = [];
   if (estimatedTurns > 0) {
     notes.push(
-      t(
-        'chat.tokenTooltipSessionEstimatedTurns',
-        'Turns with estimated token fields: {count}; those fields are excluded',
-        { count: format(estimatedTurns) },
-      ),
+      t('chat.tokenTooltipSessionEstimatedTurns', {
+        count: format(estimatedTurns),
+      }),
     );
   }
   return {
     id: 'session',
-    title: t('chat.contextCard.session', 'Session'),
-    meta: t('chat.contextCard.measuredTurns', '{turns} measured turns', {
+    title: t('chat.contextCard.session'),
+    meta: t('chat.contextCard.measuredTurns', {
       turns: format(measuredTurns),
     }),
     rows,
@@ -369,14 +319,14 @@ function contextUsageLines(contextUsage, contextWindow, format) {
   const lines = [];
   if (Number.isFinite(contextWindow) && contextWindow > 0) {
     lines.push(
-      t('chat.tokenTooltipContextSummary', '{tokens} / {context}', {
+      t('chat.tokenTooltipContextSummary', {
         tokens: tokenText,
         context: format(contextWindow),
       }),
     );
   } else {
     lines.push(
-      t('chat.tokenTooltipContextSummaryNoWindow', '{tokens}', {
+      t('chat.tokenTooltipContextSummaryNoWindow', {
         tokens: tokenText,
       }),
     );
@@ -385,20 +335,20 @@ function contextUsageLines(contextUsage, contextWindow, format) {
   const providerOutput = finiteOrNull(contextUsage.provider_output_tokens);
   if (providerInput !== null && providerOutput !== null) {
     lines.push(
-      t('chat.tokenTooltipContextInOut', '(in {input}, out {output})', {
+      t('chat.tokenTooltipContextInOut', {
         input: format(providerInput),
         output: format(providerOutput),
       }),
     );
   } else if (providerInput !== null) {
     lines.push(
-      t('chat.tokenTooltipContextInOnly', '(in {input})', {
+      t('chat.tokenTooltipContextInOnly', {
         input: format(providerInput),
       }),
     );
   } else if (providerOutput !== null) {
     lines.push(
-      t('chat.tokenTooltipContextOutOnly', '(out {output})', {
+      t('chat.tokenTooltipContextOutOnly', {
         output: format(providerOutput),
       }),
     );
@@ -406,11 +356,7 @@ function contextUsageLines(contextUsage, contextWindow, format) {
   const estimatedDelta = finiteOrNull(contextUsage.estimated_delta_tokens);
   if (estimatedDelta !== null) {
     lines.push(
-      t(
-        'chat.tokenTooltipContextDelta',
-        '  · estimated request changes: {tokens}',
-        { tokens: format(estimatedDelta) },
-      ),
+      t('chat.tokenTooltipContextDelta', { tokens: format(estimatedDelta) }),
     );
   }
   return lines;
@@ -426,8 +372,8 @@ function lastTurnLines(usage, format) {
   const reasoning = nonNegativeOrNull(usage.reasoning_tokens);
 
   const lines = [
-    t('chat.tokenTooltipLastTurn', 'Last turn'),
-    t('chat.tokenTooltipInput', 'Input: {tokens} tok', {
+    t('chat.tokenTooltipLastTurn'),
+    t('chat.tokenTooltipInput', {
       tokens: `${inputEstimated ? '~' : ''}${format(input)}`,
     }),
   ];
@@ -436,7 +382,7 @@ function lastTurnLines(usage, format) {
   }
   if (cacheWrite !== null) {
     lines.push(
-      t('chat.tokenTooltipCacheWrite', '  · newly written to cache: {tokens}', {
+      t('chat.tokenTooltipCacheWrite', {
         tokens: format(cacheWrite),
       }),
     );
@@ -444,46 +390,25 @@ function lastTurnLines(usage, format) {
   if (cacheRead !== null || cacheWrite !== null) {
     const uncached = Math.max(0, input - (cacheRead ?? 0) - (cacheWrite ?? 0));
     lines.push(
-      t('chat.tokenTooltipUncached', '  · uncached: {tokens}', {
+      t('chat.tokenTooltipUncached', {
         tokens: format(uncached),
       }),
     );
   }
   lines.push(
-    t('chat.tokenTooltipOutput', 'Output: {tokens} tok', {
+    t('chat.tokenTooltipOutput', {
       tokens: `${outputEstimated ? '~' : ''}${format(output)}`,
     }),
   );
   if (reasoning !== null) {
-    lines.push(
-      t(
-        'chat.tokenTooltipReasoning',
-        '  · reasoning (included in output): {tokens}',
-        { tokens: format(reasoning) },
-      ),
-    );
+    lines.push(t('chat.tokenTooltipReasoning', { tokens: format(reasoning) }));
   }
   if (inputEstimated && outputEstimated) {
-    lines.push(
-      t(
-        'chat.tokenTooltipEstimated',
-        'Estimated (provider sent no usage data)',
-      ),
-    );
+    lines.push(t('chat.tokenTooltipEstimated'));
   } else if (inputEstimated) {
-    lines.push(
-      t(
-        'chat.tokenTooltipInputEstimated',
-        'Input estimated (provider omitted input usage)',
-      ),
-    );
+    lines.push(t('chat.tokenTooltipInputEstimated'));
   } else if (outputEstimated) {
-    lines.push(
-      t(
-        'chat.tokenTooltipOutputEstimated',
-        'Output estimated (provider omitted output usage)',
-      ),
-    );
+    lines.push(t('chat.tokenTooltipOutputEstimated'));
   }
   return lines;
 }
@@ -504,10 +429,10 @@ function sessionUsageLines(sessionUsage, format) {
   const reasoning = nonNegative(sessionUsage.reasoning_tokens);
 
   const lines = [
-    t('chat.tokenTooltipSession', 'Session ({turns} fully measured turns)', {
+    t('chat.tokenTooltipSession', {
       turns: format(measuredTurns),
     }),
-    t('chat.tokenTooltipInput', 'Input: {tokens} tok', {
+    t('chat.tokenTooltipInput', {
       tokens: format(input),
     }),
   ];
@@ -515,38 +440,30 @@ function sessionUsageLines(sessionUsage, format) {
     lines.push(cacheReadShareLine(cacheRead, input, format));
   }
   lines.push(
-    t('chat.tokenTooltipOutput', 'Output: {tokens} tok', {
+    t('chat.tokenTooltipOutput', {
       tokens: format(output),
     }),
   );
   if (reasoningTurns > 0) {
     lines.push(
-      t(
-        'chat.tokenTooltipSessionReasoning',
-        '  · reasoning: {tokens} tok ({turns} reporting turns; included in output)',
-        {
-          tokens: format(reasoning),
-          turns: format(reasoningTurns),
-        },
-      ),
+      t('chat.tokenTooltipSessionReasoning', {
+        tokens: format(reasoning),
+        turns: format(reasoningTurns),
+      }),
     );
   }
   if (cacheTurns > 0) {
     lines.push(
-      t(
-        'chat.tokenTooltipSessionAvgCacheRead',
-        'Avg cache read per turn: {tokens} tok',
-        { tokens: format(Math.round(cacheRead / cacheTurns)) },
-      ),
+      t('chat.tokenTooltipSessionAvgCacheRead', {
+        tokens: format(Math.round(cacheRead / cacheTurns)),
+      }),
     );
   }
   if (estimatedTurns > 0) {
     lines.push(
-      t(
-        'chat.tokenTooltipSessionEstimatedTurns',
-        'Turns with estimated token fields: {count}; those fields are excluded',
-        { count: format(estimatedTurns) },
-      ),
+      t('chat.tokenTooltipSessionEstimatedTurns', {
+        count: format(estimatedTurns),
+      }),
     );
   }
   return lines;
@@ -558,16 +475,12 @@ function usageFieldIsEstimated(usage, tokenField) {
 
 function cacheReadShareLine(cacheRead, input, format) {
   if (input > 0) {
-    return t(
-      'chat.tokenTooltipCacheReadPct',
-      '  · read from cache: {tokens} ({percent}%)',
-      {
-        tokens: format(cacheRead),
-        percent: Math.round((cacheRead / input) * 100),
-      },
-    );
+    return t('chat.tokenTooltipCacheReadPct', {
+      tokens: format(cacheRead),
+      percent: Math.round((cacheRead / input) * 100),
+    });
   }
-  return t('chat.tokenTooltipCacheRead', '  · read from cache: {tokens}', {
+  return t('chat.tokenTooltipCacheRead', {
     tokens: format(cacheRead),
   });
 }

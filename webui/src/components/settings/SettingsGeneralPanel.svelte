@@ -67,9 +67,7 @@
     const pending = autosave.participant.hasPending();
     if (await autosave.participant.runSave('manual'))
       onToast({
-        title: pending
-          ? t('common.saved', 'Saved')
-          : t('common.alreadySaved', 'Already saved'),
+        title: pending ? t('common.saved') : t('common.alreadySaved'),
         variant: 'success',
       });
   }
@@ -92,9 +90,7 @@
         onCommit(await updateSettings({ server }));
         return true;
       } catch (error) {
-        onError(
-          `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-        );
+        onError(`${t('settings.saveError')} ${error.message}`);
         return false;
       } finally {
         saving = false;
@@ -144,24 +140,23 @@
     } catch (error) {
       clientsError = `${t(
         'settings.general.clients.loadError',
-        'Connected clients could not be loaded.',
       )} ${error.message}`;
     }
   }
 
   function accessorLabel(accessor) {
     if (accessor === 'browser') {
-      return t('settings.general.clients.accessor.browser', 'Browser');
+      return t('settings.general.clients.accessor.browser');
     }
     if (accessor === 'desktop') {
-      return t('settings.general.clients.accessor.desktop', 'Desktop');
+      return t('settings.general.clients.accessor.desktop');
     }
-    return t('settings.general.clients.accessor.unknown', 'Unknown');
+    return t('settings.general.clients.accessor.unknown');
   }
 
   function statusLabel(status) {
     if (status === 'connected') {
-      return t('settings.general.clients.status.connected', 'Connected');
+      return t('settings.general.clients.status.connected');
     }
     return status;
   }
@@ -191,7 +186,7 @@
     const since = connectedAtLabel(row.connectedAt);
     if (since) {
       parts.push(
-        t('settings.general.clients.connectedAt', 'Connected {time}', {
+        t('settings.general.clients.connectedAt', {
           time: since,
         }),
       );
@@ -205,13 +200,10 @@
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.general.timezone', 'Time zone')}
+          {t('settings.general.timezone')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'settings.general.timezoneDescription',
-            'Used by Agents, Calendar, Cron, and every displayed date and time.',
-          )}
+          {t('settings.general.timezoneDescription')}
         </div>
       </div>
       <div class="s-row-control s-row-control--input">
@@ -219,11 +211,8 @@
           id="settings-general-timezone"
           value={timezoneValue}
           options={timezoneOptions}
-          ariaLabel={t('settings.general.timezone', 'Time zone')}
-          searchPlaceholder={t(
-            'settings.general.timezoneSearch',
-            'Search time zones…',
-          )}
+          ariaLabel={t('settings.general.timezone')}
+          searchPlaceholder={t('settings.general.timezoneSearch')}
           onValueChange={handleTimezoneChange}
         />
       </div>
@@ -231,18 +220,15 @@
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.general.setupGuide', 'Setup guide')}
+          {t('settings.general.setupGuide')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'settings.general.setupGuideDescription',
-            'Reopen the guided first-run setup to connect a provider and assign a model.',
-          )}
+          {t('settings.general.setupGuideDescription')}
         </div>
       </div>
       <div class="s-row-control">
         <Button variant="secondary" onClick={onOpenSetupGuide}>
-          {t('settings.general.setupGuideAction', 'Open setup guide')}
+          {t('settings.general.setupGuideAction')}
         </Button>
       </div>
     </div>
@@ -254,13 +240,10 @@
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.general.serverHost', 'Server host')}
+          {t('settings.general.serverHost')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'settings.general.serverHostDescription',
-            'Address and port the vBot server listens on.',
-          )}
+          {t('settings.general.serverHostDescription')}
         </div>
       </div>
       <div class="s-row-control s-row-control--input">
@@ -270,13 +253,10 @@
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.general.dataDirectory', 'Data directory')}
+          {t('settings.general.dataDirectory')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'settings.general.dataDirectoryDescription',
-            'Root path for agents, sessions, and workspace files.',
-          )}
+          {t('settings.general.dataDirectoryDescription')}
         </div>
       </div>
       <div class="s-row-control s-row-control--input">
@@ -286,19 +266,16 @@
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.general.keepAwake', 'Keep computer awake')}
+          {t('settings.general.keepAwake')}
         </div>
         <div class="s-row-desc">
-          {t(
-            'settings.general.keepAwakeDescription',
-            'Prevent automatic sleep while vBot is running, so channels such as Telegram stay reachable. Manual sleep still works.',
-          )}
+          {t('settings.general.keepAwakeDescription')}
         </div>
       </div>
       <div class="s-row-control">
         <Toggle
           checked={keepAwakeValue}
-          ariaLabel={t('settings.general.keepAwake', 'Keep computer awake')}
+          ariaLabel={t('settings.general.keepAwake')}
           onChange={handleKeepAwakeChange}
         />
       </div>
@@ -309,13 +286,10 @@
 
   <div class="s-subhead">
     <h4 class="s-subhead__title">
-      {t('settings.general.clients.title', 'Connected clients')}
+      {t('settings.general.clients.title')}
     </h4>
     <p class="s-subhead__desc">
-      {t(
-        'settings.general.clients.description',
-        'App windows currently connected to this server (browser tabs and the Desktop app).',
-      )}
+      {t('settings.general.clients.description')}
     </p>
   </div>
 
@@ -323,15 +297,12 @@
     <Banner variant="error">{clientsError}</Banner>
   {:else if !clientsLoaded}
     <Banner variant="neutral">
-      {t('settings.general.clients.loading', 'Loading connected clients…')}
+      {t('settings.general.clients.loading')}
     </Banner>
   {:else if clientRows.length === 0}
     <EmptyState
       density="compact"
-      description={t(
-        'settings.general.clients.empty',
-        'No app windows connected.',
-      )}
+      description={t('settings.general.clients.empty')}
     />
   {:else}
     <div class="s-group s-clients-list">
@@ -345,7 +316,7 @@
               <span class="s-row-label">{accessorLabel(row.accessor)}</span>
               {#if row.isOwn}
                 <StatusChip variant="info">
-                  {t('settings.general.clients.thisWindow', 'This window')}
+                  {t('settings.general.clients.thisWindow')}
                 </StatusChip>
               {/if}
             </div>

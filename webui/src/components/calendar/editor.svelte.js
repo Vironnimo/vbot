@@ -66,10 +66,7 @@ export function createCalendarEventEditor(context) {
 
   async function submitForm() {
     if (!formValues.title.trim()) {
-      formError = t(
-        'calendar.errors.titleRequired',
-        'Please give the event a title.',
-      );
+      formError = t('calendar.errors.titleRequired');
       return;
     }
     submitting = true;

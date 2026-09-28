@@ -87,10 +87,7 @@
         return;
       }
       usageReport = null;
-      usageError = errorMessageText(
-        error,
-        t('statistics.limits.loadError', 'Usage limits could not be loaded.'),
-      );
+      usageError = errorMessageText(error, t('statistics.limits.loadError'));
     } finally {
       if (!destroyed) {
         usageLoading = false;
@@ -114,7 +111,7 @@
     <div class="stats-limit-window__head">
       <span class="stats-limit-window__label">{window.label}</span>
       <span class="stats-limit-window__used">
-        {t('statistics.limits.usedPercent', '{percent}% used', {
+        {t('statistics.limits.usedPercent', {
           percent: Math.round(percent),
         })}
       </span>
@@ -128,7 +125,7 @@
     {#if reset}
       <span class="stats-limit-window__reset" use:tooltip={reset.absolute}>
         {reset.relative
-          ? t('statistics.limits.resetsIn', 'Resets in {duration}', {
+          ? t('statistics.limits.resetsIn', {
               duration: reset.relative,
             })
           : reset.absolute}
@@ -136,30 +133,22 @@
     {/if}
     {#if window.unlimited}
       <span class="stats-limit-window__units">
-        {t('statistics.limits.unlimited', 'Unlimited')}
+        {t('statistics.limits.unlimited')}
       </span>
     {:else if window.remaining_units != null && window.total_units != null}
       <span class="stats-limit-window__units">
-        {t(
-          'statistics.limits.remainingUnits',
-          '{remaining} of {total} {unit} remaining',
-          {
-            remaining: formatInteger(window.remaining_units, locale),
-            total: formatInteger(window.total_units, locale),
-            unit: window.unit ?? t('statistics.limits.units', 'units'),
-          },
-        )}
+        {t('statistics.limits.remainingUnits', {
+          remaining: formatInteger(window.remaining_units, locale),
+          total: formatInteger(window.total_units, locale),
+          unit: window.unit ?? t('statistics.limits.units'),
+        })}
       </span>
     {:else if window.used_units != null}
       <span class="stats-limit-window__units">
-        {t(
-          'statistics.limits.observedUnits',
-          '{used} {unit} observed; quota usage is provider-weighted',
-          {
-            used: formatInteger(window.used_units, locale),
-            unit: window.unit ?? t('statistics.limits.units', 'units'),
-          },
-        )}
+        {t('statistics.limits.observedUnits', {
+          used: formatInteger(window.used_units, locale),
+          unit: window.unit ?? t('statistics.limits.units'),
+        })}
       </span>
     {/if}
   </li>
@@ -178,21 +167,20 @@
         {/if}
         {#if snapshot.credits?.enabled && snapshot.credits.balance != null}
           <span class="stats-limit-card__credits">
-            {t('statistics.limits.credits', '{balance} credits', {
+            {t('statistics.limits.credits', {
               balance: formatInteger(snapshot.credits.balance, locale),
             })}
           </span>
         {:else if snapshot.credits?.enabled}
           <span class="stats-limit-card__credits">
-            {t('statistics.limits.creditsAvailable', 'Credits available')}
+            {t('statistics.limits.creditsAvailable')}
           </span>
         {/if}
       </div>
     </div>
     {#if snapshot.error || snapshot.windows.length === 0}
       <p class="stats-limit-card__unavailable">
-        {snapshot.error ??
-          t('statistics.limits.unavailable', 'Usage unavailable')}
+        {snapshot.error ?? t('statistics.limits.unavailable')}
       </p>
     {:else}
       <ul class="stats-limit-windows">
@@ -208,15 +196,12 @@
   <div class="stats-panel">
     {#if usageLoading && !usageReport}
       <p class="stats-view__placeholder">
-        {t('statistics.limits.loading', 'Loading usage limits…')}
+        {t('statistics.limits.loading')}
       </p>
     {:else}
       <div class="stats-block__head">
         <p class="stats-note">
-          {t(
-            'statistics.limits.note',
-            'Live subscription usage, updated every 10 seconds while this tab is visible. Only the hourly automatic snapshot is stored.',
-          )}
+          {t('statistics.limits.note')}
         </p>
       </div>
 
@@ -224,16 +209,13 @@
         <Banner variant="error" aria-live="polite">
           <span>{usageError}</span>
           <Button variant="secondary" onClick={loadUsage}>
-            {t('common.retry', 'Retry')}
+            {t('common.retry')}
           </Button>
         </Banner>
       {:else if usageProviders.length === 0}
         <EmptyState
           density="compact"
-          description={t(
-            'statistics.limits.empty',
-            'No subscription providers connected.',
-          )}
+          description={t('statistics.limits.empty')}
         />
       {:else}
         <div class="stats-limits">

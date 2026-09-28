@@ -17,13 +17,13 @@
       .sort(),
   );
   let statusOptions = $derived([
-    { value: 'all', label: t('debug.allStatuses', 'All statuses') },
-    { value: 'ok', label: t('debug.statusOk', 'HTTP 2xx / WS 101') },
-    { value: 'error', label: t('debug.statusErrors', 'HTTP 4xx / 5xx') },
-    { value: 'unknown', label: t('debug.statusOther', 'Other / no status') },
+    { value: 'all', label: t('debug.allStatuses') },
+    { value: 'ok', label: t('debug.statusOk') },
+    { value: 'error', label: t('debug.statusErrors') },
+    { value: 'unknown', label: t('debug.statusOther') },
   ]);
   let providerOptions = $derived([
-    { value: '', label: t('debug.allProviders', 'All Providers') },
+    { value: '', label: t('debug.allProviders') },
     ...providers.map((item) => ({ value: item, label: item })),
   ]);
 
@@ -52,26 +52,20 @@
   }
 </script>
 
-<aside
-  class="debug-view__trace-panel"
-  aria-label={t('debug.traceList', 'Traces')}
->
+<aside class="debug-view__trace-panel" aria-label={t('debug.traceList')}>
   <div class="trace-filters">
     <input
       type="search"
       bind:value={query}
-      aria-label={t('debug.searchTraces', 'Search traces')}
-      placeholder={t(
-        'debug.searchPlaceholder',
-        'Model, Provider, URL or trace ID…',
-      )}
+      aria-label={t('debug.searchTraces')}
+      placeholder={t('debug.searchPlaceholder')}
     />
     <div class="trace-filter-row">
       <Dropdown
         id="debug-trace-status-filter"
         value={status}
         options={statusOptions}
-        ariaLabel={t('debug.statusFilter', 'Status filter')}
+        ariaLabel={t('debug.statusFilter')}
         triggerClass="trace-filter-dropdown"
         onValueChange={(value) => (status = value)}
       />
@@ -79,23 +73,23 @@
         id="debug-trace-provider-filter"
         value={provider}
         options={providerOptions}
-        ariaLabel={t('debug.modelProbe.provider', 'Provider')}
+        ariaLabel={t('debug.modelProbe.provider')}
         triggerClass="trace-filter-dropdown"
         onValueChange={(value) => (provider = value)}
       />
     </div>
     <div class="trace-count" aria-live="polite">
-      {t('debug.visibleCount', '{count} of {total} traces', {
+      {t('debug.visibleCount', {
         count: visible.length,
         total: traces.length,
       })}
-      <span>{t('debug.newestFirst', 'Newest first')}</span>
+      <span>{t('debug.newestFirst')}</span>
     </div>
   </div>
   <div
     class="debug-view__trace-list"
     role="list"
-    aria-label={t('debug.traceList', 'Traces')}
+    aria-label={t('debug.traceList')}
   >
     {#each visible as trace (trace.trace_id)}
       <div
@@ -119,7 +113,7 @@
                 mono: true,
                 placement: 'right',
                 whenTruncated: Boolean(trace.model_id),
-              }}>{trace.model_id || t('debug.modelProbe', 'Model Probe')}</span
+              }}>{trace.model_id || t('debug.modelProbe')}</span
             >
             <span
               class="trace-status"
@@ -147,9 +141,9 @@
       </div>
     {:else}
       <div class="trace-no-matches">
-        <p>{t('debug.noMatches', 'No traces match these filters.')}</p>
+        <p>{t('debug.noMatches')}</p>
         <Button variant="tertiary" onClick={resetFilters}
-          >{t('debug.resetFilters', 'Reset filters')}</Button
+          >{t('debug.resetFilters')}</Button
         >
       </div>
     {/each}

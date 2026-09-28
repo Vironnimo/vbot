@@ -385,7 +385,7 @@ describe('WakewordVoiceSettings', () => {
       await mountPanel();
 
       expect(document.body.textContent).toContain(
-        t('settings.voice.phraseLimit', '', { count: 2, max: 2 }),
+        t('settings.voice.phraseLimit', { count: 2, max: 2 }),
       );
       expect(switchByLabel('Listen for Hey Jarvis').disabled).toBe(true);
 
@@ -421,7 +421,7 @@ describe('WakewordVoiceSettings', () => {
 
       expect(switchByLabel('Listen for Hey Jarvis').disabled).toBe(true);
       expect(document.body.textContent).not.toContain(
-        t('settings.voice.phraseLimit', '', { count: 2, max: 2 }),
+        t('settings.voice.phraseLimit', { count: 2, max: 2 }),
       );
       expect(slider(NABU).disabled).toBe(true);
     });
@@ -587,13 +587,13 @@ describe('WakewordVoiceSettings', () => {
       });
 
       expect(phraseCard(NABU).textContent).toContain(
-        t('settings.voice.overlapWarning', '', {
+        t('settings.voice.overlapWarning', {
           name: 'Okay Nabu',
           others: '“Hey Nabu”',
         }),
       );
       expect(phraseCard(HEY_NABU).textContent).toContain(
-        t('settings.voice.overlapWarning', '', {
+        t('settings.voice.overlapWarning', {
           name: 'Hey Nabu',
           others: '“Okay Nabu”',
         }),
@@ -726,7 +726,7 @@ describe('WakewordVoiceSettings', () => {
         });
         expect(
           document.querySelector('.voice-save-state').textContent,
-        ).toContain(t('common.saveFailed', 'Not saved'));
+        ).toContain(t('common.saveFailed'));
         expect(
           switchByLabel('Listen for Hey Nabu').getAttribute('aria-checked'),
         ).toBe('false');
@@ -771,10 +771,10 @@ describe('WakewordVoiceSettings', () => {
       expect(desktopBridge.startVoiceCalibration).toHaveBeenCalledWith(NABU);
       const panel = phraseCard(NABU).querySelector('.voice-calibration-panel');
       expect(panel.textContent).toContain(
-        t('settings.voice.calibrationHeading', '', { name: 'Okay Nabu' }),
+        t('settings.voice.calibrationHeading', { name: 'Okay Nabu' }),
       );
       expect(panel.textContent).toContain(
-        t('settings.voice.calibrationRecommendation', '', { value: 65 }),
+        t('settings.voice.calibrationRecommendation', { value: 65 }),
       );
       expect(buttonByLabel('Calibrate Hey Nabu').disabled).toBe(true);
       expect(slider(NABU).disabled).toBe(true);
@@ -997,7 +997,7 @@ describe('WakewordVoiceSettings', () => {
 });
 
 // The English catalog has no entry for this label yet.
-const retryLabel = () => t('settings.voice.retry', 'Retry listening');
+const retryLabel = () => t('settings.voice.retry');
 
 function buttonByText(text) {
   return [...document.body.querySelectorAll('button')].find(

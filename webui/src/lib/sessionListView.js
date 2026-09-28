@@ -190,7 +190,7 @@ export function sessionDisplayName(session) {
     return `${platform}/${platformConvId}`;
   }
 
-  return t('sessions.newSession', 'New Session');
+  return t('sessions.newSession');
 }
 
 export function sessionParentReference(session) {

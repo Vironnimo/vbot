@@ -35,10 +35,7 @@
       allowed: tool.enabled,
       readiness_hint:
         tool.registered === false
-          ? t(
-              'projects.manage.unavailableToolHint',
-              'This stored Tool Whitelist entry is not currently registered for Projects. Turn it off to remove the permission, or leave it on so the permission returns with the Tool.',
-            )
+          ? t('projects.manage.unavailableToolHint')
           : tool.readiness_hint,
     })),
   );
@@ -49,24 +46,24 @@
     [
       {
         id: 'project',
-        title: t('projects.manage.projectSkills', 'Project skills'),
-        allLabel: t('projects.manage.allProjectSkills', 'All project skills'),
+        title: t('projects.manage.projectSkills'),
+        allLabel: t('projects.manage.allProjectSkills'),
         items: skillToggleSections.project,
         toggle: toggleProjectSkill,
         setAll: setAllProjectSkills,
       },
       {
         id: 'bundled',
-        title: t('projects.manage.bundledSkills', 'Bundled skills'),
-        allLabel: t('projects.manage.allBundledSkills', 'All bundled skills'),
+        title: t('projects.manage.bundledSkills'),
+        allLabel: t('projects.manage.allBundledSkills'),
         items: skillToggleSections.bundled,
         toggle: toggleBundledSkill,
         setAll: setAllBundledSkills,
       },
       {
         id: 'global',
-        title: t('projects.manage.globalSkills', 'Global skills'),
-        allLabel: t('projects.manage.allGlobalSkills', 'All global skills'),
+        title: t('projects.manage.globalSkills'),
+        allLabel: t('projects.manage.allGlobalSkills'),
         items: skillToggleSections.global,
         toggle: toggleGlobalSkill,
         setAll: setAllGlobalSkills,
@@ -166,20 +163,17 @@
   <section class="s-section" aria-labelledby="project-section-tools">
     <header class="s-section__head">
       <h3 class="s-section__title" id="project-section-tools">
-        {t('projects.detail.sectionTools', 'Tools')}
+        {t('projects.detail.sectionTools')}
       </h3>
     </header>
     <p class="s-section__desc">
-      {t(
-        'projects.manage.allowedToolsHelp',
-        'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
-      )}
+      {t('projects.manage.allowedToolsHelp')}
     </p>
     <div class="s-section__body">
       <ToolCatalogEditor
         items={toolChipItems}
         toggleLabel={(tool) =>
-          t('projects.manage.toggleTool', 'Toggle tool {name}', {
+          t('projects.manage.toggleTool', {
             name: tool.name,
           })}
         onToggle={(tool, next) => toggleTool(tool.name, next)}
@@ -203,17 +197,17 @@
       >
         {#snippet toolbar()}
           <Button variant="tertiary" onClick={() => setAllTools(true)}
-            >{t('toolAccess.selectAll', 'Select all')}</Button
+            >{t('toolAccess.selectAll')}</Button
           >
           <Button variant="tertiary" onClick={() => setAllTools(false)}
-            >{t('toolAccess.deselectAll', 'Deselect all')}</Button
+            >{t('toolAccess.deselectAll')}</Button
           >
           <Button
             variant="tertiary"
             data-testid="project-tools-reset"
             onClick={resetToolsToDefaults}
           >
-            {t('projects.manage.resetDefaults', 'Reset to defaults')}
+            {t('projects.manage.resetDefaults')}
           </Button>
         {/snippet}
       </ToolCatalogEditor>
@@ -223,49 +217,39 @@
   <section class="s-section" aria-labelledby="project-section-skills">
     <header class="s-section__head">
       <h3 class="s-section__title" id="project-section-skills">
-        {t('projects.detail.sectionSkills', 'Skills')}
+        {t('projects.detail.sectionSkills')}
       </h3>
     </header>
     <p class="s-section__desc">
-      {t(
-        'projects.manage.allowedSkillsHelp',
-        'Project skills are active by default; bundled and global skills are opt-in.',
-      )}
+      {t('projects.manage.allowedSkillsHelp')}
     </p>
     <div class="s-section__body">
       {#if skillGroups.length === 0}
         <EmptyState
           density="compact"
-          description={t('projects.manage.skillsEmpty', 'No skills available')}
+          description={t('projects.manage.skillsEmpty')}
         />
       {:else}
         <div class="s-group-toolbar projects-skill-toolbar">
           <span class="s-group-toolbar__meta projects-skill-summary">
-            {t(
-              'projects.manage.skillSelectionCount',
-              '{enabled} of {total} active',
-              { enabled: skillEnabledTotal, total: skillTotal },
-            )}
+            {t('projects.manage.skillSelectionCount', {
+              enabled: skillEnabledTotal,
+              total: skillTotal,
+            })}
           </span>
           <label class="projects-skill-search">
             <input
               type="search"
               bind:value={skillQuery}
-              placeholder={t(
-                'projects.manage.skillSearchPlaceholder',
-                'Filter skills…',
-              )}
-              aria-label={t(
-                'projects.manage.skillSearchLabel',
-                'Filter skills',
-              )}
+              placeholder={t('projects.manage.skillSearchPlaceholder')}
+              aria-label={t('projects.manage.skillSearchLabel')}
             />
           </label>
         </div>
         {#if visibleSkillGroups.length === 0}
           <EmptyState
             density="compact"
-            title={t('projects.manage.skillsNoMatch', 'No matching skills.')}
+            title={t('projects.manage.skillsNoMatch')}
           />
         {/if}
         <div class="s-check-groups">
@@ -291,11 +275,9 @@
                     <Checkbox
                       class="s-check-row"
                       checked={skill.enabled}
-                      ariaLabel={t(
-                        'projects.manage.toggleSkill',
-                        'Toggle skill {name}',
-                        { name: skill.name },
-                      )}
+                      ariaLabel={t('projects.manage.toggleSkill', {
+                        name: skill.name,
+                      })}
                       onChange={(next) => group.toggle(skill.name, next)}
                     >
                       <span class="s-check-row__name">{skill.name}</span>

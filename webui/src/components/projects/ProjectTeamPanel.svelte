@@ -40,45 +40,31 @@
   function agentTargetPolicyText(member) {
     const summary = projectAgentTargetSummary(member, projectsState.activeTeam);
     if (summary.mode === 'unavailable') {
-      return t(
-        'projects.team.agentTargetsUnavailable',
-        'Sub-Agent tools are not available to this Agent.',
-      );
+      return t('projects.team.agentTargetsUnavailable');
     }
     if (summary.mode === 'self') {
-      return t(
-        'projects.team.agentTargetsSelf',
-        'Can call only itself in a separate Session.',
-      );
+      return t('projects.team.agentTargetsSelf');
     }
     if (summary.mode === 'all') {
-      return t(
-        'projects.team.agentTargetsAll',
-        'Can call itself and every other Agent on this Project Team.',
-      );
+      return t('projects.team.agentTargetsAll');
     }
-    return t(
-      'projects.team.agentTargetsLimited',
-      'Can call itself plus: {agents}',
-      {
-        agents: summary.agents.join(', '),
-      },
-    );
+    return t('projects.team.agentTargetsLimited', {
+      agents: summary.agents.join(', '),
+    });
   }
 
   const EFFECTIVE_FIELD_META = Object.freeze({
     model: {
-      label: () => t('projects.team.effectiveModel', 'Model'),
-      empty: () => t('projects.team.valueNotConfigured', 'not configured'),
+      label: () => t('projects.team.effectiveModel'),
+      empty: () => t('projects.team.valueNotConfigured'),
     },
     temperature: {
-      label: () => t('projects.team.effectiveTemperature', 'Temperature'),
-      empty: () => t('projects.team.valueProviderDefault', 'provider default'),
+      label: () => t('projects.team.effectiveTemperature'),
+      empty: () => t('projects.team.valueProviderDefault'),
     },
     thinking_effort: {
-      label: () =>
-        t('projects.team.effectiveThinkingEffort', 'Thinking effort'),
-      empty: () => t('projects.team.valueProviderDefault', 'provider default'),
+      label: () => t('projects.team.effectiveThinkingEffort'),
+      empty: () => t('projects.team.valueProviderDefault'),
     },
   });
 
@@ -125,13 +111,13 @@
   function sourceLabel(source) {
     switch (source) {
       case 'override':
-        return t('projects.team.sourceOverride', 'override');
+        return t('projects.team.sourceOverride');
       case 'agent':
-        return t('projects.team.sourceAgentFile', 'agent file (repo)');
+        return t('projects.team.sourceAgentFile');
       case 'project_default':
-        return t('projects.team.sourceProjectDefault', 'project default');
+        return t('projects.team.sourceProjectDefault');
       case 'global_default':
-        return t('projects.team.sourceGlobalDefault', 'global default');
+        return t('projects.team.sourceGlobalDefault');
       default:
         return '';
     }
@@ -148,10 +134,7 @@
       value: option,
       label:
         option === ''
-          ? t(
-              'projects.manage.providerThinkingEffortDefault',
-              '— (provider default)',
-            )
+          ? t('projects.manage.providerThinkingEffortDefault')
           : t(`agents.form.thinkingEffortOption.${option}`),
     }));
   }
@@ -169,7 +152,7 @@
       models: projectsState.availableModels,
       connections: projectsState.availableConnections,
       selectedModelValue: overrideDraft(member.agent_id).model,
-      emptyLabel: t('projects.team.overrideModelPlaceholder', 'No override'),
+      emptyLabel: t('projects.team.overrideModelPlaceholder'),
       translate: t,
     });
   }
@@ -211,21 +194,16 @@
   <section class="s-section" aria-labelledby="project-section-team">
     <header class="s-section__head">
       <h3 class="s-section__title" id="project-section-team">
-        {t('projects.detail.sectionTeam', 'Team')}
+        {t('projects.detail.sectionTeam')}
       </h3>
-      <InfoHint
-        text={t(
-          'projects.detail.teamInfo',
-          'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
-        )}
-      />
+      <InfoHint text={t('projects.detail.teamInfo')} />
       <div class="s-section__aside">{@render scanAction?.()}</div>
     </header>
     <div class="s-section__body">
       {#if projectsState.activeReport && !projectsState.activeReport.clean}
         <Banner variant="warn" role="status">
           <span>
-            {t('projects.report.findingCount', '{count} issues found', {
+            {t('projects.report.findingCount', {
               count: projectsState.activeReport.findingCount,
             })}
           </span>
@@ -235,8 +213,8 @@
             onClick={toggleFindings}
           >
             {findingsExpanded
-              ? t('projects.report.hideDetails', 'Hide details')
-              : t('projects.report.showDetails', 'Show details')}
+              ? t('projects.report.hideDetails')
+              : t('projects.report.showDetails')}
           </Button>
         </Banner>
         {#if findingsExpanded}
@@ -252,14 +230,14 @@
                   </span>
                   {#if finding.agent_id}
                     <span class="projects-finding-meta">
-                      {t('projects.report.finding.agent', 'Agent {agentId}', {
+                      {t('projects.report.finding.agent', {
                         agentId: finding.agent_id,
                       })}
                     </span>
                   {/if}
                   {#if finding.source_path}
                     <span class="projects-finding-meta">
-                      {t('projects.report.finding.source', 'Source: {source}', {
+                      {t('projects.report.finding.source', {
                         source: finding.source_path,
                       })}
                     </span>
@@ -273,16 +251,10 @@
 
       {#if projectsState.scanLoading}
         <p class="projects-scan-loading" role="status">
-          {t('projects.loading', 'Loading projects…')}
+          {t('projects.loading')}
         </p>
       {:else if projectsState.activeTeam.length === 0}
-        <EmptyState
-          density="compact"
-          description={t(
-            'projects.team.empty',
-            'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
-          )}
-        />
+        <EmptyState density="compact" description={t('projects.team.empty')} />
       {:else}
         <ul class="s-group projects-team">
           {#each projectsState.activeTeam as member (member.agent_id)}
@@ -303,7 +275,7 @@
                   text: member.description,
                   rows: [
                     {
-                      label: t('projects.team.effectiveModel', 'Model'),
+                      label: t('projects.team.effectiveModel'),
                       value: summary.value,
                       mono: true,
                     },
@@ -342,7 +314,7 @@
                         </span>
                         {#if display.sourceLabel}
                           <span class="projects-effective-source">
-                            {t('projects.team.fromSource', 'from {source}', {
+                            {t('projects.team.fromSource', {
                               source: display.sourceLabel,
                             })}
                           </span>
@@ -354,13 +326,10 @@
                   <div class="projects-member-block">
                     <div class="s-subhead">
                       <h4 class="s-subhead__title">
-                        {t('projects.team.overridesTitle', 'Overrides')}
+                        {t('projects.team.overridesTitle')}
                       </h4>
                       <p class="s-subhead__desc">
-                        {t(
-                          'projects.team.overrideHelp',
-                          'An override replaces the agent file and all defaults for this agent in this project. The model override can also be set with /model in chat.',
-                        )}
+                        {t('projects.team.overrideHelp')}
                       </p>
                     </div>
 
@@ -371,7 +340,7 @@
                             class="s-row-label"
                             for={`project-override-model-${member.agent_id}`}
                           >
-                            {t('projects.team.effectiveModel', 'Model')}
+                            {t('projects.team.effectiveModel')}
                           </label>
                           {#if memberFieldIsOverridden(member, 'model')}
                             <Button
@@ -381,10 +350,7 @@
                               onClick={() =>
                                 applyClearOverride(member.agent_id, 'model')}
                             >
-                              {t(
-                                'projects.team.clearOverride',
-                                'Clear override',
-                              )}
+                              {t('projects.team.clearOverride')}
                             </Button>
                           {/if}
                         </div>
@@ -398,20 +364,12 @@
                             options={overrideModelOptions(member)}
                             placeholder={t(
                               'projects.team.overrideModelPlaceholder',
-                              'No override',
                             )}
                             searchPlaceholder={t(
                               'projects.manage.modelSearchPlaceholder',
-                              'Filter models…',
                             )}
-                            emptyLabel={t(
-                              'projects.manage.modelSearchEmpty',
-                              'No models match',
-                            )}
-                            ariaLabel={t(
-                              'projects.team.effectiveModel',
-                              'Model',
-                            )}
+                            emptyLabel={t('projects.manage.modelSearchEmpty')}
+                            ariaLabel={t('projects.team.effectiveModel')}
                             triggerClass="projects-dropdown"
                             panelClass="projects-view__search-panel"
                             footerActionLabel={overrideModelFilterFooter(
@@ -435,10 +393,7 @@
                             class="s-row-label"
                             for={`project-override-temperature-${member.agent_id}`}
                           >
-                            {t(
-                              'projects.team.effectiveTemperature',
-                              'Temperature',
-                            )}
+                            {t('projects.team.effectiveTemperature')}
                           </label>
                           {#if memberFieldIsOverridden(member, 'temperature')}
                             <Button
@@ -451,10 +406,7 @@
                                   'temperature',
                                 )}
                             >
-                              {t(
-                                'projects.team.clearOverride',
-                                'Clear override',
-                              )}
+                              {t('projects.team.clearOverride')}
                             </Button>
                           {/if}
                         </div>
@@ -468,12 +420,8 @@
                             value={overrideDraft(member.agent_id).temperature}
                             placeholder={t(
                               'projects.team.overrideTemperaturePlaceholder',
-                              'e.g. 0.7',
                             )}
-                            ariaLabel={t(
-                              'projects.team.effectiveTemperature',
-                              'Temperature',
-                            )}
+                            ariaLabel={t('projects.team.effectiveTemperature')}
                             onInput={(next) =>
                               updateOverrideDraft(
                                 member.agent_id,
@@ -490,10 +438,7 @@
                             class="s-row-label"
                             for={`project-override-thinking-${member.agent_id}`}
                           >
-                            {t(
-                              'projects.team.effectiveThinkingEffort',
-                              'Thinking effort',
-                            )}
+                            {t('projects.team.effectiveThinkingEffort')}
                           </label>
                           {#if memberFieldIsOverridden(member, 'thinking_effort')}
                             <Button
@@ -506,10 +451,7 @@
                                   'thinking_effort',
                                 )}
                             >
-                              {t(
-                                'projects.team.clearOverride',
-                                'Clear override',
-                              )}
+                              {t('projects.team.clearOverride')}
                             </Button>
                           {/if}
                         </div>
@@ -521,7 +463,6 @@
                             options={overrideEffortOptions(member)}
                             ariaLabel={t(
                               'projects.team.effectiveThinkingEffort',
-                              'Thinking effort',
                             )}
                             triggerClass="projects-dropdown"
                             onValueChange={(value) =>
@@ -539,10 +480,7 @@
                       >
                         <div class="projects-member-field__info">
                           <span class="s-row-label">
-                            {t(
-                              'projects.team.compactionPolicy',
-                              'Compaction Policy',
-                            )}
+                            {t('projects.team.compactionPolicy')}
                           </span>
                           {#if overrideDraft(member.agent_id).compaction_policy}
                             <Button
@@ -567,11 +505,8 @@
                                 member,
                                 'compaction_policy',
                               )
-                                ? t(
-                                    'projects.team.clearOverride',
-                                    'Clear override',
-                                  )
-                                : t('common.cancel', 'Cancel')}
+                                ? t('projects.team.clearOverride')
+                                : t('common.cancel')}
                             </Button>
                           {/if}
                         </div>
@@ -602,10 +537,7 @@
                                   ),
                                 )}
                             >
-                              {t(
-                                'projects.team.customizeCompaction',
-                                'Customize for this agent',
-                              )}
+                              {t('projects.team.customizeCompaction')}
                             </Button>
                           </div>
                         {/if}
@@ -617,16 +549,10 @@
                     <div class="s-subhead projects-member-subhead">
                       <div class="projects-member-subhead__copy">
                         <h4 class="s-subhead__title">
-                          {t(
-                            'projects.team.toolAccessOverride',
-                            'Tool access override',
-                          )}
+                          {t('projects.team.toolAccessOverride')}
                         </h4>
                         <p class="s-subhead__desc">
-                          {t(
-                            'projects.team.toolAccessOverrideHelp',
-                            'This replaces the repository Agent policy completely. It may allow a Tool blocked by the Agent file, but it can never exceed the Project Tool Whitelist.',
-                          )}
+                          {t('projects.team.toolAccessOverrideHelp')}
                         </p>
                       </div>
                       <StatusChip
@@ -635,14 +561,8 @@
                           : 'neutral'}
                       >
                         {memberFieldIsOverridden(member, 'tool_access')
-                          ? t(
-                              'projects.team.toolOverrideActive',
-                              'Override active',
-                            )
-                          : t(
-                              'projects.team.repositoryPolicyActive',
-                              'Repository policy',
-                            )}
+                          ? t('projects.team.toolOverrideActive')
+                          : t('projects.team.repositoryPolicyActive')}
                       </StatusChip>
                     </div>
                     <ToolAccessEditor
@@ -664,36 +584,24 @@
                       {agentTargetPolicyText(member)}
                     </p>
                     <p class="projects-tools-follow">
-                      {t(
-                        'projects.team.agentTargetsRepoOwned',
-                        'Defined by the repository Agent config and read-only in vBot. Even full access stays inside this Project Team.',
-                      )}
+                      {t('projects.team.agentTargetsRepoOwned')}
                     </p>
                     {#if member.denied_tools.length > 0}
                       <p class="projects-tools-line">
-                        {t(
-                          'projects.team.deniedToolsBaseline',
-                          'Repository baseline blocks: {tools}',
-                          { tools: member.denied_tools.join(', ') },
-                        )}
+                        {t('projects.team.deniedToolsBaseline', {
+                          tools: member.denied_tools.join(', '),
+                        })}
                       </p>
                       <p class="projects-tools-follow">
-                        {t(
-                          'projects.team.deniedToolsBaselineHelp',
-                          'These blocks apply only while the repository policy is active. A vBot Tool override replaces them.',
-                        )}
+                        {t('projects.team.deniedToolsBaselineHelp')}
                       </p>
                     {/if}
                     {#if member.source_path}
                       <p class="projects-source-line">
-                        {t(
-                          'projects.team.sourceFile',
-                          'Source: {path} ({format})',
-                          {
-                            path: member.source_path,
-                            format: member.source_format,
-                          },
-                        )}
+                        {t('projects.team.sourceFile', {
+                          path: member.source_path,
+                          format: member.source_format,
+                        })}
                       </p>
                     {/if}
                   </div>

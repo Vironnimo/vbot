@@ -25,7 +25,7 @@ function primaryText(tool) {
 }
 
 describe('message presentation', () => {
-  const via = (name) => t('chat.errorViaProvider', '', { name });
+  const via = (name) => t('chat.errorViaProvider', { name });
 
   it.each([
     [
@@ -100,7 +100,7 @@ describe('message presentation', () => {
     'labels persisted and live User messages with %s',
     (_label, sender, label) => {
       const message = { role: 'user', content: 'hello', sender };
-      const expected = label ?? t('chat.role.user', 'You').toUpperCase();
+      const expected = label ?? t('chat.role.user').toUpperCase();
 
       expect(labelForMessage(message)).toBe(expected);
       expect(
@@ -118,9 +118,7 @@ describe('message presentation', () => {
         media_type: 'image/png',
         image_reference: 1,
       }),
-    ).toBe(
-      t('chat.attachment.imageReference', 'Image {number}', { number: 1 }),
-    );
+    ).toBe(t('chat.attachment.imageReference', { number: 1 }));
   });
 
   it('returns the checkpoint summary byte-for-byte', () => {
@@ -144,8 +142,8 @@ describe('message presentation', () => {
         contextTokensAfter: 40_289,
       },
       () =>
-        t('chat.compactedWithTimingTokens', '', {
-          duration: t('chat.durationSeconds', '', { seconds: 45 }),
+        t('chat.compactedWithTimingTokens', {
+          duration: t('chat.durationSeconds', { seconds: 45 }),
           before: '254k',
           after: '40k',
         }),
@@ -154,8 +152,8 @@ describe('message presentation', () => {
       'a minute-scale duration',
       { durationMs: 85_000 },
       () =>
-        t('chat.compactedWithTiming', '', {
-          duration: t('chat.durationMinutesSeconds', '', {
+        t('chat.compactedWithTiming', {
+          duration: t('chat.durationMinutesSeconds', {
             minutes: 1,
             seconds: 25,
           }),
@@ -164,7 +162,7 @@ describe('message presentation', () => {
     [
       'tokens without a known duration (reloaded History)',
       { contextTokensBefore: 254_224, contextTokensAfter: 40_289 },
-      () => t('chat.compactedWithTokens', '', { before: '254k', after: '40k' }),
+      () => t('chat.compactedWithTokens', { before: '254k', after: '40k' }),
     ],
     ['neither tokens nor duration', {}, () => t('chat.compacted')],
   ])('labels a completed Compaction with %s', (_label, fields, expected) => {
@@ -178,20 +176,10 @@ describe('message presentation', () => {
   });
 
   it.each([
-    [
-      'running',
-      'chat.compactingCurrentConversation',
-      'Compacting current conversation…',
-    ],
-    [
-      'failed',
-      'chat.compactionFailed',
-      'Compaction failed. Context unchanged. Check application logs for details.',
-    ],
-  ])('labels a %s Compaction', (status, key, fallback) => {
-    expect(compactionSeparatorLabel({ status, message: null })).toBe(
-      t(key, fallback),
-    );
+    ['running', 'chat.compactingCurrentConversation'],
+    ['failed', 'chat.compactionFailed'],
+  ])('labels a %s Compaction', (status, key) => {
+    expect(compactionSeparatorLabel({ status, message: null })).toBe(t(key));
   });
 
   it('labels an Agent takeover with its raw addresses or a generic fallback', () => {
@@ -199,7 +187,7 @@ describe('message presentation', () => {
       takeoverSeparatorLabel({
         content: JSON.stringify({ from: 'reviewer@vbot', to: 'assistant' }),
       }),
-    ).toBe(t('chat.takenOver', '', { from: 'reviewer@vbot', to: 'assistant' }));
+    ).toBe(t('chat.takenOver', { from: 'reviewer@vbot', to: 'assistant' }));
 
     const generic = t('chat.takenOverGeneric');
     for (const message of [
@@ -405,7 +393,7 @@ describe('Tool row presentation', () => {
       'across all runtime packages',
     );
     expect(presentation.facts[0].text).toBe(
-      t('chat.toolFact.matches', '', { count: '10' }),
+      t('chat.toolFact.matches', { count: '10' }),
     );
   });
 
@@ -478,11 +466,11 @@ describe('Tool row presentation', () => {
     expect(presentation.primary[0].text).toHaveLength(24);
     expect(presentation.primary[0].text).toContain('…');
     expect(presentation.facts.map((fact) => fact.text)).toEqual([
-      t('chat.toolFact.result', '', { count: '1' }),
-      t('chat.toolFact.matches', '', { count: '10+' }),
-      t('chat.toolFact.edits', '', { count: '3' }),
-      t('chat.toolFact.files', '', { count: '2' }),
-      t('chat.toolFact.failure', '', { count: '1' }),
+      t('chat.toolFact.result', { count: '1' }),
+      t('chat.toolFact.matches', { count: '10+' }),
+      t('chat.toolFact.edits', { count: '3' }),
+      t('chat.toolFact.files', { count: '2' }),
+      t('chat.toolFact.failure', { count: '1' }),
     ]);
   });
 
@@ -508,7 +496,7 @@ describe('Tool row presentation', () => {
     expect(toolStatusLabel(tool)).toBe(
       [
         t('chat.toolPartial'),
-        t('chat.durationSeconds', '', { seconds: '0.2' }),
+        t('chat.durationSeconds', { seconds: '0.2' }),
       ].join(' · '),
     );
   });

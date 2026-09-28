@@ -37,18 +37,18 @@
     usageChart.scaleMax === 0 && tokenSplit(report.usage.totals).total > 0,
   );
   function tokenTooltip(point) {
-    return `${activityPeriodLabel(point.date, granularity, locale, true)} · ${t('statistics.legend.measured', 'Measured tokens')}: ${formatTokens(point.measured, locale)} · ${t('statistics.legend.estimated', 'Estimated tokens')}: ${formatTokens(point.estimated, locale)}`;
+    return `${activityPeriodLabel(point.date, granularity, locale, true)} · ${t('statistics.legend.measured')}: ${formatTokens(point.measured, locale)} · ${t('statistics.legend.estimated')}: ${formatTokens(point.estimated, locale)}`;
   }
   function tokenTooltipCard(point) {
     return {
       title: activityPeriodLabel(point.date, granularity, locale, true),
       rows: [
         {
-          label: t('statistics.legend.measured', 'Measured tokens'),
+          label: t('statistics.legend.measured'),
           value: formatTokens(point.measured, locale),
         },
         {
-          label: t('statistics.legend.estimated', 'Estimated tokens'),
+          label: t('statistics.legend.estimated'),
           value: formatTokens(point.estimated, locale),
         },
       ],
@@ -58,7 +58,7 @@
 
 {#snippet showMonths()}
   <Button variant="secondary" onClick={() => (granularity = 'month')}
-    >{t('statistics.usage.showMonths', 'Show by month')}</Button
+    >{t('statistics.usage.showMonths')}</Button
   >
 {/snippet}
 
@@ -66,7 +66,7 @@
   <div class="stats-block__head">
     <div class="stats-block__heading">
       <h3 class="stats-block__title">
-        {t('statistics.usage.dailyTokens', 'Tokens per period')}
+        {t('statistics.usage.dailyTokens')}
       </h3>
       <p>{activityWindowLabel(reportRange, granularity)} · UTC</p>
     </div>
@@ -75,11 +75,8 @@
   {#if usageChart.scaleMax === 0}<EmptyState
       density="compact"
       description={hasOlderUsage
-        ? t(
-            'statistics.usage.emptyWindow',
-            'No token usage in this period. Earlier activity lies outside the chart.',
-          )
-        : t('statistics.empty', 'No activity recorded yet.')}
+        ? t('statistics.usage.emptyWindow')
+        : t('statistics.empty')}
       actions={hasOlderUsage && granularity !== 'month'
         ? showMonths
         : undefined}
@@ -88,7 +85,7 @@
     <div
       class="stats-activity stats-token-chart"
       role="group"
-      aria-label={t('statistics.usage.dailyTokens', 'Tokens per period')}
+      aria-label={t('statistics.usage.dailyTokens')}
     >
       <div class="stats-activity__y-axis" aria-hidden="true">
         <span
@@ -139,32 +136,29 @@
     </div>
     <div class="stats-activity__legend">
       <span class="stats-legend stats-legend--measured"
-        >{t('statistics.legend.measured', 'Measured tokens')}</span
+        >{t('statistics.legend.measured')}</span
       ><span class="stats-legend stats-legend--estimated"
-        >{t('statistics.legend.estimated', 'Estimated tokens')}</span
+        >{t('statistics.legend.estimated')}</span
       >
     </div>
     <details class="stats-details">
-      <summary>{t('statistics.chart.data', 'View chart data')}</summary>
+      <summary>{t('statistics.chart.data')}</summary>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
       <div
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t(
-          'statistics.table.scroll',
-          'Statistics table; scroll for more columns',
-        )}
+        aria-label={t('statistics.table.scroll')}
       >
         <table class="stats-table">
-          <caption class="sr-only"
-            >{t('statistics.usage.dailyTokens', 'Tokens per period')}</caption
+          <caption class="sr-only">{t('statistics.usage.dailyTokens')}</caption
           ><thead
             ><tr
-              ><th>{t('statistics.granularity.label', 'Period')} (UTC)</th><th
-                >{t('statistics.legend.measured', 'Measured tokens')}</th
-              ><th>{t('statistics.legend.estimated', 'Estimated tokens')}</th
-              ><th>{t('statistics.col.cacheHit', 'Cache hit')}</th></tr
+              ><th>{t('statistics.granularity.label')} (UTC)</th><th
+                >{t('statistics.legend.measured')}</th
+              ><th>{t('statistics.legend.estimated')}</th><th
+                >{t('statistics.col.cacheHit')}</th
+              ></tr
             ></thead
           ><tbody
             >{#each usageChart.points as point (point.date)}<tr

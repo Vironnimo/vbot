@@ -56,7 +56,7 @@
   let sessionOptions = $derived([
     {
       value: '',
-      label: t('calendar.actions.newSession', 'New Session for each execution'),
+      label: t('calendar.actions.newSession'),
     },
     ...(editor?.session &&
     !sessions.some((session) => session.id === editor.session)
@@ -68,18 +68,18 @@
     })),
   ]);
   let directionOptions = $derived([
-    { value: '-', label: t('calendar.actions.before', 'Before') },
-    { value: 'at', label: t('calendar.actions.at', 'At') },
-    { value: '+', label: t('calendar.actions.after', 'After') },
+    { value: '-', label: t('calendar.actions.before') },
+    { value: 'at', label: t('calendar.actions.at') },
+    { value: '+', label: t('calendar.actions.after') },
   ]);
   let unitOptions = $derived([
-    { value: 'm', label: t('calendar.actions.minutes', 'minutes') },
-    { value: 'h', label: t('calendar.actions.hours', 'hours') },
-    { value: 'd', label: t('calendar.actions.days', 'days') },
+    { value: 'm', label: t('calendar.actions.minutes') },
+    { value: 'h', label: t('calendar.actions.hours') },
+    { value: 'd', label: t('calendar.actions.days') },
   ]);
   let anchorOptions = $derived([
-    { value: 'start', label: t('calendar.actions.start', 'Start') },
-    { value: 'end', label: t('calendar.actions.end', 'End') },
+    { value: 'start', label: t('calendar.actions.start') },
+    { value: 'end', label: t('calendar.actions.end') },
   ]);
 
   const targetCatalog = createAgentTargetCatalogLoader({
@@ -96,10 +96,7 @@
       error = failure
         ? (failure.message ?? String(failure))
         : catalog.failedProjects.length
-          ? t(
-              'calendar.actions.targetsPartial',
-              'Some Project Agent targets could not be loaded.',
-            )
+          ? t('calendar.actions.targetsPartial')
           : '';
     }
     loadTargets();
@@ -165,10 +162,7 @@
   async function save() {
     if (!editor || busy) return;
     if (!editor.target || !editor.prompt.trim()) {
-      error = t(
-        'calendar.actions.required',
-        'Choose an agent and enter an instruction.',
-      );
+      error = t('calendar.actions.required');
       return;
     }
     const when =
@@ -215,30 +209,25 @@
     if (!match) return when;
     const anchor =
       match[1] === 'start'
-        ? t('calendar.actions.start', 'Start')
-        : t('calendar.actions.end', 'End');
-    if (!match[2])
-      return t('calendar.actions.atAnchor', 'At {anchor}', { anchor });
+        ? t('calendar.actions.start')
+        : t('calendar.actions.end');
+    if (!match[2]) return t('calendar.actions.atAnchor', { anchor });
     const singular = Number(match[3]) === 1;
     const unit = {
       m: singular
-        ? t('calendar.actions.minute', 'minute')
-        : t('calendar.actions.minutes', 'minutes'),
-      h: singular
-        ? t('calendar.actions.hour', 'hour')
-        : t('calendar.actions.hours', 'hours'),
-      d: singular
-        ? t('calendar.actions.day', 'day')
-        : t('calendar.actions.days', 'days'),
+        ? t('calendar.actions.minute')
+        : t('calendar.actions.minutes'),
+      h: singular ? t('calendar.actions.hour') : t('calendar.actions.hours'),
+      d: singular ? t('calendar.actions.day') : t('calendar.actions.days'),
     }[match[4]];
     const amount = match[3];
     return match[2] === '-'
-      ? t('calendar.actions.beforeAnchor', '{amount} {unit} before {anchor}', {
+      ? t('calendar.actions.beforeAnchor', {
           amount,
           unit,
           anchor,
         })
-      : t('calendar.actions.afterAnchor', '{amount} {unit} after {anchor}', {
+      : t('calendar.actions.afterAnchor', {
           amount,
           unit,
           anchor,
@@ -258,35 +247,24 @@
   }
 </script>
 
-<section
-  class="calendar-actions"
-  aria-label={t('calendar.actions.heading', 'Agent actions')}
->
+<section class="calendar-actions" aria-label={t('calendar.actions.heading')}>
   <div class="calendar-actions-heading">
-    <h3>{t('calendar.actions.heading', 'Agent actions')}</h3>
-    <InfoHint
-      text={t(
-        'calendar.actions.help',
-        'Actions follow this event. Each execution gets a new Session unless you select an existing one. Preparations expire at event start, actions during the event at its end, later actions one hour after their scheduled time.',
-      )}
-    />
+    <h3>{t('calendar.actions.heading')}</h3>
+    <InfoHint text={t('calendar.actions.help')} />
     <Button
       variant="secondary"
       disabled={busy || serverUnavailable || editor !== null}
-      onClick={() => begin()}>{t('calendar.actions.add', 'Add action')}</Button
+      onClick={() => begin()}>{t('calendar.actions.add')}</Button
     >
   </div>
   {#if recurring}
     <p class="calendar-detail-meta">
-      {t(
-        'calendar.actions.series',
-        'These actions apply to every occurrence in the series.',
-      )}
+      {t('calendar.actions.series')}
     </p>
   {/if}
   {#if eventActions.length === 0 && !editor}
     <p class="calendar-detail-meta">
-      {t('calendar.actions.empty', 'No agent actions attached.')}
+      {t('calendar.actions.empty')}
     </p>
   {/if}
   {#each eventActions as action (action.id)}
@@ -313,13 +291,13 @@
       <p class="calendar-action-prompt">{action.prompt}</p>
       {#if execution}
         <p class="calendar-detail-meta">
-          {t('calendar.actions.scheduled', 'Scheduled: {time}', {
+          {t('calendar.actions.scheduled', {
             time: timestamp(execution.scheduled_at),
           })}
         </p>
         {#if ['pending', 'claimed', 'missed'].includes(execution.status)}
           <p class="calendar-detail-meta">
-            {t('calendar.actions.expires', 'Latest start: {time}', {
+            {t('calendar.actions.expires', {
               time: timestamp(execution.expires_at),
             })}
           </p>
@@ -330,37 +308,30 @@
           <Button
             variant="secondary"
             onClick={() => onOpenSession(execution.target, execution.session)}
-            >{t('calendar.actions.openSession', 'Open Session')}</Button
+            >{t('calendar.actions.openSession')}</Button
           >
         {/if}
         <Button
           variant="secondary"
           disabled={busy || serverUnavailable || editor !== null}
-          onClick={() => begin(action)}>{t('common.edit', 'Edit')}</Button
+          onClick={() => begin(action)}>{t('common.edit')}</Button
         >
         <Button
           variant="danger"
           disabled={busy || serverUnavailable}
-          onClick={() => (deleting = action.id)}
-          >{t('common.delete', 'Delete')}</Button
+          onClick={() => (deleting = action.id)}>{t('common.delete')}</Button
         >
       </div>
       {#if deleting === action.id}
         <div class="calendar-action-controls">
-          <span
-            >{t(
-              'calendar.actions.deleteConfirm',
-              'Remove this action from the event?',
-            )}</span
-          >
+          <span>{t('calendar.actions.deleteConfirm')}</span>
           <Button
             variant="danger"
             disabled={busy}
-            onClick={() => remove(action.id)}
-            >{t('common.delete', 'Delete')}</Button
+            onClick={() => remove(action.id)}>{t('common.delete')}</Button
           >
           <Button variant="secondary" onClick={() => (deleting = '')}
-            >{t('common.cancel', 'Cancel')}</Button
+            >{t('common.cancel')}</Button
           >
         </div>
       {/if}
@@ -376,15 +347,15 @@
     >
       <div class="calendar-form-row">
         <FormField
-          label={t('calendar.actions.agent', 'Agent')}
+          label={t('calendar.actions.agent')}
           controlId="calendar-action-target"
         >
           <Dropdown
             id="calendar-action-target"
             value={editor.target}
             options={targetOptions}
-            placeholder={t('calendar.actions.chooseAgent', 'Choose an agent')}
-            ariaLabel={t('calendar.actions.agent', 'Agent')}
+            placeholder={t('calendar.actions.chooseAgent')}
+            ariaLabel={t('calendar.actions.agent')}
             disabled={busy}
             onValueChange={(next) => {
               if (next === editor.target) return;
@@ -395,14 +366,14 @@
           />
         </FormField>
         <FormField
-          label={t('calendar.actions.session', 'Session')}
+          label={t('calendar.actions.session')}
           controlId="calendar-action-session"
         >
           <Dropdown
             id="calendar-action-session"
             value={editor.session}
             options={sessionOptions}
-            ariaLabel={t('calendar.actions.session', 'Session')}
+            ariaLabel={t('calendar.actions.session')}
             disabled={busy || sessionsLoading}
             onValueChange={(next) => (editor.session = next)}
           />
@@ -410,30 +381,27 @@
               variant="secondary"
               disabled={sessionsLoading}
               onClick={() => loadSessions(true)}
-              >{t(
-                'calendar.actions.moreSessions',
-                'Load more Sessions',
-              )}</Button
+              >{t('calendar.actions.moreSessions')}</Button
             >{/if}
         </FormField>
       </div>
       <div class="calendar-action-timing">
         <FormField
-          label={t('calendar.actions.timing', 'When')}
+          label={t('calendar.actions.timing')}
           controlId="calendar-action-direction"
         >
           <Dropdown
             id="calendar-action-direction"
             value={editor.direction}
             options={directionOptions}
-            ariaLabel={t('calendar.actions.timing', 'When')}
+            ariaLabel={t('calendar.actions.timing')}
             disabled={busy}
             onValueChange={(next) => (editor.direction = next)}
           />
         </FormField>
         {#if editor.direction !== 'at'}
           <FormField
-            label={t('calendar.actions.amount', 'Amount')}
+            label={t('calendar.actions.amount')}
             controlId="calendar-action-amount"
             ><TextField
               id="calendar-action-amount"
@@ -444,33 +412,33 @@
             /></FormField
           >
           <FormField
-            label={t('calendar.actions.unit', 'Unit')}
+            label={t('calendar.actions.unit')}
             controlId="calendar-action-unit"
             ><Dropdown
               id="calendar-action-unit"
               value={editor.unit}
               options={unitOptions}
-              ariaLabel={t('calendar.actions.unit', 'Unit')}
+              ariaLabel={t('calendar.actions.unit')}
               disabled={busy}
               onValueChange={(next) => (editor.unit = next)}
             /></FormField
           >
         {/if}
         <FormField
-          label={t('calendar.actions.reference', 'Event')}
+          label={t('calendar.actions.reference')}
           controlId="calendar-action-anchor"
           ><Dropdown
             id="calendar-action-anchor"
             value={editor.anchor}
             options={anchorOptions}
-            ariaLabel={t('calendar.actions.reference', 'Event')}
+            ariaLabel={t('calendar.actions.reference')}
             disabled={busy}
             onValueChange={(next) => (editor.anchor = next)}
           /></FormField
         >
       </div>
       <FormField
-        label={t('calendar.actions.instruction', 'Instruction')}
+        label={t('calendar.actions.instruction')}
         controlId="calendar-action-prompt"
         ><TextArea
           id="calendar-action-prompt"
@@ -483,14 +451,14 @@
         <Button
           variant="primary"
           disabled={busy || serverUnavailable}
-          onClick={save}>{t('common.save', 'Save')}</Button
+          onClick={save}>{t('common.save')}</Button
         ><Button
           variant="secondary"
           disabled={busy}
           onClick={() => {
             editor = null;
             sessionRequest += 1;
-          }}>{t('common.cancel', 'Cancel')}</Button
+          }}>{t('common.cancel')}</Button
         >
       </div>
     </form>

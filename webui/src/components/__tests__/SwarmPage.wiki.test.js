@@ -15,9 +15,9 @@ import {
 } from './SwarmPage.support.js';
 import { t } from '../../lib/i18n.js';
 
-const WIKI = t('swarm.tabs.wiki', 'Wiki');
-const BOARD = t('swarm.tabs.board', 'Board');
-const EDIT = t('common.edit', 'Edit');
+const WIKI = t('swarm.tabs.wiki');
+const BOARD = t('swarm.tabs.board');
+const EDIT = t('common.edit');
 
 // A bridge whose Wiki holds one page, `w1`, with its version history.
 function wikiBridge() {
@@ -157,9 +157,7 @@ describe('Swarm Wiki pages', () => {
       expect(panel().textContent).toContain('Wiki unavailable'),
     );
     expect(panel().querySelector('[role="status"]')).toBeNull();
-    expect(panel().textContent).not.toContain(
-      t('swarm.wiki.empty', 'No pages found.'),
-    );
+    expect(panel().textContent).not.toContain(t('swarm.wiki.empty'));
   });
 
   it('opens internal Board links, displays the pinned request and restores a deleted page', async () => {
@@ -196,12 +194,12 @@ describe('Swarm Wiki pages', () => {
           label.nextElementSibling.textContent,
         ]),
       ).toEqual([
-        [t('swarm.wiki.revisionLabel', 'Revision'), '1'],
-        [t('swarm.wiki.author', 'Author'), 'Alpha'],
+        [t('swarm.wiki.revisionLabel'), '1'],
+        [t('swarm.wiki.author'), 'Alpha'],
       ]),
     );
-    const restore = t('swarm.wiki.restore', 'Restore this version');
-    const remove = t('swarm.wiki.delete', 'Delete page');
+    const restore = t('swarm.wiki.restore');
+    const remove = t('swarm.wiki.delete');
     button(remove).click();
     await vi.waitFor(() => expect(button(restore)).toBeDefined());
     button(restore).click();
@@ -225,18 +223,18 @@ describe('Swarm Wiki pages', () => {
   it('creates free Markdown pages and searches without exposing content as HTML', async () => {
     const fixture = wikiBridge();
     await openWiki(fixture);
-    button(t('swarm.wiki.new', 'New page')).click();
+    button(t('swarm.wiki.new')).click();
     await tick();
     fill('wiki-title', 'New findings');
     fill('wiki-content', '# Findings\n<script>bad()</script>');
-    button(t('common.save', 'Save')).click();
+    button(t('common.save')).click();
     await vi.waitFor(() =>
       expect(fixture.operation).toHaveBeenCalledWith(
         'wiki',
         expect.objectContaining({ action: 'create', title: 'New findings' }),
       ),
     );
-    button(t('swarm.wiki.preview', 'View page')).click();
+    button(t('swarm.wiki.preview')).click();
     await vi.waitFor(() =>
       expect(document.querySelector('.wiki-content h1')).not.toBeNull(),
     );
@@ -294,7 +292,7 @@ describe('Swarm Wiki drafts and refresh', () => {
     expect(document.getElementById('wiki-content').value).toBe(
       'Unsaved conflicting evidence',
     );
-    button(t('swarm.wiki.discard', 'Discard changes and continue')).click();
+    button(t('swarm.wiki.discard')).click();
     await vi.waitFor(() =>
       expect(document.querySelector('.wiki-panel')).toBeNull(),
     );

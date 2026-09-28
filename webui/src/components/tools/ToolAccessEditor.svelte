@@ -96,48 +96,31 @@
   function toolNotes(tool) {
     const notes = [];
     if (tool.requires_opt_in) {
-      notes.push(
-        t(
-          'toolAccess.requiresOptIn',
-          'Requires explicit permission. Selecting this Tool grants it.',
-        ),
-      );
+      notes.push(t('toolAccess.requiresOptIn'));
     }
     if (tool.activation === 'follows') {
       notes.push(
-        t('toolAccess.activation.follows', 'Automatic with {source}', {
+        t('toolAccess.activation.follows', {
           source: tool.activation_source,
         }),
       );
     } else if (tool.activation === 'memory_mode') {
       notes.push(
         memoryPromptMode === 'off'
-          ? t('toolAccess.activation.memoryOff', 'Memory is currently off')
-          : t('toolAccess.activation.memoryOn', 'Automatic while Memory is on'),
+          ? t('toolAccess.activation.memoryOff')
+          : t('toolAccess.activation.memoryOn'),
       );
     } else if (tool.activation === 'session_grant') {
-      notes.push(
-        t(
-          'toolAccess.activation.session',
-          'Available automatically when the Session grants it',
-        ),
-      );
+      notes.push(t('toolAccess.activation.session'));
     }
     if ((tool.constraints ?? []).includes('identity_agent')) {
-      notes.push(t('toolAccess.constraint.identity', 'Identity Agents only'));
+      notes.push(t('toolAccess.constraint.identity'));
     }
     if ((tool.constraints ?? []).includes('image_fallback_route')) {
-      notes.push(
-        t(
-          'toolAccess.constraint.imageFallback',
-          'By default, available only when the main Model cannot view images. Enabling availability with vision lets this Agent request a second analysis. A configured, available image-understanding Model is required in either case.',
-        ),
-      );
+      notes.push(t('toolAccess.constraint.imageFallback'));
     }
     if (tool.registered === false) {
-      notes.push(
-        t('toolAccess.readiness.unregistered', 'Not registered right now'),
-      );
+      notes.push(t('toolAccess.readiness.unregistered'));
     }
     return notes;
   }
@@ -153,34 +136,28 @@
   >
     {#snippet toolbar()}
       <Button variant="tertiary" {disabled} onClick={selectAllTools}
-        >{t('toolAccess.selectAll', 'Select all')}</Button
+        >{t('toolAccess.selectAll')}</Button
       >
       <Button
         variant="tertiary"
         {disabled}
         onClick={() => onChange({ mode: TOOL_ACCESS_MODE_NONE })}
-        >{t('toolAccess.deselectAll', 'Deselect all')}</Button
+        >{t('toolAccess.deselectAll')}</Button
       >
       {#if showReset}
         <Button variant="tertiary" {disabled} onClick={onReset}
-          >{resetLabel ||
-            t('toolAccess.resetOverride', 'Reset to repository policy')}</Button
+          >{resetLabel || t('toolAccess.resetOverride')}</Button
         >
       {/if}
     {/snippet}
     {#snippet details(tool)}
       {#if tool.name === 'analyze_image'}
-        <FormField
-          label={t('toolAccess.imageAlwaysAvailable', 'Available with vision')}
-        >
+        <FormField label={t('toolAccess.imageAlwaysAvailable')}>
           <Toggle
             size="sm"
             checked={(policy.granted ?? []).includes(tool.name)}
             disabled={disabled || !preferenceEnabled(tool)}
-            ariaLabel={t(
-              'toolAccess.imageAlwaysAvailable',
-              'Available with vision',
-            )}
+            ariaLabel={t('toolAccess.imageAlwaysAvailable')}
             onChange={(next) =>
               onChange(setAnalyzeImageAlwaysAvailable(policy, next))}
           />

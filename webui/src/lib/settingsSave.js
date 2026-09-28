@@ -53,9 +53,7 @@ export async function runSettingsSave({
       onToast({ title: successTitle, variant: 'success' });
     return true;
   } catch (error) {
-    onError(
-      `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-    );
+    onError(`${t('settings.saveError')} ${error.message}`);
     return false;
   } finally {
     setSaving(false);

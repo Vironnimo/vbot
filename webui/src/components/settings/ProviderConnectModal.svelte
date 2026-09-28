@@ -182,17 +182,15 @@
         value,
       });
       onToast({
-        title: t(
-          'settings.providers.device_flow.success_toast',
-          '{provider} connected successfully',
-          { provider: providerName(selectedProvider) },
-        ),
+        title: t('settings.providers.device_flow.success_toast', {
+          provider: providerName(selectedProvider),
+        }),
         variant: 'success',
       });
       await onCompleted();
       onClose();
     } catch (error) {
-      errorMessage = `${t('settings.providers.add.keyError', 'API key could not be saved.')} ${error.message}`;
+      errorMessage = `${t('settings.providers.add.keyError')} ${error.message}`;
     } finally {
       saving = false;
     }
@@ -214,22 +212,18 @@
       onToast({
         title:
           result?.reachable === false
-            ? t(
-                'settings.providers.add.localUnreachable',
-                '{provider} was added, but is not reachable.',
-                { provider: providerName(selectedProvider) },
-              )
-            : t(
-                'settings.providers.add.localSuccess',
-                '{provider} added successfully.',
-                { provider: providerName(selectedProvider) },
-              ),
+            ? t('settings.providers.add.localUnreachable', {
+                provider: providerName(selectedProvider),
+              })
+            : t('settings.providers.add.localSuccess', {
+                provider: providerName(selectedProvider),
+              }),
         variant: result?.reachable === false ? 'warn' : 'success',
       });
       await onCompleted();
       onClose();
     } catch (error) {
-      errorMessage = `${t('settings.providers.add.localError', 'Provider could not be added.')} ${error.message}`;
+      errorMessage = `${t('settings.providers.add.localError')} ${error.message}`;
     } finally {
       saving = false;
     }
@@ -255,7 +249,7 @@
       oauthData = response?.user_code ? response : null;
     } catch (error) {
       oauthActive = false;
-      errorMessage = `${t('settings.providers.connectError', 'Provider connection could not be started.')} ${error.message}`;
+      errorMessage = `${t('settings.providers.connectError')} ${error.message}`;
     }
   }
 
@@ -294,21 +288,16 @@
 
     oauthActive = false;
     oauthData = null;
-    errorMessage = t(
-      'settings.providers.device_flow.error_toast',
-      'Authorization failed or timed out',
-    );
+    errorMessage = t('settings.providers.device_flow.error_toast');
   }
 
   async function completeOAuthFlow() {
     oauthActive = false;
     oauthData = null;
     onToast({
-      title: t(
-        'settings.providers.device_flow.success_toast',
-        '{provider} connected successfully',
-        { provider: providerName(selectedProvider) },
-      ),
+      title: t('settings.providers.device_flow.success_toast', {
+        provider: providerName(selectedProvider),
+      }),
       variant: 'success',
     });
     await onCompleted();
@@ -323,10 +312,7 @@
 
     if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
       onToast({
-        title: t(
-          'settings.providers.device_flow.copy_error',
-          'Device code could not be copied.',
-        ),
+        title: t('settings.providers.device_flow.copy_error'),
         variant: 'error',
       });
       return;
@@ -336,18 +322,12 @@
       await navigator.clipboard.writeText(userCode);
       copiedCode = true;
       onToast({
-        title: t(
-          'settings.providers.device_flow.copy_success',
-          'Device code copied.',
-        ),
+        title: t('settings.providers.device_flow.copy_success'),
         variant: 'success',
       });
     } catch {
       onToast({
-        title: t(
-          'settings.providers.device_flow.copy_error',
-          'Device code could not be copied.',
-        ),
+        title: t('settings.providers.device_flow.copy_error'),
         variant: 'error',
       });
     }
@@ -374,68 +354,42 @@
       return connection.label;
     }
     if (connection.type === 'api_key') {
-      return t('settings.providers.add.methodApiKey', 'API key');
+      return t('settings.providers.add.methodApiKey');
     }
     if (connection.type === 'none') {
-      return t('settings.providers.add.methodLocal', 'Local');
+      return t('settings.providers.add.methodLocal');
     }
-    return t('settings.providers.add.methodOAuth', 'Sign in (OAuth)');
+    return t('settings.providers.add.methodOAuth');
   }
 
   function connectionMethodDescription(connection) {
     if (setupMode) {
       if (connection.type === 'api_key') {
-        return t(
-          'onboarding.connect.apiKeyDescription',
-          'Paste a key from your Provider account.',
-        );
+        return t('onboarding.connect.apiKeyDescription');
       }
       if (connection.type === 'none') {
-        return t(
-          'onboarding.connect.localDescription',
-          'Use a Model server on your computer. No API key needed.',
-        );
+        return t('onboarding.connect.localDescription');
       }
-      return t(
-        'onboarding.connect.signInDescription',
-        'Sign in with your subscription or account in the browser.',
-      );
+      return t('onboarding.connect.signInDescription');
     }
     if (connection.type === 'api_key') {
-      return t(
-        'settings.providers.add.methodApiKeyDescription',
-        'Paste a static API key; it is stored in the data directory.',
-      );
+      return t('settings.providers.add.methodApiKeyDescription');
     }
     if (connection.type === 'none') {
-      return t(
-        'settings.providers.add.methodLocalDescription',
-        'Connect to the local endpoint without credentials.',
-      );
+      return t('settings.providers.add.methodLocalDescription');
     }
-    return t(
-      'settings.providers.add.methodOAuthDescription',
-      'Authorize vBot through the provider account in a browser.',
-    );
+    return t('settings.providers.add.methodOAuthDescription');
   }
 </script>
 
 {#snippet accountField(fieldDisabled)}
   <FormField
     controlId="provider-account-name"
-    label={t('settings.providers.accounts.nameLabel', 'Account')}
+    label={t('settings.providers.accounts.nameLabel')}
     help={!accountInvalid && !accountFixed
-      ? t(
-          'settings.providers.accounts.nameHint',
-          'Optional name for this account. Only needed if you add more than one — otherwise leave it empty.',
-        )
+      ? t('settings.providers.accounts.nameHint')
       : ''}
-    error={accountInvalid
-      ? t(
-          'settings.providers.accounts.invalidId',
-          'Account names use 1–32 lowercase letters, digits, or underscores and start with a letter or digit.',
-        )
-      : ''}
+    error={accountInvalid ? t('settings.providers.accounts.invalidId') : ''}
   >
     {#snippet children(field)}
       <TextField
@@ -457,10 +411,10 @@
 
 <Modal
   title={selectedProvider
-    ? t('settings.providers.device_flow.title', 'Connect {provider}', {
+    ? t('settings.providers.device_flow.title', {
         provider: providerName(selectedProvider),
       })
-    : t('settings.providers.add.title', 'Add provider')}
+    : t('settings.providers.add.title')}
   labelledById="provider-connect-modal-title"
   class={setupMode
     ? 'provider-connect-modal provider-connect-modal--setup'
@@ -473,17 +427,11 @@
       {#if step === 'provider'}
         {#if providers.length === 0}
           <p class="provider-connect-modal__hint">
-            {t(
-              'settings.providers.add.allConnected',
-              'All available providers are already connected.',
-            )}
+            {t('settings.providers.add.allConnected')}
           </p>
         {:else}
           <p class="provider-connect-modal__hint">
-            {t(
-              'settings.providers.add.chooseProvider',
-              'Choose a provider to connect.',
-            )}
+            {t('settings.providers.add.chooseProvider')}
           </p>
           <div class="provider-pick-list" role="list">
             {#each providers as provider (provider.id)}
@@ -510,11 +458,9 @@
         {/if}
       {:else if step === 'method'}
         <p class="provider-connect-modal__hint">
-          {t(
-            'settings.providers.add.chooseMethod',
-            'Choose how to connect {provider}.',
-            { provider: providerName(selectedProvider) },
-          )}
+          {t('settings.providers.add.chooseMethod', {
+            provider: providerName(selectedProvider),
+          })}
         </p>
         <div class="provider-pick-list" role="list">
           {#each methodOptions as connection (connection.id)}
@@ -545,10 +491,7 @@
                 connectionMethodLabel(selectedConnection)}</strong
             >
             <p class="provider-connect-modal__hint">
-              {t(
-                'onboarding.connect.keyHelp',
-                'Create an API key in your Provider account, then paste it below. Your Provider may require credits before a Model can respond.',
-              )}
+              {t('onboarding.connect.keyHelp')}
             </p>
             {#if selectedProvider.id === 'openrouter'}
               <a
@@ -557,10 +500,7 @@
                 target="_blank"
                 rel="noreferrer"
               >
-                {t(
-                  'onboarding.connect.openrouterKeys',
-                  'Open OpenRouter API keys ↗',
-                )}
+                {t('onboarding.connect.openrouterKeys')}
               </a>
             {/if}
           {/if}
@@ -571,16 +511,13 @@
           {/if}
           <FormField
             controlId="provider-api-key"
-            label={t('settings.providers.add.apiKeyLabel', 'API key')}
+            label={t('settings.providers.add.apiKeyLabel')}
           >
             <TextField
               id="provider-api-key"
               type="password"
               autocomplete="off"
-              placeholder={t(
-                'settings.providers.add.apiKeyPlaceholder',
-                'Paste the API key…',
-              )}
+              placeholder={t('settings.providers.add.apiKeyPlaceholder')}
               value={apiKeyValue}
               disabled={saving}
               onInput={(next) => {
@@ -592,16 +529,12 @@
           {#if !setupMode}{@render accountField(saving)}{/if}
           {#if !setupMode && selectedConnection.credential_key}
             <p class="provider-connect-modal__hint">
-              {t(
-                'settings.providers.add.apiKeyHint',
-                'Stored as {credentialKey} in the data directory .env.',
-                {
-                  credentialKey: deriveAccountCredentialKey(
-                    selectedConnection.credential_key,
-                    effectiveAccount(),
-                  ),
-                },
-              )}
+              {t('settings.providers.add.apiKeyHint', {
+                credentialKey: deriveAccountCredentialKey(
+                  selectedConnection.credential_key,
+                  effectiveAccount(),
+                ),
+              })}
             </p>
           {/if}
         </form>
@@ -611,10 +544,7 @@
               connectionMethodLabel(selectedConnection)}</strong
           >{/if}
         <p class="provider-connect-modal__hint">
-          {t(
-            'settings.providers.add.localIntro',
-            'Add the local endpoint. Models are discovered now and loaded only when used.',
-          )}
+          {t('settings.providers.add.localIntro')}
         </p>
       {:else if step === 'oauth'}
         {#if setupMode}<strong class="provider-connect-method"
@@ -623,26 +553,21 @@
           >{/if}
         {#if oauthActive && oauthData}
           <p class="device-flow-instructions">
-            {t(
-              'settings.providers.device_flow.instructions',
-              'Enter this code at the link below:',
-            )}
+            {t('settings.providers.device_flow.instructions')}
           </p>
           <div class="device-flow-code-row">
             <code class="device-flow-code">{oauthData.user_code}</code>
             <Button
               variant="secondary"
               class="device-flow-copy"
-              ariaLabel={t(
-                'settings.providers.device_flow.copy_aria',
-                'Copy device code {code}',
-                { code: oauthData.user_code },
-              )}
+              ariaLabel={t('settings.providers.device_flow.copy_aria', {
+                code: oauthData.user_code,
+              })}
               onClick={copyUserCode}
             >
               {copiedCode
-                ? t('settings.providers.device_flow.copied', 'Copied')
-                : t('common.copy', 'Copy')}
+                ? t('settings.providers.device_flow.copied')
+                : t('common.copy')}
             </Button>
           </div>
           <a
@@ -656,31 +581,25 @@
           <div class="device-flow-waiting" aria-live="polite">
             <span class="s-inline-spinner" aria-hidden="true"></span>
             <span>
-              {t(
-                'settings.providers.device_flow.waiting',
-                'Waiting for {provider} authorization…',
-                { provider: providerName(selectedProvider) },
-              )}
+              {t('settings.providers.device_flow.waiting', {
+                provider: providerName(selectedProvider),
+              })}
             </span>
           </div>
         {:else if oauthActive}
           <div class="device-flow-waiting" aria-live="polite">
             <span class="s-inline-spinner" aria-hidden="true"></span>
             <span>
-              {t(
-                'settings.providers.device_flow.waiting',
-                'Waiting for {provider} authorization…',
-                { provider: providerName(selectedProvider) },
-              )}
+              {t('settings.providers.device_flow.waiting', {
+                provider: providerName(selectedProvider),
+              })}
             </span>
           </div>
         {:else}
           <p class="provider-connect-modal__hint">
-            {t(
-              'settings.providers.add.oauthIntro',
-              'Click Connect to begin. vBot then shows a code to enter at {provider} in your browser.',
-              { provider: providerName(selectedProvider) },
-            )}
+            {t('settings.providers.add.oauthIntro', {
+              provider: providerName(selectedProvider),
+            })}
           </p>
           {#if !setupMode}{@render accountField(false)}{/if}
         {/if}
@@ -697,11 +616,11 @@
   {#snippet footer()}
     {#if canGoBack}
       <Button variant="secondary" disabled={saving} onClick={goBack}>
-        {t('common.back', 'Back')}
+        {t('common.back')}
       </Button>
     {/if}
     <Button variant="secondary" disabled={saving} onClick={close}>
-      {t('common.cancel', 'Cancel')}
+      {t('common.cancel')}
     </Button>
     {#if step === 'api-key'}
       <Button
@@ -710,15 +629,11 @@
         variant="primary"
         disabled={saving || apiKeyValue.trim().length === 0 || accountInvalid}
       >
-        {saving
-          ? t('common.saving', 'Saving…')
-          : t('settings.providers.add.saveKey', 'Save key')}
+        {saving ? t('common.saving') : t('settings.providers.add.saveKey')}
       </Button>
     {:else if step === 'keyless'}
       <Button variant="primary" disabled={saving} onClick={addKeylessProvider}>
-        {saving
-          ? t('common.saving', 'Saving…')
-          : t('settings.providers.add.localSubmit', 'Add provider')}
+        {saving ? t('common.saving') : t('settings.providers.add.localSubmit')}
       </Button>
     {:else if step === 'oauth' && !oauthActive}
       <Button
@@ -726,7 +641,7 @@
         disabled={accountInvalid}
         onClick={startOAuthFlow}
       >
-        {t('settings.providers.connect', 'Connect')}
+        {t('settings.providers.connect')}
       </Button>
     {/if}
   {/snippet}

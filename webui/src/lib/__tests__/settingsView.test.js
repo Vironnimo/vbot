@@ -54,9 +54,8 @@ import {
 } from '../settingsView.js';
 
 // Echoes the i18n key and its parameters: the key and parameters are the
-// contract, not the English fallback wording.
-const t = (key, _fallback, params) =>
-  params ? `${key} ${JSON.stringify(params)}` : key;
+// contract, not the English wording.
+const t = (key, params) => (params ? `${key} ${JSON.stringify(params)}` : key);
 
 function providerSettings(items) {
   return { providers: { items } };

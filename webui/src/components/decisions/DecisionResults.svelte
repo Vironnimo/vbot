@@ -7,7 +7,7 @@
 </script>
 
 {#if record}
-  <section class="jev-result" aria-label={t('jev.result', 'Evaluation result')}>
+  <section class="jev-result" aria-label={t('jev.result')}>
     <div class="jev-row">
       <strong>{record.status}</strong><span class="jev-help"
         >{formatDateTimeInApplicationZone(record.created_at, undefined, {
@@ -17,15 +17,12 @@
       >
     </div>
     {#if record.status === 'running'}
-      <p role="status">{t('jev.evaluating', 'Evaluating the saved input…')}</p>
+      <p role="status">{t('jev.evaluating')}</p>
     {:else if record.error}
       <p role="alert">{record.error.message}</p>
     {:else if ['cancelled', 'interrupted'].includes(record.status) && record.snapshot.mode !== 'control'}
       <p>
-        {t(
-          'jev.interruptedHelp',
-          'No completed result was retained. The Provider may already have processed and charged this request.',
-        )}
+        {t('jev.interruptedHelp')}
       </p>
     {/if}
     {#if record.snapshot.mode !== 'control'}
@@ -33,8 +30,8 @@
     {/if}
     {#if record.result?.mode === 'control'}
       <p>
-        {t('jev.stepsCompleted', 'Completed steps')}: {record.result
-          .steps_completed} · {record.result.phase}
+        {t('jev.stepsCompleted')}: {record.result.steps_completed} · {record
+          .result.phase}
       </p>
       {#each [...record.result.steps].reverse() as step (step.number)}
         <article class="jev-answer">
@@ -45,44 +42,33 @@
           </div>
           <p class="jev-help">
             {step.status === 'executing' && record.status !== 'running'
-              ? t('jev.actionUnconfirmed', 'Action outcome unconfirmed')
+              ? t('jev.actionUnconfirmed')
               : step.status}
           </p>
-          <StatePreview
-            state={step.state}
-            label={t('jev.observedState', 'Observed state')}
-          />
+          <StatePreview state={step.state} label={t('jev.observedState')} />
           <details>
-            <summary
-              >{t(
-                'jev.stepDetails',
-                'State, decision and command output',
-              )}</summary
-            >
+            <summary>{t('jev.stepDetails')}</summary>
             <pre>{JSON.stringify(step, null, 2)}</pre>
           </details>
         </article>
       {/each}
       <p class="jev-help">
-        {t(
-          'jev.retainedSteps',
-          'The most recent steps are retained. An interrupted action may already have taken effect; starting again always reads fresh state.',
-        )}
+        {t('jev.retainedSteps')}
       </p>
     {:else if record.result}
       <div class="jev-metrics">
         <span>{record.result.duration_ms} ms</span>
         <span
           >{record.result.usage.input_tokens}
-          {t('jev.inputTokens', 'input tokens')}</span
+          {t('jev.inputTokens')}</span
         >
         <span
           >{record.result.usage.output_tokens}
-          {t('jev.outputTokens', 'output tokens')}</span
+          {t('jev.outputTokens')}</span
         >
         <span
           >{record.result.usage.cost === undefined
-            ? t('jev.costUnknown', 'Cost unavailable')
+            ? t('jev.costUnknown')
             : `$${record.result.usage.cost.toFixed(7)}`}</span
         >
       </div>
@@ -92,7 +78,7 @@
         <article class="jev-answer">
           <div class="jev-row">
             <strong
-              >{t('jev.questionNumber', 'Question {number}', {
+              >{t('jev.questionNumber', {
                 number: index + 1,
               })}</strong
             ><span class="jev-answer-value"
@@ -109,7 +95,7 @@
               min="0"
               max="1"
               value={answer.noul}
-              aria-label={t('jev.yesProbability', 'Probability of yes')}
+              aria-label={t('jev.yesProbability')}
             ></meter>
           {:else if answer.probabilities}
             {#each Object.entries(answer.probabilities) as [key, value] (key)}
@@ -124,26 +110,20 @@
             {/each}
           {:else}
             <p class="jev-help">
-              {t(
-                'jev.noDistribution',
-                'The Provider did not supply a probability distribution.',
-              )}
+              {t('jev.noDistribution')}
             </p>
           {/if}
           {#if answer.confidence !== undefined}<p class="jev-help">
-              {t('jev.confidence', 'Confidence')}: {percent(answer.confidence)}
+              {t('jev.confidence')}: {percent(answer.confidence)}
             </p>{/if}
         </article>
       {/each}
       <p class="jev-help">
-        {t(
-          'jev.confidenceHelp',
-          'Confidence describes how concentrated the answer distribution is. It is not a guarantee that the decision is correct.',
-        )}
+        {t('jev.confidenceHelp')}
       </p>
     {/if}
     <details>
-      <summary>{t('jev.exactInput', 'Exact input and model')}</summary>
+      <summary>{t('jev.exactInput')}</summary>
       <pre>{JSON.stringify(record.snapshot, null, 2)}</pre>
     </details>
   </section>

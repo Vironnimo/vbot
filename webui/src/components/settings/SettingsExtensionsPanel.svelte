@@ -198,7 +198,7 @@
       formFieldErrors = {};
       secretDrafts = {};
     } catch (error) {
-      loadError = `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`;
+      loadError = `${t('settings.loadError')} ${error.message}`;
     } finally {
       loading = false;
     }
@@ -215,14 +215,12 @@
     try {
       await reloadExtensionsRequest();
       onToast({
-        title: t('settings.extensions.reloadSuccess', 'Extensions reloaded.'),
+        title: t('settings.extensions.reloadSuccess'),
         variant: 'success',
       });
       await loadExtensions();
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
     } finally {
       reloading = false;
     }
@@ -273,7 +271,7 @@
         return;
       }
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -335,18 +333,13 @@
       extensions = nextExtensions;
       if (reason === 'manual')
         onToast({
-          title: t(
-            'settings.extensions.settingsSaveSuccess',
-            'Extension settings saved.',
-          ),
+          title: t('settings.extensions.settingsSaveSuccess'),
           variant: 'success',
         });
 
       return true;
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
       return false;
     } finally {
       savingConfigName = '';
@@ -370,15 +363,13 @@
       onToast({
         title:
           value === ''
-            ? t('settings.extensions.secretCleared', 'Secret cleared.')
-            : t('settings.extensions.secretSaved', 'Secret saved.'),
+            ? t('settings.extensions.secretCleared')
+            : t('settings.extensions.secretSaved'),
         variant: 'success',
       });
       await loadExtensions();
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
     } finally {
       savingSecret = '';
     }
@@ -386,16 +377,16 @@
 
   function statusLabel(status) {
     if (status === 'loaded') {
-      return t('settings.extensions.statusLoaded', 'Loaded');
+      return t('settings.extensions.statusLoaded');
     }
     if (status === 'failed') {
-      return t('settings.extensions.statusFailed', 'Failed');
+      return t('settings.extensions.statusFailed');
     }
     if (status === 'disabled') {
-      return t('settings.extensions.statusDisabled', 'Disabled');
+      return t('settings.extensions.statusDisabled');
     }
     if (status === 'overridden') {
-      return t('settings.extensions.statusOverridden', 'Overridden');
+      return t('settings.extensions.statusOverridden');
     }
     return status;
   }
@@ -417,15 +408,13 @@
       await updateSettings(payload);
       onToast({
         title: extension.disabled
-          ? t('settings.extensions.enableSuccess', 'Extension enabled.')
-          : t('settings.extensions.disableSuccess', 'Extension disabled.'),
+          ? t('settings.extensions.enableSuccess')
+          : t('settings.extensions.disableSuccess'),
         variant: 'success',
       });
       await loadExtensions();
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
     } finally {
       actionName = '';
     }
@@ -435,44 +424,35 @@
 <div class="s-group-toolbar s-list-toolbar">
   {#if !loading && !loadError}
     <span class="s-group-toolbar__meta">
-      {t('settings.extensions.count', '{count} discovered', {
+      {t('settings.extensions.count', {
         count: extensions.length,
       })}
     </span>
   {/if}
   <div class="s-group-toolbar__actions s-list-toolbar__end">
     <Button variant="tertiary" disabled={panelBusy} onClick={reloadExtensions}>
-      {t('settings.extensions.reload', 'Reload extensions')}
+      {t('settings.extensions.reload')}
     </Button>
     <InfoHint
-      ariaLabel={t(
-        'settings.extensions.reloadInfoAria',
-        'About reloading extensions',
-      )}
-      text={t(
-        'settings.extensions.reloadHelp',
-        'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
-      )}
+      ariaLabel={t('settings.extensions.reloadInfoAria')}
+      text={t('settings.extensions.reloadHelp')}
     />
   </div>
 </div>
 
 {#if loading}
   <Banner variant="neutral">
-    {t('common.loading', 'Loading…')}
+    {t('common.loading')}
   </Banner>
 {:else if loadError}
   <Banner variant="error" role="alert">
     <span>{loadError}</span>
     <Button variant="secondary" disabled={panelBusy} onClick={loadExtensions}>
-      {t('common.retry', 'Retry')}
+      {t('common.retry')}
     </Button>
   </Banner>
 {:else if extensions.length === 0}
-  <EmptyState
-    density="compact"
-    description={t('settings.extensions.empty', 'No extensions discovered.')}
-  />
+  <EmptyState density="compact" description={t('settings.extensions.empty')} />
 {:else}
   <div class="s-group s-ext-list">
     {#each extensions as extension (extension.name)}
@@ -507,16 +487,14 @@
             {/if}
             {#if extension.error}
               <div class="s-row-desc s-ext-error-text">
-                {t('settings.extensions.error', 'Error')}: {extension.error}
+                {t('settings.extensions.error')}: {extension.error}
               </div>
             {/if}
             {#if isOverridden && extension.overriddenBy}
               <div class="s-row-desc s-ext-overridden-text">
-                {t(
-                  'settings.extensions.overriddenBy',
-                  'Overridden by your copy at {path}',
-                  { path: extension.overriddenBy },
-                )}
+                {t('settings.extensions.overriddenBy', {
+                  path: extension.overriddenBy,
+                })}
               </div>
             {/if}
             {#if !isOverridden && waiting}
@@ -545,7 +523,7 @@
             {/if}
             {#each extension.capabilityErrors as capabilityError (capabilityError)}
               <div class="s-row-desc s-ext-warning">
-                {t('settings.extensions.warning', 'Warning')}: {capabilityError}
+                {t('settings.extensions.warning')}: {capabilityError}
               </div>
             {/each}
           </div>
@@ -556,34 +534,26 @@
                 variant="secondary"
                 disabled={rowBusy}
                 ariaLabel={extension.disabled
-                  ? t(
-                      'settings.extensions.enableAria',
-                      'Enable extension {name}',
-                      {
-                        name: extension.name,
-                      },
-                    )
-                  : t(
-                      'settings.extensions.disableAria',
-                      'Disable extension {name}',
-                      { name: extension.name },
-                    )}
+                  ? t('settings.extensions.enableAria', {
+                      name: extension.name,
+                    })
+                  : t('settings.extensions.disableAria', {
+                      name: extension.name,
+                    })}
                 onClick={() => toggleExtension(extension)}
               >
                 {extension.disabled
-                  ? t('settings.extensions.enable', 'Enable')
-                  : t('settings.extensions.disable', 'Disable')}
+                  ? t('settings.extensions.enable')
+                  : t('settings.extensions.disable')}
               </Button>
               {#if hasSettingsSchema(extension)}
                 <Button
                   variant="tertiary"
                   icon
                   class="s-disclosure-btn"
-                  ariaLabel={t(
-                    'settings.extensions.configToggleAria',
-                    'Configuration for extension {name}',
-                    { name: extension.name },
-                  )}
+                  ariaLabel={t('settings.extensions.configToggleAria', {
+                    name: extension.name,
+                  })}
                   aria-expanded={configExpanded}
                   onClick={() => toggleConfigDetails(extension)}
                 >
@@ -616,10 +586,7 @@
                   label={field.label}
                   help={field.description ?? ''}
                   error={formFieldErrors[extension.name]?.[field.key]
-                    ? t(
-                        'settings.extensions.numberInvalid',
-                        'Enter a valid number.',
-                      )
+                    ? t('settings.extensions.numberInvalid')
                     : ''}
                 >
                   {#snippet children(formField)}
@@ -648,8 +615,8 @@
                       >
                         <StatusChip variant={field.set ? 'success' : 'warn'}>
                           {field.set
-                            ? t('settings.extensions.secretSet', 'Set')
-                            : t('settings.extensions.secretUnset', 'Not set')}
+                            ? t('settings.extensions.secretSet')
+                            : t('settings.extensions.secretUnset')}
                         </StatusChip>
                         <TextField
                           id={formField.controlId}
@@ -661,13 +628,11 @@
                           aria-describedby={formField.describedBy}
                           placeholder={t(
                             'settings.extensions.secretPlaceholder',
-                            'Enter a new value',
                           )}
-                          ariaLabel={t(
-                            'settings.extensions.secretAria',
-                            'Secret {label} for extension {name}',
-                            { label: field.label, name: extension.name },
-                          )}
+                          ariaLabel={t('settings.extensions.secretAria', {
+                            label: field.label,
+                            name: extension.name,
+                          })}
                           onInput={(next) =>
                             setSecretDraft(extension.name, field.key, next)}
                         />
@@ -681,15 +646,15 @@
                               )}
                           >
                             {secretSaving
-                              ? t('common.saving', 'Saving…')
-                              : t('settings.extensions.secretSave', 'Save')}
+                              ? t('common.saving')
+                              : t('settings.extensions.secretSave')}
                           </Button>
                           <Button
                             variant="secondary"
                             disabled={rowBusy || !field.set}
                             onClick={() => saveSecret(extension, field, '')}
                           >
-                            {t('settings.extensions.secretClear', 'Clear')}
+                            {t('settings.extensions.secretClear')}
                           </Button>
                         </div>
                       </form>
@@ -705,11 +670,10 @@
                         field.default === undefined
                           ? ''
                           : String(field.default)}
-                        ariaLabel={t(
-                          'settings.extensions.fieldAria',
-                          '{label} for extension {name}',
-                          { label: field.label, name: extension.name },
-                        )}
+                        ariaLabel={t('settings.extensions.fieldAria', {
+                          label: field.label,
+                          name: extension.name,
+                        })}
                         onInput={(next) =>
                           setFormValue(extension.name, field.key, next)}
                       />
@@ -724,8 +688,8 @@
                   onClick={() => handleManualSchemaConfigSave(extension)}
                 >
                   {savingConfigName === extension.name
-                    ? t('common.saving', 'Saving…')
-                    : t('settings.extensions.saveSettings', 'Save settings')}
+                    ? t('common.saving')
+                    : t('settings.extensions.saveSettings')}
                 </Button>
               </div>
             </div>

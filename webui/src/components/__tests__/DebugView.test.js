@@ -157,13 +157,13 @@ describe('DebugView', () => {
         .getElementById('debug-trace-provider-filter')
         .getAttribute('aria-label'),
     ).toBe('Provider');
-    const allStatuses = t('debug.allStatuses', 'All statuses');
-    const statusOk = t('debug.statusOk', 'HTTP 2xx / WS 101');
+    const allStatuses = t('debug.allStatuses');
+    const statusOk = t('debug.statusOk');
     expect(dropdownOptionLabels('debug-trace-status-filter')).toEqual([
       allStatuses,
       statusOk,
-      t('debug.statusErrors', 'HTTP 4xx / 5xx'),
-      t('debug.statusOther', 'Other / no status'),
+      t('debug.statusErrors'),
+      t('debug.statusOther'),
     ]);
     chooseDropdownOption('debug-trace-status-filter', statusOk);
     expect(dropdownTriggerLabel('debug-trace-status-filter')).toBe(statusOk);
@@ -173,7 +173,7 @@ describe('DebugView', () => {
     expect(document.querySelectorAll('.debug-trace')).toHaveLength(2);
     expect(dropdownTriggerLabel('debug-trace-status-filter')).toBe(allStatuses);
     expect(dropdownOptionLabels('debug-trace-provider-filter')).toEqual([
-      t('debug.allProviders', 'All Providers'),
+      t('debug.allProviders'),
       'anthropic',
       'openai',
     ]);
@@ -403,9 +403,9 @@ describe('DebugView', () => {
       document.querySelectorAll('.debug-view__detail-tab-list .tab-list__tab'),
     ).map((tab) => tab.textContent?.trim() ?? '');
     expect(tabLabels).toEqual([
-      t('debug.request', 'Request'),
-      t('debug.response', 'Response'),
-      t('debug.metadata', 'Metadata'),
+      t('debug.request'),
+      t('debug.response'),
+      t('debug.metadata'),
     ]);
     expect(tabLabels).not.toContain('Stream Events');
 
@@ -565,7 +565,7 @@ describe('DebugView', () => {
       document.querySelector('.debug-view .empty-state'),
     );
     const input = document.querySelector('input[type="number"]');
-    const save = storageButton(t('common.save', 'Save'));
+    const save = storageButton(t('common.save'));
     input.value = '0';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
@@ -617,7 +617,7 @@ describe('DebugView', () => {
     input.value = '75';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    storageButton(t('common.save', 'Save')).click();
+    storageButton(t('common.save')).click();
     await waitForCondition(() =>
       document.querySelector('.debug-utilities').textContent.includes('/ 75'),
     );
@@ -670,7 +670,7 @@ describe('DebugView', () => {
     expect(providerTrigger.getAttribute('aria-label')).toBe('Provider');
     expect(connectionTrigger.getAttribute('aria-label')).toBe('Connection');
     expect(dropdownTriggerLabel('debug-probe-provider')).toBe(
-      t('debug.modelProbe.selectProvider', 'Select a provider'),
+      t('debug.modelProbe.selectProvider'),
     );
     expect(connectionTrigger.disabled).toBe(true);
 
@@ -678,7 +678,7 @@ describe('DebugView', () => {
     expect(dropdownTriggerLabel('debug-probe-provider')).toBe('OpenAI');
     expect(connectionTrigger.disabled).toBe(false);
     expect(dropdownTriggerLabel('debug-probe-connection')).toBe(
-      t('debug.modelProbe.selectConnection', 'Select a connection'),
+      t('debug.modelProbe.selectConnection'),
     );
     const probeButton = document.querySelector('.debug-view__probe-btn');
     expect(probeButton.disabled).toBe(true);
@@ -703,7 +703,7 @@ describe('DebugView', () => {
       document
         .querySelector('.debug-view__probe-model-count')
         .textContent.trim(),
-    ).toBe(t('debug.modelProbe.modelCount', '{count} models', { count: 1 }));
+    ).toBe(t('debug.modelProbe.modelCount', { count: 1 }));
 
     // Any other response stays exactly as received.
     probeButton.click();
@@ -864,9 +864,9 @@ function storageButton(label) {
 }
 
 function clearAllTraces() {
-  storageButton(t('debug.clearAll', 'Clear all traces')).click();
+  storageButton(t('debug.clearAll')).click();
   flushSync();
-  storageButton(t('common.confirm', 'Confirm')).click();
+  storageButton(t('common.confirm')).click();
 }
 
 function getSelectedTraceId() {

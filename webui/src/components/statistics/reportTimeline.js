@@ -20,7 +20,7 @@ export function activityPeriodLabel(
     long,
   });
   return granularity === 'week' && long
-    ? t('statistics.overview.weekOf', 'Week of {date}', { date: formatted })
+    ? t('statistics.overview.weekOf', { date: formatted })
     : formatted;
 }
 

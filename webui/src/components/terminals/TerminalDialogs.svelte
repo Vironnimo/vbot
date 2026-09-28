@@ -73,8 +73,8 @@
 
   const groupOptionAutomatic = {
     value: '',
-    label: t('terminals.groupAutomatic', 'Automatic'),
-    secondaryLabel: t('terminals.kind.manual', 'Manual'),
+    label: t('terminals.groupAutomatic'),
+    secondaryLabel: t('terminals.kind.manual'),
   };
 
   export function openStartDialog() {
@@ -152,11 +152,8 @@
     startDialogOpen = false;
     await onStarted(started.terminal_id);
     onToast({
-      title: t('terminals.startedTitle', 'Terminal started'),
-      message: t(
-        'terminals.startedMessage',
-        'The manual Terminal Session is live and ready for input.',
-      ),
+      title: t('terminals.startedTitle'),
+      message: t('terminals.startedMessage'),
       variant: 'success',
     });
   }
@@ -192,10 +189,7 @@
     event.preventDefault();
     const name = groupDialogName.trim();
     if (!name) {
-      viewState.actionError = t(
-        'terminals.groupNameRequired',
-        'Enter a group name.',
-      );
+      viewState.actionError = t('terminals.groupNameRequired');
       return;
     }
     if (groupDialogMode === 'create') {
@@ -205,11 +199,8 @@
       }
       groupDialogOpen = false;
       onToast({
-        title: t('terminals.groupCreatedTitle', 'Group created'),
-        message: t(
-          'terminals.groupCreatedMessage',
-          'The group is ready and appears in the terminal list.',
-        ),
+        title: t('terminals.groupCreatedTitle'),
+        message: t('terminals.groupCreatedMessage'),
         variant: 'success',
       });
     } else {
@@ -219,11 +210,8 @@
       }
       groupDialogOpen = false;
       onToast({
-        title: t('terminals.groupRenamedTitle', 'Group renamed'),
-        message: t(
-          'terminals.groupRenamedMessage',
-          'The group name was updated.',
-        ),
+        title: t('terminals.groupRenamedTitle'),
+        message: t('terminals.groupRenamedMessage'),
         variant: 'success',
       });
     }
@@ -260,11 +248,8 @@
     }
     deleteGroupDialogOpen = false;
     onToast({
-      title: t('terminals.deleteGroupTitle', 'Delete group'),
-      message: t(
-        'terminals.deleteGroupMessage',
-        'The group was deleted and its terminals were stopped.',
-      ),
+      title: t('terminals.deleteGroupTitle'),
+      message: t('terminals.deleteGroupMessage'),
       variant: 'success',
     });
   }
@@ -272,7 +257,7 @@
 
 {#if startDialogOpen}
   <Modal
-    title={t('terminals.startTitle', 'New terminal')}
+    title={t('terminals.startTitle')}
     labelledById="terminal-start-modal-title"
     class="terminals-view__start-modal"
     closeDisabled={viewState.startingTerminal}
@@ -294,10 +279,10 @@
           {#if viewState.launchHistory.length > 0}
             <FormField controlId="terminal-start-history" full>
               {#snippet labelContent()}
-                <span>{t('terminals.historyLabel', 'Recent setup')}</span>
+                <span>{t('terminals.historyLabel')}</span>
                 <InfoHint
                   text={t('terminals.historyHelp')}
-                  ariaLabel={t('terminals.historyLabel', 'Recent setup')}
+                  ariaLabel={t('terminals.historyLabel')}
                 />
               {/snippet}
 
@@ -306,7 +291,7 @@
                   id={field.controlId}
                   value={selectedLaunchHistoryId}
                   options={launchHistoryOptions}
-                  ariaLabel={t('terminals.historyLabel', 'Recent setup')}
+                  ariaLabel={t('terminals.historyLabel')}
                   ariaDescribedby={field.describedBy}
                   disabled={viewState.startingTerminal}
                   triggerClass="terminals-view__history-dropdown"
@@ -323,10 +308,10 @@
             error={startCommandError}
           >
             {#snippet labelContent()}
-              <span>{t('terminals.commandLabel', 'Command line')}</span>
+              <span>{t('terminals.commandLabel')}</span>
               <InfoHint
                 text={t('terminals.commandHelp')}
-                ariaLabel={t('terminals.commandLabel', 'Command line')}
+                ariaLabel={t('terminals.commandLabel')}
               />
             {/snippet}
 
@@ -335,12 +320,12 @@
                 id={field.controlId}
                 variant="modal"
                 aria-describedby={field.describedBy}
-                ariaLabel={t('terminals.commandLabel', 'Command line')}
+                ariaLabel={t('terminals.commandLabel')}
                 code
                 value={startCommand}
                 invalid={field.invalid}
                 disabled={viewState.startingTerminal}
-                placeholder={t('terminals.commandPlaceholder', 'Default shell')}
+                placeholder={t('terminals.commandPlaceholder')}
                 onInput={(next) => {
                   startCommand = next;
                   markLaunchHistoryEdited();
@@ -351,10 +336,10 @@
 
           <FormField controlId="terminal-start-workdir" full>
             {#snippet labelContent()}
-              <span>{t('terminals.workdirLabel', 'Working directory')}</span>
+              <span>{t('terminals.workdirLabel')}</span>
               <InfoHint
                 text={t('terminals.workdirHelp')}
-                ariaLabel={t('terminals.workdirLabel', 'Working directory')}
+                ariaLabel={t('terminals.workdirLabel')}
               />
             {/snippet}
 
@@ -363,14 +348,11 @@
                 id={field.controlId}
                 variant="modal"
                 aria-describedby={field.describedBy}
-                ariaLabel={t('terminals.workdirLabel', 'Working directory')}
+                ariaLabel={t('terminals.workdirLabel')}
                 code
                 value={startWorkdir}
                 disabled={viewState.startingTerminal}
-                placeholder={t(
-                  'terminals.workdirPlaceholder',
-                  'User home directory',
-                )}
+                placeholder={t('terminals.workdirPlaceholder')}
                 onInput={(next) => {
                   startWorkdir = next;
                   markLaunchHistoryEdited();
@@ -381,10 +363,10 @@
 
           <FormField controlId="terminal-start-name">
             {#snippet labelContent()}
-              <span>{t('terminals.nameLabel', 'Name')}</span>
+              <span>{t('terminals.nameLabel')}</span>
               <InfoHint
                 text={t('terminals.nameHelp')}
-                ariaLabel={t('terminals.nameLabel', 'Name')}
+                ariaLabel={t('terminals.nameLabel')}
               />
             {/snippet}
 
@@ -393,10 +375,10 @@
                 id={field.controlId}
                 variant="modal"
                 aria-describedby={field.describedBy}
-                ariaLabel={t('terminals.nameLabel', 'Name')}
+                ariaLabel={t('terminals.nameLabel')}
                 value={startName}
                 disabled={viewState.startingTerminal}
-                placeholder={t('terminals.namePlaceholder', 'Unnamed')}
+                placeholder={t('terminals.namePlaceholder')}
                 onInput={(next) => {
                   startName = next;
                 }}
@@ -406,10 +388,10 @@
 
           <FormField controlId="terminal-start-group">
             {#snippet labelContent()}
-              <span>{t('terminals.startGroupLabel', 'Group')}</span>
+              <span>{t('terminals.startGroupLabel')}</span>
               <InfoHint
                 text={t('terminals.startGroupHelp')}
-                ariaLabel={t('terminals.startGroupLabel', 'Group')}
+                ariaLabel={t('terminals.startGroupLabel')}
               />
             {/snippet}
 
@@ -418,7 +400,7 @@
                 id={field.controlId}
                 value={startGroupId}
                 options={[groupOptionAutomatic, ...groupOptions]}
-                ariaLabel={t('terminals.startGroupLabel', 'Group')}
+                ariaLabel={t('terminals.startGroupLabel')}
                 ariaDescribedby={field.describedBy}
                 disabled={viewState.startingTerminal}
                 triggerClass="terminals-view__group-dropdown"
@@ -438,7 +420,7 @@
         disabled={viewState.startingTerminal}
         onClick={closeStartDialog}
       >
-        {t('common.cancel', 'Cancel')}
+        {t('common.cancel')}
       </Button>
       <Button
         type="submit"
@@ -446,7 +428,7 @@
         variant="primary"
         loading={viewState.startingTerminal}
       >
-        {t('terminals.start', 'Start terminal')}
+        {t('terminals.start')}
       </Button>
     {/snippet}
   </Modal>
@@ -455,8 +437,8 @@
 {#if groupDialogOpen}
   <Modal
     title={groupDialogMode === 'create'
-      ? t('terminals.createGroupTitle', 'New group')
-      : t('terminals.renameGroupTitle', 'Rename group')}
+      ? t('terminals.createGroupTitle')
+      : t('terminals.renameGroupTitle')}
     labelledById="terminal-group-modal-title"
     class="terminals-view__group-modal"
     closeDisabled={viewState.groupActionPending}
@@ -472,11 +454,8 @@
           {/if}
           <FormField
             controlId="terminal-group-name"
-            label={t('terminals.groupNameLabel', 'Group name')}
-            help={t(
-              'terminals.groupNameHelp',
-              'Shown in the sidebar. Terminals you start here join this group.',
-            )}
+            label={t('terminals.groupNameLabel')}
+            help={t('terminals.groupNameHelp')}
           >
             {#snippet children(field)}
               <TextField
@@ -485,7 +464,7 @@
                 aria-describedby={field.describedBy}
                 value={groupDialogName}
                 disabled={viewState.groupActionPending}
-                placeholder={t('terminals.groupNamePlaceholder', 'e.g. Work')}
+                placeholder={t('terminals.groupNamePlaceholder')}
                 onInput={(next) => {
                   groupDialogName = next;
                   viewState.actionError = '';
@@ -502,7 +481,7 @@
         disabled={viewState.groupActionPending}
         onClick={closeGroupDialog}
       >
-        {t('common.cancel', 'Cancel')}
+        {t('common.cancel')}
       </Button>
       <Button
         type="submit"
@@ -511,8 +490,8 @@
         loading={viewState.groupActionPending}
       >
         {groupDialogMode === 'create'
-          ? t('terminals.createGroup', 'Create group')
-          : t('terminals.renameGroup', 'Rename')}
+          ? t('terminals.createGroup')
+          : t('terminals.renameGroup')}
       </Button>
     {/snippet}
   </Modal>
@@ -523,7 +502,7 @@
     (group) => group.group_id === deleteGroupTargetId,
   )}
   <Modal
-    title={t('terminals.deleteGroupTitle', 'Delete group')}
+    title={t('terminals.deleteGroupTitle')}
     labelledById="terminal-delete-group-title"
     closeDisabled={viewState.groupActionPending}
     onClose={closeDeleteGroupDialog}
@@ -536,20 +515,13 @@
           </Banner>
         {/if}
         <p class="terminals-view__delete-intro">
-          {t(
-            'terminals.deleteGroupWarning',
-            'Deleting this group stops every running terminal in it. Finished terminals remain available until they expire.',
-          )}
+          {t('terminals.deleteGroupWarning')}
         </p>
         {#if deleteGroup && deleteGroup.terminal_count > 0}
           <Banner variant="warn">
-            {t(
-              'terminals.deleteGroupCount',
-              '{count} terminals are in this group.',
-              {
-                count: deleteGroup.terminal_count,
-              },
-            )}
+            {t('terminals.deleteGroupCount', {
+              count: deleteGroup.terminal_count,
+            })}
           </Banner>
         {/if}
       </div>
@@ -560,7 +532,7 @@
         disabled={viewState.groupActionPending}
         onClick={closeDeleteGroupDialog}
       >
-        {t('common.cancel', 'Cancel')}
+        {t('common.cancel')}
       </Button>
       <Button
         variant="danger"
@@ -568,10 +540,10 @@
         onClick={() => void confirmDeleteGroup()}
       >
         {deleteGroup?.terminal_count
-          ? t('terminals.deleteGroupConfirm', 'Delete {count} terminal(s)', {
+          ? t('terminals.deleteGroupConfirm', {
               count: deleteGroup.terminal_count,
             })
-          : t('terminals.deleteGroupEmptyConfirm', 'Delete group')}
+          : t('terminals.deleteGroupEmptyConfirm')}
       </Button>
     {/snippet}
   </Modal>

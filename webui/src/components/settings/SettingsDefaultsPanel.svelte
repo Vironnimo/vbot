@@ -82,7 +82,7 @@
   let allDefaultModelOptions = $derived(
     selectModelOptions(
       agentDefaults.model,
-      t('settings.defaults.noModelDefault', '— (no default)'),
+      t('settings.defaults.noModelDefault'),
     ),
   );
   let defaultModelOptions = $derived(
@@ -105,10 +105,7 @@
   // option catalog (a chain is short — max 5 — so no per-row filtering).
   const MAX_FALLBACK_MODEL_ROWS = 5;
   let allFallbackModelOptions = $derived(
-    selectModelOptions(
-      '',
-      t('settings.defaults.noFallbackModelDefault', '— (no default)'),
-    ),
+    selectModelOptions('', t('settings.defaults.noFallbackModelDefault')),
   );
   let fallbackModelRows = $derived(
     agentDefaults.fallback_models.map((binding) => ({
@@ -122,14 +119,11 @@
   let thinkingEffortOptions = $derived([
     {
       value: AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
-      label: t('settings.defaults.noThinkingEffort', '— (no default)'),
+      label: t('settings.defaults.noThinkingEffort'),
     },
     {
       value: '',
-      label: t(
-        'settings.defaults.providerThinkingEffortDefault',
-        '— (provider default)',
-      ),
+      label: t('settings.defaults.providerThinkingEffortDefault'),
     },
     ...AGENT_THINKING_EFFORT_OPTIONS.map((option) => ({
       value: option,
@@ -200,9 +194,7 @@
         applyModelCatalogs(catalogs);
       }
     } catch (error) {
-      onError(
-        `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
-      );
+      onError(`${t('settings.models.loadError')} ${error.message}`);
     }
   }
 
@@ -212,9 +204,7 @@
     try {
       catalogs = await modelCatalogLoader.load();
     } catch (error) {
-      onError(
-        `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
-      );
+      onError(`${t('settings.models.loadError')} ${error.message}`);
       return;
     }
     if (catalogs === null) {
@@ -321,7 +311,7 @@
 
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -343,10 +333,7 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildAgentDefaultsPayload(agentDefaults),
-      successTitle: t(
-        'settings.defaults.saveSuccess',
-        'Agent defaults updated.',
-      ),
+      successTitle: t('settings.defaults.saveSuccess'),
       getDraftSnapshot: () => agentDefaults,
       applyResult: (next) =>
         (agentDefaults = normalizeAgentDefaultsFormValues(next)),
@@ -358,13 +345,10 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.defaults.model', 'Model')}
+        {t('settings.defaults.model')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.defaults.modelDescription',
-          'Used when an agent model is empty.',
-        )}
+        {t('settings.defaults.modelDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--model">
@@ -372,13 +356,10 @@
         id="settings-defaults-model"
         value={defaultModelSelectValue}
         options={defaultModelOptions}
-        placeholder={t('settings.defaults.noModelDefault', '— (no default)')}
-        searchPlaceholder={t(
-          'agents.form.modelSearchPlaceholder',
-          'Filter models…',
-        )}
-        emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-        ariaLabel={t('settings.defaults.model', 'Model')}
+        placeholder={t('settings.defaults.noModelDefault')}
+        searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+        emptyLabel={t('agents.form.modelSearchEmpty')}
+        ariaLabel={t('settings.defaults.model')}
         triggerClass="settings-view__dropdown"
         panelClass="settings-view__model-panel"
         footerActionLabel={modelFilterFooter}
@@ -393,19 +374,11 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.defaults.thinkingEffort', 'Thinking effort')}
-        <InfoHint
-          text={t(
-            'agents.form.thinkingEffortHelp',
-            'How much internal reasoning the model may spend before answering. Leave at — for the default.',
-          )}
-        />
+        {t('settings.defaults.thinkingEffort')}
+        <InfoHint text={t('agents.form.thinkingEffortHelp')} />
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.defaults.thinkingEffortDescription',
-          'Used when an agent thinking effort is unset.',
-        )}
+        {t('settings.defaults.thinkingEffortDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--model">
@@ -413,7 +386,7 @@
         id="settings-defaults-thinking-effort"
         value={agentDefaults.thinking_effort}
         options={thinkingEffortOptions}
-        ariaLabel={t('settings.defaults.thinkingEffort', 'Thinking effort')}
+        ariaLabel={t('settings.defaults.thinkingEffort')}
         triggerClass="settings-view__dropdown"
         listClass="settings-view__thinking-list"
         onValueChange={(selectedValue) =>
@@ -425,19 +398,11 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.defaults.temperature', 'Temperature')}
-        <InfoHint
-          text={t(
-            'agents.form.temperatureHelp',
-            'Sampling randomness, typically 0–2. Leave empty to use the default.',
-          )}
-        />
+        {t('settings.defaults.temperature')}
+        <InfoHint text={t('agents.form.temperatureHelp')} />
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.defaults.temperatureDescription',
-          'Used when an agent temperature is unset.',
-        )}
+        {t('settings.defaults.temperatureDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
@@ -445,7 +410,7 @@
         id="settings-defaults-temperature"
         inputmode="decimal"
         value={agentDefaults.temperature}
-        ariaLabel={t('settings.defaults.temperature', 'Temperature')}
+        ariaLabel={t('settings.defaults.temperature')}
         onInput={(next) => handleAgentDefaultsChange('temperature', next)}
       />
     </div>
@@ -454,19 +419,11 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.defaults.fallbackModels', 'Fallback models')}
-        <InfoHint
-          text={t(
-            'agents.form.fallbackModelsHelp',
-            'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
-          )}
-        />
+        {t('settings.defaults.fallbackModels')}
+        <InfoHint text={t('agents.form.fallbackModelsHelp')} />
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.defaults.fallbackModelDescription',
-          'Used when an agent fallback chain is empty.',
-        )}
+        {t('settings.defaults.fallbackModelDescription')}
       </div>
     </div>
     <div class="s-row-control agent-defaults-fallbacks">
@@ -476,16 +433,10 @@
             id={`settings-defaults-fallback-model-${index}`}
             value={row.selectValue}
             options={allFallbackModelOptions}
-            placeholder={t(
-              'settings.defaults.noFallbackModelDefault',
-              '— (no default)',
-            )}
-            searchPlaceholder={t(
-              'agents.form.modelSearchPlaceholder',
-              'Filter models…',
-            )}
-            emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-            ariaLabel={`${t('settings.defaults.fallbackModels', 'Fallback models')} ${index + 1}`}
+            placeholder={t('settings.defaults.noFallbackModelDefault')}
+            searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+            emptyLabel={t('agents.form.modelSearchEmpty')}
+            ariaLabel={`${t('settings.defaults.fallbackModels')} ${index + 1}`}
             triggerClass="settings-view__dropdown"
             panelClass="settings-view__model-panel"
             onOpenChange={trackModelDropdownOpen}
@@ -495,10 +446,7 @@
           <button
             type="button"
             class="settings-view__fallback-remove"
-            aria-label={t(
-              'agents.form.removeFallbackModel',
-              'Remove fallback model',
-            )}
+            aria-label={t('agents.form.removeFallbackModel')}
             onclick={() => removeFallbackModelEntry(index)}
           >
             ×
@@ -511,7 +459,7 @@
           class="settings-view__fallback-add"
           onclick={addFallbackModelEntry}
         >
-          {t('agents.form.addFallbackModel', '+ Add fallback model')}
+          {t('agents.form.addFallbackModel')}
         </button>
       {/if}
     </div>

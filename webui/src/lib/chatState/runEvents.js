@@ -120,10 +120,7 @@ export function appendRunEvent(sessionState, event) {
     normalizedEvent.payload?.requested_by_user &&
     sessionState.currentRun?.runId === normalizedEvent.run_id
   ) {
-    sessionState.actionError = t(
-      'chat.compactionNotApplied',
-      'Compaction was not applied. The Run continues with its current context.',
-    );
+    sessionState.actionError = t('chat.compactionNotApplied');
   }
   if (normalizedEvent.type === 'model_step_usage') {
     applyModelStepUsage(sessionState, normalizedEvent.payload);

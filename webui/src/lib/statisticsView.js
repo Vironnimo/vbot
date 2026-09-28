@@ -79,13 +79,13 @@ const MODEL_CALL_STATUSES = new Set([
 export function modelCallKindLabel(kind, translate) {
   return MODEL_CALL_KINDS.has(kind)
     ? translate(`statistics.kind.${kind}`)
-    : translate('statistics.kind.other', 'Other Model request');
+    : translate('statistics.kind.other');
 }
 
 export function modelCallStatusLabel(status, translate) {
   return MODEL_CALL_STATUSES.has(status)
     ? translate(`statistics.requestStatus.${status}`)
-    : translate('statistics.requestStatus.unknown', 'Outcome unknown');
+    : translate('statistics.requestStatus.unknown');
 }
 
 function toFiniteNumber(value) {

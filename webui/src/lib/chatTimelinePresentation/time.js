@@ -21,12 +21,12 @@ export const formatTime = (timestamp) => {
 export const formatDate = (timestamp) => {
   const dateKey = dateKeyForTimestamp(timestamp);
   if (isTodayDateKey(dateKey)) {
-    return t('chat.today', 'Today');
+    return t('chat.today');
   }
 
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) {
-    return t('chat.today', 'Today');
+    return t('chat.today');
   }
   return formatDateTimeInApplicationZone(date, activeLocaleTag(), {
     day: 'numeric',
@@ -53,12 +53,12 @@ export function formatDurationMs(durationMs) {
   }
   const elapsedSeconds = durationMs / 1000;
   if (elapsedSeconds < 10) {
-    return t('chat.durationSeconds', '{seconds}s', {
+    return t('chat.durationSeconds', {
       seconds: elapsedSeconds.toFixed(1),
     });
   }
   if (elapsedSeconds < 60) {
-    return t('chat.durationSeconds', '{seconds}s', {
+    return t('chat.durationSeconds', {
       seconds: Math.round(elapsedSeconds),
     });
   }
@@ -67,12 +67,12 @@ export function formatDurationMs(durationMs) {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   if (hours > 0) {
-    return t('chat.durationHoursMinutes', '{hours}h {minutes}m', {
+    return t('chat.durationHoursMinutes', {
       hours,
       minutes,
     });
   }
-  return t('chat.durationMinutesSeconds', '{minutes}m {seconds}s', {
+  return t('chat.durationMinutesSeconds', {
     minutes,
     seconds,
   });

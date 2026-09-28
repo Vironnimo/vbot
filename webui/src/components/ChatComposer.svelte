@@ -146,7 +146,7 @@
       return '';
     }
     if (contextFillRatio > 0 && contextFillRatio < 0.01) {
-      return t('chat.contextBelowOnePercent', '<1%');
+      return t('chat.contextBelowOnePercent');
     }
     return new Intl.NumberFormat(activeLocaleTag(), {
       style: 'percent',
@@ -157,10 +157,10 @@
   // ("Compaction requested..."), otherwise a manual Compaction Run starts.
   let compactionLabel = $derived(
     compactionState === 'running'
-      ? t('chat.compactionRunning', 'Compacting…')
+      ? t('chat.compactionRunning')
       : compactionState === 'pending' || compactionSubmitting
-        ? t('chat.compactionPending', 'Compaction requested…')
-        : t('chat.compactNow', 'Compact now'),
+        ? t('chat.compactionPending')
+        : t('chat.compactNow'),
   );
   let compactionDisabled = $derived(
     disabled || compactionSubmitting || compactionState !== 'idle',
@@ -731,7 +731,7 @@
 <form
   class="input-area"
   class:drag-over={media.isDragOver}
-  aria-label={t('chat.composerLabel', 'Message')}
+  aria-label={t('chat.composerLabel')}
   ondragover={media.handleDragOver}
   ondragleave={media.handleDragLeave}
   ondrop={media.handleDrop}
@@ -751,7 +751,7 @@
   />
   {#if media.attachmentToastMessage}
     <div class="composer-toast" role="status" aria-live="polite">
-      <p class="composer-toast-title">{t('errors.appError', 'Error')}</p>
+      <p class="composer-toast-title">{t('errors.appError')}</p>
       <p class="composer-toast-message">{media.attachmentToastMessage}</p>
     </div>
   {/if}
@@ -816,7 +816,7 @@
   <div
     class="input-wrap"
     role="group"
-    aria-label={t('chat.composerArea', 'Message composer')}
+    aria-label={t('chat.composerArea')}
     use:focusInputFromWrapAction
   >
     <textarea
@@ -824,23 +824,20 @@
       bind:value={content}
       class="msg-input"
       {disabled}
-      aria-label={t('chat.composerLabel', 'Message')}
+      aria-label={t('chat.composerLabel')}
       oninput={handleInput}
       onkeydown={handleKeydown}
       onpaste={media.handlePaste}
       onclick={handleSelection}
       onkeyup={handleSelection}
-      placeholder={t(
-        'chat.composerPlaceholder',
-        'Ask this agent to do something… (/ for commands, $ for skills, @ for files)',
-      )}
+      placeholder={t('chat.composerPlaceholder')}
       rows="1"></textarea>
     {#if contextFillRatio !== null}
       <span class="context-ring context-ring--{contextLevel}">
         <button
           type="button"
           class="context-ring-trigger"
-          aria-label={t('chat.contextRingLabel', 'Context window usage')}
+          aria-label={t('chat.contextRingLabel')}
         >
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
             <circle
@@ -872,8 +869,7 @@
           use:floatingHoverCard={{ openOnPress: true }}
         >
           <div class="context-card__header">
-            <span class="context-card__title"
-              >{t('chat.contextCardTitle', 'Context')}</span
+            <span class="context-card__title">{t('chat.contextCardTitle')}</span
             >
             <span class="context-card__figures">
               {#if contextCard.summary}<span class="context-card__usage"
@@ -953,8 +949,8 @@
         variant="tertiary"
         icon
         {disabled}
-        ariaLabel={t('chat.attachment.addFile', 'Add file')}
-        tooltip={t('chat.attachment.addFile', 'Add file')}
+        ariaLabel={t('chat.attachment.addFile')}
+        tooltip={t('chat.attachment.addFile')}
         onClick={media.handleFilePickerClick}
       >
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -974,12 +970,8 @@
           icon
           class="composer-stop"
           disabled={cancelling}
-          ariaLabel={cancelling
-            ? t('cancel.cancelling', 'Cancelling run…')
-            : t('chat.cancelRun', 'Cancel run')}
-          tooltip={cancelling
-            ? t('cancel.cancelling', 'Cancelling run…')
-            : t('chat.cancelRun', 'Cancel run')}
+          ariaLabel={cancelling ? t('cancel.cancelling') : t('chat.cancelRun')}
+          tooltip={cancelling ? t('cancel.cancelling') : t('chat.cancelRun')}
           onClick={onCancelRun}
         >
           <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
@@ -1004,12 +996,8 @@
           media.hasUploadingAttachments ||
           media.voiceBusy ||
           (!content.trim() && media.pendingAttachments.length === 0)}
-        ariaLabel={isRunning
-          ? t('chat.queueMessage', 'Queue message')
-          : t('chat.sendMessage', 'Send message')}
-        tooltip={isRunning
-          ? t('chat.queueMessage', 'Queue message')
-          : t('chat.sendMessage', 'Send message')}
+        ariaLabel={isRunning ? t('chat.queueMessage') : t('chat.sendMessage')}
+        tooltip={isRunning ? t('chat.queueMessage') : t('chat.sendMessage')}
       >
         <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
           <path d="M12 7L2 2l2 5-2 5 10-5z" fill="currentColor" stroke="none" />
@@ -1018,10 +1006,7 @@
     </div>
   </div>
   {#if media.pendingAttachments.length > 0}
-    <div
-      class="attachment-tray"
-      aria-label={t('chat.attachment.preview', 'Preview attachment')}
-    >
+    <div class="attachment-tray" aria-label={t('chat.attachment.preview')}>
       {#each media.pendingAttachments as attachment, index (attachment.local_id)}
         <div
           class="attachment-item"
@@ -1033,7 +1018,7 @@
             <button
               type="button"
               class="attachment-thumb-trigger"
-              aria-label={t('chat.attachment.preview', 'Preview attachment')}
+              aria-label={t('chat.attachment.preview')}
             >
               <img
                 src={attachment.preview_url}
@@ -1069,19 +1054,19 @@
             >
             {#if attachment.uploading}
               <span class="attachment-status">
-                {t('chat.attachment.uploading', 'Uploading…')}
+                {t('chat.attachment.uploading')}
               </span>
             {:else if !media.hasImageMediaType(attachment.media_type)}
               <span class="attachment-status">
-                {t('chat.attachment.fileLabel', 'Attached file')}
+                {t('chat.attachment.fileLabel')}
               </span>
             {/if}
           </div>
           <button
             type="button"
             class="attachment-remove"
-            aria-label={t('chat.attachment.remove', 'Remove attachment')}
-            use:tooltip={t('chat.attachment.remove', 'Remove attachment')}
+            aria-label={t('chat.attachment.remove')}
+            use:tooltip={t('chat.attachment.remove')}
             onclick={() => media._removeAttachment(index)}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">

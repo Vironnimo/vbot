@@ -105,20 +105,18 @@ export function formatServerHost(server, translate) {
     return `${server.listen_host}:${server.listen_port}`;
   }
 
-  return translate('common.unknown', 'Unknown');
+  return translate('common.unknown');
 }
 
 export function getDataDirectoryValue(settings, translate) {
-  return (
-    settings?.general?.data_directory ?? translate('common.unknown', 'Unknown')
-  );
+  return settings?.general?.data_directory ?? translate('common.unknown');
 }
 
 export function getDefaultSkillDirectoryValue(settings, translate) {
   return (
     settings?.skills?.default_directory ??
     settings?.general?.default_skill_directory ??
-    translate('common.unknown', 'Unknown')
+    translate('common.unknown')
   );
 }
 

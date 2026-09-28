@@ -123,7 +123,7 @@ describe('SettingsExtensionsPanel', () => {
     const [card, brokenCard] = document.querySelectorAll('.s-ext-card');
     expect(card.textContent).toContain('guard_bash');
     expect(card.querySelector('.chip').textContent.trim()).toBe(
-      t('settings.extensions.statusLoaded', 'Loaded'),
+      t('settings.extensions.statusLoaded'),
     );
     expect(
       Array.from(
@@ -131,9 +131,9 @@ describe('SettingsExtensionsPanel', () => {
         (part) => part.textContent,
       ),
     ).toEqual([
-      `${t('settings.extensions.hooks', 'Hooks')}: tool_call(1)`,
-      `${t('settings.extensions.tools', 'Tools')}: word_count`,
-      `${t('settings.extensions.commands', 'Commands')}: /workflow`,
+      `${t('settings.extensions.hooks')}: tool_call(1)`,
+      `${t('settings.extensions.tools')}: word_count`,
+      `${t('settings.extensions.commands')}: /workflow`,
     ]);
     expect(brokenCard.textContent).toContain('import failed: boom');
     expect(buttonByText('Refresh')).toBeUndefined();
@@ -184,7 +184,7 @@ describe('SettingsExtensionsPanel', () => {
   it('reloads all extensions from one action with an explanatory hint, then re-lists', async () => {
     serveExtensions([guardBash()]);
     await mountPanel();
-    const reload = t('settings.extensions.reload', 'Reload extensions');
+    const reload = t('settings.extensions.reload');
     expect(
       [...document.querySelectorAll('button')].filter(
         (button) => button.textContent.trim() === reload,
@@ -197,10 +197,7 @@ describe('SettingsExtensionsPanel', () => {
     infoHint.click();
     flushSync();
     expect(document.body.textContent).toContain(
-      t(
-        'settings.extensions.reloadHelp',
-        'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
-      ),
+      t('settings.extensions.reloadHelp'),
     );
 
     const listCallsBefore = rpcMock.mock.calls.filter(
@@ -418,14 +415,12 @@ describe('SettingsExtensionsPanel', () => {
     ]);
     await mountPanel({ onToast: toastMock });
 
-    buttonByText(
-      t('settings.extensions.saveSettings', 'Save settings'),
-    ).click();
+    buttonByText(t('settings.extensions.saveSettings')).click();
     await flushAsync();
 
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       }),
     );

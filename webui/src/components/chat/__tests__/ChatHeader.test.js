@@ -35,12 +35,12 @@ const ACTIVITY = {
   epsilon: { status: 'running', unreadCount: 0, latestUnreadAt: 0 },
 };
 
-const running = (name) => t('chat.agentActivity.running', '', { name });
-const idle = (name) => t('chat.agentActivity.idle', '', { name });
+const running = (name) => t('chat.agentActivity.running', { name });
+const idle = (name) => t('chat.agentActivity.idle', { name });
 const unread = (name, count) =>
   count === 1
-    ? t('chat.agentActivity.unreadOne', '', { name })
-    : t('chat.agentActivity.unreadCount', '', { name, count });
+    ? t('chat.agentActivity.unreadOne', { name })
+    : t('chat.agentActivity.unreadCount', { name, count });
 
 describe('ChatHeader', () => {
   let mountedComponent;
@@ -123,7 +123,7 @@ describe('ChatHeader', () => {
     expect(trigger.textContent).toContain('Beta');
     expect(trigger.querySelector('.tab-indicator--running')).toBeTruthy();
     expect(trigger.getAttribute('aria-label')).toBe(
-      t('chat.agentPicker.label', '', { activity: running('Beta') }),
+      t('chat.agentPicker.label', { activity: running('Beta') }),
     );
 
     vi.useFakeTimers();
@@ -246,7 +246,7 @@ describe('ChatHeader', () => {
     expect(chipLabels()).toEqual([
       unread('Delta', 1),
       unread('Gamma', 2),
-      t('chat.agentChips.more', '', { count: 2 }),
+      t('chat.agentChips.more', { count: 2 }),
     ]);
     const more = document.querySelector('.agent-chip--more');
     expect(more.textContent.trim()).toBe('+2');

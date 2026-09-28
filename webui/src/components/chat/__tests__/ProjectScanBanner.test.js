@@ -49,7 +49,7 @@ describe('ProjectScanBanner', () => {
     [
       'with its finding count',
       { clean: false, findingCount: 3 },
-      t('chat.project.scanBannerCount', '', { count: 3 }),
+      t('chat.project.scanBannerCount', { count: 3 }),
     ],
     ['without a finding count', { clean: false }, t('chat.project.scanBanner')],
   ])(

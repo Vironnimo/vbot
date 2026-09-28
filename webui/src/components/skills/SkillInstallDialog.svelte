@@ -278,8 +278,8 @@
           <p>{selected?.description}</p>
           <p class="skills-field-help">
             {preview.files === 1
-              ? t('skills.install.summaryOne', '', { scope: scopeLabel })
-              : t('skills.install.summary', '', {
+              ? t('skills.install.summaryOne', { scope: scopeLabel })
+              : t('skills.install.summary', {
                   count: preview.files,
                   scope: scopeLabel,
                 })}
@@ -301,13 +301,11 @@
                 checked={replace}
                 onChange={(value) => (replace = value)}
                 disabled={Boolean(busy)}
-                ariaLabel={t('skills.install.replace', '', {
+                ariaLabel={t('skills.install.replace', {
                   name: preview.name,
                 })}
               />
-              <span
-                >{t('skills.install.replace', '', { name: preview.name })}</span
-              >
+              <span>{t('skills.install.replace', { name: preview.name })}</span>
             </div>
             <p class="skills-field-help">{t('skills.install.replaceHelp')}</p>
           {/if}
@@ -329,7 +327,7 @@
   {/snippet}
   {#snippet footer()}
     <Button variant="secondary" disabled={Boolean(busy)} onClick={onClose}
-      >{t('common.cancel', 'Cancel')}</Button
+      >{t('common.cancel')}</Button
     >
     {#if preview}
       <Button

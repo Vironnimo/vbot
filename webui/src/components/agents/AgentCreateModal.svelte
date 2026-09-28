@@ -93,21 +93,21 @@
   function inheritLabelForDefault(fieldName) {
     const value = defaultValueText(fieldName);
     if (value) {
-      return t('inherit.option', 'Inherited: {value} (global default)', {
+      return t('inherit.option', {
         value,
       });
     }
-    return t('inherit.optionNotConfigured', 'Inherit (not configured)');
+    return t('inherit.optionNotConfigured');
   }
 
   function thinkingEffortInheritLabel() {
     const value = defaultValueText('thinking_effort');
     if (value) {
-      return t('inherit.option', 'Inherited: {value} (global default)', {
+      return t('inherit.option', {
         value,
       });
     }
-    return t('inherit.optionProviderDefault', 'Inherit (provider default)');
+    return t('inherit.optionProviderDefault');
   }
 
   function defaultValueText(fieldName) {
@@ -150,10 +150,7 @@
     errorMessage = '';
 
     if (!result.isValid) {
-      errorMessage = t(
-        'errors.validation',
-        'Check the highlighted fields and try again.',
-      );
+      errorMessage = t('errors.validation');
       return;
     }
 
@@ -162,15 +159,13 @@
     try {
       const savedAgent = await createAgent(result.payload);
       onToast({
-        title: t('agents.created', 'Agent created.'),
+        title: t('agents.created'),
         variant: 'success',
       });
       await onCreated(savedAgent.id ?? result.payload.id);
     } catch (error) {
       errorMessage =
-        error?.message ||
-        t('agents.saveError') ||
-        t('errors.generic', 'Something went wrong. Try again.');
+        error?.message || t('agents.saveError') || t('errors.generic');
     } finally {
       isSaving = false;
     }
@@ -181,17 +176,14 @@
       return '';
     }
     if (formErrors[fieldName] === 'required') {
-      return t('agents.form.required', 'This field is required.');
+      return t('agents.form.required');
     }
-    return t(
-      'errors.validation',
-      'Check the highlighted fields and try again.',
-    );
+    return t('errors.validation');
   }
 </script>
 
 <Modal
-  title={t('agents.create', 'Create agent')}
+  title={t('agents.create')}
   labelledById="agent-create-modal-title"
   class="agents-view__create-modal"
   closeDisabled={isSaving}
@@ -202,12 +194,9 @@
       <div class="modal-body agents-view__create-modal-body">
         <FormField
           controlId="agent-create-id"
-          label={t('agents.form.id', 'Agent ID')}
+          label={t('agents.form.id')}
           required
-          help={t(
-            'agents.form.idHelp',
-            'Agent IDs are immutable after creation.',
-          )}
+          help={t('agents.form.idHelp')}
           error={formErrors.id ? fieldError('id') : ''}
         >
           {#snippet children(field)}
@@ -228,7 +217,7 @@
 
         <FormField
           controlId="agent-create-name"
-          label={t('agents.form.name', 'Name')}
+          label={t('agents.form.name')}
           error={formErrors.name ? fieldError('name') : ''}
         >
           {#snippet children(field)}
@@ -249,19 +238,16 @@
 
         <FormField
           controlId="agent-create-model"
-          label={t('agents.form.model', 'Model')}
+          label={t('agents.form.model')}
         >
           <SearchableDropdown
             id="agent-create-model"
             value={modelSelectValue}
             options={modelOptions}
             placeholder={modelInheritLabel}
-            searchPlaceholder={t(
-              'agents.form.modelSearchPlaceholder',
-              'Filter models…',
-            )}
-            emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-            ariaLabel={t('agents.form.model', 'Model')}
+            searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+            emptyLabel={t('agents.form.modelSearchEmpty')}
+            ariaLabel={t('agents.form.model')}
             disabled={isSaving}
             triggerClass="agents-view__dropdown"
             panelClass="agents-view__search-panel agents-view__modal-search-panel"
@@ -274,27 +260,19 @@
         <FormField
           controlId="agent-create-thinking-effort"
           help={effortDropdownDisabled
-            ? t(
-                'agents.form.thinkingEffortUnsupported',
-                'This model does not support reasoning.',
-              )
+            ? t('agents.form.thinkingEffortUnsupported')
             : ''}
         >
           {#snippet labelContent()}
-            {t('agents.form.thinkingEffort', 'Thinking effort')}
-            <InfoHint
-              text={t(
-                'agents.form.thinkingEffortHelp',
-                'How much internal reasoning the model may spend before answering. Leave at — for the default.',
-              )}
-            />
+            {t('agents.form.thinkingEffort')}
+            <InfoHint text={t('agents.form.thinkingEffortHelp')} />
           {/snippet}
           <Dropdown
             id="agent-create-thinking-effort"
             value={formValues.thinking_effort}
             options={thinkingEffortOptions}
             disabled={isSaving || effortDropdownDisabled}
-            ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
+            ariaLabel={t('agents.form.thinkingEffort')}
             triggerClass="agents-view__dropdown"
             listClass="agents-view__thinking-list agents-view__modal-thinking-list"
             onValueChange={(selectedValue) => {
@@ -308,13 +286,8 @@
           error={formErrors.temperature ? fieldError('temperature') : ''}
         >
           {#snippet labelContent()}
-            {t('agents.form.temperature', 'Temperature')}
-            <InfoHint
-              text={t(
-                'agents.form.temperatureHelp',
-                'Sampling randomness, typically 0–2. Leave empty to use the default.',
-              )}
-            />
+            {t('agents.form.temperature')}
+            <InfoHint text={t('agents.form.temperatureHelp')} />
           {/snippet}
           {#snippet children(field)}
             <TextField
@@ -342,12 +315,10 @@
 
       <div class="modal-footer">
         <Button variant="secondary" disabled={isSaving} onClick={close}>
-          {t('common.cancel', 'Cancel')}
+          {t('common.cancel')}
         </Button>
         <Button variant="primary" type="submit" disabled={isSaving}>
-          {isSaving
-            ? t('common.saving', 'Saving…')
-            : t('agents.form.submitCreate', 'Create agent')}
+          {isSaving ? t('common.saving') : t('agents.form.submitCreate')}
         </Button>
       </div>
     </form>

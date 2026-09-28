@@ -89,10 +89,7 @@ export function createProjectDialogs({
 
   async function submitAdd() {
     if (state.addForm.cwd.trim().length === 0) {
-      state.addError = translate(
-        'projects.add.missingCwd',
-        'Enter a repository path to add a project.',
-      );
+      state.addError = translate('projects.add.missingCwd');
       return;
     }
     state.addingProject = true;
@@ -116,7 +113,7 @@ export function createProjectDialogs({
         return;
       }
       const project = normalizeProject(result?.project);
-      state.statusMessage = translate('projects.add.success', 'Project added.');
+      state.statusMessage = translate('projects.add.success');
       state.isAddOpen = false;
       state.addForm = createProjectAddForm();
       state.addDetect = null;
@@ -126,7 +123,7 @@ export function createProjectDialogs({
       }
     } catch (error) {
       if (isActive()) {
-        state.addError = `${translate('projects.add.error', 'Project could not be added.')} ${errorText(error)}`;
+        state.addError = `${translate('projects.add.error')} ${errorText(error)}`;
       }
     } finally {
       if (isActive()) {
@@ -148,18 +145,12 @@ export function createProjectDialogs({
 
   function removeErrorText(error) {
     if (error?.code === PROJECT_BUSY_CODE) {
-      return translate(
-        'projects.remove.busy',
-        'This project has an active or queued run and cannot be removed right now.',
-      );
+      return translate('projects.remove.busy');
     }
     if (error?.code === PROJECT_IN_USE_CODE) {
-      return translate(
-        'projects.remove.inUse',
-        'A cron job points at one of this project’s agents, so it cannot be removed. Remove or retarget the cron job first.',
-      );
+      return translate('projects.remove.inUse');
     }
-    return `${translate('projects.remove.error', 'Project could not be removed.')} ${errorText(error)}`;
+    return `${translate('projects.remove.error')} ${errorText(error)}`;
   }
 
   async function confirmRemove() {
@@ -191,20 +182,15 @@ export function createProjectDialogs({
         ? result.affected_agent_ids.length
         : 0;
       const copyState = state.copyRootedAgentIdentityFiles
-        ? translate('projects.remove.filesCopied', 'were copied')
-        : translate('projects.remove.filesNotCopied', 'were not copied');
+        ? translate('projects.remove.filesCopied')
+        : translate('projects.remove.filesNotCopied');
       state.statusMessage =
         affectedCount === 1
-          ? translate(
-              'projects.remove.successOneAgent',
-              'Project removed. 1 Agent was reset; identity files {copyState}.',
-              { copyState },
-            )
-          : translate(
-              'projects.remove.successManyAgents',
-              'Project removed. {count} Agents were reset; identity files {copyState}.',
-              { count: affectedCount, copyState },
-            );
+          ? translate('projects.remove.successOneAgent', { copyState })
+          : translate('projects.remove.successManyAgents', {
+              count: affectedCount,
+              copyState,
+            });
       await loadProjects();
     } catch (error) {
       if (!isActive()) {
@@ -244,10 +230,7 @@ export function createProjectDialogs({
       return;
     }
     if (state.rePointCwd.trim().length === 0) {
-      state.rePointError = translate(
-        'projects.rePoint.missingCwd',
-        'Enter the new repository path.',
-      );
+      state.rePointError = translate('projects.rePoint.missingCwd');
       return;
     }
     state.rePointing = true;
@@ -262,10 +245,7 @@ export function createProjectDialogs({
       if (!isActive()) {
         return;
       }
-      state.statusMessage = translate(
-        'projects.rePoint.success',
-        'Project re-pointed.',
-      );
+      state.statusMessage = translate('projects.rePoint.success');
       state.rePointProject = null;
       await loadProjects();
       if (isActive() && state.selectedProjectId === projectId) {
@@ -273,7 +253,7 @@ export function createProjectDialogs({
       }
     } catch (error) {
       if (isActive()) {
-        state.rePointError = `${translate('projects.rePoint.error', 'The project could not be re-pointed.')} ${errorText(error)}`;
+        state.rePointError = `${translate('projects.rePoint.error')} ${errorText(error)}`;
       }
     } finally {
       if (isActive()) {

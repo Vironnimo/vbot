@@ -120,7 +120,7 @@ export function createSwarmPageActivity(host) {
   const contextTokens = $derived(
     Number.isFinite(history?.data.context_usage?.tokens)
       ? `${history.data.context_usage.estimated ? '~' : ''}${new Intl.NumberFormat(activeLocaleTag()).format(history.data.context_usage.tokens)}${contextWindow ? ` / ${new Intl.NumberFormat(activeLocaleTag()).format(contextWindow)}` : ''}`
-      : t('swarm.usage.unavailable', 'Unavailable'),
+      : t('swarm.usage.unavailable'),
   );
 
   const activityContextTooltip = $derived(

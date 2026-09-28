@@ -239,7 +239,7 @@ describe('ChatActivityPanel', () => {
         ].map(([agent, statusKey, dot]) => [
           agent,
           [
-            t('chat.activity.taskAria', '', {
+            t('chat.activity.taskAria', {
               agent,
               status: status(statusKey),
             }),
@@ -262,7 +262,7 @@ describe('ChatActivityPanel', () => {
       expect(row.tagName).toBe('DIV');
       expect(row.textContent.replace(/\s+/g, ' ').trim()).toBe(command);
       expect(row.getAttribute('aria-label')).toBe(
-        t('chat.activity.bashTaskAria', '', {
+        t('chat.activity.bashTaskAria', {
           command,
           status: status(statusKey),
         }),
@@ -296,10 +296,10 @@ describe('ChatActivityPanel', () => {
       rowContaining('builder'),
     );
     expect(subAgentCancel.getAttribute('aria-label')).toBe(
-      t('chat.activity.cancelSubAgentAria', '', { agent: 'builder' }),
+      t('chat.activity.cancelSubAgentAria', { agent: 'builder' }),
     );
     expect(bashCancel.getAttribute('aria-label')).toBe(
-      t('chat.activity.cancelBashAria', '', { command: 'npm run dev' }),
+      t('chat.activity.cancelBashAria', { command: 'npm run dev' }),
     );
 
     rowContaining('npm run dev').click();
@@ -431,7 +431,7 @@ describe('ChatActivityPanel', () => {
     const parentLink = document.querySelector('.chat-activity__parent-link');
     expect(parentLink.textContent.trim()).toBe('Original research');
     expect(parentLink.getAttribute('aria-label')).toBe(
-      t('chat.activity.openParentSession', '', {
+      t('chat.activity.openParentSession', {
         session: 'Original research',
       }),
     );
@@ -449,7 +449,7 @@ describe('ChatActivityPanel', () => {
       ],
     });
 
-    const filesChanged = `${t('chat.changeStats.filesMany', '', { count: 2 })},`;
+    const filesChanged = `${t('chat.changeStats.filesMany', { count: 2 })},`;
     const statsValue = document.querySelector('.chat-activity__stats-value');
     expect(statsValue.getAttribute('aria-label')).toBe(`${filesChanged} +8 -2`);
     expect(
@@ -517,7 +517,7 @@ describe('ChatActivityPanel', () => {
     const runningRow = rowContaining(memoryScope);
     const runningLink = runningRow.querySelector('.chat-activity__task-link');
     expect(runningLink.getAttribute('aria-label')).toBe(
-      t('chat.activity.reflectionOpenAria', '', {
+      t('chat.activity.reflectionOpenAria', {
         scope: memoryScope,
         status: status('running'),
       }),

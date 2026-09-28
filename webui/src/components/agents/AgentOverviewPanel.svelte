@@ -72,10 +72,7 @@
   const MAX_FALLBACK_MODEL_ROWS = 5;
 
   let allFallbackModelOptions = $derived(
-    selectModelOptions(
-      '',
-      t('agents.form.fallbackModelInherit', 'Inherit global default'),
-    ),
+    selectModelOptions('', t('agents.form.fallbackModelInherit')),
   );
 
   let fallbackModelRows = $derived(
@@ -125,7 +122,7 @@
     const options = [
       {
         value: '',
-        label: t('agents.form.noProject', 'No project'),
+        label: t('agents.form.noProject'),
       },
       ...(Array.isArray(projectOptions) ? projectOptions : []),
     ];
@@ -133,7 +130,7 @@
     if (selected && !options.some((option) => option.value === selected)) {
       options.push({
         value: selected,
-        label: t('agents.form.unavailableProject', 'Unavailable project'),
+        label: t('agents.form.unavailableProject'),
         secondaryLabel: selected,
         disabled: true,
       });
@@ -185,11 +182,11 @@
     // → the provider default falls through.
     if (option === '') {
       if (inheritSource('thinking_effort') === 'global_default') {
-        return t('inherit.option', 'Inherited: {value} (global default)', {
+        return t('inherit.option', {
           value: inheritDisplayValue('thinking_effort'),
         });
       }
-      return t('inherit.optionProviderDefault', 'Inherit (provider default)');
+      return t('inherit.optionProviderDefault');
     }
 
     return t(`agents.form.thinkingEffortOption.${option}`);
@@ -200,11 +197,11 @@
   // unconfigured model shows "Inherit (not configured)".
   function inheritModelLabel(fieldName) {
     if (inheritSource(fieldName) === 'global_default') {
-      return t('inherit.option', 'Inherited: {value} (global default)', {
+      return t('inherit.option', {
         value: inheritDisplayValue(fieldName),
       });
     }
-    return t('inherit.optionNotConfigured', 'Inherit (not configured)');
+    return t('inherit.optionNotConfigured');
   }
 
   let modelOptionsOpen = $state(false);
@@ -221,7 +218,7 @@
   <section class="s-section" aria-labelledby="agent-section-identity">
     <header class="s-section__head">
       <h3 class="s-section__title" id="agent-section-identity">
-        {t('agents.detail.identity', 'Identity')}
+        {t('agents.detail.identity')}
       </h3>
     </header>
     <div class="s-section__body">
@@ -229,7 +226,7 @@
         <div class="s-row">
           <div class="s-row-info">
             <label class="s-row-label" for="agent-name">
-              {t('agents.form.name', 'Name')}
+              {t('agents.form.name')}
             </label>
             {#if formErrors.name}
               <p
@@ -258,18 +255,12 @@
           <div class="s-row">
             <div class="s-row-info">
               <label class="s-row-label" for="agent-project">
-                {t('agents.form.project', 'Project')}
+                {t('agents.form.project')}
               </label>
               <div class="s-row-desc" id="agent-project-help">
                 {projectCatalogError
-                  ? t(
-                      'agents.form.projectUnavailableHelp',
-                      'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
-                    )
-                  : t(
-                      'agents.form.projectHelp',
-                      'Where relative file and shell work runs. Workspace remains the identity and memory home.',
-                    )}
+                  ? t('agents.form.projectUnavailableHelp')
+                  : t('agents.form.projectHelp')}
               </div>
             </div>
             <div class="s-row-control">
@@ -278,7 +269,7 @@
                 value={formValues.root_project_id ?? ''}
                 options={projectDropdownOptions}
                 disabled={Boolean(projectCatalogError)}
-                ariaLabel={t('agents.form.project', 'Project')}
+                ariaLabel={t('agents.form.project')}
                 ariaDescribedby="agent-project-help"
                 triggerClass="agents-view__dropdown"
                 onValueChange={(selectedValue) => {
@@ -295,12 +286,12 @@
   <section class="s-section" aria-labelledby="agent-section-model">
     <header class="s-section__head">
       <h3 class="s-section__title" id="agent-section-model">
-        {t('agents.detail.model', 'Model')}
+        {t('agents.detail.model')}
       </h3>
       {#if formMode === AGENT_FORM_MODE_EDIT}
         <div class="s-section__aside">
           <Button variant="tertiary" onClick={navigateToAgentDefaults}>
-            {t('inherit.editGlobalDefaults', 'Edit global defaults')}
+            {t('inherit.editGlobalDefaults')}
           </Button>
         </div>
       {/if}
@@ -310,7 +301,7 @@
         <div class="s-row">
           <div class="s-row-info">
             <label class="s-row-label" for="agent-model">
-              {t('agents.form.model', 'Model')}
+              {t('agents.form.model')}
             </label>
           </div>
           <div class="s-row-control">
@@ -319,12 +310,9 @@
               value={modelSelectValue}
               options={modelOptions}
               placeholder={inheritModelLabel('model')}
-              searchPlaceholder={t(
-                'agents.form.modelSearchPlaceholder',
-                'Filter models…',
-              )}
-              emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-              ariaLabel={t('agents.form.model', 'Model')}
+              searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+              emptyLabel={t('agents.form.modelSearchEmpty')}
+              ariaLabel={t('agents.form.model')}
               triggerClass="agents-view__dropdown"
               triggerTooltip={modelTriggerTooltip}
               panelClass="agents-view__search-panel"
@@ -340,18 +328,12 @@
         <div class="s-row">
           <div class="s-row-info">
             <label class="s-row-label" for="agent-thinking-effort">
-              {t('agents.form.thinkingEffort', 'Thinking effort')}
+              {t('agents.form.thinkingEffort')}
             </label>
             <div class="s-row-desc" id="agent-thinking-effort-help">
               {effortDropdownDisabled
-                ? t(
-                    'agents.form.thinkingEffortUnsupported',
-                    'This model does not support reasoning.',
-                  )
-                : t(
-                    'agents.form.thinkingEffortDescription',
-                    'How much internal reasoning the Model may spend before answering.',
-                  )}
+                ? t('agents.form.thinkingEffortUnsupported')
+                : t('agents.form.thinkingEffortDescription')}
             </div>
           </div>
           <div class="s-row-control">
@@ -360,7 +342,7 @@
               value={formValues.thinking_effort}
               options={thinkingEffortOptions}
               disabled={effortDropdownDisabled}
-              ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
+              ariaLabel={t('agents.form.thinkingEffort')}
               ariaDescribedby="agent-thinking-effort-help"
               triggerClass="agents-view__dropdown"
               listClass="agents-view__thinking-list"
@@ -385,7 +367,7 @@
               class:disclosure-chevron--open={modelOptionsOpen}
               aria-hidden="true"
             ></span>
-            {t('agents.modelOptions', 'Temperature & fallback models')}
+            {t('agents.modelOptions')}
           </span>
         </button>
         <div
@@ -396,13 +378,10 @@
           <div class="s-row">
             <div class="s-row-info">
               <label class="s-row-label" for="agent-temperature">
-                {t('agents.form.temperature', 'Temperature')}
+                {t('agents.form.temperature')}
               </label>
               <div class="s-row-desc" id="agent-temperature-desc">
-                {t(
-                  'agents.form.temperatureDescription',
-                  'Sampling randomness, typically 0–2.',
-                )}
+                {t('agents.form.temperatureDescription')}
               </div>
               {#if temperatureIsInherit}
                 <div
@@ -410,13 +389,10 @@
                   id="agent-temperature-help"
                 >
                   {inheritSource('temperature') === 'global_default'
-                    ? t('inherit.hint', 'Inherited: {value} (global default)', {
+                    ? t('inherit.hint', {
                         value: inheritDisplayValue('temperature'),
                       })
-                    : t(
-                        'inherit.hintProviderDefault',
-                        'Provider default — nothing is set here or in the global defaults.',
-                      )}
+                    : t('inherit.hintProviderDefault')}
                 </div>
               {/if}
               {#if formErrors.temperature}
@@ -442,14 +418,8 @@
                 <Button
                   variant="tertiary"
                   class="agents-view__reset-inherit"
-                  tooltip={t(
-                    'inherit.resetToInherit',
-                    'Reset to inherited value',
-                  )}
-                  ariaLabel={t(
-                    'inherit.resetToInherit',
-                    'Reset to inherited value',
-                  )}
+                  tooltip={t('inherit.resetToInherit')}
+                  ariaLabel={t('inherit.resetToInherit')}
                   onClick={clearTemperature}
                 >
                   {EMPTY_VALUE}
@@ -461,13 +431,10 @@
           <div class="s-row agents-view__fallback-models">
             <div class="s-row-info">
               <div class="s-row-label" id="agent-fallback-models-label">
-                {t('agents.form.fallbackModels', 'Fallback models')}
+                {t('agents.form.fallbackModels')}
               </div>
               <div class="s-row-desc">
-                {t(
-                  'agents.form.fallbackModelsHelp',
-                  'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
-                )}
+                {t('agents.form.fallbackModelsHelp')}
               </div>
             </div>
             <div class="s-row-control agents-view__fallback-list">
@@ -477,19 +444,10 @@
                     id={`agent-fallback-model-${index}`}
                     value={row.selectValue}
                     options={allFallbackModelOptions}
-                    placeholder={t(
-                      'agents.form.fallbackModelPlaceholder',
-                      'None',
-                    )}
-                    searchPlaceholder={t(
-                      'agents.form.modelSearchPlaceholder',
-                      'Filter models…',
-                    )}
-                    emptyLabel={t(
-                      'agents.form.modelSearchEmpty',
-                      'No models match',
-                    )}
-                    ariaLabel={`${t('agents.form.fallbackModels', 'Fallback models')} ${index + 1}`}
+                    placeholder={t('agents.form.fallbackModelPlaceholder')}
+                    searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+                    emptyLabel={t('agents.form.modelSearchEmpty')}
+                    ariaLabel={`${t('agents.form.fallbackModels')} ${index + 1}`}
                     triggerClass="agents-view__dropdown"
                     panelClass="agents-view__search-panel"
                     onOpenChange={onModelDropdownOpenChange}
@@ -499,10 +457,7 @@
                   <button
                     type="button"
                     class="agents-view__fallback-remove"
-                    aria-label={t(
-                      'agents.form.removeFallbackModel',
-                      'Remove fallback model',
-                    )}
+                    aria-label={t('agents.form.removeFallbackModel')}
                     onclick={() => removeFallbackModelEntry(index)}
                   >
                     ×
@@ -515,7 +470,7 @@
                   class="agents-view__fallback-add"
                   onclick={addFallbackModelEntry}
                 >
-                  {t('agents.form.addFallbackModel', '+ Add fallback model')}
+                  {t('agents.form.addFallbackModel')}
                 </button>
               {/if}
             </div>

@@ -46,9 +46,7 @@ export function mcpConfiguration(draft) {
       entries.some(([name]) => !name) ||
       new Set(entries.map(([name]) => name)).size !== entries.length
     ) {
-      throw new Error(
-        t('mcp.mappingInvalid', 'Each entry needs a unique, non-empty name.'),
-      );
+      throw new Error(t('mcp.mappingInvalid'));
     }
     record[field] = Object.fromEntries(entries);
   }
@@ -116,13 +114,13 @@ export function createMcpSettings({
             throw new Error(
               result.error ??
                 result.result?.error?.message ??
-                t('mcp.testFailed', 'Connection test failed.'),
+                t('mcp.testFailed'),
             );
           publish({
             notice:
               result.state === 'cancelled'
-                ? t('mcp.testCancelled', 'Connection test cancelled.')
-                : t('mcp.testPassed', 'Connection test passed: {checks}.', {
+                ? t('mcp.testCancelled')
+                : t('mcp.testPassed', {
                     checks: (result.result?.verified ?? []).join(', '),
                   }),
           });
@@ -193,30 +191,16 @@ export function createMcpSettings({
         const current = (await invoke('list')).connections.find(
           (item) => item.id === connection.id,
         );
-        if (!original && current)
-          throw new Error(
-            t(
-              'mcp.duplicate',
-              'This connection already exists. Choose another name or edit the existing connection.',
-            ),
-          );
+        if (!original && current) throw new Error(t('mcp.duplicate'));
         if (
           original &&
           (!current ||
             JSON.stringify(current.configuration) !== JSON.stringify(original))
         )
-          throw new Error(
-            t(
-              'mcp.changed',
-              'This connection changed elsewhere. Close the editor and reopen it before saving.',
-            ),
-          );
+          throw new Error(t('mcp.changed'));
         await invoke('save', { connection });
         publish({
-          notice: t(
-            'mcp.saved',
-            'Connection saved. Test it to verify access to the server.',
-          ),
+          notice: t('mcp.saved'),
         });
       });
     },
@@ -239,9 +223,7 @@ export function createMcpSettings({
       return act(async () => {
         await invoke('credential', { id, key, value });
         publish({
-          notice: value
-            ? t('mcp.credentialSaved', 'Credential saved.')
-            : t('mcp.credentialCleared', 'Credential cleared.'),
+          notice: value ? t('mcp.credentialSaved') : t('mcp.credentialCleared'),
         });
       });
     },

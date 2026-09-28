@@ -43,10 +43,7 @@
       models: availableModels,
       connections: availableConnections,
       selectedModelValue: policy.strategy.summary_model ?? '',
-      emptyLabel: t(
-        'settings.compaction.summaryModelPlaceholder',
-        'Active agent model',
-      ),
+      emptyLabel: t('settings.compaction.summaryModelPlaceholder'),
       translate: t,
     }),
   );
@@ -107,9 +104,7 @@
         ? connectionsResult.connections
         : [];
     } catch (error) {
-      onError(
-        `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
-      );
+      onError(`${t('settings.models.loadError')} ${error.message}`);
     }
   }
 
@@ -136,14 +131,14 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => ({ compaction: normalizeCompactionPolicy(policy) }),
-      successTitle: t('settings.compaction.saved', 'Compaction Policy saved.'),
+      successTitle: t('settings.compaction.saved'),
     });
   }
 
   function saveNow() {
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;

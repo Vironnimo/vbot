@@ -51,39 +51,36 @@
   <div class="stats-columns">
     <div class="stats-block">
       <h3 class="stats-block__title">
-        {t('statistics.usage.measuredTokens', 'Measured tokens')}
+        {t('statistics.usage.measuredTokens')}
       </h3>
       <div class="stats-grid stats-grid--three">
         {@render statCard(
-          t('statistics.col.input', 'Input'),
+          t('statistics.col.input'),
           formatTokens(usage.totals.measured_input_tokens, locale),
         )}{@render statCard(
-          t('statistics.col.output', 'Output'),
+          t('statistics.col.output'),
           formatTokens(usage.totals.measured_output_tokens, locale),
         )}{@render statCard(
-          t('statistics.usage.measuredTurns', 'Measured Model calls'),
+          t('statistics.usage.measuredTurns'),
           formatInteger(usage.totals.measured_turns, locale),
         )}
       </div>
     </div>
     <div class="stats-block">
       <h3 class="stats-block__title">
-        {t('statistics.usage.estimatedTokens', 'Estimated tokens')}<InfoHint
-          text={t(
-            'statistics.estimatedHint',
-            'Estimated tokens are approximated, not provider-reported.',
-          )}
+        {t('statistics.usage.estimatedTokens')}<InfoHint
+          text={t('statistics.estimatedHint')}
         />
       </h3>
       <div class="stats-grid stats-grid--three">
         {@render statCard(
-          t('statistics.col.input', 'Input'),
+          t('statistics.col.input'),
           formatTokens(usage.totals.estimated_input_tokens, locale),
         )}{@render statCard(
-          t('statistics.col.output', 'Output'),
+          t('statistics.col.output'),
           formatTokens(usage.totals.estimated_output_tokens, locale),
         )}{@render statCard(
-          t('statistics.usage.estimatedTurns', 'Estimated Model calls'),
+          t('statistics.usage.estimatedTurns'),
           formatInteger(usage.totals.estimated_turns, locale),
         )}
       </div>
@@ -92,23 +89,15 @@
   {#if usage.kinds?.length}
     <div class="stats-block">
       <h3 class="stats-block__title">
-        {t('statistics.usage.byKind', 'Model calls by activity')}
+        {t('statistics.usage.byKind')}
       </h3>
       <div class="stats-table-wrap">
-        <table
-          class="stats-table"
-          aria-label={t('statistics.usage.byKind', 'Model calls by activity')}
-        >
+        <table class="stats-table" aria-label={t('statistics.usage.byKind')}>
           <thead
             ><tr>
-              <th>{t('statistics.col.activity', 'Activity')}</th>
-              <th class="num">{t('statistics.col.calls', 'Calls')}</th>
-              <th class="num"
-                >{t(
-                  'statistics.usage.incomplete',
-                  'Incomplete token usage',
-                )}</th
-              >
+              <th>{t('statistics.col.activity')}</th>
+              <th class="num">{t('statistics.col.calls')}</th>
+              <th class="num">{t('statistics.usage.incomplete')}</th>
             </tr></thead
           >
           <tbody>
@@ -129,33 +118,27 @@
   <TokenTrend {report} bind:granularity {reportRange} />
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t('statistics.usage.cacheAndReasoning', 'Cache & Reasoning')}<InfoHint
-        text={t(
-          'statistics.usage.reasoningHint',
-          'Reasoning tokens are provider-reported subsets of measured output and are never added to token totals.',
-        )}
+      {t('statistics.usage.cacheAndReasoning')}<InfoHint
+        text={t('statistics.usage.reasoningHint')}
       />
     </h3>
     <div class="stats-grid">
       {@render statCard(
-        t('statistics.usage.cacheHitRate', 'Cache hit rate'),
+        t('statistics.usage.cacheHitRate'),
         formatPercent(cacheHitRate(usage.totals)),
-        t(
-          'statistics.usage.cacheHitHint',
-          'Cache hit rate: tokens read from cache as a share of the input, over the turns that report cache data.',
-        ),
+        t('statistics.usage.cacheHitHint'),
       )}{@render statCard(
-        t('statistics.usage.cacheRead', 'Cache read'),
+        t('statistics.usage.cacheRead'),
         usage.totals.cache_turns > 0
           ? formatTokens(usage.totals.cache_read_tokens, locale)
           : '—',
       )}{@render statCard(
-        t('statistics.usage.cacheWrite', 'Cache write'),
+        t('statistics.usage.cacheWrite'),
         usage.totals.cache_turns > 0
           ? formatTokens(usage.totals.cache_write_tokens, locale)
           : '—',
       )}{@render statCard(
-        t('statistics.usage.reasoning', 'Reasoning (output subset)'),
+        t('statistics.usage.reasoning'),
         formatReasoningTokens(usage.totals),
       )}
     </div>
@@ -163,45 +146,34 @@
   <CostsPanel {report} />
   <div class="stats-block__head">
     <h3 class="stats-section-title">
-      {t('statistics.usage.breakdown', 'Usage by Provider & Model')}
+      {t('statistics.usage.breakdown')}
     </h3>
-    <InfoHint
-      text={t(
-        'statistics.usage.runAttributionHint',
-        'Provider and Model Run counts mean “involved in this Run.” A fallback Run can appear in multiple rows, and Model duration is the full Run duration.',
-      )}
-    />
+    <InfoHint text={t('statistics.usage.runAttributionHint')} />
   </div>
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t('statistics.usage.providers', 'Providers')}
+      {t('statistics.usage.providers')}
     </h3>
     {#if usage.providers.length === 0}
-      <EmptyState
-        density="compact"
-        description={t('statistics.empty', 'No activity recorded yet.')}
-      />
+      <EmptyState density="compact" description={t('statistics.empty')} />
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
       <div
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t(
-          'statistics.table.scroll',
-          'Statistics table; scroll for more columns',
-        )}
+        aria-label={t('statistics.table.scroll')}
       >
         <table class="stats-table">
           <thead>
             <tr>
-              <th>{t('statistics.col.provider', 'Provider')}</th>
-              <th>{t('statistics.col.runs', 'Runs')}</th>
-              <th>{t('statistics.col.tokens', 'Tokens')}</th>
-              <th>{t('statistics.col.reasoning', 'Reasoning')}</th>
-              <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
-              <th>{t('statistics.col.share', 'Share')}</th>
-              <th>{t('statistics.col.errors', 'Errors')}</th>
+              <th>{t('statistics.col.provider')}</th>
+              <th>{t('statistics.col.runs')}</th>
+              <th>{t('statistics.col.tokens')}</th>
+              <th>{t('statistics.col.reasoning')}</th>
+              <th>{t('statistics.col.cacheHit')}</th>
+              <th>{t('statistics.col.share')}</th>
+              <th>{t('statistics.col.errors')}</th>
             </tr>
           </thead>
           <tbody>
@@ -224,7 +196,7 @@
 
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t('statistics.usage.models', 'Models')}
+      {t('statistics.usage.models')}
     </h3>
     {#each providerGroups as group (group.provider)}
       <h4 class="stats-subheading stats-mono">{group.provider}</h4>
@@ -233,21 +205,18 @@
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t(
-          'statistics.table.scroll',
-          'Statistics table; scroll for more columns',
-        )}
+        aria-label={t('statistics.table.scroll')}
       >
         <table class="stats-table">
           <thead>
             <tr>
-              <th>{t('statistics.col.model', 'Model')}</th>
-              <th>{t('statistics.col.runs', 'Runs')}</th>
-              <th>{t('statistics.col.tokens', 'Tokens')}</th>
-              <th>{t('statistics.col.reasoning', 'Reasoning')}</th>
-              <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
-              <th>{t('statistics.col.avgDuration', 'Avg')}</th>
-              <th>{t('statistics.col.errors', 'Errors')}</th>
+              <th>{t('statistics.col.model')}</th>
+              <th>{t('statistics.col.runs')}</th>
+              <th>{t('statistics.col.tokens')}</th>
+              <th>{t('statistics.col.reasoning')}</th>
+              <th>{t('statistics.col.cacheHit')}</th>
+              <th>{t('statistics.col.avgDuration')}</th>
+              <th>{t('statistics.col.errors')}</th>
             </tr>
           </thead>
           <tbody>
@@ -270,18 +239,12 @@
 
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t(
-        'statistics.usage.cacheSessions',
-        'Sessions with lowest cache hit rate',
-      )}
+      {t('statistics.usage.cacheSessions')}
     </h3>
     {#if cacheSessions.length === 0}
       <EmptyState
         density="compact"
-        description={t(
-          'statistics.usage.cacheEmpty',
-          'No cache-reporting activity yet.',
-        )}
+        description={t('statistics.usage.cacheEmpty')}
       />
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
@@ -289,21 +252,18 @@
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t(
-          'statistics.table.scroll',
-          'Statistics table; scroll for more columns',
-        )}
+        aria-label={t('statistics.table.scroll')}
       >
         <table class="stats-table">
           <thead>
             <tr>
-              <th>{t('statistics.col.agent', 'Agent')}</th>
-              <th>{t('statistics.col.session', 'Session')}</th>
-              <th>{t('statistics.col.turns', 'Turns')}</th>
-              <th>{t('statistics.col.input', 'Input')}</th>
-              <th>{t('statistics.col.cacheRead', 'Cache read')}</th>
-              <th>{t('statistics.col.hitRate', 'Hit rate')}</th>
-              <th>{t('statistics.col.lastActivity', 'Last activity')}</th>
+              <th>{t('statistics.col.agent')}</th>
+              <th>{t('statistics.col.session')}</th>
+              <th>{t('statistics.col.turns')}</th>
+              <th>{t('statistics.col.input')}</th>
+              <th>{t('statistics.col.cacheRead')}</th>
+              <th>{t('statistics.col.hitRate')}</th>
+              <th>{t('statistics.col.lastActivity')}</th>
             </tr>
           </thead>
           <tbody>
@@ -327,21 +287,14 @@
   {#if cacheBreaks}
     <div class="stats-block">
       <h3 class="stats-block__title">
-        {t('statistics.usage.cacheBreaks', 'Suspected cache breaks (derived)')}
+        {t('statistics.usage.cacheBreaks')}
       </h3>
       <p class="stats-note">
-        {t(
-          'statistics.usage.cacheBreaksSummary',
-          '{suspected} suspected breaks across {evaluated} evaluated continuation turns.',
-          {
-            suspected: formatInteger(cacheBreaks.suspected_turns, locale),
-            evaluated: formatInteger(cacheBreaks.evaluated_turns, locale),
-          },
-        )}
-        {t(
-          'statistics.usage.cacheBreaksHint',
-          'A turn whose cache read fell far below the previous prompt although nothing legitimate explains a miss (new session, compaction, takeover, model switch, expired cache, or a tiny prompt are excluded). Best-effort heuristic, not authoritative.',
-        )}
+        {t('statistics.usage.cacheBreaksSummary', {
+          suspected: formatInteger(cacheBreaks.suspected_turns, locale),
+          evaluated: formatInteger(cacheBreaks.evaluated_turns, locale),
+        })}
+        {t('statistics.usage.cacheBreaksHint')}
       </p>
       {#if cacheBreaks.incidents.length > 0}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
@@ -349,20 +302,17 @@
           class="stats-table-scroll"
           role="region"
           tabindex="0"
-          aria-label={t(
-            'statistics.table.scroll',
-            'Statistics table; scroll for more columns',
-          )}
+          aria-label={t('statistics.table.scroll')}
         >
           <table class="stats-table">
             <thead>
               <tr>
-                <th>{t('statistics.col.time', 'Time')}</th>
-                <th>{t('statistics.col.agent', 'Agent')}</th>
-                <th>{t('statistics.col.session', 'Session')}</th>
-                <th>{t('statistics.col.model', 'Model')}</th>
-                <th>{t('statistics.col.previousInput', 'Prev. input')}</th>
-                <th>{t('statistics.col.cacheRead', 'Cache read')}</th>
+                <th>{t('statistics.col.time')}</th>
+                <th>{t('statistics.col.agent')}</th>
+                <th>{t('statistics.col.session')}</th>
+                <th>{t('statistics.col.model')}</th>
+                <th>{t('statistics.col.previousInput')}</th>
+                <th>{t('statistics.col.cacheRead')}</th>
               </tr>
             </thead>
             <tbody>

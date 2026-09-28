@@ -38,16 +38,10 @@
       value: profile,
       label:
         profile === 'compatibility'
-          ? t(
-              'settings.voice.transcriptionProfileCompatibility',
-              'Maximum compatibility (recommended)',
-            )
+          ? t('settings.voice.transcriptionProfileCompatibility')
           : profile === 'high_quality'
-            ? t(
-                'settings.voice.transcriptionProfileHighQuality',
-                'High fidelity',
-              )
-            : t('settings.voice.transcriptionProfileCustom', 'Custom'),
+            ? t('settings.voice.transcriptionProfileHighQuality')
+            : t('settings.voice.transcriptionProfileCustom'),
     })),
   );
 
@@ -56,11 +50,8 @@
       value: format,
       label:
         format === 'wav'
-          ? t('settings.voice.transcriptionFormatWav', 'WAV (PCM16)')
-          : t(
-              'settings.voice.transcriptionFormatFlac',
-              'FLAC (lossless PCM16)',
-            ),
+          ? t('settings.voice.transcriptionFormatWav')
+          : t('settings.voice.transcriptionFormatFlac'),
     })),
   );
 
@@ -69,10 +60,7 @@
       value: String(sampleRate),
       label:
         sampleRate === 16000
-          ? t(
-              'settings.voice.transcriptionSampleRate16',
-              '16 kHz (recommended for speech)',
-            )
+          ? t('settings.voice.transcriptionSampleRate16')
           : `${sampleRate / 1000} kHz`,
     })),
   );
@@ -114,9 +102,7 @@
       return true;
     } catch (error) {
       transcriptionSaveState = 'error';
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
       return false;
     }
   }
@@ -167,23 +153,17 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.voice.transcriptionProfile', 'Transcription audio')}
+        {t('settings.voice.transcriptionProfile')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.voice.transcriptionProfileDescription',
-          'The audio sent to the Speech-to-text Model from both the Chat microphone and a command recorded after a wake phrase. Local wakeword detection keeps its optimized 16 kHz stream.',
-        )}
+        {t('settings.voice.transcriptionProfileDescription')}
       </div>
     </div>
     <div class="s-row-control">
       <Dropdown
         value={transcriptionAudio.profile}
         options={transcriptionProfileOptions}
-        ariaLabel={t(
-          'settings.voice.transcriptionProfile',
-          'Transcription audio',
-        )}
+        ariaLabel={t('settings.voice.transcriptionProfile')}
         onValueChange={handleTranscriptionProfileChange}
         disabled={transcriptionSaveState === 'saving'}
       />
@@ -193,20 +173,17 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.voice.transcriptionFormat', 'Format')}
+        {t('settings.voice.transcriptionFormat')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.voice.transcriptionFormatDescription',
-          'Mono, signed 16-bit audio. WAV has the broadest Provider support; FLAC is lossless and smaller.',
-        )}
+        {t('settings.voice.transcriptionFormatDescription')}
       </div>
     </div>
     <div class="s-row-control">
       <Dropdown
         value={transcriptionAudio.format}
         options={transcriptionFormatOptions}
-        ariaLabel={t('settings.voice.transcriptionFormat', 'Format')}
+        ariaLabel={t('settings.voice.transcriptionFormat')}
         onValueChange={handleTranscriptionFormatChange}
         disabled={transcriptionAudio.profile !== 'custom' ||
           transcriptionSaveState === 'saving'}
@@ -217,20 +194,17 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.voice.transcriptionSampleRate', 'Sample rate')}
+        {t('settings.voice.transcriptionSampleRate')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'settings.voice.transcriptionSampleRateDescription',
-          '16 kHz is the speech-focused default. Higher rates retain more source detail but create larger uploads.',
-        )}
+        {t('settings.voice.transcriptionSampleRateDescription')}
       </div>
     </div>
     <div class="s-row-control">
       <Dropdown
         value={String(transcriptionAudio.sample_rate_hz)}
         options={transcriptionSampleRateOptions}
-        ariaLabel={t('settings.voice.transcriptionSampleRate', 'Sample rate')}
+        ariaLabel={t('settings.voice.transcriptionSampleRate')}
         onValueChange={handleTranscriptionSampleRateChange}
         disabled={transcriptionAudio.profile !== 'custom' ||
           transcriptionSaveState === 'saving'}

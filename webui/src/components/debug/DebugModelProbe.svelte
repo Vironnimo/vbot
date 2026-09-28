@@ -49,10 +49,7 @@
       );
       applyModelProbeResult(viewState, result);
     } catch (error) {
-      viewState.modelProbeError = errorMessageText(
-        error,
-        t('errors.generic', 'Something went wrong. Try again.'),
-      );
+      viewState.modelProbeError = errorMessageText(error, t('errors.generic'));
       viewState.modelProbeLoading = false;
     }
   }
@@ -70,20 +67,20 @@
 
 <section class="debug-view__probe" aria-labelledby="probe-title">
   <h3 id="probe-title" class="debug-view__probe-title">
-    {t('debug.modelProbe', 'Model Endpoint Probe')}
+    {t('debug.modelProbe')}
   </h3>
 
   <div class="debug-view__probe-controls">
     <label class="debug-view__probe-field">
       <span class="debug-view__probe-label">
-        {t('debug.modelProbe.provider', 'Provider')}
+        {t('debug.modelProbe.provider')}
       </span>
       <Dropdown
         id="debug-probe-provider"
         value={viewState.modelProbeProvider}
         options={providerOptions}
-        placeholder={t('debug.modelProbe.selectProvider', 'Select a provider')}
-        ariaLabel={t('debug.modelProbe.provider', 'Provider')}
+        placeholder={t('debug.modelProbe.selectProvider')}
+        ariaLabel={t('debug.modelProbe.provider')}
         disabled={viewState.modelProbeLoading}
         triggerClass="debug-view__probe-dropdown"
         onValueChange={handleProviderChange}
@@ -92,17 +89,14 @@
 
     <label class="debug-view__probe-field">
       <span class="debug-view__probe-label">
-        {t('debug.modelProbe.connection', 'Connection')}
+        {t('debug.modelProbe.connection')}
       </span>
       <Dropdown
         id="debug-probe-connection"
         value={viewState.modelProbeConnection}
         options={connectionOptions}
-        placeholder={t(
-          'debug.modelProbe.selectConnection',
-          'Select a connection',
-        )}
-        ariaLabel={t('debug.modelProbe.connection', 'Connection')}
+        placeholder={t('debug.modelProbe.selectConnection')}
+        ariaLabel={t('debug.modelProbe.connection')}
         disabled={!viewState.modelProbeProvider || viewState.modelProbeLoading}
         triggerClass="debug-view__probe-dropdown"
         onValueChange={handleConnectionChange}
@@ -116,8 +110,8 @@
       disabled={!canProbe || viewState.modelProbeLoading}
     >
       {viewState.modelProbeLoading
-        ? t('common.loading', 'Loading\u2026')
-        : t('debug.modelProbe.run', 'Probe')}
+        ? t('common.loading')
+        : t('debug.modelProbe.run')}
     </Button>
   </div>
 
@@ -131,7 +125,7 @@
     <div class="debug-view__probe-results">
       <div class="debug-view__probe-result-section">
         <h4 class="debug-view__detail-heading">
-          {t('debug.modelProbe.rawResponse', 'Raw Response')}
+          {t('debug.modelProbe.rawResponse')}
         </h4>
         <pre
           class="debug-view__code-block debug-view__code-block--formatted">{formattedBodyText(
@@ -141,7 +135,7 @@
 
       <div class="debug-view__probe-result-section">
         <h4 class="debug-view__detail-heading">
-          {t('debug.modelProbe.normalizedPreview', 'Normalized Preview')}
+          {t('debug.modelProbe.normalizedPreview')}
         </h4>
         {#if viewState.modelProbeResult.normalized?.preview?.length > 0}
           <div class="debug-view__probe-model-list">
@@ -150,7 +144,7 @@
             {/each}
           </div>
           <p class="debug-view__probe-model-count">
-            {t('debug.modelProbe.modelCount', '{count} models', {
+            {t('debug.modelProbe.modelCount', {
               count: viewState.modelProbeResult.normalized.modelCount,
             })}
           </p>

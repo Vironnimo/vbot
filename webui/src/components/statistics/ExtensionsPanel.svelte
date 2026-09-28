@@ -22,9 +22,9 @@
     if (group.title) return group.title;
     const id = shortGroupId(group.group_id);
     if (!group.started_at) {
-      return t('statistics.extensions.groupFallbackId', 'Group {id}', { id });
+      return t('statistics.extensions.groupFallbackId', { id });
     }
-    return t('statistics.extensions.groupFallback', 'Started {date} · {id}', {
+    return t('statistics.extensions.groupFallback', {
       date: formatDateTime(group.started_at, locale),
       id,
     });
@@ -36,14 +36,10 @@
   }
 
   function groupSummary(group) {
-    return t(
-      'statistics.extensions.groupSummary',
-      '{participants} participants · {runs} Runs',
-      {
-        participants: formatInteger(group.participants.length, locale),
-        runs: formatInteger(group.activity.runs, locale),
-      },
-    );
+    return t('statistics.extensions.groupSummary', {
+      participants: formatInteger(group.participants.length, locale),
+      runs: formatInteger(group.activity.runs, locale),
+    });
   }
 </script>
 
@@ -51,54 +47,51 @@
   <div class="stats-grid">
     {#if groups != null}
       {@render statCard(
-        t('statistics.extensions.groups', 'Groups'),
+        t('statistics.extensions.groups'),
         formatInteger(groups, locale),
-        t(
-          'statistics.extensions.groupsHint',
-          'A group is one unit of work the Extension started, such as one Swarm, with its participant Sessions.',
-        ),
+        t('statistics.extensions.groupsHint'),
       )}
     {/if}
     {@render statCard(
-      t('statistics.extensions.sessions', 'Participant Sessions'),
+      t('statistics.extensions.sessions'),
       formatInteger(activity.sessions, locale),
     )}
     {@render statCard(
-      t('statistics.extensions.runs', 'Runs'),
+      t('statistics.extensions.runs'),
       formatInteger(activity.runs, locale),
       null,
-      t('statistics.extensions.unfinishedRuns', '{count} not completed', {
+      t('statistics.extensions.unfinishedRuns', {
         count: formatInteger(failedRuns(activity), locale),
       }),
     )}
     {@render statCard(
-      t('statistics.extensions.tokens', 'Tokens'),
+      t('statistics.extensions.tokens'),
       formatInteger(tokenSplit(activity).measured, locale),
       null,
       tokenSplit(activity).hasEstimated
-        ? t('statistics.extensions.estimatedTokens', '+{count} estimated', {
+        ? t('statistics.extensions.estimatedTokens', {
             count: formatInteger(tokenSplit(activity).estimated, locale),
           })
         : null,
     )}
     {@render statCard(
-      t('statistics.cost.reported', 'Provider-reported cost'),
+      t('statistics.cost.reported'),
       formatCost(activity.costs.reported_usd, locale),
       null,
-      t('statistics.cost.callCount', '{count} calls', {
+      t('statistics.cost.callCount', {
         count: formatInteger(activity.costs.reported_calls, locale),
       }),
     )}
     {@render statCard(
-      t('statistics.cost.estimated', 'Estimated API value'),
+      t('statistics.cost.estimated'),
       formatCost(activity.costs.estimated_usd, locale),
       null,
-      t('statistics.cost.callCount', '{count} calls', {
+      t('statistics.cost.callCount', {
         count: formatInteger(activity.costs.estimated_calls, locale),
       }),
     )}
     {@render statCard(
-      t('statistics.extensions.toolCalls', 'Tool calls'),
+      t('statistics.extensions.toolCalls'),
       formatInteger(activity.tool_calls, locale),
     )}
   </div>
@@ -106,18 +99,12 @@
 
 <div class="stats-panel">
   <p class="stats-note">
-    {t(
-      'statistics.extensions.note',
-      'Extensions such as Swarm run participant Sessions of their own. Every other tab already includes this activity under the Extension’s name; this tab breaks it down by group and participant.',
-    )}
+    {t('statistics.extensions.note')}
   </p>
   {#if extensions.length === 0}
     <EmptyState
       density="compact"
-      description={t(
-        'statistics.extensions.empty',
-        'No Extension activity in this time range.',
-      )}
+      description={t('statistics.extensions.empty')}
     />
   {/if}
   {#each extensions as extension (extension.name)}
@@ -125,22 +112,17 @@
       <div class="stats-block__head">
         <h3 class="stats-block__title">
           <span class="stats-mono">{extension.name}</span>
-          <Badge variant="neutral"
-            >{t('statistics.agent.extensionBadge', 'Extension')}</Badge
+          <Badge variant="neutral">{t('statistics.agent.extensionBadge')}</Badge
           >
         </h3>
       </div>
       {@render activityCards(extension.activity, extension.total_groups)}
       {#if extension.groups_truncated}
         <p class="stats-note stats-spaced">
-          {t(
-            'statistics.extensions.truncated',
-            'Showing the {shown} most recently active of {total} groups.',
-            {
-              shown: formatInteger(extension.groups.length, locale),
-              total: formatInteger(extension.total_groups, locale),
-            },
-          )}
+          {t('statistics.extensions.truncated', {
+            shown: formatInteger(extension.groups.length, locale),
+            total: formatInteger(extension.total_groups, locale),
+          })}
         </p>
       {/if}
       <div class="stats-call-list">
@@ -161,41 +143,18 @@
                 class="stats-table-scroll stats-spaced"
                 role="region"
                 tabindex="0"
-                aria-label={t(
-                  'statistics.extensions.participants',
-                  'Participants',
-                )}
+                aria-label={t('statistics.extensions.participants')}
               >
                 <table class="stats-table">
                   <thead>
                     <tr>
-                      <th
-                        >{t(
-                          'statistics.extensions.participant',
-                          'Participant',
-                        )}</th
-                      >
-                      <th>{t('statistics.col.model', 'Model')}</th>
-                      <th>{t('statistics.extensions.runs', 'Runs')}</th>
-                      <th>{t('statistics.extensions.tokens', 'Tokens')}</th>
-                      <th
-                        >{t(
-                          'statistics.cost.reported',
-                          'Provider-reported cost',
-                        )}</th
-                      >
-                      <th
-                        >{t(
-                          'statistics.cost.estimated',
-                          'Estimated API value',
-                        )}</th
-                      >
-                      <th
-                        >{t(
-                          'statistics.extensions.toolCalls',
-                          'Tool calls',
-                        )}</th
-                      >
+                      <th>{t('statistics.extensions.participant')}</th>
+                      <th>{t('statistics.col.model')}</th>
+                      <th>{t('statistics.extensions.runs')}</th>
+                      <th>{t('statistics.extensions.tokens')}</th>
+                      <th>{t('statistics.cost.reported')}</th>
+                      <th>{t('statistics.cost.estimated')}</th>
+                      <th>{t('statistics.extensions.toolCalls')}</th>
                     </tr>
                   </thead>
                   <tbody>

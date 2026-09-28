@@ -65,10 +65,7 @@ export function createTerminalRenderer({
             ...viewState.streams,
             [terminalId]: {
               status: TERMINAL_STREAM_ERROR,
-              error: t(
-                'terminals.rendererError',
-                'The browser terminal renderer could not be loaded.',
-              ),
+              error: t('terminals.rendererError'),
               errorCode: '',
             },
           };
@@ -417,7 +414,7 @@ export function createTerminalRenderer({
     if (fitted.columns === item.columns && fitted.rows === item.rows) {
       return '';
     }
-    return t('terminals.gridMismatch', 'Tile {fitted} · Session {server}', {
+    return t('terminals.gridMismatch', {
       fitted: `${fitted.columns}×${fitted.rows}`,
       server: `${item.columns}×${item.rows}`,
     });

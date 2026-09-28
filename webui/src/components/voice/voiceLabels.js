@@ -15,23 +15,19 @@ export function voiceIndicator(status) {
   if (status?.state === 'error') {
     return indicator(
       'error',
-      t('voice.state.error', 'Voice error'),
-      t('voice.mic.tooltip.error', 'Voice error'),
+      t('voice.state.error'),
+      t('voice.mic.tooltip.error'),
     );
   }
   if (!status?.enabled || status.state === 'off') {
-    return indicator(
-      'off',
-      t('voice.state.off', 'Disabled'),
-      t('voice.mic.tooltip.off', 'Wakeword disabled'),
-    );
+    return indicator('off', t('voice.state.off'), t('voice.mic.tooltip.off'));
   }
   if (status.recording) {
     return {
       ...indicator(
         'recording',
-        t('voice.state.recording', 'Recording'),
-        t('voice.mic.tooltip.recording', 'Recording — click to stop and send'),
+        t('voice.state.recording'),
+        t('voice.mic.tooltip.recording'),
       ),
       recording: true,
     };
@@ -39,8 +35,8 @@ export function voiceIndicator(status) {
   if (status.state === 'microphone_disconnected') {
     return indicator(
       'warning',
-      t('voice.state.microphone_disconnected', 'Microphone disconnected'),
-      t('voice.mic.tooltip.microphoneDisconnected', 'Microphone disconnected'),
+      t('voice.state.microphone_disconnected'),
+      t('voice.mic.tooltip.microphoneDisconnected'),
     );
   }
   const command = status.commands?.at(-1);
@@ -48,24 +44,24 @@ export function voiceIndicator(status) {
     return indicator(
       'processing',
       command.stage === 'transcribing'
-        ? t('voice.state.transcribing', 'Transcribing')
+        ? t('voice.state.transcribing')
         : command.stage === 'sending'
-          ? t('voice.state.sending', 'Sending')
-          : t('voice.state.processing', 'Processing'),
-      t('voice.mic.tooltip.processing', 'Processing voice command'),
+          ? t('voice.state.sending')
+          : t('voice.state.processing'),
+      t('voice.mic.tooltip.processing'),
     );
   }
   if (status.state === 'starting') {
     return indicator(
       'processing',
-      t('voice.state.starting', 'Starting'),
-      t('voice.mic.tooltip.starting', 'Starting wakeword listening'),
+      t('voice.state.starting'),
+      t('voice.mic.tooltip.starting'),
     );
   }
   return indicator(
     'listening',
-    t('voice.state.listening', 'Listening'),
-    t('voice.mic.tooltip.listening', 'Listening for wake phrases'),
+    t('voice.state.listening'),
+    t('voice.mic.tooltip.listening'),
   );
 }
 
@@ -79,12 +75,7 @@ function indicator(tone, label, tooltip) {
  */
 export function errorMessage(code, fallback = null) {
   return (
-    knownErrorMessage(code) ||
-    fallback ||
-    t(
-      'settings.voice.error.unknown',
-      'Voice stopped unexpectedly. Retry listening or restart the Desktop app.',
-    )
+    knownErrorMessage(code) || fallback || t('settings.voice.error.unknown')
   );
 }
 
@@ -101,109 +92,40 @@ export function bridgeErrorMessage(error) {
 
 function knownErrorMessage(code) {
   const messages = {
-    no_server: t(
-      'settings.voice.error.noServer',
-      'Voice has no active server. Connect the Desktop app to a server and try again.',
-    ),
-    server_unreachable: t(
-      'settings.voice.error.serverUnreachable',
-      'Voice could not reach the active server. Check the Desktop connection and try again.',
-    ),
+    no_server: t('settings.voice.error.noServer'),
+    server_unreachable: t('settings.voice.error.serverUnreachable'),
     speech_to_text_unconfigured: t(
       'settings.voice.error.speechToTextUnconfigured',
-      'Configure a Speech-to-text Model under Settings → Voice to send voice commands.',
     ),
     speech_to_text_unavailable: t(
       'settings.voice.error.speechToTextUnavailable',
-      'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Voice.',
     ),
     speech_to_text_readiness_failed: t(
       'settings.voice.error.speechToTextReadiness',
-      'Voice could not verify the Speech-to-text configuration. Check the Desktop log and try again.',
     ),
-    missing_target_agent: t(
-      'settings.voice.error.missingTarget',
-      'Choose an Agent for this phrase or a default Agent for this server.',
-    ),
-    target_agent_unavailable: t(
-      'settings.voice.error.targetUnavailable',
-      'The chosen Agent no longer exists on this server. Choose another Agent.',
-    ),
-    engine_start_failed: t(
-      'settings.voice.error.engine',
-      'The on-device wakeword model could not start. Restart the Desktop app and try again.',
-    ),
-    wakeword_model_unavailable: t(
-      'settings.voice.error.modelUnavailable',
-      'The selected wakeword model is no longer available. Choose another model or import it again.',
-    ),
-    wakeword_model_invalid: t(
-      'settings.voice.error.modelInvalid',
-      'The wakeword model is not a compatible pyopen-wakeword TFLite model.',
-    ),
-    wakeword_model_active: t(
-      'settings.voice.error.modelActive',
-      'This wake phrase is active. Deactivate it before removing its model.',
-    ),
-    wakeword_model_delete_failed: t(
-      'settings.voice.error.modelDeleteFailed',
-      'The Desktop could not remove this wakeword model. Check the Desktop log and try again.',
-    ),
-    calibration_unavailable: t(
-      'settings.voice.error.calibrationUnavailable',
-      'Calibration needs Voice listening with this wake phrase active. Wait until Voice is listening, then try again.',
-    ),
-    calibration_inactive: t(
-      'settings.voice.error.calibrationInactive',
-      'No calibration is running anymore. Start the calibration again.',
-    ),
-    microphone_unavailable: t(
-      'settings.voice.error.microphone',
-      'No compatible microphone is available. Connect a microphone or choose another input device, then retry.',
-    ),
-    microphone_read_failed: t(
-      'settings.voice.error.microphoneRead',
-      'The microphone stopped responding. Check the device connection and retry.',
-    ),
-    recording_interrupted: t(
-      'settings.voice.error.recordingInterrupted',
-      'The recording was interrupted. Say the wake phrase again.',
-    ),
-    detection_failed: t(
-      'settings.voice.error.detection',
-      'Wakeword detection stopped unexpectedly. Retry listening.',
-    ),
-    pipeline_failed: t(
-      'settings.voice.error.pipeline',
-      'The Voice pipeline stopped unexpectedly. Retry listening or restart the Desktop app.',
-    ),
-    session_resolution_failed: t(
-      'settings.voice.error.session',
-      'vBot could not open the target Agent Session. Check the server connection and retry.',
-    ),
-    send_failed: t(
-      'settings.voice.error.send',
-      'The spoken command could not be sent. Check the server connection and retry.',
-    ),
-    voice_config_invalid: t(
-      'settings.voice.error.configInvalid',
-      'The Desktop rejected this Voice setting. Reload Voice settings and try again.',
-    ),
-    voice_stack_unavailable: t(
-      'settings.voice.error.stackUnavailable',
-      'The Desktop Voice components are unavailable. Install the desktop Voice dependencies and restart vBot.',
-    ),
+    missing_target_agent: t('settings.voice.error.missingTarget'),
+    target_agent_unavailable: t('settings.voice.error.targetUnavailable'),
+    engine_start_failed: t('settings.voice.error.engine'),
+    wakeword_model_unavailable: t('settings.voice.error.modelUnavailable'),
+    wakeword_model_invalid: t('settings.voice.error.modelInvalid'),
+    wakeword_model_active: t('settings.voice.error.modelActive'),
+    wakeword_model_delete_failed: t('settings.voice.error.modelDeleteFailed'),
+    calibration_unavailable: t('settings.voice.error.calibrationUnavailable'),
+    calibration_inactive: t('settings.voice.error.calibrationInactive'),
+    microphone_unavailable: t('settings.voice.error.microphone'),
+    microphone_read_failed: t('settings.voice.error.microphoneRead'),
+    recording_interrupted: t('settings.voice.error.recordingInterrupted'),
+    detection_failed: t('settings.voice.error.detection'),
+    pipeline_failed: t('settings.voice.error.pipeline'),
+    session_resolution_failed: t('settings.voice.error.session'),
+    send_failed: t('settings.voice.error.send'),
+    voice_config_invalid: t('settings.voice.error.configInvalid'),
+    voice_stack_unavailable: t('settings.voice.error.stackUnavailable'),
   };
   return Object.hasOwn(messages, code) ? messages[code] : null;
 }
 
 /** Explanation of a failed voice command, by its `command_failed` code. */
 export function commandFailureMessage(code) {
-  return errorMessage(
-    code,
-    t(
-      'voice.toast.commandFailedMessage',
-      'The voice command could not be sent. The failure was written to the Desktop log.',
-    ),
-  );
+  return errorMessage(code, t('voice.toast.commandFailedMessage'));
 }

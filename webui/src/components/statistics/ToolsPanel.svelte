@@ -26,63 +26,51 @@
 <div class="stats-panel">
   <div class="stats-grid">
     {@render statCard(
-      t('statistics.tools.totalCalls', 'Tool calls'),
+      t('statistics.tools.totalCalls'),
       formatInteger(tools.total_calls, locale),
     )}
     {@render statCard(
-      t('statistics.tools.accepted', 'Accepted'),
+      t('statistics.tools.accepted'),
       formatInteger(insights.accepted, locale),
     )}
     {@render statCard(
-      t('statistics.tools.rejected', 'Rejected'),
+      t('statistics.tools.rejected'),
       formatInteger(insights.rejected, locale),
     )}
     {@render statCard(
-      t('statistics.tools.unknown', 'Unknown outcome'),
+      t('statistics.tools.unknown'),
       formatInteger(insights.unknown, locale),
-      t(
-        'statistics.tools.unknownHint',
-        'Recorded Tool results without an accepted or rejected outcome.',
-      ),
+      t('statistics.tools.unknownHint'),
     )}
   </div>
   <p class="stats-note">
-    {t(
-      'statistics.tools.outcomeNote',
-      'Accepted means the Tool returned ok:true. Rejected means it returned ok:false, including safe validation and guardrail rejections; a rejection does not by itself mean the Tool malfunctioned. Statistics never reads or includes Tool arguments.',
-    )}
+    {t('statistics.tools.outcomeNote')}
   </p>
 
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t('statistics.tools.perTool', 'Per tool')}
+      {t('statistics.tools.perTool')}
     </h3>
     {#if tools.tools.length === 0}
-      <EmptyState
-        density="compact"
-        description={t('statistics.empty', 'No activity recorded yet.')}
-      />
+      <EmptyState density="compact" description={t('statistics.empty')} />
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
       <div
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t(
-          'statistics.table.scroll',
-          'Statistics table; scroll for more columns',
-        )}
+        aria-label={t('statistics.table.scroll')}
       >
         <table class="stats-table">
           <thead>
             <tr>
-              <th>{t('statistics.col.tool', 'Tool')}</th>
-              <th>{t('statistics.col.calls', 'Calls')}</th>
-              <th>{t('statistics.col.acceptedRate', 'Accepted')}</th>
-              <th>{t('statistics.col.rejectedRate', 'Rejected')}</th>
-              <th>{t('statistics.col.avgDuration', 'Avg')}</th>
+              <th>{t('statistics.col.tool')}</th>
+              <th>{t('statistics.col.calls')}</th>
+              <th>{t('statistics.col.acceptedRate')}</th>
+              <th>{t('statistics.col.rejectedRate')}</th>
+              <th>{t('statistics.col.avgDuration')}</th>
               <th>P95</th>
-              <th>{t('statistics.col.topRejection', 'Top rejection')}</th>
+              <th>{t('statistics.col.topRejection')}</th>
             </tr>
           </thead>
           <tbody>
@@ -104,40 +92,31 @@
   </div>
 
   {@render countTable(
-    t('statistics.tools.rejectionCodes', 'Rejection codes across Tools'),
+    t('statistics.tools.rejectionCodes'),
     insights.rejectionCodes,
   )}
   <div class="stats-columns">
-    {@render agentCountTable(
-      t('statistics.tools.byAgent', 'Calls per agent'),
-      tools.by_agent,
-    )}
+    {@render agentCountTable(t('statistics.tools.byAgent'), tools.by_agent)}
     <div class="stats-block stats-block--narrow">
       <h3 class="stats-block__title">
-        {t('statistics.tools.topSessions', 'Busiest sessions')}
+        {t('statistics.tools.topSessions')}
       </h3>
       {#if tools.top_sessions.length === 0}
-        <EmptyState
-          density="compact"
-          description={t('statistics.none', 'None')}
-        />
+        <EmptyState density="compact" description={t('statistics.none')} />
       {:else}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
         <div
           class="stats-table-scroll"
           role="region"
           tabindex="0"
-          aria-label={t(
-            'statistics.table.scroll',
-            'Statistics table; scroll for more columns',
-          )}
+          aria-label={t('statistics.table.scroll')}
         >
           <table class="stats-table">
             <thead>
               <tr>
-                <th>{t('statistics.col.agent', 'Agent')}</th>
-                <th>{t('statistics.col.session', 'Session')}</th>
-                <th>{t('statistics.col.calls', 'Calls')}</th>
+                <th>{t('statistics.col.agent')}</th>
+                <th>{t('statistics.col.session')}</th>
+                <th>{t('statistics.col.calls')}</th>
               </tr>
             </thead>
             <tbody>

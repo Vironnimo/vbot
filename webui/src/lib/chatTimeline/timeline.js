@@ -130,7 +130,7 @@ function runFailureFallback(item, runEvents, messages) {
       message: {
         id,
         role: 'error',
-        content: failure.payload?.error || t('chat.runError', 'Run failed.'),
+        content: failure.payload?.error || t('chat.runError'),
         timestamp: failure.timestamp,
       },
     },

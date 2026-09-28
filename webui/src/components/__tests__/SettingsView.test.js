@@ -319,11 +319,7 @@ describe('SettingsView', () => {
       await mountSettings({}, { onNavigateToAgentDefaults: navigate });
       search('thinking');
       Array.from(document.querySelectorAll('.settings-search-result'))
-        .find((item) =>
-          item.textContent.includes(
-            t('agents.shared.title', 'Shared defaults'),
-          ),
-        )
+        .find((item) => item.textContent.includes(t('agents.shared.title')))
         .click();
       expect(navigate).toHaveBeenCalledWith('defaults');
       expect(document.querySelector('#settings-defaults-model')).toBeNull();
@@ -518,8 +514,8 @@ describe('SettingsView', () => {
 
       await waitForCondition(() => toastMock.mock.calls.length > 0);
       expect(toastMock).toHaveBeenCalledWith({
-        title: t('errors.appError', 'Error'),
-        message: `${t('settings.models.loadError', 'Model catalog could not be loaded.')} catalog offline`,
+        title: t('errors.appError'),
+        message: `${t('settings.models.loadError')} catalog offline`,
         variant: 'error',
       });
     });
@@ -718,16 +714,13 @@ describe('SettingsView', () => {
       settings.recall.available_backends = ['sqlite_fts', 'vector', 'hybrid'];
       await mountSettings({ settings }, { onToast: toastMock });
       await openRecallPanel();
-      const vectorHint = t(
-        'settings.recall.vectorHint',
-        'Semantic search uses the embedding model configured below.',
-      );
+      const vectorHint = t('settings.recall.vectorHint');
       expect(document.body.textContent).not.toContain(vectorHint);
 
       openSimpleDropdown('settings-recall-backend');
       selectSimpleOption(
         'settings-recall-backend',
-        t('settings.recall.backends.vector', 'vector'),
+        t('settings.recall.backends.vector'),
       );
       expect(document.body.textContent).toContain(vectorHint);
       getButton('Save').click();
@@ -750,7 +743,7 @@ describe('SettingsView', () => {
       openSimpleDropdown('settings-web-search-provider');
       selectSimpleOption(
         'settings-web-search-provider',
-        t('settings.webSearch.providers.searxng', 'searxng'),
+        t('settings.webSearch.providers.searxng'),
       );
       setInputValue(
         '#settings-web-search-searxng-base-url',

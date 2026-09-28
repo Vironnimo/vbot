@@ -5,11 +5,11 @@
   function granularityLabel(value) {
     switch (value) {
       case 'week':
-        return t('statistics.granularity.week', 'Week');
+        return t('statistics.granularity.week');
       case 'month':
-        return t('statistics.granularity.month', 'Month');
+        return t('statistics.granularity.month');
       default:
-        return t('statistics.granularity.day', 'Day');
+        return t('statistics.granularity.day');
     }
   }
 </script>
@@ -17,7 +17,7 @@
 <div
   class="stats-toggle"
   role="group"
-  aria-label={t('statistics.granularity.label', 'Period')}
+  aria-label={t('statistics.granularity.label')}
 >
   {#each DAILY_GRANULARITIES as value (value)}
     <button

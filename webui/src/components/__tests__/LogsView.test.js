@@ -80,7 +80,7 @@ describe('LogsView', () => {
     );
     expect(document.body.textContent).toContain('Ready');
     expect(simpleTriggerLabel('logs-file')).toContain('2026-05-11');
-    expect(buttonByText(t('common.refresh', 'Refresh'))).toBeNull();
+    expect(buttonByText(t('common.refresh'))).toBeNull();
     expect(document.querySelector('.logs-view.view-frame')).toBeTruthy();
     expect(document.querySelector('.logs-view .view-header')).toBeTruthy();
     const toolbar = document.querySelector('.logs-view .view-toolbar--stack');
@@ -127,7 +127,7 @@ describe('LogsView', () => {
     expect(window.matchMedia).toHaveBeenCalledWith('(max-width: 640px)');
     const toggle = document.querySelector('.logs-view__filters-toggle');
     const panel = document.getElementById('logs-filters');
-    expect(toggle.textContent.trim()).toBe(t('logs.filters', 'Filters'));
+    expect(toggle.textContent.trim()).toBe(t('logs.filters'));
     expect(toggle.getAttribute('aria-controls')).toBe('logs-filters');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.getAttribute('aria-label')).toBeNull();
@@ -151,12 +151,9 @@ describe('LogsView', () => {
     expect(panel.hidden).toBe(false);
 
     openSimpleDropdown('logs-level-filter');
-    selectSimpleOption('logs-level-filter', t('logs.level.error', 'ERROR'));
+    selectSimpleOption('logs-level-filter', t('logs.level.error'));
     openSimpleDropdown('logs-sort-order');
-    selectSimpleOption(
-      'logs-sort-order',
-      t('logs.sort.oldest', 'Oldest first'),
-    );
+    selectSimpleOption('logs-sort-order', t('logs.sort.oldest'));
     expect(logEntryMessages()).toEqual(['Failed to boot']);
     expect(toggle.getAttribute('aria-label')).toBe('Filters, 2 changed');
     expect(
@@ -176,12 +173,8 @@ describe('LogsView', () => {
     const inlinePanel = document.getElementById('logs-filters');
     expect(inlinePanel.hidden).toBe(false);
     expect(inlinePanel.contains(inputByLabel('Search'))).toBe(true);
-    expect(simpleTriggerLabel('logs-level-filter')).toBe(
-      t('logs.level.error', 'ERROR'),
-    );
-    expect(simpleTriggerLabel('logs-sort-order')).toBe(
-      t('logs.sort.oldest', 'Oldest first'),
-    );
+    expect(simpleTriggerLabel('logs-level-filter')).toBe(t('logs.level.error'));
+    expect(simpleTriggerLabel('logs-sort-order')).toBe(t('logs.sort.oldest'));
 
     await unmount(mountedComponent);
     mountedComponent = null;
@@ -207,19 +200,17 @@ describe('LogsView', () => {
     mountedComponent = mount(LogsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(
-      () => buttonByText(t('common.retry', 'Retry')) !== null,
-    );
-    expect(buttonByText(t('common.refresh', 'Refresh'))).toBeNull();
+    await waitForCondition(() => buttonByText(t('common.retry')) !== null);
+    expect(buttonByText(t('common.refresh'))).toBeNull();
 
-    buttonByText(t('common.retry', 'Retry')).click();
+    buttonByText(t('common.retry')).click();
     flushSync();
 
     await waitForCondition(() =>
       document.body.textContent.includes('Recovered'),
     );
-    expect(buttonByText(t('common.retry', 'Retry'))).toBeNull();
-    expect(buttonByText(t('common.refresh', 'Refresh'))).toBeNull();
+    expect(buttonByText(t('common.retry'))).toBeNull();
+    expect(buttonByText(t('common.refresh'))).toBeNull();
   });
 
   it('filters and sorts entries locally through simple dropdown controls', async () => {
@@ -264,12 +255,12 @@ describe('LogsView', () => {
 
     openSimpleDropdown('logs-level-filter');
     expect(simpleOptionLabels('logs-level-filter')).toEqual([
-      t('logs.level.all', 'All levels'),
-      t('logs.level.error', 'ERROR'),
-      t('logs.level.info', 'INFO'),
-      t('logs.level.warn', 'WARN'),
+      t('logs.level.all'),
+      t('logs.level.error'),
+      t('logs.level.info'),
+      t('logs.level.warn'),
     ]);
-    selectSimpleOption('logs-level-filter', t('logs.level.error', 'ERROR'));
+    selectSimpleOption('logs-level-filter', t('logs.level.error'));
 
     await waitForCondition(() => !document.body.textContent.includes('Ready'));
     expect(document.body.textContent).toContain('Failed to boot');
@@ -280,20 +271,17 @@ describe('LogsView', () => {
     flushSync();
 
     openSimpleDropdown('logs-level-filter');
-    selectSimpleOption('logs-level-filter', t('logs.level.all', 'All levels'));
+    selectSimpleOption('logs-level-filter', t('logs.level.all'));
     inputByLabel('Search').value = '';
     inputByLabel('Search').dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
 
     openSimpleDropdown('logs-sort-order');
     expect(simpleOptionLabels('logs-sort-order')).toEqual([
-      t('logs.sort.newest', 'Newest first'),
-      t('logs.sort.oldest', 'Oldest first'),
+      t('logs.sort.newest'),
+      t('logs.sort.oldest'),
     ]);
-    selectSimpleOption(
-      'logs-sort-order',
-      t('logs.sort.oldest', 'Oldest first'),
-    );
+    selectSimpleOption('logs-sort-order', t('logs.sort.oldest'));
 
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
     expect(logEntryMessages()).toEqual([
@@ -301,9 +289,7 @@ describe('LogsView', () => {
       'Config drift',
       'Failed to boot',
     ]);
-    expect(simpleTriggerLabel('logs-sort-order')).toBe(
-      t('logs.sort.oldest', 'Oldest first'),
-    );
+    expect(simpleTriggerLabel('logs-sort-order')).toBe(t('logs.sort.oldest'));
   });
 
   it('switches files, resubscribes to the selected file only, and resets a level it lacks', async () => {
@@ -328,7 +314,7 @@ describe('LogsView', () => {
       () => subscribeLogEventsMock.mock.calls.length === 1,
     );
 
-    const warn = t('logs.level.warn', 'WARN');
+    const warn = t('logs.level.warn');
     openSimpleDropdown('logs-level-filter');
     selectSimpleOption('logs-level-filter', warn);
     expect(simpleTriggerLabel('logs-level-filter')).toBe(warn);
@@ -349,12 +335,12 @@ describe('LogsView', () => {
     );
     expect(logEntryMessages()).toEqual(['Loaded 2026-05-10']);
 
-    const allLevels = t('logs.level.all', 'All levels');
+    const allLevels = t('logs.level.all');
     expect(simpleTriggerLabel('logs-level-filter')).toBe(allLevels);
     openSimpleDropdown('logs-level-filter');
     expect(simpleOptionLabels('logs-level-filter')).toEqual([
       allLevels,
-      t('logs.level.info', 'INFO'),
+      t('logs.level.info'),
     ]);
   });
 
@@ -421,13 +407,11 @@ describe('LogsView', () => {
       errorRow.querySelector('.logs-entry__summary').textContent.trim(),
     ).toBe('Failed');
     expect(errorRow.querySelector('.logs-entry__more').textContent).toBe(
-      t('logs.moreLinesOne', '+1 line'),
+      t('logs.moreLinesOne'),
     );
     expect(document.body.textContent).not.toContain('Traceback line');
     expect(document.body.querySelector('select')).toBeNull();
-    expect(document.body.textContent).toContain(
-      t('logs.stream.connected', 'Live'),
-    );
+    expect(document.body.textContent).toContain(t('logs.stream.connected'));
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
   });
 
@@ -451,7 +435,7 @@ describe('LogsView', () => {
     const row = document.querySelector('.logs-entry');
     const toggle = row.querySelector('.logs-entry__toggle');
     expect(row.querySelector('.logs-entry__more').textContent).toBe(
-      t('logs.moreLines', '+{count} lines', { count: 2 }),
+      t('logs.moreLines', { count: 2 }),
     );
     expect(toggle.getAttribute('aria-label')).toBe('Entry details');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
@@ -636,7 +620,7 @@ describe('LogsView', () => {
     flushSync();
     await waitForCondition(() => streamConnections.length === 1, 40, true);
 
-    const reconnecting = t('logs.stream.reconnecting', 'Reconnecting…');
+    const reconnecting = t('logs.stream.reconnecting');
     streamConnections[0].emitClose();
     flushSync();
     expect(document.body.textContent).toContain(reconnecting);

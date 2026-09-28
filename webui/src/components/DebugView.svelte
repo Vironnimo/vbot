@@ -117,10 +117,7 @@
       applyModelProbeProviders(viewState, settingsResult);
     } catch (error) {
       if (disposed || token !== listRequestToken) return;
-      viewState.error = errorMessageText(
-        error,
-        t('errors.generic', 'Something went wrong. Try again.'),
-      );
+      viewState.error = errorMessageText(error, t('errors.generic'));
     } finally {
       if (token === listRequestToken) viewState.loading = false;
     }
@@ -201,10 +198,7 @@
       if (draftWasClean) traceLimitInput = status.traceLimit;
     } catch (error) {
       if (disposed || token !== listRequestToken) return;
-      viewState.error = errorMessageText(
-        error,
-        t('errors.generic', 'Something went wrong. Try again.'),
-      );
+      viewState.error = errorMessageText(error, t('errors.generic'));
     }
   }
 
@@ -239,10 +233,7 @@
       ) {
         return;
       }
-      detailError = errorMessageText(
-        error,
-        t('errors.generic', 'Something went wrong. Try again.'),
-      );
+      detailError = errorMessageText(error, t('errors.generic'));
     } finally {
       if (requestToken === detailRequestToken) {
         loadingDetail = false;
@@ -267,10 +258,7 @@
       cleared = true;
       status = { ...status, traceCount: 0 };
     } catch (error) {
-      viewState.error = errorMessageText(
-        error,
-        t('errors.generic', 'Something went wrong. Try again.'),
-      );
+      viewState.error = errorMessageText(error, t('errors.generic'));
     } finally {
       clearing = false;
       if (cleared && !disposed) await refreshTraces();
@@ -285,10 +273,7 @@
       value < TRACE_LIMIT_MIN ||
       value > TRACE_LIMIT_MAX
     ) {
-      limitError = t(
-        'debug.limitInvalid',
-        'Enter a whole number from 1 to 500.',
-      );
+      limitError = t('debug.limitInvalid');
       return false;
     }
     limitError = '';
@@ -299,10 +284,7 @@
       if (traceLimitInput === submitted) traceLimitInput = status.traceLimit;
       return true;
     } catch (error) {
-      limitError = errorMessageText(
-        error,
-        t('errors.generic', 'Something went wrong. Try again.'),
-      );
+      limitError = errorMessageText(error, t('errors.generic'));
       return false;
     } finally {
       retentionRevision += 1;
@@ -342,46 +324,35 @@
 >
   <header class="view-header debug-header">
     <div class="debug-heading">
-      <h2 id="debug-title">{t('debug.title', 'Debug')}</h2>
+      <h2 id="debug-title">{t('debug.title')}</h2>
       <span class="capture-state" class:capture-state--enabled={status.enabled}>
         <span aria-hidden="true">●</span>
         {status.enabled
-          ? t('debug.captureEnabled', 'Capture enabled')
-          : t('debug.captureDisabled', 'Capture disabled')}
+          ? t('debug.captureEnabled')
+          : t('debug.captureDisabled')}
       </span>
     </div>
     <p>
-      {t(
-        'debug.inspectorSubtitle',
-        'Explore exactly what was sent to the Provider and what came back.',
-      )}
+      {t('debug.inspectorSubtitle')}
     </p>
   </header>
 
   <div class="debug-utilities view-toolbar view-toolbar--split">
     <Badge variant="neutral"
-      >{t('debug.statusCount', '{count} / {limit} traces', {
+      >{t('debug.statusCount', {
         count: status.traceCount,
         limit: status.traceLimit,
       })}</Badge
     >
-    <span class="debug-local-note"
-      >{t(
-        'debug.fullCapture',
-        'Stored locally · full request and response bodies',
-      )}</span
-    >
+    <span class="debug-local-note">{t('debug.fullCapture')}</span>
     <details class="debug-storage">
-      <summary>{t('debug.captureAndStorage', 'Capture & storage')}</summary>
+      <summary>{t('debug.captureAndStorage')}</summary>
       <div class="debug-storage-content">
         <p>
-          {t(
-            'debug.capturePrivacy',
-            'Bodies are stored in full, including prompts. Recognized secret headers and URL parameters are redacted; body content is not redacted.',
-          )}
+          {t('debug.capturePrivacy')}
         </p>
         <label
-          >{t('debug.traceLimit', 'Trace limit')}
+          >{t('debug.traceLimit')}
           <input
             type="number"
             min="1"
@@ -397,7 +368,7 @@
               if (event.key === 'Enter')
                 void autosave.participant.runSave('manual');
             }}
-            aria-label={t('debug.traceLimit', 'Trace limit')}
+            aria-label={t('debug.traceLimit')}
           />
         </label>
         {#if limitError}<Banner variant="error">{limitError}</Banner>{/if}
@@ -406,31 +377,27 @@
             variant="tertiary"
             disabled={!hasTraces || clearing}
             onClick={() => (showClearConfirm = !showClearConfirm)}
-            >{t('debug.clearAll', 'Clear all traces')}</Button
+            >{t('debug.clearAll')}</Button
           >
           <Button
             variant="tertiary"
             onClick={() => autosave.participant.runSave('manual')}
-            >{t('common.save', 'Save')}</Button
+            >{t('common.save')}</Button
           >
         </div>
         {#if showClearConfirm}
           <p>
-            {t(
-              'debug.clearConfirm',
-              'Clear all traces? This cannot be undone.',
-            )}
+            {t('debug.clearConfirm')}
           </p>
           <div class="storage-actions">
             <Button
               variant="danger"
               disabled={clearing}
-              onClick={handleClearTraces}
-              >{t('common.confirm', 'Confirm')}</Button
+              onClick={handleClearTraces}>{t('common.confirm')}</Button
             ><Button
               variant="secondary"
               onClick={() => (showClearConfirm = false)}
-              >{t('common.cancel', 'Cancel')}</Button
+              >{t('common.cancel')}</Button
             >
           </div>
         {/if}
@@ -442,21 +409,18 @@
     <Banner variant="error" aria-live="polite"
       ><span>{viewState.error}</span><Button
         variant="secondary"
-        onClick={loadAll}>{t('common.retry', 'Retry')}</Button
+        onClick={loadAll}>{t('common.retry')}</Button
       ></Banner
     >
   {/if}
 
   {#if viewState.loading}
-    <Banner variant="neutral">{t('common.loading', 'Loading…')}</Banner>
+    <Banner variant="neutral">{t('common.loading')}</Banner>
   {:else if !hasTraces}
     <EmptyState
       fill
-      title={t('debug.emptyHeader', 'No traces captured yet')}
-      description={t(
-        'debug.emptyState',
-        'Enable debug mode in Settings and send a message to start recording provider requests and responses.',
-      )}
+      title={t('debug.emptyHeader')}
+      description={t('debug.emptyState')}
     />
   {:else}
     <div
@@ -481,7 +445,7 @@
   {/if}
 
   <details class="debug-probe-disclosure">
-    <summary>{t('debug.modelProbe', 'Model Probe')}</summary>
+    <summary>{t('debug.modelProbe')}</summary>
     <div class="debug-probe-content"><DebugModelProbe bind:viewState /></div>
   </details>
 </section>

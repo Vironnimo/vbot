@@ -257,7 +257,7 @@
         value={Math.min(currentTime, duration)}
         disabled={!duration || Boolean(error)}
         aria-label={t('audio.seek')}
-        aria-valuetext={t('audio.position', undefined, {
+        aria-valuetext={t('audio.position', {
           current: timeLabel(currentTime),
           duration: timeLabel(duration),
         })}

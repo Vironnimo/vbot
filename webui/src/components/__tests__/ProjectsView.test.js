@@ -190,7 +190,7 @@ describe('ProjectsView list and selection', () => {
     // A non-clean report surfaces a collapsed summary at the top of the Team
     // section; the findings themselves stay hidden until expanded.
     expect(document.body.textContent).toContain(
-      t('projects.report.findingCount', '{count} issues found', { count: 1 }),
+      t('projects.report.findingCount', { count: 1 }),
     );
     expect(document.body.textContent).not.toContain('model not configured');
     buttonWithTextContent('Show details').click();
@@ -313,7 +313,7 @@ describe('ProjectsView Project settings', () => {
     buttonByTestId('project-save-demo').click();
     await waitForCondition(() => onToast.mock.calls.length > 0);
     expect(onToast).toHaveBeenCalledWith({
-      title: t('common.alreadySaved', 'Already saved'),
+      title: t('common.alreadySaved'),
       variant: 'success',
     });
     expect(setProjectMock).not.toHaveBeenCalled();

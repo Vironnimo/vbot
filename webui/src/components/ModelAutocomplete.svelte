@@ -98,14 +98,14 @@
     bind:this={containerElement}
     class="model-autocomplete"
     role="listbox"
-    aria-label={t('modelAutocomplete.label', 'Model suggestions')}
+    aria-label={t('modelAutocomplete.label')}
   >
     <div class="model-autocomplete__eyebrow">
-      {t('modelAutocomplete.eyebrow', 'Models')}
+      {t('modelAutocomplete.eyebrow')}
     </div>
     {#if loading && matchingOptions.length === 0}
       <div class="model-autocomplete__loading">
-        {t('common.loading', 'Loading…')}
+        {t('common.loading')}
       </div>
     {/if}
     {#each matchingOptions as option, index (option.value)}

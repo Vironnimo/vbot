@@ -55,29 +55,29 @@
   const ACTION_OPTIONS = [
     {
       value: ACTION_CHOICE_COMMAND,
-      label: t('settings.voice.actionCommand', 'Send a command'),
+      label: t('settings.voice.actionCommand'),
     },
     {
       value: ACTION_CHOICE_LIVE_TOGGLE,
-      label: t('settings.voice.actionLiveToggle', 'Start or end Live voice'),
+      label: t('settings.voice.actionLiveToggle'),
     },
     {
       value: ACTION_CHOICE_LIVE_START,
-      label: t('settings.voice.actionLiveStart', 'Start Live voice'),
+      label: t('settings.voice.actionLiveStart'),
     },
   ];
   const SESSION_OPTIONS = [
     {
       value: '',
-      label: t('settings.voice.sessionDefault', 'Default Session behavior'),
+      label: t('settings.voice.sessionDefault'),
     },
     {
       value: 'active',
-      label: t('settings.voice.sessionBehaviorActive', 'Use active Session'),
+      label: t('settings.voice.sessionBehaviorActive'),
     },
     {
       value: 'new',
-      label: t('settings.voice.sessionBehaviorNew', 'New Session each time'),
+      label: t('settings.voice.sessionBehaviorNew'),
     },
   ];
 
@@ -97,7 +97,7 @@
   let agentChoices = $derived([
     {
       value: '',
-      label: t('settings.voice.agentDefault', 'Default Agent'),
+      label: t('settings.voice.agentDefault'),
     },
     ...agentOptions,
     ...(action?.agent_id &&
@@ -106,10 +106,7 @@
           {
             value: action.agent_id,
             label: action.agent_id,
-            secondaryLabel: t(
-              'settings.voice.agentUnavailable',
-              'Not on this server',
-            ),
+            secondaryLabel: t('settings.voice.agentUnavailable'),
             disabled: true,
           },
         ]
@@ -149,12 +146,12 @@
       <span class="voice-model-card__name">{model.label}</span>
       <Badge variant={model.source === 'built_in' ? 'info' : 'neutral'}>
         {model.source === 'built_in'
-          ? t('settings.voice.modelBuiltIn', 'Built-in')
-          : t('settings.voice.modelImported', 'Imported TFLite')}
+          ? t('settings.voice.modelBuiltIn')
+          : t('settings.voice.modelImported')}
       </Badge>
       {#if active && problem}
         <Badge variant="warn" class="voice-model-card__problem-badge">
-          {t('settings.voice.phraseNotReady', 'Not ready')}
+          {t('settings.voice.phraseNotReady')}
         </Badge>
       {/if}
     </div>
@@ -163,7 +160,7 @@
       checked={active}
       onChange={onToggle}
       disabled={toggleDisabled}
-      ariaLabel={t('settings.voice.modelToggleAria', 'Listen for {name}', {
+      ariaLabel={t('settings.voice.modelToggleAria', {
         name: model.label,
       })}
     />
@@ -180,21 +177,17 @@
         class="voice-model-card__notice voice-model-card__notice--warn"
         role="note"
       >
-        {t(
-          'settings.voice.overlapWarning',
-          '“{name}” can also be heard as {others}, which does something else. Give them the same action or keep only one of them active.',
-          {
-            name: model.label,
-            others: conflicts.map((label) => `“${label}”`).join(', '),
-          },
-        )}
+        {t('settings.voice.overlapWarning', {
+          name: model.label,
+          others: conflicts.map((label) => `“${label}”`).join(', '),
+        })}
       </p>
     {/if}
 
     <div class="voice-model-card__tuning">
       <div class="voice-model-card__sensitivity">
         <label for={sliderId}>
-          {t('settings.voice.sensitivity', 'Sensitivity')}
+          {t('settings.voice.sensitivity')}
         </label>
         <span
           >{sliderAvailable ? `${Math.round(sliderValue * 100)}%` : '–'}</span
@@ -212,24 +205,20 @@
         disabled={sensitivityDisabled || !sliderAvailable}
       />
       <div class="voice-slider-labels">
-        <span>{t('settings.voice.lessSensitive', 'Less sensitive')}</span>
-        <span>{t('settings.voice.moreSensitive', 'More sensitive')}</span>
+        <span>{t('settings.voice.lessSensitive')}</span>
+        <span>{t('settings.voice.moreSensitive')}</span>
       </div>
 
       <div class="voice-model-card__action">
         <span aria-hidden="true">
-          {t('settings.voice.modelAction', 'When heard')}
+          {t('settings.voice.modelAction')}
         </span>
         <Dropdown
           value={actionChoice}
           options={ACTION_OPTIONS}
-          ariaLabel={t(
-            'settings.voice.modelActionAria',
-            'When {name} is heard',
-            {
-              name: model.label,
-            },
-          )}
+          ariaLabel={t('settings.voice.modelActionAria', {
+            name: model.label,
+          })}
           onValueChange={changeChoice}
           disabled={routingDisabled}
         />
@@ -237,12 +226,12 @@
       {#if command}
         <div class="voice-model-card__action">
           <span aria-hidden="true">
-            {t('settings.voice.phraseAgent', 'Agent')}
+            {t('settings.voice.phraseAgent')}
           </span>
           <Dropdown
             value={action?.agent_id ?? ''}
             options={agentChoices}
-            ariaLabel={t('settings.voice.phraseAgentAria', 'Agent for {name}', {
+            ariaLabel={t('settings.voice.phraseAgentAria', {
               name: model.label,
             })}
             onValueChange={changeAgent}
@@ -251,16 +240,14 @@
         </div>
         <div class="voice-model-card__action">
           <span aria-hidden="true">
-            {t('settings.voice.phraseSession', 'Session')}
+            {t('settings.voice.phraseSession')}
           </span>
           <Dropdown
             value={action?.session_behavior ?? ''}
             options={SESSION_OPTIONS}
-            ariaLabel={t(
-              'settings.voice.phraseSessionAria',
-              'Session for {name}',
-              { name: model.label },
-            )}
+            ariaLabel={t('settings.voice.phraseSessionAria', {
+              name: model.label,
+            })}
             onValueChange={changeSession}
             disabled={routingDisabled}
           />
@@ -275,19 +262,19 @@
         <Button
           variant="tertiary"
           disabled={calibrateDisabled}
-          ariaLabel={t('settings.voice.calibrateAria', 'Calibrate {name}', {
+          ariaLabel={t('settings.voice.calibrateAria', {
             name: model.label,
           })}
           onClick={onCalibrate}
         >
-          {t('settings.voice.calibrate', 'Calibrate')}
+          {t('settings.voice.calibrate')}
         </Button>
       </div>
     {/if}
   {:else if model.removable}
     <div class="voice-model-card__actions">
       <Button variant="tertiary" disabled={removeDisabled} onClick={onRemove}>
-        {t('settings.voice.removeModel', 'Remove imported model')}
+        {t('settings.voice.removeModel')}
       </Button>
     </div>
   {/if}

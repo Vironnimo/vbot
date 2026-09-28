@@ -13,6 +13,7 @@ import {
   showProject,
 } from '../api.js';
 import { scheduleAutosave } from '../autosave.js';
+import { t } from '../i18n.js';
 import { shouldApplyReloadNow } from '../resourceInvalidation.js';
 import { normalizeToolAccess } from '../toolAccess.js';
 import {
@@ -64,8 +65,7 @@ export function createProjectsController({
   autoSaveDelayMs = PROJECT_AUTO_SAVE_DEBOUNCE_MS,
   toolAccessOverrideAutoSaveDelayMs = TOOL_ACCESS_OVERRIDE_AUTO_SAVE_DEBOUNCE_MS,
   detectDelayMs = PROJECT_DETECT_DEBOUNCE_MS,
-  translate = (_key, fallback, values = {}) =>
-    String(fallback).replace(/\{(\w+)\}/g, (_match, key) => values[key] ?? ''),
+  translate = t,
   onProjectSelected = () => {},
   onToast = () => {},
 } = {}) {
@@ -107,7 +107,7 @@ export function createProjectsController({
     if (typeof error === 'string' && error.trim()) {
       return error.trim();
     }
-    return translate('common.unknown', 'Unknown');
+    return translate('common.unknown');
   }
 
   function selectedProject() {
@@ -295,7 +295,7 @@ export function createProjectsController({
       if (!active || requestId !== listRequestId) {
         return false;
       }
-      state.listError = `${translate('projects.loadError', 'Projects could not be loaded.')} ${errorText(error)}`;
+      state.listError = `${translate('projects.loadError')} ${errorText(error)}`;
       return false;
     } finally {
       if (active && requestId === listRequestId) {
@@ -318,7 +318,7 @@ export function createProjectsController({
       if (!active || requestId !== scanRequestId) {
         return false;
       }
-      state.editError = `${translate('projects.loadError', 'Projects could not be loaded.')} ${errorText(error)}`;
+      state.editError = `${translate('projects.loadError')} ${errorText(error)}`;
       return false;
     } finally {
       if (active && requestId === scanRequestId) {
@@ -554,7 +554,7 @@ export function createProjectsController({
     if (!hasManageChanges(changes)) {
       if (manual) {
         onToast({
-          title: translate('common.alreadySaved', 'Already saved'),
+          title: translate('common.alreadySaved'),
           variant: 'success',
         });
       }
@@ -592,13 +592,13 @@ export function createProjectsController({
       }
       applyScan(result?.scan);
       onToast({
-        title: translate('projects.manage.saveSuccess', 'Project updated.'),
+        title: translate('projects.manage.saveSuccess'),
         variant: 'success',
       });
       return true;
     } catch (error) {
       if (active) {
-        state.editError = `${translate('projects.manage.saveError', 'Project changes could not be saved.')} ${errorText(error)}`;
+        state.editError = `${translate('projects.manage.saveError')} ${errorText(error)}`;
       }
       return false;
     } finally {
@@ -698,10 +698,7 @@ export function createProjectsController({
     clearToolAccessOverrideAutoSave({ flushPending: false });
     for (const change of pendingOverrideChanges()) {
       if (!canSetOverride(change.agentId, change.field)) {
-        state.editError = translate(
-          'errors.validation',
-          'Check the highlighted fields and try again.',
-        );
+        state.editError = translate('errors.validation');
         return false;
       }
       if (
@@ -754,14 +751,14 @@ export function createProjectsController({
         };
       }
       onToast({
-        title: translate('projects.team.overrideSaved', 'Override saved.'),
+        title: translate('projects.team.overrideSaved'),
         variant: 'success',
       });
       return true;
     } catch (error) {
       if (active) {
         onToast({
-          title: `${translate('projects.team.overrideError', 'The override could not be saved.')} ${errorText(error)}`,
+          title: `${translate('projects.team.overrideError')} ${errorText(error)}`,
           variant: 'error',
           sticky: true,
         });
@@ -796,13 +793,13 @@ export function createProjectsController({
       }
       applyScan(result?.scan, { replaceDrafts: true });
       onToast({
-        title: translate('projects.team.overrideCleared', 'Override cleared.'),
+        title: translate('projects.team.overrideCleared'),
         variant: 'success',
       });
     } catch (error) {
       if (active) {
         onToast({
-          title: `${translate('projects.team.overrideClearError', 'The override could not be cleared.')} ${errorText(error)}`,
+          title: `${translate('projects.team.overrideClearError')} ${errorText(error)}`,
           variant: 'error',
           sticky: true,
         });

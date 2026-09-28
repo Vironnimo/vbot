@@ -95,7 +95,7 @@
 
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -124,12 +124,10 @@
         debugSettings = getDebugSettings(nextSettings);
       onDebugEnabledChange(nextEnabled);
       if (reason === 'manual')
-        onToast({ title: t('debug.settings', 'Debug'), variant: 'success' });
+        onToast({ title: t('debug.settings'), variant: 'success' });
       return true;
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
       return false;
     } finally {
       saving = false;
@@ -142,19 +140,16 @@
   <div class="s-row s-row--compact">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('debug.enabled', 'Enable debug mode')}
+        {t('debug.enabled')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'debug.enabledDescription',
-          'Capture provider requests and responses for inspection.',
-        )}
+        {t('debug.enabledDescription')}
       </div>
     </div>
     <div class="s-row-control">
       <Toggle
         checked={debugSettings.enabled === true}
-        ariaLabel={t('debug.enabled', 'Enable debug mode')}
+        ariaLabel={t('debug.enabled')}
         onChange={(next) => {
           debugSettings = {
             ...debugSettings,
@@ -183,23 +178,17 @@
       </svg>
     </div>
     <p class="s-debug-warning-text">
-      {t(
-        'debug.localWarning',
-        'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
-      )}
+      {t('debug.localWarning')}
     </p>
   </div>
 
   <div class="s-row s-row--compact">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('debug.traceLimit', 'Trace limit')}
+        {t('debug.traceLimit')}
       </div>
       <div class="s-row-desc">
-        {t(
-          'debug.traceLimitDescription',
-          'Maximum number of traces to keep. Older traces are removed when the limit is reached.',
-        )}
+        {t('debug.traceLimitDescription')}
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
@@ -210,7 +199,7 @@
         max="500"
         step="1"
         value={debugSettings.trace_limit}
-        ariaLabel={t('debug.traceLimit', 'Trace limit')}
+        ariaLabel={t('debug.traceLimit')}
         onInput={(next) => {
           const rawValue = next;
           if (rawValue === '') {

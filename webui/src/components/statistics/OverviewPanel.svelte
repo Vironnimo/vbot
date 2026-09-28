@@ -29,40 +29,34 @@
 <div class="stats-panel">
   <div class="stats-grid">
     {@render statCard(
-      t('statistics.usage.measuredTokens', 'Measured tokens'),
+      t('statistics.usage.measuredTokens'),
       formatTokens(tokenSplit(usage).measured, locale),
       null,
-      t('statistics.overview.estimatedExtra', '+ {count} estimated', {
+      t('statistics.overview.estimatedExtra', {
         count: formatTokens(tokenSplit(usage).estimated, locale),
       }),
     )}
     {@render statCard(
-      t('statistics.cost.reported', 'Provider-reported cost'),
+      t('statistics.cost.reported'),
       formatCost(costs.reported_usd, locale),
       null,
-      t('statistics.cost.callCount', '{count} calls', {
+      t('statistics.cost.callCount', {
         count: formatInteger(costs.reported_calls, locale),
       }),
     )}
     {@render statCard(
-      t('statistics.cost.estimated', 'Estimated API value'),
+      t('statistics.cost.estimated'),
       formatCost(costs.estimated_usd, locale),
-      t(
-        'statistics.cost.subscriptionHint',
-        'Catalog prices applied to usage. For subscriptions this is an API-equivalent value, not an additional charge or subscription bill.',
-      ),
-      t('statistics.cost.callCount', '{count} calls', {
+      t('statistics.cost.subscriptionHint'),
+      t('statistics.cost.callCount', {
         count: formatInteger(costs.estimated_calls, locale),
       }),
     )}
     {@render statCard(
-      t('statistics.usage.cacheHitRate', 'Cache hit rate'),
+      t('statistics.usage.cacheHitRate'),
       formatPercent(cacheHitRate(usage)),
-      t(
-        'statistics.usage.cacheHitHint',
-        'Cache reads as a share of input on calls that report cache data.',
-      ),
-      t('statistics.cost.cacheCoverage', '{count} calls report cache usage', {
+      t('statistics.usage.cacheHitHint'),
+      t('statistics.cost.cacheCoverage', {
         count: formatInteger(usage.cache_turns, locale),
       }),
     )}
@@ -71,50 +65,47 @@
     <TokenTrend {report} bind:granularity {reportRange} />
     <div class="stats-block">
       <h3 class="stats-block__title">
-        {t('statistics.overview.coverage', 'Coverage & diagnostics')}
+        {t('statistics.overview.coverage')}
       </h3>
       <dl class="stats-facts">
         <div>
-          <dt>{t('statistics.cost.calls', 'Recorded Model calls')}</dt>
+          <dt>{t('statistics.cost.calls')}</dt>
           <dd>{formatInteger(costs.calls, locale)}</dd>
         </div>
         <div>
-          <dt>{t('statistics.cost.unpriced', 'Calls without a price')}</dt>
+          <dt>{t('statistics.cost.unpriced')}</dt>
           <dd>{formatInteger(costs.unpriced_calls, locale)}</dd>
         </div>
         <div>
           <dt>
-            {t('statistics.usage.unreported', 'Calls missing token usage')}
+            {t('statistics.usage.unreported')}
           </dt>
           <dd>{formatInteger(usage.unreported_calls, locale)}</dd>
         </div>
         <div>
           <dt>
-            {t('statistics.cost.retrospective', 'Priced using today’s catalog')}
+            {t('statistics.cost.retrospective')}
           </dt>
           <dd>{formatInteger(costs.retrospective_calls, locale)}</dd>
         </div>
         <div>
-          <dt>{t('statistics.overview.runs', 'Runs')}</dt>
+          <dt>{t('statistics.overview.runs')}</dt>
           <dd>{formatInteger(report.overview.total_runs, locale)}</dd>
         </div>
         <div>
-          <dt>{t('statistics.overview.failedRunsLabel', 'Failed Runs')}</dt>
+          <dt>{t('statistics.overview.failedRunsLabel')}</dt>
           <dd>{formatInteger(report.overview.run_status.failed, locale)}</dd>
         </div>
       </dl>
       <p class="stats-note">
-        {t(
-          'statistics.cost.scope',
-          'Includes Chat, Compaction, Task Models and background Model requests, including retries. Recorded usage remains after a Session is archived or deleted. Older requests count where usage was retained; missing tokens and prices stay unknown. Session diagnostics cover retained, unarchived Sessions.',
-        )}
+        {t('statistics.cost.scope')}
       </p>
       <div class="stats-links">
         <Button size="sm" variant="tertiary" onClick={() => onNavigate('usage')}
-          >{t('statistics.cost.inspect', 'Inspect usage & costs')}</Button
+          >{t('statistics.cost.inspect')}</Button
         >
         <Button size="sm" variant="tertiary" onClick={() => onNavigate('runs')}
-          >{t('statistics.subview.runs', 'Runs & errors')}</Button
+          >{t('statistics.subview.runs')}</Button
         >
       </div>
     </div>
@@ -122,39 +113,34 @@
   <div class="stats-block">
     <div class="stats-block__head">
       <h3 class="stats-block__title">
-        {t('statistics.overview.leadingModels', 'Models using the most tokens')}
+        {t('statistics.overview.leadingModels')}
       </h3>
       <Button size="sm" variant="tertiary" onClick={() => onNavigate('usage')}
-        >{t('statistics.overview.allModels', 'All Models & calls')}</Button
+        >{t('statistics.overview.allModels')}</Button
       >
     </div>
     {#if models.length === 0}
-      <EmptyState
-        density="compact"
-        description={t('statistics.empty', 'No activity recorded yet.')}
-      />
+      <EmptyState density="compact" description={t('statistics.empty')} />
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
       <div
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t(
-          'statistics.overview.leadingModels',
-          'Models using the most tokens',
-        )}
+        aria-label={t('statistics.overview.leadingModels')}
       >
         <table class="stats-table">
           <thead
             ><tr>
-              <th>{t('statistics.col.model', 'Model')}</th><th
-                >{t('statistics.usage.measuredTokens', 'Measured tokens')}</th
+              <th>{t('statistics.col.model')}</th><th
+                >{t('statistics.usage.measuredTokens')}</th
               >
-              <th
-                >{t('statistics.usage.estimatedTokens', 'Estimated tokens')}</th
-              ><th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
-              <th>{t('statistics.cost.reported', 'Provider-reported cost')}</th
-              ><th>{t('statistics.cost.estimated', 'Estimated API value')}</th>
+              <th>{t('statistics.usage.estimatedTokens')}</th><th
+                >{t('statistics.col.cacheHit')}</th
+              >
+              <th>{t('statistics.cost.reported')}</th><th
+                >{t('statistics.cost.estimated')}</th
+              >
             </tr></thead
           ><tbody>
             {#each models as row (row.model)}
@@ -179,45 +165,38 @@
   <div class="stats-block">
     <div class="stats-block__head">
       <h3 class="stats-block__title">
-        {t('statistics.overview.contextHealth', 'Context after Compaction')}
+        {t('statistics.overview.contextHealth')}
       </h3>
       <Button
         size="sm"
         variant="tertiary"
         onClick={() => onNavigate('compactions')}
-        >{t(
-          'statistics.overview.inspectCompactions',
-          'Inspect Compactions',
-        )}</Button
+        >{t('statistics.overview.inspectCompactions')}</Button
       >
     </div>
     <div class="stats-grid">
       {@render statCard(
-        t('statistics.compactions.averageAfter', 'Average remaining tokens'),
+        t('statistics.compactions.averageAfter'),
         formatOptionalTokens(context.average_after_tokens, locale),
       )}
       {@render statCard(
-        t('statistics.compactions.reduction', 'Context reduction'),
+        t('statistics.compactions.reduction'),
         formatPercent(context.reduction_ratio),
       )}
       {@render statCard(
-        t('statistics.compactions.nonShrinking', 'Without context reduction'),
+        t('statistics.compactions.nonShrinking'),
         formatInteger(context.non_shrinking, locale),
       )}
       {@render statCard(
-        t('statistics.compactions.rapid', 'Repeated within 2 Model steps'),
+        t('statistics.compactions.rapid'),
         formatInteger(context.rapid_recompactions, locale),
       )}
     </div>
     <p class="stats-note stats-spaced">
-      {t(
-        'statistics.compactions.coverage',
-        '{known} of {total} checkpoints have before/after context estimates.',
-        {
-          known: formatInteger(context.observations, locale),
-          total: formatInteger(report.compactions.total_compactions, locale),
-        },
-      )}
+      {t('statistics.compactions.coverage', {
+        known: formatInteger(context.observations, locale),
+        total: formatInteger(report.compactions.total_compactions, locale),
+      })}
     </p>
   </div>
 </div>

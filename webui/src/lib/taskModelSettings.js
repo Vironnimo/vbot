@@ -47,92 +47,60 @@ export function stringifyJsonFieldValue(value) {
 const SPEECH_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_SPEECH_TO_TEXT,
-    title: () => t('settings.specializedModels.speechToText', 'Speech to text'),
-    description: () =>
-      t(
-        'settings.specializedModels.speechToTextDescription',
-        'Used by the chat microphone transcription flow.',
-      ),
+    title: () => t('settings.specializedModels.speechToText'),
+    description: () => t('settings.specializedModels.speechToTextDescription'),
   },
   {
     taskType: TASK_TEXT_TO_SPEECH,
-    title: () => t('settings.specializedModels.textToSpeech', 'Text to speech'),
-    description: () =>
-      t(
-        'settings.specializedModels.textToSpeechDescription',
-        'Used by the agent text_to_speech tool.',
-      ),
+    title: () => t('settings.specializedModels.textToSpeech'),
+    description: () => t('settings.specializedModels.textToSpeechDescription'),
   },
 ]);
 
 const LIVE_VOICE_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_LIVE_VOICE,
-    title: () => t('settings.specializedModels.liveVoice', 'Live voice'),
-    description: () =>
-      t(
-        'settings.specializedModels.liveVoiceDescription',
-        'Realtime voice model for spoken conversations with vBot. Delegating models also use a backend model to operate the app.',
-      ),
+    title: () => t('settings.specializedModels.liveVoice'),
+    description: () => t('settings.specializedModels.liveVoiceDescription'),
   },
 ]);
 
 const IMAGE_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_IMAGE_UNDERSTANDING,
-    title: () =>
-      t('settings.specializedModels.imageUnderstanding', 'Image understanding'),
+    title: () => t('settings.specializedModels.imageUnderstanding'),
     description: () =>
-      t(
-        'settings.specializedModels.imageUnderstandingDescription',
-        'Used by analyze_image. Available by default for Agents without vision, or with vision when explicitly enabled in the Agent’s Tool settings.',
-      ),
+      t('settings.specializedModels.imageUnderstandingDescription'),
   },
   {
     taskType: TASK_IMAGE_GENERATION,
-    title: () =>
-      t('settings.specializedModels.imageGeneration', 'Image generation'),
+    title: () => t('settings.specializedModels.imageGeneration'),
     description: () =>
-      t(
-        'settings.specializedModels.imageGenerationDescription',
-        'Used for image generation requests.',
-      ),
+      t('settings.specializedModels.imageGenerationDescription'),
   },
 ]);
 
 const TEXT_EMBEDDING_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_TEXT_EMBEDDING,
-    title: () =>
-      t('settings.specializedModels.embeddingModel', 'Embedding model'),
+    title: () => t('settings.specializedModels.embeddingModel'),
     description: () =>
-      t(
-        'settings.specializedModels.embeddingModelDescription',
-        'Turns text into numeric vectors for meaning-based search. Required when Recall is set to Semantic.',
-      ),
+      t('settings.specializedModels.embeddingModelDescription'),
   },
 ]);
 
 const GENERATED_MEDIA_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_VIDEO_GENERATION,
-    title: () =>
-      t('settings.specializedModels.videoGeneration', 'Video generation'),
+    title: () => t('settings.specializedModels.videoGeneration'),
     description: () =>
-      t(
-        'settings.specializedModels.videoGenerationDescription',
-        'Used by the agent generate_video tool.',
-      ),
+      t('settings.specializedModels.videoGenerationDescription'),
   },
   {
     taskType: TASK_MUSIC_GENERATION,
-    title: () =>
-      t('settings.specializedModels.musicGeneration', 'Music generation'),
+    title: () => t('settings.specializedModels.musicGeneration'),
     description: () =>
-      t(
-        'settings.specializedModels.musicGenerationDescription',
-        'Used by the agent generate_music tool.',
-      ),
+      t('settings.specializedModels.musicGenerationDescription'),
   },
 ]);
 
@@ -144,12 +112,8 @@ export const TASK_MODEL_ROWS = Object.freeze([
   ...TEXT_EMBEDDING_TASK_ROWS,
   {
     taskType: 'decision',
-    title: () => t('settings.specializedModels.decision', 'Decision model'),
-    description: () =>
-      t(
-        'settings.specializedModels.decisionDescription',
-        'Structured judgments for the evaluate Tool and Jev experiments.',
-      ),
+    title: () => t('settings.specializedModels.decision'),
+    description: () => t('settings.specializedModels.decisionDescription'),
   },
 ]);
 

@@ -94,15 +94,11 @@
     const [movedAgent] = nextAgents.splice(sourceIndex, 1);
     nextAgents.splice(targetIndex, 0, movedAgent);
     const persistence = onReorder(nextAgents.map((agent) => agent.id));
-    reorderAnnouncement = t(
-      'agents.order.announcement',
-      'Moved {name} to position {position} of {total}',
-      {
-        name: movedAgent.name || movedAgent.id,
-        position: targetIndex + 1,
-        total: nextAgents.length,
-      },
-    );
+    reorderAnnouncement = t('agents.order.announcement', {
+      name: movedAgent.name || movedAgent.id,
+      position: targetIndex + 1,
+      total: nextAgents.length,
+    });
     await persistence;
     await tick();
     document
@@ -117,13 +113,13 @@
 >
   <div class="pane-header secondary-pane__header">
     <span id="agents-list-title" class="secondary-pane__title">
-      {t('agents.title', 'Agents')}
+      {t('agents.title')}
     </span>
     <Button
       variant="tertiary"
       icon
-      ariaLabel={t('agents.create', 'Create agent')}
-      tooltip={t('agents.create', 'Create agent')}
+      ariaLabel={t('agents.create')}
+      tooltip={t('agents.create')}
       onClick={onCreate}
     >
       <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
@@ -137,8 +133,7 @@
       variant="tertiary"
       class={`secondary-list__item ${sharedDefaultsOpen ? 'active' : ''}`}
       aria-pressed={sharedDefaultsOpen}
-      onClick={onOpenSharedDefaults}
-      >{t('agents.shared.title', 'Shared defaults')}</Button
+      onClick={onOpenSharedDefaults}>{t('agents.shared.title')}</Button
     >
   </div>
 
@@ -148,16 +143,13 @@
   >
     {#if isLoading}
       <p class="agents-view__list-state">
-        {t('agents.loading', 'Loading agents…')}
+        {t('agents.loading')}
       </p>
     {:else if agents.length === 0}
       <EmptyState
         class="agent-list-pane__empty"
-        title={t('agents.empty', 'No agents found.')}
-        description={t(
-          'agents.emptyCreateHint',
-          'Create an agent to begin configuring chat access.',
-        )}
+        title={t('agents.empty')}
+        description={t('agents.emptyCreateHint')}
       >
         {#snippet icon()}
           <svg viewBox="0 0 32 32" width="34" height="34">
@@ -185,9 +177,7 @@
             <div class="agent-item-inner">
               <div class="agent-item-name">{agent.name || agent.id}</div>
               <div class="agent-item-sub">
-                {modelShortName(agent.model) ||
-                  agent.id ||
-                  t('common.unknown', 'Unknown')}
+                {modelShortName(agent.model) || agent.id || t('common.unknown')}
               </div>
             </div>
           </button>
@@ -197,11 +187,9 @@
             draggable={!isReordering && agents.length > 1}
             disabled={isReordering || agents.length < 2}
             data-agent-order-handle={agent.id}
-            aria-label={t(
-              'agents.order.handle',
-              'Reorder {name} (use arrow keys)',
-              { name: agent.name || agent.id },
-            )}
+            aria-label={t('agents.order.handle', {
+              name: agent.name || agent.id,
+            })}
             ondragstart={(event) => handleDragStart(index, event)}
             ondragend={handleDragEnd}
             onkeydown={(event) => handleHandleKeydown(index, event)}

@@ -87,19 +87,19 @@
     bind:this={containerElement}
     class="file-autocomplete"
     role="listbox"
-    aria-label={t('fileAutocomplete.label', 'File suggestions')}
+    aria-label={t('fileAutocomplete.label')}
   >
     <div class="file-autocomplete__eyebrow">
-      {t('fileAutocomplete.eyebrow', 'Files')}
+      {t('fileAutocomplete.eyebrow')}
       {#if truncated}
         <span class="file-autocomplete__truncated">
-          {t('fileAutocomplete.truncated', 'list truncated — keep typing')}
+          {t('fileAutocomplete.truncated')}
         </span>
       {/if}
     </div>
     {#if loading && matchingFiles.length === 0}
       <div class="file-autocomplete__loading">
-        {t('common.loading', 'Loading…')}
+        {t('common.loading')}
       </div>
     {/if}
     {#each matchingFiles as file, index (file)}

@@ -267,9 +267,7 @@
         }
       }
     } catch (error) {
-      onError(
-        `${t('settings.specializedModels.loadError', 'Specialized model targets could not be loaded.')} ${error.message}`,
-      );
+      onError(`${t('settings.specializedModels.loadError')} ${error.message}`);
     } finally {
       taskModelLoading = false;
     }
@@ -326,7 +324,7 @@
 
     if (saveDisabled) {
       onToast({
-        title: t('common.alreadySaved', 'Already saved'),
+        title: t('common.alreadySaved'),
         variant: 'success',
       });
       return;
@@ -366,17 +364,12 @@
       }
       if (reason === 'manual')
         onToast({
-          title: t(
-            'settings.specializedModels.saveSuccess',
-            'Specialized model bindings updated.',
-          ),
+          title: t('settings.specializedModels.saveSuccess'),
           variant: 'success',
         });
       return true;
     } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
+      onError(`${t('settings.saveError')} ${error.message}`);
       return false;
     } finally {
       taskModelSaving = false;
@@ -398,7 +391,7 @@
       await loadTaskModelSchema(taskType, target);
     } catch (error) {
       onError(
-        `${t('settings.specializedModels.optionsLoadError', 'Model options could not be loaded.')} ${error.message}`,
+        `${t('settings.specializedModels.optionsLoadError')} ${error.message}`,
       );
     }
   }
@@ -473,7 +466,7 @@
     const options = [
       {
         value: '',
-        label: t('settings.specializedModels.noTarget', 'Not configured'),
+        label: t('settings.specializedModels.noTarget'),
       },
       ...targets.map((target) => ({
         value: target.id,
@@ -489,11 +482,9 @@
     ) {
       options.push({
         value: binding.target,
-        label: t(
-          'settings.specializedModels.customTarget',
-          'Custom target: {target}',
-          { target: binding.target },
-        ),
+        label: t('settings.specializedModels.customTarget', {
+          target: binding.target,
+        }),
       });
     }
 
@@ -587,10 +578,7 @@
 
 {#if taskModelLoading}
   <Banner variant="neutral">
-    {t(
-      'settings.specializedModels.loading',
-      'Loading specialized model targets…',
-    )}
+    {t('settings.specializedModels.loading')}
   </Banner>
 {/if}
 
@@ -604,7 +592,7 @@
     label={field.label}
     help={field.description ?? ''}
     error={jsonError
-      ? t('settings.specializedModels.jsonInvalid', 'Invalid JSON: {error}', {
+      ? t('settings.specializedModels.jsonInvalid', {
           error: jsonError,
         })
       : ''}
@@ -640,10 +628,7 @@
           autocapitalize="off"
           autocorrect="off"
           aria-describedby={formField.describedBy}
-          placeholder={t(
-            'settings.specializedModels.jsonPlaceholder',
-            '[ … ] or { … }',
-          )}
+          placeholder={t('settings.specializedModels.jsonPlaceholder')}
           value={taskModelOptionValue(taskType, field)}
           onInput={(_value, event) =>
             handleTaskModelOptionChange(taskType, field, event)}
@@ -707,10 +692,7 @@
           id={`settings-specialized-${row.taskType}`}
           value={binding.target}
           options={taskModelTargetOptions(row.taskType, binding)}
-          placeholder={t(
-            'settings.specializedModels.noTarget',
-            'Not configured',
-          )}
+          placeholder={t('settings.specializedModels.noTarget')}
           ariaLabel={row.title()}
           disabled={taskModelLoading}
           triggerClass="settings-view__dropdown"
@@ -742,10 +724,7 @@
           </div>
         {:else}
           <div class="s-group__note">
-            {t(
-              'settings.specializedModels.noOptions',
-              'This target has no configurable options.',
-            )}
+            {t('settings.specializedModels.noOptions')}
           </div>
         {/if}
 
@@ -753,10 +732,7 @@
           <Button
             disabled={taskModelSaving || taskModelLoading}
             onClick={() => resetTaskModelOptions(row.taskType)}
-            >{t(
-              'settings.specializedModels.resetOptions',
-              'Reset options',
-            )}</Button
+            >{t('settings.specializedModels.resetOptions')}</Button
           >
         {/if}
 
@@ -816,7 +792,7 @@
                 disabled={speechUnloading.has(model.target) ||
                   !model.loaded ||
                   model.busy}
-                ariaLabel={t('settings.localSpeech.unloadAria', undefined, {
+                ariaLabel={t('settings.localSpeech.unloadAria', {
                   model: model.label,
                 })}
                 onClick={() => unloadSpeechMemory(model)}

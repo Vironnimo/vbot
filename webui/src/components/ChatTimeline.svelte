@@ -425,17 +425,14 @@
                "No messages yet" empty state would be a lie for a session whose
                messages just have not arrived yet. -->
           <Banner variant="neutral" class="chat-timeline-loading">
-            {t('loading.history', 'Loading chat history…')}
+            {t('loading.history')}
           </Banner>
         {:else}
           <EmptyState
             fill
             class="chat-timeline-empty"
-            title={t('chat.historyEmptyTitle', 'No messages yet')}
-            description={t(
-              'chat.historyEmpty',
-              'Send the first message to this agent.',
-            )}
+            title={t('chat.historyEmptyTitle')}
+            description={t('chat.historyEmpty')}
           >
             {#snippet icon()}
               <svg viewBox="0 0 32 32" width="38" height="38">
@@ -506,8 +503,8 @@
       variant="secondary"
       icon
       class="chat-timeline__jump-latest"
-      ariaLabel={t('chat.jumpToLatest', 'Jump to latest')}
-      tooltip={t('chat.jumpToLatest', 'Jump to latest')}
+      ariaLabel={t('chat.jumpToLatest')}
+      tooltip={t('chat.jumpToLatest')}
       onClick={jumpToLatest}
     >
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -521,17 +518,17 @@
   <div
     class="transient-card"
     role="note"
-    aria-label={t('chat.transientCard.label', 'Command output')}
+    aria-label={t('chat.transientCard.label')}
   >
     <div class="transient-card__header">
       <span class="transient-card__label">
-        {t('chat.transientCard.label', 'Command output')}
+        {t('chat.transientCard.label')}
       </span>
       <CopyButton
         text={card.text}
         class="chat-copy-action transient-card__copy"
-        label={t('chat.copyCommandOutput', 'Copy command output')}
-        copiedLabel={t('chat.commandOutputCopied', 'Command output copied')}
+        label={t('chat.copyCommandOutput')}
+        copiedLabel={t('chat.commandOutputCopied')}
       />
     </div>
     <pre class="transient-card__body">{card.text}</pre>

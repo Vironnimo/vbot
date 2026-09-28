@@ -49,8 +49,7 @@ function account(id, usable = true) {
   return { id, usable, source: 'data_dir' };
 }
 
-const defaultAccount = () =>
-  t('settings.providers.accounts.defaultLabel', 'Default');
+const defaultAccount = () => t('settings.providers.accounts.defaultLabel');
 
 function valuesAndLabels(options) {
   return options.slice(1).map(({ value, label }) => [value, label]);
@@ -240,7 +239,6 @@ describe('buildModelSelectOptions', () => {
                 value: selected,
                 label: t(
                   'agents.form.modelUnavailableConnectionOption',
-                  'Unavailable / custom: {model} ({connection})',
                   unavailable,
                 ),
                 isUnavailable: true,
@@ -260,12 +258,9 @@ describe('buildModelSelectOptions', () => {
       capabilities: { tools: true },
       ...fields,
     });
-    const noTools = t('models.filter.noTools', 'no tool calling');
-    const belowMinContext = t(
-      'models.filter.belowMinContext',
-      'below 32k context',
-    );
-    const unreachable = t('models.filter.unreachable', 'service not running');
+    const noTools = t('models.filter.noTools');
+    const belowMinContext = t('models.filter.belowMinContext');
+    const unreachable = t('models.filter.unreachable');
 
     const options = buildModelSelectOptions({
       modelOnly: true,
@@ -312,12 +307,7 @@ describe('buildModelSelectOptions', () => {
       ['no-tools', false, ['noTools'], noTools],
       ['small-effective', false, ['belowMinContext'], belowMinContext],
       ['exactly-32k', true, [], undefined],
-      [
-        'unknown',
-        false,
-        ['contextUnknown'],
-        t('models.filter.contextUnknown', 'context unknown'),
-      ],
+      ['unknown', false, ['contextUnknown'], t('models.filter.contextUnknown')],
       ['small-raw', false, ['belowMinContext'], belowMinContext],
       ['down', true, [], unreachable],
       [
@@ -391,12 +381,12 @@ describe('model suitability filter', () => {
     expect(
       modelFilterFooterLabel({ showAll: false, hiddenCount: 3, translate: t }),
     ).toBe(
-      t('models.filter.showAll', 'Show all models ({count} hidden)', {
+      t('models.filter.showAll', {
         count: 3,
       }),
     );
     expect(modelFilterFooterLabel({ showAll: true, translate: t })).toBe(
-      t('models.filter.showSuitable', 'Show only suitable models'),
+      t('models.filter.showSuitable'),
     );
     expect(
       modelFilterFooterLabel({ showAll: false, hiddenCount: 0, translate: t }),
