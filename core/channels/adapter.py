@@ -315,7 +315,7 @@ class ReplyPlanFacts:
 class MessageFacts:
     """Facts about the model-visible inbound message payload."""
 
-    content: str | list[ContentBlock]
+    content: str
 
 
 @dataclass(frozen=True)
