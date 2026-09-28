@@ -49,6 +49,7 @@ from core.chat.wire_shaping import (
     _assistant_continuation_dict,
     _message_to_request_dict,
     _notes_to_request_messages,
+    extend_request_with_notes,
     limit_request_images,
 )
 from core.debug import DebugContext
@@ -210,6 +211,7 @@ class AgenticProgression:
                     tool_catalog = await self._requests.live_tool_catalog(
                         context, known=tool_epoch.allowed_names
                     )
+            boundary_notes: list[ChatMessage] = []
             async with self._dependencies.sessions.write_lock(session_address):
                 session.begin_defer_notes()
                 binding = context.request.temporary_binding
@@ -254,7 +256,7 @@ class AgenticProgression:
                                 ],
                             )
                             if previous_delivery is None:
-                                messages.extend(_notes_to_request_messages([delivery_note]))
+                                boundary_notes.append(delivery_note)
                             await extension_registry.acknowledge_session_delivery(
                                 binding,
                                 self._dependencies.tools,
@@ -294,9 +296,16 @@ class AgenticProgression:
                         tools = state.tools
                 finally:
                     await context.session_snapshot.flush_deferred_notes(session)
-                pending_notes = session.drain_pending_notes()
-            if pending_notes:
-                messages.extend(_notes_to_request_messages(pending_notes))
+                boundary_notes.extend(session.drain_pending_notes())
+            # Rendered as the next request replays them, grouped with the notes
+            # this request already ends with, so the history bytes stay stable.
+            extend_request_with_notes(
+                messages,
+                boundary_notes,
+                context.session_snapshot.active_messages,
+                replay_policy=target.replay_policy,
+                agent_model=target.model_reference,
+            )
             extension_registry = self._dependencies.get_extension_registry()
             # The request shares the live message dicts read-only: context hooks
             # receive their own copies, image limiting copies on write, and

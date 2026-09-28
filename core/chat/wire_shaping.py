@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
@@ -566,6 +567,32 @@ def _assemble_request_history(
     agent_model: str | None = None,
 ) -> list[JsonObject]:
     request_messages: list[JsonObject] = []
+    for part in _history_request_parts(
+        messages, replay_policy=replay_policy, agent_model=agent_model
+    ):
+        if isinstance(part, tuple):
+            request_messages.extend(_notes_to_request_messages(list(part)))
+        elif part.role == "tool":
+            request_messages.append(_message_to_request_dict(part))
+        else:
+            request_messages.append(
+                _message_to_request_dict(part, replay_policy=replay_policy, agent_model=agent_model)
+            )
+    return request_messages
+
+
+def _history_request_parts(
+    messages: Sequence[ChatMessage],
+    *,
+    replay_policy: ReasoningReplayPolicy,
+    agent_model: str | None,
+) -> Iterator[ChatMessage | tuple[ChatMessage, ...]]:
+    """Yield, in request order, the history messages sent as themselves and the note groups.
+
+    Notes gather until the next message the request sends; notes that arrive
+    within a Tool Result batch follow the whole batch, as one group before the
+    notes that arrive after it.
+    """
     pending_notes: list[ChatMessage] = []
     deferred_until_after_tools: list[ChatMessage] = []
 
@@ -589,7 +616,7 @@ def _assemble_request_history(
             if pending_notes:
                 deferred_until_after_tools.extend(pending_notes)
                 pending_notes = []
-            request_messages.append(_message_to_request_dict(message))
+            yield message
             continue
 
         portable_reasoning_note = _portable_assistant_reasoning_note(message, agent_model)
@@ -609,29 +636,87 @@ def _assemble_request_history(
             continue
 
         if deferred_until_after_tools:
-            request_messages.extend(_notes_to_request_messages(deferred_until_after_tools))
+            yield tuple(deferred_until_after_tools)
             deferred_until_after_tools = []
 
         if pending_notes:
-            request_messages.extend(_notes_to_request_messages(pending_notes))
+            yield tuple(pending_notes)
             pending_notes = []
-        request_messages.append(
-            _message_to_request_dict(
-                message,
-                replay_policy=replay_policy,
-                agent_model=agent_model,
-            )
-        )
+        yield message
         if portable_reasoning_note is not None:
             pending_notes.append(portable_reasoning_note)
 
     if deferred_until_after_tools:
-        request_messages.extend(_notes_to_request_messages(deferred_until_after_tools))
+        yield tuple(deferred_until_after_tools)
 
     if pending_notes:
-        request_messages.extend(_notes_to_request_messages(pending_notes))
+        yield tuple(pending_notes)
 
-    return request_messages
+
+def _sends_itself(
+    message: ChatMessage, *, replay_policy: ReasoningReplayPolicy, agent_model: str | None
+) -> bool:
+    """Return whether *message* is a request message that closes the notes before it."""
+    if message.role in {"note", "error", "run_summary", "agent_takeover", "tool"}:
+        return False
+    return not _is_empty_assistant_history_message(
+        message, replay_policy=replay_policy, agent_model=agent_model
+    )
+
+
+def extend_request_with_notes(
+    request_messages: list[JsonObject],
+    notes: Sequence[ChatMessage],
+    history: Sequence[ChatMessage],
+    *,
+    replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
+    agent_model: str | None = None,
+) -> None:
+    """Add *notes* to a live request the way a later request replays them.
+
+    *history* is the Session history that already holds *notes*. Replay groups
+    every note after the history's last sent message into the same request
+    messages, so the notes this live request already ends with are rendered
+    again together with *notes*; the next request then repeats these bytes
+    exactly and keeps the Provider prompt cache. When the live request does not
+    end as replay would, *notes* are appended as their own group.
+    """
+    if not notes:
+        return
+    start = len(history)
+    while start > 0 and not _sends_itself(
+        history[start - 1], replay_policy=replay_policy, agent_model=agent_model
+    ):
+        start -= 1
+    if start > 0:
+        start -= 1
+    parts = list(
+        _history_request_parts(
+            history[start:], replay_policy=replay_policy, agent_model=agent_model
+        )
+    )
+    groups: list[tuple[ChatMessage, ...]] = []
+    for part in reversed(parts):
+        if not isinstance(part, tuple):
+            break
+        groups.insert(0, part)
+    new_ids = {note.id for note in notes}
+    trailing_ids = {note.id for group in groups for note in group}
+    rendered: list[JsonObject] = []
+    for group in groups:
+        rendered.extend(
+            _notes_to_request_messages([note for note in group if note.id not in new_ids])
+        )
+    if rendered and request_messages[-len(rendered) :] != rendered:
+        request_messages.extend(_notes_to_request_messages(list(notes)))
+        return
+    if rendered:
+        del request_messages[-len(rendered) :]
+    request_messages.extend(
+        _notes_to_request_messages([note for note in notes if note.id not in trailing_ids])
+    )
+    for group in groups:
+        request_messages.extend(_notes_to_request_messages(list(group)))
 
 
 def _repair_dangling_tool_calls(request_messages: list[JsonObject]) -> list[JsonObject]:
