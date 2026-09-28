@@ -401,11 +401,6 @@ class ConnectionController:
             error_body=error_body,
         )
 
-    def switch_to(self, host: str, port: int, label: str | None = None) -> DesktopProbeResult:
-        """Connect to a chosen remembered or typed server."""
-
-        return self.connect(host, port, label)
-
     def reconnect(self) -> DesktopProbeResult | None:
         """Re-probe and reload the last-used target.
 
