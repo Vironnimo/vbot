@@ -186,17 +186,9 @@
   // from each item's `section` field (set in App.svelte); a group with no
   // visible items renders neither its label nor its gap.
   const NAV_SECTIONS = [
-    { id: 'work', labelKey: 'nav.section.work', labelFallback: 'Work' },
-    {
-      id: 'configure',
-      labelKey: 'nav.section.configure',
-      labelFallback: 'Configure',
-    },
-    {
-      id: 'insights',
-      labelKey: 'nav.section.insights',
-      labelFallback: 'Insights',
-    },
+    { id: 'work', label: () => t('nav.section.work', 'Work') },
+    { id: 'configure', label: () => t('nav.section.configure', 'Configure') },
+    { id: 'insights', label: () => t('nav.section.insights', 'Insights') },
   ];
 
   const navGroups = $derived(
@@ -364,10 +356,10 @@
         <div
           class="app-shell__nav-group"
           role="group"
-          aria-label={t(group.labelKey, group.labelFallback)}
+          aria-label={group.label()}
         >
           <span class="app-shell__nav-group-label" aria-hidden="true">
-            {t(group.labelKey, group.labelFallback)}
+            {group.label()}
           </span>
           {#each group.items as item (item.id)}
             <button
@@ -378,11 +370,9 @@
               class="app-shell__nav-item"
               type="button"
               aria-current={item.id === activeViewId ? 'page' : undefined}
-              aria-label={railCompact
-                ? t(item.labelKey, item.labelFallback)
-                : undefined}
+              aria-label={railCompact ? item.label() : undefined}
               use:tooltip={{
-                text: railCompact ? t(item.labelKey, item.labelFallback) : '',
+                text: railCompact ? item.label() : '',
                 placement: 'right',
               }}
               onclick={() => handleSelectView(item.id)}
@@ -443,7 +433,7 @@
                 {/if}
               </svg>
               <span class="app-shell__nav-label">
-                {t(item.labelKey, item.labelFallback)}
+                {item.label()}
               </span>
             </button>
           {/each}

@@ -89,7 +89,7 @@
     },
     ...PROJECT_THINKING_EFFORT_OPTIONS.map((option) => ({
       value: option,
-      label: t(`agents.form.thinkingEffortOption.${option}`, option),
+      label: t(`agents.form.thinkingEffortOption.${option}`),
     })),
   ]);
 

@@ -1,81 +1,70 @@
 <script module>
+  import { t } from '$lib/i18n.js';
+
   export const NAVIGATION_ITEMS = Object.freeze([
     {
       id: 'chat',
-      labelKey: 'navigation.chat',
-      labelFallback: 'Chat',
+      label: () => t('navigation.chat', 'Chat'),
       section: 'work',
     },
     {
       id: 'terminals',
-      labelKey: 'navigation.terminals',
-      labelFallback: 'Terminals',
+      label: () => t('navigation.terminals', 'Terminals'),
       section: 'work',
     },
     {
       id: 'agents',
-      labelKey: 'navigation.agents',
-      labelFallback: 'Agents',
+      label: () => t('navigation.agents', 'Agents'),
       section: 'work',
     },
     {
       id: 'projects',
-      labelKey: 'navigation.projects',
-      labelFallback: 'Projects',
+      label: () => t('navigation.projects', 'Projects'),
       section: 'work',
     },
     {
       id: 'calendar',
-      labelKey: 'navigation.calendar',
-      labelFallback: 'Calendar',
+      label: () => t('navigation.calendar', 'Calendar'),
       section: 'work',
     },
     {
       id: 'jev',
-      labelKey: 'navigation.jev',
-      labelFallback: 'Jev',
+      label: () => t('navigation.jev', 'Jev'),
       section: 'work',
     },
     {
       id: 'skills',
-      labelKey: 'navigation.skills',
-      labelFallback: 'Skills',
+      label: () => t('navigation.skills', 'Skills'),
       section: 'configure',
     },
     {
       id: 'cron',
-      labelKey: 'navigation.cron',
-      labelFallback: 'Cron',
+      label: () => t('navigation.cron', 'Cron'),
       section: 'configure',
     },
     {
       id: 'system-prompt',
-      labelKey: 'navigation.systemPrompt',
-      labelFallback: 'System Prompt',
+      label: () => t('navigation.systemPrompt', 'System Prompt'),
       section: 'configure',
     },
     {
       id: 'settings',
-      labelKey: 'navigation.settings',
-      labelFallback: 'Settings',
+      label: () => t('navigation.settings', 'Settings'),
       section: 'configure',
     },
     {
       id: 'statistics',
-      labelKey: 'navigation.statistics',
-      labelFallback: 'Statistics',
+      label: () => t('navigation.statistics', 'Statistics'),
       section: 'insights',
     },
     {
       id: 'logs',
-      labelKey: 'navigation.logs',
-      labelFallback: 'Logs',
+      label: () => t('navigation.logs', 'Logs'),
       section: 'insights',
     },
     {
       id: 'debug',
-      labelKey: 'navigation.debug',
-      labelFallback: 'Debug',
+      label: () => t('navigation.debug', 'Debug'),
       section: 'insights',
     },
   ]);
@@ -84,7 +73,6 @@
 <script>
   import AppShell from './components/AppShell.svelte';
   import Banner from './components/ui/Banner.svelte';
-  import { t } from '$lib/i18n.js';
   import Button from './components/ui/Button.svelte';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
   import LiveVoice from './components/LiveVoice.svelte';

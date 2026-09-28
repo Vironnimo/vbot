@@ -249,7 +249,7 @@
         label:
           value === ''
             ? t('swarm.profile.providerDefault', 'Provider default')
-            : t(`agents.form.thinkingEffortOption.${value}`, value),
+            : t(`agents.form.thinkingEffortOption.${value}`),
       }),
     );
   }

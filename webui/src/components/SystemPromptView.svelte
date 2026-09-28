@@ -1,5 +1,5 @@
 <script>
-  import { t } from '$lib/i18n.js';
+  import { t, tOr } from '$lib/i18n.js';
   import Dropdown from './Dropdown.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import Button from './ui/Button.svelte';
@@ -375,7 +375,7 @@
 
                   <div class="sp-block-meta">
                     <strong class="sp-block-title"
-                      >{t(
+                      >{tOr(
                         `systemPrompt.blockTitle.${block.id}`,
                         block.id,
                       )}</strong

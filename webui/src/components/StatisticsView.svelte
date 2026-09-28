@@ -12,6 +12,7 @@
   import ToolsPanel from './statistics/ToolsPanel.svelte';
   import SkillsPanel from './statistics/SkillsPanel.svelte';
   import ExtensionsPanel from './statistics/ExtensionsPanel.svelte';
+  import { rangeLabel } from './statistics/reportTimeline.js';
   import './statistics/report.css';
   import { getStatisticsReport } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
@@ -98,10 +99,6 @@
         return t('statistics.subview.overview', 'Overview');
     }
   }
-
-  function rangeLabel(range) {
-    return t(`statistics.range.${range}`, range);
-  }
 </script>
 
 <section class="stats-view view-frame" aria-labelledby="stats-title">
@@ -169,7 +166,7 @@
               aria-label={rangeLabel(range)}
               disabled={loading}
               onclick={() => loadReport(range)}
-              >{t(`statistics.range.short.${range}`, rangeLabel(range))}</button
+              >{t(`statistics.range.short.${range}`)}</button
             >
           {/each}
         </div>

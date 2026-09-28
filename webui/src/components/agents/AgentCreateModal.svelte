@@ -82,7 +82,7 @@
       label:
         option === ''
           ? thinkingEffortInheritLabel()
-          : t(`agents.form.thinkingEffortOption.${option}`, option),
+          : t(`agents.form.thinkingEffortOption.${option}`),
     })),
   );
 

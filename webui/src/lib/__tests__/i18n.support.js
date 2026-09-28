@@ -70,7 +70,7 @@ const REQUIRED_CATALOG_KEYS = [
   'chat.project.teamLabel',
   'chat.returnToCurrentSession',
   'chat.returnToParentSession',
-  'chat.runDurationSeconds',
+  'chat.durationSeconds',
   'chat.runIterations',
   'chat.skillsLoadError',
   'chat.subagent.label',

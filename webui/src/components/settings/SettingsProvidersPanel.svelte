@@ -479,11 +479,12 @@
       await listModels();
       // The operation result remains visible through the app-level toast while
       // Provider invalidation refreshes the catalog in place.
+      const { providerCount, count } = refreshSummary(result);
       onToast({
         title: t(
           'settings.providers.refreshSuccess',
           'Model DB updated: {providerCount} providers, {count} models available.',
-          refreshSummaryValues(result),
+          { providerCount, count },
         ),
         variant: 'success',
       });
@@ -562,7 +563,7 @@
       .filter((label) => typeof label === 'string' && label.length > 0);
   }
 
-  function refreshSummaryValues(result) {
+  function refreshSummary(result) {
     const refreshedProviders = getRefreshedProviders(result);
     const modelCount = Number.isFinite(result?.model_count)
       ? result.model_count

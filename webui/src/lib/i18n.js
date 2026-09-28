@@ -61,6 +61,15 @@ export function t(key, fallback, values) {
   return interpolate(template, values);
 }
 
+// Resolves a composed key built from a server-sent code. A code without a
+// catalog entry renders `fallback` (usually the code itself) instead of the key.
+export function tOr(key, fallback, values) {
+  const catalog = catalogs[activeLocale] ?? catalogs[DEFAULT_LOCALE];
+  const translation = catalog[key] ?? catalogs[DEFAULT_LOCALE][key];
+
+  return interpolate(hasText(translation) ? translation : fallback, values);
+}
+
 export function init(locale = DEFAULT_LOCALE) {
   activeLocale = catalogs[locale] ? locale : DEFAULT_LOCALE;
 

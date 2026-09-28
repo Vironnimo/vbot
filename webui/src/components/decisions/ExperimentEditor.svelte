@@ -459,7 +459,7 @@
                 >{formatDateTimeInApplicationZone(item.created_at, undefined, {
                   dateStyle: 'short',
                   timeStyle: 'medium',
-                })} · {t(`jev.status.${item.status}`, item.status)}</Button
+                })} · {item.status}</Button
               >
               <Button
                 variant="tertiary"

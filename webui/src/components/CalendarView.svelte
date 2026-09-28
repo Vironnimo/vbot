@@ -261,7 +261,7 @@
     <TabList
       items={CALENDAR_VIEWS.map((view) => ({
         id: view,
-        label: t(`calendar.view.${view}`, view),
+        label: t(`calendar.view.${view}`),
       }))}
       value={viewState.view}
       onChange={(view) => controller.setView(view)}

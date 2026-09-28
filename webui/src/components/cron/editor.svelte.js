@@ -120,9 +120,7 @@ export function createCronEditor(context) {
   );
 
   let presetOptions = $derived(
-    buildCronPresetOptions((key) =>
-      t(`cron.presets.${key}`, key === CRON_PRESET_CUSTOM ? 'Custom' : key),
-    ),
+    buildCronPresetOptions((key) => t(`cron.presets.${key}`)),
   );
 
   function selectJob(job) {

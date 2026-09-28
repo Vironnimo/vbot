@@ -119,8 +119,10 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildSubAgentSettingsPayload(subAgentSettings),
-      successKey: 'settings.subagents.saveSuccess',
-      successFallback: 'Sub-agent settings updated.',
+      successTitle: t(
+        'settings.subagents.saveSuccess',
+        'Sub-agent settings updated.',
+      ),
       // Show the saved values (e.g. the default a cleared field saved) unless
       // the user kept editing while the request was in flight.
       getDraftSnapshot: () => subAgentSettings,

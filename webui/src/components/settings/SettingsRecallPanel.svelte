@@ -30,7 +30,7 @@
   let saving = $state(false);
 
   let recallBackendOptions = $derived(
-    buildRecallBackendOptions(recallSettings, t),
+    buildRecallBackendOptions(recallSettings),
   );
   let saveDisabled = $derived(
     saving || recallSettingsMatch(recallSettings, getRecallSettings(settings)),
@@ -107,8 +107,7 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildRecallSettingsPayload(recallSettings),
-      successKey: 'settings.recall.saveSuccess',
-      successFallback: 'Recall backend updated.',
+      successTitle: t('settings.recall.saveSuccess', 'Recall backend updated.'),
       getDraftSnapshot: () => recallSettings,
       applyResult: (next) => (recallSettings = getRecallSettings(next)),
     });

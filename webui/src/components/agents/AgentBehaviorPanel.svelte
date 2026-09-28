@@ -72,7 +72,7 @@
   }
 
   function memoryPromptLabel(option) {
-    return t(`agents.form.memoryPromptModeOption.${option}`, option);
+    return t(`agents.form.memoryPromptModeOption.${option}`);
   }
 
   function toggleMemoryPanel() {

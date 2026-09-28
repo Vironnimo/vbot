@@ -133,7 +133,7 @@
     },
     ...AGENT_THINKING_EFFORT_OPTIONS.map((option) => ({
       value: option,
-      label: t(`agents.form.thinkingEffortOption.${option}`, option),
+      label: t(`agents.form.thinkingEffortOption.${option}`),
     })),
   ]);
   let saveDisabled = $derived(saving || !agentDefaultsDraftHasChanges());
@@ -343,8 +343,10 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildAgentDefaultsPayload(agentDefaults),
-      successKey: 'settings.defaults.saveSuccess',
-      successFallback: 'Agent defaults updated.',
+      successTitle: t(
+        'settings.defaults.saveSuccess',
+        'Agent defaults updated.',
+      ),
       getDraftSnapshot: () => agentDefaults,
       applyResult: (next) =>
         (agentDefaults = normalizeAgentDefaultsFormValues(next)),

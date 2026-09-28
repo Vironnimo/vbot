@@ -285,13 +285,10 @@
     // response still fulfills this selection unless the user navigates away.
     pendingInstallSelection = { name: result.name, scope: result.scope };
     onToast({
-      title: t(
+      title:
         result.operation === 'unchanged'
-          ? 'skills.install.unchanged'
-          : 'skills.install.success',
-        '',
-        { name: result.name },
-      ),
+          ? t('skills.install.unchanged')
+          : t('skills.install.success', '', { name: result.name }),
       variant: 'success',
     });
     if (result.warnings?.length)
@@ -610,16 +607,12 @@
               <Banner variant="neutral">{t('skills.loading')}</Banner>
             {:else if !filtered.length}
               <EmptyState
-                title={t(
-                  searchQuery || statusFilter !== 'all'
-                    ? 'skills.noMatches'
-                    : 'skills.noCollectionSkills',
-                )}
-                description={t(
-                  searchQuery || statusFilter !== 'all'
-                    ? 'skills.noMatchesHelp'
-                    : 'skills.noCollectionSkillsHelp',
-                )}
+                title={searchQuery || statusFilter !== 'all'
+                  ? t('skills.noMatches')
+                  : t('skills.noCollectionSkills')}
+                description={searchQuery || statusFilter !== 'all'
+                  ? t('skills.noMatchesHelp')
+                  : t('skills.noCollectionSkillsHelp')}
               />
             {:else}
               <div class="s-group skills-group">
@@ -740,11 +733,9 @@
                       {t('skills.sharedAccessHelp')}
                     </p>{/if}
                 {:else}<p>
-                    {t(
-                      selected.origin?.startsWith('project:')
-                        ? 'skills.projectAccess'
-                        : 'skills.poolAccess',
-                    )}
+                    {selected.origin?.startsWith('project:')
+                      ? t('skills.projectAccess')
+                      : t('skills.poolAccess')}
                   </p>{/if}
                 {#if selected.disabled}<p>{t('skills.disabledEffect')}</p>{/if}
               </div>
@@ -861,11 +852,9 @@
             onValueChange={(value) => (actions.createScope = value)}
           />
           <p class="skills-secondary">
-            {t(
-              actions.createScope === 'global'
-                ? 'skills.createGlobalHelp'
-                : 'skills.createPrivateHelp',
-            )}
+            {actions.createScope === 'global'
+              ? t('skills.createGlobalHelp')
+              : t('skills.createPrivateHelp')}
           </p>
         </div>
         <div class="skills-field">

@@ -257,7 +257,7 @@ describe('Sub-Agent rows without a run id', () => {
           statuses,
           Date.parse(STARTED_AT) + 4200,
         ),
-      ).toBe(t('chat.toolDurationSeconds', '', { seconds: '4.2' }));
+      ).toBe(t('chat.durationSeconds', '', { seconds: '4.2' }));
       expect(subAgentLastToolName(row, statuses)).toBe('read');
 
       deliver('run_completed', 3, {
@@ -268,7 +268,7 @@ describe('Sub-Agent rows without a run id', () => {
       expect(subAgentDotStatus(row, statuses)).toBe('success');
       // The finished label shows the child run's real runtime.
       expect(subAgentToolStatusLabel(row, 'success', statuses)).toBe(
-        t('chat.toolDurationSeconds', '', { seconds: '4.2' }),
+        t('chat.durationSeconds', '', { seconds: '4.2' }),
       );
       // One key form: the bare twin of a Project address is never written.
       expect(

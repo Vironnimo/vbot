@@ -33,8 +33,8 @@
   let progress = $derived(
     duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0,
   );
-  let playLabel = $derived(t(paused ? 'audio.play' : 'audio.pause'));
-  let muteLabel = $derived(t(silent ? 'audio.unmute' : 'audio.mute'));
+  let playLabel = $derived(paused ? t('audio.play') : t('audio.pause'));
+  let muteLabel = $derived(silent ? t('audio.unmute') : t('audio.mute'));
 
   function timeLabel(value) {
     const seconds = Math.floor(Number.isFinite(value) && value > 0 ? value : 0);

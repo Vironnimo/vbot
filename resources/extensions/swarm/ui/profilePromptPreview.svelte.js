@@ -1,4 +1,4 @@
-import { t } from '../../../../webui/src/lib/i18n.js';
+import { t, tOr } from '../../../../webui/src/lib/i18n.js';
 export function createProfilePromptPreview(context) {
   let preview = $state(null);
 
@@ -35,15 +35,16 @@ export function createProfilePromptPreview(context) {
       if (request === previewRequest) previewBusy = false;
     }
   }
+  // Tool guidance blocks the core catalog has no title for.
+  const toolBlockTitles = {
+    'tool:project': () =>
+      t('swarm.profile.promptBlock.project', 'Project Tool guidance'),
+    'tool:subagent': () =>
+      t('swarm.profile.promptBlock.subagent', 'Subagent Tool guidance'),
+    'tool:bash': () => t('swarm.profile.promptBlock.bash', 'Bash environment'),
+  };
   const blockTitle = (id) =>
-    t(
-      `systemPrompt.blockTitle.${id}`,
-      {
-        'tool:project': 'Project Tool guidance',
-        'tool:subagent': 'Subagent Tool guidance',
-        'tool:bash': 'Bash environment',
-      }[id] || id,
-    );
+    tOr(`systemPrompt.blockTitle.${id}`, toolBlockTitles[id]?.() ?? id);
 
   return {
     blockTitle,

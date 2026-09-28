@@ -1,5 +1,5 @@
 <script>
-  import { t } from '$lib/i18n.js';
+  import { t, tOr } from '$lib/i18n.js';
   import InfoHint from '../ui/InfoHint.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
@@ -68,22 +68,17 @@
 
   const EFFECTIVE_FIELD_META = Object.freeze({
     model: {
-      labelKey: 'projects.team.effectiveModel',
-      labelFallback: 'Model',
-      emptyKey: 'projects.team.valueNotConfigured',
-      emptyFallback: 'not configured',
+      label: () => t('projects.team.effectiveModel', 'Model'),
+      empty: () => t('projects.team.valueNotConfigured', 'not configured'),
     },
     temperature: {
-      labelKey: 'projects.team.effectiveTemperature',
-      labelFallback: 'Temperature',
-      emptyKey: 'projects.team.valueProviderDefault',
-      emptyFallback: 'provider default',
+      label: () => t('projects.team.effectiveTemperature', 'Temperature'),
+      empty: () => t('projects.team.valueProviderDefault', 'provider default'),
     },
     thinking_effort: {
-      labelKey: 'projects.team.effectiveThinkingEffort',
-      labelFallback: 'Thinking effort',
-      emptyKey: 'projects.team.valueProviderDefault',
-      emptyFallback: 'provider default',
+      label: () =>
+        t('projects.team.effectiveThinkingEffort', 'Thinking effort'),
+      empty: () => t('projects.team.valueProviderDefault', 'provider default'),
     },
   });
 
@@ -120,10 +115,8 @@
     const entry = member?.effective?.[field] ?? { value: null, source: null };
     const isEmpty = entry.value === null || entry.value === undefined;
     return {
-      label: t(meta.labelKey, meta.labelFallback),
-      value: isEmpty
-        ? t(meta.emptyKey, meta.emptyFallback)
-        : String(entry.value),
+      label: meta.label(),
+      value: isEmpty ? meta.empty() : String(entry.value),
       isEmpty,
       sourceLabel: sourceLabel(entry.source),
     };
@@ -159,7 +152,7 @@
               'projects.manage.providerThinkingEffortDefault',
               '— (provider default)',
             )
-          : t(`agents.form.thinkingEffortOption.${option}`, option),
+          : t(`agents.form.thinkingEffortOption.${option}`),
     }));
   }
 
@@ -210,7 +203,7 @@
   }
 
   function groupLabel(type) {
-    return t(`projects.report.group.${type}`, type);
+    return tOr(`projects.report.group.${type}`, type);
   }
 </script>
 

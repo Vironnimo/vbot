@@ -11,7 +11,7 @@
     restartAfterLocalSpeechSetup,
     previewSpeech,
   } from '$lib/api.js';
-  import { t } from '$lib/i18n.js';
+  import { t, tOr } from '$lib/i18n.js';
 
   const componentId = $props.id();
   let {
@@ -156,30 +156,30 @@
 >
   <div role="status" aria-live="polite">
     {#if localSetupError}
-      {t(
+      {tOr(
         `settings.localSpeech.error.${localSetupError}`,
         t('settings.localSpeech.error.install_failed'),
       )}
     {:else if setupState === 'failed'}
-      {t(
+      {tOr(
         `settings.localSpeech.error.${localSetup.error}`,
         t('settings.localSpeech.error.install_failed'),
       )}
     {:else if setupState === 'installing'}
-      {t(
+      {tOr(
         `settings.localSpeech.phase.${localSetup.phase}`,
         t('settings.localSpeech.phase.installing'),
       )}
     {:else if setupState === 'ready'}
-      {t(tts ? 'settings.localSpeech.ttsReady' : 'settings.localSpeech.ready')}
+      {tts
+        ? t('settings.localSpeech.ttsReady')
+        : t('settings.localSpeech.ready')}
     {:else if setupState === 'restart_required' && !localSetup.restart_available}
       {t('settings.localSpeech.error.restart_unavailable')}
     {:else}
-      {t(
-        tts && setupState === 'missing'
-          ? 'settings.localSpeech.ttsMissing'
-          : `settings.localSpeech.state.${setupState}`,
-      )}
+      {tts && setupState === 'missing'
+        ? t('settings.localSpeech.ttsMissing')
+        : t(`settings.localSpeech.state.${setupState}`)}
     {/if}
   </div>
   {#if localSetupError === 'connection' || localSetupError === 'restart_timeout'}
@@ -192,11 +192,9 @@
       loading={localSetupAction}
       onClick={installLocalSpeech}
     >
-      {t(
-        setupState === 'failed'
-          ? 'settings.localSpeech.retry'
-          : 'settings.localSpeech.installButton',
-      )}
+      {setupState === 'failed'
+        ? t('settings.localSpeech.retry')
+        : t('settings.localSpeech.installButton')}
     </Button>
   {:else if setupState === 'restart_required'}
     <Button
@@ -209,11 +207,9 @@
     </Button>
   {:else if setupState === 'installing' || setupState === 'restarting'}
     <Button loading
-      >{t(
-        setupState === 'installing'
-          ? 'settings.localSpeech.installingButton'
-          : 'settings.localSpeech.restartingButton',
-      )}</Button
+      >{setupState === 'installing'
+        ? t('settings.localSpeech.installingButton')
+        : t('settings.localSpeech.restartingButton')}</Button
     >
   {/if}
 </Banner>
@@ -244,7 +240,7 @@
       >
       {#if previewBusy}
         <span role="status" aria-live="polite">
-          {t(
+          {tOr(
             `chat.voice.progress.${previewProgress.phase}`,
             t('chat.voice.progress.synthesizing'),
           )}

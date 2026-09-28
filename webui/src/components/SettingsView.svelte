@@ -63,36 +63,81 @@
   const autosaveContext = useAutosaveContext();
   // Navigation follows user tasks; editor components do not define pages.
   const sections = [
-    ['appearance', 'settings.appearance.title', 'Appearance'],
-    ['session_titles', 'settings.sessionTitles.title', 'Session titles'],
-    ['preferences', 'settings.preferences.title', 'Region & setup'],
-    ['providers', 'settings.providers.title', 'Providers'],
-    ['voice_controls', 'settings.sections.voiceControls', 'Voice controls'],
-    ['speech_models', 'settings.sections.speechModels', 'Speech models'],
-    ['live_voice_model', 'settings.sections.liveVoice', 'Live voice'],
-    [
-      'live_voice_shortcut',
-      'settings.sections.liveVoiceShortcut',
-      'Live voice shortcut',
-    ],
-    ['recall', 'settings.sections.recall', 'Conversation search'],
-    [
-      'embedding_model',
-      'settings.specializedModels.embeddingModel',
-      'Embedding model',
-    ],
-    ['reflection', 'settings.reflection.title', 'Reflection'],
-    ['web_search', 'settings.webSearch.title', 'Web search'],
-    ['web_fetch', 'settings.webFetch.title', 'Web Fetch'],
-    ['media_models', 'settings.sections.mediaModels', 'Images, video & music'],
-    ['decision_model', 'settings.sections.evaluation', 'Evaluation'],
-    ['subagents', 'settings.sections.delegation', 'Sub-Agent limits'],
-    ['channels', 'settings.channels.title', 'Channels'],
-    ['extensions', 'settings.extensions.title', 'Extensions'],
-    ['server', 'settings.general.title', 'Server info'],
-    ['desktop_connection', 'settings.desktop.connection.title', 'Connection'],
-    ['debug', 'debug.settings', 'Debug'],
-  ].map(([id, key, fallback]) => ({ id, label: () => t(key, fallback) }));
+    {
+      id: 'appearance',
+      label: () => t('settings.appearance.title', 'Appearance'),
+    },
+    {
+      id: 'session_titles',
+      label: () => t('settings.sessionTitles.title', 'Session titles'),
+    },
+    {
+      id: 'preferences',
+      label: () => t('settings.preferences.title', 'Region & setup'),
+    },
+    {
+      id: 'providers',
+      label: () => t('settings.providers.title', 'Providers'),
+    },
+    {
+      id: 'voice_controls',
+      label: () => t('settings.sections.voiceControls', 'Voice controls'),
+    },
+    {
+      id: 'speech_models',
+      label: () => t('settings.sections.speechModels', 'Speech models'),
+    },
+    {
+      id: 'live_voice_model',
+      label: () => t('settings.sections.liveVoice', 'Live voice'),
+    },
+    {
+      id: 'live_voice_shortcut',
+      label: () =>
+        t('settings.sections.liveVoiceShortcut', 'Live voice shortcut'),
+    },
+    {
+      id: 'recall',
+      label: () => t('settings.sections.recall', 'Conversation search'),
+    },
+    {
+      id: 'embedding_model',
+      label: () =>
+        t('settings.specializedModels.embeddingModel', 'Embedding model'),
+    },
+    {
+      id: 'reflection',
+      label: () => t('settings.reflection.title', 'Reflection'),
+    },
+    {
+      id: 'web_search',
+      label: () => t('settings.webSearch.title', 'Web search'),
+    },
+    { id: 'web_fetch', label: () => t('settings.webFetch.title', 'Web Fetch') },
+    {
+      id: 'media_models',
+      label: () => t('settings.sections.mediaModels', 'Images, video & music'),
+    },
+    {
+      id: 'decision_model',
+      label: () => t('settings.sections.evaluation', 'Evaluation'),
+    },
+    {
+      id: 'subagents',
+      label: () => t('settings.sections.delegation', 'Sub-Agent limits'),
+    },
+    { id: 'channels', label: () => t('settings.channels.title', 'Channels') },
+    {
+      id: 'extensions',
+      label: () => t('settings.extensions.title', 'Extensions'),
+    },
+    { id: 'server', label: () => t('settings.general.title', 'Server info') },
+    {
+      id: 'desktop_connection',
+      label: () => t('settings.desktop.connection.title', 'Connection'),
+    },
+    { id: 'debug', label: () => t('debug.settings', 'Debug') },
+  ];
   const panelById = new Map(sections.map((section) => [section.id, section]));
   const modelTasksBySection = {
     speech_models: ['speech_to_text', 'text_to_speech'],

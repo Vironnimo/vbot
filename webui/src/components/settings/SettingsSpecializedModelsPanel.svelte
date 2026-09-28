@@ -23,7 +23,7 @@
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
-  import { t } from '$lib/i18n.js';
+  import { t, tOr } from '$lib/i18n.js';
   import {
     JSON_OPTION_TYPE,
     TASK_MODEL_ROWS,
@@ -507,16 +507,22 @@
     }
     return fields.map((field) => ({
       ...field,
-      label: t(`settings.localSpeech.options.${field.name}.label`, field.label),
+      label: tOr(
+        `settings.localSpeech.options.${field.name}.label`,
+        field.label,
+      ),
       description: field.description
-        ? t(
+        ? tOr(
             `settings.localSpeech.options.${field.name}.help`,
             field.description,
           )
         : '',
       options: field.options.map((option) => ({
         ...option,
-        label: t(`settings.localSpeech.choices.${option.value}`, option.label),
+        label: tOr(
+          `settings.localSpeech.choices.${option.value}`,
+          option.label,
+        ),
       })),
     }));
   }
@@ -689,11 +695,11 @@
       <div class="s-row-info">
         {#if showTaskLabels}
           <div class="s-row-label">
-            {t(row.titleKey, row.titleFallback)}
+            {row.title()}
           </div>
         {/if}
         <div class="s-row-desc">
-          {t(row.descriptionKey, row.descriptionFallback)}
+          {row.description()}
         </div>
       </div>
       <div class="s-row-control s-row-control--task-model">
@@ -705,7 +711,7 @@
             'settings.specializedModels.noTarget',
             'Not configured',
           )}
-          ariaLabel={t(row.titleKey, row.titleFallback)}
+          ariaLabel={row.title()}
           disabled={taskModelLoading}
           triggerClass="settings-view__dropdown"
           onValueChange={(value) =>

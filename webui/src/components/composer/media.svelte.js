@@ -1,5 +1,5 @@
 import { SvelteDate } from 'svelte/reactivity';
-import { t } from '$lib/i18n.js';
+import { t, tOr } from '$lib/i18n.js';
 import {
   getPendingAttachments,
   setPendingAttachments,
@@ -41,7 +41,7 @@ export function createComposerMedia(context) {
   let voiceStatus = $derived(
     recordingState === 'requesting'
       ? t('chat.voice.progress.microphone')
-      : t(
+      : tOr(
           `chat.voice.progress.${transcriptionProgress.phase}`,
           t('chat.voice.progress.transcribing'),
         ),

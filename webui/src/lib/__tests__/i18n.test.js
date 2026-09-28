@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { englishCatalog, init, t } from '../i18n.js';
+import { englishCatalog, init, t, tOr } from '../i18n.js';
 import { REQUIRED_CATALOG_KEYS, RETIRED_CATALOG_KEYS } from './i18n.support.js';
 
 describe('i18n t()', () => {
@@ -22,6 +22,18 @@ describe('i18n t()', () => {
       'Hi Ada, {count} left',
     );
     expect(t('agents.detail.idValue')).toBe('id: {id}');
+  });
+});
+
+describe('i18n tOr()', () => {
+  it('renders a known code from the catalog and an unknown one as the fallback', () => {
+    expect(tOr('logs.level.warn', 'WARN')).toBe(
+      englishCatalog['logs.level.warn'],
+    );
+    expect(tOr('logs.level.trace', 'TRACE')).toBe('TRACE');
+    expect(
+      tOr('statistics.skills.origin.x', 'x: {detail}', { detail: 'y' }),
+    ).toBe('x: y');
   });
 });
 

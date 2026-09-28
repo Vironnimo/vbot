@@ -1,5 +1,5 @@
 <script>
-  import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { t, tOr, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import Badge from '../ui/Badge.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
@@ -25,11 +25,11 @@
   function originLabel(origin) {
     const { scope, detail } = parseOrigin(origin);
     if (detail !== null) {
-      return t(`statistics.skills.origin.${scope}`, `${scope}: ${detail}`, {
+      return tOr(`statistics.skills.origin.${scope}`, `${scope}: ${detail}`, {
         detail,
       });
     }
-    return t(`statistics.skills.origin.${scope}`, scope);
+    return tOr(`statistics.skills.origin.${scope}`, scope);
   }
 </script>
 

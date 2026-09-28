@@ -145,28 +145,24 @@
   const SESSION_FILTER_ROWS = [
     {
       key: 'channels',
-      labelKey: 'sessions.filters.channels',
-      labelFallback: 'Show channels',
+      label: () => t('sessions.filters.channels', 'Show channels'),
     },
     {
       key: 'subagents',
-      labelKey: 'sessions.filters.subagents',
-      labelFallback: 'Subagent runs',
+      label: () => t('sessions.filters.subagents', 'Subagent runs'),
     },
     {
       key: 'memoryReflections',
-      labelKey: 'sessions.filters.memoryReflections',
-      labelFallback: 'Memory reflections',
+      label: () =>
+        t('sessions.filters.memoryReflections', 'Memory reflections'),
     },
     {
       key: 'skillReflections',
-      labelKey: 'sessions.filters.skillReflections',
-      labelFallback: 'Skill reflections',
+      label: () => t('sessions.filters.skillReflections', 'Skill reflections'),
     },
     {
       key: 'cron',
-      labelKey: 'sessions.filters.cron',
-      labelFallback: 'Cron runs',
+      label: () => t('sessions.filters.cron', 'Cron runs'),
     },
   ];
 
@@ -581,11 +577,11 @@
               role="menuitemcheckbox"
               aria-checked={filters[filterRow.key]}
             >
-              <span>{t(filterRow.labelKey, filterRow.labelFallback)}</span>
+              <span>{filterRow.label()}</span>
               <Toggle
                 size="sm"
                 checked={filters[filterRow.key]}
-                ariaLabel={t(filterRow.labelKey, filterRow.labelFallback)}
+                ariaLabel={filterRow.label()}
                 onChange={(checked) => setFilter(filterRow.key, checked)}
               />
             </div>
@@ -895,12 +891,12 @@
                   {#each reflectionBadgeKinds(session) as runKind (runKind)}
                     <span
                       class="tooltip-anchor session-row__marker-anchor"
-                      use:tooltip={t(`sessions.runKind.${runKind}`, runKind)}
+                      use:tooltip={t(`sessions.runKind.${runKind}`)}
                     >
                       <Badge
                         variant="neutral"
                         class="session-row__badge session-row__badge--icon"
-                        aria-label={t(`sessions.runKind.${runKind}`, runKind)}
+                        aria-label={t(`sessions.runKind.${runKind}`)}
                         data-session-marker={runKind}
                       >
                         <svg

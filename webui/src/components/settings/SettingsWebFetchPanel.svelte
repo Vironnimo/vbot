@@ -7,7 +7,7 @@
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
-  import { t } from '$lib/i18n.js';
+  import { t, tOr } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
   import {
     buildWebFetchSettingsPayload,
@@ -37,10 +37,7 @@
       label:
         id === 'direct'
           ? t('settings.webFetch.direct', 'Direct (no service)')
-          : t(
-              `settings.webSearch.providers.${id}`,
-              id === 'parallel' ? 'Parallel' : id,
-            ),
+          : tOr(`settings.webSearch.providers.${id}`, id),
     })),
   );
   const service = $derived(
@@ -88,8 +85,10 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildWebFetchSettingsPayload(draft),
-      successKey: 'settings.webFetch.saveSuccess',
-      successFallback: 'Web fetch settings updated.',
+      successTitle: t(
+        'settings.webFetch.saveSuccess',
+        'Web fetch settings updated.',
+      ),
       getDraftSnapshot: () => draft,
       applyResult: (next) => (draft = getWebFetchSettings(next)),
     });

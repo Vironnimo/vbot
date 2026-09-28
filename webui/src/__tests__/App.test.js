@@ -55,13 +55,8 @@ describe('NAVIGATION_ITEMS', () => {
 
   it('describes each view only by a translated label', () => {
     for (const item of NAVIGATION_ITEMS) {
-      expect(Object.keys(item).sort()).toEqual([
-        'id',
-        'labelFallback',
-        'labelKey',
-        'section',
-      ]);
-      expect(englishCatalog[item.labelKey], item.labelKey).toBeTruthy();
+      expect(Object.keys(item).sort()).toEqual(['id', 'label', 'section']);
+      expect(Object.values(englishCatalog)).toContain(item.label());
     }
   });
 });

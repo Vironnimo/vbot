@@ -31,7 +31,7 @@ export function participantDetails(participant) {
   return [
     participant.display_name,
     participant.model,
-    t(`swarm.state.${state}`, state),
+    state,
     `${participant.pending_count ?? 0} ${t('swarm.pending', 'pending')}`,
   ].join(' · ');
 }

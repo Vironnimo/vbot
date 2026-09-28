@@ -192,7 +192,7 @@
       return t('inherit.optionProviderDefault', 'Inherit (provider default)');
     }
 
-    return t(`agents.form.thinkingEffortOption.${option}`, option);
+    return t(`agents.form.thinkingEffortOption.${option}`);
   }
 
   // The empty-option label for the model / fallback-model select. Uses that

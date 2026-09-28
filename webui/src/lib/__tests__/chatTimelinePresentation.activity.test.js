@@ -25,7 +25,7 @@ import { t } from '../i18n.js';
 import { backgroundBashTool } from './chatTimelinePresentation.support.js';
 
 const status = (name) => t(`chat.runStatus.${name}`);
-const seconds = (value) => t('chat.runDurationSeconds', '', { seconds: value });
+const seconds = (value) => t('chat.durationSeconds', '', { seconds: value });
 const iterations = (count) => t('chat.runIterations', '', { count });
 const minutesSeconds = (minutes, secs) =>
   t('chat.durationMinutesSeconds', '', { minutes, seconds: secs });

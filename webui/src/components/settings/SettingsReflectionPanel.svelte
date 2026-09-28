@@ -163,8 +163,10 @@
       buildPayload: () => ({
         reflection: getReflectionSettings({ reflection: reflectionSettings }),
       }),
-      successKey: 'settings.reflection.saveSuccess',
-      successFallback: 'Reflection settings updated.',
+      successTitle: t(
+        'settings.reflection.saveSuccess',
+        'Reflection settings updated.',
+      ),
       getDraftSnapshot: () => reflectionSettings,
       applyResult: (next) => (reflectionSettings = getReflectionSettings(next)),
     });

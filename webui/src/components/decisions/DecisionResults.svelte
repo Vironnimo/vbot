@@ -9,8 +9,7 @@
 {#if record}
   <section class="jev-result" aria-label={t('jev.result', 'Evaluation result')}>
     <div class="jev-row">
-      <strong>{t(`jev.status.${record.status}`, record.status)}</strong><span
-        class="jev-help"
+      <strong>{record.status}</strong><span class="jev-help"
         >{formatDateTimeInApplicationZone(record.created_at, undefined, {
           dateStyle: 'short',
           timeStyle: 'medium',
@@ -35,10 +34,7 @@
     {#if record.result?.mode === 'control'}
       <p>
         {t('jev.stepsCompleted', 'Completed steps')}: {record.result
-          .steps_completed} · {t(
-          `jev.phase.${record.result.phase}`,
-          record.result.phase,
-        )}
+          .steps_completed} · {record.result.phase}
       </p>
       {#each [...record.result.steps].reverse() as step (step.number)}
         <article class="jev-answer">
@@ -50,7 +46,7 @@
           <p class="jev-help">
             {step.status === 'executing' && record.status !== 'running'
               ? t('jev.actionUnconfirmed', 'Action outcome unconfirmed')
-              : t(`jev.status.${step.status}`, step.status)}
+              : step.status}
           </p>
           <StatePreview
             state={step.state}

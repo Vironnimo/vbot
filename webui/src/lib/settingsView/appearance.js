@@ -1,3 +1,5 @@
+import { t, tOr } from '../i18n.js';
+
 export const SETTINGS_LAYOUT_CLASS = 'settings-layout view active';
 
 // Presence rows for the General panel "Connected clients" list. Pure: passes
@@ -90,8 +92,7 @@ export function buildLanguageOptions(appearance) {
 
   return languageIds.map((languageId) => ({
     id: languageId,
-    labelKey: `settings.language.${languageId}`,
-    labelFallback: languageId,
+    label: tOr(`settings.language.${languageId}`, languageId),
   }));
 }
 
@@ -171,8 +172,7 @@ export function getPersistedChatWidth(settings) {
 export function buildChatWidthOptions() {
   return CHAT_WIDTH_OPTIONS.map((id) => ({
     id,
-    labelKey: `settings.appearance.chatWidth.${id}`,
-    labelFallback: id,
+    label: t(`settings.appearance.chatWidth.${id}`),
   }));
 }
 
@@ -186,8 +186,7 @@ export function getPersistedChatWorkingMode(settings) {
 export function buildChatWorkingModeOptions() {
   return CHAT_WORKING_MODE_OPTIONS.map((id) => ({
     id,
-    labelKey: `settings.appearance.chatWorkingMode.${id}`,
-    labelFallback: id,
+    label: t(`settings.appearance.chatWorkingMode.${id}`),
   }));
 }
 

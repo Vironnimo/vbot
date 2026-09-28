@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 const TASK_SPEECH_TO_TEXT = 'speech_to_text';
 const TASK_TEXT_TO_SPEECH = 'text_to_speech';
 const TASK_IMAGE_UNDERSTANDING = 'image_understanding';
@@ -45,74 +47,92 @@ export function stringifyJsonFieldValue(value) {
 const SPEECH_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_SPEECH_TO_TEXT,
-    titleKey: 'settings.specializedModels.speechToText',
-    titleFallback: 'Speech to text',
-    descriptionKey: 'settings.specializedModels.speechToTextDescription',
-    descriptionFallback: 'Used by the chat microphone transcription flow.',
+    title: () => t('settings.specializedModels.speechToText', 'Speech to text'),
+    description: () =>
+      t(
+        'settings.specializedModels.speechToTextDescription',
+        'Used by the chat microphone transcription flow.',
+      ),
   },
   {
     taskType: TASK_TEXT_TO_SPEECH,
-    titleKey: 'settings.specializedModels.textToSpeech',
-    titleFallback: 'Text to speech',
-    descriptionKey: 'settings.specializedModels.textToSpeechDescription',
-    descriptionFallback: 'Used by the agent text_to_speech tool.',
+    title: () => t('settings.specializedModels.textToSpeech', 'Text to speech'),
+    description: () =>
+      t(
+        'settings.specializedModels.textToSpeechDescription',
+        'Used by the agent text_to_speech tool.',
+      ),
   },
 ]);
 
 const LIVE_VOICE_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_LIVE_VOICE,
-    titleKey: 'settings.specializedModels.liveVoice',
-    titleFallback: 'Live voice',
-    descriptionKey: 'settings.specializedModels.liveVoiceDescription',
-    descriptionFallback:
-      'Realtime voice model for spoken conversations with vBot. Delegating models also use a backend model to operate the app.',
+    title: () => t('settings.specializedModels.liveVoice', 'Live voice'),
+    description: () =>
+      t(
+        'settings.specializedModels.liveVoiceDescription',
+        'Realtime voice model for spoken conversations with vBot. Delegating models also use a backend model to operate the app.',
+      ),
   },
 ]);
 
 const IMAGE_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_IMAGE_UNDERSTANDING,
-    titleKey: 'settings.specializedModels.imageUnderstanding',
-    titleFallback: 'Image understanding',
-    descriptionKey: 'settings.specializedModels.imageUnderstandingDescription',
-    descriptionFallback:
-      'Used by analyze_image. Available by default for Agents without vision, or with vision when explicitly enabled in the Agent’s Tool settings.',
+    title: () =>
+      t('settings.specializedModels.imageUnderstanding', 'Image understanding'),
+    description: () =>
+      t(
+        'settings.specializedModels.imageUnderstandingDescription',
+        'Used by analyze_image. Available by default for Agents without vision, or with vision when explicitly enabled in the Agent’s Tool settings.',
+      ),
   },
   {
     taskType: TASK_IMAGE_GENERATION,
-    titleKey: 'settings.specializedModels.imageGeneration',
-    titleFallback: 'Image generation',
-    descriptionKey: 'settings.specializedModels.imageGenerationDescription',
-    descriptionFallback: 'Used for image generation requests.',
+    title: () =>
+      t('settings.specializedModels.imageGeneration', 'Image generation'),
+    description: () =>
+      t(
+        'settings.specializedModels.imageGenerationDescription',
+        'Used for image generation requests.',
+      ),
   },
 ]);
 
 const TEXT_EMBEDDING_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_TEXT_EMBEDDING,
-    titleKey: 'settings.specializedModels.embeddingModel',
-    titleFallback: 'Embedding model',
-    descriptionKey: 'settings.specializedModels.embeddingModelDescription',
-    descriptionFallback:
-      'Turns text into numeric vectors for meaning-based search. Required when Recall is set to Semantic.',
+    title: () =>
+      t('settings.specializedModels.embeddingModel', 'Embedding model'),
+    description: () =>
+      t(
+        'settings.specializedModels.embeddingModelDescription',
+        'Turns text into numeric vectors for meaning-based search. Required when Recall is set to Semantic.',
+      ),
   },
 ]);
 
 const GENERATED_MEDIA_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_VIDEO_GENERATION,
-    titleKey: 'settings.specializedModels.videoGeneration',
-    titleFallback: 'Video generation',
-    descriptionKey: 'settings.specializedModels.videoGenerationDescription',
-    descriptionFallback: 'Used by the agent generate_video tool.',
+    title: () =>
+      t('settings.specializedModels.videoGeneration', 'Video generation'),
+    description: () =>
+      t(
+        'settings.specializedModels.videoGenerationDescription',
+        'Used by the agent generate_video tool.',
+      ),
   },
   {
     taskType: TASK_MUSIC_GENERATION,
-    titleKey: 'settings.specializedModels.musicGeneration',
-    titleFallback: 'Music generation',
-    descriptionKey: 'settings.specializedModels.musicGenerationDescription',
-    descriptionFallback: 'Used by the agent generate_music tool.',
+    title: () =>
+      t('settings.specializedModels.musicGeneration', 'Music generation'),
+    description: () =>
+      t(
+        'settings.specializedModels.musicGenerationDescription',
+        'Used by the agent generate_music tool.',
+      ),
   },
 ]);
 
@@ -124,11 +144,12 @@ export const TASK_MODEL_ROWS = Object.freeze([
   ...TEXT_EMBEDDING_TASK_ROWS,
   {
     taskType: 'decision',
-    titleKey: 'settings.specializedModels.decision',
-    titleFallback: 'Decision model',
-    descriptionKey: 'settings.specializedModels.decisionDescription',
-    descriptionFallback:
-      'Structured judgments for the evaluate Tool and Jev experiments.',
+    title: () => t('settings.specializedModels.decision', 'Decision model'),
+    description: () =>
+      t(
+        'settings.specializedModels.decisionDescription',
+        'Structured judgments for the evaluate Tool and Jev experiments.',
+      ),
   },
 ]);
 

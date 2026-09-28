@@ -48,19 +48,19 @@
   let languageDropdownOptions = $derived(
     availableLanguageOptions.map((language) => ({
       value: language.id,
-      label: t(language.labelKey, language.labelFallback),
+      label: language.label,
     })),
   );
   let chatWidthDropdownOptions = $derived(
     buildChatWidthOptions().map((option) => ({
       value: option.id,
-      label: t(option.labelKey, option.labelFallback),
+      label: option.label,
     })),
   );
   let chatWorkingModeDropdownOptions = $derived(
     buildChatWorkingModeOptions().map((option) => ({
       value: option.id,
-      label: t(option.labelKey, option.labelFallback),
+      label: option.label,
     })),
   );
   let persistedLanguageId = $derived(getPersistedLanguageId(settings));

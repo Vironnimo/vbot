@@ -9,7 +9,7 @@
   import LogsEntry from './logs/LogsEntry.svelte';
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
   import { reconnectBackoffDelay } from '$lib/backoff.js';
-  import { t } from '$lib/i18n.js';
+  import { t, tOr } from '$lib/i18n.js';
   import {
     LOGS_STREAM_STATUS_CONNECTED,
     LOGS_STREAM_STATUS_CONNECTING,
@@ -381,7 +381,7 @@
       return t('logs.level.unknown', 'UNKNOWN');
     }
 
-    return t(`logs.level.${level}`, level.toUpperCase());
+    return tOr(`logs.level.${level}`, level.toUpperCase());
   }
 
   function errorMessageText(error, fallback) {

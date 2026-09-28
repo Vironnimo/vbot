@@ -301,6 +301,7 @@ export default Object.freeze({
   'settings.webSearch.providers.firecrawl': 'Firecrawl',
   'settings.webSearch.providers.perplexity': 'Perplexity',
   'settings.webSearch.providers.searxng': 'SearXNG',
+  'settings.webSearch.providers.parallel': 'Parallel',
   'settings.webSearch.defaultCount': 'Default result count',
   'settings.webSearch.defaultCountDescription':
     'Number of results a web_search call returns when the agent does not ask for a specific count (1-20).',

@@ -47,21 +47,18 @@ export function dateKeyForTimestamp(timestamp) {
   return dateKeyForDate(date);
 }
 
-export function formatDurationMs(
-  durationMs,
-  i18nKey = 'chat.runDurationSeconds',
-) {
+export function formatDurationMs(durationMs) {
   if (!Number.isFinite(durationMs) || durationMs < 0) {
     return '';
   }
   const elapsedSeconds = durationMs / 1000;
   if (elapsedSeconds < 10) {
-    return t(i18nKey, '{seconds}s', {
+    return t('chat.durationSeconds', '{seconds}s', {
       seconds: elapsedSeconds.toFixed(1),
     });
   }
   if (elapsedSeconds < 60) {
-    return t(i18nKey, '{seconds}s', {
+    return t('chat.durationSeconds', '{seconds}s', {
       seconds: Math.round(elapsedSeconds),
     });
   }

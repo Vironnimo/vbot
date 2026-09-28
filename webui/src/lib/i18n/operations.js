@@ -375,4 +375,12 @@ export default Object.freeze({
   'cron.messages.disabled': 'Cron job disabled.',
   'calendar.actions.targetsPartial':
     'Some Project Agent targets could not be loaded.',
+  'calendar.actions.status.pending': 'Scheduled',
+  'calendar.actions.status.claimed': 'Waiting',
+  'calendar.actions.status.running': 'Running',
+  'calendar.actions.status.completed': 'Completed',
+  'calendar.actions.status.failed': 'Failed',
+  'calendar.actions.status.cancelled': 'Cancelled',
+  'calendar.actions.status.interrupted': 'Interrupted',
+  'calendar.actions.status.missed': 'Missed',
 });

@@ -99,10 +99,6 @@
     return provider?.name ?? provider?.id ?? 'Provider';
   }
 
-  function providerValues(provider) {
-    return { provider: providerName(provider) };
-  }
-
   function computeCanGoBack(currentStep) {
     if (saving || oauthActive) {
       return false;
@@ -189,7 +185,7 @@
         title: t(
           'settings.providers.device_flow.success_toast',
           '{provider} connected successfully',
-          providerValues(selectedProvider),
+          { provider: providerName(selectedProvider) },
         ),
         variant: 'success',
       });
@@ -221,12 +217,12 @@
             ? t(
                 'settings.providers.add.localUnreachable',
                 '{provider} was added, but is not reachable.',
-                providerValues(selectedProvider),
+                { provider: providerName(selectedProvider) },
               )
             : t(
                 'settings.providers.add.localSuccess',
                 '{provider} added successfully.',
-                providerValues(selectedProvider),
+                { provider: providerName(selectedProvider) },
               ),
         variant: result?.reachable === false ? 'warn' : 'success',
       });
@@ -311,7 +307,7 @@
       title: t(
         'settings.providers.device_flow.success_toast',
         '{provider} connected successfully',
-        providerValues(selectedProvider),
+        { provider: providerName(selectedProvider) },
       ),
       variant: 'success',
     });
@@ -461,11 +457,9 @@
 
 <Modal
   title={selectedProvider
-    ? t(
-        'settings.providers.device_flow.title',
-        'Connect {provider}',
-        providerValues(selectedProvider),
-      )
+    ? t('settings.providers.device_flow.title', 'Connect {provider}', {
+        provider: providerName(selectedProvider),
+      })
     : t('settings.providers.add.title', 'Add provider')}
   labelledById="provider-connect-modal-title"
   class={setupMode
@@ -519,7 +513,7 @@
           {t(
             'settings.providers.add.chooseMethod',
             'Choose how to connect {provider}.',
-            providerValues(selectedProvider),
+            { provider: providerName(selectedProvider) },
           )}
         </p>
         <div class="provider-pick-list" role="list">
@@ -665,7 +659,7 @@
               {t(
                 'settings.providers.device_flow.waiting',
                 'Waiting for {provider} authorization…',
-                providerValues(selectedProvider),
+                { provider: providerName(selectedProvider) },
               )}
             </span>
           </div>
@@ -676,7 +670,7 @@
               {t(
                 'settings.providers.device_flow.waiting',
                 'Waiting for {provider} authorization…',
-                providerValues(selectedProvider),
+                { provider: providerName(selectedProvider) },
               )}
             </span>
           </div>
@@ -685,7 +679,7 @@
             {t(
               'settings.providers.add.oauthIntro',
               'Click Connect to begin. vBot then shows a code to enter at {provider} in your browser.',
-              providerValues(selectedProvider),
+              { provider: providerName(selectedProvider) },
             )}
           </p>
           {#if !setupMode}{@render accountField(false)}{/if}

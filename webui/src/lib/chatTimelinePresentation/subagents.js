@@ -106,7 +106,6 @@ export const subAgentToolStatusLabel = (
   if (dotStatus === 'cancelled') {
     const duration = formatDurationMs(
       subAgentRunDurationMs(tool, subAgentStatuses),
-      'chat.toolDurationSeconds',
     );
     return [t('chat.toolCancelled', 'cancelled'), duration]
       .filter(Boolean)
@@ -118,13 +117,12 @@ export const subAgentToolStatusLabel = (
         subAgentRunStartedAt(tool, subAgentStatuses),
         nowMs,
       ),
-      'chat.toolDurationSeconds',
     );
   }
 
   const childDurationMs = subAgentRunDurationMs(tool, subAgentStatuses);
   if (childDurationMs !== null) {
-    return formatDurationMs(childDurationMs, 'chat.toolDurationSeconds');
+    return formatDurationMs(childDurationMs);
   }
 
   // A background spawn carries no inline result, so its own duration is just
@@ -135,7 +133,7 @@ export const subAgentToolStatusLabel = (
   ) {
     return '';
   }
-  return formatDurationMs(toolDurationMs(tool), 'chat.toolDurationSeconds');
+  return formatDurationMs(toolDurationMs(tool));
 };
 
 export const isSubAgentSpawnTool = (tool) => {

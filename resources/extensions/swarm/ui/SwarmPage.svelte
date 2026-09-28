@@ -238,10 +238,7 @@
                     t('swarm.profile', 'Swarm')}
                 </h2>
                 <StatusChip variant={model.working ? 'warn' : 'neutral'}>
-                  {t(
-                    `swarm.state.${model.selectedSwarm.state}`,
-                    model.selectedSwarm.state,
-                  )}
+                  {model.selectedSwarm.state}
                 </StatusChip>
               </div>
             </div>

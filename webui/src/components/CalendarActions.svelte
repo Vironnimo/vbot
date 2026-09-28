@@ -8,7 +8,7 @@
   import StatusChip from './ui/StatusChip.svelte';
   import InfoHint from './ui/InfoHint.svelte';
   import Dropdown from './Dropdown.svelte';
-  import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { t, tOr, activeLocaleTag } from '$lib/i18n.js';
   import {
     addCalendarAction,
     updateCalendarAction,
@@ -231,29 +231,22 @@
         ? t('calendar.actions.day', 'day')
         : t('calendar.actions.days', 'days'),
     }[match[4]];
-    return t(
-      match[2] === '-'
-        ? 'calendar.actions.beforeAnchor'
-        : 'calendar.actions.afterAnchor',
-      match[2] === '-'
-        ? '{amount} {unit} before {anchor}'
-        : '{amount} {unit} after {anchor}',
-      { amount: match[3], unit, anchor },
-    );
+    const amount = match[3];
+    return match[2] === '-'
+      ? t('calendar.actions.beforeAnchor', '{amount} {unit} before {anchor}', {
+          amount,
+          unit,
+          anchor,
+        })
+      : t('calendar.actions.afterAnchor', '{amount} {unit} after {anchor}', {
+          amount,
+          unit,
+          anchor,
+        });
   }
 
   function statusLabel(status) {
-    const labels = {
-      pending: 'Scheduled',
-      claimed: 'Waiting',
-      running: 'Running',
-      completed: 'Completed',
-      failed: 'Failed',
-      cancelled: 'Cancelled',
-      interrupted: 'Interrupted',
-      missed: 'Missed',
-    };
-    return t(`calendar.actions.status.${status}`, labels[status] ?? status);
+    return tOr(`calendar.actions.status.${status}`, status);
   }
 
   function timestamp(value) {

@@ -136,8 +136,7 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => ({ compaction: normalizeCompactionPolicy(policy) }),
-      successKey: 'settings.compaction.saved',
-      successFallback: 'Compaction Policy saved.',
+      successTitle: t('settings.compaction.saved', 'Compaction Policy saved.'),
     });
   }
 

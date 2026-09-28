@@ -145,7 +145,7 @@ describe('message presentation', () => {
       },
       () =>
         t('chat.compactedWithTimingTokens', '', {
-          duration: t('chat.runDurationSeconds', '', { seconds: 45 }),
+          duration: t('chat.durationSeconds', '', { seconds: 45 }),
           before: '254k',
           after: '40k',
         }),
@@ -508,7 +508,7 @@ describe('Tool row presentation', () => {
     expect(toolStatusLabel(tool)).toBe(
       [
         t('chat.toolPartial'),
-        t('chat.toolDurationSeconds', '', { seconds: '0.2' }),
+        t('chat.durationSeconds', '', { seconds: '0.2' }),
       ].join(' · '),
     );
   });

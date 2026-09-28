@@ -31,7 +31,7 @@
   let saving = $state(false);
 
   let webSearchProviderOptions = $derived(
-    buildWebSearchProviderOptions(webSearchSettings, t),
+    buildWebSearchProviderOptions(webSearchSettings),
   );
   // Hosted providers need an API key in the data directory's .env file.
   let keyHint = $derived(webSearchKeyHint(webSearchSettings.provider));
@@ -143,8 +143,10 @@
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildWebSearchSettingsPayload(webSearchSettings),
-      successKey: 'settings.webSearch.saveSuccess',
-      successFallback: 'Web search settings updated.',
+      successTitle: t(
+        'settings.webSearch.saveSuccess',
+        'Web search settings updated.',
+      ),
       getDraftSnapshot: () => webSearchSettings,
       applyResult: (next) => (webSearchSettings = getWebSearchSettings(next)),
     });

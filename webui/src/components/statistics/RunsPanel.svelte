@@ -1,5 +1,5 @@
 <script>
-  import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { t, tOr, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import EmptyState from '../ui/EmptyState.svelte';
   import {
@@ -32,7 +32,7 @@
   );
 
   function statusLabel(key) {
-    return t(`statistics.status.${key}`, key);
+    return tOr(`statistics.status.${key}`, key);
   }
 </script>
 

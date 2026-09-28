@@ -24,18 +24,27 @@
   const MODE_OPTIONS = [
     {
       value: 'automatic',
-      labelKey: 'settings.providers.openrouter.mode.automatic',
-      fallback: 'Automatic (OpenRouter managed)',
+      label: () =>
+        t(
+          'settings.providers.openrouter.mode.automatic',
+          'Automatic (OpenRouter managed)',
+        ),
     },
     {
       value: 'allowed',
-      labelKey: 'settings.providers.openrouter.mode.allowed',
-      fallback: 'Only allowed providers',
+      label: () =>
+        t(
+          'settings.providers.openrouter.mode.allowed',
+          'Only allowed providers',
+        ),
     },
     {
       value: 'ordered',
-      labelKey: 'settings.providers.openrouter.mode.ordered',
-      fallback: 'Preferred provider order',
+      label: () =>
+        t(
+          'settings.providers.openrouter.mode.ordered',
+          'Preferred provider order',
+        ),
     },
   ];
   const noop = () => {};
@@ -88,7 +97,7 @@
   let modeOptions = $derived(
     MODE_OPTIONS.map((option) => ({
       value: option.value,
-      label: t(option.labelKey, option.fallback),
+      label: option.label(),
     })),
   );
   let saveError = $derived(validateRouting(routing));

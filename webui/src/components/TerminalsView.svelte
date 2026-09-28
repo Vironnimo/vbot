@@ -805,14 +805,15 @@
                 class="terminals-view__tile-host"
                 role="group"
                 tabindex={isFinished ? -1 : 0}
-                aria-label={t(
-                  isFinished
-                    ? 'terminals.historyTerminalLabel'
-                    : 'terminals.liveTerminalLabel',
-                  isFinished
-                    ? 'Retained terminal history.'
-                    : 'Live terminal. Click to focus and type.',
-                )}
+                aria-label={isFinished
+                  ? t(
+                      'terminals.historyTerminalLabel',
+                      'Retained terminal history.',
+                    )
+                  : t(
+                      'terminals.liveTerminalLabel',
+                      'Live terminal. Click to focus and type.',
+                    )}
                 onpointerdown={(event) =>
                   activateTerminalFromPointer(event, item.terminal_id)}
                 onkeydown={(event) =>

@@ -566,22 +566,19 @@ export const backgroundBashToolStatusLabel = (
   if (rowState.dotStatus === 'running') {
     return formatDurationMs(
       elapsedSinceTimestamp(toolStartedTimestamp(tool), nowMs),
-      'chat.toolDurationSeconds',
     );
   }
   const durationMs = backgroundBashDurationMs(rowState.terminal);
   if (rowState.dotStatus === 'cancelled') {
     return [
       t('chat.toolCancelled', 'cancelled'),
-      durationMs !== null
-        ? formatDurationMs(durationMs, 'chat.toolDurationSeconds')
-        : '',
+      durationMs !== null ? formatDurationMs(durationMs) : '',
     ]
       .filter(Boolean)
       .join(' · ');
   }
   if (durationMs !== null) {
-    return formatDurationMs(durationMs, 'chat.toolDurationSeconds');
+    return formatDurationMs(durationMs);
   }
   return '';
 };
@@ -755,10 +752,7 @@ function runEndTimeLabel(assistantRun) {
 }
 
 function formatRunDuration(assistantRun, nowMs = Date.now()) {
-  const durationFromTiming = formatDurationMs(
-    assistantRun.durationMs,
-    'chat.runDurationSeconds',
-  );
+  const durationFromTiming = formatDurationMs(assistantRun.durationMs);
   if (durationFromTiming) {
     return durationFromTiming;
   }
@@ -770,13 +764,10 @@ function formatRunDuration(assistantRun, nowMs = Date.now()) {
     return '';
   }
   if (assistantRun.status === 'running') {
-    return formatDurationMs(
-      Math.max(0, nowMs - start),
-      'chat.runDurationSeconds',
-    );
+    return formatDurationMs(Math.max(0, nowMs - start));
   }
   if (end === null || end < start) {
     return '';
   }
-  return formatDurationMs(end - start, 'chat.runDurationSeconds');
+  return formatDurationMs(end - start);
 }

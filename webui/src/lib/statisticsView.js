@@ -48,44 +48,43 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const USAGE_HISTORY_GAP_MS = 90 * MINUTE_MS;
 
-const MODEL_CALL_KINDS = Object.freeze({
-  chat: 'Chat',
-  compaction: 'Compaction',
-  speech_to_text: 'Speech recognition',
-  text_to_speech: 'Speech synthesis',
-  image_understanding: 'Image understanding',
-  image_generation: 'Image generation',
-  video_generation: 'Video generation',
-  music_generation: 'Music generation',
-  text_embedding: 'Text embeddings',
-  decision: 'Decisions',
-  live_voice: 'Live voice',
-  live_voice_backend: 'Live voice reasoning',
-  session_title: 'Session titles',
-  group_title: 'Group titles',
-  extension_sampling: 'Extension sampling',
-});
+// Model request kinds and outcomes with a catalog label; any other value
+// renders the generic label.
+const MODEL_CALL_KINDS = new Set([
+  'chat',
+  'compaction',
+  'speech_to_text',
+  'text_to_speech',
+  'image_understanding',
+  'image_generation',
+  'video_generation',
+  'music_generation',
+  'text_embedding',
+  'decision',
+  'live_voice',
+  'live_voice_backend',
+  'session_title',
+  'group_title',
+  'extension_sampling',
+]);
 
-const MODEL_CALL_STATUSES = Object.freeze({
-  started: 'In progress',
-  completed: 'Completed',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-  interrupted: 'Interrupted',
-});
+const MODEL_CALL_STATUSES = new Set([
+  'started',
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+]);
 
 export function modelCallKindLabel(kind, translate) {
-  return Object.hasOwn(MODEL_CALL_KINDS, kind)
-    ? translate(`statistics.kind.${kind}`, MODEL_CALL_KINDS[kind])
+  return MODEL_CALL_KINDS.has(kind)
+    ? translate(`statistics.kind.${kind}`)
     : translate('statistics.kind.other', 'Other Model request');
 }
 
 export function modelCallStatusLabel(status, translate) {
-  return Object.hasOwn(MODEL_CALL_STATUSES, status)
-    ? translate(
-        `statistics.requestStatus.${status}`,
-        MODEL_CALL_STATUSES[status],
-      )
+  return MODEL_CALL_STATUSES.has(status)
+    ? translate(`statistics.requestStatus.${status}`)
     : translate('statistics.requestStatus.unknown', 'Outcome unknown');
 }
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { englishCatalog } from '../i18n.js';
+
 import {
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
   accountDisplayName,
@@ -326,18 +328,17 @@ describe('general and appearance', () => {
   it('reads appearance preferences and saves them as one section', () => {
     expect(
       buildLanguageOptions({ language: 'en', available_languages: ['en'] }),
-    ).toEqual([
-      { id: 'en', labelKey: 'settings.language.en', labelFallback: 'en' },
-    ]);
+    ).toEqual([{ id: 'en', label: 'English' }]);
+    expect(
+      buildLanguageOptions({ language: 'xx', available_languages: ['xx'] }),
+    ).toEqual([{ id: 'xx', label: 'xx' }]);
     expect(buildChatWidthOptions()).toContainEqual({
       id: 'wide',
-      labelKey: 'settings.appearance.chatWidth.wide',
-      labelFallback: 'wide',
+      label: 'Wide',
     });
     expect(buildChatWorkingModeOptions()).toContainEqual({
       id: 'compact',
-      labelKey: 'settings.appearance.chatWorkingMode.compact',
-      labelFallback: 'compact',
+      label: 'Compact',
     });
 
     expect(getPersistedChatWidth({ appearance: { chat_width: 'full' } })).toBe(
@@ -562,8 +563,14 @@ describe('retrieval', () => {
       recall: { backend: 'sqlite_fts' },
     });
     expect(
-      buildRecallBackendOptions({ available_backends: ['vector'] }, t),
-    ).toEqual([{ value: 'vector', label: 'settings.recall.backends.vector' }]);
+      buildRecallBackendOptions({ available_backends: ['vector', 'custom'] }),
+    ).toEqual([
+      {
+        value: 'vector',
+        label: englishCatalog['settings.recall.backends.vector'],
+      },
+      { value: 'custom', label: 'custom' },
+    ]);
   });
 
   it('normalizes web search settings and builds a trimmed payload', () => {
@@ -606,13 +613,12 @@ describe('retrieval', () => {
       },
     });
     expect(
-      buildWebSearchProviderOptions(
-        { available_providers: ['brave', 'searxng'] },
-        t,
-      ),
+      buildWebSearchProviderOptions({
+        available_providers: ['brave', 'custom'],
+      }),
     ).toEqual([
-      { value: 'brave', label: 'settings.webSearch.providers.brave' },
-      { value: 'searxng', label: 'settings.webSearch.providers.searxng' },
+      { value: 'brave', label: 'Brave Search' },
+      { value: 'custom', label: 'custom' },
     ]);
   });
 });
