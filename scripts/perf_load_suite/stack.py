@@ -100,12 +100,32 @@ def child_environment(source: dict[str, str] | None = None) -> dict[str, str]:
     return environment
 
 
-def provider_settings(provider_base_url: str) -> dict[str, Any]:
-    """``settings.json`` registering the fake Provider as the default Agent Model."""
+def provider_settings(
+    provider_base_url: str, *, compaction_trigger_tokens: int | None = None
+) -> dict[str, Any]:
+    """``settings.json`` registering the fake Provider as the default Agent Model.
+
+    ``compaction_trigger_tokens`` also lets automatic Compaction start at that
+    many estimated Context tokens instead of only at 80% of the context window.
+    """
+    compaction = (
+        {}
+        if compaction_trigger_tokens is None
+        else {
+            "compaction": {
+                "trigger": {
+                    "type": "context_ratio",
+                    "threshold": 0.8,
+                    "tokens": compaction_trigger_tokens,
+                }
+            }
+        }
+    )
     return {
         "format_version": 1,
         "defaults": {"agent": {"model": AGENT_MODEL}},
         "reflection": {"enabled": False},
+        **compaction,
         "providers": {
             "connections": {f"{FAKE_PROVIDER_ID}:default": True},
             "custom": {
@@ -272,8 +292,16 @@ class FakeProvider:
 class VbotServer:
     """One disposable vBot server with a fresh data directory."""
 
-    def __init__(self, *, data_dir: Path, log_dir: Path, provider_api_base_url: str) -> None:
+    def __init__(
+        self,
+        *,
+        data_dir: Path,
+        log_dir: Path,
+        provider_api_base_url: str,
+        compaction_trigger_tokens: int | None = None,
+    ) -> None:
         self.data_dir = data_dir
+        self._compaction_trigger_tokens = compaction_trigger_tokens
         self.port = free_port()
         self.base_url = f"http://{LOOPBACK}:{self.port}"
         self.console_log = log_dir / "server-console.log"
@@ -295,7 +323,14 @@ class VbotServer:
     def start(self) -> None:
         initialize_data_directory(self.data_dir)
         (self.data_dir / "settings.json").write_text(
-            json.dumps(provider_settings(self._provider_api_base_url), indent=2) + "\n",
+            json.dumps(
+                provider_settings(
+                    self._provider_api_base_url,
+                    compaction_trigger_tokens=self._compaction_trigger_tokens,
+                ),
+                indent=2,
+            )
+            + "\n",
             encoding="utf-8",
         )
         argv = [

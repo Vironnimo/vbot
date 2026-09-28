@@ -9,10 +9,11 @@ answered from the ``[[perf ...]]`` directive in its latest real User message
   arguments are checked against the Tool definitions in the request.
 - The final round streams filler text at the scripted rate. Every tenth content
   chunk carries a wall-clock marker ``⟦t=<epoch seconds>⟧`` so the client can
-  measure end-to-end delta latency on the same machine.
+  measure end-to-end delta latency on the same machine. A ``markdown=1``
+  directive streams a Markdown answer instead, without markers.
 - Requests without Tools or without a directive (Session titles, background
-  reflection, other utility calls) get a short plain answer and are recorded as
-  ``aux``.
+  reflection, other utility calls) and Compaction requests get a short plain
+  answer and are recorded as ``aux``.
 - Requests that offer ``swarm_board`` come from Swarm participants and follow
   :mod:`scripts.perf_load_suite.swarm_script`; a participant without a turn to
   take answers plain text recorded as ``idle``.
@@ -68,7 +69,13 @@ MARKER_EVERY_CHUNKS = 10
 UNPACED_CHUNK_TOKENS = 64
 AUX_RESPONSE_TEXT = "[title=Perf load session] Acknowledged."
 MARKER_PATTERN = re.compile(r"⟦t=(\d+(?:\.\d+)?)⟧")
+_WORD_PATTERN = re.compile(r"\S+\s*")
 _SYSTEM_REMINDER_PREFIX = "<system-reminder>"
+# Compaction appends its instruction as the last message, a System Reminder that
+# opens with these words (resources/prompts/compaction*.md).
+_COMPACTION_INSTRUCTION = re.compile(
+    re.escape(_SYSTEM_REMINDER_PREFIX) + r"\s*Create (?:a context|the next compaction) checkpoint\b"
+)
 _FILLER_WORDS = (
     "load",
     "stream",
@@ -214,6 +221,8 @@ def plan_response(
     messages = body.get("messages")
     if not isinstance(messages, list):
         raise PlanError("request has no messages array")
+    if _is_compaction_request(messages):
+        return PlannedResponse(kind="aux")
     schemas = offered_tool_schemas(body)
     if not schemas:
         return PlannedResponse(kind="aux")
@@ -307,6 +316,16 @@ def _plan_swarm_response(
         directive=directive,
         tool_calls=calls,
         participant=position.participant,
+    )
+
+
+def _is_compaction_request(messages: list[Any]) -> bool:
+    """Whether the request asks for a Compaction summary (it keeps the Tools)."""
+    last = messages[-1] if messages else None
+    return (
+        isinstance(last, dict)
+        and last.get("role") == "user"
+        and _COMPACTION_INSTRUCTION.match(message_text(last).lstrip()) is not None
     )
 
 
@@ -486,6 +505,92 @@ def filler_chunk(chunk_index: int, token_count: int, *, timestamp: float | None)
     return f"{prefix}{words} "
 
 
+def markdown_answer(tag: str, token_count: int) -> str:
+    """A deterministic Markdown answer of about ``token_count`` words.
+
+    Blocks cycle like a typical Agent answer: heading, paragraph with inline
+    code and emphasis, bullet list, fenced code block, table, numbered list.
+    ``tag`` varies the words, so answers of different turns differ.
+    """
+    seed = zlib.crc32(tag.encode("utf-8"))
+    blocks: list[str] = []
+    words = 0
+    while words < max(1, token_count):
+        block = _MARKDOWN_BLOCKS[len(blocks) % len(_MARKDOWN_BLOCKS)](seed + len(blocks))
+        blocks.append(block)
+        words += len(block.split())
+    return "\n\n".join(blocks) + "\n"
+
+
+def markdown_tokens(tag: str, token_count: int) -> list[str]:
+    """The words of :func:`markdown_answer`, each with its trailing whitespace."""
+    return _WORD_PATTERN.findall(markdown_answer(tag, token_count))
+
+
+def _filler_words(seed: int, count: int) -> list[str]:
+    return [_FILLER_WORDS[(seed * 7 + offset) % len(_FILLER_WORDS)] for offset in range(count)]
+
+
+def _markdown_heading(seed: int) -> str:
+    first, second = _filler_words(seed, 2)
+    return f"## {first.capitalize()} {second} review {seed % 97}"
+
+
+def _markdown_paragraph(seed: int) -> str:
+    words = _filler_words(seed, 32)
+    words[3] = f"`{words[3]}_{seed % 13}()`"
+    words[11] = f"**{words[11]}**"
+    words[20] = f"*{words[20]}*"
+    return f"{' '.join(words).capitalize()}."
+
+
+def _markdown_bullets(seed: int) -> str:
+    return "\n".join(
+        f"- **{words[0]}**: {' '.join(words[1:])}."
+        for words in (_filler_words(seed + item, 9) for item in range(4))
+    )
+
+
+def _markdown_code(seed: int) -> str:
+    name = f"compute_{seed % 100:02d}"
+    return "\n".join(
+        [
+            "```python",
+            f"def {name}(values: list[int]) -> int:",
+            "    total = 0",
+            "    for value in values:",
+            f"        total = (total * 31 + value + {seed % 7}) % 1_000_003",
+            "    return total",
+            "```",
+        ]
+    )
+
+
+def _markdown_table(seed: int) -> str:
+    rows = [
+        f"| `module_{(seed + row) % 12:02d}.py` | {(seed + row) % 9} | {word} |"
+        for row, word in enumerate(_filler_words(seed, 4))
+    ]
+    return "\n".join(["| File | Matches | Note |", "|---|---|---|", *rows])
+
+
+def _markdown_numbered(seed: int) -> str:
+    return "\n".join(
+        f"{item + 1}. {' '.join(_filler_words(seed + item, 7)).capitalize()}." for item in range(3)
+    )
+
+
+_MARKDOWN_BLOCKS: tuple[Callable[[int], str], ...] = (
+    _markdown_heading,
+    _markdown_paragraph,
+    _markdown_bullets,
+    _markdown_paragraph,
+    _markdown_code,
+    _markdown_table,
+    _markdown_numbered,
+)
+
+
 async def stream_text(
     model: str,
     directive: PerfDirective,
@@ -496,7 +601,8 @@ async def stream_text(
     """Stream the scripted text response, pacing tokens on an absolute schedule."""
     if directive.think_ms:
         await asyncio.sleep(directive.think_ms / 1000.0)
-    total_tokens = directive.text_tokens
+    markdown = markdown_tokens(directive.tag, directive.text_tokens) if directive.markdown else None
+    total_tokens = len(markdown) if markdown is not None else directive.text_tokens
     paced = directive.rate > 0
     tokens_per_chunk = 1 if paced else UNPACED_CHUNK_TOKENS
     start = time.monotonic()
@@ -514,10 +620,12 @@ async def stream_text(
             else:
                 max_lag = max(max_lag, -delay)
         now = time.time()
-        timed = chunk_index % MARKER_EVERY_CHUNKS == 0
-        delta: dict[str, Any] = {
-            "content": filler_chunk(chunk_index, count, timestamp=now if timed else None)
-        }
+        if markdown is not None:
+            content = "".join(markdown[emitted : emitted + count])
+        else:
+            timed = chunk_index % MARKER_EVERY_CHUNKS == 0
+            content = filler_chunk(chunk_index, count, timestamp=now if timed else None)
+        delta: dict[str, Any] = {"content": content}
         if first:
             delta["role"] = "assistant"
             record.first_byte = now
@@ -555,8 +663,13 @@ def completion_body(model: str, planned: PlannedResponse, *, prompt_tokens: int)
         }
         finish_reason = "tool_calls"
     elif planned.directive is not None:
-        completion_tokens = planned.directive.text_tokens
-        message["content"] = filler_chunk(0, completion_tokens, timestamp=time.time())
+        directive = planned.directive
+        completion_tokens = directive.text_tokens
+        message["content"] = (
+            markdown_answer(directive.tag, completion_tokens)
+            if directive.markdown
+            else filler_chunk(0, completion_tokens, timestamp=time.time())
+        )
     return {
         "id": "chatcmpl-perf",
         "object": "chat.completion",

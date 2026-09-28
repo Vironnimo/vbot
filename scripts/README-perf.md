@@ -59,6 +59,7 @@ python scripts/perf_load.py --ui                         # + headless browser wa
 python scripts/perf_load.py --scenario swarm --agents 3 --turns 2 --ui   # one Swarm, 3 participants, Swarm page open
 python scripts/perf_load.py --agents 10 --duration 30 --ui              # 30 minutes of turns: memory, Tasks, gen2 over time
 python scripts/perf_load.py --agents 3 --duration 2 --ui-profile        # --ui plus a CPU profile of the WebUI's JavaScript
+python scripts/perf_load.py --agents 1 --turns 15 --ui-history-turns 300 # WebUI with a 300-turn chat timeline
 python scripts/perf_load.py --compare perf-results/load-<old>/result.json
 python scripts/perf_load.py compare old/result.json new/result.json
 ```
@@ -91,7 +92,19 @@ The report also lists the recording's **counters** (`events.*`, `webui.*`, top 2
 
 `--ui` needs Node.js, `npm ci` in `tests/e2e` (it reuses the E2E Playwright install) and a built WebUI. It reports Long Tasks and frame gaps in the browser while the load runs, and counts every `/api/rpc` request the browser makes, per method, including those of Extension page frames (`extensions.operation` is split into `extensions.operation:<extension>/<operation>`). The table *UI RPC calls by method* shows calls, total and maximum browser-side time and failures. A method called about every two seconds while nothing changes is polling; a burst after every Run event is a reload wave, which the server counters `webui.invalidation_rpcs.<kind>.<method>` attribute to the invalidation kind that caused it.
 
+The rows *UI task / script ms*, *UI layout / style ms* and *UI layouts / style recalcs* are the browser's own counters over the load phase (Chromium DevTools `Performance.getMetrics` deltas of `TaskDuration`, `ScriptDuration`, `LayoutDuration`, `RecalcStyleDuration`, `LayoutCount`, `RecalcStyleCount`): all main-thread work, not only the tasks above 50 ms. *UI DOM nodes / layout objects / JS heap MB* are read at the end of the phase after a forced garbage collection, so they show what the page retains. The counters include the probe's own small share (its frame loop and DOM observer).
+
 `--ui-profile` does the same and also samples the WebUI page's JavaScript while the load runs. The V8 CPU profile lands in the level folder as `ui-profile.cpuprofile`; open it in the DevTools Performance panel (*Load profile*) or in [speedscope](https://www.speedscope.app) to see which functions the Long Tasks spend their time in. The regular build is minified, so build the WebUI with `npx vite build --minify false` (in `webui/`) first for readable function names, and rebuild it normally afterwards. Sampling adds overhead of its own: compare Long Task counts only between runs without `--ui-profile`.
+
+### Long chat timeline
+
+`--ui-history-turns N` (implies `--ui`, sessions scenario) measures how the WebUI's cost grows with the length of the displayed Chat timeline. History loads newest first (100 Messages, then 50 per older page when the user scrolls near the top), so a long timeline only exists in the browser after scrolling up through it.
+
+- Before the load phase, the harness gives the watched Session N completed turns through the real pipeline (`chat.stream`, fake Provider, real Tools), unpaced: each turn has three Tool rounds (`read`, `search_files`, `bash`) and a Markdown answer of about 300 words with headings, lists, a code block and a table (directive `markdown=1`). In these runs automatic Compaction starts at 200k estimated Context tokens, as on a 200k-token Model, so the History gets a Compaction checkpoint about every 40 turns, as a long real Session would, and no seeding request grows beyond that: seeding takes about 1 s per turn on an otherwise idle desktop machine. The console reports progress every 50 turns. A final `/compact` gives every N the same small Context, so no Compaction falls into the measured phase and the server does the same work per load turn for every N. The fake Provider answers Compaction requests with a short plain summary.
+- **Scroll-through phase:** the browser opens the Session, then repeatedly scrolls the timeline to the top the way a mouse wheel does, and waits until the older page is rendered, until no older History remains. It reports per page the time from the scroll to the second frame after the new items appeared (*page*, includes the `chat.history` request, *page RPC*), plus Long Tasks, frame gaps and the browser counters of the whole phase. The level details list the pages in five groups with the timeline size after each group, which shows how the cost of one page grows with the timeline above it. A note appears when fewer User messages than seeded turns are rendered at the end.
+- **Streaming phase:** the probe returns to the bottom through *Jump to latest*, so the timeline follows the live tail again, and the load phase runs as with `--ui` (`--turns` or `--duration`), measured as usual.
+
+The report shows the scroll-through as the *UI scroll:* rows and the streaming phase as the other *UI* rows. Run one invocation per N, for example N = 0, 100 and 300 with the same `--turns`, and compare the rows; `perf_load.py compare` diffs two runs with the same N, for example before and after a WebUI change.
 
 ### Swarm scenario
 
