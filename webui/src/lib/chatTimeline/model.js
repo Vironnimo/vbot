@@ -230,6 +230,12 @@ export function timingDurationMs(timing) {
     : null;
 }
 
-export function stripTimelineSequence({ sequence: _sequence, ...item }) {
+// An item without a sequence is returned as is, so an unchanged item keeps
+// its identity through the render boundary.
+export function stripTimelineSequence(item) {
+  return Object.hasOwn(item, 'sequence') ? withoutSequence(item) : item;
+}
+
+function withoutSequence({ sequence: _sequence, ...item }) {
   return item;
 }

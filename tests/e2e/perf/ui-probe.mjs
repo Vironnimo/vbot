@@ -7,6 +7,10 @@
 // fake Provider's timing markers, and every `/api/rpc` call the browser made
 // while measuring, counted per method.
 //
+// `--profile <path>` also records a V8 CPU profile of the page's main frame
+// while measuring and writes it to <path> (`.cpuprofile`, opens in the
+// DevTools Performance panel or speedscope).
+//
 // Views:
 // - `--view chat --agent <id>` opens that Agent's current Session.
 // - `--view extension:<name>:<page>` opens an Extension page. Its sandboxed
@@ -18,6 +22,7 @@
 // Lives outside the Playwright testDir (./tests) so E2E runs never collect it;
 // it reuses the E2E Playwright installation (`npm ci` in tests/e2e).
 
+import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
@@ -27,6 +32,8 @@ const FRAME_GAP_MS = 50;
 const RPC_PATH = "/api/rpc";
 const SELECT_TIMEOUT_MS = 30_000;
 const RUN_ENTRY = ".run-group button.secondary-list__item";
+// Microseconds between CPU profile samples; V8's default is 1000.
+const PROFILE_SAMPLING_US = 250;
 
 const { values } = parseArgs({
   options: {
@@ -34,6 +41,7 @@ const { values } = parseArgs({
     view: { type: "string", default: "chat" },
     agent: { type: "string" },
     "max-seconds": { type: "string", default: "900" },
+    profile: { type: "string" },
   },
 });
 
@@ -297,6 +305,22 @@ function mergeFrames(page, measurements) {
   };
 }
 
+// Samples the page's main-frame JavaScript through the DevTools protocol.
+async function startProfiler(context, page) {
+  const session = await context.newCDPSession(page);
+  await session.send("Profiler.enable");
+  await session.send("Profiler.setSamplingInterval", {
+    interval: PROFILE_SAMPLING_US,
+  });
+  await session.send("Profiler.start");
+  return {
+    async stop(path) {
+      const { profile } = await session.send("Profiler.stop");
+      await writeFile(path, JSON.stringify(profile));
+    },
+  };
+}
+
 async function main() {
   const maxSeconds = Number.parseFloat(values["max-seconds"]);
   if (!values.url || !Number.isFinite(maxSeconds)) {
@@ -334,6 +358,7 @@ async function main() {
     measuring = true;
     rpcCounter.start();
     await Promise.all(page.frames().map(measure));
+    const profiler = values.profile ? await startProfiler(context, page) : null;
     emit({ event: "ready" });
 
     const reason = await serveCommands(maxSeconds, {
@@ -341,6 +366,9 @@ async function main() {
     });
     measuring = false;
     const rpcCalls = rpcCounter.stop();
+    await profiler?.stop(values.profile).catch((error) => {
+      console.error(`CPU profile not written: ${error?.message ?? error}`);
+    });
     const measurements = new Map();
     for (const current of page.frames()) {
       const measured = await current

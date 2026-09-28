@@ -635,26 +635,56 @@ export function createChatRunStream({
     }, SSE_RECOVERY_RETRY_DELAY_MS);
   }
 
+  // The App hands its whole retained window of recent Run server events over
+  // again whenever one arrives. The window only grows at its end and drops its
+  // oldest events, so a call resumes after the last event this owner visited
+  // instead of re-keying the whole window; a window that no longer holds that
+  // event is visited in full, and the handled keys still suppress repeats.
+  let lastVisitedServerEvent = null;
+
+  function visitServerEvents(singleEvent, events, visit) {
+    for (const serverEvent of normalizedRunServerEvents(
+      null,
+      unvisitedServerEvents(events),
+    )) {
+      lastVisitedServerEvent = serverEvent;
+      visit(serverEvent, runServerEventKey(serverEvent));
+    }
+    if (singleEvent) {
+      visit(singleEvent, runServerEventKey(singleEvent));
+    }
+  }
+
+  function unvisitedServerEvents(events) {
+    if (!Array.isArray(events) || !lastVisitedServerEvent) {
+      return events;
+    }
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      if (events[index] === lastVisitedServerEvent) {
+        return events.slice(index + 1);
+      }
+    }
+    return events;
+  }
+
   function handleServerEvents(singleEvent, events) {
-    for (const serverEvent of normalizedRunServerEvents(singleEvent, events)) {
-      const eventKey = runServerEventKey(serverEvent);
+    visitServerEvents(singleEvent, events, (serverEvent, eventKey) => {
       if (!eventKey || handledRunServerEventKeys.has(eventKey)) {
-        continue;
+        return;
       }
       handledRunServerEventKeys.add(eventKey);
       handleRunServerEvent(serverEvent);
-    }
+    });
   }
 
   // Mark retained events as already reflected (by a current-state snapshot)
   // so a later `handleServerEvents` over the same window ignores them.
   function skipServerEvents(singleEvent, events) {
-    for (const serverEvent of normalizedRunServerEvents(singleEvent, events)) {
-      const eventKey = runServerEventKey(serverEvent);
+    visitServerEvents(singleEvent, events, (_serverEvent, eventKey) => {
       if (eventKey) {
         handledRunServerEventKeys.add(eventKey);
       }
-    }
+    });
   }
 
   function handleRunServerEvent(serverEvent) {

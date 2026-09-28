@@ -22,11 +22,32 @@ import {
 } from './runChildren.js';
 import { isPlainObject } from '../values.js';
 
-export function historyTimelineItems(messages) {
+// A History item is a pure projection of the Messages it was built from.
+// `reuse` (see `createHistoryItemReuse`) hands back the object an earlier
+// projection built from the same Messages, so keyed rendering skips unchanged
+// rows instead of re-rendering the whole History on every streaming flush,
+// and a run of Messages projected before is not rebuilt at all.
+export function historyTimelineItems(messages, reuse = null) {
+  const projected = projectedHistorySegment(reuse, messages);
+  if (projected) {
+    return projected;
+  }
   const timelineItems = [];
+  const entries = [];
+  const push = (item, sources) => {
+    const entry = reuseHistoryItem(reuse, item, sources);
+    entries.push(entry);
+    timelineItems.push(entry.item);
+  };
   let activeAssistantRun = null;
+  let activeRunSources = [];
   let previousVisibleRole = '';
   let activeRecordRunId;
+  const pushActiveRun = () => {
+    pushActiveAssistantRun(push, activeAssistantRun, activeRunSources);
+    activeAssistantRun = null;
+    activeRunSources = [];
+  };
 
   for (const message of messages ?? []) {
     // Missing terminal persistence must not merge two canonical executions.
@@ -37,33 +58,36 @@ export function historyTimelineItems(messages) {
       Object.hasOwn(message, 'history_run_id') &&
       activeRecordRunId !== message.history_run_id
     ) {
-      pushActiveAssistantRun(timelineItems, activeAssistantRun);
-      activeAssistantRun = null;
+      pushActiveRun();
       previousVisibleRole = '';
     }
     if (message?.role === 'compaction_checkpoint') {
-      pushActiveAssistantRun(timelineItems, activeAssistantRun);
-      activeAssistantRun = null;
-      timelineItems.push({
-        id: `compaction-${historyMessageKey(message)}`,
-        type: 'compaction_separator',
-        timestamp: message.timestamp,
-        message,
-        durationMs: message?.usage?.compaction_duration_ms ?? null,
-      });
+      pushActiveRun();
+      push(
+        {
+          id: `compaction-${historyMessageKey(message)}`,
+          type: 'compaction_separator',
+          timestamp: message.timestamp,
+          message,
+          durationMs: message?.usage?.compaction_duration_ms ?? null,
+        },
+        [message],
+      );
       previousVisibleRole = 'compaction_checkpoint';
       continue;
     }
 
     if (message?.role === 'agent_takeover') {
-      pushActiveAssistantRun(timelineItems, activeAssistantRun);
-      activeAssistantRun = null;
-      timelineItems.push({
-        id: `takeover-${historyMessageKey(message)}`,
-        type: 'takeover_separator',
-        timestamp: message.timestamp,
-        message,
-      });
+      pushActiveRun();
+      push(
+        {
+          id: `takeover-${historyMessageKey(message)}`,
+          type: 'takeover_separator',
+          timestamp: message.timestamp,
+          message,
+        },
+        [message],
+      );
       previousVisibleRole = 'agent_takeover';
       continue;
     }
@@ -71,17 +95,15 @@ export function historyTimelineItems(messages) {
     if (message?.role === 'run_summary') {
       if (activeAssistantRun) {
         appendHistoryRunSummary(activeAssistantRun, message);
-        pushActiveAssistantRun(timelineItems, activeAssistantRun);
-        activeAssistantRun = null;
+        activeRunSources.push(message);
+        pushActiveRun();
       } else if (
         message.status === 'cancelled' ||
         message.status === 'interrupted'
       ) {
         // A terminal run with no visible output has only its summary as a
         // durable trace. Render a bare status row instead of leaving a hole.
-        timelineItems.push(
-          terminalRunSummaryItem(message, timelineItems.length),
-        );
+        push(terminalRunSummaryItem(message, timelineItems.length), [message]);
       }
       previousVisibleRole = 'run_summary';
       continue;
@@ -94,13 +116,13 @@ export function historyTimelineItems(messages) {
       message.history_run_id === activeRecordRunId
     ) {
       appendSteeringMessage(activeAssistantRun, message);
+      activeRunSources.push(message);
       previousVisibleRole = 'user';
       continue;
     }
     if (message?.role === 'user') {
-      pushActiveAssistantRun(timelineItems, activeAssistantRun);
-      activeAssistantRun = null;
-      timelineItems.push(historyMessageItem(message));
+      pushActiveRun();
+      push(historyMessageItem(message), [message]);
       previousVisibleRole = 'user';
       continue;
     }
@@ -108,8 +130,7 @@ export function historyTimelineItems(messages) {
     if (message?.role === 'assistant') {
       const followsAssistant = previousVisibleRole === 'assistant';
       if (followsAssistant) {
-        pushActiveAssistantRun(timelineItems, activeAssistantRun);
-        activeAssistantRun = null;
+        pushActiveRun();
       }
 
       if (
@@ -130,29 +151,82 @@ export function historyTimelineItems(messages) {
 
       if (activeAssistantRun) {
         appendHistoryAssistantMessage(activeAssistantRun, message);
+        activeRunSources.push(message);
         previousVisibleRole = 'assistant';
         continue;
       }
 
-      timelineItems.push(historyMessageItem(message));
+      push(historyMessageItem(message), [message]);
       previousVisibleRole = 'assistant';
       continue;
     }
 
     if (message?.role === 'tool' && activeAssistantRun) {
       appendHistoryToolResult(activeAssistantRun, message);
+      activeRunSources.push(message);
       previousVisibleRole = 'tool';
       continue;
     }
 
-    pushActiveAssistantRun(timelineItems, activeAssistantRun);
-    activeAssistantRun = null;
-    timelineItems.push(historyMessageItem(message));
+    pushActiveRun();
+    push(historyMessageItem(message), [message]);
     previousVisibleRole = message?.role ?? '';
   }
 
-  pushActiveAssistantRun(timelineItems, activeAssistantRun);
+  pushActiveRun();
+  if (reuse && messages?.length) {
+    reuse.nextSegments.set(messages[0], { messages: [...messages], entries });
+  }
   return timelineItems;
+}
+
+// One projection generation per displayed Session: an item built from the
+// same Messages as in the previous generation is handed back unchanged, and so
+// are all items of a Message sequence projected in the previous generation.
+export function createHistoryItemReuse() {
+  return {
+    previous: new Map(),
+    next: new Map(),
+    previousSegments: new Map(),
+    nextSegments: new Map(),
+  };
+}
+
+export function finishHistoryItemReuse(reuse) {
+  reuse.previous = reuse.next;
+  reuse.next = new Map();
+  reuse.previousSegments = reuse.nextSegments;
+  reuse.nextSegments = new Map();
+}
+
+function projectedHistorySegment(reuse, messages) {
+  const first = messages?.[0];
+  const segment = first && reuse?.previousSegments.get(first);
+  if (!segment || !sameMessages(segment.messages, messages)) {
+    return null;
+  }
+  reuse.nextSegments.set(first, segment);
+  for (const entry of segment.entries) {
+    reuse.next.set(entry.item.id, entry);
+  }
+  return segment.entries.map((entry) => entry.item);
+}
+
+function reuseHistoryItem(reuse, item, sources) {
+  const cached = reuse?.previous.get(item.id);
+  const entry =
+    cached && sameMessages(cached.sources, sources)
+      ? cached
+      : { sources, item };
+  reuse?.next.set(item.id, entry);
+  return entry;
+}
+
+function sameMessages(left, right) {
+  return (
+    left.length === right.length &&
+    left.every((message, index) => message === right[index])
+  );
 }
 
 export function appendHistoryAssistantMessage(assistantRun, message) {
@@ -265,12 +339,12 @@ function appendHistoryRunSummary(assistantRun, message) {
   }
 }
 
-function pushActiveAssistantRun(timelineItems, assistantRun) {
+function pushActiveAssistantRun(push, assistantRun, sources) {
   if (!assistantRun) {
     return;
   }
   syncAssistantRunCollections(assistantRun);
-  timelineItems.push(stripTimelineSequence(assistantRun));
+  push(stripTimelineSequence(assistantRun), sources);
 }
 
 function hasToolCalls(message) {

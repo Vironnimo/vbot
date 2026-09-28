@@ -23,6 +23,7 @@ READY_TIMEOUT_SECONDS = 90.0
 RESULT_TIMEOUT_SECONDS = 60.0
 SELECT_TIMEOUT_SECONDS = 60.0
 CHAT_VIEW = "chat"
+PROFILE_FILE = "ui-profile.cpuprofile"
 TOP_RPC_METHODS = 12
 
 
@@ -124,7 +125,8 @@ class UiProbe:
     """One headless browser watching one WebUI view during the load phase.
 
     ``view`` is ``chat`` (``agent_id``'s current Session) or an Extension page
-    route such as ``extension:swarm:swarms``.
+    route such as ``extension:swarm:swarms``. With ``profile_path`` the probe
+    also writes a CPU profile of the page's main-frame JavaScript there.
     """
 
     def __init__(
@@ -135,6 +137,7 @@ class UiProbe:
         agent_id: str | None = None,
         log_path: Path,
         max_seconds: float,
+        profile_path: Path | None = None,
     ) -> None:
         self._argv = [
             str(shutil.which("node") or "node"),
@@ -146,7 +149,9 @@ class UiProbe:
             *(["--agent", agent_id] if agent_id else []),
             "--max-seconds",
             str(int(max_seconds)),
+            *(["--profile", str(profile_path)] if profile_path else []),
         ]
+        self.profile_path = profile_path
         self._log_path = log_path
         self._process: subprocess.Popen[str] | None = None
         self._log_file: TextIO | None = None

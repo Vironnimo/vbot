@@ -5,7 +5,14 @@
 // Session state changes, including every streaming flush. The state is built
 // with the real chatState functions (loadHistory, startRun, appendRunEvent).
 //
-// - `timeline.history[1000msg]`: an idle Session, History only.
+// A projection hands back the rows of unchanged History Messages from the
+// previous projection of the same Session instead of rebuilding them.
+//
+// - `timeline.history[1000msg]`: an idle Session, History only, projected
+//   again without changes.
+// - `timeline.history_reload[1000msg]`: the idle Session after a full History
+//   reload delivered new Message objects, which rebuilds every row. One
+//   operation is the reload plus one projection.
 // - `timeline.streaming_flush[1000msg]`: the same History while the next Run
 //   streams its answer (run_started, user_message_persisted and 200 compressed
 //   assistant_output_delta events). One operation is one flush's projection.
@@ -240,6 +247,28 @@ bench(
   }),
   () => {
     visibleTimelineItemsForRender(idle);
+  },
+  benchOptions(),
+);
+
+// Two copies with their own Message objects, loaded alternately, so every
+// operation meets Messages the previous projection has not seen.
+const reloaded = idleSession(history);
+const reloads = [0, 1].map(() =>
+  structuredClone(history.messages.slice(0, -1)),
+);
+let reloadIndex = 0;
+bench(
+  benchName('timeline.history_reload[1000msg]', {
+    messages: history.messages.length - 1,
+    rows: idleRows.length,
+  }),
+  () => {
+    reloadIndex = 1 - reloadIndex;
+    loadHistory(reloaded, reloads[reloadIndex], {
+      runs: history.runs.slice(0, -1),
+    });
+    visibleTimelineItemsForRender(reloaded);
   },
   benchOptions(),
 );

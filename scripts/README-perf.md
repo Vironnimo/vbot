@@ -58,6 +58,7 @@ python scripts/perf_load.py --profile                    # + py-spy flamegraph a
 python scripts/perf_load.py --ui                         # + headless browser watching one streaming Session
 python scripts/perf_load.py --scenario swarm --agents 3 --turns 2 --ui   # one Swarm, 3 participants, Swarm page open
 python scripts/perf_load.py --agents 10 --duration 30 --ui              # 30 minutes of turns: memory, Tasks, gen2 over time
+python scripts/perf_load.py --agents 3 --duration 2 --ui-profile        # --ui plus a CPU profile of the WebUI's JavaScript
 python scripts/perf_load.py --compare perf-results/load-<old>/result.json
 python scripts/perf_load.py compare old/result.json new/result.json
 ```
@@ -84,11 +85,13 @@ Because the fake Provider's own timing is known, the report can separate vBot's 
 | Run duration / ideal | Measured Run time against the pure scripted Provider time |
 | Server-side rows | Event Loop lag/utilization, stalls, SQLite, request build, persist, Tool rounds, worker pools — from the recording |
 
-Output: `perf-results/load-<UTC>/` with `report.md`, `result.json` and one `level-NN/` folder per level (`runs.json`, `provider-requests.json`, `recording-summary.json`, the Perfetto trace, server logs, the server's `performance-history/` windows, and depending on the options `participants.json`, `heap.json`, `flamegraph.svg` / `ui-probe.log`).
+Output: `perf-results/load-<UTC>/` with `report.md`, `result.json` and one `level-NN/` folder per level (`runs.json`, `provider-requests.json`, `recording-summary.json`, the Perfetto trace, server logs, the server's `performance-history/` windows, and depending on the options `participants.json`, `heap.json`, `flamegraph.svg` / `ui-probe.log` / `ui-profile.cpuprofile`).
 
 The report also lists the recording's **counters** (`events.*`, `webui.*`, top 25; all of them are in `result.json`). They show the push traffic behind the load: how many `/ws` events, SSE events and invalidations per kind the level caused.
 
 `--ui` needs Node.js, `npm ci` in `tests/e2e` (it reuses the E2E Playwright install) and a built WebUI. It reports Long Tasks and frame gaps in the browser while the load runs, and counts every `/api/rpc` request the browser makes, per method, including those of Extension page frames (`extensions.operation` is split into `extensions.operation:<extension>/<operation>`). The table *UI RPC calls by method* shows calls, total and maximum browser-side time and failures. A method called about every two seconds while nothing changes is polling; a burst after every Run event is a reload wave, which the server counters `webui.invalidation_rpcs.<kind>.<method>` attribute to the invalidation kind that caused it.
+
+`--ui-profile` does the same and also samples the WebUI page's JavaScript while the load runs. The V8 CPU profile lands in the level folder as `ui-profile.cpuprofile`; open it in the DevTools Performance panel (*Load profile*) or in [speedscope](https://www.speedscope.app) to see which functions the Long Tasks spend their time in. The regular build is minified, so build the WebUI with `npx vite build --minify false` (in `webui/`) first for readable function names, and rebuild it normally afterwards. Sampling adds overhead of its own: compare Long Task counts only between runs without `--ui-profile`.
 
 ### Swarm scenario
 
