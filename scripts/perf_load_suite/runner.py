@@ -74,7 +74,12 @@ from scripts.perf_load_suite.timeline import (
     heap_census,
     heap_digest,
 )
-from scripts.perf_load_suite.ui_probe import UiProbe, UiProbeError, ui_probe_unavailable_reason
+from scripts.perf_load_suite.ui_probe import (
+    PROFILE_FILE,
+    UiProbe,
+    UiProbeError,
+    ui_probe_unavailable_reason,
+)
 
 DEFAULT_LEVELS: tuple[int, ...] = (1, 10, 20, 30)
 QUICK_LEVELS: tuple[int, ...] = (1, 5)
@@ -116,6 +121,7 @@ class LoadConfig:
     profile: bool = False
     profile_gil: bool = False
     ui: bool = False
+    ui_profile: bool = False
     keep: bool = False
     output_root: Path = field(default=DEFAULT_OUTPUT_ROOT)
 
@@ -438,6 +444,7 @@ def run_sessions_level(context: LevelContext, level: dict[str, Any]) -> None:
             agent_id=UI_AGENT_ID,
             log_path=context.level_dir / "ui-probe.log",
             max_seconds=config.probe_seconds(),
+            profile_path=context.level_dir / PROFILE_FILE if config.ui_profile else None,
         )
         if context.ui_enabled
         else None
@@ -510,6 +517,7 @@ def run_swarm_level(context: LevelContext, level: dict[str, Any]) -> None:
             view=SWARM_VIEW,
             log_path=context.level_dir / "ui-probe.log",
             max_seconds=config.probe_seconds(),
+            profile_path=context.level_dir / PROFILE_FILE if config.ui_profile else None,
         )
         if context.ui_enabled
         else None
@@ -815,6 +823,9 @@ def measure_load(
             measured["files"]["flamegraph"] = _relative(level_dir / flamegraph, level_dir.parent)
     if "ui" in outcomes:
         measured["ui"] = outcomes["ui"]
+        profile = active_probe.profile_path if active_probe is not None else None
+        if profile is not None and profile.is_file():
+            measured["files"]["ui_profile"] = _relative(profile, level_dir.parent)
     elif "ui" in failures:
         measured["ui"] = {"status": "failed", "reason": failures["ui"]}
     return measured, requests, output  # type: ignore[return-value]

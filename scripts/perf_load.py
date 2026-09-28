@@ -24,6 +24,7 @@ Examples::
     python scripts/perf_load.py --agents 1,10,20,30 --profile
     python scripts/perf_load.py --scenario swarm --agents 3 --turns 2 --ui
     python scripts/perf_load.py --agents 10 --duration 30 --ui
+    python scripts/perf_load.py --agents 3 --duration 2 --ui-profile
     python scripts/perf_load.py --compare perf-results/load-<old>/result.json
     python scripts/perf_load.py compare old/result.json new/result.json
 """
@@ -217,6 +218,12 @@ def build_run_parser() -> argparse.ArgumentParser:
         "in a headless browser and count its RPC calls (needs Node.js, npm ci in tests/e2e "
         "and a built WebUI); skipped with a message when unavailable",
     )
+    measure.add_argument(
+        "--ui-profile",
+        action="store_true",
+        help="like --ui, and record a CPU profile of the WebUI page's JavaScript into each "
+        "level folder (ui-profile.cpuprofile)",
+    )
     output = parser.add_argument_group("output")
     output.add_argument(
         "--output",
@@ -270,7 +277,8 @@ def config_from_args(args: argparse.Namespace) -> LoadConfig:
         snapshot_interval_seconds=args.snapshot_interval,
         profile=args.profile or args.profile_gil,
         profile_gil=args.profile_gil,
-        ui=args.ui,
+        ui=args.ui or args.ui_profile,
+        ui_profile=args.ui_profile,
         keep=args.keep,
         output_root=args.output if args.output is not None else DEFAULT_OUTPUT_ROOT,
     )

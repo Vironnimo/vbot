@@ -15,8 +15,15 @@ import scripts.perf_load as perf_load
     ("argv", "expected"),
     [
         (
-            ["--agents", "2", "--turns", "1"],
-            {"scenario": "sessions", "levels": (2,), "turns": 1, "duration_minutes": None},
+            ["--agents", "2", "--turns", "1", "--ui-profile"],
+            {
+                "scenario": "sessions",
+                "levels": (2,),
+                "turns": 1,
+                "duration_minutes": None,
+                "ui": True,
+                "ui_profile": True,
+            },
         ),
         (
             ["--scenario", "swarm", "--agents", "3", "--duration", "2"],
