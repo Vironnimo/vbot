@@ -66,9 +66,10 @@ def prepare_board_call(arguments: Json) -> tuple[str, list[str]]:
     for field in _REFERENCES:
         if isinstance(arguments.get(field), str):
             arguments[field] = arguments[field].strip().strip("\"'`[]<>").strip()
+    named = None
     if action == "post" and "message_id" in arguments:
         # A post that names a post answers it, as with reply_to.
-        message_id = arguments.pop("message_id")
+        named = message_id = arguments.pop("message_id")
         if arguments.setdefault("reply_to", message_id) != message_id:
             raise AgentCallError("invalid_arguments", text.POST_WITH_TWO_TARGETS)
     if action == "read" and "message_id" in arguments:
@@ -93,6 +94,12 @@ def prepare_board_call(arguments: Json) -> tuple[str, list[str]]:
     for field in _REQUIRED.get(action, ()):
         value = arguments.get(field)
         if not isinstance(value, str) or not value.strip():
+            if field == "text" and isinstance(named, str):
+                # message_id is how read names a post, so the call may mean read.
+                call = call_text({"action": "read", "message_id": named})
+                raise AgentCallError(
+                    "invalid_arguments", text.POST_NEEDS_TEXT_OR_READ.format(post=named, call=call)
+                )
             raise AgentCallError(
                 "invalid_arguments", text.BOARD_REQUIRED[field].format(action=action)
             )

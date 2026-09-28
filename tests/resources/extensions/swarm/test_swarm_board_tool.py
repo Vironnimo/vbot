@@ -256,6 +256,11 @@ async def test_board_validation_names_the_missing_or_misplaced_field_before_any_
     for arguments, message in [
         ({"action": "post"}, "post needs text, the message body."),
         (
+            {"action": "post", "message_id": "#1"},
+            'post needs text, the message body. To read #1, use {"action": "read", '
+            '"message_id": "#1"}; to answer it, repeat the call with text.',
+        ),
+        (
             {"action": "list", "text": "inapplicable"},
             "list does not use text, so the call may mean another action. Repeat it without "
             "text, or use an action that takes text: post or create.",

@@ -326,6 +326,10 @@ BOARD_REQUIRED = {
     "discussion_id": '{action} needs discussion_id. Use {{"action": "list"}} to see the '
     "discussion IDs.",
 }
+POST_NEEDS_TEXT_OR_READ = (
+    "post needs text, the message body. To read {post}, use {call}; to answer it, repeat the "
+    "call with text. Nothing was saved."
+)
 RECIPIENT_UNKNOWN = "recipients: {values} {verb} not a participant in your group."
 RECIPIENT_SUGGESTIONS = "Did you mean {suggestions}?"
 RECIPIENT_ROSTER = "Participants: {roster}."
