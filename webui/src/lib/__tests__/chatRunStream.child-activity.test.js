@@ -5,8 +5,9 @@ import {
   subAgentDotStatus,
   subAgentLastToolName,
   subAgentRunDurationMs,
-  subAgentRunStartedAt,
+  subAgentToolStatusLabel,
 } from '../chatTimelinePresentation.js';
+import { t } from '../i18n.js';
 import {
   DISPLAYED_AGENT_ID,
   DISPLAYED_SESSION_ID,
@@ -249,7 +250,15 @@ describe('Sub-Agent rows without a run id', () => {
       });
 
       expect(subAgentDotStatus(row, statuses)).toBe('running');
-      expect(subAgentRunStartedAt(row, statuses)).toBe(STARTED_AT);
+      // The running label measures from the child run's start event.
+      expect(
+        subAgentToolStatusLabel(
+          row,
+          'running',
+          statuses,
+          Date.parse(STARTED_AT) + 4200,
+        ),
+      ).toBe(t('chat.toolDurationSeconds', '', { seconds: '4.2' }));
       expect(subAgentLastToolName(row, statuses)).toBe('read');
 
       deliver('run_completed', 3, {

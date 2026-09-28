@@ -509,8 +509,6 @@ export const metaForEvent = (event) => {
 export const isToolEvent = (event) =>
   event.type === 'tool_call_started' || event.type === 'tool_call_result';
 
-export const isRunningToolEvent = (event) => event.type === 'tool_call_started';
-
 export const isFailedToolEvent = (event) =>
   event.type === 'tool_call_result' && hasToolResultError(event);
 
