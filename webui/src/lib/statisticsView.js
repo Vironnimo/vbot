@@ -5,6 +5,7 @@
 // numbers follow the app language, never the implicit browser locale.
 
 import { parseAgentAddress } from './agentAddress.js';
+import { t } from './i18n.js';
 
 export const STATISTICS_SUB_VIEWS = Object.freeze([
   'overview',
@@ -76,16 +77,16 @@ const MODEL_CALL_STATUSES = new Set([
   'interrupted',
 ]);
 
-export function modelCallKindLabel(kind, translate) {
+export function modelCallKindLabel(kind) {
   return MODEL_CALL_KINDS.has(kind)
-    ? translate(`statistics.kind.${kind}`)
-    : translate('statistics.kind.other');
+    ? t(`statistics.kind.${kind}`)
+    : t('statistics.kind.other');
 }
 
-export function modelCallStatusLabel(status, translate) {
+export function modelCallStatusLabel(status) {
   return MODEL_CALL_STATUSES.has(status)
-    ? translate(`statistics.requestStatus.${status}`)
-    : translate('statistics.requestStatus.unknown');
+    ? t(`statistics.requestStatus.${status}`)
+    : t('statistics.requestStatus.unknown');
 }
 
 function toFiniteNumber(value) {

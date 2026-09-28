@@ -1,4 +1,5 @@
 import { qualifyAgentAddress } from '../agentAddress.js';
+import { t } from '../i18n.js';
 import {
   mergeBoundedEntries,
   replaceActiveSubAgentStatuses,
@@ -29,12 +30,7 @@ const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
 
 // Internal child-task lifecycle: bounded status/result caches, exact-work
 // inspection, cancellation races and background-process notifications.
-export function createChatChildTasks({
-  chatState,
-  operations,
-  translate,
-  errorMessage,
-}) {
+export function createChatChildTasks({ chatState, operations, errorMessage }) {
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
 
@@ -406,7 +402,7 @@ export function createChatChildTasks({
       });
       return true;
     } catch (error) {
-      sessionState.actionError = `${translate('chat.cancelError')} ${errorMessage(error)}`;
+      sessionState.actionError = `${t('chat.cancelError')} ${errorMessage(error)}`;
       return false;
     }
   }
@@ -436,7 +432,7 @@ export function createChatChildTasks({
       };
       return true;
     } catch (error) {
-      sessionState.actionError = `${translate(
+      sessionState.actionError = `${t(
         'chat.cancelBackgroundTaskError',
       )} ${errorMessage(error)}`;
       return false;

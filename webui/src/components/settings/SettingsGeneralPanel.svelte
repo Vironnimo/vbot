@@ -34,10 +34,8 @@
     onError = noop,
   } = $props();
 
-  let serverHostValue = $derived(
-    formatServerHost(settings?.general?.server, t),
-  );
-  let dataDirectoryValue = $derived(getDataDirectoryValue(settings, t));
+  let serverHostValue = $derived(formatServerHost(settings?.general?.server));
+  let dataDirectoryValue = $derived(getDataDirectoryValue(settings));
   let keepAwakeValue = $state(
     untrack(() => settings?.general?.keep_awake === true),
   );

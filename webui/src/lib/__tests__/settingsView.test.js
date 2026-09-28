@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { englishCatalog } from '../i18n.js';
+import { englishCatalog, t } from '../i18n.js';
 
 import {
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
@@ -52,10 +52,6 @@ import {
   normalizeSubAgentSettings,
   normalizeTranscriptionAudio,
 } from '../settingsView.js';
-
-// Echoes the i18n key and its parameters: the key and parameters are the
-// contract, not the English wording.
-const t = (key, params) => (params ? `${key} ${JSON.stringify(params)}` : key);
 
 function providerSettings(items) {
   return { providers: { items } };
@@ -198,20 +194,20 @@ describe('providers and accounts', () => {
   });
 
   it('labels accounts and builds account-aware provider payloads', () => {
-    expect(accountDisplayName({ id: 'default' }, t)).toBe(
-      'settings.providers.accounts.defaultLabel',
+    expect(accountDisplayName({ id: 'default' })).toBe(
+      t('settings.providers.accounts.defaultLabel'),
     );
-    expect(accountDisplayName({ id: 'work' }, t)).toBe('work');
-    expect(describeAccountSource({ source: 'process_env' }, t)).toBe(
-      'settings.providers.accounts.source.processEnv',
+    expect(accountDisplayName({ id: 'work' })).toBe('work');
+    expect(describeAccountSource({ source: 'process_env' })).toBe(
+      t('settings.providers.accounts.source.processEnv'),
     );
-    expect(describeAccountSource({ source: 'data_dir' }, t)).toBe(
-      'settings.providers.accounts.source.dataDir',
+    expect(describeAccountSource({ source: 'data_dir' })).toBe(
+      t('settings.providers.accounts.source.dataDir'),
     );
-    expect(describeAccountSource({ source: 'oauth' }, t)).toBe(
-      'settings.providers.accounts.source.oauth',
+    expect(describeAccountSource({ source: 'oauth' })).toBe(
+      t('settings.providers.accounts.source.oauth'),
     );
-    expect(describeAccountSource({}, t)).toBe('');
+    expect(describeAccountSource({})).toBe('');
 
     expect(connectionSupportsAddAccount({ type: 'api_key' })).toBe(true);
     expect(
@@ -252,29 +248,30 @@ describe('providers and accounts', () => {
 
   it('describes provider metadata through i18n keys', () => {
     expect(
-      describeProvider(
-        {
-          credential_key: 'OPENAI_API_KEY',
-          base_url: 'https://api.openai.com/v1',
-          model_count: 2,
-        },
-        t,
-      ),
+      describeProvider({
+        credential_key: 'OPENAI_API_KEY',
+        base_url: 'https://api.openai.com/v1',
+        model_count: 2,
+      }),
     ).toBe(
       [
-        'settings.providers.description.credentialKey {"credentialKey":"OPENAI_API_KEY"}',
-        'settings.providers.description.baseUrl {"baseUrl":"https://api.openai.com/v1"}',
-        'settings.providers.description.modelCount {"count":2}',
+        t('settings.providers.description.credentialKey', {
+          credentialKey: 'OPENAI_API_KEY',
+        }),
+        t('settings.providers.description.baseUrl', {
+          baseUrl: 'https://api.openai.com/v1',
+        }),
+        t('settings.providers.description.modelCount', { count: 2 }),
       ].join(' '),
     );
-    expect(describeProvider({}, t)).toBe('settings.providers.description.none');
+    expect(describeProvider({})).toBe(t('settings.providers.description.none'));
   });
 });
 
 describe('general and appearance', () => {
   it('formats the server host and lists connected clients with the own row flagged', () => {
     expect(
-      formatServerHost({ listen_host: '127.0.0.1', listen_port: 8420 }, t),
+      formatServerHost({ listen_host: '127.0.0.1', listen_port: 8420 }),
     ).toBe('127.0.0.1:8420');
 
     const roster = [
@@ -393,7 +390,7 @@ describe('general and appearance', () => {
       },
     };
 
-    expect(getDefaultSkillDirectoryValue(settings, t)).toBe(
+    expect(getDefaultSkillDirectoryValue(settings)).toBe(
       'C:/Users/test/.vbot/skills',
     );
     expect(getSkillDirectories(settings)).toEqual(['C:/skills/shared']);

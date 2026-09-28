@@ -570,7 +570,6 @@
     chatState,
     preserveSessionSelection: untrack(() => preserveSessionSelection),
     runStream,
-    translate: t,
     isDisplayedSession: target.isDisplayedSession,
     shouldLoadCurrentHistory: () =>
       !navigation.viewingSessionId && !target.projectAgentActive,

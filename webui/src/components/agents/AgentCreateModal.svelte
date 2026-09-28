@@ -51,7 +51,6 @@
       connections: availableConnections,
       selectedModelValue: formValues.model,
       emptyLabel: modelInheritLabel,
-      translate: t,
     }),
   );
   let modelOptions = $derived(
@@ -64,7 +63,6 @@
     modelFilterFooterLabel({
       showAll: showAllModels,
       hiddenCount: allModelOptions.length - modelOptions.length,
-      translate: t,
     }),
   );
   let modelSelectValue = $derived(

@@ -1,3 +1,5 @@
+import { t } from '$lib/i18n.js';
+
 // Presentation only: the server owns availability, identity, and write scopes.
 export const SKILL_PAGE_SIZE = 50;
 
@@ -5,18 +7,18 @@ export function agentDisplayName(agentId, agents) {
   return agents.find((agent) => agent.id === agentId)?.name || agentId;
 }
 
-export function skillSourceLabel(entry, translate, agents) {
+export function skillSourceLabel(entry, agents) {
   if (entry.owner_id)
-    return translate('skills.ownerLabel', {
+    return t('skills.ownerLabel', {
       name: agentDisplayName(entry.owner_id, agents),
     });
   if (entry.origin?.startsWith('project:'))
-    return translate('skills.projectLabel', {
+    return t('skills.projectLabel', {
       name: entry.origin.slice(8),
     });
-  if (entry.origin === 'bundled') return translate('skills.library.bundled');
-  return translate('skills.sourceLabel', {
-    name: entry.source_label || translate('skills.library.global'),
+  if (entry.origin === 'bundled') return t('skills.library.bundled');
+  return t('skills.sourceLabel', {
+    name: entry.source_label || t('skills.library.global'),
   });
 }
 
@@ -27,26 +29,26 @@ export function matchesSkillScope(entry, scope) {
   return entry.origin === scope;
 }
 
-export function skillCollections(entries, agents, translate) {
+export function skillCollections(entries, agents) {
   const items = [
     {
       key: 'all',
-      label: translate('skills.library.all'),
+      label: t('skills.library.all'),
       section: 'library',
     },
     {
       key: 'global',
-      label: translate('skills.library.global'),
+      label: t('skills.library.global'),
       section: 'library',
     },
     {
       key: 'bundled',
-      label: translate('skills.library.bundled'),
+      label: t('skills.library.bundled'),
       section: 'library',
     },
     {
       key: 'shared',
-      label: translate('skills.library.shared'),
+      label: t('skills.library.shared'),
       section: 'library',
     },
     ...agents.map((agent) => ({
@@ -132,16 +134,16 @@ export function skillStatusVariant(entry) {
   }
 }
 
-export function skillStatusLabel(entry, translate) {
+export function skillStatusLabel(entry) {
   switch (entry.status) {
     case 'available':
-      return translate('skills.status.available');
+      return t('skills.status.available');
     case 'unavailable':
-      return translate('skills.status.unavailable');
+      return t('skills.status.unavailable');
     case 'disabled':
-      return translate('skills.status.disabled');
+      return t('skills.status.disabled');
     default:
-      return translate('skills.status.invalid');
+      return t('skills.status.invalid');
   }
 }
 

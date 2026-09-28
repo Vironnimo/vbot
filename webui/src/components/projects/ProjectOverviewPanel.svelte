@@ -34,7 +34,6 @@
       connections: projectsState.availableConnections,
       selectedModelValue: projectsState.editForm.default_model,
       emptyLabel: defaultModelInheritLabel(),
-      translate: t,
     }),
   );
 
@@ -49,7 +48,6 @@
     modelFilterFooterLabel({
       showAll: projectsState.showAllModels,
       hiddenCount: allModelOptions.length - modelOptions.length,
-      translate: t,
     }),
   );
 

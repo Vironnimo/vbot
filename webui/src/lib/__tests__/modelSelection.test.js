@@ -154,7 +154,6 @@ describe('buildModelSelectOptions', () => {
     const options = buildModelSelectOptions({
       models: [catalogModel('openai/gpt-5.2', 'openai')],
       connections,
-      translate: t,
     });
 
     expect(valuesAndLabels(options)).toEqual(expected());
@@ -224,7 +223,6 @@ describe('buildModelSelectOptions', () => {
           ]),
           usableConnection('openai:subscription', 'openai', 'Subscription'),
         ],
-        translate: t,
       };
 
       const options = buildModelSelectOptions({
@@ -264,7 +262,6 @@ describe('buildModelSelectOptions', () => {
 
     const options = buildModelSelectOptions({
       modelOnly: true,
-      translate: t,
       models: [
         model('big', {
           context_window: 200000,
@@ -378,19 +375,15 @@ describe('model suitability filter', () => {
   });
 
   it('labels the footer toggle with the hidden count or the way back', () => {
-    expect(
-      modelFilterFooterLabel({ showAll: false, hiddenCount: 3, translate: t }),
-    ).toBe(
+    expect(modelFilterFooterLabel({ showAll: false, hiddenCount: 3 })).toBe(
       t('models.filter.showAll', {
         count: 3,
       }),
     );
-    expect(modelFilterFooterLabel({ showAll: true, translate: t })).toBe(
+    expect(modelFilterFooterLabel({ showAll: true })).toBe(
       t('models.filter.showSuitable'),
     );
-    expect(
-      modelFilterFooterLabel({ showAll: false, hiddenCount: 0, translate: t }),
-    ).toBe('');
+    expect(modelFilterFooterLabel({ showAll: false, hiddenCount: 0 })).toBe('');
   });
 });
 

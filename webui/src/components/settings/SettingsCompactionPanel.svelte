@@ -44,7 +44,6 @@
       connections: availableConnections,
       selectedModelValue: policy.strategy.summary_model ?? '',
       emptyLabel: t('settings.compaction.summaryModelPlaceholder'),
-      translate: t,
     }),
   );
   let summaryModelSelectValue = $derived(

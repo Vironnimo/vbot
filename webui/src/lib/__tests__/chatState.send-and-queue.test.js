@@ -6,6 +6,7 @@ import {
   startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
+import { t } from '../i18n.js';
 import {
   countTimelineTextOccurrences,
   deferred,
@@ -61,7 +62,7 @@ describe('send and edit admission', () => {
       kind: 'failed',
     });
 
-    expect(addressed.actionError).toBe('chat.sendError provider down');
+    expect(addressed.actionError).toBe(`${t('chat.sendError')} provider down`);
     expect(addressed.error).toBeNull();
     expect(addressed.status).toBe('idle');
     expect(other.actionError).toBe('');
@@ -224,7 +225,7 @@ describe('send and edit admission', () => {
 
     expect(sessionState.messages).toBe(messages);
     expect(sessionState.currentRun).toBeNull();
-    expect(sessionState.actionError).toBe('chat.editError busy');
+    expect(sessionState.actionError).toBe(`${t('chat.editError')} busy`);
   });
 
   it('preserves accepted edit events that arrived before its response', async () => {
@@ -506,7 +507,7 @@ describe('Queue', () => {
     await controller.syncSessionQueue(sessionState);
     controller.destroy();
 
-    expect(sessionState.actionError).toBe('queue.syncError offline');
+    expect(sessionState.actionError).toBe(`${t('queue.syncError')} offline`);
     expect(chatState.actionError).toBe('');
     expect(runStream.closeSubscriptions).toHaveBeenCalledOnce();
   });
@@ -573,7 +574,7 @@ describe('Queue', () => {
       await controller.updateQueued(sessionState, 'queued-one', 'Unsaved', []),
     ).toBe(false);
     expect(sessionState.queue[0].content).toBe('With file');
-    expect(sessionState.actionError).toBe('queue.editError offline');
+    expect(sessionState.actionError).toBe(`${t('queue.editError')} offline`);
   });
 
   it.each(['edit', 'remove'])(
@@ -603,7 +604,7 @@ describe('Queue', () => {
         await controller.removeQueued(session, 'old');
       }
 
-      expect(session.actionError).toBe('queue.steeringLocked');
+      expect(session.actionError).toBe(t('queue.steeringLocked'));
       expect(listQueue).toHaveBeenCalledOnce();
       expect(session.queue[0]).toMatchObject({ id: 'old', steering: true });
     },

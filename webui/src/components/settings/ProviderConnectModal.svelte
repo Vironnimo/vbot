@@ -506,7 +506,7 @@
           {/if}
           {#if isSharedOpenCodeConnection(selectedConnection)}
             <p class="provider-connect-modal__hint" role="note">
-              {describeSharedOpenCodeKey(t)}
+              {describeSharedOpenCodeKey()}
             </p>
           {/if}
           <FormField

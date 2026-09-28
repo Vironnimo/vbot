@@ -1,3 +1,4 @@
+import { t } from '../i18n.js';
 import {
   emptyScanSkills,
   createProjectAddForm,
@@ -18,7 +19,6 @@ export function createProjectDialogs({
   state,
   operations,
   detectDelayMs,
-  translate,
   isActive,
   errorText,
   selectProject,
@@ -89,7 +89,7 @@ export function createProjectDialogs({
 
   async function submitAdd() {
     if (state.addForm.cwd.trim().length === 0) {
-      state.addError = translate('projects.add.missingCwd');
+      state.addError = t('projects.add.missingCwd');
       return;
     }
     state.addingProject = true;
@@ -113,7 +113,7 @@ export function createProjectDialogs({
         return;
       }
       const project = normalizeProject(result?.project);
-      state.statusMessage = translate('projects.add.success');
+      state.statusMessage = t('projects.add.success');
       state.isAddOpen = false;
       state.addForm = createProjectAddForm();
       state.addDetect = null;
@@ -123,7 +123,7 @@ export function createProjectDialogs({
       }
     } catch (error) {
       if (isActive()) {
-        state.addError = `${translate('projects.add.error')} ${errorText(error)}`;
+        state.addError = `${t('projects.add.error')} ${errorText(error)}`;
       }
     } finally {
       if (isActive()) {
@@ -145,12 +145,12 @@ export function createProjectDialogs({
 
   function removeErrorText(error) {
     if (error?.code === PROJECT_BUSY_CODE) {
-      return translate('projects.remove.busy');
+      return t('projects.remove.busy');
     }
     if (error?.code === PROJECT_IN_USE_CODE) {
-      return translate('projects.remove.inUse');
+      return t('projects.remove.inUse');
     }
-    return `${translate('projects.remove.error')} ${errorText(error)}`;
+    return `${t('projects.remove.error')} ${errorText(error)}`;
   }
 
   async function confirmRemove() {
@@ -182,12 +182,12 @@ export function createProjectDialogs({
         ? result.affected_agent_ids.length
         : 0;
       const copyState = state.copyRootedAgentIdentityFiles
-        ? translate('projects.remove.filesCopied')
-        : translate('projects.remove.filesNotCopied');
+        ? t('projects.remove.filesCopied')
+        : t('projects.remove.filesNotCopied');
       state.statusMessage =
         affectedCount === 1
-          ? translate('projects.remove.successOneAgent', { copyState })
-          : translate('projects.remove.successManyAgents', {
+          ? t('projects.remove.successOneAgent', { copyState })
+          : t('projects.remove.successManyAgents', {
               count: affectedCount,
               copyState,
             });
@@ -230,7 +230,7 @@ export function createProjectDialogs({
       return;
     }
     if (state.rePointCwd.trim().length === 0) {
-      state.rePointError = translate('projects.rePoint.missingCwd');
+      state.rePointError = t('projects.rePoint.missingCwd');
       return;
     }
     state.rePointing = true;
@@ -245,7 +245,7 @@ export function createProjectDialogs({
       if (!isActive()) {
         return;
       }
-      state.statusMessage = translate('projects.rePoint.success');
+      state.statusMessage = t('projects.rePoint.success');
       state.rePointProject = null;
       await loadProjects();
       if (isActive() && state.selectedProjectId === projectId) {
@@ -253,7 +253,7 @@ export function createProjectDialogs({
       }
     } catch (error) {
       if (isActive()) {
-        state.rePointError = `${translate('projects.rePoint.error')} ${errorText(error)}`;
+        state.rePointError = `${t('projects.rePoint.error')} ${errorText(error)}`;
       }
     } finally {
       if (isActive()) {

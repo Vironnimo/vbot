@@ -219,9 +219,9 @@
           >
           <div class="stats-call__body">
             <p class="stats-note">
-              {modelCallKindLabel(call.kind, t)}
+              {modelCallKindLabel(call.kind)}
               {#if call.status}
-                · {modelCallStatusLabel(call.status, t)}{/if}
+                · {modelCallStatusLabel(call.status)}{/if}
               {#if call.session_id}
                 · {call.session_title || call.session_id}
               {:else}

@@ -10,10 +10,7 @@ import {
   extensionStatusChipVariant,
   hasSettingsSchema,
 } from '../settingsView.js';
-
-// Echoes the i18n key and its parameters: the key and parameters are the
-// contract, not the English wording.
-const t = (key, params) => (params ? `${key} ${JSON.stringify(params)}` : key);
+import { t } from '../i18n.js';
 
 function rawExtensions() {
   return {
@@ -151,16 +148,16 @@ describe('extension list', () => {
   it('lists contributed capabilities with translated labels', () => {
     const [extension] = applyExtensionsPanelList(rawExtensions());
 
-    expect(extensionCapabilityParts(extension.capabilities, t)).toEqual([
+    expect(extensionCapabilityParts(extension.capabilities)).toEqual([
       {
-        label: 'settings.extensions.hooks',
+        label: t('settings.extensions.hooks'),
         value: 'tool_call(1), run_end(2)',
       },
-      { label: 'settings.extensions.tools', value: 'word_count' },
-      { label: 'settings.extensions.commands', value: '/workflow' },
-      { label: 'settings.extensions.startup', value: '' },
+      { label: t('settings.extensions.tools'), value: 'word_count' },
+      { label: t('settings.extensions.commands'), value: '/workflow' },
+      { label: t('settings.extensions.startup'), value: '' },
     ]);
-    expect(extensionCapabilityParts({}, t)).toEqual([]);
+    expect(extensionCapabilityParts({})).toEqual([]);
   });
 
   it('describes the waiting state and names unset secrets by label', () => {
@@ -193,13 +190,13 @@ describe('extension list', () => {
       ],
     });
 
-    expect(describeExtensionWaiting(ready, t)).toBeNull();
-    expect(describeExtensionWaiting(waiting, t)).toEqual({
-      hint: 'settings.extensions.waiting',
-      waitingFor: 'settings.extensions.waitingFor {"fields":"Token"}',
+    expect(describeExtensionWaiting(ready)).toBeNull();
+    expect(describeExtensionWaiting(waiting)).toEqual({
+      hint: t('settings.extensions.waiting'),
+      waitingFor: t('settings.extensions.waitingFor', { fields: 'Token' }),
     });
-    expect(describeExtensionWaiting(plain, t)).toEqual({
-      hint: 'settings.extensions.waiting',
+    expect(describeExtensionWaiting(plain)).toEqual({
+      hint: t('settings.extensions.waiting'),
       waitingFor: null,
     });
   });

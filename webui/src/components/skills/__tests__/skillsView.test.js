@@ -704,14 +704,13 @@ describe('skill projections', () => {
   });
   it('labels owner, Project, and external source without presenting them as authors', () => {
     expect(
-      skillSourceLabel(entry('a', 'a'), t, [
+      skillSourceLabel(entry('a', 'a'), [
         { id: 'main', name: 'Owner sentinel' },
       ]),
     ).toBe('Agent: Owner sentinel');
     expect(
       skillSourceLabel(
         entry('b', 'b', { owner_id: null, origin: 'project:Repo sentinel' }),
-        t,
         [],
       ),
     ).toBe('Project: Repo sentinel');
@@ -722,7 +721,6 @@ describe('skill projections', () => {
           origin: 'global',
           source_label: 'Folder sentinel',
         }),
-        t,
         [],
       ),
     ).toBe('Source: Folder sentinel');

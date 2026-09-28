@@ -65,7 +65,6 @@ export function createProjectsController({
   autoSaveDelayMs = PROJECT_AUTO_SAVE_DEBOUNCE_MS,
   toolAccessOverrideAutoSaveDelayMs = TOOL_ACCESS_OVERRIDE_AUTO_SAVE_DEBOUNCE_MS,
   detectDelayMs = PROJECT_DETECT_DEBOUNCE_MS,
-  translate = t,
   onProjectSelected = () => {},
   onToast = () => {},
 } = {}) {
@@ -92,7 +91,6 @@ export function createProjectsController({
     state,
     operations,
     detectDelayMs,
-    translate,
     isActive: () => active,
     errorText,
     selectProject,
@@ -107,7 +105,7 @@ export function createProjectsController({
     if (typeof error === 'string' && error.trim()) {
       return error.trim();
     }
-    return translate('common.unknown');
+    return t('common.unknown');
   }
 
   function selectedProject() {
@@ -295,7 +293,7 @@ export function createProjectsController({
       if (!active || requestId !== listRequestId) {
         return false;
       }
-      state.listError = `${translate('projects.loadError')} ${errorText(error)}`;
+      state.listError = `${t('projects.loadError')} ${errorText(error)}`;
       return false;
     } finally {
       if (active && requestId === listRequestId) {
@@ -318,7 +316,7 @@ export function createProjectsController({
       if (!active || requestId !== scanRequestId) {
         return false;
       }
-      state.editError = `${translate('projects.loadError')} ${errorText(error)}`;
+      state.editError = `${t('projects.loadError')} ${errorText(error)}`;
       return false;
     } finally {
       if (active && requestId === scanRequestId) {
@@ -554,7 +552,7 @@ export function createProjectsController({
     if (!hasManageChanges(changes)) {
       if (manual) {
         onToast({
-          title: translate('common.alreadySaved'),
+          title: t('common.alreadySaved'),
           variant: 'success',
         });
       }
@@ -592,13 +590,13 @@ export function createProjectsController({
       }
       applyScan(result?.scan);
       onToast({
-        title: translate('projects.manage.saveSuccess'),
+        title: t('projects.manage.saveSuccess'),
         variant: 'success',
       });
       return true;
     } catch (error) {
       if (active) {
-        state.editError = `${translate('projects.manage.saveError')} ${errorText(error)}`;
+        state.editError = `${t('projects.manage.saveError')} ${errorText(error)}`;
       }
       return false;
     } finally {
@@ -698,7 +696,7 @@ export function createProjectsController({
     clearToolAccessOverrideAutoSave({ flushPending: false });
     for (const change of pendingOverrideChanges()) {
       if (!canSetOverride(change.agentId, change.field)) {
-        state.editError = translate('errors.validation');
+        state.editError = t('errors.validation');
         return false;
       }
       if (
@@ -751,14 +749,14 @@ export function createProjectsController({
         };
       }
       onToast({
-        title: translate('projects.team.overrideSaved'),
+        title: t('projects.team.overrideSaved'),
         variant: 'success',
       });
       return true;
     } catch (error) {
       if (active) {
         onToast({
-          title: `${translate('projects.team.overrideError')} ${errorText(error)}`,
+          title: `${t('projects.team.overrideError')} ${errorText(error)}`,
           variant: 'error',
           sticky: true,
         });
@@ -793,13 +791,13 @@ export function createProjectsController({
       }
       applyScan(result?.scan, { replaceDrafts: true });
       onToast({
-        title: translate('projects.team.overrideCleared'),
+        title: t('projects.team.overrideCleared'),
         variant: 'success',
       });
     } catch (error) {
       if (active) {
         onToast({
-          title: `${translate('projects.team.overrideClearError')} ${errorText(error)}`,
+          title: `${t('projects.team.overrideClearError')} ${errorText(error)}`,
           variant: 'error',
           sticky: true,
         });

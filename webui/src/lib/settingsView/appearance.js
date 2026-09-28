@@ -96,7 +96,7 @@ export function buildLanguageOptions(appearance) {
   }));
 }
 
-export function formatServerHost(server, translate) {
+export function formatServerHost(server) {
   if (
     typeof server?.listen_host === 'string' &&
     server.listen_host.length > 0 &&
@@ -105,18 +105,18 @@ export function formatServerHost(server, translate) {
     return `${server.listen_host}:${server.listen_port}`;
   }
 
-  return translate('common.unknown');
+  return t('common.unknown');
 }
 
-export function getDataDirectoryValue(settings, translate) {
-  return settings?.general?.data_directory ?? translate('common.unknown');
+export function getDataDirectoryValue(settings) {
+  return settings?.general?.data_directory ?? t('common.unknown');
 }
 
-export function getDefaultSkillDirectoryValue(settings, translate) {
+export function getDefaultSkillDirectoryValue(settings) {
   return (
     settings?.skills?.default_directory ??
     settings?.general?.default_skill_directory ??
-    translate('common.unknown')
+    t('common.unknown')
   );
 }
 

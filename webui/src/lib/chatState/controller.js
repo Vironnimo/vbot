@@ -123,7 +123,6 @@ export function createChatController({
   chatState,
   runStream,
   operations = defaultChatOperations(),
-  translate = t,
   isDisplayedSession = () => false,
   shouldLoadCurrentHistory = () => true,
   onAgentsChanged = () => {},
@@ -144,7 +143,6 @@ export function createChatController({
   const childTasks = createChatChildTasks({
     chatState,
     operations,
-    translate,
     errorMessage,
   });
   const {
@@ -194,7 +192,7 @@ export function createChatController({
       if (!isLatestRequest()) {
         return;
       }
-      sessionState.actionError = `${translate('queue.syncError')} ${errorMessage(error)}`;
+      sessionState.actionError = `${t('queue.syncError')} ${errorMessage(error)}`;
     }
   }
 
@@ -483,7 +481,7 @@ export function createChatController({
       return true;
     } catch (error) {
       if (isCurrentSnapshot()) {
-        sessionState.actionError = `${translate('chat.historyOlderLoadError')} ${errorMessage(error)}`;
+        sessionState.actionError = `${t('chat.historyOlderLoadError')} ${errorMessage(error)}`;
       }
       return false;
     } finally {
@@ -520,7 +518,7 @@ export function createChatController({
       if (requestVersion !== commandsLoadVersion) {
         return false;
       }
-      chatState.commandsError = `${translate('chat.skillsLoadError')} ${errorMessage(error)}`;
+      chatState.commandsError = `${t('chat.skillsLoadError')} ${errorMessage(error)}`;
       chatState.availableSkills = [];
       return false;
     }
@@ -598,7 +596,7 @@ export function createChatController({
       }
       return { kind: 'started', runId: run.run_id ?? '' };
     } catch (error) {
-      sessionState.actionError = `${translate('chat.sendError')} ${errorMessage(error)}`;
+      sessionState.actionError = `${t('chat.sendError')} ${errorMessage(error)}`;
       return { kind: 'failed' };
     }
   }
@@ -637,7 +635,7 @@ export function createChatController({
       }
       return { kind: 'started', runId: run.run_id ?? '' };
     } catch (error) {
-      sessionState.actionError = `${translate('chat.editError')} ${errorMessage(error)}`;
+      sessionState.actionError = `${t('chat.editError')} ${errorMessage(error)}`;
       return { kind: 'failed' };
     }
   }
@@ -655,7 +653,7 @@ export function createChatController({
       await reconcileRunSession(sessionState, runId);
     } catch (error) {
       if (sessionState.currentRun?.runId === runId)
-        sessionState.actionError = `${translate('chat.cancelError')} ${errorMessage(error)}`;
+        sessionState.actionError = `${t('chat.cancelError')} ${errorMessage(error)}`;
     } finally {
       sessionState.cancellingRunIds = sessionState.cancellingRunIds.filter(
         (pendingId) => pendingId !== runId,
@@ -687,7 +685,7 @@ export function createChatController({
       });
       runStream.mergeRunResponse(sessionState, run);
     } catch (error) {
-      sessionState.actionError = `${translate('chat.controlRunError')} ${errorMessage(error)}`;
+      sessionState.actionError = `${t('chat.controlRunError')} ${errorMessage(error)}`;
     } finally {
       delete sessionState.pendingRunControls[pendingKey];
     }
@@ -709,7 +707,7 @@ export function createChatController({
       await operations.cancelToolCall({ agentId, runId, toolCallId });
     } catch (error) {
       if (sessionState) {
-        sessionState.actionError = `${translate('chat.cancelError')} ${errorMessage(error)}`;
+        sessionState.actionError = `${t('chat.cancelError')} ${errorMessage(error)}`;
       }
     }
   }
@@ -728,7 +726,7 @@ export function createChatController({
       await syncSessionQueue(sessionState);
       return true;
     } catch (error) {
-      sessionState.actionError = `${translate('queue.steerError')} ${errorMessage(error)}`;
+      sessionState.actionError = `${t('queue.steerError')} ${errorMessage(error)}`;
       await syncSessionQueue(sessionState);
       return false;
     }
@@ -749,7 +747,7 @@ export function createChatController({
       removeQueuedMessage(sessionState, queuedMessageId);
     } catch (error) {
       if (await reportQueueItemSteering(sessionState, error)) return;
-      sessionState.actionError = `${translate('queue.removeError')} ${errorMessage(error)}`;
+      sessionState.actionError = `${t('queue.removeError')} ${errorMessage(error)}`;
     }
   }
 
@@ -757,7 +755,7 @@ export function createChatController({
   // steering state (or its delivery) replaces the stale local controls.
   async function reportQueueItemSteering(sessionState, error) {
     if (error?.code !== RPC_ERROR_QUEUE_ITEM_STEERING) return false;
-    sessionState.actionError = translate('queue.steeringLocked');
+    sessionState.actionError = t('queue.steeringLocked');
     await syncSessionQueue(sessionState);
     return true;
   }
@@ -790,7 +788,7 @@ export function createChatController({
       return true;
     } catch (error) {
       if (await reportQueueItemSteering(sessionState, error)) return false;
-      sessionState.actionError = `${translate('queue.editError')} ${errorMessage(error)}`;
+      sessionState.actionError = `${t('queue.editError')} ${errorMessage(error)}`;
       return false;
     }
   }

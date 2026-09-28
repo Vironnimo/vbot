@@ -5,8 +5,7 @@ import {
   createChatState,
 } from '../chatState.js';
 
-// Chat controller over fake operations and a fake Run stream. `translate`
-// returns the i18n key, so messages are asserted through their key.
+// Chat controller over fake operations and a fake Run stream.
 export function setupController({
   operationOverrides = {},
   isDisplayedSession = () => false,
@@ -37,7 +36,6 @@ export function setupController({
       loadReflectionRuns: vi.fn().mockResolvedValue({ reflection_runs: [] }),
       ...operationOverrides,
     },
-    translate: (key) => key,
     isDisplayedSession,
     shouldLoadCurrentHistory,
     onRestartQueueDiscarded,

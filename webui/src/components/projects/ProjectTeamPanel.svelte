@@ -153,7 +153,6 @@
       connections: projectsState.availableConnections,
       selectedModelValue: overrideDraft(member.agent_id).model,
       emptyLabel: t('projects.team.overrideModelPlaceholder'),
-      translate: t,
     });
   }
 
@@ -166,7 +165,6 @@
       hiddenCount:
         allOverrideModelOptions(member).length -
         overrideModelOptions(member).length,
-      translate: t,
     });
   }
 
