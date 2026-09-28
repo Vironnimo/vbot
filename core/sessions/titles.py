@@ -404,30 +404,25 @@ class SessionTitleService:
                 "owner_name": owner_name,
                 "group_id": group_id,
             }
-            request_context = (
-                dict(
-                    adapter.request_context_kwargs(
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        project_id=project_id,
-                    )
+            request_context = dict(
+                adapter.request_context_kwargs(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    project_id=project_id,
                 )
-                if hasattr(adapter, "request_context_kwargs")
-                else {}
             )
-            if hasattr(adapter, "set_debug_context"):
-                adapter.set_debug_context(
-                    DebugContext(
-                        run_id=debug_run_id,
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        provider_id=provider_id,
-                        connection_id=connection_id,
-                        model_id=model_id,
-                        streaming=False,
-                        iteration_number=0,
-                    )
+            adapter.set_debug_context(
+                DebugContext(
+                    run_id=debug_run_id,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    provider_id=provider_id,
+                    connection_id=connection_id,
+                    model_id=model_id,
+                    streaming=False,
+                    iteration_number=0,
                 )
+            )
             try:
                 response = await self._send_title_request(
                     adapter,

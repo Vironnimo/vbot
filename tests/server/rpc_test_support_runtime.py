@@ -37,6 +37,7 @@ from core.utils.errors import ConfigError
 from server.events import ServerEventBus
 from server.file_delivery import FileDelivery
 from tests.core.chat.chat_loop_support import build_chat_loop
+from tests.core.providers.adapter_test_support import AdapterHookDefaults
 from tests.server.rpc_test_support_common import (
     StubAgent,
     StubAgentResolver,
@@ -200,7 +201,7 @@ class ReloadableStubRuntimeSkills:
         return []
 
 
-class StubAdapter:
+class StubAdapter(AdapterHookDefaults):
     def __init__(
         self,
         responses: list[JsonObject] | None = None,

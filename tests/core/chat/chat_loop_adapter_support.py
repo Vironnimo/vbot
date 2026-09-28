@@ -11,11 +11,12 @@ from core.providers.reasoning import (
     ReasoningReplayPolicy,
 )
 from core.utils.tokens import estimate_request_input_tokens
+from tests.core.providers.adapter_test_support import AdapterHookDefaults
 
 JsonObject = dict[str, Any]
 
 
-class StubAdapter:
+class StubAdapter(AdapterHookDefaults):
     def __init__(
         self,
         responses: list[Any],

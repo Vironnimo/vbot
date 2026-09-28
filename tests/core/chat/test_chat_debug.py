@@ -1,8 +1,5 @@
 """Debug context for Provider requests: every Model request of a Run, including a fallback
 Model's, tells a recording Adapter which Run, Agent, Session, route and iteration it serves.
-
-Adapters without ``set_debug_context`` (the plain test doubles used everywhere else) receive
-nothing and run normally.
 """
 
 from __future__ import annotations

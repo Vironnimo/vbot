@@ -408,8 +408,7 @@ class ImageService:
                 )
                 raise ImageUnderstandingUnavailableError(safe_error) from exc
             wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
-            get_limit = getattr(adapter, "image_size_limit", None)
-            wire_limit = get_limit(target_ref.model_id) if callable(get_limit) else None
+            wire_limit = adapter.image_size_limit(target_ref.model_id)
             max_image_bytes = self._max_input_bytes
             if isinstance(wire_limit, int) and not isinstance(wire_limit, bool) and wire_limit > 0:
                 max_image_bytes = min(max_image_bytes, wire_limit)
@@ -661,10 +660,7 @@ def _set_analysis_debug_context(
 ) -> None:
     if run_context is None:
         return
-    set_debug_context = getattr(adapter, "set_debug_context", None)
-    if not callable(set_debug_context):
-        return
-    set_debug_context(
+    adapter.set_debug_context(
         DebugContext(
             run_id=run_context.run_id,
             agent_id=run_context.agent_id,

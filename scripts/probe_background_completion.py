@@ -244,6 +244,9 @@ class _SyntheticFirstStepAdapter:
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         return frozenset(self._delegate.wire_media_support(model_id))
 
+    def image_size_limit(self, model_id: str) -> int | None:
+        return cast(int | None, self._delegate.image_size_limit(model_id))
+
     def request_context_kwargs(self, **kwargs: Any) -> JsonObject:
         return dict(self._delegate.request_context_kwargs(**kwargs))
 

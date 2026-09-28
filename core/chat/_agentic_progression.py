@@ -324,19 +324,18 @@ class AgenticProgression:
             # The next ordinal is derived from the canonical completed count.
             # Failed requests therefore do not consume an Iteration number.
             request_iteration_number = run.iteration_count + 1
-            if hasattr(target.adapter, "set_debug_context"):
-                target.adapter.set_debug_context(
-                    DebugContext(
-                        run_id=run.id,
-                        agent_id=run.agent_id,
-                        session_id=run.session_id,
-                        provider_id=target.provider_id,
-                        connection_id=target.connection_id,
-                        model_id=target.model_id,
-                        streaming=self._streaming,
-                        iteration_number=request_iteration_number,
-                    )
+            target.adapter.set_debug_context(
+                DebugContext(
+                    run_id=run.id,
+                    agent_id=run.agent_id,
+                    session_id=run.session_id,
+                    provider_id=target.provider_id,
+                    connection_id=target.connection_id,
+                    model_id=target.model_id,
+                    streaming=self._streaming,
+                    iteration_number=request_iteration_number,
                 )
+            )
             _LOGGER.debug(
                 "Iteration %d requested (run=%s model=%s messages=%d)",
                 request_iteration_number,

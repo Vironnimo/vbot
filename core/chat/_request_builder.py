@@ -100,8 +100,7 @@ def _resolved_model_reference(
 
 
 def _resolve_image_size_limit(adapter: Any, model_id: str) -> int | None:
-    getter = getattr(adapter, "image_size_limit", None)
-    value = getter(model_id) if callable(getter) else None
+    value = adapter.image_size_limit(model_id)
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 

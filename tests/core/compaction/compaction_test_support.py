@@ -11,6 +11,7 @@ from core.compaction import CompactionService, CompactionSettings
 from core.compaction.compaction import COMPACTION_USER_QUOTE_PREFIX
 from core.sessions import SessionAddress
 from core.utils.tokens import estimate_request_input_tokens
+from tests.core.providers.adapter_test_support import AdapterHookDefaults
 
 TIMESTAMP = "2026-05-19T12:00:00+00:00"
 PROMPT_FRAGMENT = "Preserve decisions and unfinished work."
@@ -36,7 +37,7 @@ class StubStorage:
         return PROMPT_FRAGMENT
 
 
-class StubAdapter:
+class StubAdapter(AdapterHookDefaults):
     def __init__(self, text: str = "COMPACTED") -> None:
         self.text = text
         self.requests: list[dict[str, Any]] = []
