@@ -36,6 +36,19 @@
   background: var(--surface-3);
 }
 
+/* The timeline's live region: read by screen readers, never shown. */
+.chat-timeline__announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .chat-timeline__jump-latest svg {
   fill: none;
   stroke: currentcolor;

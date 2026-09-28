@@ -15,6 +15,7 @@
   import { assistantRunChildProgressKey } from '../lib/chatState.js';
   import ChatAssistantRun from './chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from './chat/ChatTimelineEntry.svelte';
+  import { createTimelineAnnouncer } from './chat/timelineAnnouncer.js';
   import {
     createTimelineViewState,
     provideTimelineViewState,
@@ -90,6 +91,11 @@
   // Disclosure and pending-action state of the rows, per displayed Session;
   // rows read it through context so it outlives their components.
   const viewState = provideTimelineViewState(createTimelineViewState());
+  // Text of the polite live region: only genuinely new content (see
+  // `timelineAnnouncer.js`), never rows the window mounts while scrolling.
+  const announcer = createTimelineAnnouncer();
+  let announcement = $state('');
+  let announcedSessionKey = null;
   // Bumped whenever the scroll controller changes which rows to mount.
   let windowVersion = $state(0);
   let controllerReady = $state(false);
@@ -229,6 +235,24 @@
   $effect(() => {
     renderEntries;
     untrack(() => controller?.rendered());
+  });
+
+  $effect(() => {
+    const items = timelineItems;
+    const cards = transientCards;
+    const key = sessionScrollKey;
+    const text = announcer.update(items, cards, key, {
+      loading: loadingHistory,
+    });
+    untrack(() => {
+      if (key !== announcedSessionKey) {
+        announcedSessionKey = key;
+        announcement = '';
+      }
+      if (text) {
+        announcement = text;
+      }
+    });
   });
 
   $effect(() => {
@@ -472,7 +496,7 @@
 </script>
 
 <div class="chat-timeline">
-  <section class="messages" bind:this={scrollContainer} aria-live="polite">
+  <section class="messages" bind:this={scrollContainer}>
     <div class="messages__content" bind:this={timelineContent}>
       {#if timelineItems.length === 0 && transientCards.length === 0}
         {#if loadingHistory}
@@ -532,6 +556,9 @@
       </svg>
     </Button>
   {/if}
+  <div class="chat-timeline__announcer" role="status" aria-live="polite">
+    {announcement}
+  </div>
 </div>
 
 {#snippet timelineRow(item)}
