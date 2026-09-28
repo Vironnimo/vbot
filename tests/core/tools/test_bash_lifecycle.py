@@ -325,8 +325,9 @@ async def test_timeout_remains_active_after_foreground_yields_to_background(
 
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
-    poll_result = await manager.poll(result["data"]["process_id"], AGENT_ID, timeout_ms=2000)
-    assert poll_result["status"] == "killed"
+    process_id = result["data"]["process_id"]
+    outcome, _line = await manager.wait(process_id, AGENT_ID, timeout_seconds=2)
+    assert (outcome, manager.get_process(process_id, AGENT_ID).status) == ("exited", "killed")
 
 
 @pytest.mark.asyncio

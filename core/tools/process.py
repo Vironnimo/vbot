@@ -246,14 +246,7 @@ async def _handle_process_tool(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    action = arguments.get("action")
-    if not isinstance(action, str) or action not in PROCESS_ACTIONS:
-        return tool_failure(
-            "invalid_arguments",
-            f"action must be one of: {', '.join(PROCESS_ACTIONS)}",
-            retryable=False,
-        )
-
+    action = arguments["action"]
     try:
         if action == "status":
             return await _handle_status(process_manager, context, arguments)
@@ -462,11 +455,7 @@ def _list_processes(
     arguments: JsonObject,
 ) -> JsonObject:
     selection = arguments.get("filter", "running")
-    if not isinstance(selection, str) or selection not in PROCESS_LIST_FILTERS:
-        raise ValueError("filter must be one of: running, finished, all")
     limit = arguments.get("limit", PROCESS_LIST_DEFAULT_LIMIT)
-    if type(limit) is not int or not 1 <= limit <= PROCESS_LIST_MAX_LIMIT:
-        raise ValueError("limit must be an integer from 1 to 100")
     before = optional_string(arguments.get("before"), field_name="before")
     boundary = None
     if before is not None:

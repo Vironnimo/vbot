@@ -91,17 +91,12 @@ class TrackedProcess:
     proc: Process
     combined_buffer: bytearray
     truncated: bool
-    stdout_lines: list[bytes]
-    stderr_lines: list[bytes]
-    foreground_stdout_bytes: int
-    foreground_stderr_bytes: int
     status: ProcessStatus
     exit_code: int | None
     started_at: datetime
     finished_at: datetime | None
     last_poll_at: datetime | None
     execution_owner: RunExecutionOwner | None = None
-    foreground_capture_open: bool = True
     buffer_start_offset: int = 0
     poll_offset: int = 0
     log_file: Path | None = None
@@ -114,7 +109,6 @@ class TrackedProcess:
     kill_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     termination_failed: bool = False
     termination_targets: list[Any] = field(default_factory=list, repr=False)
-    output_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     stdout_task: asyncio.Task[None] | None = field(default=None, repr=False)
     stderr_task: asyncio.Task[None] | None = field(default=None, repr=False)
     wait_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -345,10 +339,6 @@ class ProcessManager:
             proc=proc,
             combined_buffer=bytearray(),
             truncated=False,
-            stdout_lines=[],
-            stderr_lines=[],
-            foreground_stdout_bytes=0,
-            foreground_stderr_bytes=0,
             status="running",
             exit_code=None,
             started_at=_utc_now(),
@@ -421,36 +411,22 @@ class ProcessManager:
         )
 
     async def poll(
-        self,
-        process_id: str,
-        agent_id: str,
-        timeout_ms: int = 0,
-        *,
-        project_id: str | None = None,
+        self, process_id: str, agent_id: str, *, project_id: str | None = None
     ) -> dict[str, object]:
-        """Return output produced since the previous poll for this process."""
+        """Return the status and the stream-tagged output chunks since the previous poll."""
         tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
-        timeout_seconds = max(timeout_ms, 0) / 1000
-        deadline = asyncio.get_running_loop().time() + timeout_seconds
-
-        while True:
-            poll_result = await self._poll_once(tracked)
-            if poll_result["output"] or tracked.status != "running" or timeout_seconds == 0:
-                return poll_result
-
-            remaining_seconds = deadline - asyncio.get_running_loop().time()
-            if remaining_seconds <= 0:
-                return poll_result
-
-            tracked.output_event.clear()
-            poll_result = await self._poll_once(tracked)
-            if poll_result["output"] or tracked.status != "running":
-                return poll_result
-
-            try:
-                await asyncio.wait_for(tracked.output_event.wait(), timeout=remaining_seconds)
-            except TimeoutError:
-                return await self._poll_once(tracked)
+        async with tracked.lock:
+            start_offset = max(tracked.poll_offset, tracked.buffer_start_offset)
+            end_offset = tracked.buffer_start_offset + len(tracked.combined_buffer)
+            chunks = _chunks_between(tracked.output_chunks, start_offset, end_offset)
+            tracked.poll_offset = end_offset
+            tracked.last_poll_at = _utc_now()
+            return {
+                "status": tracked.status,
+                "chunks": [
+                    {"stream": chunk.stream, "data": _decode(chunk.data)} for chunk in chunks
+                ],
+            }
 
     async def log(
         self,
@@ -561,10 +537,9 @@ class ProcessManager:
     def mark_backgrounded(
         self, process_id: str, agent_id: str, *, project_id: str | None = None
     ) -> None:
-        """Stop accumulating foreground-only stdout/stderr line buffers."""
+        """Record the handoff to the background, so exit publishes a terminal notification."""
         tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
         tracked.backgrounded = True
-        tracked.foreground_capture_open = False
 
     def register_completion_notification(
         self,
@@ -628,32 +603,6 @@ class ProcessManager:
             await tracked.spool.close()
             tracked.log_file = tracked.spool.path
 
-    async def _poll_once(self, tracked: TrackedProcess) -> dict[str, object]:
-        async with tracked.lock:
-            start_offset = max(tracked.poll_offset, tracked.buffer_start_offset)
-            end_offset = tracked.buffer_start_offset + len(tracked.combined_buffer)
-            relative_start = start_offset - tracked.buffer_start_offset
-            output = bytes(tracked.combined_buffer[relative_start:])
-            chunks = _chunks_between(tracked.output_chunks, start_offset, end_offset)
-            tracked.poll_offset = end_offset
-            tracked.last_poll_at = _utc_now()
-            return {
-                "process_id": tracked.process_id,
-                "status": tracked.status,
-                "exit_code": tracked.exit_code,
-                "output": _decode(output),
-                "stdout": _decode(
-                    b"".join(chunk.data for chunk in chunks if chunk.stream == "stdout")
-                ),
-                "stderr": _decode(
-                    b"".join(chunk.data for chunk in chunks if chunk.stream == "stderr")
-                ),
-                "chunks": [
-                    {"stream": chunk.stream, "data": _decode(chunk.data)} for chunk in chunks
-                ],
-                "truncated": tracked.truncated,
-            }
-
     async def _read_stream(self, tracked: TrackedProcess, stream_name: OutputStreamName) -> None:
         stream = tracked.proc.stdout if stream_name == "stdout" else tracked.proc.stderr
         if stream is None:
@@ -678,7 +627,6 @@ class ProcessManager:
     ) -> None:
         async with tracked.lock:
             normalized = self._append_output(tracked, stream_name, chunk, final=final)
-        tracked.output_event.set()
         # Do not hold the snapshot lock over file I/O. Both readers await each
         # chunk, bounding pending output and applying ordinary pipe backpressure.
         if normalized and tracked.spool is not None:
@@ -704,7 +652,6 @@ class ProcessManager:
             if tracked.status == "running":
                 tracked.status = "completed" if return_code == 0 else "failed"
             tracked.finished_at = _utc_now()
-        tracked.output_event.set()
         self._notify_terminal(tracked)
 
     def _notify_terminal(self, tracked: TrackedProcess) -> None:
@@ -781,64 +728,8 @@ class ProcessManager:
         tracked.combined_buffer.extend(chunk)
         end_offset = start_offset + len(chunk)
         tracked.output_chunks.append(OutputChunk(stream_name, chunk, start_offset, end_offset))
-        if tracked.foreground_capture_open:
-            target = tracked.stdout_lines if stream_name == "stdout" else tracked.stderr_lines
-            target.append(chunk)
-            if stream_name == "stdout":
-                tracked.foreground_stdout_bytes += len(chunk)
-            else:
-                tracked.foreground_stderr_bytes += len(chunk)
-            self._enforce_foreground_capture_cap(tracked, stream_name)
         self._enforce_buffer_cap(tracked)
         return chunk
-
-    def _enforce_foreground_capture_cap(
-        self,
-        tracked: TrackedProcess,
-        newest_stream_name: OutputStreamName,
-    ) -> None:
-        overflow = (
-            tracked.foreground_stdout_bytes
-            + tracked.foreground_stderr_bytes
-            - self._buffer_cap_bytes
-        )
-        if overflow <= 0:
-            return
-
-        first_stream_name: OutputStreamName = (
-            "stderr" if newest_stream_name == "stdout" else "stdout"
-        )
-        overflow = self._trim_foreground_stream(tracked, first_stream_name, overflow)
-        if overflow > 0:
-            self._trim_foreground_stream(tracked, newest_stream_name, overflow)
-        tracked.truncated = True
-
-    @staticmethod
-    def _trim_foreground_stream(
-        tracked: TrackedProcess,
-        stream_name: OutputStreamName,
-        bytes_to_remove: int,
-    ) -> int:
-        chunks = tracked.stdout_lines if stream_name == "stdout" else tracked.stderr_lines
-        while bytes_to_remove > 0 and chunks:
-            chunk = chunks[0]
-            if len(chunk) <= bytes_to_remove:
-                chunks.pop(0)
-                bytes_to_remove -= len(chunk)
-                removed = len(chunk)
-            else:
-                removed = bytes_to_remove
-                while removed < len(chunk) and chunk[removed] & 0xC0 == 0x80:
-                    removed += 1
-                chunks[0] = chunk[removed:]
-                bytes_to_remove = 0
-
-            if stream_name == "stdout":
-                tracked.foreground_stdout_bytes -= removed
-            else:
-                tracked.foreground_stderr_bytes -= removed
-
-        return bytes_to_remove
 
     def _enforce_buffer_cap(self, tracked: TrackedProcess) -> None:
         overflow = len(tracked.combined_buffer) - self._buffer_cap_bytes
@@ -878,7 +769,6 @@ class ProcessManager:
                     self._kill_failed(tracked, error)
                 else:
                     self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
-        tracked.output_event.set()
         if tracked.wait_task is not None:
             await asyncio.shield(asyncio.gather(tracked.wait_task, return_exceptions=True))
         if tracked.status == "killed" and tracked.finished_at is None:
@@ -907,7 +797,6 @@ class ProcessManager:
             self._kill_failed(tracked, error)
         else:
             self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
-        tracked.output_event.set()
         if (
             tracked.status == "killed"
             and tracked.wait_task is not None
@@ -926,7 +815,6 @@ class ProcessManager:
     def _kill_failed(tracked: TrackedProcess, error: OSError) -> None:
         tracked.termination_failed = True
         _LOGGER.warning("Process tree kill failed for process=%s: %s", tracked.process_id, error)
-        tracked.output_event.set()
         raise ProcessTerminationError(tracked.process_id) from error
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:

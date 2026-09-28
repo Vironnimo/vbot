@@ -116,11 +116,6 @@ def powershell_command(command: str) -> str:
     return f"{wrapped}\n{EXIT_STATUS_STATEMENT}"
 
 
-def with_setup(command: str) -> str:
-    """Return ``command`` with the setup line where PowerShell allows it."""
-    return _with_setup(command, _body_start(command)[0])
-
-
 def _with_setup(command: str, position: int) -> str:
     prefix = command[:position]
     if prefix and not prefix.endswith(("\n", "\r", "{")):
@@ -270,5 +265,4 @@ __all__ = [
     "UNIX_LINE_FILTERS_STATEMENT",
     "UTF8_OUTPUT_STATEMENT",
     "powershell_command",
-    "with_setup",
 ]

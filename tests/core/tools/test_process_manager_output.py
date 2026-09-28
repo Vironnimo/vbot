@@ -43,7 +43,7 @@ async def test_spawn_captures_stdout_and_stderr_as_separate_streams(manager) -> 
     result = await finish(manager, process_id)
 
     assert result["status"] == "completed"
-    assert result["exit_code"] == 0
+    assert manager.get_process(process_id, AGENT_A).exit_code == 0
     assert stream_text(result, "stdout").strip() == "hello"
     assert stream_text(result, "stderr").strip() == "problem"
 
@@ -88,7 +88,7 @@ async def test_output_and_log_file_are_stripped_of_ansi_escape_sequences(tmp_pat
 
     assert log_file is not None
     for surfaced in (
-        str(result["output"]),
+        stream_text(result, "stdout"),
         str(log_result["output"]),
         log_file.read_text(encoding="utf-8"),
     ):
