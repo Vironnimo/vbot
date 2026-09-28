@@ -168,12 +168,6 @@ export function extensionCapabilityParts(capabilities, translate) {
   return parts;
 }
 
-export function summarizeExtensionCapabilities(capabilities, translate) {
-  return extensionCapabilityParts(capabilities, translate)
-    .map((part) => (part.value ? `${part.label}: ${part.value}` : part.label))
-    .join(' · ');
-}
-
 /**
  * Describe an extension's derived waiting state for the Extensions panel (the
  * one place the waiting state is shown). Returns ``null`` when the extension is
@@ -250,7 +244,7 @@ const SCHEMA_FIELD_TYPES = ['text', 'number', 'toggle', 'secret'];
  * dropping malformed entries. Secret fields keep ``envKey``/``set``; others keep
  * ``default``.
  */
-export function normalizeSchemaFields(schema) {
+function normalizeSchemaFields(schema) {
   if (!Array.isArray(schema)) {
     return [];
   }

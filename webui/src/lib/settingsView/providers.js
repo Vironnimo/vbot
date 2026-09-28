@@ -103,7 +103,7 @@ export function connectionSupportsAddAccount(connection) {
   );
 }
 
-export function isConnectionConfigured(connection) {
+function isConnectionConfigured(connection) {
   if (connection?.type === 'none') {
     return connection?.added === true;
   }
@@ -124,7 +124,7 @@ export function isConnectionEnabled(connection) {
 // Connection-level behavior gate computed by the server. This deliberately
 // stays distinct from configured credentials and account usability: a keyless
 // local connection has both even while its opt-in enable switch is off.
-export function isConnectionUsable(connection) {
+function isConnectionUsable(connection) {
   return connection?.usable === true;
 }
 
