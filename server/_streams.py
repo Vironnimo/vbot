@@ -216,7 +216,7 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
             "started_at": run.created_at,
             "iteration_count": run.iteration_count,
             "controls": run.controls(),
-            "controls_sequence": run.events[-1].sequence if run.events else 0,
+            "controls_sequence": run.last_sequence,
             "sse_url": f"/api/runs/{run.id}/events",
         }
         if not getattr(run, "contributes_to_agent_activity", True):

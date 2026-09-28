@@ -280,4 +280,6 @@ async def test_manual_compaction_preserves_note_appended_during_summary(tmp_path
     catalog_pin = runtime.chat_sessions.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT)
     assert catalog_pin is not None and catalog_pin["catalog_text"] == "catalog:1"
     assert runtime.chat_sessions.seen_skills(session.address) is None
-    assert any(event.type == COMPACTION_ABORTED_EVENT for event in run.events)
+    assert any(
+        event.type == COMPACTION_ABORTED_EVENT for event in await runtime.timelines.events(run)
+    )

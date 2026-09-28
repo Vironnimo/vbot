@@ -78,10 +78,10 @@ def _fallback_runtime(
     )
 
 
-def _fallback_events(run: Any) -> list[tuple[str, str]]:
+async def _fallback_events(runtime: StubRuntime, run: Any) -> list[tuple[str, str]]:
     return [
         (event.payload["from_model"], event.payload["to_model"])
-        for event in run.events
+        for event in await runtime.timelines.events(run)
         if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
     ]
 
@@ -137,7 +137,7 @@ async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
     )
     # Usage and cost belong to the Model that actually answered.
     assert messages[2].model == FALLBACK
-    assert _fallback_events(run) == [(PRIMARY, FALLBACK)]
+    assert await _fallback_events(runtime, run) == [(PRIMARY, FALLBACK)]
     assert run.iteration_count == 1
     assert messages[-1].iteration_count == 1
     assert run.events[-1].payload["iteration_count"] == 1
@@ -163,13 +163,15 @@ async def test_rate_limit_without_a_fallback_fails_the_run_after_same_model_reco
     assert (run.iteration_count, messages[-1].iteration_count) == (0, 0)
     assert run.events[-1].payload["iteration_count"] == 0
     assert (messages[1].error_kind, messages[1].content) == ("rate_limit", "too many requests")
-    assert event_types(run) == [
+    assert await event_types(runtime, run) == [
         "run_started",
         "user_message_persisted",
         ERROR_MESSAGE_PERSISTED_EVENT,
         "run_failed",
     ]
-    persisted_error = next(e for e in run.events if e.type == ERROR_MESSAGE_PERSISTED_EVENT)
+    persisted_error = next(
+        e for e in await runtime.timelines.events(run) if e.type == ERROR_MESSAGE_PERSISTED_EVENT
+    )
     assert persisted_error.payload["message"]["role"] == "error"
     assert persisted_error.payload["message"]["error_kind"] == "rate_limit"
 
@@ -186,7 +188,7 @@ async def test_account_wide_fatal_error_never_advances_the_fallback_chain(tmp_pa
     run = last_run(runtime)
     assert run.status == RunStatus.FAILED
     assert persisted_roles(history(runtime)) == ["user", "error"]
-    assert _fallback_events(run) == []
+    assert await _fallback_events(runtime, run) == []
     assert fallback.requests == []
 
 
@@ -220,8 +222,8 @@ async def test_fallback_serves_the_rest_of_the_run_and_the_next_run_starts_on_th
     assert (second.content, second.model) == ("Primary turn 2", PRIMARY)
     assert [request["model_id"] for request in primary.requests] == ["gpt-5.2", "gpt-5.2"]
     assert [request["model_id"] for request in fallback.requests] == ["claude-sonnet-4"] * 2
-    assert _fallback_events(first_run) == [(PRIMARY, FALLBACK)]
-    assert _fallback_events(last_run(runtime)) == []
+    assert await _fallback_events(runtime, first_run) == [(PRIMARY, FALLBACK)]
+    assert await _fallback_events(runtime, last_run(runtime)) == []
 
 
 class _RecordingAdapter(StubAdapter):
@@ -259,7 +261,7 @@ async def test_fallback_chain_skips_unresolvable_candidates_and_cascades_in_orde
 
     messages = history(runtime)
     assert assistant.content == "Recovered"
-    assert _fallback_events(last_run(runtime)) == [
+    assert await _fallback_events(runtime, last_run(runtime)) == [
         (PRIMARY, "anthropic/first-resort::api-key"),
         ("anthropic/first-resort::api-key", "anthropic/last-resort::api-key"),
     ]
@@ -284,8 +286,8 @@ async def test_candidate_whose_adapter_cannot_be_built_is_skipped(tmp_path: Path
     run = last_run(runtime)
     assert run.status == RunStatus.FAILED
     assert persisted_roles(history(runtime)) == ["user", "error"]
-    assert ERROR_MESSAGE_PERSISTED_EVENT in event_types(run)
-    assert _fallback_events(run) == []
+    assert ERROR_MESSAGE_PERSISTED_EVENT in await event_types(runtime, run)
+    assert await _fallback_events(runtime, run) == []
 
 
 @pytest.mark.asyncio
@@ -300,8 +302,8 @@ async def test_fallback_failure_persists_the_fallback_error(tmp_path: Path) -> N
     run = last_run(runtime)
     messages = history(runtime)
     assert run.status == RunStatus.FAILED
-    assert event_types(run).count(ERROR_MESSAGE_PERSISTED_EVENT) == 1
-    assert _fallback_events(run) == [(PRIMARY, FALLBACK)]
+    assert (await event_types(runtime, run)).count(ERROR_MESSAGE_PERSISTED_EVENT) == 1
+    assert await _fallback_events(runtime, run) == [(PRIMARY, FALLBACK)]
     assert persisted_roles(messages) == ["user", "note", "error"]
     assert messages[-2].error_kind == "rate_limit"
 

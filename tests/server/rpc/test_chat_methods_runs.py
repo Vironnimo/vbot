@@ -16,6 +16,7 @@ from core.sessions import ChatSessionManager, SessionAddress
 from core.tools import ToolContext, tool_success
 from server.file_delivery import FileDelivery
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_RUN_NOT_FOUND
+from tests.core.runs.runs_test_support import RunTimelines
 from tests.core.sessions.history_fixtures import complete_run
 from tests.server.rpc.chat_methods_test_support import call
 from tests.server.rpc_test_support import JsonObject, StubAdapter, make_state
@@ -59,6 +60,7 @@ async def test_cancel_stops_the_run_during_a_tool_and_ignores_its_late_output(
         ]
     )
     state = make_state(tmp_path, adapter)
+    timelines = RunTimelines(state.chat_runs)
     runtime = state.runtime
     slow_tool_started = asyncio.Event()
     release_tool = asyncio.Event()
@@ -85,9 +87,10 @@ async def test_cancel_stops_the_run_during_a_tool_and_ignores_its_late_output(
     await asyncio.sleep(0)
 
     run = state.chat_runs.get(stream_response["result"]["run_id"])
+    events = await timelines.events(run)
     messages = runtime.chat_sessions.get(ADDRESS).load()
     assert cancel_response["result"]["status"] == "cancelled"
-    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
+    assert [event.type for event in events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         "reasoning_delta",
@@ -98,7 +101,7 @@ async def test_cancel_stops_the_run_during_a_tool_and_ignores_its_late_output(
         "tool_call_started",
         "run_cancelled",
     ]
-    tool_delta = next(event for event in run.events if event.type == "tool_call_delta")
+    tool_delta = next(event for event in events if event.type == "tool_call_delta")
     assert tool_delta.payload == {
         "tool_call_id": "call_slow",
         "name_delta": "slow_tool",

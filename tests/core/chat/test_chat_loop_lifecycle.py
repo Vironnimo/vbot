@@ -327,6 +327,7 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
         source_session_id="reviewed-session",
     )
     await run.wait()
+    events = await runtime.timelines.events(run)
 
     assert run.source_session_id == "reviewed-session"
     persisted = history(runtime)
@@ -334,11 +335,11 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
     assert persisted[-1].run_id == run.id
     assert persisted[-1].status == "completed"
     assert persisted[-1].iteration_count == 1
-    assert run.events[-1].payload["iteration_count"] == 1
+    assert events[-1].payload["iteration_count"] == 1
     activity = runtime.chat_sessions.list_summaries("coder")[0]
     assert activity["latest_completion_run_id"] is None
     assert activity["has_unread_completion"] is False
-    assert all(event.contributes_to_agent_activity is False for event in run.events)
+    assert all(event.contributes_to_agent_activity is False for event in events)
 
 
 @pytest.mark.asyncio
@@ -370,8 +371,9 @@ async def test_provider_retry_is_visible_before_answer_without_leaking_error(
         "coder", "Hi", session_id="session-one"
     )
     await run.wait()
+    events = await runtime.timelines.events(run)
 
-    status = [event.payload for event in run.events if event.type == PROVIDER_REQUEST_STATUS_EVENT]
+    status = [event.payload for event in events if event.type == PROVIDER_REQUEST_STATUS_EVENT]
     retrying = [item for item in status if item["state"] == "retrying"]
     # A stalled stream announces its retry before the recovery backoff does.
     assert [item["state"] for item in status] == [

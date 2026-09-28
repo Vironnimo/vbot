@@ -385,9 +385,8 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
         if registry.host_for(identity).temporary_agents is None:
             raise ValueError("Extension page is unavailable; refresh the page")
         # Read the live replay watermark after the ownership was re-verified.
-        replay = inspection.run.events
         return {
-            "replay_through_sequence": replay[-1].sequence if replay else 0,
+            "replay_through_sequence": inspection.run.last_sequence,
             "participant_id": inspection.record.owner.participant_id,
             "stream": state.file_delivery.open_extension_run(
                 extension=name,

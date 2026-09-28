@@ -140,6 +140,32 @@ async def test_live_subscriber_is_evicted_when_it_lags_after_catch_up(
         await iterator.aclose()
 
 
+@pytest.mark.parametrize(
+    ("kept", "limit", "expected"),
+    [
+        ([1, 0, 1, 1, 1, 1], 10, [3, 4, 5, 6]),
+        ([1, 1, 1, 1, 1, 1], 2, [5, 6]),
+        ([0, 0, 0, 0, 0, 0], 10, [6]),
+    ],
+    ids=["stops-at-first-unkept", "capped", "newest-always-kept"],
+)
+async def test_compact_keeps_the_newest_contiguous_suffix_as_replay_head(
+    kept: list[int], limit: int, expected: list[int]
+) -> None:
+    stream = _stream(byte_limit=100, size_of=lambda event: event["size"])
+    for sequence, keep in enumerate(kept, start=1):
+        stream.publish({"sequence": sequence, "keep": keep, "size": 10})
+
+    stream.compact(limit=limit, keep=lambda event: event["keep"] == 1)
+
+    assert [event["sequence"] for event in stream.events] == expected
+    replayed = [event["sequence"] async for event in stream.subscribe(live=False)]
+    assert replayed == expected
+    # Compaction released the byte budget of everything it dropped.
+    _publish(stream, range(7, 7 + 10 - len(expected)), size=10, keep=1)
+    assert stream.events[0]["sequence"] == expected[0]
+
+
 async def test_byte_budget_evicts_old_replay_and_oversized_events() -> None:
     stream = _stream(retention=10, queue=10, byte_limit=10, size_of=lambda event: event["size"])
     _publish(stream, range(1, 5), size=4)

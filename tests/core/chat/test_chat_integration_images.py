@@ -38,6 +38,7 @@ from tests.core.chat.chat_integration_test_support import FakeAdapter, JsonObjec
 from tests.core.chat.chat_integration_test_support import resources_dir as resources_dir
 from tests.core.chat.chat_integration_test_support import start_runtime as start_runtime
 from tests.core.chat.chat_loop_support import session_address
+from tests.core.runs.runs_test_support import RunTimelines
 
 _png_stream = io.BytesIO()
 Image.new("RGB", (12, 8), "blue").save(_png_stream, format="PNG")
@@ -326,6 +327,7 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         ]
     )
     with start_runtime(adapter) as runtime:
+        timelines = RunTimelines(runtime.chat_run_manager)
         agent = runtime.agents.create(
             "coder", "Coder Agent", model="fake-provider/fake-model-vision"
         )
@@ -355,7 +357,11 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         assert set((tmp_path / "data" / "artifacts" / "attachments").rglob("*")) == stored_before
         assert runtime.chat_runs is not None
         assert "base64" not in json.dumps(
-            [event.payload for run in runtime.chat_runs._runs.values() for event in run.events]
+            [
+                event.payload
+                for run in runtime.chat_runs._runs.values()
+                for event in await timelines.events(run)
+            ]
         )
         with Image.open(io.BytesIO(base64.b64decode(media_parts[0]["base64"]))) as delivered:
             assert delivered.size == (16, 12)

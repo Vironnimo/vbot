@@ -39,6 +39,7 @@ from tests.core.chat.chat_loop_adapter_support import (
     StubAdapter,
     TenToolsThenBlockingReasoningAdapter,
 )
+from tests.core.runs.runs_test_support import RunTimelines
 
 __all__ = [
     "BlockingReasoningStreamingStubAdapter",
@@ -140,9 +141,13 @@ def last_run(runtime: Any, session_id: str = "session-one", agent_id: str = "cod
     return cast(Run, runtime.chat_runs.get(summary.run_id))
 
 
-def event_types(run: Run) -> list[str]:
-    """Run event types without the Provider request status updates."""
-    return [event.type for event in run.events if event.type != PROVIDER_REQUEST_STATUS_EVENT]
+async def event_types(runtime: Any, run: Run) -> list[str]:
+    """Every emitted Run event type without the Provider request status updates."""
+    return [
+        event_type
+        for event_type in await runtime.timelines.types(run)
+        if event_type != PROVIDER_REQUEST_STATUS_EVENT
+    ]
 
 
 def quoted_json_objects(text: str) -> list[JsonObject]:
@@ -563,6 +568,8 @@ class StubRuntime:
         self.system_prompts = StubPrompts(self.tools)
         self.chat_runs = ChatRunManager(persistence=self.chat_sessions)
         self.chat_run_manager = self.chat_runs
+        # Complete Run timelines; a finished Run itself replays only its ending.
+        self.timelines = RunTimelines(self.chat_runs)
         self.process_manager = StubProcessManager()
         self.extensions: Any = None
         self.providers = StubProviders(

@@ -20,7 +20,12 @@ from core.runs import (
     RunStatus,
 )
 from core.sessions import SessionAddress
-from tests.core.runs.runs_test_support import SESSION, assert_timing_payload, held
+from tests.core.runs.runs_test_support import (
+    SESSION,
+    RunTimelines,
+    assert_timing_payload,
+    held,
+)
 
 pytestmark = pytest.mark.asyncio
 SUBPROCESS_TIMEOUT_SECONDS = 10
@@ -421,6 +426,7 @@ async def test_cancel_drains_cleanup_registered_by_another_callback(
 @pytest.mark.parametrize("reason", ["user", None])
 async def test_cancel_suppresses_late_output_and_reports_its_reason(reason: str | None) -> None:
     manager = ChatRunManager()
+    timelines = RunTimelines(manager)
     output_started = asyncio.Event()
     release = asyncio.Event()
 
@@ -443,7 +449,7 @@ async def test_cancel_suppresses_late_output_and_reports_its_reason(reason: str 
         await run.wait()
 
     assert run.status == RunStatus.CANCELLED
-    assert [event.type for event in run.events] == [
+    assert await timelines.types(run) == [
         "run_started",
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "run_cancelled",

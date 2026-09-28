@@ -10,7 +10,7 @@ The bus belongs to one Event Loop: the loop running when it is constructed (the 
 
 Allowed server event types are `app_error`, Run lifecycle summaries (`run_started`, `run_output`, `run_completed`, `run_cancelled`, `run_failed`, `run_interrupted`), `provider_auth_completed`, `resource_changed`, and `bash_process_status_changed` (one background Bash process terminal snapshot per handed-off process, bridged from the ProcessManager terminal callbacks; accessor-only - it never reaches the Model). The Run bridge maps the core terminal interruption to `run_interrupted` with its normalized `cause`, timing, and terminal extras; it is terminal for replay/subscriber cleanup but remains distinct from completion, failure, and cancellation. Event type and resource kind allowlists are enforced at publish seams; add new entries there rather than bypassing the bus contract.
 
-The buffers are not durable. Old conversation state comes from Session history, active Run state from the connection handshake, and missed retained Run detail from SSE while the Run still exists.
+The buffers are not durable. Old conversation state comes from Session history, active Run state from the connection handshake, and missed retained Run detail from SSE while the Run is still running; a finished Run keeps only its settled ending.
 
 ## `/ws` handshake and replay
 
@@ -63,7 +63,7 @@ The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/
 
 ## SSE and dedicated WebSockets
 
-`GET /api/runs/{run_id}/events` streams the complete provider-agnostic Run timeline over SSE. It replays after an explicit `after_sequence` query value or, when absent, `Last-Event-ID`; invalid/negative values clamp to zero. Every Run frame uses the Run event sequence as SSE `id`, the Run event type as `event`, and sanitized event JSON as `data`, then follows until terminal state. While a running Run is quiet, the server emits transport-only `heartbeat` events without a Run sequence; clients use them for liveness but never add them to timeline or replay state.
+`GET /api/runs/{run_id}/events` streams the complete provider-agnostic Run timeline over SSE. It replays after an explicit `after_sequence` query value or, when absent, `Last-Event-ID`; invalid/negative values clamp to zero. Every Run frame uses the Run event sequence as SSE `id`, the Run event type as `event`, and sanitized event JSON as `data`, then follows until terminal state. A stream opened after the Run finished replays only its settled ending, whose first frame may lie beyond the requested cursor (`runs.md` -> Finished-Run replay retention); a cursor at the terminal sequence ends the stream without frames (`test_sse.py`). While a running Run is quiet, the server emits transport-only `heartbeat` events without a Run sequence; clients use them for liveness but never add them to timeline or replay state.
 
 Owner-scoped Extension Run streams additionally include `file_urls`: verified file capabilities found in the sanitized event, using the same public-payload projector as Extension History. File verification runs on the bounded file-preview worker pool. `extensions.page_run` returns the canonical `participant_id` with the stream capability so the host can keep those grants within its selected History scope; ordinary Run streams retain their existing payload shape.
 
