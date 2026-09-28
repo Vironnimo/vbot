@@ -6,8 +6,13 @@
   } from '$lib/chatTimelinePresentation.js';
 
   import CopyButton from '../ui/CopyButton.svelte';
+  import { timelineViewState } from './timelineViewState.svelte.js';
 
   let { item, inRun = false } = $props();
+
+  // The open checkpoint survives the row being unmounted and mounted again.
+  const viewState = timelineViewState();
+  const disclosureKey = $derived(`compaction:${item?.id ?? ''}`);
 
   const summaryText = $derived(compactionSummaryText(item));
   const running = $derived(item?.status === 'running');
@@ -27,6 +32,9 @@
   <details
     class="compaction-disclosure"
     class:compaction-disclosure--in-run={inRun}
+    open={viewState.isOpen(disclosureKey)}
+    ontoggle={(event) =>
+      viewState.setOpen(disclosureKey, event.currentTarget.open)}
   >
     <summary class="date-sep compaction-sep" class:run-compaction-sep={inRun}>
       <span class="compaction-sep__trigger">

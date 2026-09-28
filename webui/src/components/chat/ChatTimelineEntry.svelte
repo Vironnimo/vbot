@@ -5,6 +5,7 @@
   import { isImeComposing } from '$lib/keyboard.js';
   import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
   import { linkifiedTextSegments } from '$lib/markdown.js';
+  import { mountHold } from '$lib/mountHold.js';
   import {
     attachmentFilename,
     attachmentPreviewLabel,
@@ -57,6 +58,7 @@
   import MarkdownContent from './MarkdownContent.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
+  import { timelineViewState } from './timelineViewState.svelte.js';
 
   let {
     item,
@@ -70,6 +72,22 @@
   let editing = $state(false);
   let editedContent = $state('');
   let editSaving = $state(false);
+  let messageElement = $state();
+  // Disclosure state lives in the timeline's view state, so it survives this
+  // row being unmounted and mounted again.
+  const viewState = timelineViewState();
+  const holdMounted = mountHold();
+
+  // A virtualizing timeline keeps a message in inline edit mounted while it
+  // is scrolled out of view, so the draft and its focus survive.
+  $effect(() => {
+    if (!editing || !messageElement) return undefined;
+    return holdMounted(messageElement);
+  });
+
+  function disclosureKey(kind) {
+    return `${kind}:${item.id ?? item.message?.id ?? ''}`;
+  }
 
   function beginEditing(message) {
     editedContent = typeof message?.content === 'string' ? message.content : '';
@@ -361,6 +379,7 @@
 
 {#if item.type === 'message' && shouldRenderMessage(item.message)}
   <article
+    bind:this={messageElement}
     class:assistant={item.message.role === 'assistant'}
     class:user={item.message.role === 'user'}
     class:error={item.message.role === 'error'}
@@ -474,7 +493,15 @@
             )}
             <p class="msg-body-text">{errorPresentation.summary}</p>
             {#if errorPresentation.details}
-              <details class="error-details">
+              <details
+                class="error-details"
+                open={viewState.isOpen(disclosureKey('error'))}
+                ontoggle={(event) =>
+                  viewState.setOpen(
+                    disclosureKey('error'),
+                    event.currentTarget.open,
+                  )}
+              >
                 <summary class="error-details-summary">
                   {t('chat.errorDetails')}
                 </summary>
@@ -522,7 +549,12 @@
         {/if}
       </div>
       <div class="msg-content">
-        <details class="tool-event">
+        <details
+          class="tool-event"
+          open={viewState.isOpen(disclosureKey('tool'))}
+          ontoggle={(event) =>
+            viewState.setOpen(disclosureKey('tool'), event.currentTarget.open)}
+        >
           <summary class="tool-event-line">
             <span
               class:error={toolStatus(eventToolRow) === 'failed'}
@@ -571,7 +603,7 @@
             <AudioPlayer
               class="speech-audio-player"
               src={speechArtifact.url}
-              autoplay
+              autoplay={viewState.claimAutoplay(speechArtifact.url)}
             />
           {/if}
         {/if}

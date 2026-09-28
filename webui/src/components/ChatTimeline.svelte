@@ -1,5 +1,5 @@
 <script>
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
 
   import {
     dateKeyForTimestamp,
@@ -10,10 +10,16 @@
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
   import { createChatScrollController } from '$lib/chatScroll.js';
+  import { provideMountHold } from '$lib/mountHold.js';
 
   import { assistantRunChildProgressKey } from '../lib/chatState.js';
   import ChatAssistantRun from './chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from './chat/ChatTimelineEntry.svelte';
+  import { createTimelineAnnouncer } from './chat/timelineAnnouncer.js';
+  import {
+    createTimelineViewState,
+    provideTimelineViewState,
+  } from './chat/timelineViewState.svelte.js';
   import ImageLightbox from './ImageLightbox.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -82,7 +88,42 @@
   let scrollContainer = $state();
   let timelineContent = $state();
   let lightboxImage = $state(null);
-  let reasoningDisclosureState = $state({});
+  // Disclosure and pending-action state of the rows, per displayed Session;
+  // rows read it through context so it outlives their components.
+  const viewState = provideTimelineViewState(createTimelineViewState());
+  // Text of the polite live region: only genuinely new content (see
+  // `timelineAnnouncer.js`), never rows the window mounts while scrolling.
+  const announcer = createTimelineAnnouncer();
+  let announcement = $state('');
+  let announcedSessionKey = null;
+  // Bumped whenever the scroll controller changes which rows to mount.
+  let windowVersion = $state(0);
+  let controllerReady = $state(false);
+  // The rows and spacers to mount, decided by the scroll controller: every
+  // row until the timeline has shown layout, then the rows in and around the
+  // viewport plus held rows, with spacers standing in for the rest. Nothing
+  // before the controller exists; it is created as soon as the scroller
+  // binds, within the same update.
+  let renderEntries = $derived.by(() => {
+    windowVersion;
+    const items = timelineItems;
+    const key = sessionScrollKey;
+    return controller ? controller.renderPlan(items, key) : [];
+  });
+  let itemIndexById = $derived(
+    new Map(timelineItems.map((item, index) => [item.id, index])),
+  );
+  // The running Run's row stays mounted while the user reads elsewhere, so
+  // its live output (a fresh speech result starting to play) does not depend
+  // on the scroll position.
+  let runningRowId = $derived(
+    currentRun?.status === 'running'
+      ? (timelineItems.findLast(
+          (item) =>
+            item.type === 'assistant_run' && item.runId === currentRun.runId,
+        )?.id ?? '')
+      : '',
+  );
   let showJumpToLatest = $state(false);
   let timelineSignature = $derived(
     `${timelineItems.map((item) => timelineItemSignature(item)).join('|')}` +
@@ -158,20 +199,27 @@
   // created here too, guaranteeing it exists before any consumer runs.
   $effect.pre(() => {
     const container = scrollContainer;
-    if (!container) {
+    if (!container || !timelineContent) {
       return;
     }
     if (!controller) {
       controller = createChatScrollController(container, {
+        content: timelineContent,
         onViewChanged: syncJumpToLatestVisibility,
+        onWindowChanged: () => {
+          windowVersion += 1;
+        },
         shouldLoadOlder: () => shouldLoadOlderHistory(),
         requestLoadOlder: () => onLoadOlder?.(),
       });
+      controllerReady = true;
+      windowVersion += 1;
     }
     const key = sessionScrollKey;
     if (key !== renderedSessionScrollKey) {
       renderedSessionScrollKey = key;
       controller.sessionChanged(key);
+      viewState.setSession(key);
     }
   });
 
@@ -180,6 +228,47 @@
       controller?.destroy();
       controller = null;
     };
+  });
+
+  // After every update of the mounted rows the controller measures new rows
+  // and corrects the position before the browser paints.
+  $effect(() => {
+    renderEntries;
+    untrack(() => controller?.rendered());
+  });
+
+  $effect(() => {
+    const items = timelineItems;
+    const cards = transientCards;
+    const key = sessionScrollKey;
+    const text = announcer.update(items, cards, key, {
+      loading: loadingHistory,
+    });
+    untrack(() => {
+      if (key !== announcedSessionKey) {
+        announcedSessionKey = key;
+        announcement = '';
+      }
+      if (text) {
+        announcement = text;
+      }
+    });
+  });
+
+  $effect(() => {
+    const id = runningRowId;
+    if (!controllerReady || !id) {
+      return undefined;
+    }
+    return untrack(() => controller?.hold(id));
+  });
+
+  // Row content with ongoing interaction (a playing player, an inline edit)
+  // keeps its row mounted while it is scrolled out of the window.
+  provideMountHold((element) => {
+    const id = element?.closest?.('[data-timeline-item-id]')?.dataset
+      .timelineItemId;
+    return (id !== undefined && controller?.hold(id)) || (() => {});
   });
 
   $effect(() => {
@@ -289,20 +378,6 @@
     controller?.noteUserInput();
   }
 
-  // Growth invisible to Svelte state (images, fonts, Markdown layout) feeds
-  // the same coordination path, coalesced by the controller.
-  $effect(() => {
-    const content = timelineContent;
-    if (!content || typeof ResizeObserver !== 'function') {
-      return undefined;
-    }
-    const observer = new ResizeObserver(() => {
-      controller?.contentChanged();
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  });
-
   // The scroller's real scrollbar width (0 with overlay scrollbars), so the
   // floating composer stack can end before the scrollbar column instead of
   // covering it. Observe the container itself because loading History can
@@ -372,15 +447,15 @@
   }
 
   function isReasoningOpen(id) {
-    return Boolean(reasoningDisclosureState[id]);
+    return viewState.isOpen(`reasoning:${id}`);
   }
 
   function setReasoningOpen(id, isOpen) {
-    reasoningDisclosureState[id] = isOpen;
+    viewState.setOpen(`reasoning:${id}`, isOpen);
   }
 
   function shouldRenderTimelineDateSeparator(itemIndex) {
-    if (!shouldShowTimelineDateSeparators) {
+    if (!shouldShowTimelineDateSeparators || itemIndex === undefined) {
       return false;
     }
 
@@ -421,7 +496,7 @@
 </script>
 
 <div class="chat-timeline">
-  <section class="messages" bind:this={scrollContainer} aria-live="polite">
+  <section class="messages" bind:this={scrollContainer}>
     <div class="messages__content" bind:this={timelineContent}>
       {#if timelineItems.length === 0 && transientCards.length === 0}
         {#if loadingHistory}
@@ -449,51 +524,17 @@
         {#each transientCardGroups.leading as card (card.id)}
           {@render transientCard(card)}
         {/each}
-        {#each timelineItems as item, itemIndex (item.id)}
-          <div class="timeline-item" data-timeline-item-id={item.id}>
-            {#if shouldRenderTimelineDateSeparator(itemIndex)}
-              <div class="date-sep">
-                {formatDate(timestampForItem(item))}
-              </div>
-            {/if}
-            {#if item.type === 'assistant_run'}
-              <ChatAssistantRun
-                {item}
-                {agentName}
-                {chatWorkingMode}
-                {subAgentStatuses}
-                {subAgentResults}
-                {backgroundBashStatuses}
-                {backgroundBashProcesses}
-                {nowMs}
-                {isReasoningOpen}
-                onReasoningOpenChange={setReasoningOpen}
-                {onNavigateToSubAgent}
-                {onCancelToolCall}
-                {onBackgroundToolCall}
-                backgroundToolCallIds={currentRun?.runId === item.runId &&
-                currentRun.status === 'running'
-                  ? (currentRun.controls?.background_tool_call_ids ?? [])
-                  : []}
-                {onCancelSubAgent}
-              />
-            {:else}
-              <ChatTimelineEntry
-                {item}
-                {agentName}
-                {isReasoningOpen}
-                onReasoningOpenChange={setReasoningOpen}
-                {messageEditingDisabled}
-                {onEditMessage}
-              />
-            {/if}
-            {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}
-              {@render transientCard(card)}
-            {/each}
-            {#each transientCardGroups.byItemIndex.get(itemIndex) ?? [] as card (card.id)}
-              {@render transientCard(card)}
-            {/each}
-          </div>
+        {#each renderEntries as entry (entry.key)}
+          {#if entry.spacer}
+            <div
+              class="timeline-spacer"
+              data-timeline-spacer
+              aria-hidden="true"
+              style:height={`${entry.height}px`}
+            ></div>
+          {:else}
+            {@render timelineRow(entry.item)}
+          {/if}
         {/each}
         {#each transientCardGroups.trailing as card (card.id)}
           {@render transientCard(card)}
@@ -515,7 +556,58 @@
       </svg>
     </Button>
   {/if}
+  <div class="chat-timeline__announcer" role="status" aria-live="polite">
+    {announcement}
+  </div>
 </div>
+
+{#snippet timelineRow(item)}
+  {@const itemIndex = itemIndexById.get(item.id)}
+  <div class="timeline-item" data-timeline-item-id={item.id}>
+    {#if shouldRenderTimelineDateSeparator(itemIndex)}
+      <div class="date-sep">
+        {formatDate(timestampForItem(item))}
+      </div>
+    {/if}
+    {#if item.type === 'assistant_run'}
+      <ChatAssistantRun
+        {item}
+        {agentName}
+        {chatWorkingMode}
+        {subAgentStatuses}
+        {subAgentResults}
+        {backgroundBashStatuses}
+        {backgroundBashProcesses}
+        {nowMs}
+        {isReasoningOpen}
+        onReasoningOpenChange={setReasoningOpen}
+        {onNavigateToSubAgent}
+        {onCancelToolCall}
+        {onBackgroundToolCall}
+        backgroundToolCallIds={currentRun?.runId === item.runId &&
+        currentRun.status === 'running'
+          ? (currentRun.controls?.background_tool_call_ids ?? [])
+          : []}
+        {onCancelSubAgent}
+      />
+    {:else}
+      <ChatTimelineEntry
+        {item}
+        {agentName}
+        {isReasoningOpen}
+        onReasoningOpenChange={setReasoningOpen}
+        {messageEditingDisabled}
+        {onEditMessage}
+      />
+    {/if}
+    {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}
+      {@render transientCard(card)}
+    {/each}
+    {#each transientCardGroups.byItemIndex.get(itemIndex) ?? [] as card (card.id)}
+      {@render transientCard(card)}
+    {/each}
+  </div>
+{/snippet}
 
 {#snippet transientCard(card)}
   <div

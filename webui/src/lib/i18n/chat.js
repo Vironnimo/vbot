@@ -106,6 +106,7 @@ export default Object.freeze({
   'chat.role.assistantAvatar': 'A',
   'chat.role.systemAvatar': 'S',
   'chat.role.error': 'Error',
+  'chat.announcement.error': 'Error: {message}',
   'chat.event.thinking': 'Thinking',
   'chat.reasoning.active': 'thinking...',
   'chat.reasoning.done': 'thought',
