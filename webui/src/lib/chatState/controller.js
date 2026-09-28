@@ -34,7 +34,6 @@ import {
   selectedAgent,
   sessionKey,
   ensureSessionState,
-  sessionHasTerminalRun,
   syncQueueFromServer,
   addServerQueuedMessage,
   updateQueuedMessageContent,
@@ -349,17 +348,13 @@ export function createChatController({
         resetStaleRun(sessionState);
         runStream.closeSubscriptionFor(sessionState.key);
       }
+      // A loaded result is acknowledged by the Chat view, which knows whether
+      // the user can see it.
       if (isDisplayed()) {
         runStream.attachRunStream(
           sessionState,
           attachableHistoryRun(sessionState, history?.active_run),
         );
-        if (
-          sessionState.unreadRunId &&
-          sessionHasTerminalRun(sessionState, sessionState.unreadRunId)
-        ) {
-          await markSessionCompletionRead(sessionState);
-        }
       }
       await syncSessionQueue(sessionState);
       return true;
