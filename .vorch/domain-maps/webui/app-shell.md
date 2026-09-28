@@ -68,13 +68,14 @@ AppShell's optional `sidebarFooter` snippet precedes the existing microphone and
 - `subscribeTerminalEvents()` owns the per-Terminal server-push WebSocket. It carries an authoritative snapshot plus sequenced live output/state only; terminal input, resize, and stop remain RPC wrappers, and the view/controller owns reconnect and cleanup.
 - Attachment downloads use server URLs returned by `getAttachmentUrl()` and remain outside JSON-RPC.
 - Debug wrappers remain guarded by the frontend development gate and the server's debug policy.
+- `lib/clientMetrics.js` measures the browser side for the performance domain (`performance.md` -> Metric Catalog, `webui.*`). `App.svelte` starts it on mount and stops it on teardown; `rpc()` in `lib/api/transport.js` times every RPC except those sent with `untracked` (the report itself), `appController.js` notes each `resource_changed` kind before routing it, and `ExtensionPage.svelte` notes host-requested page invalidations. It reports through `reportClientMetrics` about once a minute, drops a batch whose report fails, and records nothing before it starts, so tests and views need no setup.
 
 ## Source and tests
 
 - Composition and lifecycle: `webui/src/App.svelte`, `webui/src/lib/appController.js`
 - Connection and replay state: `webui/src/lib/connectionState.js`, `webui/src/lib/api.js`
 - Navigation, autosave coordination, and invalidation: `webui/src/lib/navigationHistory.js`, `webui/src/lib/autosave.js`, `webui/src/lib/resourceInvalidation.js`
-- Focused coverage: `webui/src/lib/__tests__/api.test.js`, `api.events.test.js`, `appController.test.js`, `connectionState.test.js`, `navigationHistory.test.js`, `resourceInvalidation.test.js`, plus `webui/src/__tests__/App*.test.js`
+- Focused coverage: `webui/src/lib/__tests__/api.test.js`, `api.events.test.js`, `appController.test.js`, `clientMetrics.test.js`, `connectionState.test.js`, `navigationHistory.test.js`, `resourceInvalidation.test.js`, plus `webui/src/__tests__/App*.test.js`
 
 Private App view implementations live in `webui/src/app/`: `selection.svelte.js` owns persisted Agent/Project selection and roster loading, `setup.svelte.js` owns Settings-backed operational state and onboarding, `desktop.svelte.js` owns Desktop capability/Voice feedback and toast lifetimes, and `extensions.svelte.js` owns Extension-page descriptors, route state, and theme synchronization. `App.svelte` retains application-controller construction, autosave transitions, navigation, and composition; the public `NAVIGATION_ITEMS` export remains unchanged.
 

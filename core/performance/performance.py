@@ -19,10 +19,12 @@ stall watchdog and owns recordings and their files.
 from __future__ import annotations
 
 import asyncio
+import math
 import threading
 from collections import deque
 from collections.abc import Callable, Collection, Mapping
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
@@ -39,7 +41,12 @@ from core.performance._history import (
     read_history,
     window_record,
 )
-from core.performance._metrics import MetricRegistry
+from core.performance._metrics import (
+    OVERFLOW_BUCKET,
+    UNDERFLOW_BUCKET,
+    HistogramData,
+    MetricRegistry,
+)
 from core.performance._monitor import LoopMonitor, StallRecord, is_project_frame
 from core.performance._recording import (
     STOPPED_MAX_SECONDS,
@@ -123,6 +130,14 @@ class _Sink:
         recording = self.recording
         if recording is not None:
             recording.count(name, amount)
+
+    def merge(self, metric: str, data: HistogramData) -> None:
+        if not self.metrics.merge(metric, data):
+            self.drop()
+            return
+        recording = self.recording
+        if recording is not None:
+            recording.merge(metric, data)
 
     def set_gauge(self, name: str, value: float, track: str | None) -> None:
         if not self.metrics.set_gauge(name, value):
@@ -209,6 +224,51 @@ class Measurement:
 def record_duration(metric: str, ms: float) -> None:
     """Add one duration in milliseconds to the ``metric`` histogram."""
     _SINK.observe(metric, ms)
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalHistogram:
+    """Durations measured elsewhere, already sorted into this module's buckets.
+
+    ``buckets`` maps a bucket index (log-scale buckets growing by 10% from
+    0.01 ms: index ``floor(ln(ms / 0.01) / ln(1.1)) + 1`` up to 3,600,000 ms,
+    0 below and ``OVERFLOW_BUCKET`` above) to its observation count; the counts
+    add up to ``count``. Construction raises ``ValueError`` for data that
+    cannot come from such observations.
+    """
+
+    count: int
+    total_ms: float
+    min_ms: float
+    max_ms: float
+    buckets: Mapping[int, int]
+
+    def __post_init__(self) -> None:
+        if self.count < 1 or sum(self.buckets.values()) != self.count:
+            raise ValueError("bucket counts must add up to a positive count")
+        if any(
+            not UNDERFLOW_BUCKET <= index <= OVERFLOW_BUCKET or bucket_count < 1
+            for index, bucket_count in self.buckets.items()
+        ):
+            raise ValueError(
+                f"bucket indexes must be {UNDERFLOW_BUCKET}..{OVERFLOW_BUCKET} with counts"
+            )
+        if not (0.0 <= self.min_ms <= self.max_ms < math.inf and 0.0 <= self.total_ms < math.inf):
+            raise ValueError("durations must be finite with 0 <= min_ms <= max_ms")
+
+
+def merge_histogram(metric: str, histogram: ExternalHistogram) -> None:
+    """Add durations measured elsewhere to the ``metric`` histogram."""
+    _SINK.merge(
+        metric,
+        HistogramData(
+            count=histogram.count,
+            total_ms=histogram.total_ms,
+            min_ms=histogram.min_ms,
+            max_ms=histogram.max_ms,
+            buckets=dict(histogram.buckets),
+        ),
+    )
 
 
 def set_gauge(name: str, value: float, *, track: str | None = None) -> None:

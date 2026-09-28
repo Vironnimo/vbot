@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from core.performance._metrics import MetricRegistry
+from core.performance._metrics import HistogramData, MetricRegistry
 from core.utils.atomic import atomic_write_stream, atomic_write_text
 from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
@@ -174,6 +174,10 @@ class Recording:
     def count(self, name: str, amount: int) -> None:
         if not self._closed:
             self.metrics.add(name, amount)
+
+    def merge(self, metric: str, data: HistogramData) -> None:
+        if not self._closed:
+            self.metrics.merge(metric, data)
 
     def add_instant(
         self,

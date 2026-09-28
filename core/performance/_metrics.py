@@ -62,6 +62,15 @@ class HistogramData:
             self.max_ms = ms
         self.buckets[index] = self.buckets.get(index, 0) + 1
 
+    def merge(self, other: HistogramData) -> None:
+        """Add every observation of ``other``, a histogram over the same buckets."""
+        self.count += other.count
+        self.total_ms += other.total_ms
+        self.min_ms = min(self.min_ms, other.min_ms)
+        self.max_ms = max(self.max_ms, other.max_ms)
+        for index, bucket_count in other.buckets.items():
+            self.buckets[index] = self.buckets.get(index, 0) + bucket_count
+
     def copy(self) -> HistogramData:
         return HistogramData(
             self.count, self.total_ms, self.min_ms, self.max_ms, dict(self.buckets)
@@ -153,6 +162,17 @@ class MetricRegistry:
                     return False
                 histogram = self._histograms[name] = HistogramData()
             histogram.add(ms, index)
+        return True
+
+    def merge(self, name: str, data: HistogramData) -> bool:
+        """Add a histogram measured elsewhere; return False when a new name exceeds the cap."""
+        with self._lock:
+            histogram = self._histograms.get(name)
+            if histogram is None:
+                if len(self._histograms) >= self._max_names:
+                    return False
+                histogram = self._histograms[name] = HistogramData()
+            histogram.merge(data)
         return True
 
     def set_gauge(self, name: str, value: float, *, capped: bool = True) -> bool:

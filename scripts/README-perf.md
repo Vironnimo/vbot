@@ -26,6 +26,7 @@ What is measured:
 - **Chat per Model step:** `chat.request_build`, `provider.first_token`, `provider.response`, `chat.persist`, `chat.tool_round`, `tool.<name>`, `chat.compaction`, `chat.run`.
 - **RPC:** `rpc.<method>` per registered method.
 - **Server push (counters):** `events.<type>` per `/ws` event, `events.resource_changed.<kind>` per invalidation kind, `events.sse` per Run event sent over SSE. Compare an invalidation count with the RPC counts it causes: `events.resource_changed.extensions=500` next to `rpc.extensions.page_descriptors count=11500` means every invalidation made 23 clients or pages reload. In a recording, each invalidation is a marker on the `events` row, followed by the RPC spans it caused.
+- **WebUI (reported by each open browser tab about once a minute):** `webui.rpc` (RPC time as the browser sees it, including its wait for a connection), `webui.rpc_errors`, `webui.long_task` and `webui.long_animation_frame` (main-thread blocks of 50 ms or more), `webui.invalidations.<kind>` (invalidations the tabs received), `webui.invalidation_rpcs.<kind>.<method>` (RPCs a tab started within 250 ms after such an invalidation, the reload wave it caused) and `webui.extension_page.invalidations.<reason>` (Extension pages told to refresh). In a recording, each report is a marker on the `webui` row.
 - **Process:** `process.cpu_percent`, `process.rss_mb`, `process.python_threads`, `asyncio.tasks`, `runs.active`, `runs.queued`.
 
 ```bash
@@ -105,7 +106,7 @@ Some benchmarks reach into private functions (`_build_payload`, request-history 
 - **py-spy** (dev extra) samples a running Python process without code changes and shows where CPU time goes. `perf_load.py --profile` records the server during the highest level. By hand against any server: `py-spy record -o flame.svg --pid <server-pid> --duration 30`; add `--gil` to see only threads holding the GIL; `py-spy dump --pid <pid>` prints all current thread stacks once. Some samples fail on Windows; judge flamegraphs by proportions, not totals.
 - **Perfetto** (<https://ui.perfetto.dev>) opens recording traces. Use it to see ordering and waiting between Sessions, pools and SQLite, not just totals.
 - **Stall stacks** (`vbot performance status`, recording summaries, and a rate-limited WARNING in the server log for stalls of at least 1 s) point directly at code that blocked the Event Loop.
-- **Browser:** the DevTools Performance panel for UI work; `perf_load.py --ui` for Long Tasks under load.
+- **Browser:** the DevTools Performance panel for UI work; `perf_load.py --ui` for Long Tasks under load; the `webui.*` metrics for what real tabs experienced.
 
 ## Reading results
 
@@ -114,3 +115,4 @@ Some benchmarks reach into private functions (`_build_payload`, request-history 
 - A slow phase with low `event_loop.utilization` is waiting (disk, locks, subprocesses); a slow phase with high utilization or stalls is CPU work on the Event Loop.
 - A stall with only a few samples and a high `gc_ms` is a garbage collection pause, not the code in its stack; compare `gc.gen2` max with the stall duration.
 - A stall whose `loop_cpu_ms` is close to its CPU window is the loop computing; near zero, the loop waited. If another thread is named with high `cpu_ms`, it most likely held the GIL (or a lock the loop waited for); its stack shows what it did.
+- `webui.rpc` far above `rpc.<method>` means the time went into the network or the browser's connection queue, not the server. `webui.invalidation_rpcs.<kind>.*` divided by `webui.invalidations.<kind>` is the number of RPCs one invalidation costs a tab; an RPC the user happened to start in the same 250 ms counts too. `webui.*` values arrive up to a minute late.

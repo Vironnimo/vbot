@@ -109,8 +109,10 @@
     debugStatus,
     acknowledgeDataStoreIncident,
     getDataStoreStatus,
+    reportClientMetrics,
     showProject,
   } from '$lib/api.js';
+  import { startClientMetrics } from '$lib/clientMetrics.js';
   import {
     createAutosaveCoordinator,
     provideAutosaveContext,
@@ -467,6 +469,9 @@
   onMount(() => {
     let cancelled = false;
 
+    const stopClientMetrics = startClientMetrics({
+      report: reportClientMetrics,
+    });
     appController.initializeNavigationHistory();
     connectServerEvents();
 
@@ -505,6 +510,7 @@
       selection.destroy();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       appController.destroy();
+      stopClientMetrics();
     };
   });
   function protectPendingEdits(event) {
