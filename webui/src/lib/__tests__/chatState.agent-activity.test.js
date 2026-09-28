@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  AGENT_ACTIVITY_IDLE,
-  AGENT_ACTIVITY_RUNNING,
-  AGENT_ACTIVITY_UNREAD,
-  CHAT_STATUS_RUNNING,
   agentActivityStatus,
   agentUnreadResults,
   appendRunEvent,
@@ -776,12 +772,10 @@ describe('Agent activity projection', () => {
     newerUnread.unreadRunAt = '2026-07-20T10:05:00+00:00';
     startRun(runningSession, {
       run_id: 'run-live',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
 
-    expect(agentActivityStatus(chatState, 'alpha')).toBe(
-      AGENT_ACTIVITY_RUNNING,
-    );
+    expect(agentActivityStatus(chatState, 'alpha')).toBe('running');
     expect(newestUnreadSessionForAgent(chatState, 'alpha')).toBe(newerUnread);
   });
 
@@ -795,13 +789,11 @@ describe('Agent activity projection', () => {
     );
     displayed.hasUnreadCompletion = true;
 
-    expect(agentActivityStatus(chatState, 'alpha', displayed.key)).toBe(
-      AGENT_ACTIVITY_IDLE,
-    );
+    expect(agentActivityStatus(chatState, 'alpha', displayed.key)).toBe('idle');
 
     background.hasUnreadCompletion = true;
     expect(agentActivityStatus(chatState, 'alpha', displayed.key)).toBe(
-      AGENT_ACTIVITY_UNREAD,
+      'unread',
     );
   });
 
@@ -854,12 +846,12 @@ describe('Agent activity projection', () => {
         run_id: 'run-system',
         sequence: 1,
         contributes_to_agent_activity: false,
-        payload: { status: CHAT_STATUS_RUNNING },
+        payload: { status: 'running' },
       });
 
       expect(isRunActive(sessionState)).toBe(true);
       expect(sessionState.currentRun?.contributesToAgentActivity).toBe(false);
-      expect(agentActivityStatus(chatState, 'alpha')).toBe(AGENT_ACTIVITY_IDLE);
+      expect(agentActivityStatus(chatState, 'alpha')).toBe('idle');
 
       appendRunEvent(sessionState, {
         type: terminalType,
@@ -872,7 +864,7 @@ describe('Agent activity projection', () => {
       expect(sessionState.status).toBe(terminalStatus);
       expect(sessionState.hasUnreadCompletion).toBe(false);
       expect(sessionState.latestCompletionRunId).toBe('');
-      expect(agentActivityStatus(chatState, 'alpha')).toBe(AGENT_ACTIVITY_IDLE);
+      expect(agentActivityStatus(chatState, 'alpha')).toBe('idle');
       expect(visibleTimelineItemsForRender(sessionState)).toEqual([
         expect.objectContaining({
           type: 'assistant_run',

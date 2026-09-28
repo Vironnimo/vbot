@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  CHAT_STATUS_COMPLETED,
-  CHAT_STATUS_RUNNING,
   appendRunEvent,
   createChatState,
   ensureSessionState,
@@ -110,7 +108,7 @@ describe('History projection', () => {
     expect(assistantRun).toEqual(
       expect.objectContaining({
         runId: 'run-one',
-        status: CHAT_STATUS_COMPLETED,
+        status: 'completed',
         durationMs: 1250,
       }),
     );
@@ -297,7 +295,7 @@ describe('History projection', () => {
     startRun(sessionState, {
       run_id: 'run-two',
       sse_url: '/api/runs/run-two/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',

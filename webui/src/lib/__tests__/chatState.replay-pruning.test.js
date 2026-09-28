@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHAT_STATUS_COMPLETED,
-  CHAT_STATUS_IDLE,
-  CHAT_STATUS_RUNNING,
   appendRunEvent,
   createChatState,
   ensureSessionState,
@@ -88,7 +85,7 @@ describe('replayed Runs after a History refresh', () => {
     startRun(sessionState, {
       run_id: 'run-two',
       sse_url: '/api/runs/run-two/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     // The WebSocket replays the completed parent run (run-one) in sequence order:
     // its user message, tool result, assistant output, and terminal event.
@@ -96,7 +93,7 @@ describe('replayed Runs after a History refresh', () => {
       type: 'run_started',
       run_id: 'run-one',
       sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
@@ -143,7 +140,7 @@ describe('replayed Runs after a History refresh', () => {
       type: 'run_started',
       run_id: 'run-two',
       sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       type: 'assistant_output',
@@ -230,13 +227,13 @@ describe('replayed Runs after a History refresh', () => {
     startRun(sessionState, {
       run_id: 'run-two',
       sse_url: '/api/runs/run-two/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     appendRunEvent(sessionState, {
       type: 'run_started',
       run_id: 'run-two',
       sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       type: 'assistant_output',
@@ -299,7 +296,7 @@ describe('replayed Runs after a History refresh', () => {
     startRun(sessionState, {
       run_id: 'run-two',
       sse_url: '/api/runs/run-two/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
 
     // A remounted Chat consumes App's retained WebSocket list. The bounded
@@ -309,7 +306,7 @@ describe('replayed Runs after a History refresh', () => {
       type: 'run_started',
       run_id: 'run-one',
       sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
@@ -327,7 +324,7 @@ describe('replayed Runs after a History refresh', () => {
       type: 'run_started',
       run_id: 'run-two',
       sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
@@ -395,7 +392,7 @@ describe('replayed Runs after a History refresh', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     appendRunEvent(sessionState, {
       type: 'reasoning',
@@ -446,7 +443,7 @@ describe('replayed Runs after a History refresh', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
@@ -517,7 +514,7 @@ describe('replayed Runs after a History refresh', () => {
         tools: [
           expect.objectContaining({
             toolCallId: 'call-one',
-            status: CHAT_STATUS_RUNNING,
+            status: 'running',
           }),
         ],
       }),
@@ -533,7 +530,7 @@ describe('replayed Runs after a History refresh', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     appendRunEvent(sessionState, {
       type: 'assistant_output_delta',
@@ -553,7 +550,7 @@ describe('replayed Runs after a History refresh', () => {
       type: 'run_completed',
       run_id: 'run-one',
       sequence: 3,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
     });
 
     loadHistory(
@@ -570,7 +567,7 @@ describe('replayed Runs after a History refresh', () => {
           id: 'summary-one',
           role: 'run_summary',
           run_id: 'run-one',
-          status: CHAT_STATUS_COMPLETED,
+          status: 'completed',
         },
       ],
       { runs: [{ run_id: 'run-one', complete: true }] },
@@ -592,7 +589,7 @@ describe('finished Run retention during an active Run', () => {
       type: 'run_started',
       run_id: runId,
       sequence: 1,
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       type: 'assistant_output',
@@ -606,7 +603,7 @@ describe('finished Run retention during an active Run', () => {
       type: 'run_completed',
       run_id: runId,
       sequence: 3,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
     });
   }
 
@@ -620,13 +617,13 @@ describe('finished Run retention during an active Run', () => {
     startRun(sessionState, {
       run_id: 'run-active',
       sse_url: '/api/runs/run-active/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
       events: [
         {
           type: 'run_started',
           run_id: 'run-active',
           sequence: 1,
-          payload: { status: CHAT_STATUS_RUNNING },
+          payload: { status: 'running' },
         },
       ],
     });
@@ -663,7 +660,7 @@ describe('finished Run retention during an active Run', () => {
     expect(sessionState.runEvents.map((event) => event.run_id)).toEqual([
       'run-active',
     ]);
-    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.status).toBe('running');
   });
 
   it.each([
@@ -688,7 +685,7 @@ describe('finished Run retention during an active Run', () => {
       startRun(sessionState, {
         run_id: 'run-active',
         sse_url: '/api/runs/run-active/events',
-        status: CHAT_STATUS_RUNNING,
+        status: 'running',
       });
       const runEventsBefore = [...sessionState.runEvents];
 
@@ -823,13 +820,13 @@ describe('stale Run reset', () => {
     startRun(sessionState, {
       run_id: 'run-stale',
       sse_url: '/api/runs/run-stale/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
       events: [
         {
           sequence: 1,
           run_id: 'run-stale',
           type: 'run_started',
-          payload: { status: CHAT_STATUS_RUNNING },
+          payload: { status: 'running' },
         },
         {
           sequence: 2,
@@ -868,8 +865,8 @@ describe('stale Run reset', () => {
 
     resetStaleRun(sessionState);
 
-    expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
-    expect(sessionState.streamStatus).toBe(CHAT_STATUS_IDLE);
+    expect(sessionState.status).toBe('idle');
+    expect(sessionState.streamStatus).toBe('idle');
     expect(sessionState.currentRun).toBeNull();
     expect(isRunActive(sessionState)).toBe(false);
     // Freshly loaded History is authoritative; no live replay renders or

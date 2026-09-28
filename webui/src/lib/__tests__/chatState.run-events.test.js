@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHAT_STATUS_CANCELLED,
-  CHAT_STATUS_COMPLETED,
-  CHAT_STATUS_FAILED,
-  CHAT_STATUS_RUNNING,
   appendRunEvent,
   applyRunControls,
   createChatState,
@@ -170,11 +166,11 @@ describe('live Run events', () => {
       payload: {},
     });
 
-    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
-    expect(sessionState.streamStatus).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.status).toBe('running');
+    expect(sessionState.streamStatus).toBe('running');
     expect(sessionState.currentRun).toMatchObject({
       runId: 'run-from-ws',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
       startedAt: '2026-08-05T18:04:00.000Z',
     });
   });
@@ -297,7 +293,7 @@ describe('live Run events', () => {
       run_id: 'run-one',
       type: 'run_started',
       timestamp: '2026-05-03T14:30:00+00:00',
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       sequence: 2,
@@ -324,7 +320,7 @@ describe('live Run events', () => {
       run_id: 'run-one',
       type: 'run_completed',
       timestamp: '2026-05-03T14:30:03+00:00',
-      payload: { status: CHAT_STATUS_COMPLETED, timing },
+      payload: { status: 'completed', timing },
     });
 
     const assistantRun = visibleTimelineItemsForRender(sessionState).find(
@@ -488,8 +484,8 @@ describe('Tool-use loops', () => {
     ]);
     expect(assistantRun.tools.map((tool) => tool.status)).toEqual([
       'success',
-      CHAT_STATUS_RUNNING,
-      CHAT_STATUS_FAILED,
+      'running',
+      'failed',
     ]);
   });
 
@@ -502,7 +498,7 @@ describe('Tool-use loops', () => {
     startRun(sessionState, {
       run_id: 'run-cancelled-siblings',
       sse_url: '/api/runs/run-cancelled-siblings/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     const append = (sequence, type, payload, extra = {}) =>
       appendRunEvent(sessionState, {
@@ -540,19 +536,19 @@ describe('Tool-use loops', () => {
     append(
       19,
       'run_cancelled',
-      { status: CHAT_STATUS_CANCELLED },
+      { status: 'cancelled' },
       { timestamp: '2026-08-07T12:00:00.000Z' },
     );
 
     const [assistantRun] = visibleTimelineItemsForRender(sessionState);
-    expect(assistantRun.status).toBe(CHAT_STATUS_CANCELLED);
+    expect(assistantRun.status).toBe('cancelled');
     expect(assistantRun.tools.map((tool) => tool.toolCallId)).toEqual(
       Array.from({ length: 12 }, (_value, index) => `call-${index}`),
     );
     expect(assistantRun.tools.map((tool) => tool.status)).toEqual([
       'failed',
       'failed',
-      ...Array.from({ length: 10 }, () => CHAT_STATUS_CANCELLED),
+      ...Array.from({ length: 10 }, () => 'cancelled'),
     ]);
     expect(assistantRun.tools[2]).toMatchObject({
       endTimestamp: '2026-08-07T12:00:00.000Z',
@@ -569,7 +565,7 @@ describe('Tool-use loops', () => {
     startRun(sessionState, {
       run_id: 'run-cancelled',
       sse_url: '/api/runs/run-cancelled/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
 
     appendRunEvent(sessionState, {
@@ -610,12 +606,12 @@ describe('Tool-use loops', () => {
       type: 'run_cancelled',
       run_id: 'run-cancelled',
       sequence: 4,
-      payload: { status: CHAT_STATUS_CANCELLED },
+      payload: { status: 'cancelled' },
     });
 
     const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
-    expect(assistantRun.status).toBe(CHAT_STATUS_CANCELLED);
+    expect(assistantRun.status).toBe('cancelled');
     expect(assistantRun.reasoning).toEqual([
       expect.objectContaining({
         content: 'Inspect the evidence.',
@@ -672,7 +668,7 @@ describe('Run order', () => {
     expect(assistantRuns[1].tools).toEqual([
       expect.objectContaining({
         toolCallId: 'new-tool',
-        status: CHAT_STATUS_RUNNING,
+        status: 'running',
       }),
     ]);
   });
@@ -689,7 +685,7 @@ describe('Run order', () => {
       run_id: 'run-one',
       sequence: 1,
       timestamp: '2026-05-07T10:00:00Z',
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
@@ -736,7 +732,7 @@ describe('Run order', () => {
       run_id: 'run-two',
       sequence: 1,
       timestamp: '2026-05-07T10:01:00Z',
-      payload: { status: CHAT_STATUS_RUNNING },
+      payload: { status: 'running' },
     });
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',

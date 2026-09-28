@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  AGENT_ACTIVITY_UNREAD,
-  CHAT_STATUS_COMPLETED,
-  CHAT_STATUS_FAILED,
-  CHAT_STATUS_RUNNING,
   agentActivityStatus,
   appendRunEvent,
   contextCompactionState,
@@ -32,7 +28,7 @@ describe('turn usage from Run events', () => {
       name: 'run_completed with turn usage',
       type: 'run_completed',
       payload: {
-        status: CHAT_STATUS_COMPLETED,
+        status: 'completed',
         usage: { input_tokens: 8432, output_tokens: 512 },
       },
       usage: { input_tokens: 8432, output_tokens: 512 },
@@ -41,7 +37,7 @@ describe('turn usage from Run events', () => {
       name: 'run_completed with estimated turn usage',
       type: 'run_completed',
       payload: {
-        status: CHAT_STATUS_COMPLETED,
+        status: 'completed',
         usage: { input_tokens: 500, output_tokens: 200, estimated: true },
       },
       usage: { input_tokens: 500, output_tokens: 200, estimated: true },
@@ -49,14 +45,14 @@ describe('turn usage from Run events', () => {
     {
       name: 'run_completed without usage',
       type: 'run_completed',
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
       usage: null,
     },
     {
       name: 'run_failed with Session and Context Usage',
       type: 'run_failed',
       payload: {
-        status: CHAT_STATUS_FAILED,
+        status: 'failed',
         error: 'boom',
         session_usage: measuredSessionUsage,
         context_usage: measuredContextUsage,
@@ -82,7 +78,7 @@ describe('turn usage from Run events', () => {
       startRun(sessionState, {
         run_id: 'run-one',
         sse_url: '/api/runs/run-one/events',
-        status: CHAT_STATUS_RUNNING,
+        status: 'running',
       });
 
       appendRunEvent(sessionState, {
@@ -95,9 +91,7 @@ describe('turn usage from Run events', () => {
       expect(sessionState.usage).toEqual(usage);
       expect(sessionState.sessionUsage).toEqual(sessionUsage);
       expect(sessionState.contextUsage).toEqual(contextUsage);
-      expect(agentActivityStatus(chatState, 'alpha')).toBe(
-        AGENT_ACTIVITY_UNREAD,
-      );
+      expect(agentActivityStatus(chatState, 'alpha')).toBe('unread');
     },
   );
 
@@ -110,7 +104,7 @@ describe('turn usage from Run events', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     const sessionUsage = {
       measured_turns: 4,
@@ -143,8 +137,8 @@ describe('turn usage from Run events', () => {
     });
     expect(sessionState.sessionUsage).toEqual(sessionUsage);
     expect(sessionState.contextUsage).toEqual(contextUsage);
-    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
-    expect(sessionState.currentRun.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.status).toBe('running');
+    expect(sessionState.currentRun.status).toBe('running');
     expect(visibleTimelineItemsForRender(sessionState)).toEqual([]);
   });
 });
@@ -238,13 +232,13 @@ describe('usage from History', () => {
       startRun(sessionState, {
         run_id: 'run-one',
         sse_url: '/api/runs/run-one/events',
-        status: CHAT_STATUS_RUNNING,
+        status: 'running',
       });
       appendRunEvent(sessionState, {
         type: 'run_completed',
         run_id: 'run-one',
         sequence: 2,
-        payload: { status: CHAT_STATUS_COMPLETED, usage: liveUsage },
+        payload: { status: 'completed', usage: liveUsage },
       });
     }
 

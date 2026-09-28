@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHAT_STATUS_COMPLETED,
-  CHAT_STATUS_RUNNING,
   appendRunEvent,
   createChatState,
   ensureSessionState,
@@ -366,7 +364,7 @@ describe('final assistant output', () => {
     startRun(sessionState, {
       run_id: 'run-reported-overlap',
       sse_url: '/api/runs/run-reported-overlap/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
 
     appendRunEvent(sessionState, {
@@ -412,7 +410,7 @@ describe('final assistant output', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     appendRunEvent(sessionState, {
       type: 'assistant_output_delta',
@@ -434,13 +432,13 @@ describe('final assistant output', () => {
       type: 'run_completed',
       run_id: 'run-one',
       sequence: 3,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
     });
 
     expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       expect.objectContaining({
         type: 'assistant_run',
-        status: CHAT_STATUS_COMPLETED,
+        status: 'completed',
         outputs: [
           expect.objectContaining({
             content: 'Draft',
@@ -462,7 +460,7 @@ describe('final assistant output', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
     appendRunEvent(sessionState, {
       type: 'tool_call_started',
@@ -487,11 +485,11 @@ describe('final assistant output', () => {
       type: 'run_completed',
       run_id: 'run-one',
       sequence: 3,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
     });
 
     const [assistantRun] = visibleTimelineItemsForRender(sessionState);
-    expect(assistantRun.status).toBe(CHAT_STATUS_COMPLETED);
+    expect(assistantRun.status).toBe('completed');
     expect(assistantRun.tools[0]).toEqual(
       expect.objectContaining({ toolCallId: 'call-one', stdout: 'hello\n' }),
     );

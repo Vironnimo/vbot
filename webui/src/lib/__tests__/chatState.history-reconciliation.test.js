@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHAT_STATUS_CANCELLED,
-  CHAT_STATUS_COMPLETED,
-  CHAT_STATUS_RUNNING,
   appendRunEvent,
   createChatState,
   ensureSessionState,
@@ -395,7 +392,7 @@ describe('History reconciliation', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
 
     loadHistory(sessionState, [
@@ -465,15 +462,15 @@ describe('History reconciliation', () => {
       type: 'run_completed',
       run_id: 'run-one',
       sequence: 4,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
     });
 
-    expect(sessionState.status).toBe(CHAT_STATUS_COMPLETED);
+    expect(sessionState.status).toBe('completed');
     expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       expect.objectContaining({ id: 'user-one', type: 'message' }),
       expect.objectContaining({
         id: 'assistant-run-run-one',
-        status: CHAT_STATUS_COMPLETED,
+        status: 'completed',
         outputs: [expect.objectContaining({ content: 'The file says A.' })],
       }),
     ]);
@@ -488,7 +485,7 @@ describe('History reconciliation', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
 
     loadHistory(
@@ -603,7 +600,7 @@ describe('History reconciliation', () => {
       type: 'run_completed',
       run_id: 'run-one',
       sequence: 7,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
     });
 
     const timelineItems = visibleTimelineItemsForRender(sessionState);
@@ -613,7 +610,7 @@ describe('History reconciliation', () => {
       expect.objectContaining({
         id: 'assistant-run-run-one',
         type: 'assistant_run',
-        status: CHAT_STATUS_COMPLETED,
+        status: 'completed',
       }),
     );
     expect(timelineItems[1].tools.map((tool) => tool.toolCallId)).toEqual([
@@ -634,7 +631,7 @@ describe('History reconciliation', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
 
     loadHistory(
@@ -678,7 +675,7 @@ describe('History reconciliation', () => {
       type: 'run_completed',
       run_id: 'run-one',
       sequence: 3,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
     });
 
     expect(visibleTimelineItemsForRender(sessionState)).toEqual([
@@ -686,7 +683,7 @@ describe('History reconciliation', () => {
       expect.objectContaining({
         id: 'assistant-run-run-one',
         type: 'assistant_run',
-        status: CHAT_STATUS_COMPLETED,
+        status: 'completed',
         outputs: [expect.objectContaining({ content: 'The file says A.' })],
         tools: [expect.objectContaining({ toolCallId: 'call-one' })],
       }),
@@ -702,7 +699,7 @@ describe('History reconciliation', () => {
     startRun(sessionState, {
       run_id: 'run-parent',
       sse_url: '/api/runs/run-parent/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
 
     loadHistory(
@@ -763,7 +760,7 @@ describe('History reconciliation', () => {
       sequence: 3,
       timestamp: '2026-07-27T12:11:57Z',
       payload: {
-        status: CHAT_STATUS_CANCELLED,
+        status: 'cancelled',
         timing: { duration_ms: 1509909 },
       },
     });
@@ -778,14 +775,14 @@ describe('History reconciliation', () => {
       expect.objectContaining({
         id: 'assistant-run-run-parent',
         runId: 'run-parent',
-        status: CHAT_STATUS_CANCELLED,
+        status: 'cancelled',
         durationMs: 1509909,
       }),
     );
     expect(assistantRun.tools).toEqual([
       expect.objectContaining({
         toolCallId: 'call-subagent',
-        status: CHAT_STATUS_CANCELLED,
+        status: 'cancelled',
       }),
     ]);
   });
@@ -857,7 +854,7 @@ describe('History reconciliation', () => {
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
-      status: CHAT_STATUS_RUNNING,
+      status: 'running',
     });
 
     loadHistory(
@@ -907,7 +904,7 @@ describe('History reconciliation', () => {
       type: 'run_completed',
       run_id: 'run-one',
       sequence: 2,
-      payload: { status: CHAT_STATUS_COMPLETED },
+      payload: { status: 'completed' },
     });
 
     const timelineItems = visibleTimelineItemsForRender(sessionState);
@@ -917,7 +914,7 @@ describe('History reconciliation', () => {
       expect.objectContaining({
         id: 'assistant-run-run-one',
         type: 'assistant_run',
-        status: CHAT_STATUS_COMPLETED,
+        status: 'completed',
       }),
     );
     expect(timelineItems[1].items.map((item) => item.type)).toEqual([

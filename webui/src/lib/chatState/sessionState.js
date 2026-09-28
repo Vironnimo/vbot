@@ -17,11 +17,11 @@ export const CHAT_STATUS_CANCELLED = 'cancelled';
 
 export const CHAT_STATUS_INTERRUPTED = 'interrupted';
 
-export const AGENT_ACTIVITY_IDLE = 'idle';
+const AGENT_ACTIVITY_IDLE = 'idle';
 
-export const AGENT_ACTIVITY_RUNNING = 'running';
+const AGENT_ACTIVITY_RUNNING = 'running';
 
-export const AGENT_ACTIVITY_UNREAD = 'unread';
+const AGENT_ACTIVITY_UNREAD = 'unread';
 
 export const TERMINAL_RUN_EVENTS = new Set([
   'run_completed',
