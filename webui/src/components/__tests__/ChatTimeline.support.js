@@ -22,7 +22,10 @@ vi.mock('svelte/store', async () => {
   return import('../../../node_modules/svelte/src/store/index-client.js');
 });
 
-const { default: ChatTimeline } = await import('../ChatTimeline.svelte');
+// Renders ChatTimeline from a `sessionState` prop, projecting it like
+// ChatView.
+const { default: ChatTimelineHost } =
+  await import('./ChatTimelineHost.support.svelte');
 
 // Registers the per-test lifecycle and returns the mount helpers. With
 // `observeResize`, a ResizeObserver stub records callbacks that
@@ -64,10 +67,13 @@ export function setupChatTimelineSuite({ observeResize = false } = {}) {
   });
 
   return {
-    // Mounts ChatTimeline with `props` as given (a plain object or a reactive
-    // props bag).
+    // Mounts ChatTimeline for `props.sessionState` with the other `props` as
+    // given (a plain object or a reactive props bag).
     mount(props) {
-      mountedComponent = mount(ChatTimeline, { target: document.body, props });
+      mountedComponent = mount(ChatTimelineHost, {
+        target: document.body,
+        props,
+      });
       flushSync();
       return mountedComponent;
     },

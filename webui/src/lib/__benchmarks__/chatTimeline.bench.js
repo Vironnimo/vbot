@@ -1,9 +1,10 @@
 // Chat Timeline projection over a long Session.
 //
-// ChatTimeline and ChatView derive their rows from
-// visibleTimelineItemsForRender(sessionState), so it re-runs whenever the
-// Session state changes, including every streaming flush. The state is built
-// with the real chatState functions (loadHistory, startRun, appendRunEvent).
+// ChatView derives the displayed Session's rows once from
+// visibleTimelineItemsForRender(sessionState) and hands them to ChatTimeline,
+// so it re-runs whenever the Session state changes, including every streaming
+// flush. The state is built with the real chatState functions (loadHistory,
+// startRun, appendRunEvent).
 //
 // A projection hands back the rows of unchanged History Messages from the
 // previous projection of the same Session instead of rebuilding them.

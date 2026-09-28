@@ -275,6 +275,8 @@
   // always loads; Agent changes and Extension lifecycle events both refresh it.
   let lastCommandsAddress = undefined;
 
+  // The displayed Session's rendered rows, projected once per update and
+  // shared by the timeline, the Activity panel and Sub-Agent reconciliation.
   let activeTimelineItems = $derived(
     visibleTimelineItemsForRender(target.activeSessionState),
   );
@@ -803,7 +805,9 @@
         {/if}
         <div class="chat-view__timeline-shell">
           <ChatTimeline
-            sessionState={target.activeSessionState}
+            timelineItems={activeTimelineItems}
+            sessionKey={target.activeSessionState?.key ?? ''}
+            currentRun={target.activeSessionState?.currentRun ?? null}
             agentName={target.activeAgent.name}
             {chatWorkingMode}
             loadingHistory={layout.historyLoadingFeedbackVisible}

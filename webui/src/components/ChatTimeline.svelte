@@ -11,10 +11,7 @@
   import { t } from '$lib/i18n.js';
   import { createChatScrollController } from '$lib/chatScroll.js';
 
-  import {
-    assistantRunChildProgressKey,
-    visibleTimelineItemsForRender,
-  } from '../lib/chatState.js';
+  import { assistantRunChildProgressKey } from '../lib/chatState.js';
   import ChatAssistantRun from './chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from './chat/ChatTimelineEntry.svelte';
   import ImageLightbox from './ImageLightbox.svelte';
@@ -24,7 +21,15 @@
   import EmptyState from './ui/EmptyState.svelte';
 
   let {
-    sessionState,
+    // The displayed Session's rendered rows, projected once by the owner
+    // through `visibleTimelineItemsForRender()`.
+    timelineItems = [],
+    // Key of the displayed Session: per-Session scroll memory and follow
+    // requests.
+    sessionKey = '',
+    // The displayed Session's current Run; while it runs, its Tool rows offer
+    // the server-advertised Move to background action.
+    currentRun = null,
     agentName = '',
     chatWorkingMode = 'normal',
     transientCards = [],
@@ -60,7 +65,6 @@
     onScrollbarWidthChange = () => {},
   } = $props();
 
-  let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
   let nowMs = $state(Date.now());
   // Transient cards interleaved with the timeline: each renders after the
   // item it was anchored to; a card whose anchor is gone after a history
@@ -84,7 +88,7 @@
     `${timelineItems.map((item) => timelineItemSignature(item)).join('|')}` +
       `#${transientCards.map((card) => card.id).join(',')}`,
   );
-  let sessionScrollKey = $derived(sessionState?.key ?? '');
+  let sessionScrollKey = $derived(sessionKey ?? '');
   let renderedSessionScrollKey = null;
   let handledFollowSessionRequestId = 0;
   // Owns follow/reading modes, per-Session viewports, programmatic writes,
@@ -467,10 +471,9 @@
                 {onNavigateToSubAgent}
                 {onCancelToolCall}
                 {onBackgroundToolCall}
-                backgroundToolCallIds={sessionState?.currentRun?.runId ===
-                  item.runId && sessionState.currentRun.status === 'running'
-                  ? (sessionState.currentRun.controls
-                      ?.background_tool_call_ids ?? [])
+                backgroundToolCallIds={currentRun?.runId === item.runId &&
+                currentRun.status === 'running'
+                  ? (currentRun.controls?.background_tool_call_ids ?? [])
                   : []}
                 {onCancelSubAgent}
               />
