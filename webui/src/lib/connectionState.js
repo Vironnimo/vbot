@@ -12,16 +12,30 @@ const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const WS_HEARTBEAT_TIMEOUT_MS = 60000;
 
+// The public state carries only what callers read; the socket, timers and
+// backoff bookkeeping stay private to this module, keyed by that state object.
+const transports = new WeakMap();
+
+function transportOf(state) {
+  let transport = transports.get(state);
+  if (!transport) {
+    transport = {
+      connection: null,
+      reconnectTimer: null,
+      reconnectAttempt: 0,
+      heartbeatTimer: null,
+      lastEventAt: 0,
+    };
+    transports.set(state, transport);
+  }
+  return transport;
+}
+
 export function createConnectionState() {
   return {
     status: CONNECTION_STATUS_RECONNECTING,
     lastSequence: 0,
     epoch: '',
-    _connection: null,
-    _reconnectTimer: null,
-    _reconnectAttempt: 0,
-    _heartbeatTimer: null,
-    _lastEventAt: 0,
   };
 }
 
@@ -36,7 +50,7 @@ export function connect(state, handlers = {}) {
       {
         onOpen: () => {
           state.status = CONNECTION_STATUS_CONNECTED;
-          state._reconnectAttempt = 0;
+          transportOf(state).reconnectAttempt = 0;
           handlers.onStatusChange?.();
           _armHeartbeatWatchdog(state);
         },
@@ -91,7 +105,7 @@ export function connect(state, handlers = {}) {
     return;
   }
 
-  state._connection = connection;
+  transportOf(state).connection = connection;
   _armHeartbeatWatchdog(state);
 }
 
@@ -101,29 +115,31 @@ export function disconnect(state) {
 }
 
 function _cleanup(state) {
-  if (state._reconnectTimer) {
-    clearTimeout(state._reconnectTimer);
-    state._reconnectTimer = null;
+  const transport = transportOf(state);
+  if (transport.reconnectTimer) {
+    clearTimeout(transport.reconnectTimer);
+    transport.reconnectTimer = null;
   }
   _clearHeartbeatWatchdog(state);
-  if (state._connection) {
-    state._connection.close();
-    state._connection = null;
+  if (transport.connection) {
+    transport.connection.close();
+    transport.connection = null;
   }
 }
 
 function _armHeartbeatWatchdog(state) {
   _clearHeartbeatWatchdog(state);
-  state._lastEventAt = Date.now();
-  state._heartbeatTimer = setTimeout(() => {
-    state._heartbeatTimer = null;
-    if (state._connection) {
+  const transport = transportOf(state);
+  transport.lastEventAt = Date.now();
+  transport.heartbeatTimer = setTimeout(() => {
+    transport.heartbeatTimer = null;
+    if (transport.connection) {
       try {
         // Close the underlying socket so subscribeServerEvents keeps its close
         // listener installed. Its wrapper close() intentionally removes that
         // listener for a user-requested disconnect, which is the wrong
         // lifecycle for a stalled connection that must reconnect.
-        state._connection.socket.close();
+        transport.connection.socket.close();
       } catch {
         // Close is best-effort; onClose will schedule reconnect.
       }
@@ -141,13 +157,14 @@ export function handleVisibilityChange(state) {
   if (state.status !== CONNECTION_STATUS_CONNECTED) {
     return;
   }
-  const elapsed = Date.now() - (state._lastEventAt || 0);
+  const transport = transportOf(state);
+  const elapsed = Date.now() - transport.lastEventAt;
   if (elapsed > WS_HEARTBEAT_TIMEOUT_MS / 2) {
-    if (state._connection) {
+    if (transport.connection) {
       try {
         // See _armHeartbeatWatchdog: this is a recovery close, not an
         // intentional disconnect, so onClose must schedule a reconnect.
-        state._connection.socket.close();
+        transport.connection.socket.close();
       } catch {
         // Best-effort; onClose will schedule reconnect.
       }
@@ -156,20 +173,22 @@ export function handleVisibilityChange(state) {
 }
 
 function _clearHeartbeatWatchdog(state) {
-  if (state._heartbeatTimer) {
-    clearTimeout(state._heartbeatTimer);
-    state._heartbeatTimer = null;
+  const transport = transportOf(state);
+  if (transport.heartbeatTimer) {
+    clearTimeout(transport.heartbeatTimer);
+    transport.heartbeatTimer = null;
   }
 }
 
 function _scheduleReconnect(state, handlers) {
-  const delay = reconnectBackoffDelay(state._reconnectAttempt, {
+  const transport = transportOf(state);
+  const delay = reconnectBackoffDelay(transport.reconnectAttempt, {
     initialDelayMs: RECONNECT_INITIAL_DELAY_MS,
     maxDelayMs: RECONNECT_MAX_DELAY_MS,
   });
-  state._reconnectAttempt += 1;
-  state._reconnectTimer = setTimeout(() => {
-    state._reconnectTimer = null;
+  transport.reconnectAttempt += 1;
+  transport.reconnectTimer = setTimeout(() => {
+    transport.reconnectTimer = null;
     connect(state, handlers);
   }, delay);
 }
