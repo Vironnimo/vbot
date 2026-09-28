@@ -188,9 +188,13 @@ MCP_MESSAGES = {
         "tell the user if it keeps failing."
     ),
     "tool_error": (
-        "The MCP {item} reported an error:\n{text}\n\nIt may have changed the application "
-        "before failing. Fix what the error describes, then call it again; an unchanged "
-        "repeat helps only when the error says the problem is temporary."
+        "The MCP {item} reported an error:\n{text}\n\nThe {item} could have changed the "
+        "application before it failed. If the error concerns this call, for example an "
+        "argument or an item it names, fix the call and send it again. If the error concerns "
+        "the setup, for example the application not running, a program not found or a "
+        "missing key or setting, tell the user what the error says. The user configures this "
+        "connection in Settings -> Extensions. Repeat the unchanged call only when the error "
+        "says the problem is temporary."
     ),
     "tool_changed": (
         "The MCP tool {tool} changed while this call was prepared, so it was not sent. Check "
