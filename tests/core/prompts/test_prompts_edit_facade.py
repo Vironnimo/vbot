@@ -160,6 +160,7 @@ def test_reset_block_agent_scope_falls_back_to_inherited(tmp_path: Path) -> None
         lambda manager: manager.reset_block("user:note"),
         lambda manager: manager.create_block("../etc/passwd"),
         lambda manager: manager.create_block("note"),
+        lambda manager: manager.create_block("Note"),
         lambda manager: manager.remove_block("core:tools"),
         lambda manager: manager.list_blocks({"type": "agent", "agent_id": "plain"}),
     ],
@@ -168,6 +169,7 @@ def test_reset_block_agent_scope_falls_back_to_inherited(tmp_path: Path) -> None
         "reset-user-block",
         "create-bad-slug",
         "create-collision",
+        "create-case-variant-collision",
         "remove-core-block",
         "custom-prompt-disabled-agent",
     ],
@@ -206,6 +208,33 @@ def test_set_layout_persists_order_keeps_user_blocks_and_prunes_inert_ids(
         ("core:tools", True),
     ]
     assert [entry["id"] for entry in result["layout"]] == [entry.id for entry in persisted]
+
+
+def test_layouts_holding_case_variant_custom_blocks_keep_every_entry(tmp_path: Path) -> None:
+    # Only creation rejects a case variant; a layout that already holds both spellings
+    # is never rewritten or pruned, and each entry can still be reordered and removed.
+    store = StubBlockStore(
+        layouts={
+            "default": [
+                LayoutEntry(id="user:Note", source="user"),
+                LayoutEntry(id="user:note", source="user"),
+            ]
+        }
+    )
+    manager = _facade_manager(tmp_path, store=store)
+
+    listed = [block["id"] for block in manager.list_blocks() if block["id"].startswith("user:")]
+    manager.set_layout(
+        [{"id": "user:note", "enabled": False}, {"id": "user:Note", "enabled": True}]
+    )
+
+    assert listed == ["user:Note", "user:note"]
+    assert [(entry.id, entry.enabled) for entry in store.read_layout("default")] == [
+        ("user:note", False),
+        ("user:Note", True),
+    ]
+    manager.remove_block("user:note")
+    assert [entry.id for entry in store.read_layout("default")] == ["user:Note"]
 
 
 def test_create_and_remove_manage_custom_user_blocks(tmp_path: Path) -> None:

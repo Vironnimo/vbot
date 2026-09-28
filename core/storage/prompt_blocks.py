@@ -15,7 +15,9 @@ maps to ``blocks/<namespace>/<slug>.md`` — the colon never reaches the disk
 (Windows-safe), the namespace is a fixed closed set, and the slug is validated
 with the canonical agent-id rule. This module is the single id-to-path writer;
 unsafe ids, slugs, and namespaces are rejected with :class:`StorageError`, never
-sanitized into a path.
+sanitized into a path. An override file belongs to the id whose slug spells its name
+exactly: on a case-insensitive filesystem a case variant such as ``notes`` for a
+stored ``Notes.md`` reads as absent, is refused on write, and never removes the file.
 
 This store carries **no** owner default text: a missing override file reads as
 ``None`` and the definition layer (Phase 1/3) supplies the default. A dynamic
@@ -58,6 +60,7 @@ from core.prompts import LayoutEntry
 from core.settings import is_valid_agent_id
 from core.storage.errors import StorageError
 from core.utils.atomic import atomic_write_text
+from core.utils.ids import has_id_entry
 
 # The block-id source prefixes that may appear on disk as a ``blocks/<namespace>``
 # subfolder. A fixed closed set (D3): an unknown namespace is invalid storage
@@ -299,7 +302,7 @@ class PromptBlockStore:
         """
 
         override_path = self.block_override_path(scope, block_id)
-        if not override_path.exists():
+        if not self._is_stored_exactly(override_path):
             return None
 
         try:
@@ -316,6 +319,11 @@ class PromptBlockStore:
         """
 
         target_path = self.block_override_path(scope, block_id)
+        if target_path.exists() and not self._is_stored_exactly(target_path):
+            raise StorageError(
+                f"Block override {target_path.name} would replace the file of a block whose "
+                "id differs only by case"
+            )
         self._ensure_directories()
         try:
             atomic_write_text(target_path, content, data_dir=self._data_dir)
@@ -333,6 +341,8 @@ class PromptBlockStore:
         """
 
         override_path = self.block_override_path(scope, block_id)
+        if not self._is_stored_exactly(override_path):
+            return False
         try:
             override_path.unlink()
         except FileNotFoundError:
@@ -342,6 +352,19 @@ class PromptBlockStore:
         return True
 
     # -- Validation & id-to-path mapping ------------------------------------
+
+    @staticmethod
+    def _is_stored_exactly(path: Path) -> bool:
+        """Whether a file is stored under exactly ``path``'s spelling.
+
+        A case-insensitive filesystem opens ``Notes.md`` for ``notes.md``; that file
+        belongs to the block spelled ``Notes``, so a case variant finds nothing.
+        """
+
+        try:
+            return path.exists() and has_id_entry(path.parent, path.name)
+        except OSError as exc:
+            raise StorageError(f"Cannot inspect block override {path}: {exc}") from exc
 
     @staticmethod
     def _split_block_id(block_id: str) -> tuple[str, str]:
