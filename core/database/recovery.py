@@ -226,12 +226,6 @@ def _quarantine_bundle(
     return QuarantineResult("success", path=batch)
 
 
-def quarantine_database(data_dir: Path, name: str) -> QuarantineResult:
-    """Move one canonical database bundle to quarantine for an explicit recovery."""
-    validate_database_name(name)
-    return _quarantine_bundle(Path(data_dir), name, canonical_database_path(data_dir, name))
-
-
 # ---------------------------------------------------------------------------
 # Incidents
 # ---------------------------------------------------------------------------
@@ -929,7 +923,6 @@ __all__ = [
     "auto_restore_if_needed",
     "incident_path",
     "pending_restore",
-    "quarantine_database",
     "quarantine_root",
     "read_incident",
     "read_incidents",
