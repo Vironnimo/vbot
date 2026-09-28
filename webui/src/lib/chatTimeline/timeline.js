@@ -1,6 +1,10 @@
 import { t } from '../i18n.js';
 import { stripTimelineSequence, normalizedIterationCount } from './model.js';
-import { historyTimelineItems } from './history.js';
+import {
+  createHistoryItemReuse,
+  finishHistoryItemReuse,
+  historyTimelineItems,
+} from './history.js';
 import { keepLiveRunIdentities, reconcileTimeline } from './reconciliation.js';
 import { liveTimelineItems } from './live.js';
 
@@ -63,6 +67,21 @@ function liveRunProjectionCache(sessionState) {
   return cache;
 }
 
+// Per-session reuse of History items between projections: every streaming
+// flush re-projects the timeline, and handing back the unchanged History rows
+// as the same objects keeps their rendering untouched, so a flush costs the
+// active Run instead of the whole Session.
+const historyItemReusesBySession = new WeakMap();
+
+function historyItemReuse(sessionState) {
+  let reuse = historyItemReusesBySession.get(sessionState);
+  if (!reuse) {
+    reuse = createHistoryItemReuse();
+    historyItemReusesBySession.set(sessionState, reuse);
+  }
+  return reuse;
+}
+
 function buildVisibleTimelineItems(sessionState, runEvents) {
   if (!sessionState) {
     return [];
@@ -73,12 +92,14 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
     liveRunProjectionCache(sessionState),
   );
   applyCurrentRunIterationCount(liveItems, sessionState.currentRun);
+  const reuse = historyItemReuse(sessionState);
   const reconciledItems = keepLiveRunIdentities(
     sessionState,
     runEvents.length > 0
-      ? reconcileTimeline(sessionState, liveItems, runEvents)
-      : historyTimelineItems(sessionState.messages),
+      ? reconcileTimeline(sessionState, liveItems, reuse)
+      : historyTimelineItems(sessionState.messages, reuse),
   );
+  finishHistoryItemReuse(reuse);
 
   const persistedMessageIds = new Set(
     reconciledItems

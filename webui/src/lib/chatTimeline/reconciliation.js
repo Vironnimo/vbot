@@ -39,7 +39,11 @@ export function pruneRunEventsPersistedInHistory(runEvents, runs, activeRunId) {
     : (runEvents ?? []);
 }
 
-export function reconcileTimeline(sessionState, liveItems) {
+export function reconcileTimeline(
+  sessionState,
+  liveItems,
+  historyItemReuse = null,
+) {
   const messages = sessionState.messages ?? [];
   const retired = new Set(
     liveItems
@@ -81,7 +85,7 @@ export function reconcileTimeline(sessionState, liveItems) {
   const emitted = new Set();
   let history = [];
   const flushHistory = () => {
-    timeline.push(...historyTimelineItems(history));
+    timeline.push(...historyTimelineItems(history, historyItemReuse));
     history = [];
   };
   for (const message of messages) {
@@ -105,7 +109,7 @@ export function reconcileTimeline(sessionState, liveItems) {
       !RUN_HISTORY_CONTENT_ROLES.has(message.role) &&
       message.role !== 'run_summary'
     ) {
-      timeline.push(...historyTimelineItems([message]));
+      timeline.push(...historyTimelineItems([message], historyItemReuse));
     }
   }
   flushHistory();
@@ -271,7 +275,12 @@ export function keepLiveRunIdentities(sessionState, items) {
     delete entry.live;
     if (usedIds.has(entry.identity.id)) return item;
     usedIds.add(entry.identity.id);
-    return withRunIdentity(item, entry.identity);
+    // An unchanged History item keeps its rebuilt object as well.
+    if (entry.rebuiltFrom !== item) {
+      entry.rebuiltFrom = item;
+      entry.rebuilt = withRunIdentity(item, entry.identity);
+    }
+    return entry.rebuilt;
   });
 }
 

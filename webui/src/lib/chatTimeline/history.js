@@ -22,11 +22,23 @@ import {
 } from './runChildren.js';
 import { isPlainObject } from '../values.js';
 
-export function historyTimelineItems(messages) {
+// A History item is a pure projection of the Messages it was built from.
+// `reuse` (see `createHistoryItemReuse`) hands back the object an earlier
+// projection built from the same Messages, so keyed rendering skips unchanged
+// rows instead of re-rendering the whole History on every streaming flush.
+export function historyTimelineItems(messages, reuse = null) {
   const timelineItems = [];
+  const push = (item, sources) =>
+    timelineItems.push(reuseHistoryItem(reuse, item, sources));
   let activeAssistantRun = null;
+  let activeRunSources = [];
   let previousVisibleRole = '';
   let activeRecordRunId;
+  const pushActiveRun = () => {
+    pushActiveAssistantRun(push, activeAssistantRun, activeRunSources);
+    activeAssistantRun = null;
+    activeRunSources = [];
+  };
 
   for (const message of messages ?? []) {
     // Missing terminal persistence must not merge two canonical executions.
@@ -37,33 +49,36 @@ export function historyTimelineItems(messages) {
       Object.hasOwn(message, 'history_run_id') &&
       activeRecordRunId !== message.history_run_id
     ) {
-      pushActiveAssistantRun(timelineItems, activeAssistantRun);
-      activeAssistantRun = null;
+      pushActiveRun();
       previousVisibleRole = '';
     }
     if (message?.role === 'compaction_checkpoint') {
-      pushActiveAssistantRun(timelineItems, activeAssistantRun);
-      activeAssistantRun = null;
-      timelineItems.push({
-        id: `compaction-${historyMessageKey(message)}`,
-        type: 'compaction_separator',
-        timestamp: message.timestamp,
-        message,
-        durationMs: message?.usage?.compaction_duration_ms ?? null,
-      });
+      pushActiveRun();
+      push(
+        {
+          id: `compaction-${historyMessageKey(message)}`,
+          type: 'compaction_separator',
+          timestamp: message.timestamp,
+          message,
+          durationMs: message?.usage?.compaction_duration_ms ?? null,
+        },
+        [message],
+      );
       previousVisibleRole = 'compaction_checkpoint';
       continue;
     }
 
     if (message?.role === 'agent_takeover') {
-      pushActiveAssistantRun(timelineItems, activeAssistantRun);
-      activeAssistantRun = null;
-      timelineItems.push({
-        id: `takeover-${historyMessageKey(message)}`,
-        type: 'takeover_separator',
-        timestamp: message.timestamp,
-        message,
-      });
+      pushActiveRun();
+      push(
+        {
+          id: `takeover-${historyMessageKey(message)}`,
+          type: 'takeover_separator',
+          timestamp: message.timestamp,
+          message,
+        },
+        [message],
+      );
       previousVisibleRole = 'agent_takeover';
       continue;
     }
@@ -71,17 +86,15 @@ export function historyTimelineItems(messages) {
     if (message?.role === 'run_summary') {
       if (activeAssistantRun) {
         appendHistoryRunSummary(activeAssistantRun, message);
-        pushActiveAssistantRun(timelineItems, activeAssistantRun);
-        activeAssistantRun = null;
+        activeRunSources.push(message);
+        pushActiveRun();
       } else if (
         message.status === 'cancelled' ||
         message.status === 'interrupted'
       ) {
         // A terminal run with no visible output has only its summary as a
         // durable trace. Render a bare status row instead of leaving a hole.
-        timelineItems.push(
-          terminalRunSummaryItem(message, timelineItems.length),
-        );
+        push(terminalRunSummaryItem(message, timelineItems.length), [message]);
       }
       previousVisibleRole = 'run_summary';
       continue;
@@ -94,13 +107,13 @@ export function historyTimelineItems(messages) {
       message.history_run_id === activeRecordRunId
     ) {
       appendSteeringMessage(activeAssistantRun, message);
+      activeRunSources.push(message);
       previousVisibleRole = 'user';
       continue;
     }
     if (message?.role === 'user') {
-      pushActiveAssistantRun(timelineItems, activeAssistantRun);
-      activeAssistantRun = null;
-      timelineItems.push(historyMessageItem(message));
+      pushActiveRun();
+      push(historyMessageItem(message), [message]);
       previousVisibleRole = 'user';
       continue;
     }
@@ -108,8 +121,7 @@ export function historyTimelineItems(messages) {
     if (message?.role === 'assistant') {
       const followsAssistant = previousVisibleRole === 'assistant';
       if (followsAssistant) {
-        pushActiveAssistantRun(timelineItems, activeAssistantRun);
-        activeAssistantRun = null;
+        pushActiveRun();
       }
 
       if (
@@ -130,29 +142,59 @@ export function historyTimelineItems(messages) {
 
       if (activeAssistantRun) {
         appendHistoryAssistantMessage(activeAssistantRun, message);
+        activeRunSources.push(message);
         previousVisibleRole = 'assistant';
         continue;
       }
 
-      timelineItems.push(historyMessageItem(message));
+      push(historyMessageItem(message), [message]);
       previousVisibleRole = 'assistant';
       continue;
     }
 
     if (message?.role === 'tool' && activeAssistantRun) {
       appendHistoryToolResult(activeAssistantRun, message);
+      activeRunSources.push(message);
       previousVisibleRole = 'tool';
       continue;
     }
 
-    pushActiveAssistantRun(timelineItems, activeAssistantRun);
-    activeAssistantRun = null;
-    timelineItems.push(historyMessageItem(message));
+    pushActiveRun();
+    push(historyMessageItem(message), [message]);
     previousVisibleRole = message?.role ?? '';
   }
 
-  pushActiveAssistantRun(timelineItems, activeAssistantRun);
+  pushActiveRun();
   return timelineItems;
+}
+
+// One projection generation per displayed Session: an item built from the
+// same Messages as in the previous generation is handed back unchanged.
+export function createHistoryItemReuse() {
+  return { previous: new Map(), next: new Map() };
+}
+
+export function finishHistoryItemReuse(reuse) {
+  reuse.previous = reuse.next;
+  reuse.next = new Map();
+}
+
+function reuseHistoryItem(reuse, item, sources) {
+  if (!reuse) {
+    return item;
+  }
+  const cached = reuse.previous.get(item.id);
+  const kept =
+    cached && sameMessages(cached.sources, sources) ? cached.item : item;
+  reuse.next.set(item.id, { sources, item: kept });
+  return kept;
+}
+
+function sameMessages(left, right) {
+  return (
+    left.length === right.length &&
+    left.every((message, index) => message === right[index])
+  );
 }
 
 export function appendHistoryAssistantMessage(assistantRun, message) {
@@ -265,12 +307,12 @@ function appendHistoryRunSummary(assistantRun, message) {
   }
 }
 
-function pushActiveAssistantRun(timelineItems, assistantRun) {
+function pushActiveAssistantRun(push, assistantRun, sources) {
   if (!assistantRun) {
     return;
   }
   syncAssistantRunCollections(assistantRun);
-  timelineItems.push(stripTimelineSequence(assistantRun));
+  push(stripTimelineSequence(assistantRun), sources);
 }
 
 function hasToolCalls(message) {

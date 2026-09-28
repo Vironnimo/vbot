@@ -463,6 +463,63 @@ describe('History and live Run projection', () => {
     expect(rebuilt.tools.map((tool) => tool.toolCallId)).toEqual(['call-late']);
   });
 
+  it('hands back unchanged History rows as the same objects while a Run streams', () => {
+    const state = session();
+    for (const event of finishedRunEvents('run-1', 'assistant-1')) {
+      appendRunEvent(state, event);
+    }
+    const persisted = (message, index) => ({
+      ...message,
+      history_run_id: 'run-1',
+      history_sequence: index + 1,
+    });
+    loadHistory(
+      state,
+      [
+        { id: 'user-run-1', role: 'user', content: 'Hi' },
+        { id: 'assistant-1', role: 'assistant', content: 'Done.' },
+      ].map(persisted),
+      { runs: [{ run_id: 'run-1', complete: true }] },
+    );
+    start(state, 'run-2');
+    append(state, 'run-2', 1, 'run_started', { status: 'running' });
+    append(state, 'run-2', 2, 'assistant_output_delta', {
+      content_delta: 'Stream',
+    });
+    const [user, finished, streaming] = render(state);
+    expect(finished.source).toBe('history');
+
+    append(state, 'run-2', 3, 'assistant_output_delta', {
+      content_delta: 'ing',
+    });
+    const flushed = render(state);
+    expect(flushed[0]).toBe(user);
+    expect(flushed[1]).toBe(finished);
+    expect(flushed[2]).not.toBe(streaming);
+
+    // A Run whose Messages change is rebuilt; its neighbours stay untouched.
+    loadHistory(
+      state,
+      [
+        persisted(
+          {
+            id: 'summary-1',
+            role: 'run_summary',
+            run_id: 'run-1',
+            status: 'completed',
+            iteration_count: 3,
+          },
+          2,
+        ),
+      ],
+      { incremental: true, runs: [{ run_id: 'run-1', complete: true }] },
+    );
+    const reloaded = render(state);
+    expect(reloaded[0]).toBe(user);
+    expect(reloaded[1]).not.toBe(finished);
+    expect(reloaded[1]).toMatchObject({ id: finished.id, iterationCount: 3 });
+  });
+
   it('inserts a retained live Run into History by its timestamp', () => {
     const state = session();
     loadHistory(state, [
