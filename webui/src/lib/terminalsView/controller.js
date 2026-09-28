@@ -687,36 +687,6 @@ export function createTerminalsController({
     stream.pendingResize = null;
   }
 
-  async function killTerminal(terminalId) {
-    if (
-      !terminalId ||
-      state.killing === terminalId ||
-      terminalIsFinished(
-        state.terminals.find((item) => item.terminal_id === terminalId),
-      )
-    ) {
-      return false;
-    }
-    state.killing = terminalId;
-    state.actionError = '';
-    try {
-      await api.killTerminal(terminalId);
-      await loadTerminals({ silent: true });
-      return true;
-    } catch (error) {
-      state.actionError = errorMessage(error);
-      return false;
-    } finally {
-      if (state.killing === terminalId) {
-        state.killing = '';
-      }
-    }
-  }
-
-  async function killSelected() {
-    return killTerminal(state.selectedTerminalId);
-  }
-
   // Strip closing Terminal Sessions out of a fresh server list and adjust
   // their groups so the sidebar does not show a phantom member while the
   // background stop and catalog removal are still settling.
@@ -750,9 +720,9 @@ export function createTerminalsController({
 
   // Remove one Terminal Session from the local projection: close its stream,
   // drop it from the list, keep the sidebar group count in sync, and move
-  // the selection to a surviving terminal. Used by forget and by the
-  // optimistic close path, where the tile must disappear before the
-  // server-side stop completes.
+  // the selection to a surviving terminal. Used by the optimistic close
+  // path, where the tile must disappear before the server-side stop
+  // completes.
   function removeTerminalFromState(terminalId) {
     const item = state.terminals.find(
       (terminal) => terminal.terminal_id === terminalId,
@@ -793,32 +763,6 @@ export function createTerminalsController({
     return item;
   }
 
-  async function forgetTerminal(terminalId) {
-    if (
-      !terminalId ||
-      state.forgetting === terminalId ||
-      !terminalIsFinished(
-        state.terminals.find((item) => item.terminal_id === terminalId),
-      )
-    ) {
-      return false;
-    }
-    state.forgetting = terminalId;
-    state.actionError = '';
-    try {
-      await api.forgetTerminal(terminalId);
-      removeTerminalFromState(terminalId);
-      return true;
-    } catch (error) {
-      state.actionError = errorMessage(error);
-      return false;
-    } finally {
-      if (state.forgetting === terminalId) {
-        state.forgetting = '';
-      }
-    }
-  }
-
   // Close one Terminal Session with a single click. The tile is removed from
   // the canvas immediately (optimistic); the server-side stop and catalog
   // removal continue in the background, so the UI never waits for the
@@ -856,10 +800,6 @@ export function createTerminalsController({
         state.closing = '';
       }
     }
-  }
-
-  async function forgetSelected() {
-    return forgetTerminal(state.selectedTerminalId);
   }
 
   function setServerUnavailable(unavailable) {
@@ -932,10 +872,6 @@ export function createTerminalsController({
     createGroup,
     deleteGroup,
     destroy,
-    forgetSelected,
-    forgetTerminal,
-    killSelected,
-    killTerminal,
     loadTerminals,
     queueInput,
     renameGroup,
