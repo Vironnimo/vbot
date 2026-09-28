@@ -10,6 +10,11 @@ from core.providers._ollama_constants import (
     _OLLAMA_TOOL_DONE_REASONS,
 )
 from core.providers.adapter import (
+    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
+    TERMINAL_OUTCOME_STOP,
+    TERMINAL_OUTCOME_TOOL_CALLS,
+    TERMINAL_OUTCOME_UNKNOWN,
+    TerminalOutcome,
     normalize_tool_call_candidates,
     project_tool_result_content_fallbacks,
     tool_result_content_blocks,
@@ -188,14 +193,18 @@ def _extract_ollama_usage(response: Mapping[str, Any]) -> dict[str, Any] | None:
     return usage or None
 
 
-def _normalize_ollama_done_reason(done_reason: Any, *, has_tool_calls: bool) -> str:
+def _normalize_ollama_done_reason(done_reason: Any, *, has_tool_calls: bool) -> TerminalOutcome:
     if not isinstance(done_reason, str):
-        return "unknown"
+        return TERMINAL_OUTCOME_UNKNOWN
     if done_reason in _OLLAMA_TOOL_DONE_REASONS:
-        return "tool_calls"
+        return TERMINAL_OUTCOME_TOOL_CALLS
     if done_reason == "stop":
-        return "tool_calls" if has_tool_calls else "stop"
-    return "unknown"
+        return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
+    if done_reason == "length":
+        # Ollama's value when ``num_predict`` or the loaded context window ends
+        # the turn; it never authorizes dispatch of a Tool Call cut off with it.
+        return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+    return TERMINAL_OUTCOME_UNKNOWN
 
 
 def _build_error_detail(status_code: int, response_body: str = "") -> str:

@@ -409,6 +409,8 @@ async def test_streamed_tool_call_arrives_whole_with_tool_finish(
         ("stop", False, "stop"),
         pytest.param("stop", True, "tool_calls", id="stop-with-calls"),
         ("tool_calls", True, "tool_calls"),
+        pytest.param("length", False, "output_truncated", id="length-is-output-truncation"),
+        pytest.param("length", True, "output_truncated", id="length-never-authorizes-dispatch"),
         pytest.param("unrecognized", True, "unknown", id="unrecognized-cannot-authorize-dispatch"),
         pytest.param(None, True, "unknown", id="missing-cannot-authorize-dispatch"),
     ],
