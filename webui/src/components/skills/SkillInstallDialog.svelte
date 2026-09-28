@@ -267,7 +267,9 @@
       {/if}
       {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
       {#if busy}<Banner variant="info" role="status"
-          >{t(`skills.install.${busy}`)}</Banner
+          >{busy === 'installing'
+            ? t('skills.install.installing')
+            : t('skills.install.checking')}</Banner
         >{/if}
       {#if preview}
         <section

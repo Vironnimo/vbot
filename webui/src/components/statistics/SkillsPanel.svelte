@@ -25,9 +25,7 @@
   function originLabel(origin) {
     const { scope, detail } = parseOrigin(origin);
     if (detail !== null) {
-      return tOr(`statistics.skills.origin.${scope}`, `${scope}: ${detail}`, {
-        detail,
-      });
+      return t(`statistics.skills.scopedOrigin.${scope}`, { detail });
     }
     return tOr(`statistics.skills.origin.${scope}`, scope);
   }

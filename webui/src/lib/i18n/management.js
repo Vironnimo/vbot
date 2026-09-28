@@ -11,7 +11,6 @@ export default Object.freeze({
   'toolAccess.explicitPermission': 'Explicit permission required',
   'agents.modelOptions': 'Temperature & fallback models',
   'agents.storageDetails': 'Workspace & advanced',
-  'agents.identityStorage': 'Identity & storage',
   'projects.repositorySection': 'Repository',
   'projects.defaultsSection': 'Agent defaults',
   'projects.defaultsSummary':
@@ -66,7 +65,6 @@ export default Object.freeze({
   'skills.projectLabel': 'Project: {name}',
   'skills.sourceLabel': 'Source: {name}',
   'skills.actionsFor': 'Actions for {name}',
-  'skills.shareAction': 'Share',
   'skills.shareNamed': 'Share {name}',
   'skills.deleteNamed': 'Delete {name}',
   'skills.enabled': 'Enabled',
@@ -107,7 +105,6 @@ export default Object.freeze({
   'skills.nextPage': 'Next page',
   'skills.page': 'Page {page} of {pages}',
   'skills.backToList': 'Back to list',
-  'skills.ownedSkill': 'Agent skill',
   'skills.editInstructions': 'Edit instructions',
   'skills.sharing': 'Sharing',
   'skills.readOnly': 'Read only',
@@ -130,13 +127,8 @@ export default Object.freeze({
   'skills.contentView': 'Skill content view',
   'skills.copyContent': 'Copy original text',
   'skills.loadingContent': 'Loading instructions…',
-  'skills.availabilityAndRemoval': 'Availability & removal',
   'skills.disableHelp':
     'This is a master switch. It disables every skill with this name across all Agents and sources, including private copies. Instructions are kept.',
-  'skills.enableEverywhere': 'Enable everywhere',
-  'skills.disableEverywhere': 'Disable everywhere',
-  'skills.deleteHelp':
-    'Permanently remove this original and its bundled files. Recipients also lose access.',
   'skills.deletePackageConfirm':
     'Permanently delete skill "{name}" and its package files? Any Agents sharing this original will lose access.',
   'skills.createGlobalHelp':
@@ -179,17 +171,12 @@ export default Object.freeze({
   'agents.form.workspace': 'Workspace',
   'agents.form.temperature': 'Temperature',
   'agents.form.thinkingEffort': 'Thinking effort',
-  'agents.form.allowedTools': 'Allowed tools',
   'agents.form.toolAccess': 'Tool access',
   'agents.form.toolAccessHelp':
     'Choose which Tools this Agent may use. Automatic Tools become available when their condition is met; permission does not guarantee current availability.',
   'agents.form.allowedSkills': 'Allowed skills',
   'agents.form.customSystemPrompt': 'Custom system prompt',
-  'agents.form.customPromptHelp':
-    'Gives this agent its own editable copy of the system prompt. Edit it in the System Prompt tab by selecting this agent as the scope. Turning this off keeps the customized blocks but stops using them.',
   'agents.form.memoryPromptMode': 'Memory',
-  'agents.form.memoryPromptModeHelp':
-    'Which memory notes are shown to the model: the agent’s own notes (MEMORY.md), or additionally what it knows about you (USER.md).',
   'agents.form.memoryModeHelp':
     'Which memory files are pinned into the System Prompt. Tool access is independent: blocking the memory Tool keeps these notes visible but makes Memory read-only.',
   'agents.form.fallbackModelsHelp':
@@ -247,7 +234,6 @@ export default Object.freeze({
   'toolAccess.readiness.unregistered': 'Not registered right now',
   'agents.form.idHelp':
     'Used to address this Agent. Use Change ID to rename it and update its references.',
-  'agents.form.modelPlaceholder': 'Default (no model selected)',
   'agents.form.fallbackModelPlaceholder': 'None',
   'agents.form.modelUnavailableOption': 'Unavailable / custom: {model}',
   'agents.form.modelUnavailableConnectionOption':
@@ -303,8 +289,6 @@ export default Object.freeze({
   'agents.detail.idValue': 'id: {id}',
   'agents.detail.identity': 'Identity',
   'agents.detail.model': 'Model',
-  'agents.detail.systemPrompt': 'System Prompt',
-  'agents.detail.memory': 'Memory',
   'agents.memory.manage': 'Manage Memory entries',
   'agents.memory.hide': 'Hide Memory entries',
   'agents.memory.loading': 'Loading Memory entries…',
@@ -320,8 +304,6 @@ export default Object.freeze({
   'agents.memory.countOne': '1 entry',
   'agents.memory.countMany': '{count} entries',
   'agents.memory.emptyTitle': 'No memories',
-  'agents.memory.emptyDescription':
-    'This category has no saved Memory entries.',
   'agents.memory.addPlaceholder': 'Add a durable fact…',
   'agents.memory.addLabel': 'New {category} entry',
   'agents.memory.add': 'Add Memory',
@@ -335,24 +317,16 @@ export default Object.freeze({
   'agents.memory.deleteConfirmBody':
     'This permanently removes the selected Memory entry from the Agent’s Workspace.',
   'agents.memory.deleteConfirmAction': 'Delete Memory',
-  'agents.detail.access': 'Access',
-  'agents.detail.metadata': 'Metadata',
   'agents.detail.sessionId': 'Current session ID',
   'agents.detail.created': 'Created',
   'agents.detail.updated': 'Updated',
   'agents.emptyCreateHint': 'Create an agent to begin configuring chat access.',
-  'agents.access.allOn': 'all on',
-  'agents.access.allOff': 'all off',
-  'agents.access.toggleTool': 'Toggle tool {name}',
   'agents.access.toggleSkill': 'Toggle skill {name}',
-  'agents.access.descriptionLabel': '{description}',
   'agents.access.noSkills': 'No loadable skills are available.',
   'agents.access.skillWarnings': 'Warnings',
   'agents.access.invalidSkillsTitle': 'Unavailable skills',
   'agents.access.unknownSkillName': 'Unknown skill',
   'agents.access.notLoadable': 'not loadable',
-
-  // Shared toggle-chip allow-list (tools/skills) — Agent editor + Projects.
   'agents.access.projectTargetsLoadError':
     'Some Project Agent targets could not be loaded.',
   'agents.access.unavailableAgentTarget':
@@ -369,10 +343,6 @@ export default Object.freeze({
   'access.noMatches': 'No matches.',
   'access.toggle': 'Toggle {name}',
   'access.lockedAuto': 'auto',
-  'agents.tools.memoryFollowsActive':
-    'Follows the Memory setting — currently available.',
-  'agents.tools.memoryFollowsOff':
-    'Follows the Memory setting — currently unavailable (Memory is off).',
   'agents.tools.notReadyBadge': 'Currently unavailable',
   'agents.tools.openExtensions': 'Open Extensions',
   'agents.confirmDisableCustomPrompt.title': 'Disable custom system prompt?',
@@ -380,8 +350,6 @@ export default Object.freeze({
     'This agent has customized prompt blocks. They will be kept, but the agent stops using them and follows the Default scope again. Re-enabling brings them back.',
   'agents.confirmDisableCustomPrompt.confirm': 'Disable custom prompt',
   'projects.title': 'Projects',
-  'projects.subtitle':
-    'Add a repository as a project to discover its team and chat with project agents. Adding a project also scans its repo for issues.',
   'projects.loading': 'Loading projects…',
   'projects.loadError': 'Projects could not be loaded.',
   'projects.emptyTitle': 'No projects yet',
@@ -412,7 +380,6 @@ export default Object.freeze({
   'projects.add.claudeMdSuggestionLabel': 'Load CLAUDE.md as a project file',
   'projects.format.opencode': 'OpenCode',
   'projects.format.claude': 'Claude Code',
-  'projects.list.title': 'Your projects',
   'projects.manage.displayName': 'Display name',
   'projects.manage.sourceFormat': 'Source format',
   'projects.manage.sourceFormatHelp':
@@ -429,7 +396,6 @@ export default Object.freeze({
   'projects.manage.defaultAgentEmpty': 'No project default',
   'projects.manage.defaultAgentUnavailable': '{agentId} (not in team)',
   'projects.manage.defaultModel': 'Default model',
-  'projects.manage.defaultModelEmpty': 'No project default',
   'projects.manage.defaultTemperature': 'Default temperature',
   'projects.manage.defaultThinkingEffort': 'Default thinking effort',
   'projects.manage.noThinkingEffort': 'No project default',
@@ -448,7 +414,6 @@ export default Object.freeze({
     'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
   'projects.manage.resetDefaults': 'Reset to defaults',
   'projects.manage.toggleTool': 'Toggle tool {name}',
-  'projects.manage.toolsEmpty': 'No tools available',
   'projects.manage.unavailableToolHint':
     'This stored Tool Whitelist entry is not currently registered for Projects. Turn it off to remove the permission, or leave it on so the permission returns with the Tool.',
   'projects.manage.allowedSkillsHelp':
@@ -465,8 +430,6 @@ export default Object.freeze({
   'projects.manage.skillsNoMatch': 'No matching skills.',
   'projects.manage.toggleSkill': 'Toggle skill {name}',
   'projects.manage.skillsEmpty': 'No skills available',
-  'projects.manage.save': 'Save changes',
-  'projects.manage.saving': 'Saving…',
   'projects.manage.saveError': 'Project changes could not be saved.',
   'projects.manage.saveSuccess': 'Project updated.',
   'projects.remove': 'Remove',
@@ -483,15 +446,11 @@ export default Object.freeze({
     'Project removed. {count} Agents were reset; identity files {copyState}.',
   'projects.remove.filesCopied': 'were copied',
   'projects.remove.filesNotCopied': 'were not copied',
-  'projects.remove.confirm':
-    'Remove project {name}? The project is archived and can be restored; the repository on disk is never touched.',
   'projects.remove.error': 'Project could not be removed.',
-  'projects.remove.success': 'Project removed.',
   'projects.remove.busy':
     'This project has an active or queued run and cannot be removed right now.',
   'projects.remove.inUse':
     'A cron job points at one of this project’s agents, so it cannot be removed. Remove or retarget the cron job first.',
-  'projects.detail.sectionSettings': 'Project settings',
   'projects.detail.sectionAutoLoad': 'Auto-load files',
   'projects.detail.autoLoadInfo':
     'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
@@ -501,12 +460,10 @@ export default Object.freeze({
   'projects.detail.sectionTools': 'Tools',
   'projects.detail.sectionSkills': 'Skills',
   'projects.detail.empty': 'Select a project to view and edit it.',
-  'projects.team.title': 'Team',
   'projects.repository.rescan': 'Rescan repository',
   'projects.repository.rescanning': 'Scanning…',
   'projects.team.empty':
     'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
-  'projects.team.noModel': 'No model',
   'projects.team.effectiveModel': 'Model',
   'projects.team.effectiveTemperature': 'Temperature',
   'projects.team.effectiveThinkingEffort': 'Thinking effort',
@@ -518,7 +475,6 @@ export default Object.freeze({
   'projects.team.sourceProjectDefault': 'project default',
   'projects.team.sourceGlobalDefault': 'global default',
   'projects.team.overridesTitle': 'Overrides',
-  'projects.team.setOverride': 'Set override',
   'projects.team.clearOverride': 'Clear override',
   'projects.team.overrideSaved': 'Override saved.',
   'projects.team.overrideCleared': 'Override cleared.',
@@ -536,13 +492,7 @@ export default Object.freeze({
     'These blocks apply only while the repository policy is active. A vBot Tool override replaces them.',
   'projects.team.overrideModelPlaceholder': 'No override',
   'projects.team.overrideTemperaturePlaceholder': 'e.g. 0.7',
-  'projects.team.deniedTools': 'Denied by the agent file: {tools}',
-  'projects.team.deniedToolsNone':
-    'No tool denials — follows the project tool whitelist.',
-  'projects.team.toolsFollowWhitelist':
-    'All other tools follow the project tool whitelist.',
   'projects.team.sourceFile': 'Source: {path} ({format})',
-  'projects.team.toggleExpand': 'Toggle {agent} details',
   'projects.team.agentTargetsUnavailable':
     'Sub-Agent tools are not available to this Agent.',
   'projects.team.agentTargetsSelf':
@@ -554,7 +504,6 @@ export default Object.freeze({
   'projects.team.customizeCompaction': 'Customize for this agent',
   'projects.team.agentTargetsRepoOwned':
     'Defined by the repository Agent config and read-only in vBot. Even full access stays inside this Project Team.',
-  'projects.report.title': 'Scan report',
   'projects.report.findingCount': '{count} issues found',
   'projects.report.showDetails': 'Show details',
   'projects.report.hideDetails': 'Hide details',
@@ -712,53 +661,20 @@ export default Object.freeze({
     'Choose the common starting point. Individual Agents can override it.',
   'agents.shared.compactionDescription':
     'The inherited policy for keeping long conversations within the Model context.',
-  'management.sections': 'Detail sections',
-  'management.overview': 'Overview',
-  'management.behavior': 'Behavior',
-  'management.access': 'Tools & Skills',
-  'management.details': 'Details',
-  'management.context': 'Context',
-  'management.savedAutomatically': 'Changes save automatically',
-  'skills.eyebrow': 'Configure',
   'skills.title': 'Skills',
-  'skills.subtitle':
-    'Every skill from every source — manage availability, sharing, and editing.',
-  'skills.refresh': 'Refresh',
   'skills.loadError': 'Skills could not be loaded.',
   'skills.loading': 'Loading skills…',
-  'skills.directoriesTitle': 'Scan directories',
-  'skills.managerTitle': 'Installed skills',
   'skills.createScopeLabel': 'Create in',
-  'skills.empty': 'No skills found.{suffix}',
-  'skills.searchPlaceholder': 'Search skills…',
-  'skills.viewModeLabel': 'Group by',
-  'skills.viewBySource': 'By source',
-  'skills.viewByAgent': 'By agent',
   'skills.noDescription': 'No description',
   'skills.editTitle': 'Edit {name}',
   'skills.staleShared':
     '{count} shared-skill entries point at a missing agent or skill and are ignored.',
-  'skills.group.bundled': 'Bundled',
-  'skills.group.global': 'Global',
-  'skills.group.project': "Project '{name}'",
-  'skills.group.private': '{name} (private)',
-  'skills.group.shared': 'Shared by {name}',
   'skills.status.available': 'Available',
   'skills.status.unavailable': 'Unavailable',
   'skills.status.disabled': 'Disabled',
   'skills.status.invalid': 'Invalid',
-  'skills.showDetails': 'Details',
-  'skills.hideDetails': 'Hide details',
-  'skills.enable': 'Enable',
-  'skills.disable': 'Disable',
-  'skills.share': 'Share',
-  'skills.unshare': 'Unshare',
-  'skills.manageShare': 'Manage',
   'skills.sharedBadge': 'Shared',
-  'skills.sharedWith': 'with {names}',
   'skills.shareTitle': 'Share {name}',
-  'skills.shareDescription':
-    'Select which agents should have access to this skill. They can activate and co-maintain it.',
   'skills.saveShare': 'Save',
   'skills.noOtherAgents': 'No other identity agents exist to share with.',
   'skills.toggleReceiver': 'Share with {name}',
@@ -766,9 +682,7 @@ export default Object.freeze({
   'skills.disabledToast': 'Skill “{name}” disabled everywhere.',
   'skills.toggleError': 'The skill could not be changed.',
   'skills.sharedToast': 'Skill shared with {count} agents.',
-  'skills.unsharedToast': 'Sharing stopped.',
   'skills.shareError': 'Sharing could not be changed.',
-  'skills.editLoadError': 'Skill content could not be loaded.',
   'agents.shared.sections': 'Default settings sections',
   'agents.rename.action': 'Change ID',
   'agents.rename.invalidId':
