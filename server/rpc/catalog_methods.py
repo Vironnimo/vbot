@@ -170,10 +170,7 @@ def _agent_skill_suggestions(
 
 
 def _sorted_filtered_skills(skill_registry: Any, allowed_skills: list[str]) -> list[Any]:
-    filter_allowed = getattr(skill_registry, "filter_allowed", None)
-    if callable(filter_allowed):
-        return sorted(filter_allowed(allowed_skills), key=lambda skill: skill.name)
-    return sorted(skill_registry.list_all(), key=lambda skill: skill.name)
+    return sorted(skill_registry.filter_allowed(allowed_skills), key=lambda skill: skill.name)
 
 
 async def _list_files(state: Any, params: JsonObject) -> JsonObject:

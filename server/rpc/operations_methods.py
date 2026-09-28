@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -52,24 +51,6 @@ async def _file_preview_revision(state: Any, params: JsonObject) -> JsonObject:
         return {"revision": revision}
     except ValueError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
-
-
-async def _run_prompt_method(
-    manager: Any,
-    async_name: str,
-    sync_name: str,
-    *arguments: Any,
-    **keyword_arguments: Any,
-) -> Any:
-    """Prefer Prompt's async facade while keeping lightweight sync substitutes valid."""
-    async_method = getattr(manager, async_name, None)
-    if callable(async_method) and inspect.iscoroutinefunction(async_method):
-        return await async_method(*arguments, **keyword_arguments)
-    return await _PROMPT_RPC_WORKERS.run(
-        getattr(manager, sync_name),
-        *arguments,
-        **keyword_arguments,
-    )
 
 
 async def _list_logs(state: Any, params: JsonObject) -> JsonObject:
@@ -310,12 +291,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     try:
         prompt_manager = state.runtime.system_prompts
         working_project_context = (
-            await _run_prompt_method(
-                prompt_manager,
-                "render_working_project_context_async",
-                "render_working_project_context",
-                project_context,
-            )
+            await prompt_manager.render_working_project_context_async(project_context)
             if project_id is None and prompt_project is not None and project_context is not None
             else None
         )
@@ -324,10 +300,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
             skill_project_id,
             identity_agent_id,
         )
-        text = await _run_prompt_method(
-            prompt_manager,
-            "build_system_prompt_async",
-            "build_system_prompt",
+        text = await prompt_manager.build_system_prompt_async(
             agent,
             scope=prompt_scope,
             agent_body=runtime_agent_body(agent),
@@ -341,12 +314,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     # The provider tool-definition array occupies model context alongside the
     # prompt text but is not part of it — report it separately so the preview
     # reflects the request's real prompt-side footprint.
-    tool_definitions = await _run_prompt_method(
-        prompt_manager,
-        "provider_tool_definitions_async",
-        "provider_tool_definitions",
-        agent,
-    )
+    tool_definitions = await prompt_manager.provider_tool_definitions_async(agent)
 
     def estimate_preview() -> tuple[int, bool, int, list[JsonObject]]:
         token_count, estimated = estimate_tokens(text)

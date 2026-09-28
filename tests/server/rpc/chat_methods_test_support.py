@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
@@ -150,6 +151,7 @@ def chat_state(
         chat_runs=ChatRunManager(),
         command_dispatcher=CommandDispatcher(ChatRunManager()),
         event_bus=ServerEventBus(),
+        run_event_bridge_run_ids=OrderedDict(),
         runtime=SimpleNamespace(chat_sessions=_InlineSessionPool(), **runtime),
     )
 

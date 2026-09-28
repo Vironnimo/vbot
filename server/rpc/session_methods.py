@@ -304,16 +304,10 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     )
 
     def load_sessions() -> tuple[list[JsonObject], SessionListCursor | None, int]:
-        resolver = getattr(state.runtime, "agent_resolver", None)
-        agents = getattr(state.runtime, "agents", None)
+        resolver = state.runtime.agent_resolver
         agent_policies: dict[tuple[str | None, str], Any] = {}
         for _address, agent_id, project_id in parsed_addresses:
-            if resolver is not None:
-                agent = resolver.resolve_agent(project_id, agent_id)
-            elif agents is not None:
-                agent = agents.get(agent_id)
-            else:
-                agent = None
+            agent = resolver.resolve_agent(project_id, agent_id)
             agent_policies[(project_id, agent_id)] = getattr(agent, "compaction_policy", None)
         load_global_policy = _global_compaction_policy_loader(state)
         page = state.runtime.chat_sessions.list_summaries_page(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import OrderedDict
 from collections.abc import Collection, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -545,6 +546,7 @@ def make_state(
             storage=cast(Any, runtime.storage),
         ),
         event_bus=ServerEventBus(),
+        run_event_bridge_run_ids=OrderedDict(),
         agent_delete_lock=asyncio.Lock(),
         server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
     )

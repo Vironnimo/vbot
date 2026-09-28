@@ -128,10 +128,7 @@ def _list_connections(state: Any, params: JsonObject) -> JsonObject:
 def custom_provider_items(runtime: Any) -> list[JsonObject]:
     """Return secret-free Custom Provider records with live runtime state."""
 
-    loader = getattr(runtime.storage, "load_custom_providers_settings", None)
-    if not callable(loader):
-        return []
-    providers = loader()
+    providers = runtime.storage.load_custom_providers_settings()
     items: list[JsonObject] = []
     for provider_id, provider in sorted(providers.items()):
         connection_id = f"{provider_id}:default"

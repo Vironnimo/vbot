@@ -22,8 +22,6 @@ _FILE_URL_PATTERN = re.compile(r"/api/files/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 
 def projected_file_urls(value: Any, delivery: Any) -> list[str]:
     """List verified file capabilities in an already-sanitized public payload."""
-    if delivery is None:
-        return []
     urls: list[str] = []
     seen: set[str] = set()
 

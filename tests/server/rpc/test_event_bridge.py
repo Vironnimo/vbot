@@ -431,7 +431,10 @@ async def test_run_event_bridge_observes_publish_failures(
         warnings.append((message, kwargs.get("exc_info") is True))
 
     monkeypatch.setattr(event_bridge._LOGGER, "warning", record_warning)
-    event_bridge._bridge_run_to_event_bus(SimpleNamespace(event_bus=FailingEventBus()), run)
+    event_bridge._bridge_run_to_event_bus(
+        SimpleNamespace(event_bus=FailingEventBus(), run_event_bridge_run_ids=OrderedDict()),
+        run,
+    )
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 

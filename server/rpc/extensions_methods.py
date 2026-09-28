@@ -190,10 +190,7 @@ def _command_is_registered(
     extension_name: str,
     command_name: str,
 ) -> bool:
-    dispatcher = getattr(state, "command_dispatcher", None)
-    if dispatcher is None:
-        dispatcher = getattr(state.runtime, "command_dispatcher", None)
-    owner = getattr(dispatcher, "extension_command_owner", None)
+    owner = getattr(state.command_dispatcher, "extension_command_owner", None)
     return callable(owner) and owner(command_name) == extension_name
 
 
