@@ -18,11 +18,15 @@ from tests.resources.extensions.mcp.mcp_test_support import (
 )
 
 TARGET = "<target>"
+# The target from search without its kind, such as inspect:<fingerprint>.
+UNKINDED = "<target without kind>"
 
 
 def _with_target(value, target):
     if value == TARGET:
         return target
+    if value == UNKINDED:
+        return target.split(":", 1)[1]
     if isinstance(value, dict):
         return {key: _with_target(item, target) for key, item in value.items()}
     return value
@@ -39,6 +43,7 @@ def _with_target(value, target):
         {"action": "call", "target": "Inspect", "parameters": {"value": "sentinel"}},
         {"call": {"target": TARGET, "arguments": {"value": "sentinel"}}},
         {"Action": "call", "Target": TARGET, "Arguments": {"value": "sentinel"}},
+        {"action": "call", "target": UNKINDED, "arguments": {"value": "sentinel"}},
         # Fields that request nothing for a call are dropped.
         {"action": "call", "target": TARGET, "arguments": {"value": "sentinel"}, "query": ""},
         {"action": "call", "target": TARGET, "arguments": {"value": "sentinel"}, "offset": 0},
@@ -52,6 +57,7 @@ async def test_call_dialects_reach_the_exact_remote_tool(context_service, host, 
 
     assert result["ok"], result
     assert result["data"]["content"] == "sentinel"
+    assert "note" not in result["data"]
     assert calls == [("tools/call", {"name": "inspect", "arguments": {"value": "sentinel"}})]
 
 
@@ -226,17 +232,77 @@ async def test_changed_definition_is_not_substituted_for_a_call(context_service,
     )
     describe = await dispatch(registry, host, {"action": "describe", "target": old})
 
-    assert call["error"]["code"] == "mcp_target_changed"
-    assert current in call["error"]["message"]
-    assert (
-        json.dumps({"action": "describe", "target": current}, separators=(",", ":"))
-        in (call["error"]["message"])
+    describe_current = json.dumps({"action": "describe", "target": current}, separators=(",", ":"))
+    assert model_text(call) == (
+        "Error (mcp_target_changed): tool inspect changed since that target was returned, so "
+        f"it was not called. Its current target is {current}; check its arguments with "
+        f"{describe_current}, then call the current target."
     )
     assert describe["data"]["target"] == current
     assert (
         describe["data"]["note"] == f"{old} named an earlier definition; this is the current one."
     )
     assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action,inputs",
+    [("call", {"value": "sentinel"}), ("call", {"value": 7, "vlaue": "y"}), ("describe", None)],
+)
+async def test_a_fingerprint_this_connection_never_showed_reads_as_the_name(
+    context_service, host, action, inputs
+):
+    service, registry, runner, calls = context_service
+    current = await tool_target(registry, host)
+    # Invented, or from before a restart: this connection never showed it.
+    unknown = "tool:inspect:" + "0" * 24
+    arguments = {"action": action, "target": unknown}
+    if inputs is not None:
+        arguments["arguments"] = inputs
+
+    result = await dispatch(registry, host, arguments)
+
+    note = (
+        f"Used the current target {current}. The part after the name in {unknown} matches no "
+        "definition this connection knows, so it was ignored."
+    )
+    if action == "describe":
+        assert result["data"]["target"] == current
+        assert result["data"]["note"] == note
+    elif "vlaue" in inputs:
+        assert model_text(result) == (
+            "Error (mcp_invalid_arguments): tool inspect was not called: /arguments has fields "
+            "the target does not take: vlaue. It takes value (string, required). Correct the "
+            f'arguments and call again; {{"action":"describe","target":"{current}"}} shows the '
+            f"full schema. {note}"
+        )
+        assert calls == []
+    else:
+        assert model_text(result).startswith(f"note: {note}\n")
+        assert result["data"]["content"] == "sentinel"
+        assert calls == [("tools/call", {"name": "inspect", "arguments": {"value": "sentinel"}})]
+
+
+@pytest.mark.asyncio
+async def test_the_target_note_leaves_a_remote_note_field_intact(
+    context_service, host, monkeypatch
+):
+    service, registry, runner, calls = context_service
+    current = await tool_target(registry, host)
+
+    async def answer(operation, arguments, invocation_context=None):
+        return {"content": [{"type": "text", "text": "done"}], "note": {"remote": True}}
+
+    monkeypatch.setattr(runner, "invoke", answer)
+    result = await dispatch(
+        registry,
+        host,
+        {"action": "call", "target": "tool:inspect:" + "0" * 24, "arguments": {"value": "x"}},
+    )
+
+    assert result["data"]["note"] == {"remote": True}
+    assert result["data"]["target_note"].startswith(f"Used the current target {current}.")
 
 
 @pytest.mark.asyncio

@@ -146,6 +146,10 @@ MCP_MESSAGES = {
         "target is {target}; check its arguments with {describe}, then call the current target."
     ),
     "target_updated": "{previous} named an earlier definition; this is the current one.",
+    "target_unrecognized": (
+        "Used the current target {current}. The part after the name in {sent} matches no "
+        "definition this connection knows, so it was ignored."
+    ),
     "access_denied": (
         "This Agent's Tool settings do not allow this MCP tool, so nothing was run. Tell the "
         "user if it is needed."
@@ -199,6 +203,9 @@ SEARCH_SUMMARY_CHARACTERS = 160
 GUIDANCE_PREVIEW_CHARACTERS = 1200
 
 TARGET_FINGERPRINT_LENGTH = 24
+
+# Targets each connection has shown, kept to tell a stale target from an invented one.
+PUBLISHED_TARGETS_PER_CONNECTION = 2048
 
 MAX_FINISHED_JOBS = 128
 
