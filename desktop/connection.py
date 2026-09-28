@@ -34,6 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 
 from desktop.main import (
@@ -45,6 +46,7 @@ from desktop.main import (
     PROBE_WEBUI_UNAVAILABLE,
     DesktopProbeResult,
     DesktopTarget,
+    SessionLink,
     build_target_url,
     probe_target,
     validate_host,
@@ -63,6 +65,9 @@ logger = logging.getLogger("vbot.desktop.connection")
 _DEFAULT_HOST_PLACEHOLDER = "127.0.0.1"
 _DEFAULT_PORT_PLACEHOLDER = 8420
 DESKTOP_SESSION_QUERY_PARAM = "desktop_session"
+# The WebUI opens this Session once it has loaded and removes both parameters.
+OPEN_AGENT_QUERY_PARAM = "open_agent"
+OPEN_SESSION_QUERY_PARAM = "open_session"
 
 
 class WindowProtocol(Protocol):
@@ -340,20 +345,32 @@ class ConnectionController:
 
     # -- Navigation ----------------------------------------------------------
 
-    def connect(self, host: str, port: int, label: str | None = None) -> DesktopProbeResult:
+    def connect(
+        self,
+        host: str,
+        port: int,
+        label: str | None = None,
+        *,
+        open_session: SessionLink | None = None,
+    ) -> DesktopProbeResult:
         """Probe a target and navigate the window to it, or to the error screen.
 
         On a successful probe the host/port are remembered (carrying ``label``)
         and marked last-used, and the window loads the WebUI with the
-        ``accessor=desktop`` marker. On any failure the window shows the
-        connection screen with the failed host/port prefilled and an inline
-        error, so the user corrects the target in place. Returns the probe result
-        so callers/tests can assert the outcome.
+        ``accessor=desktop`` marker; ``open_session`` adds the ``open_agent`` /
+        ``open_session`` parameters, so the WebUI opens that Session once loaded.
+        On any failure the window shows the connection screen with the failed
+        host/port prefilled and an inline error, so the user corrects the target
+        in place. Returns the probe result so callers/tests can assert the
+        outcome.
         """
 
         prepared = self.prepare_connect(host, port, label)
         if prepared.navigation_url is not None:
-            self._navigate_url(prepared.navigation_url)
+            url = prepared.navigation_url
+            if open_session is not None:
+                url = _with_session_link(url, open_session)
+            self._navigate_url(url)
         else:
             self._show_connection_screen(prepared.result)
         return prepared.result
@@ -401,20 +418,27 @@ class ConnectionController:
             error_body=error_body,
         )
 
-    def reconnect(self) -> DesktopProbeResult | None:
+    def reconnect(self, *, open_session: SessionLink | None = None) -> DesktopProbeResult | None:
         """Re-probe and reload the last-used target.
 
         With nothing remembered, there is no target to retry — the connection
-        screen is shown with no inline error and ``None`` is returned.
+        screen is shown with no inline error and ``None`` is returned (a given
+        ``open_session`` is dropped with it).
         """
 
         entry = self.resolve_last_used()
         if entry is None:
+            if open_session is not None:
+                logger.info(
+                    "No server is remembered; Session %s of %s is not opened",
+                    open_session.session,
+                    open_session.agent,
+                )
             self.show_connection_screen()
             return None
-        return self.connect(entry.host, entry.port, entry.label)
+        return self.connect(entry.host, entry.port, entry.label, open_session=open_session)
 
-    def auto_connect(self) -> DesktopProbeResult | None:
+    def auto_connect(self, *, open_session: SessionLink | None = None) -> DesktopProbeResult | None:
         """Launch entry point: auto-connect to the last-used target.
 
         First run (nothing remembered) opens the connection screen and returns
@@ -422,7 +446,19 @@ class ConnectionController:
         launch target.
         """
 
-        return self.reconnect()
+        return self.reconnect(open_session=open_session)
+
+    def is_active_server(self, host: str, port: int) -> bool:
+        """Whether ``host:port`` is the server the window was last sent to."""
+
+        target = self._build_target(host, port)
+        active = self.active_server_url()
+        # Host names are case-insensitive; the rest of the base URL is fixed.
+        return (
+            target.configuration_error is None
+            and active is not None
+            and target.url.casefold() == active.casefold()
+        )
 
     def show_connection_screen(self) -> None:
         """Render the connection screen with no inline error."""
@@ -818,6 +854,17 @@ def _with_accessor_param(url: str, desktop_session_id: str) -> str:
     return (
         f"{url}{separator}{ACCESSOR_QUERY_PARAM}&{DESKTOP_SESSION_QUERY_PARAM}={desktop_session_id}"
     )
+
+
+def _with_session_link(url: str, link: SessionLink) -> str:
+    """Ask the WebUI behind ``url`` to open one Session once it has loaded."""
+
+    separator = "&" if "?" in url else "?"
+    query = urlencode(
+        {OPEN_AGENT_QUERY_PARAM: link.agent, OPEN_SESSION_QUERY_PARAM: link.session},
+        quote_via=quote,
+    )
+    return f"{url}{separator}{query}"
 
 
 def _display_port(value: Any) -> int:

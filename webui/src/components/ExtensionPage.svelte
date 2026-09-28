@@ -3,6 +3,7 @@
   import { SvelteMap } from 'svelte/reactivity';
   import { t } from '$lib/i18n.js';
   import { createExtensionRunStream } from '$lib/extensionRunStream.js';
+  import { noteExtensionPageInvalidation } from '$lib/clientMetrics.js';
   import Banner from './ui/Banner.svelte';
   import { useAutosaveContext } from '$lib/autosave.js';
   import {
@@ -184,7 +185,8 @@
     previous?.autosaveFlush?.finish(false);
     for (const subscription of runSubscriptions.values()) subscription.close();
     runSubscriptions.clear();
-    if (previous?.window)
+    if (previous?.window) {
+      noteExtensionPageInvalidation(reason);
       previous.window.postMessage(
         {
           type: 'vbot.extension.invalidate',
@@ -196,6 +198,7 @@
         },
         '*',
       );
+    }
   }
 
   function onFrameLoad() {
@@ -362,12 +365,14 @@
                 data.params.run_id,
                 afterSequence,
               ),
-            onResync: () =>
+            onResync: () => {
+              noteExtensionPageInvalidation('run_stream_recovered');
               post(context, {
                 ...contextPayload(context),
                 type: 'vbot.extension.invalidate',
                 reason: 'run_stream_recovered',
-              }),
+              });
+            },
             onEvent: ({ type, data: payload }) => {
               const event = { ...payload, type };
               if (
@@ -491,6 +496,7 @@
     const context = frameContext;
     if (!context?.ready) return;
     if (next.owner != null && next.owner !== context.descriptor.owner) return;
+    noteExtensionPageInvalidation('change');
     const message = {
       type: 'vbot.extension.invalidate',
       version: BRIDGE_VERSION,

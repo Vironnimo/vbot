@@ -1,4 +1,4 @@
-"""Live voice requests and Voice pushes from the Desktop into the page."""
+"""Live voice requests, Voice pushes, and Session requests from the Desktop into the page."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from desktop.page_events import (
     MAX_PENDING_VOICE_EVENTS,
     PageEventDispatcher,
     live_request_script,
+    open_session_script,
     voice_push_script,
 )
 
@@ -42,7 +43,7 @@ class FakeWindow:
         return self.result
 
 
-def _live_detail(script: str) -> dict[str, str]:
+def _request_detail(script: str) -> dict[str, str]:
     start = script.index("detail: ") + len("detail: ")
     detail: dict[str, str] = json.loads(script[start : script.index("}", start) + 1])
     return detail
@@ -83,12 +84,28 @@ def dispatchers() -> Any:
 # -- Scripts -------------------------------------------------------------------
 
 
-def test_live_script_dispatches_a_cancelable_event_and_reports_handling() -> None:
-    script = live_request_script("toggle", "hotkey")
-
-    assert script.startswith('!window.dispatchEvent(new CustomEvent("vbot-desktop-live", ')
+@pytest.mark.parametrize(
+    ("script", "event", "detail"),
+    [
+        (
+            live_request_script("toggle", "hotkey"),
+            "vbot-desktop-live",
+            {"action": "toggle", "source": "hotkey"},
+        ),
+        (
+            open_session_script("builder@project", "session-1"),
+            "vbot-desktop-open-session",
+            {"agent": "builder@project", "session": "session-1"},
+        ),
+    ],
+    ids=["live", "open-session"],
+)
+def test_request_scripts_dispatch_a_cancelable_event_and_report_handling(
+    script: str, event: str, detail: dict[str, str]
+) -> None:
+    assert script.startswith(f'!window.dispatchEvent(new CustomEvent("{event}", ')
     assert "cancelable: true" in script
-    assert _live_detail(script) == {"action": "toggle", "source": "hotkey"}
+    assert _request_detail(script) == detail
 
 
 def test_voice_script_dispatches_the_detail_as_json() -> None:
@@ -114,7 +131,7 @@ def test_live_request_is_delivered_on_a_background_thread(dispatchers: Any) -> N
     assert window.threads[0] is not threading.current_thread()
     assert window.threads[0].name == "vbot-desktop-page-events"
     assert window.threads[0].daemon is True
-    assert _live_detail(window.scripts[0]) == {"action": "start", "source": "wakeword"}
+    assert _request_detail(window.scripts[0]) == {"action": "start", "source": "wakeword"}
 
 
 def test_live_requests_never_block_the_producer_and_drop_excess(dispatchers: Any) -> None:
@@ -151,7 +168,7 @@ def test_stale_live_requests_are_dropped(dispatchers: Any) -> None:
     release.set()
 
     _wait_until(lambda: len(window.scripts) == 2)
-    assert [_live_detail(script) for script in window.scripts] == [
+    assert [_request_detail(script) for script in window.scripts] == [
         {"action": "start", "source": "wakeword"},
         {"action": "start", "source": "wakeword"},
     ]
@@ -208,12 +225,41 @@ def test_pushes_after_close_are_ignored(dispatchers: Any) -> None:
     dispatcher.close()
 
     dispatcher.request_live("start", "wakeword")
+    dispatcher.request_open_session("builder", "session-1")
     dispatcher.publish_status({"sequence": 1})
     dispatcher.publish_event({"sequence": 2, "kind": "detected"})
 
     # Nothing can arrive to wait for, so a short bounded wait proves no delivery thread started.
     assert not window.started.wait(timeout=0.05)
     assert window.scripts == []
+
+
+# -- Session requests ----------------------------------------------------------------
+
+
+def test_a_waiting_session_request_is_replaced_by_the_newest(dispatchers: Any) -> None:
+    release = threading.Event()
+    window = FakeWindow(block=release)
+    dispatcher = dispatchers()
+    dispatcher.attach_window(window)
+    dispatcher.request_open_session("builder", "session-1")
+    assert window.started.wait(timeout=2)
+
+    dispatcher.request_open_session("builder", "session-2")
+    dispatcher.publish_event({"sequence": 1, "kind": "detected"})
+    dispatcher.request_open_session("reviewer@project", "session-3")
+    dispatcher.request_open_session("", "session-4")  # invalid: ignored
+    release.set()
+
+    _wait_until(lambda: len(window.scripts) == 3)
+    # The waiting request keeps its place in the queue but opens the newest Session.
+    assert [
+        _request_detail(script) for script in window.scripts if "vbot-desktop-open" in script
+    ] == [
+        {"agent": "builder", "session": "session-1"},
+        {"agent": "reviewer@project", "session": "session-3"},
+    ]
+    assert "vbot-desktop-voice" in window.scripts[-1]
 
 
 # -- Voice pushes ------------------------------------------------------------------

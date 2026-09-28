@@ -716,6 +716,7 @@ Settings centralizes validated runtime policy. Major areas include:
 - Channels and denied-chat discovery
 - trusted Extensions and Extension settings
 - Session title generation, local-model context, Appearance, Logs, and Debug behavior
+- Desktop notifications shown by the Windows tray
 - Desktop-local Voice settings when running inside Desktop
 
 For an Agent's primary chat Model, list the currently selectable catalog through the running server:
@@ -918,6 +919,17 @@ Under **Settings → Tools & Media → Web Fetch**, choose **Direct (no service)
 - Set the displayed API-key variable in the `.env` file in the vBot data directory. Firecrawl, Tavily and Exa share their keys with Web Search; Parallel uses `PARALLEL_API_KEY`. Key presence alone does not enable a service.
 
 The selected service receives requested URLs and may charge for extraction. Free allowances, paid rates and rendering capabilities vary; check [Firecrawl pricing](https://www.firecrawl.dev/pricing), [Tavily credits](https://docs.tavily.com/documentation/api-credits), [Exa pricing](https://exa.ai/pricing), or [Parallel pricing](https://docs.parallel.ai/getting-started/pricing). Saved-page reading and searching do not incur another service request. Pages requiring authentication or interactive challenges can still fail; the Tool reports missing content instead of claiming a complete extraction.
+
+### Desktop notifications
+
+An installed vBot on Windows shows Windows notifications from its `vBot.exe` tray. Under **Settings → General → Desktop notifications**, switch each kind on or off; all are on by default:
+
+- **Run completed** and **Run failed**: an Agent Run in a Session finished or ended with an error.
+- **Automation failed**: a Cron job or Calendar action failed.
+- **Update result**: an application update finished or failed.
+- **Server stopped**: the local vBot server stopped unexpectedly.
+
+A notification about a Session is skipped while you are already looking at that Session. The switches are the Settings paths `notifications.run_completed`, `notifications.run_failed`, `notifications.automation_failed`, `notifications.update_result`, and `notifications.server_stopped`, so `vbot config` reads and changes them too.
 
 ## Channels
 

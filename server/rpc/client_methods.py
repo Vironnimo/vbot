@@ -11,7 +11,7 @@ JsonObject = dict[str, Any]
 
 
 def _list_clients(state: Any, params: JsonObject) -> JsonObject:
-    """Return the roster of connected app windows (browser tabs / Desktop shell).
+    """Return the roster of connected app clients (browser tabs, Desktop, tray).
 
     A pure read of the in-memory presence registry; empty when no registry is
     wired (e.g. a CLI-only runtime stub). The client re-fetches this after each

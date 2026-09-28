@@ -215,6 +215,109 @@ describe('App navigation', () => {
     });
   });
 
+  describe('Session links from outside the page', () => {
+    const ALPHA = {
+      id: 'alpha',
+      name: 'Alpha',
+      current_session_id: 'session-alpha',
+    };
+    const olderSessionRpc = () =>
+      createAppRpcMock({
+        agents: [ALPHA],
+        history: (params) => ({
+          messages:
+            params.session_id === 'session-old'
+              ? [{ id: 'old-reply', role: 'assistant', content: 'Older reply' }]
+              : [],
+        }),
+      });
+
+    it('opens the Session a startup link names and takes the link out of the address bar', async () => {
+      rpcMock.mockImplementation(olderSessionRpc());
+      window.history.replaceState(
+        null,
+        '',
+        '/?desktop_session=launch-1&open_agent=alpha&open_session=session-old',
+      );
+      mountApp();
+
+      expect(window.location.search).toBe('?desktop_session=launch-1');
+      await waitForCondition(() => {
+        expect(document.body.textContent).toContain('Older reply');
+        expect(window.history.state?.session?.sessionId).toBe('session-old');
+      });
+
+      // Back returns to the Agent's current Session; no entry keeps the link.
+      window.history.back();
+      await waitForCondition(() => {
+        expect(document.body.textContent).not.toContain('Older reply');
+        expect(window.history.state?.session).toBeNull();
+      });
+      expect(window.location.search).toBe('?desktop_session=launch-1');
+    });
+
+    it('keeps the app usable when a startup link names an unknown Session', async () => {
+      const appRpc = createAppRpcMock({
+        agents: [
+          ALPHA,
+          { id: 'beta', name: 'Beta', current_session_id: 'session-beta' },
+        ],
+      });
+      rpcMock.mockImplementation((method, params) =>
+        method === 'chat.history' && params?.session_id === 'missing'
+          ? Promise.reject(new Error('Session not found'))
+          : appRpc(method, params),
+      );
+      window.history.replaceState(
+        null,
+        '',
+        '/?open_agent=alpha&open_session=missing',
+      );
+      mountApp();
+
+      await waitForCondition(() => {
+        expect(document.body.textContent).toContain('Session not found');
+      });
+      expect(window.location.search).toBe('');
+
+      await selectPersonalAgent('Beta');
+      await waitForCondition(() => {
+        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+          agent_id: 'beta',
+          session_id: 'session-beta',
+          limit: 100,
+        });
+        expect(document.body.textContent).not.toContain('Session not found');
+      });
+    });
+
+    it('opens the Session the Desktop app asks for', async () => {
+      rpcMock.mockImplementation(olderSessionRpc());
+      window.history.replaceState(null, '', '/?accessor=desktop');
+      mountApp();
+      await waitForCondition(() => {
+        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+          agent_id: 'alpha',
+          session_id: 'session-alpha',
+          limit: 100,
+        });
+      });
+
+      const handled = !window.dispatchEvent(
+        new CustomEvent('vbot-desktop-open-session', {
+          cancelable: true,
+          detail: { agent: 'alpha', session: 'session-old' },
+        }),
+      );
+
+      expect(handled).toBe(true);
+      await waitForCondition(() => {
+        expect(document.body.textContent).toContain('Older reply');
+        expect(window.history.state?.session?.sessionId).toBe('session-old');
+      });
+    });
+  });
+
   it('treats tab switches as history entries so browser back returns to the previous tab', async () => {
     mountApp();
 

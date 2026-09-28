@@ -1,4 +1,8 @@
-"""``result.json`` shape, console and Markdown reports, and run comparison."""
+"""``result.json`` shape, console and Markdown reports, and run comparison.
+
+A result without ``scenario`` comes from the sessions scenario; rows whose
+figures a level does not have are left out of the tables.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,9 @@ from typing import Any
 
 RESULT_KIND = "vbot-perf-load"
 RESULT_SCHEMA = 1
+DEFAULT_SCENARIO = "sessions"
+TOP_REPORTED_RPC_METHODS = 12
+TOP_REPORTED_COUNTERS = 25
 
 
 def _p50_p99_max(prefix: str) -> tuple[str, str, str]:
@@ -18,6 +25,12 @@ def _p50_p99_max(prefix: str) -> tuple[str, str, str]:
 # (label, dotted paths into one level). Several paths render as "a / b / c".
 TABLE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Runs ok / total", ("client.runs.ok", "client.runs.total")),
+    ("Swarm participants / Runs", ("swarm.participants", "swarm.participant_runs")),
+    ("Swarm turns scripted / idle", ("swarm.turns.scripted", "swarm.turns.idle")),
+    (
+        "Board posts total / participants / kicks",
+        ("swarm.board_posts", "swarm.participant_posts", "swarm.kicks"),
+    ),
     ("Tool calls / Tool errors", ("client.runs.tool_calls", "client.runs.tool_errors")),
     ("TTFT p50 / p95 ms", ("client.ttft_ms.p50", "client.ttft_ms.p95")),
     ("TTFT overhead p50 / p95 ms", ("client.ttft_overhead_ms.p50", "client.ttft_overhead_ms.p95")),
@@ -38,6 +51,12 @@ TABLE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Run duration p50 / ideal ms", ("client.run_duration_ms.p50", "client.run_ideal_ms.p50")),
     ("Run excess p50 / p95 ms", ("client.run_excess_ms.p50", "client.run_excess_ms.p95")),
     ("Run duration / ideal p50", ("client.run_duration_ratio.p50",)),
+    (
+        "Start->1st request p50 / max ms",
+        ("client.start_to_first_request_ms.p50", "client.start_to_first_request_ms.max"),
+    ),
+    ("Turn duration p50 / ideal ms", ("client.turn_duration_ms.p50", "client.turn_ideal_ms")),
+    ("Turn excess p50 / p95 ms", ("client.turn_excess_ms.p50", "client.turn_excess_ms.p95")),
     ("Server CPU avg / max %", ("server_process.cpu_avg", "server_process.cpu_max")),
     ("Server tree CPU avg / max %", ("server_process.tree_cpu_avg", "server_process.tree_cpu_max")),
     ("Server RSS max MB", ("server_process.rss_max_mb",)),
@@ -70,9 +89,36 @@ TABLE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("UI long tasks count / max ms", ("ui.long_tasks.count", "ui.long_tasks.max_ms")),
     ("UI frame gaps >50ms count / max", ("ui.frame_gaps.count", "ui.frame_gaps.max_ms")),
     (
+        "UI page frame gaps >50ms count / max",
+        ("ui.page_frame_gaps.count", "ui.page_frame_gaps.max_ms"),
+    ),
+    (
         "UI marker latency p50 / p95 ms",
         ("ui.dom_marker_latency_ms.p50", "ui.dom_marker_latency_ms.p95"),
     ),
+    ("UI RPC calls / per s", ("ui.rpc.count", "ui.rpc.per_second")),
+    (
+        "RSS first / last / max MB",
+        (
+            "timeline.trends.rss_mb.first",
+            "timeline.trends.rss_mb.last",
+            "timeline.trends.rss_mb.max",
+        ),
+    ),
+    (
+        "asyncio Tasks first / last / max",
+        (
+            "timeline.trends.asyncio_tasks.first",
+            "timeline.trends.asyncio_tasks.last",
+            "timeline.trends.asyncio_tasks.max",
+        ),
+    ),
+    (
+        "gc.gen2 collections first / last",
+        ("timeline.trends.gc_gen2_count.first", "timeline.trends.gc_gen2_count.last"),
+    ),
+    ("gc.gen2 max pause ms", ("timeline.trends.gc_gen2_max_ms.last",)),
+    ("Heap tracked start / end", ("heap.tracked_start", "heap.tracked_end")),
 )
 
 # Scalar metrics compared between two result files, all "lower is better"
@@ -116,6 +162,14 @@ COMPARE_KEYS: tuple[str, ...] = (
     "ui.long_tasks.max_ms",
     "ui.frame_gaps.count",
     "ui.frame_gaps.max_ms",
+    "ui.rpc.count",
+    "client.turn_duration_ms.p50",
+    "client.turn_excess_ms.p50",
+    "client.turn_excess_ms.p95",
+    "client.start_to_first_request_ms.p50",
+    "timeline.trends.rss_mb.change",
+    "timeline.trends.asyncio_tasks.change",
+    "heap.tracked_change",
 )
 HIGHER_IS_BETTER = frozenset({"client.runs.ok"})
 
@@ -144,6 +198,12 @@ def format_value(value: Any) -> str:
             return f"{value:.1f}"
         return f"{value:.2f}"
     return str(value)
+
+
+def scenario_of(data: Mapping[str, Any]) -> str:
+    """The scenario of a result or level; older results are sessions runs."""
+    scenario = data.get("scenario")
+    return scenario if isinstance(scenario, str) else DEFAULT_SCENARIO
 
 
 def level_label(level: Mapping[str, Any]) -> str:
@@ -201,6 +261,14 @@ def render_markdown(result: Mapping[str, Any]) -> str:
     config = result.get("config") or {}
     machine = result.get("machine") or {}
     git = result.get("git") or {}
+    scenario = scenario_of(result)
+    duration = config.get("duration_minutes")
+    per = "participant" if scenario == "swarm" else "Session"
+    shape = (
+        f"{duration} min of turns per {per}"
+        if duration is not None
+        else f"{config.get('turns')} turn(s) per {per}"
+    )
     lines = [
         "# vBot load report",
         "",
@@ -209,7 +277,7 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         + (" (uncommitted changes)" if git.get("dirty") else ""),
         f"- Machine: {machine.get('platform')}, Python {machine.get('python')}, "
         f"{machine.get('cpu_logical')} logical CPUs, {machine.get('memory_gb')} GB RAM",
-        f"- Scenario: {config.get('turns')} turn(s) per Session, steps={config.get('steps')}, "
+        f"- Scenario: {scenario}, {shape}, steps={config.get('steps')}, "
         f"tokens={config.get('tokens')}, rate={config.get('rate')}/s, "
         f"think_ms={config.get('think_ms')}, tools={','.join(config.get('tools') or [])}, "
         f"calls={config.get('calls')}, history_tokens={config.get('history_tokens')}",
@@ -222,9 +290,30 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         "receipt (includes vBot's 40 ms delta batching). *Ideal* Run duration is the scripted "
         "Provider time (think + tokens / rate).",
         "",
-        "## Summary",
-        "",
     ]
+    if scenario == "swarm":
+        lines.extend(
+            [
+                "Swarm: one Swarm per level with one participant per agent. A *turn* is one "
+                "scripted round trip of a participant (Tool rounds, then text); turn 1 starts "
+                "with reading the goal post. *Turn duration* runs from the turn's first Model "
+                "request to its final text as the fake Provider sees them; *turn excess* "
+                "subtracts the scripted text time. *Idle* turns are plain answers of "
+                "participants without work left; *kicks* are harness posts that wake a Swarm "
+                "that fell idle with turns left. Participant Runs are counted from their "
+                "histories.",
+                "",
+            ]
+        )
+    if any(level.get("ui") for level in levels):
+        lines.extend(
+            [
+                "UI: *RPC calls* are the `/api/rpc` requests the browser made while measuring, "
+                "including Extension page frames; *page frame gaps* come from Extension frames.",
+                "",
+            ]
+        )
+    lines.extend(["## Summary", ""])
     header = ["Metric", *(level_label(level) for level in levels)]
     lines.extend(_markdown_table(header, table_rows(levels)))
     for level in levels:
@@ -316,6 +405,11 @@ def _level_details(level: Mapping[str, Any]) -> list[str]:
         lines.extend(
             _markdown_table(["Metric", "Count", "Total ms", "p50 ms", "p99 ms", "Max ms"], rows)
         )
+    lines.extend(_swarm_details(level))
+    lines.extend(_rpc_details(level))
+    lines.extend(_counter_details(level))
+    lines.extend(_timeline_details(level))
+    lines.extend(_heap_details(level))
     worst = get_path(level, "server.stalls.worst")
     if worst:
         lines.extend(
@@ -347,6 +441,114 @@ def _level_details(level: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def _swarm_details(level: Mapping[str, Any]) -> list[str]:
+    by_name = get_path(level, "swarm.tool_calls_by_name") or {}
+    if not by_name:
+        return []
+    lines = ["", "Participant Tool calls:", ""]
+    rows = [[name, format_value(count)] for name, count in by_name.items()]
+    lines.extend(_markdown_table(["Tool", "Calls"], rows))
+    return lines
+
+
+def _rpc_details(level: Mapping[str, Any]) -> list[str]:
+    calls = get_path(level, "ui.rpc_calls") or {}
+    if not calls:
+        return []
+    ordered = sorted(calls.items(), key=lambda item: (-int(item[1].get("count") or 0), item[0]))
+    rows = [
+        [
+            f"`{method}`",
+            format_value(values.get("count")),
+            format_value(values.get("total_ms")),
+            format_value(values.get("max_ms")),
+            format_value(values.get("failed")),
+        ]
+        for method, values in ordered[:TOP_REPORTED_RPC_METHODS]
+    ]
+    lines = ["", f"UI RPC calls by method (top {TOP_REPORTED_RPC_METHODS}):", ""]
+    lines.extend(_markdown_table(["Method", "Calls", "Total ms", "Max ms", "Failed"], rows))
+    return lines
+
+
+def _counter_details(level: Mapping[str, Any]) -> list[str]:
+    counters = get_path(level, "server.counters") or {}
+    if not counters:
+        return []
+    ordered = sorted(counters.items(), key=lambda item: (-float(item[1]), item[0]))
+    lines = ["", f"Server counters in the recording (top {TOP_REPORTED_COUNTERS}):", ""]
+    rows = [[f"`{name}`", format_value(value)] for name, value in ordered[:TOP_REPORTED_COUNTERS]]
+    lines.extend(_markdown_table(["Counter", "Total"], rows))
+    return lines
+
+
+_TIMELINE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("t s", "t_s"),
+    ("RSS MB", "rss_mb"),
+    ("Tasks", "asyncio_tasks"),
+    ("Threads", "python_threads"),
+    ("Runs", "runs_active"),
+    ("gen2 n", "gc_gen2_count"),
+    ("gen2 max ms", "gc_gen2_max_ms"),
+    ("gen2 sum ms", "gc_gen2_sum_ms"),
+    ("lag p99 ms", "lag_p99_ms"),
+    ("Counters", "counters_total"),
+)
+
+
+def _timeline_details(level: Mapping[str, Any]) -> list[str]:
+    samples = get_path(level, "timeline.samples") or []
+    if not samples:
+        return []
+    interval = get_path(level, "timeline.interval_seconds")
+    lines = [
+        "",
+        f"Server snapshots every {format_value(interval)} s (gen2 and lag figures are "
+        "cumulative since the server started):",
+        "",
+    ]
+    rows = [
+        [format_value(sample.get(key)) for _label, key in _TIMELINE_COLUMNS]
+        for sample in samples
+        if "error" not in sample
+    ]
+    lines.extend(_markdown_table([label for label, _key in _TIMELINE_COLUMNS], rows))
+    failed = [sample for sample in samples if "error" in sample]
+    if failed:
+        lines.append("")
+        lines.extend(
+            f"- Snapshot at {format_value(sample.get('t_s'))} s failed: {sample['error']}"
+            for sample in failed
+        )
+    return lines
+
+
+def _heap_details(level: Mapping[str, Any]) -> list[str]:
+    heap = level.get("heap")
+    if not isinstance(heap, Mapping):
+        return []
+    lines = [
+        "",
+        f"Heap census: {format_value(heap.get('tracked_start'))} -> "
+        f"{format_value(heap.get('tracked_end'))} tracked objects "
+        f"({format_value(heap.get('tracked_change'))}; "
+        f"{format_value(heap.get('frozen_end'))} frozen startup objects not included).",
+    ]
+    for title, key in (("Types", "growth"), ("Modules", "module_growth")):
+        rows = [
+            [
+                f"`{row.get('name')}`",
+                format_value(row.get("count")),
+                format_value(row.get("change")),
+            ]
+            for row in heap.get(key) or []
+        ]
+        if rows:
+            lines.extend(["", f"{title} that grew most:", ""])
+            lines.extend(_markdown_table(["Name", "Objects", "Change"], rows))
+    return lines
+
+
 def compare_results(old: Mapping[str, Any], new: Mapping[str, Any]) -> str:
     """Per level and metric: old, new, absolute and relative change."""
     old_levels = {level.get("agents"): level for level in old.get("levels") or []}
@@ -356,6 +558,11 @@ def compare_results(old: Mapping[str, Any], new: Mapping[str, Any]) -> str:
         f"Comparing {old.get('started_at')} ({get_path(old, 'git.commit')}) -> "
         f"{new.get('started_at')} ({get_path(new, 'git.commit')})"
     ]
+    if scenario_of(old) != scenario_of(new):
+        lines.append(
+            f"Note: comparing a {scenario_of(old)} run with a {scenario_of(new)} run; "
+            "the same metric can mean different work."
+        )
     if not shared:
         lines.append("No concurrency level appears in both results.")
         return "\n".join(lines)

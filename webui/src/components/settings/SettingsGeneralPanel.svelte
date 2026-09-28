@@ -149,6 +149,9 @@
     if (accessor === 'desktop') {
       return t('settings.general.clients.accessor.desktop');
     }
+    if (accessor === 'tray') {
+      return t('settings.general.clients.accessor.tray');
+    }
     return t('settings.general.clients.accessor.unknown');
   }
 

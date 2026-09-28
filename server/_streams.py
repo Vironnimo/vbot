@@ -9,6 +9,7 @@ from contextlib import aclosing, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from core.performance import count
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
 from server._app_lifecycle import _app_chat_runs
 from server._http_dependencies import Request, WebSocket
@@ -31,6 +32,9 @@ if TYPE_CHECKING:
 JsonObject = dict[str, Any]
 
 SSE_HEARTBEAT_INTERVAL_SECONDS = 10.0
+
+# Run events sent over SSE, all streams together; heartbeats are not counted.
+SSE_EVENTS_METRIC = "events.sse"
 
 WS_HEARTBEAT_INTERVAL_SECONDS = 25.0
 
@@ -310,6 +314,7 @@ async def _sse_run_events(
                         if candidates
                         else []
                     )
+                count(SSE_EVENTS_METRIC)
                 yield (
                     f"id: {event.sequence}\n"
                     f"event: {event.type}\n"

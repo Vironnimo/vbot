@@ -28,6 +28,13 @@ WEB_SEARCH_DEFAULTS = {
     "default_count": 12,
     "searxng": {"base_url": "http://localhost:8888"},
 }
+NOTIFICATION_DEFAULTS = {
+    "run_completed": True,
+    "run_failed": True,
+    "automation_failed": True,
+    "update_result": True,
+    "server_stopped": True,
+}
 
 Read = Callable[[StorageManager], Any]
 
@@ -97,6 +104,11 @@ ACCESSOR_DEFAULTS: list[tuple[Read, dict[str, Any], Any]] = [
         WEB_SEARCH_DEFAULTS,
     ),
     (StorageManager.load_model_task_settings, {"model_tasks": []}, {}),
+    (
+        StorageManager.load_notification_settings,
+        {"notifications": {"run_failed": "yes"}},
+        NOTIFICATION_DEFAULTS,
+    ),
     (
         StorageManager.load_extensions_settings,
         {"extensions": []},
@@ -334,6 +346,12 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
         StorageManager.load_local_models_settings,
         {"context_windows": {"ollama/b": 16384, "ollama/c": 4096}},
     ),
+    "notifications-merge-into-stored-section": (
+        {"notifications": {"run_completed": False}},
+        {"notifications": {"server_stopped": False}},
+        StorageManager.load_notification_settings,
+        {**NOTIFICATION_DEFAULTS, "run_completed": False, "server_stopped": False},
+    ),
     "session-titles-trim-model": (
         {},
         {"session_titles": {"enabled": True, "model": " openai/gpt-4.1-mini::api-key "}},
@@ -408,6 +426,7 @@ def test_section_update_merges_into_stored_settings_and_returns_what_is_read_bac
         pytest.param({"local_models": {"context_windows": {"ollama/m": -5}}}, id="window"),
         pytest.param({"local_models": {"context_windows": {}, "extra": 1}}, id="local-unknown"),
         pytest.param({"server": {"keep_awake": "yes"}}, id="server-non-boolean"),
+        pytest.param({"notifications": {"run_failed": "yes"}}, id="notifications-non-boolean"),
         pytest.param({"server": {"port": 8421}}, id="server-unknown-field"),
         pytest.param({"server": {"timezone": "Mars/Olympus"}}, id="server-unknown-timezone"),
         pytest.param(

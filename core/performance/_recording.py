@@ -1,7 +1,7 @@
 """One bounded trace recording and its retained Chrome Trace Event files.
 
 A recording buffers compact event tuples while it is active and keeps its own
-window histograms, gauge maxima and stalls. Each track becomes one trace
+window histograms, gauge maxima, counters and stalls. Each track becomes one trace
 process; spans take the lowest free lane (trace thread) of their track, so
 concurrent spans never overlap on one lane. Files are written only after the
 recording is closed, off the Event Loop, in chunks so no single JSON encode
@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from core.performance._metrics import MetricRegistry
+from core.performance._metrics import HistogramData, MetricRegistry
 from core.utils.atomic import atomic_write_stream, atomic_write_text
 from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
@@ -171,6 +171,30 @@ class Recording:
         if not self._closed:
             self.metrics.observe(metric, ms)
 
+    def count(self, name: str, amount: int) -> None:
+        if not self._closed:
+            self.metrics.add(name, amount)
+
+    def merge(self, metric: str, data: HistogramData) -> None:
+        if not self._closed:
+            self.metrics.merge(metric, data)
+
+    def add_instant(
+        self,
+        track: str,
+        at: float,
+        *,
+        name: str,
+        category: str,
+        args: dict[str, Any] | None,
+    ) -> None:
+        """Emit one process-scoped instant event on ``track``."""
+        with self._lock:
+            if self._closed:
+                return
+            pid = self._track(track).pid
+            self._append(("i", pid, 0, self._ts(at), None, name, category, args))
+
     def gauge(self, name: str, value: float, track: str, at: float) -> None:
         """Track a gauge maximum and emit its counter sample."""
         if self._closed:
@@ -196,9 +220,15 @@ class Recording:
             self._stalls.append(dict(record))
             pid = self._track(track).pid
             args = {
-                "duration_ms": record["duration_ms"],
-                "gc_ms": record["gc_ms"],
-                "samples": record["samples"],
+                key: record.get(key)
+                for key in (
+                    "duration_ms",
+                    "gc_ms",
+                    "cpu_window_ms",
+                    "loop_cpu_ms",
+                    "samples",
+                    "threads",
+                )
             }
             self._append(("i", pid, 0, self._ts(started), None, "event_loop.stall", "stall", args))
 
@@ -213,12 +243,13 @@ class Recording:
             return True
 
     def summary(self) -> dict[str, Any]:
-        """Return the window histograms, gauge maxima and stalls of this recording."""
+        """Return the window histograms, gauge maxima, counters and stalls of this recording."""
         with self._lock:
             stalls = [dict(stall) for stall in self._stalls]
         return {
             "metrics": self.metrics.histogram_summaries(),
             "gauges_max": self.gauges_max.gauges(),
+            "counters": self.metrics.counters(),
             "stalls": stalls,
         }
 

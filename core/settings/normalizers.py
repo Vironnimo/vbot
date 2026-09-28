@@ -48,6 +48,7 @@ from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS, normalize_agent_d
 from core.settings.settings import (
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
+    NOTIFICATION_FIELDS,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
 )
@@ -83,6 +84,10 @@ REFLECTION_SETTING_DEFAULTS: dict[str, Any] = {
     "memory_turn_interval": 10,
     "skill_model_step_interval": 10,
 }
+
+
+# Every desktop notification kind is shown unless the user switches it off.
+NOTIFICATION_SETTING_DEFAULTS: dict[str, bool] = dict.fromkeys(NOTIFICATION_FIELDS, True)
 
 
 def normalize_speech_settings(speech: Any) -> dict[str, Any]:
@@ -447,6 +452,27 @@ def _normalize_reflection_interval(key: str, value: Any) -> int:
     return value
 
 
+def normalize_notification_settings(notifications: Any) -> dict[str, bool]:
+    """Return all desktop-notification switches, filling absent ones with defaults."""
+
+    if notifications is None:
+        return dict(NOTIFICATION_SETTING_DEFAULTS)
+    if not isinstance(notifications, Mapping):
+        raise StorageError("Expected settings.notifications to be an object")
+
+    unsupported_fields = sorted(set(notifications) - set(NOTIFICATION_FIELDS))
+    if unsupported_fields:
+        raise StorageError(f"Unsupported notifications settings: {', '.join(unsupported_fields)}")
+
+    normalized: dict[str, bool] = {}
+    for field, default in NOTIFICATION_SETTING_DEFAULTS.items():
+        enabled = notifications.get(field, default)
+        if not isinstance(enabled, bool):
+            raise StorageError(f"Notification setting {field} must be a boolean")
+        normalized[field] = enabled
+    return normalized
+
+
 def normalize_web_fetch_settings(value: Any) -> dict[str, Any]:
     try:
         return parse_web_fetch_settings({} if value is None else value)
@@ -617,6 +643,7 @@ __all__ = [
     "DEFAULT_RECALL_SETTINGS",
     "DEFAULT_SESSION_TITLE_SETTINGS",
     "DEFAULT_WEB_SEARCH_SETTINGS",
+    "NOTIFICATION_SETTING_DEFAULTS",
     "REFLECTION_SETTING_DEFAULTS",
     "SUPPORTED_APPEARANCE_LANGUAGES",
     "coerce_defaults_section",
@@ -636,6 +663,7 @@ __all__ = [
     "normalize_json_object",
     "normalize_local_models_settings",
     "normalize_model_task_settings",
+    "normalize_notification_settings",
     "normalize_providers_settings",
     "normalize_recall_settings",
     "normalize_reflection_settings",

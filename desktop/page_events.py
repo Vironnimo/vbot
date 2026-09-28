@@ -1,6 +1,7 @@
-"""Pushes from the Desktop into the loaded page: Live voice requests and Voice updates.
+"""Pushes from the Desktop into the loaded page: Live voice requests, Voice updates,
+and requests to open a Session.
 
-Two window events carry them:
+Three window events carry them:
 
 - ``vbot-desktop-live`` (cancelable), ``detail``
   ``{action: "start" | "toggle", source: "wakeword" | "hotkey"}``: a wake phrase
@@ -9,6 +10,10 @@ Two window events carry them:
 - ``vbot-desktop-voice``, ``detail`` ``{type: "status", status}`` or
   ``{type: "event", event}``: Voice status snapshots and events (see
   :mod:`desktop.wakeword.controller`).
+- ``vbot-desktop-open-session`` (cancelable), ``detail`` ``{agent, session}``:
+  a later ``--open-session`` launch asks the page to open that Session (the
+  Agent address and the Session id). The page acknowledges with
+  ``preventDefault()``.
 
 ``Window.evaluate_js`` blocks until the page answers and deadlocks on the GUI
 thread, so one daemon thread (``vbot-desktop-page-events``) delivers every push
@@ -20,7 +25,8 @@ in order from one queue. Producers never block:
 - Voice events: at most :data:`MAX_PENDING_VOICE_EVENTS` wait; the oldest is
   dropped (the page notices the sequence gap and reads the status again);
 - Voice status: at most one snapshot waits; a newer one replaces its content
-  where it waits.
+  where it waits;
+- Session requests: at most one waits; a newer one replaces it where it waits.
 
 A page without handlers (the connection screen) ignores the events.
 """
@@ -40,6 +46,7 @@ logger = logging.getLogger("vbot.desktop.page_events")
 
 LIVE_REQUEST_EVENT = "vbot-desktop-live"
 VOICE_PUSH_EVENT = "vbot-desktop-voice"
+OPEN_SESSION_EVENT = "vbot-desktop-open-session"
 LIVE_REQUEST_ACTIONS = frozenset({"start", "toggle"})
 LIVE_REQUEST_SOURCES = frozenset({"wakeword", "hotkey"})
 MAX_PENDING_LIVE_REQUESTS = 4
@@ -69,11 +76,30 @@ def voice_push_script(detail: Mapping[str, Any]) -> str:
     )
 
 
+def open_session_script(agent: str, session: str) -> str:
+    """Return JavaScript that asks the page to open one Session and reports whether it did.
+
+    Like a Live request, the event is cancelable: ``dispatchEvent`` returning
+    ``false`` means the page took the request.
+    """
+    detail = json.dumps({"agent": agent, "session": session})
+    return (
+        f"!window.dispatchEvent(new CustomEvent({json.dumps(OPEN_SESSION_EVENT)}, "
+        f"{{cancelable: true, detail: {detail}}}))"
+    )
+
+
 @dataclass
 class _LiveRequest:
     action: str
     source: str
     requested_at: float
+
+
+@dataclass
+class _OpenSession:
+    agent: str
+    session: str
 
 
 @dataclass
@@ -86,17 +112,19 @@ class _VoicePush:
 
 
 class PageEventDispatcher:
-    """Deliver Live voice requests and Voice pushes to the window's page off the GUI thread.
+    """Deliver Live voice requests, Voice pushes, and Session requests to the window's page.
 
-    Implements the Voice event sink (``publish_status`` / ``publish_event``).
+    Delivery runs off the GUI thread. Implements the Voice event sink
+    (``publish_status`` / ``publish_event``).
     """
 
     def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
         self._condition = threading.Condition()
         self._window: Any = None
-        self._queue: deque[_LiveRequest | _VoicePush] = deque()
+        self._queue: deque[_LiveRequest | _VoicePush | _OpenSession] = deque()
         self._pending_status: _VoicePush | None = None
+        self._pending_open: _OpenSession | None = None
         self._live_count = 0
         self._event_count = 0
         self._thread: threading.Thread | None = None
@@ -124,6 +152,23 @@ class PageEventDispatcher:
             self._live_count += 1
             self._enqueue_locked(_LiveRequest(action, source, self._clock()))
         logger.info("Live voice requested (action=%s, source=%s)", action, source)
+
+    def request_open_session(self, agent: str, session: str) -> None:
+        """Queue a request to open one Session, replacing a request that still waits."""
+        if not agent or not session:
+            logger.warning("Ignoring a Session request without an Agent address or Session id")
+            return
+        with self._condition:
+            if self._closed:
+                return
+            if self._pending_open is not None:
+                self._pending_open.agent = agent
+                self._pending_open.session = session
+                return
+            request = _OpenSession(agent, session)
+            self._pending_open = request
+            self._enqueue_locked(request)
+        logger.info("Asking the page to open Session %s of %s", session, agent)
 
     def publish_status(self, status: Mapping[str, Any]) -> None:
         """Queue a Voice status snapshot, replacing one that still waits."""
@@ -163,12 +208,13 @@ class PageEventDispatcher:
             self._closed = True
             self._queue.clear()
             self._pending_status = None
+            self._pending_open = None
             self._condition.notify_all()
             thread = self._thread
         if thread is not None:
             thread.join(_CLOSE_TIMEOUT_SECONDS)
 
-    def _enqueue_locked(self, item: _LiveRequest | _VoicePush) -> None:
+    def _enqueue_locked(self, item: _LiveRequest | _VoicePush | _OpenSession) -> None:
         self._queue.append(item)
         if self._thread is None:
             self._thread = threading.Thread(
@@ -187,6 +233,8 @@ class PageEventDispatcher:
                 window = self._window
                 if isinstance(item, _LiveRequest):
                     self._live_count -= 1
+                elif isinstance(item, _OpenSession):
+                    self._pending_open = None
                 elif item is self._pending_status:
                     self._pending_status = None
                 else:
@@ -194,6 +242,8 @@ class PageEventDispatcher:
                 detail = dict(item.detail) if isinstance(item, _VoicePush) else None
             if isinstance(item, _LiveRequest):
                 self._deliver_live(window, item)
+            elif isinstance(item, _OpenSession):
+                self._deliver_open_session(window, item)
             elif detail is not None:
                 self._deliver_voice(window, detail)
 
@@ -214,6 +264,18 @@ class PageEventDispatcher:
                 "Live voice request was not handled by the page (action=%s, source=%s)",
                 request.action,
                 request.source,
+            )
+
+    def _deliver_open_session(self, window: Any, request: _OpenSession) -> None:
+        if window is None:
+            logger.debug("Dropping the Session request; no window is attached")
+            return
+        handled = self._evaluate(window, open_session_script(request.agent, request.session))
+        if handled is not True:
+            logger.info(
+                "The page did not open Session %s of %s; it shows no WebUI",
+                request.session,
+                request.agent,
             )
 
     def _deliver_voice(self, window: Any, detail: dict[str, Any]) -> None:

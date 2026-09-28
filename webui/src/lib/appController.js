@@ -1,4 +1,5 @@
 import { formatAgentAddress } from './agentAddress.js';
+import { noteInvalidation } from './clientMetrics.js';
 import {
   CONNECTION_REPLAY_STATUS_EPOCH_CHANGED,
   CONNECTION_REPLAY_STATUS_GAP,
@@ -16,6 +17,7 @@ import {
   requestedViewIdFromLocationHash,
   sameNavigationSelection,
   sameSessionOverride,
+  sessionLinkFromSearch,
   viewIdFromLocationHash,
 } from './navigationHistory.js';
 import {
@@ -416,6 +418,28 @@ export function createAppController({
     browserWindow?.addEventListener?.('popstate', handlePopState);
   }
 
+  // Read the page's link to one Session (`?open_agent=...&open_session=...`) and
+  // remove both parameters from the address bar, so neither a history entry
+  // nor a reload repeats it. Returns `{agentId, sessionId}` when both were
+  // given, else null.
+  function takeSessionLink() {
+    const location = browserWindow?.location;
+    const link = sessionLinkFromSearch(location?.search ?? '');
+    if (!link) {
+      return null;
+    }
+    try {
+      browserHistory?.replaceState(
+        browserHistory.state,
+        '',
+        `${location.pathname ?? ''}${link.search}${location.hash ?? ''}`,
+      );
+    } catch {
+      // History API unavailable (non-browser environment).
+    }
+    return link.target;
+  }
+
   // Called after each successful Extension page catalog load. Opens a pending
   // initial Extension page link in place of the startup view when the page
   // exists and the user has not navigated meanwhile; when it does not exist,
@@ -593,6 +617,7 @@ export function createAppController({
     }
 
     const kind = event.payload?.kind;
+    noteInvalidation(kind);
     if (kind === 'extensions') {
       // An owner-scoped change names data behind that Extension's page; an
       // unscoped one follows a reload, whose page descriptors may differ.
@@ -704,5 +729,6 @@ export function createAppController({
     navigateToSubAgent,
     navigateToSession,
     selectView,
+    takeSessionLink,
   };
 }

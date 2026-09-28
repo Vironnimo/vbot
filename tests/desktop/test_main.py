@@ -37,10 +37,10 @@ class FakeDesktopInstance:
     """Single-instance guard double owned by the launch under test."""
 
     def __init__(self) -> None:
-        self.on_activate: Callable[[], None] | None = None
+        self.on_activate: Callable[[dict[str, Any] | None], None] | None = None
         self.closed = False
 
-    def listen(self, on_activate: Callable[[], None]) -> None:
+    def listen(self, on_activate: Callable[[dict[str, Any] | None], None]) -> None:
         self.on_activate = on_activate
 
     def close(self) -> None:
@@ -76,6 +76,7 @@ class LaunchSeams:
     def __init__(self) -> None:
         self.instance: FakeDesktopInstance | None = FakeDesktopInstance()
         self.claimed: list[Path] = []
+        self.handed_over: list[dict[str, Any] | None] = []
         self.browser_origins: list[tuple[str, ...]] = []
         self.secure_origin_targets: list[list[tuple[str, int]]] = []
         self.microphone_origin: Callable[[], str | None] | None = None
@@ -87,8 +88,11 @@ class LaunchSeams:
         self.hotkeys.append(hotkey)
         return hotkey
 
-    def claim(self, config_directory: Path) -> FakeDesktopInstance | None:
+    def claim(
+        self, config_directory: Path, *, request: dict[str, Any] | None = None
+    ) -> FakeDesktopInstance | None:
         self.claimed.append(config_directory)
+        self.handed_over.append(request)
         return self.instance
 
     def secure_origins(self, targets: Any) -> tuple[str, ...]:
@@ -320,25 +324,52 @@ SAVED_PI = {"servers": [{"host": "pi.lan", "port": 9000}]}
 
 
 @pytest.mark.parametrize(
-    ("argv", "host", "port", "mock_wakeword"),
+    ("argv", "host", "port", "open_session", "mock_wakeword"),
     [
-        ([], None, None, False),
-        (["--host", "192.168.1.50", "--port", "9000"], "192.168.1.50", 9000, False),
-        (["--mock-wakeword"], None, None, True),
+        ([], None, None, None, False),
+        (["--host", "192.168.1.50", "--port", "9000"], "192.168.1.50", 9000, None, False),
+        (
+            ["--open-session", "builder@project", "session-1", "--port", "9000"],
+            None,
+            9000,
+            ["builder@project", "session-1"],
+            False,
+        ),
+        (["--mock-wakeword"], None, None, None, True),
     ],
 )
-def test_parse_args_reads_the_target_and_the_mock_wakeword_flag(
-    argv: list[str], host: str | None, port: int | None, mock_wakeword: bool
+def test_parse_args_reads_the_target_the_session_and_the_mock_wakeword_flag(
+    argv: list[str],
+    host: str | None,
+    port: int | None,
+    open_session: list[str] | None,
+    mock_wakeword: bool,
 ) -> None:
     args = desktop_main.parse_args(argv)
 
-    assert (args.host, args.port, args.mock_wakeword) == (host, port, mock_wakeword)
+    assert (args.host, args.port, args.open_session, args.mock_wakeword) == (
+        host,
+        port,
+        open_session,
+        mock_wakeword,
+    )
 
 
-@pytest.mark.parametrize("port", ["0", "65536", "not-a-port"])
-def test_parse_args_rejects_invalid_ports(port: str) -> None:
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--port", "0"],
+        ["--port", "65536"],
+        ["--port", "not-a-port"],
+        ["--open-session", "builder"],
+        ["--open-session", "", "session-1"],
+        ["--open-session", "builder", "session 1"],
+        ["--open-session", "builder", "x" * 513],
+    ],
+)
+def test_parse_args_rejects_invalid_values(argv: list[str]) -> None:
     with pytest.raises(SystemExit):
-        desktop_main.parse_args(["--port", port])
+        desktop_main.parse_args(argv)
 
 
 @pytest.mark.parametrize(("opened", "records"), [(True, 1), (False, 0)])
@@ -793,6 +824,28 @@ def test_a_target_override_connects_directly_and_becomes_last_used(
     assert len(stored["servers"]) == (1 if saved is None else 2)
 
 
+@pytest.mark.parametrize(
+    ("argv", "target"),
+    [
+        (["--open-session", "builder@project", "session-1"], ("pi.lan", 9000)),
+        (
+            ["--host", "nas.lan", "--port", "8420", "--open-session", "builder@project", "s-1"],
+            ("nas.lan", 8420),
+        ),
+    ],
+    ids=["last-used", "override"],
+)
+def test_a_requested_session_rides_on_the_first_navigation(
+    tmp_path: Path, argv: list[str], target: tuple[str, int]
+) -> None:
+    fake_webview = _launch(tmp_path, argv, settings=SAVED_PI)
+
+    session = argv[-1]
+    assert fake_webview.window.loaded_urls == [
+        f"{_webui_url(*target)}&open_agent=builder%40project&open_session={session}"
+    ]
+
+
 # -- Voice during a launch ------------------------------------------------------------
 
 
@@ -905,17 +958,44 @@ def test_mock_wakeword_flag_selects_the_mock_voice_mode(tmp_path: Path) -> None:
 # -- Single instance, browser arguments, and Live voice ------------------------------
 
 
+SESSION_REQUEST = {"agent": "builder@project", "session": "session-1"}
+
+
+@pytest.mark.parametrize(
+    ("argv", "handed_over", "logged"),
+    [
+        (
+            ["--host", "pi.lan", "--port", "9000"],
+            None,
+            "ignored the requested target pi.lan:9000",
+        ),
+        (
+            ["--open-session", "builder@project", "session-1"],
+            {"host": None, "port": None, **SESSION_REQUEST},
+            "handed over Session session-1 of builder@project",
+        ),
+        (
+            ["--port", "9000", "--open-session", "builder@project", "session-1"],
+            {"host": desktop_main.DEFAULT_HOST, "port": 9000, **SESSION_REQUEST},
+            "handed over Session session-1 of builder@project",
+        ),
+    ],
+    ids=["target", "session", "session-on-target"],
+)
 def test_second_launch_focuses_the_running_desktop_without_a_window(
     tmp_path: Path,
     launch_seams: LaunchSeams,
     caplog: pytest.LogCaptureFixture,
+    argv: list[str],
+    handed_over: dict[str, Any] | None,
+    logged: str,
 ) -> None:
     launch_seams.instance = None
     fake_webview = FakeWebview()
 
     with caplog.at_level("INFO", logger="vbot.desktop"):
         opened = desktop_main.launch_desktop(
-            ["--host", "pi.lan", "--port", "9000"],
+            argv,
             settings_file=tmp_path / "settings.json",
             probe=_available,
             webview_module=fake_webview,
@@ -924,11 +1004,12 @@ def test_second_launch_focuses_the_running_desktop_without_a_window(
 
     assert opened is False
     assert launch_seams.claimed == [tmp_path]
+    assert launch_seams.handed_over == [handed_over]
     assert fake_webview.created_windows == []
     assert fake_webview.start_calls == []
     assert launch_seams.browser_origins == []
     assert not (tmp_path / "settings.json").exists()
-    assert "ignored the requested target pi.lan:9000" in caplog.text
+    assert logged in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -955,7 +1036,7 @@ def test_a_second_launch_brings_the_window_back_at_its_previous_size(
 
     for name in window_events:
         getattr(fake_webview.window.events, name).emit()
-    instance.on_activate()
+    instance.on_activate(None)
 
     assert fake_webview.window.focus_calls == focus_calls
 
@@ -1016,35 +1097,100 @@ def test_live_hotkey_runs_only_while_the_window_is_shown(
     assert _bridge(fake_webview).getDesktopCapabilities()["liveHotkey"] is True
 
 
+class RecordingDispatcher:
+    """Page event double recording the pushes a launch asks for."""
+
+    def __init__(self) -> None:
+        self.window: Any = None
+        self.requests: list[tuple[str, str]] = []
+        self.opened_sessions: list[tuple[str, str]] = []
+        self.closed = False
+
+    def attach_window(self, window: Any) -> None:
+        self.window = window
+
+    def request_live(self, action: str, source: str) -> None:
+        self.requests.append((action, source))
+
+    def request_open_session(self, agent: str, session: str) -> None:
+        self.opened_sessions.append((agent, session))
+
+    def publish_status(self, _status: Any) -> None:
+        pass
+
+    def publish_event(self, _event: Any) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _record_page_events(monkeypatch: pytest.MonkeyPatch) -> list[RecordingDispatcher]:
+    dispatchers: list[RecordingDispatcher] = []
+
+    def create() -> RecordingDispatcher:
+        dispatcher = RecordingDispatcher()
+        dispatchers.append(dispatcher)
+        return dispatcher
+
+    monkeypatch.setattr(desktop_page_events, "PageEventDispatcher", create)
+    return dispatchers
+
+
+@pytest.mark.parametrize(
+    ("handed_over", "opened"),
+    [
+        ({"host": None, "port": None, **SESSION_REQUEST}, True),
+        ({"host": "PI.lan", "port": 9000, **SESSION_REQUEST}, True),
+        ({"host": "pi.lan", "port": 9001, **SESSION_REQUEST}, False),
+        ({"host": "pi.lan", "port": 9000, "agent": "", "session": "session-1"}, False),
+        ({"host": "pi.lan", "port": "9000", **SESSION_REQUEST}, False),
+        (None, False),
+    ],
+    ids=["shown-server", "same-server", "other-server", "no-agent", "bad-port", "no-request"],
+)
+def test_a_running_desktop_opens_a_handed_over_session_only_on_its_server(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+    monkeypatch: pytest.MonkeyPatch,
+    handed_over: dict[str, Any] | None,
+    opened: bool,
+) -> None:
+    dispatchers = _record_page_events(monkeypatch)
+    fake_webview = _launch(tmp_path, settings=SAVED_PI)
+    instance = launch_seams.instance
+    assert instance is not None and instance.on_activate is not None
+
+    instance.on_activate(handed_over)
+
+    expected = [(SESSION_REQUEST["agent"], SESSION_REQUEST["session"])] if opened else []
+    assert dispatchers[0].opened_sessions == expected
+    assert fake_webview.window.focus_calls == ["show"]
+
+
+def test_a_running_desktop_on_its_connection_screen_opens_no_session(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatchers = _record_page_events(monkeypatch)
+    fake_webview = _launch(tmp_path)
+    instance = launch_seams.instance
+    assert instance is not None and instance.on_activate is not None
+
+    instance.on_activate({"host": None, "port": None, **SESSION_REQUEST})
+
+    assert dispatchers[0].opened_sessions == []
+    assert fake_webview.window.focus_calls == ["show"]
+
+
 def test_page_pushes_reach_the_window_page_until_it_closes(
     tmp_path: Path,
     launch_seams: LaunchSeams,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dispatchers: list[RecordingDispatcher] = []
     voice_sinks: list[Any] = []
-
-    class RecordingDispatcher:
-        def __init__(self) -> None:
-            self.window: Any = None
-            self.requests: list[tuple[str, str]] = []
-            self.closed = False
-            dispatchers.append(self)
-
-        def attach_window(self, window: Any) -> None:
-            self.window = window
-
-        def request_live(self, action: str, source: str) -> None:
-            self.requests.append((action, source))
-
-        def publish_status(self, _status: Any) -> None:
-            pass
-
-        def publish_event(self, _event: Any) -> None:
-            pass
-
-        def close(self) -> None:
-            self.closed = True
+    dispatchers = _record_page_events(monkeypatch)
 
     original_create_voice = desktop_main._create_voice
 
@@ -1052,7 +1198,6 @@ def test_page_pushes_reach_the_window_page_until_it_closes(
         voice_sinks.append(page_events)
         return original_create_voice(args, settings, server_url, page_events)
 
-    monkeypatch.setattr(desktop_page_events, "PageEventDispatcher", RecordingDispatcher)
     monkeypatch.setattr(desktop_main, "_create_voice", create_voice)
 
     fake_webview = _launch(tmp_path)

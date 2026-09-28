@@ -2,12 +2,15 @@
 
 The harness starts one recording right before a level's load phase and stops
 it right after. The stop result carries a metric summary (timings, gauge
-maxima, Event Loop stalls with sampled stacks) and the path of the full trace
-file, which is copied into the level's result folder.
+maxima, counters, Event Loop stalls with sampled stacks) and the path of the
+full trace file, which is copied into the level's result folder. A recording
+that reached its time limit first stopped itself; a duration run then reads
+its stop result back from the server's data directory.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
@@ -21,6 +24,9 @@ METHOD_NOT_FOUND_CODE = "method_not_found"
 TOP_WORKER_POOLS = 5
 TOP_METRICS = 15
 STALL_FRAMES = 12
+RECORDINGS_DIRECTORY = Path("artifacts") / "performance"
+SUMMARY_SUFFIX = ".summary.json"
+TRACE_SUFFIX = ".trace.json"
 _WORKER_POOL_PREFIX = "worker_pool."
 _TOOL_PREFIX = "tool."
 # Digest key -> server histogram name (see the Performance domain's metric catalog).
@@ -82,17 +88,45 @@ def start_recording(rpc: RpcCaller, *, label: str, max_seconds: float) -> dict[s
     return dict(status)
 
 
-def stop_recording(rpc: RpcCaller) -> dict[str, Any]:
-    """Stop the level's recording and return the server's full stop result."""
+def stop_recording(
+    rpc: RpcCaller, *, finished_in: Path | None = None, recording_id: str | None = None
+) -> dict[str, Any]:
+    """Stop the level's recording and return the server's full stop result.
+
+    With ``finished_in`` (the server's data directory) and ``recording_id``, a
+    recording that already stopped at its time limit is read back from disk
+    instead of failing.
+    """
     try:
         result = rpc.call("performance.recording_stop", {})
     except RpcCallError as exc:
         if exc.code == RECORDING_INACTIVE_CODE:
+            if finished_in is not None and recording_id is not None:
+                recovered = read_finished_recording(finished_in, recording_id)
+                if recovered is not None:
+                    return recovered
             raise RecordingError(
                 "the recording ended before the load phase finished; raise --recording-max-seconds"
             ) from exc
         raise RecordingError(f"performance.recording_stop failed: {exc}") from exc
     return dict(result)
+
+
+def read_finished_recording(data_dir: Path, recording_id: str) -> dict[str, Any] | None:
+    """The stop result of a finished recording, rebuilt from its summary file."""
+    directory = data_dir / RECORDINGS_DIRECTORY
+    try:
+        document = json.loads(
+            (directory / f"{recording_id}{SUMMARY_SUFFIX}").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    return {
+        **document,
+        "trace_path": (directory / f"{recording_id}{TRACE_SUFFIX}").absolute().as_posix(),
+    }
 
 
 def copy_trace(stop_result: Mapping[str, Any], destination_dir: Path) -> Path | None:
@@ -133,7 +167,16 @@ def digest_recording(stop_result: Mapping[str, Any]) -> dict[str, Any]:
         "worker_pools": _worker_pools(metrics, gauges),
         "top_metrics": _top_metrics(metrics),
         "stalls": _stalls(stalls),
+        "counters": _counters(summary.get("counters")),
     }
+
+
+def _counters(raw: Any) -> dict[str, int | float] | None:
+    """All counter totals, largest first; ``None`` for servers without counters."""
+    if not isinstance(raw, dict):
+        return None
+    counters = {str(name): value for name, value in raw.items() if isinstance(value, int | float)}
+    return dict(sorted(counters.items(), key=lambda item: (-item[1], item[0])))
 
 
 def _mapping(value: Any) -> dict[str, Any]:

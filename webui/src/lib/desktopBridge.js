@@ -12,6 +12,7 @@ const LIVE_REQUEST_EVENT = 'vbot-desktop-live';
 const LIVE_REQUEST_ACTIONS = new Set(['start', 'toggle']);
 const LIVE_REQUEST_SOURCES = new Set(['wakeword', 'hotkey']);
 const VOICE_PUSH_EVENT = 'vbot-desktop-voice';
+const OPEN_SESSION_EVENT = 'vbot-desktop-open-session';
 // The Voice UI works only against this Desktop Voice bridge version.
 const DESKTOP_VOICE_API_VERSION = 2;
 // A Live voice start never waits longer than this for the Desktop capabilities
@@ -586,6 +587,33 @@ export function onDesktopLiveRequest(handler) {
   };
   window.addEventListener(LIVE_REQUEST_EVENT, listener);
   return () => window.removeEventListener(LIVE_REQUEST_EVENT, listener);
+}
+
+/**
+ * Handle the Desktop's requests to open one Session (a later launch of the
+ * Desktop app with `--open-session`, for example from a tray notification).
+ *
+ * `handler({agentId, sessionId})` receives the Agent address (`agent` or
+ * `agent@project`) and the Session id; returning `false` reports the request
+ * as not handled. Returns a cleanup function.
+ */
+export function onDesktopOpenSession(handler) {
+  if (typeof window === 'undefined') return () => {};
+  const listener = (event) => {
+    const agentId = event?.detail?.agent;
+    const sessionId = event?.detail?.session;
+    if (
+      typeof agentId !== 'string' ||
+      typeof sessionId !== 'string' ||
+      !agentId ||
+      !sessionId
+    )
+      return;
+    // The Desktop reads a cancelled event as "handled".
+    if (handler({ agentId, sessionId }) !== false) event.preventDefault();
+  };
+  window.addEventListener(OPEN_SESSION_EVENT, listener);
+  return () => window.removeEventListener(OPEN_SESSION_EVENT, listener);
 }
 
 /**

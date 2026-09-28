@@ -18,7 +18,7 @@ export default Object.freeze({
   'settings.providers.opencode.removeKey': 'Remove shared key',
   'settings.pages.general': 'General',
   'settings.pages.generalDescription':
-    'Display, conversation titles, and regional preferences.',
+    'Display, conversation titles, regional preferences, and desktop notifications.',
   'settings.pages.providersDescription':
     'Connect the services and local runtimes that supply your Models.',
   'settings.pages.voiceDescription':
@@ -133,15 +133,16 @@ export default Object.freeze({
   'settings.general.setupGuideAction': 'Open setup guide',
   'settings.general.clients.title': 'Connected clients',
   'settings.general.clients.description':
-    'App windows currently connected to this server (browser tabs and the Desktop app).',
+    'Apps currently connected to this server (browser tabs, the Desktop app and the vBot tray).',
   'settings.general.clients.loading': 'Loading connected clients…',
-  'settings.general.clients.empty': 'No app windows connected.',
+  'settings.general.clients.empty': 'No apps connected.',
   'settings.general.clients.loadError':
     'Connected clients could not be loaded.',
   'settings.general.clients.thisWindow': 'This window',
   'settings.general.clients.connectedAt': 'Connected {time}',
   'settings.general.clients.accessor.browser': 'Browser',
   'settings.general.clients.accessor.desktop': 'Desktop',
+  'settings.general.clients.accessor.tray': 'vBot tray',
   'settings.general.clients.accessor.unknown': 'Unknown',
   'settings.general.clients.status.connected': 'Connected',
   'settings.defaults.model': 'Model',
@@ -207,6 +208,25 @@ export default Object.freeze({
   'settings.reflection.skillIntervalDescription':
     'A skill review becomes due after this many completed Model request/response pairs in a conversation.',
   'settings.reflection.saveSuccess': 'Reflection settings updated.',
+  'settings.notifications.title': 'Desktop notifications',
+  'settings.notifications.intro':
+    'Windows notifications shown by the vBot tray app of an installed vBot on Windows. A notification about a Session is skipped while you are already looking at that Session.',
+  'settings.notifications.runCompleted': 'Run completed',
+  'settings.notifications.runCompletedDescription':
+    'Notify when an Agent finishes a Run in a Session.',
+  'settings.notifications.runFailed': 'Run failed',
+  'settings.notifications.runFailedDescription':
+    'Notify when an Agent Run in a Session ends with an error.',
+  'settings.notifications.automationFailed': 'Automation failed',
+  'settings.notifications.automationFailedDescription':
+    'Notify when a Cron job or Calendar action fails.',
+  'settings.notifications.updateResult': 'Update result',
+  'settings.notifications.updateResultDescription':
+    'Notify when an application update finishes or fails.',
+  'settings.notifications.serverStopped': 'Server stopped',
+  'settings.notifications.serverStoppedDescription':
+    'Notify when the local vBot server stops unexpectedly.',
+  'settings.notifications.saveSuccess': 'Notification settings updated.',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.summaryModelPlaceholder': 'Active agent model',
   'settings.compaction.saved': 'Compaction settings saved.',

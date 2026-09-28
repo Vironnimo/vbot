@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
+from core.performance import PerformanceService
+from core.performance.performance import reset_for_tests
 from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT, ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import SessionAddress
 from core.tools import FileReadState, register_read_tool
@@ -273,14 +275,23 @@ async def test_sse_stream_close_removes_run_subscriber() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sse_stream_emits_heartbeat_while_run_is_quiet() -> None:
+async def test_sse_stream_emits_heartbeat_while_run_is_quiet(tmp_path: Path) -> None:
+    reset_for_tests()
     run = Run(run_id="run-heartbeat", agent_id="coder", session_id="session-one")
     stream = _sse_run_events(run, heartbeat_interval_seconds=0.001)
 
     heartbeat = await asyncio.wait_for(anext(stream), timeout=1)
+    run.emit("visible", {"content": "hello"})
+    while "event: visible" not in await asyncio.wait_for(anext(stream), timeout=1):
+        pass
 
     assert heartbeat == "event: heartbeat\ndata: {}\n\n"
     assert run.subscriber_count == 1
+    # Only Run events count as sent SSE events; heartbeats are transport-only.
+    service = PerformanceService(tmp_path / "performance")
+    assert (await service.snapshot())["counters"]["events.sse"] == 1
+    await service.aclose()
+    reset_for_tests()
 
     await stream.aclose()
 

@@ -109,12 +109,18 @@
     debugStatus,
     acknowledgeDataStoreIncident,
     getDataStoreStatus,
+    reportClientMetrics,
     showProject,
   } from '$lib/api.js';
+  import { startClientMetrics } from '$lib/clientMetrics.js';
   import {
     createAutosaveCoordinator,
     provideAutosaveContext,
   } from '$lib/autosave.js';
+  import {
+    isDesktopAccessor,
+    onDesktopOpenSession,
+  } from '$lib/desktopBridge.js';
   import { viewIdFromLocationHash } from '$lib/navigationHistory.js';
   import { createAppSelection } from './app/selection.svelte.js';
   import { createAppSetup } from './app/setup.svelte.js';
@@ -367,6 +373,14 @@
       appController.navigateToSubAgent(targetOrAgentId, maybeSessionId),
     );
 
+  // Opens one Session from outside the page, the way Live UI's `open` action
+  // does: a startup link or a request of the Desktop app.
+  const openSessionLink = ({ agentId, sessionId }) => {
+    requestAutosaveTransition(() =>
+      appController.navigateToSession(agentId, sessionId),
+    );
+  };
+
   const loadDataStoreStatus = async () => {
     try {
       const result = await getDataStoreStatus();
@@ -467,7 +481,17 @@
   onMount(() => {
     let cancelled = false;
 
+    const stopClientMetrics = startClientMetrics({
+      report: reportClientMetrics,
+    });
     appController.initializeNavigationHistory();
+    const sessionLink = appController.takeSessionLink();
+    if (sessionLink) {
+      openSessionLink(sessionLink);
+    }
+    const stopDesktopSessionRequests = isDesktopAccessor()
+      ? onDesktopOpenSession(openSessionLink)
+      : () => {};
     connectServerEvents();
 
     const onVisibilityChange = () => {
@@ -502,9 +526,11 @@
 
     return () => {
       cancelled = true;
+      stopDesktopSessionRequests();
       selection.destroy();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       appController.destroy();
+      stopClientMetrics();
     };
   });
   function protectPendingEdits(event) {
