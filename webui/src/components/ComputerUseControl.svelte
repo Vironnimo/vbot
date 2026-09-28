@@ -5,51 +5,88 @@
   import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
 
-  let { onError = () => {} } = $props();
+  const EXTENSION = 'computer_use';
+
+  let { onError = () => {}, subscribeInvalidations = null } = $props();
   let status = $state(null);
   let error = $state('');
   let stopping = $state(false);
   let disposed = false;
   let revision = 0;
   let discovered = false;
+  // One refresh runs at a time; a request arriving meanwhile runs once more
+  // afterwards, so the last read always follows the newest change.
+  let refreshing = false;
+  let refreshQueued = false;
+  let rediscover = false;
 
   const control = (action) =>
-    extensionOperation('computer_use', 'control', {
+    extensionOperation(EXTENSION, 'control', {
       action,
       ...(action === 'stop' ? { call_id: status.call_id } : {}),
     });
 
-  onMount(() => {
-    let timer;
-    async function poll() {
-      const requestRevision = revision;
-      try {
+  // Computer Use publishes a change whenever its control status changes, so
+  // the status is read only then. An invalidation without an owner (reconnect,
+  // Extension reload, enable or disable) also checks that it is still loaded.
+  function onInvalidation({ owner }) {
+    if (owner == null) refresh({ discover: true });
+    else if (owner === EXTENSION) refresh();
+  }
+
+  function refresh({ discover = false } = {}) {
+    if (discover) rediscover = true;
+    refreshQueued = true;
+    if (!refreshing && !stopping && !disposed) void drain();
+  }
+
+  async function drain() {
+    refreshing = true;
+    try {
+      while (refreshQueued && !stopping && !disposed) {
+        refreshQueued = false;
+        await load();
+      }
+    } finally {
+      refreshing = false;
+    }
+  }
+
+  async function load() {
+    const requestRevision = revision;
+    try {
+      if (rediscover || !discovered) {
+        rediscover = false;
+        const catalog = await listExtensions();
+        if (disposed || requestRevision !== revision) return;
+        discovered = catalog.extensions.some(
+          (item) => item.name === EXTENSION && item.status === 'loaded',
+        );
         if (!discovered) {
-          const catalog = await listExtensions();
-          if (disposed || requestRevision !== revision) return;
-          discovered = catalog.extensions.some(
-            (item) => item.name === 'computer_use' && item.status === 'loaded',
-          );
-        }
-        if (discovered) {
-          const result = await control('status');
-          if (disposed || requestRevision !== revision || stopping) return;
-          status = result;
+          // An Extension that is not loaded runs no call.
+          status = null;
           error = '';
+          return;
         }
-      } catch (failure) {
-        if (!disposed && requestRevision === revision) {
-          discovered = false;
-          if (status) error = failure.message;
-        }
-      } finally {
-        if (!disposed) timer = setTimeout(poll, discovered ? 2000 : 10000);
+      }
+      const result = await control('status');
+      if (disposed || requestRevision !== revision || stopping) return;
+      status = result;
+      error = '';
+    } catch (failure) {
+      if (!disposed && requestRevision === revision) {
+        discovered = false;
+        if (status) error = failure.message;
       }
     }
-    void poll();
+  }
+
+  $effect(() => subscribeInvalidations?.(onInvalidation));
+
+  onMount(() => {
+    refresh({ discover: true });
     return () => {
       disposed = true;
-      clearTimeout(timer);
     };
   });
 
@@ -67,6 +104,8 @@
       }
     } finally {
       stopping = false;
+      // Read the changes published while the stop was in flight.
+      if (refreshQueued && !refreshing && !disposed) void drain();
     }
   }
 </script>

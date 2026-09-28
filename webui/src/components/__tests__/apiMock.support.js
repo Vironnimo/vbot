@@ -156,6 +156,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     disableChannel: (id) => call('channel.disable', { id }),
     deleteChannel: (id) => call('channel.delete', { id }),
     listExtensions: () => call('extensions.list'),
+    listExtensionRequests: () => call('extensions.requests'),
     reloadExtensions: () => call('extensions.reload'),
     setExtensionSecret: (params) => call('extensions.set_secret', params),
     getStatisticsReport: (params) => call('statistics.report', params),

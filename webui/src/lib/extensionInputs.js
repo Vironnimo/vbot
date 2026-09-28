@@ -1,3 +1,8 @@
+// The `resource` of the change an Extension publishes whenever its pending
+// inputs gain or lose an entry (`PENDING_INPUTS_RESOURCE` in
+// `core/extensions/operations.py`); any owner may publish it.
+export const PENDING_INPUTS_RESOURCE = 'pending_inputs';
+
 // Presentation conversion only; the Extension validates the complete response.
 export function inputFields(request) {
   return Object.entries(

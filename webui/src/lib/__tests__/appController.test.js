@@ -506,12 +506,12 @@ describe('App controller', () => {
     expect(onReloadExtensionPages).toHaveBeenCalledOnce();
   });
 
-  it('hands an owner-scoped Extension change to its page without reloading page descriptors', async () => {
+  it('hands an owner-scoped Extension change to its owner without reloading page descriptors', async () => {
     const onReloadExtensionPages = vi.fn().mockResolvedValue(undefined);
-    const onExtensionPageChange = vi.fn();
+    const onExtensionChange = vi.fn();
     const { controller } = setup({
       onReloadExtensionPages,
-      onExtensionPageChange,
+      onExtensionChange,
     });
     const scope = {
       owner: 'swarm',
@@ -522,14 +522,14 @@ describe('App controller', () => {
 
     await controller.handleServerEvent(resourceChanged('extensions', scope));
 
-    expect(onExtensionPageChange).toHaveBeenCalledExactlyOnceWith(scope);
+    expect(onExtensionChange).toHaveBeenCalledExactlyOnceWith(scope);
     expect(onReloadExtensionPages).not.toHaveBeenCalled();
 
     // An Extension reload carries no scope: its page descriptors may differ.
     await controller.handleServerEvent(resourceChanged('extensions'));
 
     expect(onReloadExtensionPages).toHaveBeenCalledOnce();
-    expect(onExtensionPageChange).toHaveBeenCalledOnce();
+    expect(onExtensionChange).toHaveBeenCalledOnce();
   });
 
   it('applies an Agent rename mapping before reloading and remaps old history entries', async () => {

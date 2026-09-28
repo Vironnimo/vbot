@@ -473,7 +473,7 @@
     onAgentIdChanged: selection.remapIdentityAgentId,
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
-    onExtensionPageChange: extensions.publishPageChange,
+    onExtensionChange: extensions.publishChange,
     onLoadDataStoreStatus: loadDataStoreStatus,
     onSetOnboardingAside: setup.dismissOnboarding,
   });
@@ -570,7 +570,9 @@
       </Button>
     </Banner>
   {/if}
-  <ExtensionRequests />
+  <ExtensionRequests
+    subscribeInvalidations={extensions.subscribeInvalidations}
+  />
   {#snippet sidebarFooter()}
     <LiveVoice
       configured={Boolean(setup.settings?.model_tasks?.live_voice?.target)}
@@ -639,6 +641,7 @@
         {commandsRefreshToken}
         {queueInvalidation}
         {sessionDeletion}
+        subscribeExtensionInvalidations={extensions.subscribeInvalidations}
         hasConnectedProvider={setup.settings === null
           ? null
           : setup.operational}
@@ -655,7 +658,7 @@
           theme={{ ...extensions.extensionPageTheme }}
           locale={setup.settings?.appearance?.language ?? 'en'}
           timezone={dateTimePrefs.timeZone}
-          subscribeInvalidations={extensions.subscribePageInvalidations}
+          subscribeInvalidations={extensions.subscribeInvalidations}
           onRouteChange={(route) => {
             extensions.extensionPageRoute = route;
           }}
