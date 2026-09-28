@@ -14,7 +14,6 @@ from resources.extensions.mcp.content import (
     READ_TOO_LARGE,
     RESULT_DENIED,
     RESULT_MISSING,
-    RESULT_READ_CHARACTERS,
     RESULT_READ_ENTRIES,
     RESULT_TEXT_CHARACTERS,
     RESULT_VIEW_CHARACTERS,
@@ -55,7 +54,6 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
         if "next" not in page:
             break
         arguments = page["next"]
-    oversized = restored.read_result(document, {**continuation, "limit": 10_000})
 
     # The view shows the text start and names the read that continues it; it holds no
     # file path: read is the only way to the saved payload.
@@ -65,8 +63,6 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
     assert f"first {RESULT_TEXT_CHARACTERS} of {len(text)} characters" in receipt["note"]
     assert len(json.dumps(receipt)) < RESULT_VIEW_CHARACTERS
     assert "".join(pieces) == text
-    # A text page holds at most RESULT_READ_CHARACTERS, whatever limit asks for.
-    assert oversized["content"] == text[RESULT_TEXT_CHARACTERS:][:RESULT_READ_CHARACTERS]
     assert document["payload"]["_meta"] == payload["_meta"]
     assert list(payloads(host).rows) == [receipt["result_id"]]
     assert not (host.data_dir / "mcp").exists()
@@ -206,6 +202,31 @@ async def test_large_error_keeps_full_payload_and_bounded_receipt(
 
 def payload_id(message: str) -> str:
     return message.split('"result_id":"', 1)[1].split('"', 1)[0]
+
+
+@pytest.mark.asyncio
+async def test_text_read_over_the_maximum_says_what_it_applied_and_continues_with_it(
+    context_service, host, monkeypatch
+):
+    service, registry, runner, calls = context_service
+    text = "".join(f"{index:05d}" for index in range(4000))
+    payload = {"content": [{"type": "text", "text": text}]}
+    receipt = await _call_returning(payload, context_service, host, monkeypatch)
+    identifier = receipt["data"]["result_id"]
+    call = {"action": "read", "result_id": identifier, "pointer": "/content/0/text"}
+
+    capped = await dispatch(registry, host, {**call, "offset": 3000, "limit": 10000})
+    continued = await dispatch(registry, host, capped["data"]["next"])
+
+    assert model_text(capped) == (
+        f"result_id: {identifier}\npointer: /content/0/text\noffset: 3000\ntotal: 20000\n"
+        "limit: 10000 was reduced to 4000 characters, the maximum for text\n"
+        f'next: {{"action":"read","result_id":"{identifier}","pointer":"/content/0/text",'
+        '"offset":7000,"limit":4000}\n\n' + text[3000:7000]
+    )
+    assert "limit" not in continued["data"]
+    assert continued["data"]["content"] == text[7000:11000]
+    assert continued["data"]["next"]["limit"] == 4000
 
 
 @pytest.mark.asyncio
