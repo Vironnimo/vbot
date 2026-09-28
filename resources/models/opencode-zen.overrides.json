@@ -2,6 +2,7 @@
   "_comment": "Verified Zen Chat profiles: Space Bunny minimum effort (2026-09-24), Qwen3.8 Max binary thinking control (2026-09-28). Both return readable reasoning_content.",
   "models": {
     "qwen3.8-max": {
+      "name": "Qwen3.8 Max",
       "metadata": {
         "opencode_zen": {
           "protocol": "chat_completions",
