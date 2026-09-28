@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import time
 from collections.abc import Callable, Sequence
@@ -208,21 +209,30 @@ async def drive_turns(
     targets: Sequence[SessionTarget],
     directive_for: Callable[[SessionTarget, int], PerfDirective],
     *,
-    turns: int,
+    turns: int | None,
     timeout_seconds: float,
+    deadline: float | None = None,
 ) -> list[RunRecord]:
-    """Run ``turns`` sequential turns in every Session, all Sessions concurrently.
+    """Run sequential turns in every Session, all Sessions concurrently.
 
     Every Session worker waits at a shared gate so all first turns are sent in
-    the same instant; later turns follow as soon as the previous Run ends.
+    the same instant; later turns follow as soon as the previous Run ends. A
+    worker stops after ``turns`` turns or, with ``deadline`` (``time.monotonic``
+    seconds), sends no new turn once it passed; the turn in flight finishes.
     """
+    if turns is None and deadline is None:
+        raise ValueError("drive_turns needs turns or a deadline")
     client = AsyncRpcClient(base_url, max_connections=2 * len(targets) + 8)
     gate = asyncio.Event()
 
     async def session_worker(target: SessionTarget) -> list[RunRecord]:
         await gate.wait()
         records = []
-        for turn_index in range(turns):
+        for turn_index in itertools.count():
+            if turns is not None and turn_index >= turns:
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             records.append(
                 await run_turn(
                     client,

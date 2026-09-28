@@ -14,10 +14,16 @@ and memory, plus the server's own performance recording (Event Loop lag,
 worker pools, SQLite writes, request building, stalls). Results land in
 ``perf-results/load-<UTC timestamp>/`` as ``result.json`` and ``report.md``.
 
+``--scenario swarm`` instead starts one Swarm of the bundled Swarm Extension
+per level with N participants that post to the Board, and ``--duration``
+keeps turns coming for a number of minutes while sampling retained state.
+
 Examples::
 
     python scripts/perf_load.py --quick
     python scripts/perf_load.py --agents 1,10,20,30 --profile
+    python scripts/perf_load.py --scenario swarm --agents 3 --turns 2 --ui
+    python scripts/perf_load.py --agents 10 --duration 30 --ui
     python scripts/perf_load.py --compare perf-results/load-<old>/result.json
     python scripts/perf_load.py compare old/result.json new/result.json
 """
@@ -46,10 +52,15 @@ from scripts.perf_load_suite.runner import (  # noqa: E402
     DEFAULT_LEVELS,
     DEFAULT_OUTPUT_ROOT,
     QUICK_LEVELS,
+    SCENARIOS,
     LoadConfig,
     failed_levels,
     run_load,
 )
+from scripts.perf_load_suite.swarm_script import DEFAULT_SWARM_TOOLS  # noqa: E402
+from scripts.perf_load_suite.timeline import DEFAULT_SNAPSHOT_INTERVAL_SECONDS  # noqa: E402
+
+DEFAULT_TURNS = 3
 
 EXIT_OK = 0
 EXIT_LEVEL_FAILED = 1
@@ -97,24 +108,44 @@ def build_run_parser() -> argparse.ArgumentParser:
     )
     load = parser.add_argument_group("load shape")
     load.add_argument(
+        "--scenario",
+        choices=SCENARIOS,
+        default="sessions",
+        help="sessions: N Sessions receive scripted turns through chat.stream; "
+        "swarm: one Swarm of the bundled Swarm Extension with N participants",
+    )
+    load.add_argument(
         "--agents",
         type=_positive_int_list,
         default=",".join(map(str, DEFAULT_LEVELS)),
         metavar="N,N,...",
-        help="concurrency levels; each level runs N Sessions concurrently on a fresh server",
+        help="concurrency levels; each level runs N Sessions (or N Swarm participants) "
+        "concurrently on a fresh server",
     )
-    load.add_argument("--turns", type=int, default=3, help="sequential turns per Session")
+    load.add_argument(
+        "--turns",
+        type=int,
+        help=f"sequential turns per Session or Swarm participant (default {DEFAULT_TURNS})",
+    )
+    load.add_argument(
+        "--duration",
+        type=float,
+        metavar="MINUTES",
+        help="keep sending turns for this many minutes instead of a fixed number, sampling "
+        "server memory, Tasks and garbage collection over time (excludes --turns)",
+    )
     load.add_argument(
         "--identity-agents",
         type=int,
         default=3,
-        help="Identity Agents the Sessions of a level are spread over",
+        help="Identity Agents the Sessions of a level are spread over (sessions scenario)",
     )
     load.add_argument(
         "--history-tokens",
         type=int,
         default=0,
-        help="grow every Session's history by about this many tokens before measuring",
+        help="grow every Session's history by about this many tokens before measuring "
+        "(sessions scenario)",
     )
     load.add_argument(
         "--quick",
@@ -141,9 +172,10 @@ def build_run_parser() -> argparse.ArgumentParser:
     scripted.add_argument(
         "--tools",
         type=_name_list,
-        default=",".join(DEFAULT_TOOLS),
         metavar="NAME,NAME,...",
-        help="Tools rotated through the Tool-call rounds",
+        help="Tools rotated through the Tool-call rounds; Swarm Tools may name an action "
+        f"(swarm_board.read). Default: {','.join(DEFAULT_TOOLS)} (sessions), "
+        f"{','.join(DEFAULT_SWARM_TOOLS)} (swarm)",
     )
     scripted.add_argument("--calls", type=int, default=1, help="parallel Tool calls per round")
     measure = parser.add_argument_group("measurement")
@@ -162,6 +194,13 @@ def build_run_parser() -> argparse.ArgumentParser:
         "(1-3600 seconds)",
     )
     measure.add_argument(
+        "--snapshot-interval",
+        type=float,
+        default=DEFAULT_SNAPSHOT_INTERVAL_SECONDS,
+        metavar="SECONDS",
+        help="with --duration: how often the server's performance snapshot is sampled",
+    )
+    measure.add_argument(
         "--profile",
         action="store_true",
         help="record a py-spy flamegraph of the server during the highest level",
@@ -174,8 +213,9 @@ def build_run_parser() -> argparse.ArgumentParser:
     measure.add_argument(
         "--ui",
         action="store_true",
-        help="watch one streaming Session in a headless browser (needs Node.js, "
-        "npm ci in tests/e2e and a built WebUI); skipped with a message when unavailable",
+        help="watch one streaming Session (swarm: the Swarm page with the running Swarm) "
+        "in a headless browser and count its RPC calls (needs Node.js, npm ci in tests/e2e "
+        "and a built WebUI); skipped with a message when unavailable",
     )
     output = parser.add_argument_group("output")
     output.add_argument(
@@ -209,19 +249,25 @@ def build_compare_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args: argparse.Namespace) -> LoadConfig:
+    if args.duration is not None and args.turns is not None:
+        raise ValueError("--duration and --turns exclude each other")
+    turns = args.turns if args.turns is not None else DEFAULT_TURNS
     return LoadConfig(
         levels=QUICK_LEVELS if args.quick else args.agents,
-        turns=1 if args.quick else args.turns,
+        scenario=args.scenario,
+        turns=1 if args.quick else turns,
+        duration_minutes=args.duration,
         identity_agents=args.identity_agents,
         steps=args.steps,
         tokens=args.tokens,
         rate=args.rate,
         think_ms=args.think_ms,
-        tools=args.tools,
+        tools=args.tools or (),
         calls=args.calls,
         history_tokens=args.history_tokens,
         run_timeout_seconds=args.run_timeout,
         recording_max_seconds=args.recording_max_seconds,
+        snapshot_interval_seconds=args.snapshot_interval,
         profile=args.profile or args.profile_gil,
         profile_gil=args.profile_gil,
         ui=args.ui,
