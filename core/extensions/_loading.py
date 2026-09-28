@@ -164,7 +164,7 @@ def _register_extension(
     except (Exception, asyncio.CancelledError) as exc:
         _LOGGER.error("Extension %r register() raised: %s", name, exc, exc_info=True)
         record.status = "failed"
-        record.error = f"register() raised: {exc}"
+        record.error = f"register() raised: {str(exc) or type(exc).__name__}"
         return record
 
     if inspect.iscoroutine(result):
@@ -216,7 +216,7 @@ def _await_pending_registers(pending: list[tuple[ExtensionRecord, Any]]) -> None
                 "Extension %r async register() raised: %s", record.name, exc, exc_info=True
             )
             record.status = "failed"
-            record.error = f"async register() raised: {exc}"
+            record.error = f"async register() raised: {str(exc) or type(exc).__name__}"
 
 
 def _detach_register_task(task: asyncio.Task[None], record: ExtensionRecord) -> None:
@@ -274,7 +274,7 @@ async def _await_pending_registers_async(pending: list[tuple[ExtensionRecord, An
                 "Extension %r async register() raised: %s", record.name, exc, exc_info=True
             )
             record.status = "failed"
-            record.error = f"async register() raised: {exc}"
+            record.error = f"async register() raised: {str(exc) or type(exc).__name__}"
 
 
 def _run_coroutine_to_completion(coro: Any, timeout_seconds: float | None = None) -> None:

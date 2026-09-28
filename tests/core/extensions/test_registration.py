@@ -77,7 +77,7 @@ async def test_async_register_completes_before_declarations_apply(
 
     cancelled = record(registry, "a_cancelled")
     assert cancelled.status == "failed"
-    assert "async register() raised" in (cancelled.error or "")
+    assert cancelled.error == "async register() raised: CancelledError"
     assert record(registry, "async_ext").status == "loaded"
     await registry.dispatch_run_start(hook_context(), session_id="s", agent_id="a")
     assert marker_lines(marker) == ["async_ext"]

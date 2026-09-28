@@ -212,7 +212,7 @@ def test_each_load_failure_fails_only_its_extension(tmp_path: Path) -> None:
         "future": "api_version",
         "import_boom": "import failed: import boom",
         "register_boom": "register() raised: nope",
-        "register_cancelled": "register() raised",
+        "register_cancelled": "register() raised: CancelledError",
         "bad_settings": "Bad",
         "double_settings": "already declared",
     }
