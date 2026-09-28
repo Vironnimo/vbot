@@ -79,9 +79,9 @@ export function describeCronExpression(expression) {
 }
 
 export const CRON_STATUS_ACTIVE = 'active';
-export const CRON_STATUS_PAUSED = 'paused';
+const CRON_STATUS_PAUSED = 'paused';
 export const CRON_STATUS_COMPLETED = 'completed';
-export const CRON_STATUS_FAILED = 'failed';
+const CRON_STATUS_FAILED = 'failed';
 export const CRON_STATUS_MISSED = 'missed';
 
 export function createCronViewState() {
@@ -357,7 +357,7 @@ function toDateTimeLocalInput(value, timezone = 'UTC') {
   }
 }
 
-export function formatTimestamp(value, timezone = 'UTC', locale = 'en-GB') {
+function formatTimestamp(value, timezone) {
   if (!value) {
     return '';
   }
@@ -368,7 +368,7 @@ export function formatTimestamp(value, timezone = 'UTC', locale = 'en-GB') {
   }
 
   try {
-    return new Intl.DateTimeFormat(locale, {
+    return new Intl.DateTimeFormat('en-GB', {
       timeZone: timezone,
       year: 'numeric',
       month: 'short',

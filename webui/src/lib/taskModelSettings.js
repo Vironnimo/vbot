@@ -1,11 +1,11 @@
-export const TASK_SPEECH_TO_TEXT = 'speech_to_text';
-export const TASK_TEXT_TO_SPEECH = 'text_to_speech';
-export const TASK_IMAGE_UNDERSTANDING = 'image_understanding';
-export const TASK_IMAGE_GENERATION = 'image_generation';
-export const TASK_VIDEO_GENERATION = 'video_generation';
-export const TASK_MUSIC_GENERATION = 'music_generation';
-export const TASK_TEXT_EMBEDDING = 'text_embedding';
-export const TASK_LIVE_VOICE = 'live_voice';
+const TASK_SPEECH_TO_TEXT = 'speech_to_text';
+const TASK_TEXT_TO_SPEECH = 'text_to_speech';
+const TASK_IMAGE_UNDERSTANDING = 'image_understanding';
+const TASK_IMAGE_GENERATION = 'image_generation';
+const TASK_VIDEO_GENERATION = 'video_generation';
+const TASK_MUSIC_GENERATION = 'music_generation';
+const TASK_TEXT_EMBEDDING = 'text_embedding';
+const TASK_LIVE_VOICE = 'live_voice';
 
 export const JSON_OPTION_TYPE = 'json';
 
@@ -147,12 +147,7 @@ export function normalizeTaskModelSettings(settings) {
 }
 
 export function normalizeTargets(result) {
-  const targets = Array.isArray(result?.targets) ? result.targets : result;
-  if (!Array.isArray(targets)) {
-    return [];
-  }
-
-  return targets
+  return result.targets
     .map((target) => ({
       id: textOrEmpty(target?.id),
       label: textOrFallback(target?.label, target?.id),

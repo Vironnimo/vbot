@@ -3,8 +3,8 @@ export const LOGS_STREAM_STATUS_CONNECTING = 'connecting';
 export const LOGS_STREAM_STATUS_CONNECTED = 'connected';
 export const LOGS_STREAM_STATUS_RECONNECTING = 'reconnecting';
 export const LOGS_STREAM_STATUS_ERROR = 'error';
-export const LOGS_SORT_ORDER_NEWEST = 'newest';
-export const LOGS_SORT_ORDER_OLDEST = 'oldest';
+const LOGS_SORT_ORDER_NEWEST = 'newest';
+const LOGS_SORT_ORDER_OLDEST = 'oldest';
 
 const ALL_LEVELS_FILTER = 'all';
 const SORT_ORDER_OPTIONS = [LOGS_SORT_ORDER_NEWEST, LOGS_SORT_ORDER_OLDEST];
@@ -123,7 +123,7 @@ export function deriveLevelOptions(entries) {
   return [ALL_LEVELS_FILTER, ...Array.from(levels).sort()];
 }
 
-function filterLogEntries(entries, filters = {}) {
+function filterLogEntries(entries, filters) {
   const levelFilter = filters.levelFilter;
   const searchNeedle = normalizeSearchText(filters.searchText);
 

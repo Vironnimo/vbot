@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  TASK_IMAGE_GENERATION,
-  TASK_SPEECH_TO_TEXT,
-  TASK_TEXT_EMBEDDING,
   createTaskModelUpdatePayload,
   isOptionFieldHidden,
   normalizeOptionSchema,
@@ -34,16 +31,16 @@ describe('task model bindings', () => {
     const bindings = normalizeTaskModelSettings(raw);
     const payload = createTaskModelUpdatePayload(bindings);
 
-    expect(payload[TASK_SPEECH_TO_TEXT]).toEqual({
+    expect(payload.speech_to_text).toEqual({
       target: 'openrouter/openai/gpt-4o-transcribe::api-key',
       options: { language: 'auto' },
     });
-    expect(payload[TASK_TEXT_EMBEDDING]).toEqual({
+    expect(payload.text_embedding).toEqual({
       target: 'openrouter/google/gemini-embedding-2::api-key',
       options: { dimensions: 768 },
     });
     // Unbound rows are sent as an explicit "not configured".
-    expect(payload[TASK_IMAGE_GENERATION]).toEqual({ target: '', options: {} });
+    expect(payload.image_generation).toEqual({ target: '', options: {} });
     expect(
       taskModelBindingsMatch(bindings, normalizeTaskModelSettings(raw)),
     ).toBe(true);
@@ -54,11 +51,11 @@ describe('task model bindings', () => {
     const saved = normalizeTaskModelSettings(raw);
     const draft = {
       ...saved,
-      [TASK_IMAGE_GENERATION]: { target: 'openai/gpt-image-1', options: {} },
+      image_generation: { target: 'openai/gpt-image-1', options: {} },
     };
 
     expect(createTaskModelUpdatePayload(draft, saved)).toEqual({
-      [TASK_IMAGE_GENERATION]: { target: 'openai/gpt-image-1', options: {} },
+      image_generation: { target: 'openai/gpt-image-1', options: {} },
     });
   });
 
@@ -70,7 +67,6 @@ describe('task model bindings', () => {
     ).toEqual([
       { id: 'target-1', label: 'Target 1', usable: true, kind: 'provider' },
     ]);
-    expect(normalizeTargets({})).toEqual([]);
 
     const fields = normalizeOptionSchema({
       schema: {
