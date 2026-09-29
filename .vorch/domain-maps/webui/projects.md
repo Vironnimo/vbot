@@ -35,7 +35,7 @@ The view forwards user intent to the controller; the controller alone sequences 
 
 ## Refresh and error behavior
 
-- List refresh preserves the selected Project when it still exists and selects a valid fallback when it does not. Detail and scan responses are discarded if they belong to a no-longer-selected Project.
+- The view's place is `[projectId]` (`webui/app-shell.md` -> Navigation): choosing or adding a Project is a history step; the empty place shows the shared managed Project, and a removed or unknown Project corrects the entry. List refresh prefers the Project the place names, then the selected one, then the first. Detail and scan responses are discarded if they belong to a no-longer-selected Project.
 - Mutations reconcile the authoritative Project list/detail or returned scan before clearing controller-owned busy state. Errors stay attached to the operation that failed and do not silently discard the current management draft.
 - `resource_changed` can request a Projects refresh through the app shell. The Projects controller decides when refreshed state can safely replace an active form or modal.
 
