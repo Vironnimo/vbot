@@ -6,6 +6,7 @@ import asyncio
 import traceback
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -14,6 +15,7 @@ import telegram
 from telegram.error import BadRequest, ChatMigrated, NetworkError, RetryAfter, TimedOut
 
 from core.channels import ChannelError
+from core.channels._telegram_transport import TelegramTransport
 from core.channels.adapter import FileData, ReplyPlanFacts
 from core.channels.telegram import (
     TELEGRAM_CAPTION_LIMIT,
@@ -273,6 +275,43 @@ async def test_typing_shows_in_the_topic_while_a_run_is_active(
     await clock.advance(4)
     assert bot.send_chat_action.await_count == 2
     await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_stopping_typing_keeps_a_cancellation_of_the_waiting_worker() -> None:
+    # Stopping a Channel waits for its conversation workers. A worker that
+    # absorbed its cancellation while the indicator wound down would wait for
+    # its next queued message forever.
+    typing = asyncio.Event()
+    winding_down = asyncio.Event()
+
+    async def send_chat_action(**_payload: Any) -> None:
+        typing.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # A request takes a moment to wind down; a second cancellation ends it.
+            winding_down.set()
+            await asyncio.Event().wait()
+            raise
+
+    transport = TelegramTransport(
+        "tg-assistant", lambda: SimpleNamespace(send_chat_action=send_chat_action), None
+    )
+    reply_ready = asyncio.Event()
+
+    async def relay() -> None:
+        async with transport.activity_indicator("12345"):
+            await reply_ready.wait()
+
+    worker = asyncio.create_task(relay())
+    await typing.wait()
+    reply_ready.set()
+    # The worker left its block and now waits for the indicator to end.
+    await winding_down.wait()
+    worker.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await worker
 
 
 def _file(filename: str, media_type: str) -> FileData:

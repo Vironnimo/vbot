@@ -502,8 +502,15 @@ class TelegramTransport:
             yield
         finally:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await task
+            except asyncio.CancelledError:
+                # The indicator's own cancellation ends here. A cancellation of
+                # the caller that arrives meanwhile must reach it: a Channel
+                # worker that absorbed it would never end, and stop waits for it.
+                caller = asyncio.current_task()
+                if caller is not None and caller.cancelling():
+                    raise
 
     async def _keep_typing(self, platform_target: str, thread_id: str | None = None) -> None:
         try:
