@@ -81,19 +81,18 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
     affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
 
-    compaction_logger = logging.getLogger("vbot.compaction.coordination")
-    compaction_logger.addHandler(caplog.handler)
-    try:
-        with caplog.at_level("INFO", logger=compaction_logger.name):
-            probe = await auto_compact(loop, agent, session, usage={"input_tokens": 90})
-    finally:
-        compaction_logger.removeHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="vbot.compaction.coordination")
+    probe = await auto_compact(loop, agent, session, usage={"input_tokens": 90})
 
-    logs = [record.getMessage() for record in caplog.records]
-    triggered = next(line for line in logs if line.startswith("Auto-compaction triggered"))
-    assert "input_tokens=90" in triggered and "context_window=100" in triggered
-    completed = next(line for line in logs if line.startswith("Auto-compaction completed"))
-    assert "session=session-one" in completed and "estimated_tokens_after=" in completed
+    # One INFO line reports the committed Compaction; per-step detail stays at DEBUG.
+    [completed] = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.compaction.coordination" and record.levelno >= logging.INFO
+    ]
+    fields = ("session=session-one", "trigger=auto", "reason=context_ratio", "input_tokens=90")
+    assert all(field in completed for field in fields)
+    assert all(key in completed for key in ("tokens_after=", "carried_notes=0", "duration_ms="))
     assert persisted_roles(session.load()) == ["user", "assistant", "compaction_checkpoint"]
     assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) != affinity_before
     [call] = service.compact_calls
@@ -453,7 +452,7 @@ async def test_continuation_skips_model_call_without_reclaimable_new_context(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [False, True], ids=["completed", "failed"])
 async def test_user_compaction_waits_for_tool_result_and_continues_run(
-    tmp_path: Path, failure: bool
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, failure: bool
 ) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
@@ -497,6 +496,7 @@ async def test_user_compaction_waits_for_tool_result_and_continues_run(
         compact_error=RuntimeError("test failure") if failure else None,
     )
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    caplog.set_level(logging.INFO, logger="vbot.compaction.coordination")
 
     run = await loop.start_run("coder", "Continue", session_id=session.id)
     await asyncio.wait_for(started.wait(), WAIT_SECONDS)
@@ -513,6 +513,13 @@ async def test_user_compaction_waits_for_tool_result_and_continues_run(
     assert call["message_roles"][-2:] == ["assistant", "tool"]
     assert call["minimum_reclaim_tokens"] == MIN_AUTO_COMPACTION_RECLAIM_TOKENS
     assert run.compaction_state == "idle"
+    # The one outcome line labels the user request as manual, never as automatic.
+    [outcome] = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.compaction.coordination" and record.levelno >= logging.INFO
+    ]
+    assert "trigger=manual" in outcome
     roles = persisted_roles(session.load())
     event_types = {event.type for event in await runtime.timelines.events(run)}
     if failure:

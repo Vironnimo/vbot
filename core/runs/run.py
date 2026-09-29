@@ -402,7 +402,7 @@ class Run:
         if self.compaction_state == "idle":
             self._user_compaction_requested = True
             self.set_compaction_state("pending")
-            _LOGGER.info("Compaction requested (run=%s session=%s)", self.id, self.session_id)
+            _LOGGER.debug("Compaction requested (run=%s session=%s)", self.id, self.session_id)
         return True
 
     def register_tool_background(self, tool_call_id: str, callback: Callable[[], bool]) -> None:
