@@ -139,7 +139,7 @@
       id: 'extensions',
       label: () => t('settings.extensions.title'),
     },
-    { id: 'server', label: () => t('settings.general.title') },
+    { id: 'server', label: () => t('settings.sections.server') },
     {
       id: 'desktop_connection',
       label: () => t('settings.desktop.connection.title'),

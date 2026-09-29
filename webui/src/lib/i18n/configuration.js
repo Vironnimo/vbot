@@ -114,7 +114,7 @@ export default Object.freeze({
   'settings.desktop.connection.removeSuccess': 'Server removed.',
   'settings.desktop.connection.removeError': 'Server could not be removed.',
   'settings.desktop.switchModalTitle': 'Switch server',
-  'settings.general.title': 'Server',
+  'settings.sections.server': 'Server',
   'settings.general.serverHost': 'Server host',
   'settings.general.dataDirectory': 'Data directory',
   'settings.general.dataDirectoryHelp':
@@ -217,11 +217,11 @@ export default Object.freeze({
   'settings.notifications.title': 'Desktop notifications',
   'settings.notifications.intro': 'Shown by the vBot tray app on Windows.',
   'settings.notifications.help':
-    'The vBot tray app of an installed vBot on Windows shows these notifications.\n\nRun completed and Run failed cover Agent Runs in your Sessions, not Sub-Agent, Channel, or other background work. They are skipped while a vBot window already shows that Session.\n\nAutomation failed covers Schedules and Calendar actions that fail. Update result reports how a vBot update ended. Server stopped appears when the server the tray started stops unexpectedly.',
+    'The vBot tray app of an installed vBot on Windows shows these notifications.\n\nRun completed and Run failed cover Agent Runs in your Sessions, not Sub-Agent, Channel, or other background work. They are skipped while a vBot window already shows that Session.\n\nAutomation failed covers Schedules and Calendar actions that fail. Update finished reports how a vBot update ended, successfully or not. Server stopped appears when the server the tray started stops unexpectedly.',
   'settings.notifications.runCompleted': 'Run completed',
   'settings.notifications.runFailed': 'Run failed',
   'settings.notifications.automationFailed': 'Automation failed',
-  'settings.notifications.updateResult': 'Update result',
+  'settings.notifications.updateResult': 'Update finished',
   'settings.notifications.serverStopped': 'Server stopped',
   'settings.notifications.saveSuccess': 'Notification settings updated.',
   'settings.compaction.title': 'Compaction',
@@ -415,9 +415,7 @@ export default Object.freeze({
   'settings.specializedModels.musicGenerationHelp':
     'Used by the generate_music Tool.',
   'settings.specializedModels.embeddingModel': 'Embedding model',
-  'settings.specializedModels.embeddingModelLabel': 'Model',
-  'settings.specializedModels.embeddingModelDescription':
-    'Needed to search past conversations by meaning.',
+  'settings.specializedModels.embeddingModelLabel': 'Semantic search',
   'settings.specializedModels.embeddingModelHelp':
     'Conversation search uses it to find passages by meaning. Your conversation text is sent to this Model’s Provider to build the search index in the background.\n\nSwitching to another Model rebuilds that index from all stored conversations, which adds Provider usage.',
   'settings.specializedModels.noTarget': 'Not configured',

@@ -383,7 +383,7 @@ describe('SettingsView', () => {
         );
 
       search('sleep');
-      expect(resultTitles()).toEqual([t('settings.general.title')]);
+      expect(resultTitles()).toEqual([t('settings.sections.server')]);
 
       // Debug is off, so its trace limit row is hidden.
       search('trace limit');

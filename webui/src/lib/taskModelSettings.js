@@ -92,8 +92,6 @@ const TEXT_EMBEDDING_TASK_ROWS = Object.freeze([
     taskType: TASK_TEXT_EMBEDDING,
     title: () => t('settings.specializedModels.embeddingModel'),
     label: () => t('settings.specializedModels.embeddingModelLabel'),
-    description: () =>
-      t('settings.specializedModels.embeddingModelDescription'),
     help: () => t('settings.specializedModels.embeddingModelHelp'),
   },
 ]);

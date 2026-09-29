@@ -67,7 +67,7 @@ describe('SettingsNotificationsPanel', () => {
       ['Run completed', 'true'],
       ['Run failed', 'true'],
       ['Automation failed', 'true'],
-      ['Update result', 'true'],
+      ['Update finished', 'true'],
       ['Server stopped', 'true'],
     ]);
 
