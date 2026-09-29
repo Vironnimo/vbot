@@ -206,6 +206,107 @@
   function cronTimeLabel(cron) {
     return formatTimeInZone(cron.fire_at, viewState.systemTimeZone, locale);
   }
+
+  // Each view steps by its own period; the arrows name it.
+  const PREV_LABELS = {
+    month: () => t('calendar.prevMonth'),
+    week: () => t('calendar.prevWeek'),
+    day: () => t('calendar.prevDay'),
+    agenda: () => t('calendar.prevAgenda'),
+  };
+  const NEXT_LABELS = {
+    month: () => t('calendar.nextMonth'),
+    week: () => t('calendar.nextWeek'),
+    day: () => t('calendar.nextDay'),
+    agenda: () => t('calendar.nextAgenda'),
+  };
+  let prevLabel = $derived(
+    (PREV_LABELS[viewState.view] ?? PREV_LABELS.month)(),
+  );
+  let nextLabel = $derived(
+    (NEXT_LABELS[viewState.view] ?? NEXT_LABELS.month)(),
+  );
+
+  function entryTime(entry) {
+    if (entry.kind === 'cron') {
+      return cronTimeLabel(entry.cron);
+    }
+    return occurrenceHeading(entry.occurrence);
+  }
+
+  // An entry's details card: its complete title, time with the zone it is
+  // shown in, and what the chip leaves out (notes, repetition, Agent actions;
+  // for a Schedule Run, that clicking opens the Schedule).
+  function entryDetails(entry) {
+    const zone = viewState.systemTimeZone;
+    if (entry.kind === 'cron') {
+      return {
+        title: entry.cron.name,
+        text: t('calendar.details.cronLead'),
+        rows: [
+          { label: t('calendar.details.time'), value: entryTime(entry) },
+          { label: t('calendar.details.timeZone'), value: zone },
+        ],
+      };
+    }
+    const occurrence = entry.occurrence;
+    const actionCount = viewState.actions.filter(
+      (action) => action.event_id === occurrence.event_id,
+    ).length;
+    return {
+      title: entry.title,
+      text: occurrence.notes || '',
+      rows: [
+        { label: t('calendar.details.time'), value: entryTime(entry) },
+        {
+          label: t('calendar.details.timeZone'),
+          value: occurrence.all_day ? '' : zone,
+        },
+        {
+          label: t('calendar.form.recurrence'),
+          value: occurrence.recurring ? t('calendar.detail.recurring') : '',
+        },
+        {
+          label: t('calendar.actions.heading'),
+          value: actionCount ? String(actionCount) : '',
+        },
+      ],
+    };
+  }
+
+  // The entries a month cell has no room for, as time and title rows.
+  function moreDetails(entries) {
+    return {
+      title: t('calendar.details.more'),
+      rows: entries.map((entry) => ({
+        label: entryTime(entry),
+        value: entry.kind === 'cron' ? entry.cron.name : entry.title,
+      })),
+    };
+  }
+
+  // A layer chip: what the layer holds, how many entries this view has, and
+  // whether it is shown.
+  function layerDetails(layer) {
+    const shown =
+      layer === 'local' ? viewState.showLocalLayer : viewState.showCronLayer;
+    return {
+      text:
+        layer === 'local'
+          ? t('calendar.layer.localHint')
+          : t('calendar.layer.cronHint'),
+      rows: [
+        {
+          label: t('calendar.layer.inView'),
+          value: String(layer === 'local' ? localCount : cronCount),
+        },
+        {
+          value: shown ? t('calendar.layer.shown') : t('calendar.layer.hidden'),
+          tone: shown ? undefined : 'muted',
+        },
+      ],
+    };
+  }
 </script>
 
 <div class="view-frame calendar-view">
@@ -228,8 +329,8 @@
               viewState.view,
               stepAnchor(viewState.view, viewState.anchorKey, -1),
             )}
-          ariaLabel={t('calendar.prev')}
-          tooltip={t('calendar.prev')}
+          ariaLabel={prevLabel}
+          tooltip={prevLabel}
         >
           ‹
         </Button>
@@ -248,8 +349,8 @@
               viewState.view,
               stepAnchor(viewState.view, viewState.anchorKey, 1),
             )}
-          ariaLabel={t('calendar.next')}
-          tooltip={t('calendar.next')}
+          ariaLabel={nextLabel}
+          tooltip={nextLabel}
         >
           ›
         </Button>
@@ -271,8 +372,9 @@
             type="button"
             class="calendar-chip calendar-chip--local"
             class:is-off={!viewState.showLocalLayer}
+            aria-pressed={viewState.showLocalLayer}
             onclick={() => controller.toggleLayer('local')}
-            use:tooltip={t('calendar.layer.localHint')}
+            use:tooltip={() => layerDetails('local')}
           >
             {t('calendar.layer.local')}
             <span class="calendar-chip-count">{localCount}</span>
@@ -281,8 +383,9 @@
             type="button"
             class="calendar-chip calendar-chip--cron"
             class:is-off={!viewState.showCronLayer}
+            aria-pressed={viewState.showCronLayer}
             onclick={() => controller.toggleLayer('cron')}
-            use:tooltip={t('calendar.layer.cronHint')}
+            use:tooltip={() => layerDetails('cron')}
           >
             {t('calendar.layer.cron')}
             <span class="calendar-chip-count">{cronCount}</span>
@@ -353,6 +456,7 @@
                 <button
                   type="button"
                   class="calendar-entry calendar-entry--cron"
+                  use:tooltip={() => entryDetails(entry)}
                   onclick={(event) => {
                     event.stopPropagation();
                     onOpenCronJob?.(entry.cron.job_id);
@@ -367,6 +471,7 @@
                 <button
                   type="button"
                   class="calendar-entry"
+                  use:tooltip={() => entryDetails(entry)}
                   class:calendar-entry--allday={entry.all_day}
                   onclick={(event) => {
                     event.stopPropagation();
@@ -392,7 +497,9 @@
               {/if}
             {/each}
             {#if dayEntriesList.length > 4}
-              <span class="calendar-entry-more"
+              <span
+                class="calendar-entry-more"
+                use:tooltip={() => moreDetails(dayEntriesList.slice(4))}
                 >+{dayEntriesList.length - 4}</span
               >
             {/if}
@@ -422,6 +529,7 @@
                 <button
                   type="button"
                   class="calendar-entry calendar-entry--cron"
+                  use:tooltip={() => entryDetails(entry)}
                   onclick={() => onOpenCronJob?.(entry.cron.job_id)}
                 >
                   <span class="calendar-entry-time"
@@ -433,6 +541,7 @@
                 <button
                   type="button"
                   class="calendar-entry"
+                  use:tooltip={() => entryDetails(entry)}
                   class:calendar-entry--allday={entry.all_day}
                   onclick={() => editor.openDetail(entry.occurrence)}
                 >
@@ -478,6 +587,7 @@
               <button
                 type="button"
                 class="calendar-entry calendar-entry--cron"
+                use:tooltip={() => entryDetails(entry)}
                 onclick={() => onOpenCronJob?.(entry.cron.job_id)}
               >
                 <span class="calendar-entry-time"
@@ -489,6 +599,7 @@
               <button
                 type="button"
                 class="calendar-entry"
+                use:tooltip={() => entryDetails(entry)}
                 class:calendar-entry--allday={entry.all_day}
                 onclick={() => editor.openDetail(entry.occurrence)}
               >
@@ -544,6 +655,7 @@
                       <button
                         type="button"
                         class="calendar-entry calendar-entry--cron"
+                        use:tooltip={() => entryDetails(entry)}
                         onclick={() => onOpenCronJob?.(entry.cron.job_id)}
                       >
                         <span class="calendar-entry-time"
@@ -557,6 +669,7 @@
                       <button
                         type="button"
                         class="calendar-entry"
+                        use:tooltip={() => entryDetails(entry)}
                         class:calendar-entry--allday={entry.all_day}
                         onclick={() => editor.openDetail(entry.occurrence)}
                       >
