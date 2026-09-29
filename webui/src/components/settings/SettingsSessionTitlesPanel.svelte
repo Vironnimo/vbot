@@ -3,7 +3,7 @@
 
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import {
@@ -30,7 +30,6 @@
   let {
     settings = null,
     onCommit = noop,
-    onToast = noop,
     onError = noop,
     modelsRefreshToken = 0,
   } = $props();
@@ -137,31 +136,16 @@
     });
   }
 
-  async function save(reason) {
+  async function save() {
     if (sessionTitleSettingsMatch(formValues, settings)) return true;
     return runSettingsSave({
-      reason,
       onCommit,
-      onToast,
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildSessionTitleSettingsPayload(formValues),
-      successTitle: t('settings.sessionTitles.saveSuccess'),
       getDraftSnapshot: () => formValues,
       applyResult: (next) => (formValues = normalizeSessionTitleSettings(next)),
     });
-  }
-
-  function saveNow() {
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-    sessionTitlesAutosave.cancelPendingTimer();
-    void sessionTitlesAutosave.participant.runSave('manual');
   }
 </script>
 
@@ -214,10 +198,9 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={sessionTitlesAutosave.participant.hasChanges()}
-    onClick={saveNow}
+    onClick={() => sessionTitlesAutosave.participant.runSave('manual')}
   />
 </div>

@@ -424,24 +424,18 @@ describe('ProjectsView list and selection', () => {
 describe('ProjectsView Project settings', () => {
   const view = setupProjectsViewSuite();
 
-  it('confirms an unchanged manual Save and then saves only the changed fields', async () => {
+  it('offers Save only for unsaved edits and saves only the changed fields', async () => {
     serveProject({
       default_agent: 'builder',
       default_model: 'openai/gpt-5.2',
       auto_load: ['AGENTS.md'],
     });
-    const onToast = vi.fn();
-    view.mount({ onToast });
+    view.mount();
     await selectDemo();
     await waitForCondition(() => inputById('project-edit-name'));
-
-    buttonByTestId('project-save-demo').click();
-    await waitForCondition(() => onToast.mock.calls.length > 0);
-    expect(onToast).toHaveBeenCalledWith({
-      title: t('common.alreadySaved'),
-      variant: 'success',
-    });
-    expect(setProjectMock).not.toHaveBeenCalled();
+    expect(
+      document.querySelector('[data-testid="project-save-demo"]'),
+    ).toBeNull();
 
     setInputValue('project-edit-name', 'Renamed');
     buttonByTestId('project-save-demo').click();
@@ -701,6 +695,7 @@ describe('ProjectsView Tool and Skill whitelists', () => {
     search.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
     document.querySelector('[aria-label="All Files Tools"]').click();
+    flushSync();
     buttonByTestId('project-save-demo').click();
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);
     expect(setProjectMock).toHaveBeenCalledWith('demo', {
@@ -741,6 +736,7 @@ describe('ProjectsView Tool and Skill whitelists', () => {
 
     unavailableToggle.click();
     toggleByAriaLabel('Toggle tool edit').click();
+    flushSync();
     buttonByTestId('project-save-demo').click();
 
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);
@@ -793,6 +789,7 @@ describe('ProjectsView Tool and Skill whitelists', () => {
       document.querySelector('[data-testid="project-tools-reset"]'),
     );
     buttonByTestId('project-tools-reset').click();
+    flushSync();
     buttonByTestId('project-save-demo').click();
 
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);
@@ -840,6 +837,7 @@ describe('ProjectsView Tool and Skill whitelists', () => {
 
     toggleByAriaLabel('Toggle skill debugging').click();
     toggleByAriaLabel('Toggle skill deploy').click();
+    flushSync();
     buttonByTestId('project-save-demo').click();
 
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);

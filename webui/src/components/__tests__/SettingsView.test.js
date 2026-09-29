@@ -27,6 +27,7 @@ import {
   openWebSearchPanel,
   resetSettingsViewHarness,
   rpcMock,
+  saveStateText,
   selectSearchableOption,
   selectSimpleOption,
   setInputValue,
@@ -549,20 +550,11 @@ describe('SettingsView', () => {
   });
 
   describe('General page', () => {
-    it('keeps the appearance Save enabled and persists the language', async () => {
-      const toastMock = vi.fn();
+    it('persists the language through the appearance save state', async () => {
       const settings = settingsPayload();
       settings.appearance.available_languages = ['en', 'fr'];
-      await mountSettings({ settings }, { onToast: toastMock });
+      await mountSettings({ settings });
       await openSettingsSection('General', 'appearance');
-
-      // A clean form shows the saved state on the same manual Save control,
-      // and saving it writes nothing.
-      const saveButton = getButton('Saved');
-      expect(saveButton.disabled).toBe(false);
-      saveButton.click();
-      flushSync();
-      expect(getSettingsUpdateCalls()).toHaveLength(0);
 
       openSimpleDropdown('settings-appearance-language');
       selectSimpleOption('settings-appearance-language', 'fr');
@@ -581,15 +573,13 @@ describe('SettingsView', () => {
           },
         ],
       ]);
-      await waitForCondition(() => toastMock.mock.calls.length > 0);
-      expect(toastMock).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success' }),
+      await waitForCondition(
+        () => saveStateText('appearance') === t('common.saved'),
       );
       expect(document.querySelector('.banner--success')).toBeNull();
       expect(
         getSimpleTrigger('settings-appearance-language').textContent.trim(),
       ).toBe('fr');
-      expect(saveButton.disabled).toBe(false);
     });
 
     describe('Chat appearance preferences', () => {
@@ -664,8 +654,7 @@ describe('SettingsView', () => {
     });
 
     it('enables automatic Session titles and saves a separate Title Model', async () => {
-      const toastMock = vi.fn();
-      await mountSettings({}, { onToast: toastMock });
+      await mountSettings();
       await openSettingsSection('General', 'session_titles');
 
       // The Title model only appears while automatic titles are on.
@@ -698,9 +687,8 @@ describe('SettingsView', () => {
           model: 'openai/gpt-5.2::api-key',
         },
       });
-      await waitForCondition(() => toastMock.mock.calls.length > 0);
-      expect(toastMock).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success' }),
+      await waitForCondition(
+        () => saveStateText('session_titles') === t('common.saved'),
       );
     });
 
@@ -917,10 +905,9 @@ describe('SettingsView', () => {
 
   describe('Memory and Tools pages', () => {
     it('selects and saves the Recall backend, pointing semantic search at its embedding model', async () => {
-      const toastMock = vi.fn();
       const settings = settingsPayload();
       settings.recall.available_backends = ['sqlite_fts', 'vector', 'hybrid'];
-      await mountSettings({ settings }, { onToast: toastMock });
+      await mountSettings({ settings });
       await openRecallPanel();
       const embeddingNote = () =>
         document.querySelector('[data-recall-embedding-note]');
@@ -939,15 +926,13 @@ describe('SettingsView', () => {
       expect(getSettingsUpdateCalls()[0][1]).toEqual({
         recall: { backend: 'vector' },
       });
-      await waitForCondition(() => toastMock.mock.calls.length > 0);
-      expect(toastMock).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success' }),
+      await waitForCondition(
+        () => saveStateText('recall') === t('common.saved'),
       );
     });
 
     it('selects SearXNG and saves the Web Search provider settings', async () => {
-      const toastMock = vi.fn();
-      await mountSettings({}, { onToast: toastMock });
+      await mountSettings();
       await openWebSearchPanel();
 
       openSimpleDropdown('settings-web-search-provider');
@@ -969,9 +954,8 @@ describe('SettingsView', () => {
           searxng: { base_url: 'http://localhost:9999' },
         },
       });
-      await waitForCondition(() => toastMock.mock.calls.length > 0);
-      expect(toastMock).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success' }),
+      await waitForCondition(
+        () => saveStateText('web_search') === t('common.saved'),
       );
     });
   });

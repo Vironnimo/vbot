@@ -38,7 +38,7 @@ test("an agent can be created, renamed, and deleted", async ({
       agentList.getByRole("button", { name: /^E2E Agent Updated(?:\s|$)/ }),
     ).toBeVisible();
     await expect(
-      agents.getByRole("button", { exact: true, name: "Saved" }),
+      agents.getByRole("status").getByText("Saved", { exact: true }),
     ).toBeVisible();
     await page.reload();
     await expect(

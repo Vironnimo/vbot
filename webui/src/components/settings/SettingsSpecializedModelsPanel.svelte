@@ -7,7 +7,7 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import FormField from '../ui/FormField.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import TextArea from '../ui/TextArea.svelte';
@@ -46,7 +46,6 @@
   let {
     settings = null,
     onCommit = noop,
-    onToast = noop,
     onError = noop,
     modelsRefreshToken = 0,
     taskTypes = null,
@@ -318,24 +317,7 @@
     return true;
   }
 
-  function handleManualTaskModelSave() {
-    if (taskModelSaving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    taskModelsAutosave.cancelPendingTimer();
-    void taskModelsAutosave.participant.runSave('manual');
-  }
-
-  async function saveTaskModelBindings(reason) {
+  async function saveTaskModelBindings() {
     if (
       !autoSaveArmed ||
       taskModelBindingsMatch(taskModelBindings, scopedBindings(settings))
@@ -363,11 +345,6 @@
         taskModelBindings = scopedBindings(nextSettings);
         autoSaveArmed = false;
       }
-      if (reason === 'manual')
-        onToast({
-          title: t('settings.specializedModels.saveSuccess'),
-          variant: 'success',
-        });
       return true;
     } catch (error) {
       onError(`${t('settings.saveError')} ${error.message}`);
@@ -855,11 +832,10 @@
 {/if}
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     saving={taskModelSaving}
     pending={taskModelsAutosave.participant.hasChanges()}
-    onClick={handleManualTaskModelSave}
+    onClick={() => taskModelsAutosave.participant.runSave('manual')}
   />
 </div>
 

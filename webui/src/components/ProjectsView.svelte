@@ -1,7 +1,7 @@
 <script>
   import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
-  import SaveButton from './ui/SaveButton.svelte';
+  import SaveStatus from './ui/SaveStatus.svelte';
   import Banner from './ui/Banner.svelte';
   import ContextMenu from './ui/ContextMenu.svelte';
   import { contextMenuAnchor, isContextMenuKey } from './ui/contextMenu.js';
@@ -80,23 +80,10 @@
     hasChanges: () =>
       hasManageChanges(projectsController.pendingChanges()) ||
       projectsController.pendingOverrideChanges().length > 0,
-    save: async (reason) => {
-      if (
-        reason === 'manual' &&
-        !hasManageChanges(projectsController.pendingChanges()) &&
-        projectsController.pendingOverrideChanges().length === 0
-      ) {
-        onToast({
-          title: t('common.alreadySaved'),
-          variant: 'success',
-        });
-        return true;
-      }
+    save: async () => {
       if (
         hasManageChanges(projectsController.pendingChanges()) &&
-        !(await projectsController.saveSelectedProject({
-          manual: reason === 'manual',
-        }))
+        !(await projectsController.saveSelectedProject())
       ) {
         return false;
       }
@@ -205,7 +192,7 @@
 
   function handleManualSave(event) {
     event.preventDefault();
-    void projectAutosave.runSave('manual', { force: true });
+    void projectAutosave.runSave('manual');
   }
 
   function updateToolAccessOverride(agentId, value) {
@@ -462,11 +449,12 @@
               {navigateToExtensions}
             />
             <div class="management-footer">
-              <SaveButton
+              <SaveStatus
                 type="submit"
                 form="project-settings-form"
                 data-testid={`project-save-${selectedProject.project_id}`}
-                saving={projectsState.editSaving}
+                saving={projectsState.editSaving ||
+                  projectsState.overrideBusyKey !== ''}
                 pending={projectAutosave.hasChanges()}
               />
             </div>

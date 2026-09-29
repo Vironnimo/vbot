@@ -32,6 +32,7 @@
   import Badge from './ui/Badge.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import SaveStatus from './ui/SaveStatus.svelte';
   import EmptyState from './ui/EmptyState.svelte';
 
   const TRACE_LIMIT_MAX = 500;
@@ -53,6 +54,7 @@
   let traceLimitInput = $state(50);
   let settingsReady = $state(false);
   let limitError = $state('');
+  let limitSaving = $state(false);
   let listRequestToken = 0;
   let retentionRevision = 0;
   let disposed = false;
@@ -321,6 +323,7 @@
     }
     limitError = '';
     retentionRevision += 1;
+    limitSaving = true;
     try {
       const result = await updateSettings({ debug: { trace_limit: value } });
       status = { ...status, traceLimit: result?.debug?.trace_limit ?? value };
@@ -331,6 +334,7 @@
       return false;
     } finally {
       retentionRevision += 1;
+      limitSaving = false;
     }
   }
 
@@ -441,11 +445,11 @@
             onClick={() => (showClearConfirm = !showClearConfirm)}
             >{t('debug.clearAll')}</Button
           >
-          <Button
-            variant="tertiary"
+          <SaveStatus
+            saving={limitSaving}
+            pending={autosave.participant.hasChanges()}
             onClick={() => autosave.participant.runSave('manual')}
-            >{t('common.save')}</Button
-          >
+          />
         </div>
         {#if showClearConfirm}
           <p>

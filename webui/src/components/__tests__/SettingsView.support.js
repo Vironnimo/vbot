@@ -181,6 +181,17 @@ export function buttonsByText(label) {
   );
 }
 
+// The text of a Settings section's save state ('' at rest).
+export function saveStateText(sectionId) {
+  return (
+    document
+      .querySelector(
+        `[data-settings-section="${sectionId}"] .save-status [role="status"]`,
+      )
+      ?.textContent.trim() ?? ''
+  );
+}
+
 export function getSettingsUpdateCalls() {
   return rpcMock.mock.calls.filter((call) => call[0] === 'settings.update');
 }

@@ -573,17 +573,14 @@ describe('CronView', () => {
     );
 
     // The first reload does not list the created job yet. When a later
-    // reload does, its submitted values count as saved: no second write.
+    // reload does, its submitted values count as saved: nothing is left to
+    // save and nothing is written again.
     props.cronRefreshToken += 1;
     await waitForCondition(() =>
       document.querySelector('[data-testid="cron-item-job-created"]'),
     );
-    buttonByText(t('common.save')).click();
-    await waitForCondition(() =>
-      toastMock.mock.calls.some(
-        ([toast]) => toast.title === t('common.alreadySaved'),
-      ),
-    );
+    await waitForCondition(() => document.querySelector('.save-status'));
+    expect(document.querySelector('.save-status button')).toBeNull();
     expect(createCronJobMock).toHaveBeenCalledOnce();
     expect(updateCronJobMock).not.toHaveBeenCalled();
   });

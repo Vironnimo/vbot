@@ -433,7 +433,6 @@ export default Object.freeze({
   'cron.errors.missingRequired':
     'Agent, prompt, and a complete schedule are required: a time, at least one day for weekly schedules, and a valid day, minute, or interval. The repeat limit must be a positive whole number.',
   'cron.messages.created': 'Cron job created.',
-  'cron.messages.updated': 'Cron job updated.',
   'cron.messages.deleted': 'Cron job deleted.',
   'cron.messages.enabled': 'Cron job enabled.',
   'cron.messages.disabled': 'Cron job disabled.',
@@ -557,9 +556,6 @@ export default Object.freeze({
   'jev.choice': 'Choice',
   'jev.score': 'Score',
   'jev.noul': 'Yes / no · Noul',
-  'jev.saving': 'Saving…',
-  'jev.saved': 'Saved',
-  'jev.save': 'Save',
   'jev.noResults': 'Evaluate your questions to see their answers here.',
   'jev.history': 'Evaluation history',
   'jev.historyHelp':

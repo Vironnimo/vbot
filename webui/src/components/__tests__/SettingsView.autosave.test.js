@@ -112,9 +112,8 @@ describe('SettingsView editor saving', () => {
     expect(getSettingsUpdateCalls()).toHaveLength(1);
   });
 
-  it('saves every edited field manually and returns the control to Saved', async () => {
-    const toastMock = vi.fn();
-    await mountSubAgents(createSettingsRpcMock(), { onToast: toastMock });
+  it('saves every edited field manually and confirms it in the save state', async () => {
+    await mountSubAgents();
     const inputs = document.querySelectorAll(
       '[data-settings-section="subagents"] input.s-input',
     );
@@ -123,10 +122,10 @@ describe('SettingsView editor saving', () => {
       '8',
       '60',
     ]);
-    const saveControl = inputs[0]
+    const saveState = inputs[0]
       .closest('.settings-editor')
-      .querySelector('.save-button');
-    expect(saveControl.textContent.trim()).toBe('Saved');
+      .querySelector('.save-status');
+    expect(saveState.querySelector('button')).toBeNull();
 
     for (const [index, value] of [
       [0, '5'],
@@ -137,8 +136,7 @@ describe('SettingsView editor saving', () => {
       inputs[index].dispatchEvent(new Event('input', { bubbles: true }));
     }
     flushSync();
-    expect(saveControl.textContent.trim()).toBe('Save');
-    saveControl.click();
+    saveState.querySelector('button').click();
     flushSync();
 
     expect(getSettingsUpdateCalls()).toEqual([
@@ -153,24 +151,12 @@ describe('SettingsView editor saving', () => {
         },
       ],
     ]);
-    await waitForCondition(() => saveControl.textContent.trim() === 'Saved');
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'success' }),
+    await waitForCondition(
+      () =>
+        saveState.querySelector('[role="status"]').textContent.trim() ===
+        'Saved',
     );
-  });
-
-  it('reports a successful no-op when manual save is clicked with no changes', async () => {
-    const toastMock = vi.fn();
-    await mountSubAgents(createSettingsRpcMock(), { onToast: toastMock });
-
-    // A clean draft already reads as saved; clicking still confirms it.
-    getButton('Saved').click();
-    flushSync();
-
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'success' }),
-    );
-    expect(getSettingsUpdateCalls()).toHaveLength(0);
+    expect(saveState.querySelector('button')).toBeNull();
   });
 
   it('cancels a pending debounce timer on manual save', async () => {

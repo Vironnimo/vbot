@@ -6,6 +6,7 @@
   import Badge from '../ui/Badge.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import FormField from '../ui/FormField.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
@@ -52,7 +53,7 @@
   let loadError = $state('');
   let reloading = $state(false);
   let actionName = $state('');
-  let savingConfigName = $state('');
+  let savingConfigNames = $state([]);
   let formStates = $state({});
   let formFieldErrors = $state({});
   let secretDrafts = $state({});
@@ -111,7 +112,7 @@
     loading ||
       reloading ||
       actionName.length > 0 ||
-      savingConfigName.length > 0 ||
+      savingConfigNames.length > 0 ||
       savingSecret.length > 0,
   );
   const autosaveContext = useAutosaveContext();
@@ -150,8 +151,8 @@
   }
 
   // Whether the extension's declared non-secret settings differ from what is
-  // persisted — the dirty test that gates autosave and the "Already saved"
-  // toast. Extensions without a schema expose no configuration surface.
+  // persisted — the dirty test that gates autosave. Extensions without a
+  // schema expose no configuration surface.
   function extensionConfigDirty(extension) {
     if (!hasSettingsSchema(extension)) {
       return false;
@@ -281,38 +282,7 @@
     };
   }
 
-  // Explicit Save on the schema form: a clean form confirms trust with the
-  // shared "Already saved" toast (the same behavior as every autosave surface);
-  // a dirty one persists immediately, cancelling the pending debounce.
-  function handleManualSchemaConfigSave(extension) {
-    if (panelBusy) {
-      return;
-    }
-    if (!extensionConfigDirty(extension)) {
-      // A form with an invalid field is not "already saved" — surface its
-      // validation errors instead of a success toast.
-      const built = buildSchemaConfigFromForm(
-        extension.settingsSchema,
-        formStates[extension.name] ?? {},
-      );
-      if (!built.ok) {
-        formFieldErrors = {
-          ...formFieldErrors,
-          [extension.name]: built.errors,
-        };
-        return;
-      }
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-    clearAutoSaveTimer(extension.name);
-    void extensionConfigAutosave.runSave('manual');
-  }
-
-  async function saveExtensionConfigs(reason) {
+  async function saveExtensionConfigs() {
     if (panelBusy) {
       return false;
     }
@@ -350,7 +320,7 @@
       return true;
     }
 
-    savingConfigName = changedExtensions[0].name;
+    savingConfigNames = [...nextConfigs.keys()];
     onError('');
     const nextExtensions = extensions.map((extension) =>
       nextConfigs.has(extension.name)
@@ -363,18 +333,12 @@
       // Update the persisted baseline without unmounting the form or replacing
       // drafts (including another extension edited during this request).
       extensions = nextExtensions;
-      if (reason === 'manual')
-        onToast({
-          title: t('settings.extensions.settingsSaveSuccess'),
-          variant: 'success',
-        });
-
       return true;
     } catch (error) {
       onError(`${t('settings.saveError')} ${error.message}`);
       return false;
     } finally {
-      savingConfigName = '';
+      savingConfigNames = [];
     }
   }
 
@@ -715,15 +679,12 @@
                   </FormField>
                 {/each}
                 <div class="s-ext-config-actions">
-                  <Button
-                    variant="tertiary"
+                  <SaveStatus
                     disabled={rowBusy}
-                    onClick={() => handleManualSchemaConfigSave(extension)}
-                  >
-                    {savingConfigName === extension.name
-                      ? t('common.saving')
-                      : t('settings.extensions.saveSettings')}
-                  </Button>
+                    saving={savingConfigNames.includes(extension.name)}
+                    pending={extensionDraftHasChanges(extension)}
+                    onClick={() => extensionConfigAutosave.runSave('manual')}
+                  />
                 </div>
               </div>
             {/if}

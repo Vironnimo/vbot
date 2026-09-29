@@ -85,9 +85,7 @@ describe('SettingsNotificationsPanel', () => {
 });
 
 function findSaveButton() {
-  return [...document.body.querySelectorAll('button')].find((button) =>
-    button.className.includes('s-save-button'),
-  );
+  return document.body.querySelector('.save-status button');
 }
 
 async function waitForCondition(check, attempts = 20) {

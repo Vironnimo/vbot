@@ -3,7 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import ServiceApiKey from './ServiceApiKey.svelte';
   import {
     createDebouncedAutosave,
@@ -92,32 +92,16 @@
     onError('');
   }
 
-  async function save(reason) {
+  async function save() {
     if (!hasChanges()) return true;
     return runSettingsSave({
-      reason,
       onCommit,
-      onToast,
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildWebFetchSettingsPayload(draft),
-      successTitle: t('settings.webFetch.saveSuccess'),
       getDraftSnapshot: () => draft,
       applyResult: (next) => (draft = getWebFetchSettings(next)),
     });
-  }
-
-  function manualSave() {
-    if (saving) return;
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-    autosave.cancelPendingTimer();
-    void autosave.participant.runSave('manual');
   }
 </script>
 
@@ -192,10 +176,9 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={autosave.participant.hasChanges()}
-    onClick={manualSave}
+    onClick={() => autosave.participant.runSave('manual')}
   />
 </div>

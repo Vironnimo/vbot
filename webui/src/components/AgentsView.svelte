@@ -719,7 +719,6 @@
                 <SettingsDefaultsPanel
                   settings={sharedSettings}
                   onCommit={commitSharedSettings}
-                  {onToast}
                   onError={sharedSettingsFailure}
                   {modelsRefreshToken}
                 />
@@ -743,7 +742,6 @@
                 <SettingsCompactionPanel
                   settings={sharedSettings}
                   onCommit={commitSharedSettings}
-                  {onToast}
                   onError={sharedSettingsFailure}
                   {modelsRefreshToken}
                 />

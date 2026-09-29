@@ -80,10 +80,17 @@ function button(text) {
   );
 }
 
-// The saved-profile editor's manual Save action (shared SaveButton), whose
-// label follows the draft state: Save, Saving… or Saved.
+// The saved-profile editor's Save action, shown only while its draft is
+// unsaved (null otherwise).
 function saveButton() {
-  return document.querySelector('.swarm-profile-editor .save-button');
+  return document.querySelector('.swarm-profile-editor .save-status button');
+}
+
+// The saved-profile editor's save state text: '', Saving… or Saved.
+function saveStateText() {
+  return document
+    .querySelector('.swarm-profile-editor .save-status [role="status"]')
+    .textContent.trim();
 }
 
 // `detail` replaces the Swarm fixture for every Swarm read of this bridge.
@@ -407,6 +414,7 @@ export {
   swarm,
   button,
   saveButton,
+  saveStateText,
   createBridge,
   overrideOperations,
   swarmWithRun,

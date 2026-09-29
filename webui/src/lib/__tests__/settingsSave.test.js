@@ -21,10 +21,8 @@ function saveOptions(draft, applyResult) {
     buildPayload: () => ({ defaults: { agent: { model: draft.model } } }),
     getDraftSnapshot: () => draft,
     onCommit: vi.fn(),
-    onToast: vi.fn(),
     onError: vi.fn(),
     setSaving: vi.fn(),
-    successTitle: 'Agent defaults updated.',
     applyResult,
   };
 }

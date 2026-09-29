@@ -9,7 +9,7 @@
   import { t } from '$lib/i18n.js';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import Modal from '../ui/Modal.svelte';
   import FormField from '../ui/FormField.svelte';
@@ -186,10 +186,6 @@
       formMode === AGENT_FORM_MODE_EDIT &&
       !agentPayloadHasChanges(result.payload)
     ) {
-      if (source === 'manual') {
-        showAgentToast(t('common.alreadySaved'));
-      }
-
       return true;
     }
 
@@ -226,14 +222,7 @@
         showAgentToast(t('agents.created'));
         await onAgentCreated(savedAgent.id ?? result.payload.id);
       } else {
-        const updatedSelectedAgent = applySavedAgentUpdate(
-          savedAgent,
-          result.payload,
-          draftValues,
-        );
-        if (updatedSelectedAgent && source === 'manual') {
-          showAgentToast(t('agents.updated'));
-        }
+        applySavedAgentUpdate(savedAgent, result.payload, draftValues);
       }
 
       return true;
@@ -352,7 +341,7 @@
       formMode !== AGENT_FORM_MODE_EDIT ||
       editorAgentId !== nextAgent.id
     ) {
-      return false;
+      return;
     }
 
     editBaselineValues = createAgentFormValues(nextAgent);
@@ -360,8 +349,6 @@
     if (formValuesMatch(formValues, draftValues)) {
       formValues = createAgentFormValues(nextAgent);
     }
-
-    return true;
   }
 
   function formValuesMatch(left, right) {
@@ -596,7 +583,7 @@
     />
     <div class="agent-detail-footer">
       {#if formMode === AGENT_FORM_MODE_EDIT}
-        <SaveButton
+        <SaveStatus
           type="submit"
           saving={isSaving}
           pending={!formValuesMatch(formValues, editBaselineValues)}

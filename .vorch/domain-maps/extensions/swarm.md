@@ -57,7 +57,7 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   updates. Failed editor loads leave the overview usable (`SwarmPage.test.js`).
 - Profile editing uses the shared Model search/selection and effort helpers,
   the shared Secondary bar, topic tabs, a bounded scrollport, and the shared
-  `SaveButton` after its fields (Save / Saving… / Saved, reflecting unsaved edits).
+  save state after its fields (`webui/autosave.md`).
   Creation saves explicitly; saved profiles autosave and flush before navigation
   through the generic page bridge. Invalidations preserve the mounted draft.
   The System Prompt tab owns editable instructions, explicit block selection,
@@ -704,7 +704,7 @@ and `SwarmPage.wiki.test.js`.
 
 WikiPanel.svelte shows each page's number in the list and page header and opens
 `#wiki/w3` links by number. List rows show only number and title (no excerpt);
-their tooltip names the latest revision and its author. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations, and only `wiki` changes of its Swarm (or a full refresh) reload the Wiki. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
+their tooltip names the latest revision and its author. It owns free page drafts, bounded content loading, search, version history and restore. Its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations, and only `wiki` changes of its Swarm (or a full refresh) reload the Wiki. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. The editor ends with the shared save state (`webui/autosave.md`), whose Save action also creates a new page. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
 
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are

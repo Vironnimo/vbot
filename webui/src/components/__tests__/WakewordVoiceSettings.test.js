@@ -432,9 +432,9 @@ describe('WakewordVoiceSettings', () => {
         model_sensitivities: { [NABU]: 0.8 },
       });
       expect(owner.adopt).toHaveBeenCalled();
-      expect(document.querySelector('.voice-save-state').textContent).toContain(
-        t('common.saved'),
-      );
+      expect(
+        document.querySelector('.save-status [role="status"]').textContent,
+      ).toContain(t('common.saved'));
     });
 
     it('sends a phrase to its own Agent and Session', async () => {
@@ -727,9 +727,10 @@ describe('WakewordVoiceSettings', () => {
           message: message(),
           variant: 'error',
         });
+        // The unsaved edit offers Save again as its retry.
         expect(
-          document.querySelector('.voice-save-state').textContent,
-        ).toContain(t('common.saveFailed'));
+          document.querySelector('.save-status button').textContent.trim(),
+        ).toBe(t('common.save'));
         expect(
           switchByLabel('Listen for Hey Nabu').getAttribute('aria-checked'),
         ).toBe('false');

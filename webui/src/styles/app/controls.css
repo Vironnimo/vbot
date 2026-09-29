@@ -1315,11 +1315,58 @@ summary:not([class])::-webkit-details-marker {
   align-items: flex-start;
 }
 
-/* Manual Save beside autosaved editors: quiet once everything is persisted. */
-.save-button.btn-tertiary.save-button--saved {
-  color: var(--text-lo);
+/* Save state beside autosaved editors (SaveStatus.svelte). The root keeps the
+   Save action's height, and the state text lines up with the action's
+   label, so switching between them never moves anything. */
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 32px;
 }
 
-.save-button.btn-tertiary.save-button--saved:hover {
-  color: var(--text-hi);
+.save-status__state {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Holds keyboard focus only when the focused Save action goes away. */
+.save-status__state:focus {
+  outline: none;
+}
+
+.save-status__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  color: var(--text-lo);
+  font: 500 var(--fs-body-sm)/1.3 var(--font-ui);
+  white-space: nowrap;
+}
+
+.save-status__text--saved {
+  animation: save-status-saved linear forwards;
+}
+
+.save-status__check {
+  color: var(--green);
+  stroke-width: 2;
+}
+
+@keyframes save-status-saved {
+  0%,
+  80% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .save-status__text--saved {
+    animation: none;
+  }
 }

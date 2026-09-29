@@ -2,7 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import {
     createDebouncedAutosave,
@@ -54,12 +54,7 @@
     return NOTIFICATION_KINDS.every(({ key }) => left[key] === right[key]);
   }
 
-  let {
-    settings = null,
-    onCommit = noop,
-    onToast = noop,
-    onError = noop,
-  } = $props();
+  let { settings = null, onCommit = noop, onError = noop } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
@@ -106,24 +101,7 @@
     notificationAutosave.cancelPendingTimer();
   });
 
-  function handleManualNotificationSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    notificationAutosave.cancelPendingTimer();
-    void notificationAutosave.participant.runSave('manual');
-  }
-
-  async function saveNotificationSettings(reason) {
+  async function saveNotificationSettings() {
     if (
       notificationSettingsMatch(
         notificationSettings,
@@ -134,13 +112,10 @@
     }
 
     return runSettingsSave({
-      reason,
       onCommit,
-      onToast,
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => ({ notifications: { ...notificationSettings } }),
-      successTitle: t('settings.notifications.saveSuccess'),
       getDraftSnapshot: () => notificationSettings,
       applyResult: (next) =>
         (notificationSettings = getNotificationSettings(next)),
@@ -179,11 +154,10 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={notificationAutosave.participant.hasChanges()}
-    onClick={handleManualNotificationSettingsSave}
+    onClick={() => notificationAutosave.participant.runSave('manual')}
   />
 </div>
 

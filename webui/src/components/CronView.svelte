@@ -20,6 +20,7 @@
 
   import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
+  import SaveStatus from './ui/SaveStatus.svelte';
   import Banner from './ui/Banner.svelte';
   import ContextMenu from './ui/ContextMenu.svelte';
   import { contextMenuAnchor, isContextMenuKey } from './ui/contextMenu.js';
@@ -1134,19 +1135,27 @@
               {#if editor.isCreating}
                 <Button
                   variant="secondary"
-                  disabled={editor.isCreating && editor.submittingForm}
+                  disabled={editor.submittingForm}
                   onClick={editor.cancelCreate}
                 >
                   {t('common.cancel')}
                 </Button>
+                <Button
+                  variant="primary"
+                  type="submit"
+                  disabled={editor.submittingForm}
+                >
+                  {editor.submittingForm
+                    ? t('common.saving')
+                    : t('common.save')}
+                </Button>
+              {:else}
+                <SaveStatus
+                  type="submit"
+                  saving={editor.submittingForm}
+                  pending={editor.isDirty}
+                />
               {/if}
-              <Button
-                variant={editor.isCreating ? 'primary' : 'tertiary'}
-                type="submit"
-                disabled={editor.isCreating && editor.submittingForm}
-              >
-                {editor.submittingForm ? t('common.saving') : t('common.save')}
-              </Button>
             </div>
           </form>
         </div>

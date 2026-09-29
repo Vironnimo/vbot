@@ -76,7 +76,7 @@ export function createCronEditor(context) {
   const autosave = createDebouncedAutosave({
     getSnapshot: () => ({ jobId: selectedJobId, values: formValues }),
     hasChanges: () => !isCreating && isDirty,
-    save: (reason) => persistForm(null, reason),
+    save: () => persistForm(),
   });
 
   const unregisterAutosave = autosaveContext.register(autosave.participant);
@@ -106,7 +106,7 @@ export function createCronEditor(context) {
   function submitForm(event) {
     event.preventDefault();
     if (isCreating) return persistForm();
-    return autosave.participant.runSave('manual', { force: true });
+    return autosave.participant.runSave('manual');
   }
 
   let isCronSchedule = $derived(
@@ -271,17 +271,14 @@ export function createCronEditor(context) {
     return true;
   }
 
-  async function persistForm(event = null, reason = 'manual') {
+  async function persistForm(event = null) {
     event?.preventDefault();
 
     if (submittingForm || !validateFormValues()) {
       return false;
     }
 
-    if (!isCreating && !isDirty) {
-      if (reason === 'manual') context.showToast(t('common.alreadySaved'));
-      return true;
-    }
+    if (!isCreating && !isDirty) return true;
     const submitted = cronFormFingerprint(formValues);
     const creating = isCreating;
     submittingForm = true;
@@ -300,7 +297,6 @@ export function createCronEditor(context) {
         context.showToast(t('cron.messages.created'));
       } else {
         await updateCronJob(buildUpdateCronPayload(formValues));
-        if (reason === 'manual') context.showToast(t('cron.messages.updated'));
       }
 
       if (context.destroyed) {

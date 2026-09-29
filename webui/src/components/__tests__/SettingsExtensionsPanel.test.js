@@ -420,22 +420,29 @@ describe('SettingsExtensionsPanel', () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it('confirms an unchanged manual save without writing', async () => {
-    const toastMock = vi.fn();
+  it('saves a changed form from its save state and confirms the save', async () => {
     serveExtensions([
       withSchema([{ key: 'level', type: 'text', label: 'Level' }]),
     ]);
-    await mountPanel({ onToast: toastMock });
+    await mountPanel();
+    const saveState = document.querySelector(
+      '.s-ext-config-actions .save-status',
+    );
+    expect(saveState.querySelector('button')).toBeNull();
 
-    buttonByText(t('settings.extensions.saveSettings')).click();
+    const input = document.querySelector('input[type="text"]');
+    input.value = 'warn';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    saveState.querySelector('button').click();
     await flushAsync();
 
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      }),
+    expect(settingsUpdates()).toHaveLength(1);
+    expect(settingsUpdates()[0][1].extensions.config.guard_bash).toEqual({
+      level: 'warn',
+    });
+    expect(saveState.querySelector('[role="status"]').textContent.trim()).toBe(
+      t('common.saved'),
     );
-    expect(settingsUpdates()).toHaveLength(0);
   });
 });

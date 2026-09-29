@@ -3,7 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
   import { tooltip } from '$lib/tooltip.js';
@@ -59,7 +59,6 @@
   let {
     settings = null,
     onCommit = noop,
-    onToast = noop,
     onError = noop,
     modelsRefreshToken = 0,
   } = $props();
@@ -303,36 +302,16 @@
     );
   }
 
-  function handleManualAgentDefaultsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    agentDefaultsAutosave.cancelPendingTimer();
-    void agentDefaultsAutosave.participant.runSave('manual');
-  }
-
-  async function saveAgentDefaults(reason) {
+  async function saveAgentDefaults() {
     if (!agentDefaultsDraftHasChanges()) {
       return true;
     }
 
     return runSettingsSave({
-      reason,
       onCommit,
-      onToast,
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildAgentDefaultsPayload(agentDefaults),
-      successTitle: t('settings.defaults.saveSuccess'),
       getDraftSnapshot: () => agentDefaults,
       applyResult: (next) =>
         (agentDefaults = normalizeAgentDefaultsFormValues(next)),
@@ -466,10 +445,9 @@
   </div>
 </div>
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={agentDefaultsAutosave.participant.hasChanges()}
-    onClick={handleManualAgentDefaultsSave}
+    onClick={() => agentDefaultsAutosave.participant.runSave('manual')}
   />
 </div>

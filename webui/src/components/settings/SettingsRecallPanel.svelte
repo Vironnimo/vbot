@@ -3,7 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
@@ -22,12 +22,7 @@
 
   const noop = () => {};
 
-  let {
-    settings = null,
-    onCommit = noop,
-    onToast = noop,
-    onError = noop,
-  } = $props();
+  let { settings = null, onCommit = noop, onError = noop } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
@@ -88,36 +83,16 @@
     onError('');
   }
 
-  function handleManualRecallSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    recallAutosave.cancelPendingTimer();
-    void recallAutosave.participant.runSave('manual');
-  }
-
-  async function saveRecallSettings(reason) {
+  async function saveRecallSettings() {
     if (recallSettingsMatch(recallSettings, getRecallSettings(settings))) {
       return true;
     }
 
     return runSettingsSave({
-      reason,
       onCommit,
-      onToast,
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildRecallSettingsPayload(recallSettings),
-      successTitle: t('settings.recall.saveSuccess'),
       getDraftSnapshot: () => recallSettings,
       applyResult: (next) => (recallSettings = getRecallSettings(next)),
     });
@@ -164,11 +139,10 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={recallAutosave.participant.hasChanges()}
-    onClick={handleManualRecallSettingsSave}
+    onClick={() => recallAutosave.participant.runSave('manual')}
   />
 </div>
 

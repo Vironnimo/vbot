@@ -605,11 +605,12 @@ describe('DebugView', () => {
       document.querySelector('.debug-view .empty-state'),
     );
     const input = document.querySelector('input[type="number"]');
-    const save = storageButton(t('common.save'));
+    const save = () => storageButton(t('common.save'));
+    expect(save()).toBeUndefined();
     input.value = '0';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    save.click();
+    save().click();
     await waitForCondition(() =>
       document.querySelector('.debug-storage-content .banner--error'),
     );
@@ -619,7 +620,7 @@ describe('DebugView', () => {
     input.value = '75';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    save.click();
+    save().click();
     await waitForCondition(() => resolveSave);
     input.value = '100';
     input.dispatchEvent(new Event('input', { bubbles: true }));

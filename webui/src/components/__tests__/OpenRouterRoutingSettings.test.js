@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 
 const rpcMock = vi.fn();
@@ -100,7 +100,7 @@ describe('OpenRouterRoutingSettings', () => {
     document
       .querySelector('[aria-label="Allow OpenRouter provider fallbacks"]')
       .click();
-    clickButton('Save routing');
+    clickButton('Save');
 
     await waitForCondition(() => updateCalls().length === 1);
     expect(updateCalls()[0][1]).toEqual({
@@ -119,8 +119,11 @@ describe('OpenRouterRoutingSettings', () => {
       },
     });
     expect(onRefreshProviderSettingsMock).toHaveBeenCalledOnce();
-    expect(onToastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'success' }),
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.openrouter-routing [role="status"]')
+          .textContent.trim() === t('common.saved'),
     );
   });
 
@@ -155,7 +158,7 @@ describe('OpenRouterRoutingSettings', () => {
     clickOption('Preferred provider order');
     expect(document.querySelector('.banner--warn')).toBeTruthy();
 
-    clickButton('Save routing');
+    clickButton('Save');
     await waitForCondition(() => updateCalls().length === 1);
     expect(
       updateCalls()[0][1].providers.openrouter.routing.models[

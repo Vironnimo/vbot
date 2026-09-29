@@ -34,12 +34,16 @@ export function createPromptEditor(context) {
 
   const blockSavePromises = new SvelteMap();
 
+  let hasUnsavedEdits = $derived(
+    blocks.some((block) => block.editable && block.isDirty),
+  );
+
   const promptAutosaveParticipant = {
     flush: flushPendingPromptAutosaves,
     hasPending: () =>
       blockSavePromises.size > 0 ||
       Object.keys(autoSaveTimers).length > 0 ||
-      blocks.some((block) => block.editable && block.isDirty),
+      hasUnsavedEdits,
   };
 
   const unregisterPromptAutosave = context.autosaveContext.register(
@@ -129,7 +133,7 @@ export function createPromptEditor(context) {
     }
     autoSaveTimers[blockId] = scheduleAutosave(() => {
       delete autoSaveTimers[blockId];
-      void saveBlock(blockId, { showSuccessToast: false });
+      void saveBlock(blockId);
     }, AUTO_SAVE_DEBOUNCE_MS);
   }
 
@@ -164,11 +168,7 @@ export function createPromptEditor(context) {
         return true;
       }
 
-      const results = await Promise.all(
-        dirtyIds.map((blockId) =>
-          saveBlock(blockId, { showSuccessToast: false }),
-        ),
-      );
+      const results = await Promise.all(dirtyIds.map(saveBlock));
       if (!results.every(Boolean)) {
         return false;
       }
@@ -177,17 +177,17 @@ export function createPromptEditor(context) {
     return false;
   }
 
-  function saveBlock(blockId, options = {}) {
+  function saveBlock(blockId) {
     const activeSave = blockSavePromises.get(blockId);
     if (activeSave) {
       return activeSave.then((saved) => {
         if (!saved) return false;
         const block = blocks.find((entry) => entry.id === blockId);
-        return block?.isDirty ? saveBlock(blockId, options) : true;
+        return block?.isDirty ? saveBlock(blockId) : true;
       });
     }
 
-    const operation = persistBlock(blockId, options);
+    const operation = persistBlock(blockId);
     blockSavePromises.set(blockId, operation);
     void operation.finally(() => {
       if (blockSavePromises.get(blockId) === operation) {
@@ -197,13 +197,12 @@ export function createPromptEditor(context) {
     return operation;
   }
 
-  async function persistBlock(blockId, options = {}) {
+  async function persistBlock(blockId) {
     const index = blockIndexById(blockId);
     if (index === -1) {
       return false;
     }
     const block = blocks[index];
-    const showSuccessToast = options.showSuccessToast ?? true;
 
     if (!block.editable || !block.isDirty || block.isSaving || block.isBusy) {
       return false;
@@ -237,9 +236,6 @@ export function createPromptEditor(context) {
       if (typeof result.inheritance === 'string') {
         blocks[liveIndex].inheritance = result.inheritance;
       }
-      if (showSuccessToast) {
-        context.showToast(t('common.saved'), 'success');
-      }
       context.schedulePreviewRefresh();
       return true;
     } catch {
@@ -254,32 +250,15 @@ export function createPromptEditor(context) {
   }
 
   async function handleManualSaveAll() {
-    if (isBusy) {
-      return;
-    }
-
     const dirtyIds = blocks
       .filter((block) => block.editable && block.isDirty)
       .map((block) => block.id);
-
-    if (dirtyIds.length === 0) {
-      context.showToast(t('common.alreadySaved'), 'success');
-      return;
-    }
 
     for (const blockId of dirtyIds) {
       clearAutoSaveTimer(blockId);
     }
 
-    const results = await Promise.all(
-      dirtyIds.map((blockId) =>
-        saveBlock(blockId, { showSuccessToast: false }),
-      ),
-    );
-
-    if (results.every(Boolean)) {
-      context.showToast(t('common.saved'), 'success');
-    }
+    await Promise.all(dirtyIds.map(saveBlock));
   }
 
   function resetBlock(blockId) {
@@ -496,6 +475,9 @@ export function createPromptEditor(context) {
     },
     get isBusy() {
       return isBusy;
+    },
+    get hasUnsavedEdits() {
+      return hasUnsavedEdits;
     },
     set isBusy(value) {
       isBusy = value;

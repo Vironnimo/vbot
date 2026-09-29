@@ -4,6 +4,7 @@
   import { isImeComposing } from '../../../../webui/src/lib/keyboard.js';
   import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
+  import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
@@ -417,13 +418,13 @@
                   editing = false;
                 })}>{t('swarm.wiki.preview')}</Button
             >
-            <Button
-              variant="tertiary"
-              loading={saving}
-              onClick={() =>
-                autosave.participant.runSave('manual', { force: true })}
-              >{t('common.save')}</Button
-            >
+            <!-- An existing page autosaves; a new page is created only by
+                 this Save action. -->
+            <SaveStatus
+              {saving}
+              pending={hasChanges()}
+              onClick={() => autosave.participant.runSave('manual')}
+            />
           </div>
         {:else if selected}
           <h3>

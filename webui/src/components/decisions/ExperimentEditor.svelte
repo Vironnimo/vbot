@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy, untrack } from 'svelte';
   import Button from '../ui/Button.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import TabList from '../ui/TabList.svelte';
   import TextField from '../ui/TextField.svelte';
   import TextArea from '../ui/TextArea.svelte';
@@ -59,7 +60,6 @@
   );
   let error = $state('');
   let conflict = $state(false);
-  let saved = $state(false);
   let saving = $state(false);
   let busy = $state(false);
   // The page shown while none is requested: Setup, or Results once saved
@@ -105,11 +105,8 @@
     return { ...JSON.parse(JSON.stringify(draft)), state };
   }
 
-  async function save(reason) {
-    if (!hasChanges()) {
-      if (reason === 'manual') saved = true;
-      return true;
-    }
+  async function save() {
+    if (!hasChanges()) return true;
     const captured = JSON.stringify(snapshot());
     saving = true;
     try {
@@ -118,7 +115,6 @@
       baseline = captured;
       error = '';
       conflict = false;
-      saved = true;
       onSaved(result);
       return true;
     } catch (failure) {
@@ -409,18 +405,11 @@
       </div>
     {/if}
     <div class="jev-row jev-submit">
-      <span class="jev-help" role="status"
-        >{saving
-          ? t('jev.saving')
-          : !hasChanges() && saved
-            ? t('jev.saved')
-            : ''}</span
-      >
-      <Button
-        variant="tertiary"
-        onClick={() => autosave.participant.runSave('manual', { force: true })}
-        >{t('jev.save')}</Button
-      >
+      <SaveStatus
+        {saving}
+        pending={hasChanges()}
+        onClick={() => autosave.participant.runSave('manual')}
+      />
     </div>
   </div>
   <div

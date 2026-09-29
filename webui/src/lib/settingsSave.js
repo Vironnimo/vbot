@@ -6,31 +6,26 @@ import { t } from './i18n.js';
  *
  * Every settings panel's save handler is the same shape: mark saving, clear the
  * error, push the built payload through `settings.update`, commit (and
- * optionally re-seed local state from) the result, toast success, and surface
- * any failure through `onError` — always clearing the saving flag. This is the
- * one home for that lifecycle, the success-toast shape, and the save-error
+ * optionally re-seed local state from) the result, and surface any failure
+ * through `onError` — always clearing the saving flag. The panel's save state
+ * confirms success. This is the one home for that lifecycle and the save-error
  * message format.
  *
  * @param {object} params
  * @param {() => object} params.buildPayload - Builds the `settings.update` params.
  * @param {(next: object) => void} params.onCommit - Receives the updated settings.
- * @param {(toast: object) => void} params.onToast - Shows a toast.
  * @param {(message: string) => void} params.onError - Sets/clears the error text.
  * @param {(saving: boolean) => void} params.setSaving - Drives the panel's saving flag.
- * @param {string} params.successTitle - Translated success toast title.
  * @param {(next: object) => void} [params.applyResult] - Optional: re-seed local state.
  * @param {() => unknown} [params.getDraftSnapshot] - Optional: reads the current local draft.
  */
 export async function runSettingsSave({
   buildPayload,
   onCommit,
-  onToast,
   onError,
   setSaving,
-  successTitle,
   applyResult,
   getDraftSnapshot,
-  reason = 'manual',
 }) {
   setSaving(true);
   onError('');
@@ -49,8 +44,6 @@ export async function runSettingsSave({
     if (draftIsCurrent) {
       applyResult?.(nextSettings);
     }
-    if (reason === 'manual')
-      onToast({ title: successTitle, variant: 'success' });
     return true;
   } catch (error) {
     onError(`${t('settings.saveError')} ${error.message}`);
