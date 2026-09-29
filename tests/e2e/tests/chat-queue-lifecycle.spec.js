@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { startIsolatedChat } from "./chat-run-support.js";
+import { chatTimeline, startIsolatedChat } from "./chat-run-support.js";
 
 test("queued Chat messages can be edited, removed, and run in FIFO order", async ({
   page,
@@ -11,7 +11,9 @@ test("queued Chat messages can be edited, removed, and run in FIFO order", async
 
   await messageInput.fill("E2E_QUEUE_ACTIVE Keep this Run active");
   await chat.getByRole("button", { name: "Send message" }).click();
-  await expect(chat.getByText(/Queue run started\./)).toBeVisible();
+  await expect(
+    chatTimeline(chat).getByText(/Queue run started\./),
+  ).toBeVisible();
 
   await messageInput.fill("E2E_QUEUE_FIRST Original first queued message");
   await chat.getByRole("button", { name: "Queue message" }).click();
@@ -64,17 +66,19 @@ test("queued Chat messages can be edited, removed, and run in FIFO order", async
     }),
   ).toBeVisible();
   await expect(
-    chat.getByText("First queued response.", { exact: true }),
+    chatTimeline(chat).getByText("First queued response.", { exact: true }),
   ).toBeVisible();
   await expect(
     chat.getByText("E2E_QUEUE_THIRD Final queued message", { exact: true }),
   ).toBeVisible();
   await expect(
-    chat.getByText("Third queued response.", { exact: true }),
+    chatTimeline(chat).getByText("Third queued response.", { exact: true }),
   ).toBeVisible();
   await expect(chat.getByText(/E2E_QUEUE_REMOVED/)).toHaveCount(0);
   await expect(
-    chat.getByText("Removed queued message unexpectedly ran.", { exact: true }),
+    chatTimeline(chat).getByText("Removed queued message unexpectedly ran.", {
+      exact: true,
+    }),
   ).toHaveCount(0);
 
   const userMessages = await chat

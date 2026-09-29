@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 test("learn authors a private Skill and reflect creates a review Fork", async ({
   page,
@@ -27,13 +31,13 @@ test("learn authors a private Skill and reflect creates a review Fork", async ({
     "E2E_CLEAN_LEARNED_COMMAND remove the test Skill",
   );
   await expect(
-    chat.getByText("Learned command Skill cleaned up.", { exact: true }),
+    chatTimeline(chat).getByText("Learned command Skill cleaned up.", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(chat.getByText("· Running", { exact: true })).toHaveCount(0);
 
-  await drawer
-    .getByRole("button", { name: "Session list filters" })
-    .click();
+  await drawer.getByRole("button", { name: "Session list filters" }).click();
   await page
     .getByRole("menu")
     .getByRole("switch", { name: "Skill reflections" })
@@ -48,9 +52,7 @@ test("learn authors a private Skill and reflect creates a review Fork", async ({
   await expect(drawer.getByRole("listitem")).toHaveCount(
     previousSessionCount + 1,
   );
-  const reflectionMarker = drawer.locator(
-    '[data-session-marker="reflection"]',
-  );
+  const reflectionMarker = drawer.locator('[data-session-marker="reflection"]');
   await expect(reflectionMarker).toBeVisible();
   await expect(reflectionMarker).toHaveAttribute("aria-label", "Reflection");
 });

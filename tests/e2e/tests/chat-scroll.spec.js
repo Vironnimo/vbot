@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 async function scrollMetrics(messages) {
   return messages.evaluate((element) => ({
@@ -17,7 +21,7 @@ test("Chat follow mode respects reading intent and resumes at the bottom", async
 }) => {
   test.setTimeout(40_000);
   const chat = await startIsolatedChat(page);
-  const messages = chat.locator(".messages");
+  const messages = chatTimeline(chat);
   const tallSeed = [
     "E2E_STREAM Build enough real layout for scroll ownership.",
     ...Array.from(
@@ -28,14 +32,14 @@ test("Chat follow mode respects reading intent and resumes at the bottom", async
 
   await sendChatMessage(chat, tallSeed);
   await expect(
-    chat.getByText("Fake provider streaming response.", { exact: true }),
+    messages.getByText("Fake provider streaming response.", { exact: true }),
   ).toBeVisible();
   await expect
     .poll(async () => (await scrollMetrics(messages)).scrollHeight)
     .toBeGreaterThan((await scrollMetrics(messages)).clientHeight);
 
   await sendChatMessage(chat, "E2E_SLOW Keep growing while I read above.");
-  await expect(chat.getByText(/Slow response started\./)).toBeVisible();
+  await expect(messages.getByText(/Slow response started\./)).toBeVisible();
   await messages.hover();
   await page.mouse.wheel(0, -650);
   await expect
@@ -60,7 +64,7 @@ test("Chat follow mode respects reading intent and resumes at the bottom", async
   await expect(
     chat.getByRole("button", { exact: true, name: "New session" }),
   ).toBeEnabled({ timeout: 25_000 });
-  await expect(chat.getByText(/Slow response started\./)).toBeVisible();
+  await expect(messages.getByText(/Slow response started\./)).toBeVisible();
   await expect
     .poll(async () => (await scrollMetrics(messages)).distanceFromBottom)
     .toBeLessThanOrEqual(2);

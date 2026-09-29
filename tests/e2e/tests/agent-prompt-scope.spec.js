@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 import { createAgent, deleteAgentIfPresent } from "./rpc-support.js";
 
 const AGENT_ID = "prompt-agent";
@@ -60,15 +64,18 @@ test("an Agent-scoped System Prompt block reaches only that Agent's Provider pro
     let chat = await startIsolatedChat(page, { agentName: AGENT_NAME });
     await sendChatMessage(chat, "E2E_PROMPT_SCOPE_CHECK Inspect this Agent");
     await expect(
-      chat.getByText("Agent-scoped System Prompt reached the Provider.", {
-        exact: true,
-      }),
+      chatTimeline(chat).getByText(
+        "Agent-scoped System Prompt reached the Provider.",
+        {
+          exact: true,
+        },
+      ),
     ).toBeVisible();
 
     chat = await startIsolatedChat(page, { agentName: "Main" });
     await sendChatMessage(chat, "E2E_PROMPT_SCOPE_CHECK Inspect Main");
     await expect(
-      chat.getByText(
+      chatTimeline(chat).getByText(
         "Agent-scoped System Prompt stayed out of the Provider prompt.",
         { exact: true },
       ),

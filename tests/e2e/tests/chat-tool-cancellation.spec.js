@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { startIsolatedChat } from "./chat-run-support.js";
+import { chatTimeline, startIsolatedChat } from "./chat-run-support.js";
 import { openToolRow, toolRow } from "./chat-tool-support.js";
 
 test("cancelling one running tool lets the Agentic Loop continue", async ({
@@ -21,7 +21,7 @@ test("cancelling one running tool lets the Agentic Loop continue", async ({
   await cancelTool.click();
 
   await expect(
-    chat.getByText("Tool cancellation handled.", { exact: true }),
+    chatTimeline(chat).getByText("Tool cancellation handled.", { exact: true }),
   ).toBeVisible({ timeout: 30_000 });
   const bash = toolRow(page, chat, "bash");
   await expect(bash).toBeVisible();

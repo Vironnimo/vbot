@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 test("the model command changes and resets the active Agent Model", async ({
   page,
@@ -14,7 +18,9 @@ test("the model command changes and resets the active Agent Model", async ({
 
   await sendChatMessage(chat, "Confirm the temporary Model selection");
   await expect(
-    chat.getByText("Fallback provider response.", { exact: true }),
+    chatTimeline(chat).getByText("Fallback provider response.", {
+      exact: true,
+    }),
   ).toBeVisible();
 
   await sendChatMessage(chat, "/model reset");
@@ -22,6 +28,8 @@ test("the model command changes and resets the active Agent Model", async ({
 
   await sendChatMessage(chat, "E2E_STREAM Confirm the inherited Model");
   await expect(
-    chat.getByText("Fake provider streaming response.", { exact: true }),
+    chatTimeline(chat).getByText("Fake provider streaming response.", {
+      exact: true,
+    }),
   ).toBeVisible();
 });

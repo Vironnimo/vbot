@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { startIsolatedChat } from "./chat-run-support.js";
+import { chatTimeline, startIsolatedChat } from "./chat-run-support.js";
 
 test("a Chat Run streams a provider response to completion", async ({
   page,
@@ -12,7 +12,9 @@ test("a Chat Run streams a provider response to completion", async ({
   await chat.getByRole("button", { name: "Send message" }).click();
 
   await expect(
-    chat.getByText("Fake provider streaming response.", { exact: true }),
+    chatTimeline(chat).getByText("Fake provider streaming response.", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(chat.getByText("· Running", { exact: true })).toHaveCount(0);
   await expect(
@@ -31,7 +33,7 @@ test("completed History replaces stale live replay after Chat navigation", async
   await chat.getByRole("button", { name: "Send message" }).click();
 
   await expect(
-    chat.getByText("Slow response started.", { exact: false }),
+    chatTimeline(chat).getByText("Slow response started.", { exact: false }),
   ).toBeVisible();
   await context.setOffline(true);
   await page.getByRole("button", { exact: true, name: "Agents" }).click();

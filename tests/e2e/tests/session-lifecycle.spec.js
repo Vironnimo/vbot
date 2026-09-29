@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  chatTimeline,
   parkPointer,
   sendChatMessage,
   startIsolatedChat,
@@ -31,7 +32,9 @@ test("Sessions can be selected and continued without a past-session warning", as
   await expect(earlierSession).toBeVisible();
   await sendChatMessage(chat, EARLIER_SESSION_SEED_MESSAGE);
   await expect(
-    chat.getByText("Fake provider streaming response.", { exact: true }),
+    chatTimeline(chat).getByText("Fake provider streaming response.", {
+      exact: true,
+    }),
   ).toBeVisible();
   const previousCount = await sessionList.getByRole("listitem").count();
 
@@ -62,7 +65,7 @@ test("Sessions can be selected and continued without a past-session warning", as
     }),
   ).toHaveCount(0);
 
-  const providerResponses = chat.getByText(
+  const providerResponses = chatTimeline(chat).getByText(
     "Fake provider streaming response.",
     { exact: true },
   );

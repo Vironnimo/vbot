@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { parkPointer, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  parkPointer,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 import { rpc } from "./rpc-support.js";
 
 const SCHEDULED_JOB_NAME = "E2E One-time Delivery";
@@ -141,7 +145,9 @@ test("a one-time Scheduled Run fires and its result reaches the open Chat", asyn
     await parkPointer(page);
     await scheduledSession.locator("button.session-row__select").click();
     await expect(
-      chat.getByText("Scheduled Run delivered 4471.", { exact: true }),
+      chatTimeline(chat).getByText("Scheduled Run delivered 4471.", {
+        exact: true,
+      }),
     ).toBeVisible();
 
     await page.goto("/#cron");

@@ -89,6 +89,14 @@ export async function parkPointer(page) {
   await expect(page.getByRole("tooltip")).toHaveCount(0);
 }
 
+// The message timeline of a Chat area. Assertions about Assistant output and
+// error messages scope to it: the Chat region also holds a visually hidden
+// status region that repeats each finished answer and error for screen
+// readers, so an unscoped text match can resolve to both.
+export function chatTimeline(chat) {
+  return chat.locator(".messages");
+}
+
 export async function sendChatMessage(chat, content) {
   await chat.getByRole("textbox", { name: "Message" }).fill(content);
   await chat.getByRole("button", { name: "Send message" }).click();
