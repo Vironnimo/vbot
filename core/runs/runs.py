@@ -513,7 +513,7 @@ class ChatRunManager:
             item.waiting_scope = waiting_scope
             queue = self._queues.setdefault(address, deque())
             queue.append(item)
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Run queued for busy session (agent=%s session=%s queue_depth=%d)",
                 address.agent_id,
                 address.session_id,
@@ -623,7 +623,7 @@ class ChatRunManager:
                 raise ActiveRunError("this queued input cannot steer a Run")
             if not item.steering:
                 item.steering = True
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Queue steering requested (agent=%s session=%s item=%s)",
                     agent_id,
                     session_id,

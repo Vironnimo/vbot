@@ -50,9 +50,7 @@ async def test_busy_session_rejects_start_and_an_idle_enqueue_starts_at_once() -
     assert await run.wait() == "done"
 
 
-async def test_busy_session_queues_input_and_drains_it_with_its_admission(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_busy_session_queues_input_and_drains_it_with_its_admission() -> None:
     manager = ChatRunManager()
     active_execute, active_release = held("active")
     queued_execute, queued_release = held("queued")
@@ -60,19 +58,10 @@ async def test_busy_session_queues_input_and_drains_it_with_its_admission(
     admission = RunAdmission(
         work_id="sub-work-one", contributes_to_agent_activity=False, source_session_id="source"
     )
-    with caplog.at_level(logging.INFO, logger="vbot.runs"):
-        item = await manager.enqueue(
-            SESSION, queued_execute, display_content="Queued next", admission=admission
-        )
-
-    queue_line = next(
-        record.getMessage()
-        for record in caplog.records
-        if record.getMessage().startswith("Run queued for busy session")
+    item = await manager.enqueue(
+        SESSION, queued_execute, display_content="Queued next", admission=admission
     )
-    assert "agent=coder" in queue_line
-    assert "session=session-one" in queue_line
-    assert "queue_depth=1" in queue_line
+
     assert item.future.done() is False
     assert item.admission is admission
     assert [

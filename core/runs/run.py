@@ -428,7 +428,7 @@ class Run:
         accepted = callback()
         self.emit("run_controls_changed", self.controls())
         if accepted:
-            _LOGGER.info("Tool background requested (run=%s tool_call=%s)", self.id, tool_call_id)
+            _LOGGER.debug("Tool background requested (run=%s tool_call=%s)", self.id, tool_call_id)
         return accepted
 
     @property
