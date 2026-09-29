@@ -200,8 +200,10 @@ def _handle_cron_tool(
         if action == "delete":
             return _handle_delete(cron_service, arguments)
         if action == "enable":
-            return _job_success(cron_service, cron_service.enable_job(arguments["id"]))
-        return _job_success(cron_service, cron_service.disable_job(arguments["id"]))
+            return _job_success(
+                cron_service, cron_service.enable_job(arguments["id"], actor="tool")
+            )
+        return _job_success(cron_service, cron_service.disable_job(arguments["id"], actor="tool"))
     except CronCallRefusedError as error:
         return tool_failure("invalid_arguments", str(error))
     except (CronTargetError, InvalidAgentAddressError) as error:
@@ -278,6 +280,7 @@ def _handle_create(
         session_id=None,
         status="paused" if paused else "active",
         project_id=project_id,
+        actor="tool",
     )
     notes = [note] if note else []
     if paused:
@@ -337,7 +340,7 @@ def _handle_update(
         updates["remaining_runs"] = arguments["repeat"]
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
-    job = cron_service.update_job(job_id, **updates)
+    job = cron_service.update_job(job_id, actor="tool", **updates)
     return _job_success(cron_service, job, [note] if note else [])
 
 
@@ -350,7 +353,7 @@ def _target_agent(context: ToolContext, target: str) -> tuple[str, str | None]:
 
 def _handle_delete(cron_service: CronService, arguments: JsonObject) -> JsonObject:
     job = cron_service.get_job(arguments["id"])
-    cron_service.delete_job(job.id)
+    cron_service.delete_job(job.id, actor="tool")
     return tool_success({"id": job.id, "name": job.name, "status": "deleted"})
 
 

@@ -100,6 +100,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 remaining_runs=repeat,
                 session_id=session_id,
                 project_id=project_id,
+                actor="rpc",
             )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -193,13 +194,13 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     if "agent_id" in updates:
         try:
             async with _agent_reference_lock(state):
-                job = state.runtime.cron_service.update_job(job_id, **updates)
+                job = state.runtime.cron_service.update_job(job_id, actor="rpc", **updates)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
         return _cron_job_response(state.runtime.cron_service, job)
 
     try:
-        job = state.runtime.cron_service.update_job(job_id, **updates)
+        job = state.runtime.cron_service.update_job(job_id, actor="rpc", **updates)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _cron_job_response(state.runtime.cron_service, job)
@@ -210,7 +211,7 @@ def _cron_delete(state: Any, params: JsonObject) -> JsonObject:
 
     job_id = _required_string(params, "id")
     try:
-        state.runtime.cron_service.delete_job(job_id)
+        state.runtime.cron_service.delete_job(job_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"ok": True}
@@ -221,7 +222,7 @@ def _cron_enable(state: Any, params: JsonObject) -> JsonObject:
 
     job_id = _required_string(params, "id")
     try:
-        job = state.runtime.cron_service.enable_job(job_id)
+        job = state.runtime.cron_service.enable_job(job_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _cron_job_response(state.runtime.cron_service, job)
@@ -232,7 +233,7 @@ def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
 
     job_id = _required_string(params, "id")
     try:
-        job = state.runtime.cron_service.disable_job(job_id)
+        job = state.runtime.cron_service.disable_job(job_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _cron_job_response(state.runtime.cron_service, job)
@@ -289,6 +290,7 @@ async def _bootstrap_create(state: Any, params: JsonObject) -> JsonObject:
                 prompt=prompt,
                 mode=mode,
                 session_id=session_id,
+                actor="rpc",
             )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -328,9 +330,9 @@ async def _bootstrap_update(state: Any, params: JsonObject) -> JsonObject:
     try:
         if "agent_id" in updates or "session_id" in updates:
             async with _agent_reference_lock(state):
-                job = state.runtime.bootstrap_service.update_job(job_id, **updates)
+                job = state.runtime.bootstrap_service.update_job(job_id, actor="rpc", **updates)
         else:
-            job = state.runtime.bootstrap_service.update_job(job_id, **updates)
+            job = state.runtime.bootstrap_service.update_job(job_id, actor="rpc", **updates)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _bootstrap_job_response(job)
@@ -340,7 +342,7 @@ def _bootstrap_delete(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "bootstrap.delete")
     job_id = _required_string(params, "id")
     try:
-        state.runtime.bootstrap_service.delete_job(job_id)
+        state.runtime.bootstrap_service.delete_job(job_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"ok": True, "id": job_id}
@@ -350,7 +352,7 @@ def _bootstrap_enable(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "bootstrap.enable")
     try:
         return _bootstrap_job_response(
-            state.runtime.bootstrap_service.enable_job(_required_string(params, "id"))
+            state.runtime.bootstrap_service.enable_job(_required_string(params, "id"), actor="rpc")
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -360,7 +362,7 @@ def _bootstrap_disable(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "bootstrap.disable")
     try:
         return _bootstrap_job_response(
-            state.runtime.bootstrap_service.disable_job(_required_string(params, "id"))
+            state.runtime.bootstrap_service.disable_job(_required_string(params, "id"), actor="rpc")
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

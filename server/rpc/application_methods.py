@@ -214,6 +214,7 @@ async def _update_continuation(state: Any, params: JsonObject) -> JsonObject:
             name=name,
             prompt=prompt,
             mode="once",
+            actor="application",
         )
         created = True
     atomic_write_text(

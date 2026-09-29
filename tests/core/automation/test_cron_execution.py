@@ -267,7 +267,7 @@ async def test_persistent_save_failure_does_not_hang_the_firing_task(
 
 @pytest.mark.asyncio
 async def test_recurring_job_stops_after_consecutive_run_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     service, trigger_service = make_service(tmp_path)
     monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
@@ -281,15 +281,25 @@ async def test_recurring_job_stops_after_consecutive_run_failures(
         cron_expression="0 9 * * *",
     )
 
-    assert await service._trigger_job_run(job) is False
-    assert service.get_job(job.id).status == "active"
-    assert await service._trigger_job_run(job) is False
+    with caplog.at_level(logging.WARNING, logger="vbot.automation.cron"):
+        assert await service._trigger_job_run(job) is False
+        assert service.get_job(job.id).status == "active"
+        assert await service._trigger_job_run(job) is False
 
     updated = service.get_job(job.id)
     assert updated.status == "failed"
     assert updated.last_outcome == "failed"
     assert updated.last_error == "boom"
     assert updated.consecutive_failures == 2
+    # The stop is a health transition an operator must see: one WARNING, not INFO.
+    stopped = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.automation.cron"
+        and record.levelno == logging.WARNING
+        and job.id in record.getMessage()
+    ]
+    assert len(stopped) == 1
 
 
 @pytest.mark.asyncio
