@@ -186,6 +186,9 @@
   // where the user left the document.
   let settingsScrollPosition = $state(null);
   let settingsView = $state(null);
+  // Cron is unmounted as well; a changed new job waits here until its form
+  // opens again.
+  let cronNewJobDraft = $state.raw(null);
 
   let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
@@ -632,8 +635,9 @@
       stopClientMetrics();
     };
   });
+  // Unsaved edits and an unsaved new Cron job ask before the page unloads.
   function protectPendingEdits(event) {
-    if (!autosaveCoordinator.hasPending()) return;
+    if (!autosaveCoordinator.hasPending() && !cronNewJobDraft) return;
     event.preventDefault();
     event.returnValue = '';
   }
@@ -811,6 +815,7 @@
       {:else if activeViewId === 'cron'}
         <CronView
           navigation={navigator.view('cron')}
+          bind:newJobDraft={cronNewJobDraft}
           onToast={desktop.showToast}
           {serverUnavailable}
           {cronRefreshToken}

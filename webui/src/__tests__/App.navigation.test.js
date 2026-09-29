@@ -530,6 +530,39 @@ describe('App navigation', () => {
     });
   });
 
+  it('keeps an unsaved new Cron job across other views and guards unloading the page', async () => {
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        agents: [{ id: 'alpha', name: 'Alpha' }],
+        methods: {
+          'cron.list': () => ({ jobs: [] }),
+          'project.list': () => ({ projects: [] }),
+        },
+      }),
+    );
+    mountApp();
+    const prompt = () => document.getElementById('cron-job-prompt');
+    sidebarNavButton('cron').click();
+    await waitForCondition(() =>
+      expect(labelledButton('cron.detail.createTitle')?.disabled).toBe(false),
+    );
+    labelledButton('cron.detail.createTitle').click();
+    await waitForCondition(() => expect(prompt()).toBeTruthy());
+    typeInto(prompt(), 'Unfinished prompt');
+
+    sidebarNavButton('logs').click();
+    await waitForCondition(() => expect(logsShown()).toBe(true));
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+
+    window.history.back();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#cron/new');
+      expect(prompt()?.value).toBe('Unfinished prompt');
+    });
+  });
+
   it('retains Settings input after a failed topic change and retries the same navigation', async () => {
     rpcMock.mockImplementation(failingSettingsRpc(1));
     mountApp();

@@ -60,6 +60,9 @@
     // The place is the shown job, [job id], or ['new'] for a new job's form.
     // An empty place shows the first job.
     navigation = createStandaloneNavigation(),
+    // The changed new job's form values, kept while the view is closed; null
+    // without one.
+    newJobDraft = $bindable(null),
     onToast = noop,
     serverUnavailable = false,
     cronRefreshToken = 0,
@@ -69,6 +72,12 @@
   const editor = createCronEditor({
     get navigation() {
       return navigation;
+    },
+    get newJobDraft() {
+      return newJobDraft;
+    },
+    set newJobDraft(value) {
+      newJobDraft = value;
     },
     get jobs() {
       return jobs;
