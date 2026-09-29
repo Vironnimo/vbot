@@ -125,7 +125,7 @@ export default Object.freeze({
   'calendar.serverUnavailable': 'The vBot server is not reachable right now.',
   'calendar.freeDay': 'Nothing scheduled.',
   'calendar.layer.local': 'Events',
-  'calendar.layer.localHint': 'Appointments stored in vBot',
+  'calendar.layer.localHint': 'Appointments stored in vBot.',
   'calendar.layer.cron': 'Schedules',
   'calendar.layer.cronHint':
     'Upcoming Runs of your Schedules, computed from their timing.',
@@ -246,7 +246,7 @@ export default Object.freeze({
   'terminals.details.terminalCount':
     '{count} · {running} running, {finished} finished',
   'terminals.state.starting': 'Starting',
-  'terminals.state.ready': 'Running · waiting for input',
+  'terminals.state.ready': 'Running · output quiet',
   'terminals.state.working': 'Running · producing output',
   'terminals.state.exited': 'Exited',
   'terminals.state.exitedWithCode': 'Exited with code {code}',

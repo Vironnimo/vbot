@@ -493,6 +493,9 @@ describe('CalendarView', () => {
       const chip = document.querySelector('.calendar-chip--local');
       expect(chip.getAttribute('aria-pressed')).toBe('true');
       focusWithKeyboard(chip);
+      expect(
+        document.querySelector('#app-tooltip .app-tooltip__title').textContent,
+      ).toBe(t('calendar.layer.local'));
       expect(tooltipRows()).toEqual([
         [t('calendar.layer.inView'), '5'],
         ['', t('calendar.layer.shown')],

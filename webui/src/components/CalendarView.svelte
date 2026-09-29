@@ -304,6 +304,10 @@
     const shown =
       layer === 'local' ? viewState.showLocalLayer : viewState.showCronLayer;
     return {
+      title:
+        layer === 'local'
+          ? t('calendar.layer.local')
+          : t('calendar.layer.cron'),
       text:
         layer === 'local'
           ? t('calendar.layer.localHint')

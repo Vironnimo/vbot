@@ -316,7 +316,7 @@ export default Object.freeze({
   'agents.access.filterAgentsPlaceholder': 'Filter Agents…',
   'agents.access.project': 'Project',
   'agents.details.id': 'Agent ID',
-  'agents.details.modelInherited': 'Inherited from the global defaults',
+  'agents.details.modelInherited': 'Model inherited from the global defaults',
   'agents.details.modelNotConfigured':
     'Neither this Agent nor the global defaults set a Model.',
   'agents.details.connection': 'Connection',

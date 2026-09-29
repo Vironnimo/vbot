@@ -116,11 +116,10 @@ function stateTone(item) {
 }
 
 /**
- * Details card of a Terminal's title: what the tile bar omits. The latest
- * attention summary leads; the rows give the full command line, working
- * directory, state (with the exit code once finished), start and finish
- * moments, process id while running, and the grid size. Selectable, so the
- * command and directory can be copied.
+ * Details card of a Terminal's title: what the tile bar omits. The rows
+ * give the full command line, working directory, state (with the exit code
+ * once finished), start and finish moments, process id while running, and
+ * the grid size. Selectable, so the command and directory can be copied.
  */
 export function terminalDetails(item, { nowMs = Date.now() } = {}) {
   const finished = FINISHED_STATES.has(item?.state);
@@ -139,7 +138,6 @@ export function terminalDetails(item, { nowMs = Date.now() } = {}) {
       : '';
   return {
     title: terminalTitle(item),
-    text: String(item?.attention?.summary || '').trim(),
     rows: [
       {
         label: t('terminals.details.command'),

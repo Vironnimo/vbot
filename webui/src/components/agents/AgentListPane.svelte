@@ -30,6 +30,7 @@
     const inherited = agent.effective?.model?.source === 'global_default';
     return {
       title: agent.name || agent.id,
+      text: inherited ? t('agents.details.modelInherited') : '',
       rows: [
         {
           label: t('agents.form.model'),
@@ -37,7 +38,6 @@
           mono: Boolean(model),
           tone: model ? undefined : 'muted',
         },
-        { value: inherited ? t('agents.details.modelInherited') : '' },
         {
           label: t('agents.details.id'),
           value: agent.name ? agent.id : '',
