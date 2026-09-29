@@ -39,6 +39,10 @@ vi.mock('$lib/api.js', () =>
 );
 
 const { default: ProjectsView } = await import('../ProjectsView.svelte');
+// Loaded after the Svelte mock, so its context lookups share the components'
+// runtime.
+const { createStandaloneNavigation } =
+  await import('../../lib/navigation.svelte.js');
 
 // Just above the component's 800ms auto-save debounce, so the timer has fired
 // by the time the test inspects the mock.
@@ -325,4 +329,4 @@ export {
   setupProjectsViewSuite,
 };
 
-export { flushSync };
+export { createStandaloneNavigation, flushSync };

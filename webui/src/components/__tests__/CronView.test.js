@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
+import { createAutosaveCoordinator } from '../../lib/autosave.js';
+import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -31,6 +33,8 @@ vi.mock('$lib/api.js', () =>
 );
 
 const { default: CronView } = await import('../CronView.svelte');
+const { default: AutosaveContextHost } =
+  await import('./AutosaveContextHost.support.svelte');
 
 describe('CronView', () => {
   let mountedComponent;
@@ -216,6 +220,41 @@ describe('CronView', () => {
     ).toBe(7);
   });
 
+  it('shows the job named by the place and records job and new-job steps in it', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({ id: 'job-one' }),
+        cronJob({ id: 'job-two', prompt: 'Second prompt' }),
+      ],
+    });
+    const navigation = createStandaloneNavigation(['job-two']);
+    mountView({ navigation });
+    await waitForCondition(
+      () =>
+        document.getElementById('cron-job-prompt')?.value === 'Second prompt',
+    );
+
+    buttonByTestId('cron-item-job-one').click();
+    flushSync();
+    expect(navigation.place).toEqual(['job-one']);
+    expect(inputById('cron-job-prompt').value).toBe('Default cron prompt');
+
+    buttonByAriaLabel('Create schedule').click();
+    flushSync();
+    expect(navigation.place).toEqual(['new']);
+    expect(inputById('cron-job-prompt').value).toBe('');
+
+    // Cancel goes up to the job the new job's form was opened from.
+    buttonByText(t('common.cancel')).click();
+    flushSync();
+    expect(navigation.place).toEqual(['job-one']);
+
+    // The empty place (the view's start page) names the first job.
+    navigation.navigate([]);
+    flushSync();
+    expect(navigation.place).toEqual(['job-one']);
+  });
+
   it('disables the selected job and enables a paused job after selecting it', async () => {
     listCronJobsMock.mockResolvedValue({
       jobs: [
@@ -255,8 +294,9 @@ describe('CronView', () => {
       .mockResolvedValueOnce({ jobs: [] })
       .mockResolvedValueOnce({ jobs: [createdJob] })
       .mockResolvedValue({ jobs: [createdJob] });
+    const navigation = createStandaloneNavigation();
 
-    mountView();
+    mountView({ navigation });
 
     await waitForCondition(() => {
       const button = findButtonByAriaLabel('Create schedule');
@@ -295,6 +335,8 @@ describe('CronView', () => {
     await waitForCondition(() =>
       document.querySelector('[data-testid="cron-delete-job-created"]'),
     );
+    // The saved job replaces the new job's entry.
+    expect(navigation.place).toEqual(['job-created']);
 
     inputById('cron-job-prompt').value = 'Prepare updated digest';
     inputById('cron-job-prompt').dispatchEvent(
@@ -456,7 +498,18 @@ describe('CronView', () => {
       jobs.find((job) => job.id === id).prompt = prompt;
       return { ok: true };
     });
-    mountView();
+    // Like the App's navigator, the handle saves pending edits before a step.
+    const coordinator = createAutosaveCoordinator();
+    const navigation = gatedNavigation(coordinator);
+    mountedComponent = mount(AutosaveContextHost, {
+      target: document.body,
+      props: {
+        component: CronView,
+        coordinator,
+        componentProps: { onToast: toastMock, navigation },
+      },
+    });
+    flushSync();
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
 
     inputById('cron-job-prompt').value = 'Unsaved draft';
@@ -480,6 +533,7 @@ describe('CronView', () => {
     expect(updateCronJobMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'job-one', prompt: 'Unsaved draft' }),
     );
+    expect(navigation.place).toEqual(['job-two']);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
@@ -565,6 +619,34 @@ describe('CronView', () => {
     expect(deleteCronJobMock).toHaveBeenCalledWith('job-delete');
   });
 });
+
+// A standalone navigation handle whose steps pass an autosave gate first, as
+// the App's navigator does.
+function gatedNavigation(coordinator, initialPlace = []) {
+  const inner = createStandaloneNavigation(initialPlace);
+  const gated =
+    (move) =>
+    async (...args) =>
+      (await coordinator.flushPending()) ? move(...args) : false;
+  return {
+    active: true,
+    get place() {
+      return inner.place;
+    },
+    get extra() {
+      return inner.extra;
+    },
+    get origin() {
+      return inner.origin;
+    },
+    get revision() {
+      return inner.revision;
+    },
+    navigate: gated(inner.navigate),
+    replace: inner.replace,
+    up: gated(inner.up),
+  };
+}
 
 // Clicks a button in the open ConfirmDialog by its label.
 function confirmDialog(label) {

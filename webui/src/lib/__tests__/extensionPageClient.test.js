@@ -17,7 +17,7 @@ function dispatchFrom(source, data) {
   window.dispatchEvent(event);
 }
 
-function initialize(target, nonce = 'nonce-a', epoch = 'epoch-a') {
+function initialize(target, nonce = 'nonce-a', epoch = 'epoch-a', fields = {}) {
   dispatchFrom(target, {
     type: 'vbot.extension.init',
     version: 1,
@@ -28,6 +28,7 @@ function initialize(target, nonce = 'nonce-a', epoch = 'epoch-a') {
     theme: { mode: 'dark' },
     locale: 'de',
     timezone: 'Europe/Berlin',
+    ...fields,
   });
 }
 
@@ -150,6 +151,95 @@ describe('extension page client', () => {
       timezone: 'Europe/Berlin',
     });
     expect(contexts).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['pushRoute', 'route.push'],
+    ['replaceRoute', 'route.replace'],
+  ])('sends %s to the host as a %s call', (name, method) => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    initialize(target);
+    void client[name]('/swarms/swr-a').catch(() => {});
+    expect(target.postMessage.mock.calls.at(-1)[0]).toMatchObject({
+      type: 'vbot.extension.call',
+      method,
+      params: { route: '/swarms/swr-a' },
+    });
+  });
+
+  it('reports whether layers are open and closes the topmost one when the host asks', () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    const states = () =>
+      target.postMessage.mock.calls
+        .map(([data]) => data)
+        .filter((data) => data.type === 'vbot.extension.layers.state')
+        .map((data) => data.open);
+    const dialog = { close: vi.fn() };
+    const menu = { close: vi.fn() };
+    const releaseDialog = client.registerLayer(dialog);
+    // A layer opened before the host is known is reported with Ready.
+    initialize(target);
+    const releaseMenu = client.registerLayer(menu);
+    dispatchFrom(target, {
+      type: 'vbot.extension.layers.close',
+      version: 1,
+      nonce: 'nonce-a',
+      epoch: 'epoch-a',
+      descriptor,
+    });
+    expect(menu.close).toHaveBeenCalledOnce();
+    expect(dialog.close).not.toHaveBeenCalled();
+    releaseMenu();
+    releaseDialog();
+    expect(states()).toEqual([true, false]);
+  });
+
+  it('forwards Back/Forward keys and side buttons to the host only when it asks', () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    const moves = () =>
+      target.postMessage.mock.calls
+        .map(([data]) => data)
+        .filter((data) => data.type === 'vbot.extension.history.move')
+        .map((data) => [data.nonce, data.direction]);
+    // Each returns whether the page's native handling was cancelled.
+    const press = (key, modifiers = {}) =>
+      !window.dispatchEvent(
+        new KeyboardEvent('keydown', { key, cancelable: true, ...modifiers }),
+      );
+    const click = (type, button) =>
+      !window.dispatchEvent(new MouseEvent(type, { button, cancelable: true }));
+    initialize(target);
+    expect([press('ArrowLeft', { altKey: true }), click('mouseup', 3)]).toEqual(
+      [false, false],
+    );
+    initialize(target, 'nonce-b', 'epoch-b', { forwardHistoryInput: true });
+    expect([
+      press('ArrowLeft', { altKey: true }),
+      press('ArrowRight', { altKey: true, shiftKey: true }),
+      press('BrowserForward'),
+      click('mousedown', 3),
+      click('mouseup', 3),
+      click('mouseup', 4),
+    ]).toEqual([true, false, true, true, true, true]);
+    // A key the page handled itself stays with the page.
+    const handled = new KeyboardEvent('keydown', {
+      key: 'ArrowLeft',
+      altKey: true,
+      cancelable: true,
+    });
+    handled.preventDefault();
+    window.dispatchEvent(handled);
+    expect(moves()).toEqual([
+      ['nonce-b', 'back'],
+      ['nonce-b', 'forward'],
+      ['nonce-b', 'back'],
+      ['nonce-b', 'forward'],
+    ]);
+    client.dispose();
+    expect(press('ArrowLeft', { altKey: true })).toBe(false);
   });
 
   it('rejects pending calls on reload and ignores stale results', async () => {

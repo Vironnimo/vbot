@@ -209,7 +209,19 @@ function createBridge(initialProfile = profile, detail = swarm) {
     }
     return Promise.resolve({ profile: structuredClone(profile) });
   });
-  let context;
+  let onContext;
+  // The context the host shows. Like the host, the bridge sends a changed
+  // route back to the page, here at once.
+  let shown = { route: '' };
+  const showContext = (next) => {
+    shown = { ...shown, ...next };
+    onContext(shown);
+  };
+  const moveTo = (route) => {
+    if (route !== shown.route) showContext({ route });
+    return Promise.resolve({});
+  };
+  const layers = [];
   return {
     operation,
     bridge: {
@@ -230,7 +242,21 @@ function createBridge(initialProfile = profile, detail = swarm) {
       },
       openLink: (url) => operation('link.open', { url }),
       openMedia: (url) => operation('media.open', { url }),
-      replaceRoute: vi.fn(),
+      pushRoute: vi.fn(moveTo),
+      replaceRoute: vi.fn(moveTo),
+      // The route the host shows, which Back/Forward change with `goTo`.
+      get route() {
+        return shown.route;
+      },
+      goTo: (route) => showContext({ route }),
+      registerLayer(layer) {
+        layers.push(layer);
+        return () => {
+          if (layers.includes(layer)) layers.splice(layers.indexOf(layer), 1);
+        };
+      },
+      // Back or Forward in the app, which close the page's topmost dialog.
+      back: () => layers.at(-1)?.close(),
       readHistory: vi.fn(() =>
         Promise.resolve({
           status: 'completed',
@@ -248,7 +274,7 @@ function createBridge(initialProfile = profile, detail = swarm) {
       subscribeRun: vi.fn(),
       unsubscribeRun: vi.fn().mockResolvedValue({}),
       onContext(callback) {
-        context = callback;
+        onContext = callback;
         return () => {};
       },
       onInvalidation(callback) {
@@ -263,11 +289,10 @@ function createBridge(initialProfile = profile, detail = swarm) {
         for (const listener of runListeners) listener(id, event);
       },
       dispose: vi.fn(),
-      updateContext(next) {
-        context(next);
-      },
+      updateContext: showContext,
+      // Initializes a freshly mounted page at its start.
       show() {
-        context({ route: '' });
+        showContext({ route: '' });
       },
     },
   };

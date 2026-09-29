@@ -27,12 +27,15 @@
   import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
   import { applyAppearanceSettings } from '$lib/appearancePrefs.svelte.js';
   import { t } from '$lib/i18n.js';
-  import { useAutosaveContext } from '$lib/autosave.js';
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
 
   const noop = () => {};
 
   let {
+    // The place is `[page]` or `[page, section]`; an App deep link may name a
+    // page or a section id alone. An empty place shows the General page.
+    navigation = createStandaloneNavigation(),
     providerAuthEvent = null,
     connectProvider = null,
     disconnectProvider = null,
@@ -43,8 +46,6 @@
     desktopCapabilities = null,
     // The app-level Desktop Voice owner (see app/desktop.svelte.js).
     desktopVoice = null,
-    targetPanelId = '',
-    targetPanelRequestId = 0,
     onDebugEnabledChange = noop,
     onOpenSetupGuide = noop,
     modelsRefreshToken = 0,
@@ -62,7 +63,6 @@
     return captureScrollPosition();
   }
 
-  const autosaveContext = useAutosaveContext();
   // Navigation follows user tasks; editor components do not define pages.
   const sections = [
     {
@@ -245,17 +245,17 @@
   let providersPanel = $state(null);
   let scrollContainer = $state(null);
   let documentRoot = $state(null);
-  let activePageId = $state(
-    untrack(() => initialScrollPosition?.pageId || 'general'),
-  );
+  let shownPlace = $derived(resolvePlace(navigation.place));
+  let activePageId = $derived(shownPlace.page.id);
   let searchQuery = $state('');
   let searchResults = $state([]);
   let searchActive = $derived(searchQuery.trim().length > 0);
-  let handledTargetPanelRequestId = -1;
-  let restoreTop = untrack(() => Math.max(0, initialScrollPosition?.top || 0));
-  let restorePending = untrack(() => Boolean(initialScrollPosition));
+  let restoreTop = 0;
+  let restorePending = false;
   let restoreFrame = null;
   let restoreAnchorId = '';
+  // The canonical place last shown; null until the loaded content shows one.
+  let appliedPlaceKey = null;
 
   onMount(() => {
     loadSettings();
@@ -266,23 +266,27 @@
     };
   });
 
+  // Place -> shown page and section. The page follows the place directly;
+  // once the content has loaded, a section target scrolls to its heading and
+  // any other page change starts at the page top. A place that is not
+  // canonical (a bare page or section id from an App deep link, an empty or
+  // unknown place) is then corrected without a step.
   $effect(() => {
-    if (!loading && !pages.some((page) => page.id === activePageId))
-      activePageId = pages[0].id;
-  });
-
-  $effect(() => {
-    if (
-      !loading &&
-      targetPanelId &&
-      targetPanelRequestId !== handledTargetPanelRequestId &&
-      pageForDestination(targetPanelId)
-    ) {
-      handledTargetPanelRequestId = targetPanelRequestId;
-      // A deliberate deep link replaces the remembered page; an ordinary
-      // return carries its saved page and may still have an old target prop.
-      if (!initialScrollPosition) void selectDestination(targetPanelId);
-    }
+    const place = navigation.place;
+    if (loading) return;
+    untrack(() => {
+      const target = resolvePlace(place);
+      const canonical = placeFor(target);
+      const key = canonical.join('/');
+      if (appliedPlaceKey === null) {
+        appliedPlaceKey = key;
+        showFirstTarget(target, place);
+      } else if (key !== appliedPlaceKey || !samePlace(place, canonical)) {
+        appliedPlaceKey = key;
+        void showTarget(target);
+      }
+      if (!samePlace(place, canonical)) navigation.replace(canonical);
+    });
   });
 
   $effect(() => {
@@ -392,11 +396,14 @@
     restoreAnchorId = '';
   }
 
+  // The reading position App keeps while another main view is shown. Its
+  // place tells a return to the same entry apart from a new deep link.
   function captureScrollPosition() {
     return scrollContainer
       ? {
           top: Math.max(0, scrollContainer.scrollTop),
           pageId: activePageId,
+          place: [...navigation.place],
         }
       : null;
   }
@@ -413,21 +420,66 @@
     );
   }
 
-  async function selectDestination(id) {
-    const page = pageForDestination(id);
-    if (!page) return;
+  // The page and section a place names. A page with a single section has no
+  // section headings, so the page itself is the target there; anything
+  // unknown shows the start page.
+  function resolvePlace(place) {
+    const [first = '', second = ''] = place;
+    const page = pageForDestination(first);
+    if (!page) return { page: pages[0], sectionId: '' };
+    const sectionId = page.id === first ? second : first;
+    return {
+      page,
+      sectionId:
+        page.sections.length > 1 && page.sections.includes(sectionId)
+          ? sectionId
+          : '',
+    };
+  }
+
+  function placeFor({ page, sectionId }) {
+    return sectionId ? [page.id, sectionId] : [page.id];
+  }
+
+  function samePlace(left, right) {
+    return (
+      Array.isArray(left) &&
+      left.length === right.length &&
+      left.every((segment, index) => segment === right[index])
+    );
+  }
+
+  // The first place shown after loading. Returning to the entry the reading
+  // position was kept for, or to a page without a section target, resumes
+  // that position when it belongs to the shown page; a section target
+  // otherwise scrolls to its section and any other page opens at its top.
+  function showFirstTarget(target, place) {
+    const kept = initialScrollPosition;
+    if (
+      kept?.pageId === target.page.id &&
+      (!target.sectionId || samePlace(kept.place, place))
+    ) {
+      restoreTop = Math.max(0, kept.top || 0);
+      restorePending = true;
+      queueRestore();
+    } else if (target.sectionId) {
+      void showTarget(target);
+    }
+  }
+
+  async function showTarget({ page, sectionId }) {
     releaseRestore();
     searchQuery = '';
-    activePageId = page.id;
     await tick();
-    const headingId =
-      page.id === id ? 'settings-page-' + page.id : 'settings-section-' + id;
+    const headingId = sectionId
+      ? 'settings-section-' + sectionId
+      : 'settings-page-' + page.id;
     const heading = documentRoot?.querySelector('#' + headingId);
     if (scrollContainer) {
       scrollContainer.scrollTop =
-        page.id === id || !heading ? 0 : headingOffset(heading);
-      // Keep a deep link in view while asynchronous editors above it settle.
-      if (page.id !== id && heading) {
+        sectionId && heading ? headingOffset(heading) : 0;
+      // Keep a section in view while asynchronous editors above it settle.
+      if (sectionId && heading) {
         restoreAnchorId = headingId;
         queueRestore();
       }
@@ -436,14 +488,17 @@
     heading?.focus({ preventScroll: true });
   }
 
-  function navigateToSection(id) {
-    return autosaveContext.requestTransition(() => selectDestination(id));
+  // Opening a page or a search result is a step. Opening the place already
+  // shown returns to its start: the page top or the section heading.
+  function openDestination(id) {
+    const target = resolvePlace([id]);
+    const place = placeFor(target);
+    if (samePlace(place, navigation.place)) return showTarget(target);
+    return navigation.navigate(place);
   }
 
   function navigateToDefaults() {
-    return autosaveContext.requestTransition(() =>
-      onNavigateToAgentDefaults('defaults'),
-    );
+    return onNavigateToAgentDefaults('defaults');
   }
 
   function handleSearchInput(event) {
@@ -533,6 +588,8 @@
   async function loadSettings() {
     loading = true;
     loadError = '';
+    // The loaded content shows the current place afresh, also after a retry.
+    appliedPlaceKey = null;
 
     try {
       const nextSettings = await getSettings();
@@ -712,7 +769,7 @@
           aria-current={!searchActive && page.id === activePageId
             ? 'page'
             : undefined}
-          onclick={() => navigateToSection(page.id)}>{page.label()}</button
+          onclick={() => openDestination(page.id)}>{page.label()}</button
         >
       {/each}
     </div>
@@ -722,7 +779,7 @@
         value={activePageId}
         options={mobileSectionOptions}
         ariaLabel={t('settings.sections')}
-        onValueChange={navigateToSection}
+        onValueChange={openDestination}
       />
     </div>
   </nav>
@@ -766,7 +823,7 @@
               <Button
                 class="settings-search-result"
                 onClick={() =>
-                  panel ? navigateToSection(panelId) : navigateToDefaults()}
+                  panel ? openDestination(panelId) : navigateToDefaults()}
               >
                 <span class="settings-search-result__title"
                   >{panel ? panel.label() : t('agents.shared.title')}</span

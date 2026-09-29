@@ -22,11 +22,19 @@
     cancelDecisionEvaluation,
   } from '$lib/api.js';
 
+  const PANELS = ['setup', 'results'];
+
   let {
     experiment,
     onSaved = () => {},
     onReload = () => {},
     available = true,
+    // The Setup or Results page requested by the owner. With `onPanelChange`
+    // the owner decides the shown page: a switch asks it for the page and the
+    // first shown default is reported with `{ replace: true }`. Without it the
+    // editor switches pages itself.
+    panel: requestedPanel = '',
+    onPanelChange = null,
   } = $props();
   const initial = untrack(() => experiment);
   const id = initial.id;
@@ -54,7 +62,12 @@
   let saved = $state(false);
   let saving = $state(false);
   let busy = $state(false);
-  let panel = $state('setup');
+  // The page shown while none is requested: Setup, or Results once saved
+  // results arrive before the user picked a page or edited.
+  let defaultPanel = $state('setup');
+  let panel = $derived(
+    PANELS.includes(requestedPanel) ? requestedPanel : defaultPanel,
+  );
   let panelChosen = false;
   let history = $state([]);
   let active = $derived(history.find((item) => item.status === 'running'));
@@ -79,6 +92,11 @@
     if (hasChanges()) panelChosen = true;
     autosave.scheduleRun();
   });
+
+  function showPanel(value, { replace = false } = {}) {
+    defaultPanel = value;
+    onPanelChange?.(value, { replace });
+  }
 
   function payload() {
     const state = jsonMode ? JSON.parse(stateText) : stateText;
@@ -184,7 +202,7 @@
         mode,
       );
       pendingStart = null;
-      panel = 'results';
+      showPanel('results');
       await loadHistory();
     } catch (failure) {
       error = failure.message;
@@ -218,7 +236,6 @@
   }
 
   function restore() {
-    panel = 'setup';
     mode = selected.snapshot.mode;
     const source = selected.snapshot;
     draft = {
@@ -231,12 +248,16 @@
     };
     jsonMode = typeof source.state !== 'string';
     stateText = jsonMode ? JSON.stringify(source.state, null, 2) : source.state;
+    showPanel('setup');
   }
 
   onMount(() => {
     void loadHistory().then(() => {
-      if (!destroyed && !panelChosen && !hasChanges() && history.length)
-        panel = 'results';
+      if (destroyed) return;
+      if (!panelChosen && !hasChanges() && history.length)
+        defaultPanel = 'results';
+      if (!PANELS.includes(requestedPanel))
+        showPanel(defaultPanel, { replace: true });
     });
   });
   onDestroy(() => {
@@ -260,7 +281,7 @@
       value={panel}
       onChange={(value) => {
         panelChosen = true;
-        panel = value;
+        showPanel(value);
       }}
     />
     <div class="jev-actions">

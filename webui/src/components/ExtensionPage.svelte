@@ -7,6 +7,10 @@
   import Banner from './ui/Banner.svelte';
   import { useAutosaveContext } from '$lib/autosave.js';
   import {
+    createStandaloneNavigation,
+    useNavigation,
+  } from '$lib/navigation.svelte.js';
+  import {
     invokeExtensionPageOperation,
     openExtensionPageRun,
     cancelExtensionPageToolCall,
@@ -23,6 +27,7 @@
     'history.read',
     'link.open',
     'media.open',
+    'route.push',
     'route.replace',
     'toast',
     'run.subscribe',
@@ -32,14 +37,24 @@
 
   let {
     descriptor,
-    route = '',
+    navigation = createStandaloneNavigation(),
     theme = {},
     locale = 'en',
     timezone = 'UTC',
     subscribeInvalidations = null,
-    onRouteChange = () => {},
     onToast = () => {},
   } = $props();
+  // The page's route spells its navigation place (`/swarms/<id>`), or is ''
+  // at the page's start. Back/Forward and the main navigation change the
+  // place; the page changes it with `route.push` (a step) or `route.replace`
+  // (a correction of the current entry).
+  const route = $derived(
+    navigation.place.length ? `/${navigation.place.join('/')}` : '',
+  );
+  const placeFromRoute = (value) => value.split('/').filter(Boolean);
+  // The App navigator: its Back/Forward first close registered layers, and
+  // the page's frame forwards the Back/Forward input it handles.
+  const shell = useNavigation();
   let frame = $state.raw(null);
   let frameContext = $state.raw(null);
   let disposed = false;
@@ -179,9 +194,32 @@
     };
   }
 
+  // While the page reports an open dialog or menu, it holds one layer of the
+  // App navigation; Back/Forward then ask the page to close its topmost one.
+  function showPageLayers(context, open) {
+    if (open === Boolean(context.releaseLayer)) return;
+    if (!open) {
+      context.releaseLayer();
+      context.releaseLayer = null;
+      return;
+    }
+    context.releaseLayer =
+      shell?.registerLayer({
+        close: () =>
+          post(context, {
+            type: 'vbot.extension.layers.close',
+            version: BRIDGE_VERSION,
+            nonce: context.nonce,
+            epoch: context.descriptor.epoch,
+            descriptor: context.descriptor,
+          }),
+      }) ?? (() => {});
+  }
+
   function invalidateContext(reason) {
     const previous = frameContext;
     frameContext = null;
+    if (previous) showPageLayers(previous, false);
     previous?.autosaveFlush?.finish(false);
     for (const subscription of runSubscriptions.values()) subscription.close();
     runSubscriptions.clear();
@@ -212,6 +250,10 @@
       descriptor: captured,
       ready: false,
       allowedUrls: [],
+      // Where the App moves on the Back/Forward keys and mouse buttons (the
+      // Desktop app), the page forwards the ones pressed inside its frame,
+      // which never reach the App window.
+      forwardsHistoryInput: shell?.handlesInput === true,
     };
     frameContext = context;
     post(context, {
@@ -224,6 +266,7 @@
       theme: isPlainObject(theme) ? theme : {},
       locale: typeof locale === 'string' && locale ? locale : 'en',
       timezone: typeof timezone === 'string' && timezone ? timezone : 'UTC',
+      forwardHistoryInput: context.forwardsHistoryInput,
     });
   }
 
@@ -271,6 +314,24 @@
       typeof data.pending === 'boolean'
     ) {
       context.autosavePending = data.pending;
+      return;
+    }
+    if (
+      context.ready &&
+      data.type === 'vbot.extension.layers.state' &&
+      typeof data.open === 'boolean'
+    ) {
+      showPageLayers(context, data.open);
+      return;
+    }
+    if (
+      context.ready &&
+      context.forwardsHistoryInput &&
+      data.type === 'vbot.extension.history.move' &&
+      (data.direction === 'back' || data.direction === 'forward')
+    ) {
+      if (data.direction === 'back') shell.back();
+      else shell.forward();
       return;
     }
     if (
@@ -431,10 +492,13 @@
         runSubscriptions.delete(data.params.id);
         result = {};
       } else if (
-        data.method === 'route.replace' &&
+        (data.method === 'route.push' || data.method === 'route.replace') &&
         typeof data.params.route === 'string'
       ) {
-        onRouteChange(data.params.route);
+        // The new route reaches the page with the next context update.
+        const place = placeFromRoute(data.params.route);
+        if (data.method === 'route.push') navigation.navigate(place);
+        else navigation.replace(place);
         result = {};
       } else if (
         data.method === 'toast' &&

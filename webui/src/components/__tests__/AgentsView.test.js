@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
+import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 import {
   rpcMock,
@@ -203,24 +204,89 @@ describe('AgentsView', () => {
     expect(getAgentUpdateCalls()).toHaveLength(0);
   });
 
-  it('opens an explicit Compaction target inside shared Agent defaults', async () => {
+  it('opens shared defaults at the Compaction section its place names', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
-    const consumed = vi.fn();
+    // jsdom has no layout, so the scroll target is recorded instead.
+    const scrolled = [];
+    Element.prototype.scrollIntoView = function () {
+      scrolled.push(this);
+    };
+    try {
+      mountedComponent = mount(AgentsView, {
+        target: document.body,
+        props: {
+          navigation: createStandaloneNavigation(['~defaults', 'compaction']),
+        },
+      });
+      flushSync();
+      await waitForCondition(() => scrolled.length > 0);
+      expect(document.querySelector('.agent-shared-pane').hidden).toBe(false);
+      expect(scrolled).toEqual([
+        document.querySelector('[data-settings-section="compaction"]'),
+      ]);
+    } finally {
+      delete Element.prototype.scrollIntoView;
+    }
+  });
+
+  it('shows the Agent its place names, steps on list choices and corrects an unknown place', async () => {
+    const agents = [
+      baseAgent(),
+      { ...baseAgent(), id: 'bravo', name: 'Bravo' },
+    ];
+    rpcMock.mockImplementation(createAgentsRpcMock({ agents }));
+    const onAgentSelected = vi.fn();
+    const navigation = createStandaloneNavigation();
     mountedComponent = mount(AgentsView, {
       target: document.body,
-      props: {
-        targetDefaultsPanel: 'compaction',
-        onDefaultsTargetHandled: consumed,
-      },
+      props: { navigation, onAgentSelected, sharedSelectedAgentId: 'bravo' },
     });
     flushSync();
-    await waitForCondition(() =>
-      document.querySelector('#agent-shared-compaction'),
+
+    // The empty place shows the shared selected Agent and names it.
+    await waitForCondition(() => navigation.place[0] === 'bravo', 100);
+    expect(textInputValue('agent-id')).toBe('bravo');
+    expect(onAgentSelected).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'bravo' }),
     );
-    expect(document.querySelector('#agent-shared-compaction').hidden).toBe(
-      false,
+
+    getAgentButton('Alpha').click();
+    flushSync();
+    expect(navigation.place).toEqual(['alpha']);
+    expect(textInputValue('agent-id')).toBe('alpha');
+    expect(onAgentSelected).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'alpha' }),
     );
-    expect(consumed).toHaveBeenCalledOnce();
+
+    document.querySelector('.agent-list-defaults button').click();
+    flushSync();
+    expect(navigation.place).toEqual(['~defaults']);
+    await waitForCondition(() => document.querySelector('.agent-shared-title'));
+    getButton(t('agents.shared.back')).click();
+    flushSync();
+    expect(navigation.place).toEqual(['alpha']);
+    expect(document.querySelector('.agent-editor-host').hidden).toBe(false);
+
+    // A place naming an Agent the roster does not know yet (the App remaps
+    // the place after a rename elsewhere) is read once more and shown.
+    const rosterReads = () =>
+      rpcMock.mock.calls.filter(([method]) => method === 'agent.list').length;
+    let readsBefore = rosterReads();
+    agents[0] = { ...agents[0], id: 'researcher' };
+    navigation.replace(['researcher']);
+    flushSync();
+    await waitForCondition(() => textInputValue('agent-id') === 'researcher');
+    expect(navigation.place).toEqual(['researcher']);
+    expect(rosterReads()).toBe(readsBefore + 1);
+
+    // An Agent the read does not find leaves the shown one and corrects the
+    // entry.
+    readsBefore = rosterReads();
+    navigation.navigate(['ghost']);
+    flushSync();
+    await waitForCondition(() => navigation.place[0] === 'researcher', 100);
+    expect(rosterReads()).toBe(readsBefore + 1);
+    expect(textInputValue('agent-id')).toBe('researcher');
   });
 
   it('keeps the Agent on one page while local disclosures preserve edited fields', async () => {
@@ -354,7 +420,11 @@ describe('AgentsView', () => {
       }),
     );
 
-    mountedComponent = mount(AgentsView, { target: document.body });
+    const navigation = createStandaloneNavigation();
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { navigation },
+    });
     flushSync();
 
     await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
@@ -410,6 +480,9 @@ describe('AgentsView', () => {
 
     await waitForCondition(() => listedAgentIds().includes('bravo'), 100);
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    // Showing the created Agent is a step to its place.
+    expect(navigation.place).toEqual(['bravo']);
+    await waitForCondition(() => textInputValue('agent-id') === 'bravo', 100);
   });
 
   it('keeps the current Agent selected while the Add modal is open and after cancelling it', async () => {
@@ -574,11 +647,12 @@ describe('AgentsView', () => {
   it('renames through an explicit confirmation flow and keeps the renamed Agent selected', async () => {
     const onAgentSelected = vi.fn();
     const onAgentsChanged = vi.fn();
+    const navigation = createStandaloneNavigation(['alpha']);
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, {
       target: document.body,
-      props: { onAgentSelected, onAgentsChanged },
+      props: { navigation, onAgentSelected, onAgentsChanged },
     });
     flushSync();
     await waitForCondition(() => textInputValue('agent-name') === 'Alpha', 100);
@@ -599,6 +673,7 @@ describe('AgentsView', () => {
       new_id: 'researcher',
     });
     expect(textInputValue('agent-id')).toBe('researcher');
+    expect(navigation.place).toEqual(['researcher']);
     expect(onAgentSelected).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'researcher' }),
     );

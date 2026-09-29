@@ -10,17 +10,6 @@ import {
   disconnect,
 } from './connectionState.js';
 import {
-  createNavigationHistoryState,
-  isExtensionViewId,
-  isNavigationHistoryState,
-  locationHashForView,
-  requestedViewIdFromLocationHash,
-  sameNavigationSelection,
-  sameSessionOverride,
-  sessionLinkFromSearch,
-  viewIdFromLocationHash,
-} from './navigationHistory.js';
-import {
   RESOURCE_TOKEN_AGENTS,
   RESOURCE_TOKEN_MEMORIES,
   RESOURCE_TOKEN_CALENDAR,
@@ -123,9 +112,8 @@ function sessionDeletionFromScope(scope) {
   };
 }
 
-export function createAppControllerState(activeViewId) {
+export function createAppControllerState() {
   return {
-    activeViewId,
     activeRuns: [],
     calendarRefreshToken: 0,
     channelsRefreshToken: 0,
@@ -137,10 +125,7 @@ export function createAppControllerState(activeViewId) {
     debugTracesRefreshToken: 0,
     modelsRefreshToken: 0,
     memoriesRefreshToken: 0,
-    pendingSessionNavigation: null,
     projectsRefreshToken: 0,
-    promptScopeTarget: '',
-    promptScopeTargetRequestId: 0,
     providerAuthEvent: null,
     queueInvalidation: null,
     backgroundBashStatusEvents: [],
@@ -155,23 +140,17 @@ export function createAppControllerState(activeViewId) {
     // (replay gap or server restart).
     sessionsRefreshToken: 0,
     dataStoreIncident: null,
-    settingsPanelTarget: '',
-    settingsPanelTargetRequestId: 0,
     skillsRefreshToken: 0,
     terminalsRefreshToken: 0,
   };
 }
 
-// The application boundary for navigation, connection lifecycle, server-event
-// projection, and global invalidation. App.svelte supplies application actions
-// (reload data, show a toast, set onboarding aside) and renders this state.
+// The application boundary for connection lifecycle, server-event projection,
+// and global invalidation. App.svelte supplies application actions (reload
+// data, show a toast) and renders this state; navigation belongs to
+// `navigation.svelte.js`.
 export function createAppController({
   state,
-  knownViewIds,
-  defaultViewId,
-  currentNavigationSelection,
-  isDebugEnabled,
-  isOperational,
   onAppError,
   onLoadProjects,
   onAgentIdChanged = () => {},
@@ -179,25 +158,17 @@ export function createAppController({
   onReloadExtensionPages = async () => {},
   onExtensionChange = () => {},
   onLoadDataStoreStatus = async () => {},
-  onSetOnboardingAside,
-  browserHistory = globalThis.history,
-  browserWindow = globalThis.window,
   unavailableNoticeDelayMs = SERVER_UNAVAILABLE_NOTICE_DELAY_MS,
   restoredNoticeDurationMs = SERVER_RESTORED_NOTICE_DURATION_MS,
 }) {
-  let chatSessionOverride = null;
-  let sessionNavigationRequestId = 0;
   let sessionInvalidationSequence = state.sessionInvalidations?.at(-1)?.id ?? 0;
-  // An initial deep link to an Extension page whose route is unknown until
-  // the page catalog loads; cleared by the first user navigation.
-  let pendingExtensionViewId = '';
   let unavailableNoticeTimer = null;
   let restoredNoticeTimer = null;
+  // Renamed identity Agents, old id -> new id, so remembered places that name
+  // an old id (history entries, the last place of a view) still resolve.
   const identityAgentRedirects = new Map();
-  const currentKnownViewIds = () =>
-    typeof knownViewIds === 'function' ? knownViewIds() : knownViewIds;
 
-  function resolvedIdentityAgentId(agentId) {
+  function resolveIdentityAgentId(agentId) {
     let resolved = agentId;
     const visited = new Set();
     while (
@@ -211,24 +182,6 @@ export function createAppController({
     return resolved;
   }
 
-  function remapNavigationState(navState) {
-    const selection = navState.selection
-      ? {
-          ...navState.selection,
-          agentId: resolvedIdentityAgentId(navState.selection.agentId),
-        }
-      : null;
-    const session = navState.session
-      ? {
-          ...navState.session,
-          agentId: navState.session.projectId
-            ? navState.session.agentId
-            : resolvedIdentityAgentId(navState.session.agentId),
-        }
-      : null;
-    return { ...navState, selection, session };
-  }
-
   function applyIdentityAgentRename(oldAgentId, newAgentId) {
     for (const [source, target] of identityAgentRedirects) {
       if (target === oldAgentId) {
@@ -236,271 +189,7 @@ export function createAppController({
       }
     }
     identityAgentRedirects.set(oldAgentId, newAgentId);
-    if (chatSessionOverride && !chatSessionOverride.projectId) {
-      chatSessionOverride = {
-        ...chatSessionOverride,
-        agentId: resolvedIdentityAgentId(chatSessionOverride.agentId),
-      };
-    }
-    if (state.pendingSessionNavigation) {
-      const pending = state.pendingSessionNavigation;
-      state.pendingSessionNavigation = {
-        ...pending,
-        agentId: pending.projectId
-          ? pending.agentId
-          : resolvedIdentityAgentId(pending.agentId),
-        selection: pending.selection
-          ? {
-              ...pending.selection,
-              agentId: resolvedIdentityAgentId(pending.selection.agentId),
-            }
-          : pending.selection,
-      };
-    }
     onAgentIdChanged(oldAgentId, newAgentId);
-  }
-
-  function pushNavigationState() {
-    pendingExtensionViewId = '';
-    try {
-      browserHistory?.pushState(
-        createNavigationHistoryState(
-          state.activeViewId,
-          chatSessionOverride,
-          currentNavigationSelection(),
-        ),
-        '',
-        locationHashForView(state.activeViewId),
-      );
-    } catch {
-      // History API unavailable (non-browser environment).
-    }
-  }
-
-  function selectView(viewId) {
-    if (viewId !== state.activeViewId && !isOperational()) {
-      onSetOnboardingAside();
-    }
-    if (viewId === state.activeViewId) {
-      return false;
-    }
-    if (state.activeViewId === 'chat') {
-      chatSessionOverride = null;
-      state.pendingSessionNavigation = null;
-    }
-    state.activeViewId = viewId;
-    pushNavigationState();
-    return true;
-  }
-
-  function handleChatSessionNavigation(override) {
-    const next = override ?? null;
-    if (sameSessionOverride(chatSessionOverride, next)) {
-      return false;
-    }
-    chatSessionOverride = next;
-    pushNavigationState();
-    return true;
-  }
-
-  function applyNavigationState(navState) {
-    pendingExtensionViewId = '';
-    navState = remapNavigationState(navState);
-    let viewId = currentKnownViewIds().includes(navState.view)
-      ? navState.view
-      : defaultViewId;
-    if (viewId === 'debug' && !isDebugEnabled()) {
-      viewId = 'settings';
-    }
-    state.activeViewId = viewId;
-
-    if (viewId !== 'chat') {
-      chatSessionOverride = null;
-      state.pendingSessionNavigation = null;
-      return;
-    }
-
-    const target = navState.session ?? null;
-    const selection = navState.selection ?? null;
-    const selectionDiffers =
-      selection &&
-      !sameNavigationSelection(selection, currentNavigationSelection());
-    if (!selectionDiffers && sameSessionOverride(chatSessionOverride, target)) {
-      return;
-    }
-    chatSessionOverride = target;
-    sessionNavigationRequestId += 1;
-    state.pendingSessionNavigation = {
-      ...(target ? { ...target } : { returnToCurrent: true }),
-      requestId: sessionNavigationRequestId,
-      selection,
-    };
-  }
-
-  function handlePopState(event) {
-    if (isNavigationHistoryState(event.state)) {
-      applyNavigationState(event.state);
-      return;
-    }
-    const viewId =
-      viewIdFromLocationHash(
-        browserWindow?.location?.hash ?? '',
-        currentKnownViewIds(),
-      ) || defaultViewId;
-    applyNavigationState(createNavigationHistoryState(viewId, null));
-  }
-
-  function replaceNavigationState() {
-    try {
-      browserHistory?.replaceState(
-        createNavigationHistoryState(
-          state.activeViewId,
-          null,
-          currentNavigationSelection(),
-        ),
-        '',
-        locationHashForView(state.activeViewId),
-      );
-    } catch {
-      // History API unavailable (non-browser environment).
-    }
-  }
-
-  // The view the page was opened or reloaded with: its hash, else the view of
-  // the restored history entry.
-  function requestedInitialViewId(existingState) {
-    return (
-      requestedViewIdFromLocationHash(browserWindow?.location?.hash ?? '') ||
-      existingState?.view ||
-      ''
-    );
-  }
-
-  function restoreInitialNavigationEntry() {
-    const existingState = isNavigationHistoryState(browserHistory?.state)
-      ? browserHistory.state
-      : null;
-    const requestedViewId = requestedInitialViewId(existingState);
-    if (
-      requestedViewId !== state.activeViewId &&
-      isExtensionViewId(requestedViewId)
-    ) {
-      if (!currentKnownViewIds().includes(requestedViewId)) {
-        // Keep the link's entry and URL, so a reload keeps it too, until the
-        // Extension page catalog shows whether the page exists.
-        pendingExtensionViewId = requestedViewId;
-        return;
-      }
-      state.activeViewId = requestedViewId;
-    }
-    if (
-      existingState &&
-      existingState.view === state.activeViewId &&
-      existingState.session
-    ) {
-      chatSessionOverride = existingState.session;
-      sessionNavigationRequestId += 1;
-      state.pendingSessionNavigation = {
-        ...existingState.session,
-        requestId: sessionNavigationRequestId,
-      };
-      return;
-    }
-    replaceNavigationState();
-  }
-
-  function initializeNavigationHistory() {
-    try {
-      restoreInitialNavigationEntry();
-    } catch {
-      // History API unavailable (non-browser environment).
-    }
-    browserWindow?.addEventListener?.('popstate', handlePopState);
-  }
-
-  // Read the page's link to one Session (`?open_agent=...&open_session=...`) and
-  // remove both parameters from the address bar, so neither a history entry
-  // nor a reload repeats it. Returns `{agentId, sessionId}` when both were
-  // given, else null.
-  function takeSessionLink() {
-    const location = browserWindow?.location;
-    const link = sessionLinkFromSearch(location?.search ?? '');
-    if (!link) {
-      return null;
-    }
-    try {
-      browserHistory?.replaceState(
-        browserHistory.state,
-        '',
-        `${location.pathname ?? ''}${link.search}${location.hash ?? ''}`,
-      );
-    } catch {
-      // History API unavailable (non-browser environment).
-    }
-    return link.target;
-  }
-
-  // Called after each successful Extension page catalog load. Opens a pending
-  // initial Extension page link in place of the startup view when the page
-  // exists and the user has not navigated meanwhile; when it does not exist,
-  // the startup view replaces the link's entry. Returns whether it opened.
-  function resolvePendingExtensionView() {
-    const viewId = pendingExtensionViewId;
-    if (!viewId) {
-      return false;
-    }
-    pendingExtensionViewId = '';
-    const available = currentKnownViewIds().includes(viewId);
-    if (available) {
-      state.activeViewId = viewId;
-    }
-    replaceNavigationState();
-    return available;
-  }
-
-  function navigateToSession(
-    targetOrAgentId,
-    maybeSessionId,
-    subAgent = false,
-  ) {
-    const agentId =
-      typeof targetOrAgentId === 'string'
-        ? targetOrAgentId
-        : (targetOrAgentId?.agentId ?? '');
-    const sessionId =
-      typeof targetOrAgentId === 'string'
-        ? maybeSessionId
-        : targetOrAgentId?.sessionId;
-    if (!agentId || !sessionId) {
-      return false;
-    }
-    selectView('chat');
-    handleChatSessionNavigation({ agentId, sessionId, subAgent });
-    sessionNavigationRequestId += 1;
-    state.pendingSessionNavigation = {
-      agentId,
-      sessionId,
-      subAgent,
-      followSession: true,
-      requestId: sessionNavigationRequestId,
-    };
-    return true;
-  }
-
-  function navigateToSubAgent(targetOrAgentId, maybeSessionId) {
-    return navigateToSession(targetOrAgentId, maybeSessionId, true);
-  }
-
-  function navigateToSettingsPanel(panelId) {
-    state.settingsPanelTarget = panelId;
-    state.settingsPanelTargetRequestId += 1;
-    selectView('settings');
-  }
-
-  function navigateToPromptScope(agentId) {
-    state.promptScopeTarget = typeof agentId === 'string' ? agentId : '';
-    state.promptScopeTargetRequestId += 1;
-    selectView('system-prompt');
   }
 
   function clearConnectionTimers() {
@@ -709,26 +398,15 @@ export function createAppController({
   }
 
   function destroy() {
-    browserWindow?.removeEventListener?.('popstate', handlePopState);
     disconnect(state.connectionState);
     clearConnectionTimers();
   }
 
   return {
-    applyNavigationState,
     connectServerEvents,
     destroy,
-    handleChatSessionNavigation,
     handleConnectionStatusChange,
-    handlePopState,
     handleServerEvent,
-    initializeNavigationHistory,
-    resolvePendingExtensionView,
-    navigateToPromptScope,
-    navigateToSettingsPanel,
-    navigateToSubAgent,
-    navigateToSession,
-    selectView,
-    takeSessionLink,
+    resolveIdentityAgentId,
   };
 }

@@ -39,6 +39,8 @@ export function createProjectEditForm(project = null) {
 export function createProjectsState({ selectedProjectId = '' } = {}) {
   return {
     projects: [],
+    // The first Project list has been applied.
+    projectsLoaded: false,
     loadingProjects: false,
     listError: '',
     statusMessage: '',

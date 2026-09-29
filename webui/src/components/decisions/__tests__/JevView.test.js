@@ -4,6 +4,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init, t } from '$lib/i18n.js';
 import { fileURLToPath } from 'node:url';
 import { readStyleSheet } from '../../../__tests__/styles.support.js';
+import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
 
 const api = vi.hoisted(() => ({
   listDecisionExperiments: vi.fn(),
@@ -26,7 +27,7 @@ afterEach(async () => {
   if (component) await unmount(component);
   document.body.innerHTML = '';
 });
-it('shows the workspace under the real shell cascade and opens a saved example', async () => {
+it('shows the workspace under the real shell cascade, opens a saved example and follows the place', async () => {
   init('en');
   api.listDecisionExperiments.mockResolvedValue({
     experiments: [],
@@ -48,7 +49,8 @@ it('shows the workspace under the real shell cascade and opens a saved example',
     )
     .join('\n');
   document.body.append(style);
-  component = mount(View, { target: document.body });
+  const navigation = createStandaloneNavigation();
+  component = mount(View, { target: document.body, props: { navigation } });
   async function settle() {
     for (let n = 0; n < 20; n++) {
       await Promise.resolve();
@@ -76,10 +78,23 @@ it('shows the workspace under the real shell cascade and opens a saved example',
     getComputedStyle(document.querySelector('.jev-submit')).position,
   );
   expect(document.querySelector('.jev-history').hidden).toBe(true);
+  // Creating opens the experiment as a step; its shown page names the entry.
+  expect(navigation.place).toEqual(['exp', 'setup']);
   [...document.querySelectorAll('button')]
     .find((node) => node.textContent.includes('←'))
     .click();
   await settle();
+  expect(navigation.place).toEqual([]);
   expect(document.querySelector('.jev-library')).not.toBeNull();
   expect(document.querySelector('.jev-editor')).toBeNull();
+
+  api.getDecisionExperiment.mockResolvedValue({
+    id: 'exp',
+    revision: 1,
+    draft: api.saveDecisionExperiment.mock.calls[0][0],
+  });
+  navigation.navigate(['exp', 'results']);
+  await settle();
+  expect(api.getDecisionExperiment).toHaveBeenCalledWith('exp');
+  expect(document.querySelector('.jev-history').hidden).toBe(false);
 });

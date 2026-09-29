@@ -12,8 +12,11 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   const contextListeners = new Set();
   const runEventListeners = new Set();
   let autosaveParticipant = null;
+  // The dialogs and menus the page shows over its content, the topmost last.
+  const layers = [];
+  let forwardsHistoryInput = false;
 
-  function autosaveMessage(type, values = {}) {
+  function hostMessage(type, values = {}) {
     if (!context) return;
     target.postMessage(
       {
@@ -29,9 +32,67 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   }
 
   function notifyAutosave() {
-    autosaveMessage('vbot.extension.autosave.state', {
+    hostMessage('vbot.extension.autosave.state', {
       pending: autosaveParticipant?.hasPending() === true,
     });
+  }
+
+  function notifyLayers() {
+    hostMessage('vbot.extension.layers.state', { open: layers.length > 0 });
+  }
+
+  // While any layer is open, the app's Back/Forward close the topmost one
+  // (the host sends `layers.close`) instead of leaving the page's place.
+  function registerLayer(layer) {
+    const entry = { close: () => layer?.close?.() };
+    layers.push(entry);
+    if (layers.length === 1) notifyLayers();
+    return () => {
+      const index = layers.indexOf(entry);
+      if (index < 0) return;
+      layers.splice(index, 1);
+      if (layers.length === 0) notifyLayers();
+    };
+  }
+
+  // Where the app moves on the Back/Forward keys and mouse buttons itself
+  // (the Desktop app), the host asks the page to forward those pressed inside
+  // it, since they never reach the app window. Same rules as the app: plain
+  // Alt with the arrows, the browser keys, side buttons 3 and 4.
+  function moveHistory(direction) {
+    hostMessage('vbot.extension.history.move', { direction });
+  }
+
+  function onHistoryKey(event) {
+    if (event.defaultPrevented) return;
+    const plainAlt =
+      event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+    const backwards =
+      event.key === 'BrowserBack' || (plainAlt && event.key === 'ArrowLeft');
+    const forwards =
+      event.key === 'BrowserForward' ||
+      (plainAlt && event.key === 'ArrowRight');
+    if (!backwards && !forwards) return;
+    event.preventDefault();
+    moveHistory(backwards ? 'back' : 'forward');
+  }
+
+  // The WebView's own navigation for the side buttons is cancelled on both
+  // press and release, so each click moves exactly once.
+  function onHistoryButton(event) {
+    if (event.button !== 3 && event.button !== 4) return;
+    event.preventDefault();
+    if (event.type === 'mouseup')
+      moveHistory(event.button === 3 ? 'back' : 'forward');
+  }
+
+  function forwardHistoryInput(enabled) {
+    if (enabled === forwardsHistoryInput) return;
+    forwardsHistoryInput = enabled;
+    const listen = enabled ? 'addEventListener' : 'removeEventListener';
+    window[listen]('keydown', onHistoryKey);
+    window[listen]('mousedown', onHistoryButton);
+    window[listen]('mouseup', onHistoryButton);
   }
 
   function isPlainObject(value) {
@@ -119,6 +180,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
         locale: typeof data.locale === 'string' ? data.locale : 'en',
         timezone: typeof data.timezone === 'string' ? data.timezone : 'UTC',
       };
+      forwardHistoryInput(data.forwardHistoryInput === true);
       target.postMessage(
         {
           type: 'vbot.extension.ready',
@@ -131,9 +193,14 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       );
       for (const listener of contextListeners) listener(context);
       if (autosaveParticipant) notifyAutosave();
+      if (layers.length > 0) notifyLayers();
       return;
     }
     if (!matchesContext(data)) return;
+    if (data.type === 'vbot.extension.layers.close') {
+      layers.at(-1)?.close();
+      return;
+    }
     if (
       data.type === 'vbot.extension.autosave.flush' &&
       typeof data.id === 'string'
@@ -149,7 +216,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
           )
             return;
           notifyAutosave();
-          autosaveMessage('vbot.extension.autosave.result', {
+          hostMessage('vbot.extension.autosave.result', {
             id: data.id,
             saved: saved === true,
           });
@@ -258,6 +325,12 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       }),
     openLink: (url) => call('link.open', { url }),
     openMedia: (url) => call('media.open', { url }),
+    // The route becomes part of the app's Back/Forward history: `pushRoute`
+    // records a user step to another place of the page, `replaceRoute`
+    // corrects the current entry (a default choice, a record that vanished).
+    // A changed route comes back in the next context, like one that
+    // Back/Forward changed.
+    pushRoute: (route) => call('route.push', { route }),
     replaceRoute: (route) => call('route.replace', { route }),
     toast: (message, variant = 'info') => call('toast', { message, variant }),
     registerAutosave(participant) {
@@ -272,6 +345,11 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       };
     },
     notifyAutosave,
+    // Registers an open dialog or menu: `{close}` closes it, and the returned
+    // function releases it once it is closed. A Svelte page provides it to
+    // its components with `provideNavigation({ registerLayer })` in its root,
+    // so the shared Modal and ContextMenu register themselves.
+    registerLayer,
     subscribeRun: (groupId, runId, afterSequence = 0) =>
       call('run.subscribe', {
         group_id: groupId,
@@ -301,11 +379,13 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     },
     dispose() {
       window.removeEventListener('message', onMessage);
+      forwardHistoryInput(false);
       rejectPending('Extension page was disposed');
       invalidationListeners.clear();
       contextListeners.clear();
       runEventListeners.clear();
       autosaveParticipant = null;
+      layers.length = 0;
       context = null;
     },
   };

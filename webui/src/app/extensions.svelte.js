@@ -26,10 +26,6 @@ export function createAppExtensions(context) {
 
   let invalidationRevision = 0;
 
-  let extensionPageRoute = $state('');
-
-  let extensionPageRouteView = $state('');
-
   let extensionPageTheme = $state({});
 
   const refreshExtensionPageTheme = () => {
@@ -119,14 +115,6 @@ export function createAppExtensions(context) {
     return extensionPagesLoadInFlight;
   };
 
-  function syncRoute(activeViewId) {
-    const nextView = activeViewId.startsWith('extension:') ? activeViewId : '';
-    if (nextView !== extensionPageRouteView) {
-      extensionPageRoute = '';
-    }
-    extensionPageRouteView = nextView;
-  }
-
   onMount(() => {
     refreshExtensionPageTheme();
     const themeObserver = new MutationObserver(refreshExtensionPageTheme);
@@ -157,18 +145,11 @@ export function createAppExtensions(context) {
     };
   });
   return {
-    syncRoute,
     get extensionPages() {
       return extensionPages;
     },
     subscribeInvalidations,
     publishChange,
-    get extensionPageRoute() {
-      return extensionPageRoute;
-    },
-    set extensionPageRoute(value) {
-      extensionPageRoute = value;
-    },
     get extensionPageTheme() {
       return extensionPageTheme;
     },

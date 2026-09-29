@@ -96,7 +96,7 @@
   import ToastStack from './components/ToastStack.svelte';
   import Modal from './components/ui/Modal.svelte';
   import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import {
     CONNECTION_STATUS_DISCONNECTED,
     handleVisibilityChange,
@@ -121,7 +121,11 @@
     isDesktopAccessor,
     onDesktopOpenSession,
   } from '$lib/desktopBridge.js';
-  import { viewIdFromLocationHash } from '$lib/navigationHistory.js';
+  import {
+    createNavigator,
+    provideNavigation,
+    sameLocation,
+  } from '$lib/navigation.svelte.js';
   import { createAppSelection } from './app/selection.svelte.js';
   import { createAppSetup } from './app/setup.svelte.js';
   import { createAppDesktop } from './app/desktop.svelte.js';
@@ -130,26 +134,13 @@
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
-  const selection = createAppSelection({
-    get promptScopeTarget() {
-      return promptScopeTarget;
-    },
-    set promptScopeTarget(value) {
-      promptScopeTarget = value;
-    },
-    get promptScopeTargetRequestId() {
-      return promptScopeTargetRequestId;
-    },
-    set promptScopeTargetRequestId(value) {
-      promptScopeTargetRequestId = value;
-    },
-  });
+  const selection = createAppSelection();
   const setup = createAppSetup({
     get modelsRefreshToken() {
       return modelsRefreshToken;
     },
     get selectView() {
-      return selectView;
+      return showView;
     },
   });
   const desktop = createAppDesktop({
@@ -162,10 +153,10 @@
       return navigationItems;
     },
     get selectView() {
-      return selectView;
+      return openView;
     },
     // A startup link to an Extension page resolves once its route is known.
-    onPagesLoaded: () => appController?.resolvePendingExtensionView(),
+    onPagesLoaded: () => navigator.resolvePendingStart(),
   });
 
   const visibleNavigationItems = $derived(
@@ -174,34 +165,21 @@
       : extensions.allNavigationItems.filter((item) => item.id !== 'debug'),
   );
 
-  const knownViewIds = () =>
-    extensions.allNavigationItems.map((item) => item.id);
+  const isKnownView = (viewId) =>
+    extensions.allNavigationItems.some((item) => item.id === viewId);
 
-  const initialViewId = () => {
-    try {
-      return (
-        viewIdFromLocationHash(window.location.hash, knownViewIds()) ||
-        navigationItems[0].id
-      );
-    } catch {
-      return navigationItems[0].id;
-    }
-  };
-
-  const appControllerState = $state(createAppControllerState(initialViewId()));
+  const appControllerState = $state(createAppControllerState());
   const autosaveCoordinator = createAutosaveCoordinator();
   let appController;
-  let activeViewId = $derived(appControllerState.activeViewId);
-  $effect.pre(() => extensions.syncRoute(activeViewId));
 
   let autosaveTransitionSaving = $state(false);
   let autosaveFailureOpen = $state(false);
   let pendingAutosaveTransition = null;
-  let debugEnabled = $state(false);
+  // Unknown until the first status read; Debug stays reachable meanwhile so a
+  // startup link to it is not lost.
+  let debugEnabled = $state(null);
 
   let terminalsView = $state();
-  let projectsView = $state();
-  let voiceChatSelection = null;
 
   // Settings is unmounted when another main view opens. Keep its reading
   // anchor in the long-lived App shell so a normal tab return resumes exactly
@@ -238,9 +216,6 @@
     connectionState.status === CONNECTION_STATUS_DISCONNECTED,
   );
 
-  let pendingSessionNavigation = $derived(
-    appControllerState.pendingSessionNavigation,
-  );
   let providerAuthEvent = $derived(appControllerState.providerAuthEvent);
   let runServerEvents = $derived(appControllerState.runServerEvents);
   let backgroundBashStatusEvents = $derived(
@@ -251,41 +226,11 @@
 
   let serverSwitcherOpen = $state(false);
 
-  let settingsPanelTarget = $derived(appControllerState.settingsPanelTarget);
-  let settingsPanelTargetRequestId = $derived(
-    appControllerState.settingsPanelTargetRequestId,
-  );
-  let promptScopeTarget = $derived(appControllerState.promptScopeTarget);
-  let promptScopeTargetRequestId = $derived(
-    appControllerState.promptScopeTargetRequestId,
-  );
-
   $effect(() => {
     if (!serverUnavailable) {
       serverSwitcherOpen = false;
     }
   });
-
-  const navigateToAgentModel = () => {
-    selectView('agents');
-  };
-
-  const navigateToProviders = () => {
-    navigateToSettingsPanel('providers');
-  };
-
-  const navigateToProjects = () => {
-    selectView('projects');
-  };
-
-  // Calendar → Scheduled Runs deep link: remember the job the user clicked so
-  // CronView can preselect it once its list loads.
-  let pendingCronJobTarget = $state('');
-
-  const openCronJobFromCalendar = (jobId) => {
-    pendingCronJobTarget = typeof jobId === 'string' ? jobId : '';
-    selectView('cron');
-  };
 
   const runAutosaveTransition = async (action) => {
     pendingAutosaveTransition = action;
@@ -338,48 +283,191 @@
     action();
   };
 
-  const selectView = (viewId) =>
+  // Every navigation - a click, a deep link, Back or Forward - waits for
+  // pending edits here. Leaving Settings also keeps its reading position:
+  // captured while Settings still owns its DOM, because scroll events alone
+  // must not decide the navigation boundary.
+  const navigationGate = (action) =>
     requestAutosaveTransition(() => {
-      // Capture while Settings still owns its DOM. Browser scroll events usually
-      // keep this current already, but the navigation boundary must not depend
-      // on destroy-hook ordering.
-      if (activeViewId === 'settings' && viewId !== 'settings') {
+      if (activeViewId === 'settings') {
         const position = settingsView?.getScrollPosition?.();
         if (position) {
           settingsScrollPosition = position;
         }
       }
-      return appController.selectView(viewId);
+      return action();
     });
-  const handleChatSessionNavigation = (override) => {
-    voiceChatSelection = override;
-    return appController.handleChatSessionNavigation(override);
+
+  const desktopAccessor = isDesktopAccessor();
+  const navigator = createNavigator({
+    defaultView: navigationItems[0].id,
+    isKnownView,
+    resolveView: (viewId) =>
+      viewId === 'debug' && debugEnabled === false ? 'settings' : viewId,
+    gate: navigationGate,
+    remap: remapRenamedAgents,
+    guardExit: desktopAccessor,
+    handleInput: desktopAccessor,
+  });
+  provideNavigation(navigator);
+  let activeViewId = $derived(navigator.location.view);
+
+  // The main navigation: a view's last place, or its start when it is shown.
+  // Leaving first-run setup for another view sets setup aside.
+  const openView = (viewId) => {
+    if (viewId !== activeViewId && !setup.operational) {
+      setup.dismissOnboarding();
+    }
+    return navigator.open(viewId);
   };
+
+  // Show a view without leaving the place it shows now.
+  const showView = (viewId) =>
+    viewId === activeViewId ? false : openView(viewId);
+
+  // Chat's first area reports every place it moves to; App turns places it
+  // did not choose itself (Back/Forward, deep links, the main navigation)
+  // into a restore request for that area.
+  const chatNavigation = navigator.view('chat');
+  let chatShownSession = $state(null);
+  let pendingSessionNavigation = $state(null);
+  let chatRestoreRequestId = 0;
+  let lastChatLocation = null;
+
+  // Restores wait for the Agent roster, so an entry's Agent is known when
+  // Chat applies it.
+  $effect.pre(() => {
+    const location = navigator.location;
+    if (location.view !== 'chat' || selection.agents.length === 0) return;
+    untrack(() => {
+      const previous = lastChatLocation;
+      lastChatLocation = location;
+      if (location.origin === 'view' || sameLocation(previous, location)) {
+        return;
+      }
+      if (!previous && location.place.length === 0 && !location.extra) {
+        return;
+      }
+      const [agentId = '', sessionId = ''] = location.place;
+      const subAgent = location.extra?.subAgent === true;
+      const shown = chatShownSession;
+      if (
+        shown?.agentId === agentId &&
+        shown.sessionId === sessionId &&
+        shown.subAgent === subAgent
+      ) {
+        return;
+      }
+      chatRestoreRequestId += 1;
+      pendingSessionNavigation = {
+        ...(agentId && sessionId
+          ? {
+              agentId,
+              sessionId,
+              subAgent,
+              followSession: subAgent && location.origin === 'app',
+            }
+          : { returnToCurrent: true }),
+        selection: location.extra?.selection ?? null,
+        requestId: chatRestoreRequestId,
+      };
+    });
+  });
+
+  const chatExtra = (subAgent) => ({
+    selection: selection.currentNavigationSelection(),
+    subAgent: subAgent === true,
+  });
+
+  // `session` is the Session Chat's first area shows now (`{agentId,
+  // sessionId, subAgent}`). A report while Chat is hidden corrects the place
+  // Chat returns to and never pulls the app back to Chat.
+  const handleChatSessionNavigation = (session, { replace = false } = {}) => {
+    chatShownSession = session ?? null;
+    if (!session) return false;
+    const place = [session.agentId, session.sessionId];
+    const extra = chatExtra(session.subAgent);
+    return replace || activeViewId !== 'chat'
+      ? chatNavigation.replace(place, { extra })
+      : chatNavigation.navigate(place, { extra });
+  };
+
+  const navigateToSession = (agentId, sessionId, subAgent = false) => {
+    if (!agentId || !sessionId) return false;
+    return navigator.navigate('chat', [agentId, sessionId], {
+      extra: chatExtra(subAgent),
+    });
+  };
+
+  // Another view chose a different Agent: Chat follows the shared selection
+  // when it is shown next instead of returning to its old place.
+  const selectAgentFromView = (agentOrId) => {
+    const agentId =
+      typeof agentOrId === 'string' ? agentOrId : (agentOrId?.id ?? '');
+    if (agentId && agentId !== selection.selectedAgentId) {
+      navigator.forget('chat');
+    }
+    selection.selectAgent(agentId);
+  };
+
+  function remapRenamedAgents(location) {
+    const resolve = (agentId) =>
+      appController?.resolveIdentityAgentId(agentId) ?? agentId;
+    const remapScope = (segment) =>
+      segment.startsWith('agent:')
+        ? `agent:${resolve(segment.slice('agent:'.length))}`
+        : segment;
+    if (location.view === 'chat') {
+      const [agentId, ...rest] = location.place;
+      const chatSelection = location.extra?.selection;
+      return {
+        ...location,
+        place:
+          agentId && !agentId.includes('@')
+            ? [resolve(agentId), ...rest]
+            : location.place,
+        extra: chatSelection
+          ? {
+              ...location.extra,
+              selection: {
+                ...chatSelection,
+                agentId: resolve(chatSelection.agentId),
+              },
+            }
+          : location.extra,
+      };
+    }
+    if (location.view === 'agents' && location.place[0]) {
+      return {
+        ...location,
+        place: [resolve(location.place[0]), ...location.place.slice(1)],
+      };
+    }
+    if (location.view === 'skills' || location.view === 'system-prompt') {
+      return { ...location, place: location.place.map(remapScope) };
+    }
+    return location;
+  }
 
   const liveUiActions = createLiveUiActions({
     selection,
-    appController: () => appController,
+    navigator,
+    navigateToSession,
     activeView: () => activeViewId,
     requestTransition: requestAutosaveTransition,
-    chatSelection: () => voiceChatSelection,
+    chatSelection: () => chatShownSession,
     loadProject: showProject,
     terminalsView: () => terminalsView,
-    projectsView: () => projectsView,
     afterRender: tick,
   });
 
-  const navigateToSubAgent = (targetOrAgentId, maybeSessionId) =>
-    requestAutosaveTransition(() =>
-      appController.navigateToSubAgent(targetOrAgentId, maybeSessionId),
-    );
+  const navigateToSubAgent = (target) =>
+    navigateToSession(target?.agentId, target?.sessionId, true);
 
   // Opens one Session from outside the page, the way Live UI's `open` action
   // does: a startup link or a request of the Desktop app.
-  const openSessionLink = ({ agentId, sessionId }) => {
-    requestAutosaveTransition(() =>
-      appController.navigateToSession(agentId, sessionId),
-    );
-  };
+  const openSessionLink = ({ agentId, sessionId }) =>
+    navigateToSession(agentId, sessionId);
 
   const loadDataStoreStatus = async () => {
     try {
@@ -409,25 +497,33 @@
 
   const connectServerEvents = () => appController.connectServerEvents();
 
-  // Shared defaults have one owner in Agents, including links from Projects.
-  // Consume the target after opening so ordinary navigation returns to the Agent.
-  let pendingAgentDefaultsPanel = $state('');
-  const navigateToAgentDefaults = (panelId = 'defaults') =>
-    requestAutosaveTransition(() => {
-      pendingAgentDefaultsPanel = panelId === 'agent' ? '' : panelId;
-      return appController.selectView('agents');
-    });
+  const navigateToAgentModel = () =>
+    navigator.navigate('agents', [selection.selectedAgentId]);
 
+  const navigateToProjects = () => openView('projects');
+
+  const openCronJobFromCalendar = (jobId) =>
+    navigator.navigate('cron', typeof jobId === 'string' ? [jobId] : []);
+
+  // Shared defaults have one owner in Agents, including links from Projects;
+  // 'agent' names the selected Agent's own editor.
+  const navigateToAgentDefaults = (panelId = 'defaults') =>
+    navigator.navigate(
+      'agents',
+      panelId === 'agent'
+        ? [selection.selectedAgentId]
+        : ['~defaults', ...(panelId === 'defaults' ? [] : [panelId])],
+    );
+
+  // Settings resolves a page or section id to its canonical place; a section
+  // link scrolls to its section.
   const navigateToSettingsPanel = (panelId) => {
     if (panelId === 'defaults' || panelId === 'compaction')
       return navigateToAgentDefaults(panelId);
-    requestAutosaveTransition(() => {
-      // A deliberate deep link (for example Provider setup) owns the
-      // next Settings position; ordinary tab switches leave the memory intact.
-      settingsScrollPosition = null;
-      return appController.navigateToSettingsPanel(panelId);
-    });
+    return navigator.navigate('settings', [panelId]);
   };
+
+  const navigateToProviders = () => navigateToSettingsPanel('providers');
 
   const rememberSettingsScrollPosition = (position) => {
     settingsScrollPosition = position;
@@ -437,31 +533,24 @@
     navigateToSettingsPanel('voice');
   };
 
-  // Deep-link to the System Prompt view with a given agent's scope preselected.
-  // Mirrors the settings-panel mechanism: a target agent id + a fresh request id
-  // SystemPromptView reacts to once scopes have loaded, falling back to the
-  // default scope when the target scope is absent.
-  const navigateToAgentPromptScope = (agentId) => {
-    requestAutosaveTransition(() =>
-      appController.navigateToPromptScope(agentId),
-    );
-  };
+  // Deep-link to the System Prompt editor with a given Agent's scope; the
+  // view falls back to the default scope when that scope does not exist.
+  const navigateToAgentPromptScope = (agentId) =>
+    navigator.navigate('system-prompt', [
+      'edit',
+      ...(agentId ? [`agent:${agentId}`] : []),
+    ]);
 
   const handleDebugEnabledChange = (enabled) => {
     const isEnabled = enabled === true;
     debugEnabled = isEnabled;
     if (!isEnabled && activeViewId === 'debug') {
-      selectView('settings');
+      navigator.replace('settings');
     }
   };
 
   appController = createAppController({
     state: appControllerState,
-    knownViewIds,
-    defaultViewId: navigationItems[0].id,
-    currentNavigationSelection: selection.currentNavigationSelection,
-    isDebugEnabled: () => debugEnabled,
-    isOperational: () => setup.operational,
     onAppError: (message) => {
       desktop.showToast({
         title: t('errors.appError'),
@@ -470,13 +559,16 @@
       });
     },
     onLoadProjects: selection.loadProjects,
-    onAgentIdChanged: selection.remapIdentityAgentId,
+    onAgentIdChanged: (oldAgentId, newAgentId) => {
+      selection.remapIdentityAgentId(oldAgentId, newAgentId);
+      navigator.remapAll();
+    },
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
     onExtensionChange: extensions.publishChange,
     onLoadDataStoreStatus: loadDataStoreStatus,
-    onSetOnboardingAside: setup.dismissOnboarding,
   });
+  navigator.start();
 
   onMount(() => {
     let cancelled = false;
@@ -484,8 +576,7 @@
     const stopClientMetrics = startClientMetrics({
       report: reportClientMetrics,
     });
-    appController.initializeNavigationHistory();
-    const sessionLink = appController.takeSessionLink();
+    const sessionLink = navigator.takeSessionLink();
     if (sessionLink) {
       openSessionLink(sessionLink);
     }
@@ -530,6 +621,7 @@
       selection.destroy();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       appController.destroy();
+      navigator.destroy();
       stopClientMetrics();
     };
   });
@@ -545,7 +637,8 @@
 <AppShell
   items={visibleNavigationItems}
   {activeViewId}
-  onSelectView={selectView}
+  onSelectView={openView}
+  navigationControls={desktopAccessor ? navigator : null}
   connectionStatus={connectionState.status}
   {serverUnavailable}
   {serverNoticeState}
@@ -654,24 +747,20 @@
         )}
         <ExtensionPage
           descriptor={page}
-          route={extensions.extensionPageRoute}
+          navigation={navigator.view(activeViewId)}
           theme={{ ...extensions.extensionPageTheme }}
           locale={setup.settings?.appearance?.language ?? 'en'}
           timezone={dateTimePrefs.timeZone}
           subscribeInvalidations={extensions.subscribeInvalidations}
-          onRouteChange={(route) => {
-            extensions.extensionPageRoute = route;
-          }}
           onToast={(message, variant) =>
             desktop.showToast({ title: message, variant })}
         />
       {:else if activeViewId === 'agents'}
         <AgentsView
+          navigation={navigator.view('agents')}
           sharedSelectedAgentId={selection.selectedAgentId}
-          targetDefaultsPanel={pendingAgentDefaultsPanel}
-          onDefaultsTargetHandled={() => (pendingAgentDefaultsPanel = '')}
           onAgentsChanged={selection.refreshAgents}
-          onAgentSelected={selection.selectAgent}
+          onAgentSelected={selectAgentFromView}
           onToast={desktop.showToast}
           onNavigateToSettingsPanel={navigateToSettingsPanel}
           onNavigateToAgentPrompt={navigateToAgentPromptScope}
@@ -684,13 +773,14 @@
       {:else if activeViewId === 'terminals'}
         <TerminalsView
           bind:this={terminalsView}
+          navigation={navigator.view('terminals')}
           {terminalsRefreshToken}
           {serverUnavailable}
           onToast={desktop.showToast}
         />
       {:else if activeViewId === 'projects'}
         <ProjectsView
-          bind:this={projectsView}
+          navigation={navigator.view('projects')}
           selectedProjectId={selection.managedProjectId}
           onProjectSelected={selection.selectManagedProject}
           onToast={desktop.showToast}
@@ -699,29 +789,31 @@
           {projectsRefreshToken}
         />
       {:else if activeViewId === 'jev'}
-        <JevView onNavigateToSettingsPanel={navigateToSettingsPanel} />
+        <JevView
+          navigation={navigator.view('jev')}
+          onNavigateToSettingsPanel={navigateToSettingsPanel}
+        />
       {:else if activeViewId === 'calendar'}
         <CalendarView
+          navigation={navigator.view('calendar')}
           onToast={desktop.showToast}
           {serverUnavailable}
           {calendarRefreshToken}
           onOpenCronJob={openCronJobFromCalendar}
-          onOpenSession={(target, session) =>
-            requestAutosaveTransition(() =>
-              appController.navigateToSession(target, session),
-            )}
+          onOpenSession={navigateToSession}
         />
       {:else if activeViewId === 'cron'}
         <CronView
+          navigation={navigator.view('cron')}
           onToast={desktop.showToast}
           {serverUnavailable}
           {cronRefreshToken}
           agentsRefreshToken={selection.agentsRefreshToken}
           {projectsRefreshToken}
-          targetJobId={pendingCronJobTarget}
         />
       {:else if activeViewId === 'skills'}
         <SkillsView
+          navigation={navigator.view('skills')}
           onToast={desktop.showToast}
           settings={setup.settings}
           onSettingsCommit={(nextSettings) => (setup.settings = nextSettings)}
@@ -731,13 +823,13 @@
         />
       {:else if activeViewId === 'system-prompt'}
         <SystemPromptView
+          navigation={navigator.view('system-prompt')}
           onToast={desktop.showToast}
-          targetScopeAgentId={promptScopeTarget}
-          targetScopeRequestId={promptScopeTargetRequestId}
         />
       {:else if activeViewId === 'settings'}
         <SettingsView
           bind:this={settingsView}
+          navigation={navigator.view('settings')}
           onSettingsCommit={(nextSettings) => (setup.settings = nextSettings)}
           onNavigateToAgentDefaults={navigateToAgentDefaults}
           {providerAuthEvent}
@@ -745,8 +837,6 @@
           agents={selection.agents}
           desktopCapabilities={desktop.desktopCapabilities}
           desktopVoice={desktop.desktopVoice}
-          targetPanelId={settingsPanelTarget}
-          targetPanelRequestId={settingsPanelTargetRequestId}
           onDebugEnabledChange={handleDebugEnabledChange}
           onOpenSetupGuide={setup.reopenOnboarding}
           {modelsRefreshToken}
@@ -756,11 +846,14 @@
           onScrollPositionChange={rememberSettingsScrollPosition}
         />
       {:else if activeViewId === 'logs'}
-        <LogsView />
+        <LogsView navigation={navigator.view('logs')} />
       {:else if activeViewId === 'statistics'}
-        <StatisticsView />
+        <StatisticsView navigation={navigator.view('statistics')} />
       {:else if activeViewId === 'debug'}
-        <DebugView {debugTracesRefreshToken} />
+        <DebugView
+          navigation={navigator.view('debug')}
+          {debugTracesRefreshToken}
+        />
       {/if}
     {/if}
   {/key}

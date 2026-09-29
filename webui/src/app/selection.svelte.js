@@ -1,6 +1,6 @@
 import { listProjects, listAgents } from '$lib/api.js';
 
-export function createAppSelection(context) {
+export function createAppSelection() {
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
 
   const SELECTED_PROJECT_KEY = 'vbot.selectedProjectId';
@@ -201,10 +201,10 @@ export function createAppSelection(context) {
     }
   };
 
-  // The selection half of a history entry: which identity agent and which
-  // project context were active when the entry was created. Restored together
-  // with the session override so Back/Forward re-establish the whole chat
-  // context (chips, project bar, and displayed session agree again).
+  // The selection half of a Chat place: which identity agent and which
+  // project context were active when the history entry was created. Restored
+  // together with the shown Session so Back/Forward re-establish the whole
+  // chat context (chips, project bar, and displayed session agree again).
   const currentNavigationSelection = () => ({
     agentId: selectedAgentId,
     projectId: selectedProjectId,
@@ -236,10 +236,6 @@ export function createAppSelection(context) {
   const remapIdentityAgentId = (oldAgentId, newAgentId) => {
     if (selectedAgentId === oldAgentId) {
       selectedAgentId = newAgentId;
-    }
-    if (context.promptScopeTarget === oldAgentId) {
-      context.promptScopeTarget = newAgentId;
-      context.promptScopeTargetRequestId += 1;
     }
   };
 

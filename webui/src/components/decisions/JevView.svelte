@@ -1,7 +1,8 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { t } from '$lib/i18n.js';
   import { useAutosaveContext } from '$lib/autosave.js';
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import {
     listDecisionExperiments,
     getDecisionExperiment,
@@ -16,7 +17,12 @@
   import { experimentExample } from './examples.js';
   import './jev.css';
 
-  let { onNavigateToSettingsPanel = () => {} } = $props();
+  let {
+    // The place is [experiment id, page]: an empty place shows the library,
+    // the page is the experiment's Setup or Results. Search is not a place.
+    navigation = createStandaloneNavigation(),
+    onNavigateToSettingsPanel = () => {},
+  } = $props();
   const transitions = useAutosaveContext();
   let experiments = $state([]);
   let experiment = $state(null);
@@ -48,20 +54,49 @@
       loading = false;
     }
   }
-  async function select(id) {
-    return transitions.requestTransition(async () => {
-      const current = ++generation;
-      try {
-        const result = await getDecisionExperiment(id);
-        if (!destroyed && current === generation) {
-          experiment = result;
-          selectionVersion++;
-          error = '';
-        }
-      } catch (failure) {
-        if (!destroyed) error = failure.message;
-      }
+  // Place -> shown experiment. An empty place shows the library.
+  $effect(() => {
+    const id = navigation.place[0] ?? '';
+    untrack(() => {
+      if (id === (experiment?.id ?? '')) return;
+      if (id) void open(id);
+      else closeExperiment();
     });
+  });
+
+  async function open(id) {
+    const current = ++generation;
+    try {
+      const result = await getDecisionExperiment(id);
+      if (!destroyed && current === generation) {
+        experiment = result;
+        selectionVersion++;
+        error = '';
+      }
+    } catch (failure) {
+      if (destroyed || current !== generation) return;
+      error = failure.message;
+      // A deleted or unknown experiment leaves the library in its place.
+      if (failure.code === 'not_found') navigation.replace([]);
+    }
+  }
+  function closeExperiment() {
+    generation++;
+    experiment = null;
+    void refresh();
+  }
+  async function reload() {
+    return transitions.requestTransition(() => open(experiment.id));
+  }
+  function retry() {
+    void refresh();
+    const id = navigation.place[0] ?? '';
+    if (id && id !== experiment?.id) void open(id);
+  }
+  function showPanel(panel, { replace = false } = {}) {
+    const place = [experiment.id, panel];
+    if (replace) navigation.replace(place);
+    else navigation.navigate(place);
   }
   async function create(kind) {
     return transitions.requestTransition(async () => {
@@ -78,6 +113,7 @@
         const created = await saveDecisionExperiment(draft);
         if (!destroyed) {
           experiment = created;
+          navigation.navigate([created.id]);
           await refresh();
         }
       } catch (failure) {
@@ -99,6 +135,7 @@
       await deleteDecisionExperiment(experiment.id, experiment.revision);
       experiment = null;
       deleting = false;
+      navigation.replace([]);
       await refresh();
     } catch (failure) {
       error = failure.message;
@@ -141,20 +178,13 @@
       >
     </Banner>{/if}
   {#if error}<p class="jev-error" role="alert">{error}</p>
-    {#if !experiment}<Button onClick={refresh}>{t('common.retry')}</Button
+    {#if !experiment}<Button onClick={retry}>{t('common.retry')}</Button
       >{/if}{/if}
   <div class="jev-workspace">
     {#if experiment}
       <main class="jev-main">
         <div class="jev-toolbar">
-          <Button
-            variant="tertiary"
-            onClick={() =>
-              transitions.requestTransition(() => {
-                experiment = null;
-                void refresh();
-              })}
-          >
+          <Button variant="tertiary" onClick={() => navigation.up([])}>
             ← {t('jev.experiments')}
           </Button>
           <span>{experiment.title}</span>
@@ -174,8 +204,12 @@
           <ExperimentEditor
             {experiment}
             onSaved={saved}
-            onReload={() => select(experiment.id)}
+            onReload={reload}
             {available}
+            panel={navigation.place[0] === experiment.id
+              ? (navigation.place[1] ?? '')
+              : ''}
+            onPanelChange={showPanel}
           />
         {/key}
       </main>
@@ -202,7 +236,9 @@
           {#if loading}<p role="status">{t('jev.loading')}</p>{/if}
           <div class="jev-experiments">
             {#each filtered as item (item.id)}
-              <Button onClick={() => select(item.id)}>{item.title}</Button>
+              <Button onClick={() => navigation.navigate([item.id])}
+                >{item.title}</Button
+              >
             {/each}
             {#if !loading && !filtered.length}
               <p class="jev-help">

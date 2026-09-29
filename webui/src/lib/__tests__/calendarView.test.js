@@ -8,8 +8,10 @@ import {
   eventToFormValues,
   formatTimeInZone,
   groupByDay,
+  isDayKey,
   monthGridDays,
   sortDayEntries,
+  stepAnchor,
   todayKey,
   weekColumnLabel,
   weekRangeLabel,
@@ -114,6 +116,21 @@ describe('day keys and the month grid', () => {
       from: '2020-01-01',
       to: '2020-01-14',
     });
+  });
+
+  it('steps the anchor by the period of each view', () => {
+    expect(stepAnchor('month', '2026-09-15', 1)).toBe('2026-10-01');
+    expect(stepAnchor('month', '2026-01-15', -1)).toBe('2025-12-01');
+    expect(stepAnchor('week', '2026-09-02', 1)).toBe('2026-09-09');
+    expect(stepAnchor('day', '2026-09-30', 1)).toBe('2026-10-01');
+    expect(stepAnchor('agenda', '2026-09-01', -1)).toBe('2026-08-18');
+  });
+
+  it('accepts only real calendar dates as day keys', () => {
+    expect(isDayKey('2026-02-28')).toBe(true);
+    expect(isDayKey('2026-02-30')).toBe(false);
+    expect(isDayKey('2026-9-1')).toBe(false);
+    expect(isDayKey('')).toBe(false);
   });
 });
 
@@ -253,52 +270,46 @@ describe('server timezone rendering', () => {
 });
 
 describe('controller', () => {
-  it('corrects the initial anchor to the server day and keeps Today in the server timezone', async () => {
+  it('moves a today anchor to the server day but never an explicit day', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-01T00:30:00Z'));
     getCalendarWindow.mockResolvedValue(serverWindow('America/Los_Angeles'));
     const state = createCalendarViewState();
     const controller = createCalendarController({ state });
 
-    await controller.load();
+    await controller.show('month', todayKey(), { today: true });
 
     expect(state.anchorKey).toBe('2026-08-31');
     expect(getCalendarWindow).toHaveBeenLastCalledWith({
       from: '2026-07-27',
       to: '2026-09-06',
     });
+    expect(todayKey(state.systemTimeZone)).toBe('2026-08-31');
 
-    state.anchorKey = '2026-10-15';
-    controller.goToday();
-    expect(state.anchorKey).toBe('2026-08-31');
+    const explicit = createCalendarViewState();
+    await createCalendarController({ state: explicit }).show(
+      'month',
+      '2026-09-01',
+    );
+    expect(explicit.anchorKey).toBe('2026-09-01');
   });
 
-  it('steps the anchor by the period of the current view and loads its window', async () => {
+  it('loads the window of a shown period only when the period changes', async () => {
     const state = createCalendarViewState();
-    state.anchorKey = '2026-09-15';
     const controller = createCalendarController({ state });
 
-    controller.navigate(1);
-    expect(state.anchorKey).toBe('2026-10-01');
-    expect(getCalendarWindow).toHaveBeenLastCalledWith(
-      windowForView('month', '2026-10-01'),
-    );
-    controller.navigate(-2);
-    expect(state.anchorKey).toBe('2026-08-01');
-
-    controller.setAnchor('2026-09-02');
-    controller.setView('week');
-    controller.navigate(1);
-    expect(state.anchorKey).toBe('2026-09-09');
+    await controller.show('week', '2026-09-09');
+    await controller.show('week', '2026-09-09');
+    expect(getCalendarWindow).toHaveBeenCalledOnce();
     expect(getCalendarWindow).toHaveBeenLastCalledWith({
       from: '2026-09-07',
       to: '2026-09-13',
     });
 
-    controller.setAnchor('2026-09-30');
-    controller.setView('day');
-    controller.navigate(1);
-    expect(state.anchorKey).toBe('2026-10-01');
+    await controller.show('day', '2026-09-09');
+    expect(getCalendarWindow).toHaveBeenLastCalledWith(
+      windowForView('day', '2026-09-09'),
+    );
   });
 
   it('toggles layers', () => {

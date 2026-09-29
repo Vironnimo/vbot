@@ -29,7 +29,7 @@ import {
   setupSystemPromptViewSuite,
 } from './SystemPromptView.support.js';
 
-import { reactiveProps } from './reactiveProps.support.svelte.js';
+import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 
 const DEFAULT_SCOPE = () => t('systemPrompt.scope.default');
 const AGENT_SCOPE = { type: 'agent', agent_id: 'agent-1' };
@@ -83,13 +83,20 @@ describe('SystemPromptView scope and preview', () => {
         promptPreview: { text: 'Agent scoped preview', tokens: 77 },
       }),
     );
-    mountView();
+    const navigation = createStandaloneNavigation();
+    const navigate = vi.spyOn(navigation, 'navigate');
+    mountView({ navigation });
     await waitForDefaultScope();
+    // The empty place shows the Prompt tab and the default scope previewed
+    // with the first Agent, and records that place.
+    expect(navigation.place).toEqual(['prompt', 'default', 'agent:agent-1']);
 
     // Only the scopes the server offers (default and enabled Agents) appear.
     expect(scopeOptionLabels()).toEqual([DEFAULT_SCOPE(), 'Alpha']);
 
+    // Choosing a scope is a step to its place.
     selectPromptScope('Alpha');
+    expect(navigate).toHaveBeenCalledWith(['prompt', 'agent:agent-1']);
     await waitForCondition(
       () => hasCall('prompt.list', (params) => params.scope),
       100,
@@ -194,39 +201,36 @@ describe('SystemPromptView scope and preview', () => {
   });
 
   it.each([
-    ['agent-1', 'Alpha', true],
-    // An Agent without a prompt scope leaves the default selected and never
-    // requests a scoped prompt list.
-    ['ghost', null, false],
+    ['agent-1', 'Alpha', 'Alpha', ['edit', 'agent:agent-1']],
+    // An Agent without a prompt scope opens the default scope previewed with
+    // that Agent; an unknown Agent previews the first Agent. Neither requests
+    // a scoped prompt list, and the place records what is shown.
+    ['agent-2', null, 'Beta', ['edit', 'default', 'agent:agent-2']],
+    ['ghost', null, 'Alpha', ['edit', 'default', 'agent:agent-1']],
   ])(
-    'handles a scope deep-link request for %s',
-    async (agentId, selectedLabel, requestsScope) => {
+    'opens the editor place of the Agent scope %s',
+    async (agentId, scopeLabel, previewLabel, shownPlace) => {
       rpcMock.mockImplementation(createRpcMock());
-      const props = reactiveProps({
-        targetScopeAgentId: '',
-        targetScopeRequestId: 0,
-      });
-      mountView(props);
-      await waitForDefaultScope();
-
-      props.targetScopeAgentId = agentId;
-      props.targetScopeRequestId = 1;
-      flushSync();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      flushSync();
+      const navigation = createStandaloneNavigation([
+        'edit',
+        `agent:${agentId}`,
+      ]);
+      const navigate = vi.spyOn(navigation, 'navigate');
+      mountView({ navigation });
 
       const scopedList = () =>
         hasCall('prompt.list', (params) => params.scope?.agent_id === agentId);
-      if (requestsScope) {
-        await waitForCondition(
-          () =>
-            scopedList() && scopeTrigger()?.textContent.includes(selectedLabel),
-          100,
-        );
-      } else {
-        expect(scopeTrigger().textContent).toContain(DEFAULT_SCOPE());
-        expect(scopedList()).toBe(false);
-      }
+      await waitForCondition(
+        () =>
+          scopeTrigger()?.textContent.includes(scopeLabel ?? DEFAULT_SCOPE()) &&
+          agentTrigger()?.textContent.includes(previewLabel) &&
+          !isLoading(),
+        100,
+      );
+      expect(scopedList()).toBe(Boolean(scopeLabel));
+      expect(document.querySelector('.sp-editor').hidden).toBe(false);
+      expect(navigation.place).toEqual(shownPlace);
+      expect(navigate).not.toHaveBeenCalled();
     },
   );
 
@@ -330,14 +334,22 @@ describe('SystemPromptView scope and preview', () => {
         ? old.promise
         : Promise.resolve({ text: 'NEW-AGENT', tools: [], tokens: 5 });
     });
-    mountView();
+    const navigation = createStandaloneNavigation();
+    const navigate = vi.spyOn(navigation, 'navigate');
+    mountView({ navigation });
     await waitForCondition(
       () =>
         hasCall('prompt.preview', (params) => params.agent_id === 'agent-1'),
       100,
     );
 
+    // Choosing a preview Agent is a step; Beta has no scope of its own.
     selectPreviewAgent('Beta');
+    expect(navigate).toHaveBeenCalledWith([
+      'prompt',
+      'default',
+      'agent:agent-2',
+    ]);
     await waitForCondition(() => documentText().includes('NEW-AGENT'), 100);
     expect(lastCall('prompt.preview')[1]).toMatchObject({
       agent_id: 'agent-2',
@@ -351,6 +363,11 @@ describe('SystemPromptView scope and preview', () => {
     flushSync();
     expect(documentText()).toContain('NEW-AGENT');
     clickTab(t('systemPrompt.tabs.tools'));
+    expect(navigate).toHaveBeenLastCalledWith([
+      'tools',
+      'default',
+      'agent:agent-2',
+    ]);
     expect(document.querySelector('.tool-detail')).toBeNull();
   });
 

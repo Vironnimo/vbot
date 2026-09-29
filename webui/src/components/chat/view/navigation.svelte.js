@@ -13,7 +13,7 @@ import {
   setAgents,
 } from '../../../lib/chatState.js';
 import { t } from '$lib/i18n.js';
-import { untrack } from 'svelte';
+import { tick, untrack } from 'svelte';
 import { takeSessionInvalidations } from '$lib/sessionInvalidation.js';
 
 export function createChatViewNavigation(context) {
@@ -213,8 +213,8 @@ export function createChatViewNavigation(context) {
   let sessionOverrideActive = $derived(Boolean(viewingSessionId));
 
   // App-driven session navigation: sub-agent link clicks routed through
-  // `navigateToSubAgent` and browser-history restores. Both arrive here so
-  // they never echo back through `onSessionNavigation` as a new history push.
+  // `navigateToSubAgent`, Back/Forward, deep links and the main navigation.
+  // They arrive here and are never reported back as a new step.
   $effect(() => {
     const navigation = context.pendingSessionNavigation;
     const requestId = navigation?.requestId ?? '';
@@ -248,7 +248,17 @@ export function createChatViewNavigation(context) {
     void handleSessionDeleted(deletion, { passive: true });
   });
 
-  const handleSelectAgent = async (agentId, { focusComposer = true } = {}) => {
+  // `step: false` follows a selection made elsewhere (the shared Agent
+  // selection) without a new history step.
+  const handleSelectAgent = (
+    agentId,
+    { focusComposer = true, step = true } = {},
+  ) => {
+    const select = () => selectAgentSession(agentId, { focusComposer });
+    return step ? asStep(select) : select();
+  };
+
+  const selectAgentSession = async (agentId, { focusComposer }) => {
     // Choosing an identity agent always returns the chat to the identity bar,
     // tearing down any active project-agent selection (the upper bar wins for
     // the identity path; the project stays selected in the dropdown so its
@@ -271,7 +281,6 @@ export function createChatViewNavigation(context) {
           : unreadSession.sessionId;
       viewingSessionAgentId = '';
       viewingSubAgentSession = false;
-      reportSessionNavigation();
       await context.loadHistoryForSession(agentId, unreadSession.sessionId);
       if (focusComposer) {
         context.layout.requestComposerFocus();
@@ -281,7 +290,6 @@ export function createChatViewNavigation(context) {
     if (agentId === context.chatState.selectedAgentId) {
       if (sessionOverrideActive) {
         clearSessionOverride();
-        reportSessionNavigation();
         await context.loadCurrentHistory();
         if (focusComposer) {
           context.layout.requestComposerFocus();
@@ -292,7 +300,6 @@ export function createChatViewNavigation(context) {
     clearSessionOverride();
     selectAgent(context.chatState, agentId);
     context.onAgentSelected?.(agentId);
-    reportSessionNavigation();
     await context.loadCurrentHistory();
     if (focusComposer) {
       context.layout.requestComposerFocus();
@@ -314,6 +321,7 @@ export function createChatViewNavigation(context) {
   // browser-history restore. Restores re-enter past overrides (or return to
   // the current session) without creating new history entries.
   const applySessionNavigation = async (navigation) => {
+    stepMarked = false;
     const isCurrent = () => context.pendingSessionNavigation === navigation;
     const selectionChanged = await applyNavigationSelection(
       navigation.selection,
@@ -324,6 +332,9 @@ export function createChatViewNavigation(context) {
     if (navigation.returnToCurrent) {
       const hadOverride = sessionOverrideActive;
       clearSessionOverride();
+      // The start place names no Session; report the one shown even when it
+      // did not change.
+      reportShownSessionAgain();
       if (hadOverride || selectionChanged) {
         await loadActiveOwnHistory();
       }
@@ -342,12 +353,8 @@ export function createChatViewNavigation(context) {
       return;
     }
 
-    viewingSessionAgentId =
-      navigation.agentId === context.target.activeOwnAgentAddress()
-        ? ''
-        : navigation.agentId;
-    viewingSubAgentSession = false;
-    viewingSessionId = navigation.sessionId;
+    // An entry naming the active Agent's current Session shows it as current.
+    setViewedSession(navigation.agentId, navigation.sessionId, false);
     await context.loadHistoryForSession(
       navigation.agentId,
       navigation.sessionId,
@@ -412,7 +419,16 @@ export function createChatViewNavigation(context) {
     return changed;
   };
 
-  const handleSessionSelected = async (
+  const handleSessionSelected = (
+    sessionId,
+    sessionAgentAddress,
+    isSubAgentSession,
+  ) =>
+    asStep(() =>
+      showSession(sessionId, sessionAgentAddress, isSubAgentSession),
+    );
+
+  const showSession = async (
     sessionId,
     sessionAgentAddress,
     isSubAgentSession,
@@ -428,7 +444,6 @@ export function createChatViewNavigation(context) {
     }
 
     setViewedSession(agentAddress, normalizedSessionId, isSubAgentSession);
-    reportSessionNavigation();
     await context.loadHistoryForSession(agentAddress, normalizedSessionId);
     context.layout.requestComposerFocus();
   };
@@ -440,11 +455,7 @@ export function createChatViewNavigation(context) {
   // worlds — a project agent's sessions go through `agent@projekt`.
   const setViewedSession = (agentAddress, sessionId, isSubAgentSession) => {
     const isOwnAgent = agentAddress === context.target.activeOwnAgentAddress();
-    const ownCurrentSessionId = isOwnAgent
-      ? context.target.projectAgentActive
-        ? (context.target.projectAgentSessions[agentAddress] ?? '')
-        : (selectedAgent(context.chatState)?.current_session_id ?? '')
-      : '';
+    const ownCurrentSessionId = isOwnAgent ? ownCurrentSession() : '';
     viewingSessionAgentId = isOwnAgent ? '' : agentAddress;
     // The sub-agent notice follows the picked row's real sub-agent flag,
     // not cross-agent-ness: a foreign agent's ordinary session is a normal
@@ -468,8 +479,9 @@ export function createChatViewNavigation(context) {
   //
   // The server's deletion event and the drawer's delete response arrive in
   // either order. When the event came first, this area already followed
-  // passively; the drawer's deletion then completes the deliberate navigation
-  // (history entry, composer focus) instead of finding nothing to do.
+  // passively; the drawer's deletion then completes the deliberate part
+  // (composer focus) instead of finding nothing to do. Either way the deleted
+  // Session's history entry is corrected to its landing, never a new step.
   let passiveDeletionFollow = null;
   const handleSessionDeleted = async (
     { deletedSessionId, nextSessionId, agentAddress } = {},
@@ -500,7 +512,6 @@ export function createChatViewNavigation(context) {
       followed.landingId === viewedSessionId
     ) {
       passiveDeletionFollow = null;
-      reportSessionNavigation();
       await followed.loaded;
       context.layout.requestComposerFocus();
       return;
@@ -509,8 +520,8 @@ export function createChatViewNavigation(context) {
       return;
     }
     if (passive) {
-      // Another area's or window's action: follow it without a
-      // browser-history entry or stealing composer focus.
+      // Another area's or window's action: follow it without stealing
+      // composer focus.
       setViewedSession(ownerAddress, landingId, false);
       const loaded = context.loadHistoryForSession(ownerAddress, landingId);
       passiveDeletionFollow = { removedId, landingId, loaded };
@@ -518,7 +529,8 @@ export function createChatViewNavigation(context) {
       return;
     }
     passiveDeletionFollow = null;
-    await handleSessionSelected(landingId, ownerAddress);
+    // The deleted Session's entry now names its landing.
+    await showSession(landingId, ownerAddress);
   };
 
   const releaseDeletedSession = (agentAddress, removedId, landingId) => {
@@ -577,20 +589,65 @@ export function createChatViewNavigation(context) {
     viewingSubAgentSession = false;
   };
 
-  // Report the (possibly cleared) session override to App so it becomes a
-  // browser-history entry. Only user-initiated navigation calls this —
-  // App-driven navigation through `pendingSessionNavigation` must not.
-  const reportSessionNavigation = () => {
-    context.onSessionNavigation?.(
-      viewingSessionId
-        ? {
-            agentId:
-              viewingSessionAgentId || context.target.activeOwnAgentAddress(),
-            sessionId: viewingSessionId,
-            subAgent: viewingSubAgentSession,
-          }
-        : null,
-    );
+  // The active Agent's own current Session: a Project Agent's locally held
+  // one, else the selected identity Agent's current Session.
+  const ownCurrentSession = () =>
+    context.target.projectAgentActive
+      ? (context.target.projectAgentSessions[
+          context.target.activeOwnAgentAddress()
+        ] ?? '')
+      : (selectedAgent(context.chatState)?.current_session_id ?? '');
+
+  // The Session this area shows (`{agentId, sessionId, subAgent}`), null
+  // while it is not known yet.
+  const shownSession = () => {
+    const ownAddress = context.target.activeOwnAgentAddress();
+    if (viewingSessionId) {
+      return {
+        agentId: viewingSessionAgentId || ownAddress,
+        sessionId: viewingSessionId,
+        subAgent: viewingSubAgentSession,
+      };
+    }
+    const sessionId = ownCurrentSession();
+    return ownAddress && sessionId
+      ? { agentId: ownAddress, sessionId, subAgent: false }
+      : null;
+  };
+
+  // Every change of the shown Session reaches App as this area's place. A
+  // user action (`asStep`) makes its change a new history step; any other
+  // change - a restore, a load resolving the Session, a deletion, a moved
+  // Session - corrects the current entry.
+  let stepMarked = false;
+  let reportedSessionKey = '';
+  let reportRevision = $state(0);
+  const reportShownSessionAgain = () => {
+    reportedSessionKey = '';
+    reportRevision += 1;
+  };
+  $effect(() => {
+    void reportRevision;
+    const session = shownSession();
+    untrack(() => {
+      if (!session) return;
+      const key = `${session.agentId}::${session.sessionId}::${session.subAgent}`;
+      if (key === reportedSessionKey) return;
+      reportedSessionKey = key;
+      const replace = !stepMarked;
+      stepMarked = false;
+      context.onSessionNavigation?.(session, { replace });
+    });
+  });
+
+  const asStep = async (action) => {
+    stepMarked = true;
+    try {
+      return await action();
+    } finally {
+      await tick();
+      stepMarked = false;
+    }
   };
 
   // Load the active agent's own current view after an override was cleared:
@@ -610,7 +667,9 @@ export function createChatViewNavigation(context) {
     await context.loadCurrentHistory();
   };
 
-  const handleReturnToCurrentSession = async () => {
+  const handleReturnToCurrentSession = () => asStep(returnToCurrentSession);
+
+  const returnToCurrentSession = async () => {
     if (!subAgentSessionActive || context.chatState.loadingHistory) {
       return;
     }
@@ -620,31 +679,31 @@ export function createChatViewNavigation(context) {
     // child sessions, deleted parent agent) the button falls back to the
     // return-to-current behavior below.
     if (subAgentSessionActive && subAgentParentTarget) {
-      await navigateToParentSession(subAgentParentTarget);
+      await showParentSession(subAgentParentTarget);
       context.layout.requestComposerFocus();
       return;
     }
 
     clearSessionOverride();
-    reportSessionNavigation();
     await loadActiveOwnHistory();
     context.layout.requestComposerFocus();
   };
 
   // User-initiated navigation from a child session to its parent session: a
-  // normal session navigation, so it reports up and becomes a history push —
-  // Back returns to the child. A parent that is itself a Sub-Agent Session
-  // keeps the contextual banner so another parent step remains available;
-  // the root parent returns to ordinary Session presentation.
-  const navigateToParentSession = async ({
+  // normal session navigation and a new history step — Back returns to the
+  // child. A parent that is itself a Sub-Agent Session keeps the contextual
+  // banner so another parent step remains available; the root parent returns
+  // to ordinary Session presentation.
+  const navigateToParentSession = (target) =>
+    asStep(() => showParentSession(target));
+
+  const showParentSession = async ({
     agentAddress,
     sessionId,
     isSubAgentSession = false,
   }) => {
     const ownAddress = context.target.activeOwnAgentAddress();
-    const ownCurrentSessionId = context.target.projectAgentActive
-      ? (context.target.projectAgentSessions[ownAddress] ?? '')
-      : (selectedAgent(context.chatState)?.current_session_id ?? '');
+    const ownCurrentSessionId = ownCurrentSession();
     viewingSubAgentSession = isSubAgentSession;
     if (agentAddress === ownAddress && sessionId === ownCurrentSessionId) {
       clearSessionOverride();
@@ -652,11 +711,12 @@ export function createChatViewNavigation(context) {
       viewingSessionAgentId = agentAddress === ownAddress ? '' : agentAddress;
       viewingSessionId = sessionId;
     }
-    reportSessionNavigation();
     await context.loadHistoryForSession(agentAddress, sessionId);
   };
 
-  const handleNewSession = async () => {
+  const handleNewSession = () => asStep(createNewSession);
+
+  const createNewSession = async () => {
     if (
       context.chatState.loadingHistory ||
       creatingSession ||
@@ -675,7 +735,6 @@ export function createChatViewNavigation(context) {
       // Symmetric with the identity path below: a new session always leaves
       // any override view and becomes the displayed session.
       clearSessionOverride();
-      reportSessionNavigation();
       if (await createProjectAgentSession()) {
         context.layout.requestComposerFocus({ includeMobile: true });
       }
@@ -760,7 +819,6 @@ export function createChatViewNavigation(context) {
     setAgents(context.chatState, updatedAgents);
     context.onAgentsChanged?.(updatedAgents);
     context.onAgentSelected?.(agentId);
-    reportSessionNavigation();
     ensureSessionState(context.chatState, agentId, normalizedSessionId);
     await context.loadHistoryForSession(agentId, normalizedSessionId);
   };
@@ -898,8 +956,8 @@ export function createChatViewNavigation(context) {
     get clearSessionOverride() {
       return clearSessionOverride;
     },
-    get reportSessionNavigation() {
-      return reportSessionNavigation;
+    get asStep() {
+      return asStep;
     },
     get handleReturnToCurrentSession() {
       return handleReturnToCurrentSession;

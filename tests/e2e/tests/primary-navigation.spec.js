@@ -28,7 +28,8 @@ test("primary navigation opens every available product section", async ({
     await navigation
       .getByRole("button", { exact: true, name: section.button })
       .click();
-    await expect(page).toHaveURL(new RegExp(`${section.hash}$`));
+    // A view names its shown place after its hash (`#settings/general`).
+    await expect(page).toHaveURL(new RegExp(`${section.hash}(/|$)`));
     await expect(
       page
         .getByRole("main")
@@ -37,7 +38,7 @@ test("primary navigation opens every available product section", async ({
   }
 
   await page.goBack();
-  await expect(page).toHaveURL(/#statistics$/);
+  await expect(page).toHaveURL(/#statistics(\/|$)/);
   await expect(
     page.getByRole("main").getByRole("region", {
       exact: true,
@@ -46,7 +47,7 @@ test("primary navigation opens every available product section", async ({
   ).toBeVisible();
 
   await page.goBack();
-  await expect(page).toHaveURL(/#cron$/);
+  await expect(page).toHaveURL(/#cron(\/|$)/);
   await expect(
     page.getByRole("main").getByRole("region", {
       exact: true,
@@ -55,7 +56,7 @@ test("primary navigation opens every available product section", async ({
   ).toBeVisible();
 
   await page.goForward();
-  await expect(page).toHaveURL(/#statistics$/);
+  await expect(page).toHaveURL(/#statistics(\/|$)/);
   await expect(
     page.getByRole("main").getByRole("region", {
       exact: true,

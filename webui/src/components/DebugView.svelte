@@ -1,10 +1,11 @@
 <script>
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, onDestroy, tick, untrack } from 'svelte';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
     autosaveInput,
   } from '../lib/autosave.js';
+  import { createStandaloneNavigation } from '../lib/navigation.svelte.js';
 
   import {
     debugStatus,
@@ -35,9 +36,17 @@
   const TRACE_LIMIT_MAX = 500;
   const TRACE_LIMIT_MIN = 1;
 
-  let { debugTracesRefreshToken = 0 } = $props();
+  let {
+    // The place is the inspected trace; an empty place shows the trace list
+    // without one. Filters and the detail's tabs are not places.
+    navigation = createStandaloneNavigation(),
+    debugTracesRefreshToken = 0,
+  } = $props();
 
   let viewState = $state(createDebugViewState());
+  // Set once the first trace list arrived, so the place can be checked
+  // against it.
+  let tracesLoaded = $state(false);
   let status = $state({ enabled: false, traceLimit: 50, traceCount: 0 });
   let showClearConfirm = $state(false);
   let traceLimitInput = $state(50);
@@ -115,6 +124,7 @@
 
       applyTraceList(viewState, traceResult);
       applyModelProbeProviders(viewState, settingsResult);
+      tracesLoaded = true;
     } catch (error) {
       if (disposed || token !== listRequestToken) return;
       viewState.error = errorMessageText(error, t('errors.generic'));
@@ -202,7 +212,39 @@
     }
   }
 
-  async function handleTraceSelect(traceId) {
+  // Place -> inspected trace. An empty place closes it; a trace that is not
+  // listed keeps what is shown and corrects the entry.
+  $effect(() => {
+    const traceId = navigation.place[0] ?? '';
+    if (!tracesLoaded) return;
+    untrack(() => {
+      const shownId = viewState.selectedTrace?.trace_id ?? '';
+      if (traceId === shownId) return;
+      if (!traceId) {
+        void closeTrace(shownId);
+      } else if (viewState.traces.some((trace) => trace.trace_id === traceId)) {
+        void loadTrace(traceId);
+      } else {
+        showTraceInPlace();
+      }
+    });
+  });
+
+  // Inspected trace -> place: a refresh or Clear all dropped it.
+  $effect(() => {
+    void viewState.selectedTrace?.trace_id;
+    if (!tracesLoaded) return;
+    untrack(showTraceInPlace);
+  });
+
+  function showTraceInPlace() {
+    const traceId = viewState.selectedTrace?.trace_id ?? '';
+    if ((navigation.place[0] ?? '') !== traceId) {
+      navigation.replace(traceId ? [traceId] : []);
+    }
+  }
+
+  async function loadTrace(traceId) {
     viewState.error = '';
     detailError = '';
 
@@ -291,12 +333,17 @@
     }
   }
 
-  async function backToTraces() {
-    const previousId = viewState.selectedTrace?.trace_id;
+  async function closeTrace(previousId) {
     viewState.selectedTrace = null;
     detailRequestToken += 1;
     loadingDetail = false;
+    detailError = '';
     await tick();
+    // Focus left with the replaced detail panel (its Back control); return it
+    // to the row that was inspected.
+    if (document.activeElement && document.activeElement !== document.body) {
+      return;
+    }
     const row = [...document.querySelectorAll('.debug-trace')].find(
       (item) => item.dataset.traceId === previousId,
     );
@@ -430,15 +477,15 @@
       <DebugTraceList
         traces={viewState.traces}
         selectedTraceId={viewState.selectedTrace?.trace_id ?? ''}
-        onSelect={handleTraceSelect}
+        onSelect={(traceId) => navigation.navigate([traceId])}
       />
       {#key detailRequestToken}
         <DebugTraceDetail
           trace={viewState.selectedTrace}
           loading={loadingDetail}
           error={detailError}
-          onRetry={() => handleTraceSelect(viewState.selectedTrace.trace_id)}
-          onBack={backToTraces}
+          onRetry={() => loadTrace(viewState.selectedTrace.trace_id)}
+          onBack={() => navigation.up([])}
         />
       {/key}
     </div>

@@ -261,9 +261,8 @@ describe('Swarm Usage refresh', () => {
     button(USAGE).click();
     await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
     button('Second swarm').click();
-    await vi.waitFor(() =>
-      expect(bridge.replaceRoute).toHaveBeenLastCalledWith('/swarms/swr-b'),
-    );
+    // The Usage tab stays open for the newly selected Swarm.
+    await vi.waitFor(() => expect(bridge.route).toBe('/swarms/swr-b/usage'));
     button(USAGE).click();
     await tick();
     const report = () => document.querySelector('.usage-summary').textContent;
@@ -271,6 +270,6 @@ describe('Swarm Usage refresh', () => {
     for (const resolve of pending) resolve(result('swr-a'));
     await settle();
     expect(report()).toContain('222');
-    expect(bridge.replaceRoute).toHaveBeenLastCalledWith('/swarms/swr-b');
+    expect(bridge.route).toBe('/swarms/swr-b/usage');
   });
 });

@@ -431,8 +431,11 @@
         void chatController.loadAdoptedSelectionHistory();
         return;
       }
+      // Following the shared selection corrects Chat's place; the choice was
+      // made (and recorded) where the Agent was selected.
       navigation.handleSelectAgent(sharedSelectedAgentId, {
         focusComposer: false,
+        step: false,
       });
     }
   });

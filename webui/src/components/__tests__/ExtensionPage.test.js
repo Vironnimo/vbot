@@ -18,6 +18,8 @@ vi.mock('$lib/api.js', () => ({
   subscribeRunEvents: vi.fn(),
 }));
 const api = await import('$lib/api.js');
+const { createStandaloneNavigation } =
+  await import('$lib/navigation.svelte.js');
 const { default: ExtensionPageHost } =
   await import('./ExtensionPageHost.support.svelte');
 
@@ -121,14 +123,12 @@ describe('ExtensionPage frame bridge', () => {
   });
 
   it('accepts calls only after Ready from the current frame and publishes the display context', async () => {
-    const routeChange = vi.fn();
     const page = mountPage({
       initialContext: {
         locale: 'de',
         timezone: 'Europe/Berlin',
         theme: { mode: 'dark' },
       },
-      onRouteChange: routeChange,
     });
     const ready = { ...page.init, type: 'vbot.extension.ready' };
     message(window, ready);
@@ -151,8 +151,31 @@ describe('ExtensionPage frame bridge', () => {
         timezone: 'Europe/Berlin',
       }),
     );
-    page.call('2', 'route.replace', { route: '/details' });
-    expect(routeChange).toHaveBeenCalledWith('/details');
+  });
+
+  it('spells the navigation place as the page route and moves it on route calls', async () => {
+    const navigation = createStandaloneNavigation(['swarms', 'swr-a']);
+    const navigate = vi.spyOn(navigation, 'navigate');
+    const replace = vi.spyOn(navigation, 'replace');
+    const page = openPage({ navigation });
+    const routes = () =>
+      page
+        .posted()
+        .filter((data) => data.type === 'vbot.extension.context')
+        .map((data) => data.route);
+    expect(page.init.route).toBe('/swarms/swr-a');
+    // Back/Forward and the main navigation move the place.
+    navigation.replace([]);
+    flushSync();
+    expect(routes().at(-1)).toBe('');
+    page.call('push', 'route.push', { route: '/swarms/swr-b/usage' });
+    page.call('replace', 'route.replace', { route: '/profiles/prf-a' });
+    await page.replied('replace');
+    expect(navigate).toHaveBeenCalledWith(['swarms', 'swr-b', 'usage']);
+    expect(replace).toHaveBeenLastCalledWith(['profiles', 'prf-a']);
+    expect(page.reply('push').result).toEqual({});
+    flushSync();
+    expect(routes().at(-1)).toBe('/profiles/prf-a');
   });
 
   it('invalidates immediately on descriptor replacement and forwards display updates', () => {
@@ -291,6 +314,75 @@ describe('ExtensionPage frame bridge', () => {
     document.querySelector('iframe').dispatchEvent(new Event('load'));
     await expect(interrupted).resolves.toBe(false);
   });
+
+  it("holds one App layer while the current frame shows dialogs and lets Back close the page's topmost one", () => {
+    const layers = [];
+    const shell = {
+      registerLayer: (layer) => {
+        layers.push(layer);
+        return () => layers.splice(layers.indexOf(layer), 1);
+      },
+    };
+    const page = openPage({ shell });
+    const report = (open, fields = {}) =>
+      page.message({
+        ...page.init,
+        type: 'vbot.extension.layers.state',
+        open,
+        ...fields,
+      });
+    report(true, { nonce: 'stale' });
+    expect(layers).toHaveLength(0);
+    report(true);
+    report(true);
+    expect(layers).toHaveLength(1);
+    layers[0].close();
+    expect(page.posted().at(-1)).toEqual({
+      type: 'vbot.extension.layers.close',
+      version: 1,
+      nonce: page.init.nonce,
+      epoch: 'epoch-a',
+      descriptor: page.init.descriptor,
+    });
+    report(false);
+    expect(layers).toHaveLength(0);
+    report(true);
+    // A reloaded page starts without layers.
+    loadFrame();
+    expect(layers).toHaveLength(0);
+  });
+
+  it.each([
+    ['the Desktop app', true, 1],
+    ['a browser', false, 0],
+  ])(
+    'moves the App history for Back/Forward input forwarded from the current frame in %s',
+    (_app, handlesInput, moves) => {
+      const shell = {
+        handlesInput,
+        back: vi.fn(),
+        forward: vi.fn(),
+        registerLayer: () => () => {},
+      };
+      const page = mountPage({ shell });
+      expect(page.init.forwardHistoryInput).toBe(handlesInput);
+      const move = (direction, fields = {}) => ({
+        ...page.init,
+        type: 'vbot.extension.history.move',
+        direction,
+        ...fields,
+      });
+      page.message(move('back'));
+      page.ready();
+      message(window, move('back'));
+      page.message(move('back', { nonce: 'stale' }));
+      page.message(move('up'));
+      page.message(move('back'));
+      page.message(move('forward'));
+      expect(shell.back).toHaveBeenCalledTimes(moves);
+      expect(shell.forward).toHaveBeenCalledTimes(moves);
+    },
+  );
 
   it.each([
     [128 * 1024, (result) => ({ type: 'vbot.extension.result', result })],

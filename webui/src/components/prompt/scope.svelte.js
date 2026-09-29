@@ -112,26 +112,30 @@ export function createPromptScope(context) {
     projectTeamsLoaded = !catalog.projectError;
   }
 
-  function selectPreviewAgent(agentId) {
-    if (agentId === selectedAgentId) return;
-    return context.autosaveContext.requestTransition(async () => {
-      selectedAgentId = agentId;
-      const scopeKey = promptScopes.some(
-        (scope) => scope.key === `agent:${agentId}`,
-      )
-        ? `agent:${agentId}`
-        : 'default';
-      await applyScopeSelection(scopeKey);
-    });
+  // The scope and preview Agent a selection `{scopeKey, agentId}` shows with
+  // the loaded scopes and Agents. An Agent scope previews its own Agent. A
+  // scope that does not exist shows the default scope, which previews the
+  // named Agent when it can be previewed, else the first Agent.
+  function resolveSelection({ scopeKey = 'default', agentId = '' } = {}) {
+    const agentScope = promptScopes.find(
+      (scope) => scope.type === 'agent' && scope.key === scopeKey,
+    );
+    if (agentScope) {
+      return { scopeKey: agentScope.key, agentId: agentScope.agent_id };
+    }
+    return { scopeKey: 'default', agentId: resolvePreviewAgentId(agentId) };
   }
 
-  function selectScope(nextScopeKey) {
-    if (nextScopeKey === selectedScopeKey) {
-      return false;
+  // Show a selection as `resolveSelection` resolves it and return what is
+  // shown. Another scope reloads its blocks; another preview Agent alone
+  // only refreshes the preview.
+  function showSelection(selection) {
+    const shown = resolveSelection(selection);
+    selectedAgentId = shown.agentId;
+    if (shown.scopeKey !== selectedScopeKey) {
+      void applyScopeSelection(shown.scopeKey);
     }
-    return context.autosaveContext.requestTransition(() =>
-      applyScopeSelection(nextScopeKey),
-    );
+    return shown;
   }
 
   async function applyScopeSelection(nextScopeKey) {
@@ -282,8 +286,13 @@ export function createPromptScope(context) {
     return 'default';
   }
 
+  // An Identity Agent, or a Project Agent address (`agent@project`) that
+  // `prompt.preview` resolves itself; anything else previews the first Agent.
   function resolvePreviewAgentId(agentId) {
-    if (agents.some((agent) => agent.id === agentId)) {
+    if (
+      agents.some((agent) => agent.id === agentId) ||
+      /^[^@]+@[^@]+$/u.test(agentId)
+    ) {
       return agentId;
     }
 
@@ -495,11 +504,11 @@ export function createPromptScope(context) {
     get loadProjectTeams() {
       return loadProjectTeams;
     },
-    get selectPreviewAgent() {
-      return selectPreviewAgent;
+    get resolveSelection() {
+      return resolveSelection;
     },
-    get selectScope() {
-      return selectScope;
+    get showSelection() {
+      return showSelection;
     },
     get loadBlocksForScope() {
       return loadBlocksForScope;

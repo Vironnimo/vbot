@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
+import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 
 const rpcMock = vi.fn();
@@ -169,6 +170,43 @@ describe('CalendarView', () => {
       expect(plainText(today.querySelector('.calendar-column-heading'))).toBe(
         'Wed 23',
       );
+    });
+
+    it('shows the period named by the place and makes each period change a step', async () => {
+      const navigation = createStandaloneNavigation(['week', '2026-09-02']);
+      mountedComponent = mount(CalendarView, {
+        target: document.body,
+        props: { navigation },
+      });
+      await waitForCondition(
+        () => document.querySelector('.calendar-columns') !== null,
+      );
+      expect(plainText(document.querySelector('.calendar-heading'))).toBe(
+        'Aug 31 – Sep 6, 2026',
+      );
+      expect(rpcCalls('calendar.window')[0]).toEqual({
+        from: '2026-08-31',
+        to: '2026-09-06',
+      });
+
+      document
+        .querySelector(`button[aria-label="${t('calendar.prev')}"]`)
+        .click();
+      flushSync();
+      expect(navigation.place).toEqual(['week', '2026-08-26']);
+      expect(plainText(document.querySelector('.calendar-heading'))).toBe(
+        'Aug 24 – 30, 2026',
+      );
+      showView('month');
+      expect(navigation.place).toEqual(['month', '2026-08-26']);
+      button(t('calendar.today')).click();
+      flushSync();
+      expect(navigation.place).toEqual(['month', '2026-09-23']);
+
+      // The empty place (the view's start page) names the month around today.
+      navigation.navigate([]);
+      flushSync();
+      expect(navigation.place).toEqual(['month', '2026-09-23']);
     });
 
     it('names the shown day once in the day view', async () => {

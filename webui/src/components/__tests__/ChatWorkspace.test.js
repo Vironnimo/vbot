@@ -675,10 +675,16 @@ describe('ChatWorkspace', () => {
       await settle();
 
       expect(deletedHistoryReads()).toBe(readsAtDeletion);
-      // A passive follow: no browser-history entry for another window's act.
-      expect(props.onSessionNavigation.mock.calls.length).toBe(
-        navigationReports,
-      );
+      // A passive follow corrects the first area's place; another window's
+      // act is no new history step.
+      expect(
+        props.onSessionNavigation.mock.calls.slice(navigationReports),
+      ).toEqual([
+        [
+          expect.objectContaining({ sessionId: 'session-2' }),
+          { replace: true },
+        ],
+      ]);
       expect(
         rpcMock.mock.calls.some(([method]) => method === 'session.delete'),
       ).toBe(false);

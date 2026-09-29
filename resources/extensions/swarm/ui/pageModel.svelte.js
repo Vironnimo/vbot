@@ -22,7 +22,9 @@ import { referenceLinks } from './referenceLinks.js';
 const USAGE_REFRESH_INTERVAL_MS = 10_000;
 
 export function createSwarmPageModel(host) {
-  let client = $state(null);
+  // Exists from the start, so the page root can hand its layer registry to
+  // the page's dialogs before any of them mounts.
+  const client = host.bridgeClient ?? createExtensionPageClient();
 
   let loading = $state(true);
 
@@ -144,6 +146,28 @@ export function createSwarmPageModel(host) {
 
   let disposed = false;
 
+  // The page's place in the app's Back/Forward history is its route: '' for
+  // the start page (the goal form), `/swarms/<id>` for a Swarm's Board,
+  // `/swarms/<id>/<tab>` for its other tabs and `/profiles/<id>` or
+  // `/profiles/new` for the profile editor. `route` is the one the host shows;
+  // `applyRoute` shows its target. Opening a Swarm, a profile or the start
+  // page pushes the target route and lets the host send it back; a tab
+  // switches at once and pushes the route it now shows. A correction (a
+  // deleted record, a saved new profile, a route the page cannot show)
+  // replaces the route with what the page shows.
+  let route = '';
+
+  let routeRequest = 0;
+
+  // The newest route whose target is shown; until then corrections wait,
+  // since the target may still be loading.
+  let routeSettled = 0;
+
+  // A profile route that arrived before the profiles waits for them.
+  let routeWaits = false;
+
+  let profilesLoaded = false;
+
   const backgroundRefresh = createPageRefresh(refreshChanges);
 
   function navigate(action) {
@@ -152,15 +176,133 @@ export function createSwarmPageModel(host) {
     return action();
   }
 
-  function newSwarm() {
-    return navigate(() => {
-      selectionRequest += 1;
-      editor = null;
-      selectedSwarm = null;
-      host.activity.leaveActivity();
-      client.replaceRoute('');
-      void selectRunProfile(selectedProfile);
+  const swarmRoute = (id, tab = 'board') =>
+    tab === 'board' ? `/swarms/${id}` : `/swarms/${id}/${tab}`;
+
+  function shownRoute() {
+    if (editor) return `/profiles/${editor === 'new' ? 'new' : editor.id}`;
+    return selectedSwarm ? swarmRoute(selectedSwarm.id, activeTab) : '';
+  }
+
+  // What a route names, or null for the start page (also for a route the
+  // page does not know, which the correction then replaces).
+  function routeTarget(value) {
+    const [kind, id, tab, ...rest] = value.split('/').filter(Boolean);
+    if (kind === 'swarms' && id && !rest.length) {
+      const shownTab = tab ?? 'board';
+      if (tabs.some((item) => item.id === shownTab))
+        return { swarm: id, tab: shownTab };
+    }
+    if (kind === 'profiles' && id && tab === undefined) return { profile: id };
+    return null;
+  }
+
+  // A user step to another place: the host records it and sends the route
+  // back, which shows the place.
+  function stepTo(next) {
+    return client.pushRoute(next).catch((cause) => {
+      if (!disposed) error = cause.message;
     });
+  }
+
+  // Shown content -> route: records it as a user step or corrects the
+  // current entry to it.
+  function syncRoute({ step }) {
+    const shown = shownRoute();
+    if (shown === route) return;
+    if (!step && routeSettled !== routeRequest) return;
+    void (step ? client.pushRoute(shown) : client.replaceRoute(shown)).catch(
+      (cause) => {
+        if (!disposed) error = cause.message;
+      },
+    );
+  }
+
+  // Host route -> shown content. A target the page cannot show leaves the
+  // shown content in place and corrects the route to it.
+  async function applyRoute(next) {
+    route = next;
+    // A Swarm or profile still loading for an earlier route stays closed.
+    if (routeSettled !== routeRequest) selectionRequest += 1;
+    const request = ++routeRequest;
+    routeWaits = false;
+    const shown = await showRoute(routeTarget(next));
+    if (disposed || request !== routeRequest) return;
+    if (!shown) {
+      routeWaits = true;
+      return;
+    }
+    routeSettled = request;
+    syncRoute({ step: false });
+  }
+
+  // Returns false while the target waits for the profiles to load.
+  async function showRoute(target) {
+    if (target?.swarm) {
+      if (!editor && selectedSwarm?.id === target.swarm) {
+        showTab(target.tab);
+        return true;
+      }
+      closeDialogs();
+      await selectSwarm(target.swarm, { tab: target.tab });
+      return true;
+    }
+    if (target?.profile) {
+      const profile =
+        target.profile === 'new'
+          ? 'new'
+          : profiles.find((item) => item.id === target.profile);
+      if (!profile) return profilesLoaded;
+      if (editor === profile || (editor?.id && editor.id === profile.id))
+        return true;
+      closeDialogs();
+      await showProfile(profile);
+      return true;
+    }
+    if (editor || selectedSwarm) {
+      closeDialogs();
+      showStart();
+    }
+    return true;
+  }
+
+  // Dialogs act on the shown record, so showing another one closes them.
+  function closeDialogs() {
+    composeOpen = false;
+    settingsOpen = false;
+    profileSnapshotOpen = false;
+    if (pending === 'delete') return;
+    deleteCandidate = null;
+    swarmDeleteCandidate = null;
+  }
+
+  function showStart() {
+    selectionRequest += 1;
+    editor = null;
+    selectedSwarm = null;
+    host.activity.leaveActivity();
+    void selectRunProfile(selectedProfile);
+  }
+
+  function newSwarm() {
+    return navigate(() => stepTo(''));
+  }
+
+  function openSwarm(id) {
+    return stepTo(swarmRoute(id, activeTab));
+  }
+
+  function showTab(tab) {
+    if (tab === activeTab) return;
+    activeTab = tab;
+    void loadVisibleTab().catch((cause) => {
+      if (!disposed) error = cause.message;
+    });
+  }
+
+  function openTab(tab) {
+    showTab(tab);
+    syncRoute({ step: true });
   }
 
   async function selectRunProfile(profile) {
@@ -387,6 +529,8 @@ export function createSwarmPageModel(host) {
     if (disposed || request !== profilesRequest) return;
     profiles = page(result);
     profilesCursor = result.cursor ?? null;
+    profilesLoaded = true;
+    if (routeWaits) void applyRoute(route);
     const previousProfile = selectedProfile;
     if (!selectedProfile) selectedProfile = profiles[0] ?? null;
     if (selectedProfile)
@@ -413,10 +557,11 @@ export function createSwarmPageModel(host) {
     swarmsCursor = result.cursor ?? null;
   }
 
-  // `changes` limits a background reload of the visible tab to what changed.
+  // `changes` limits a background reload of the visible tab to what changed;
+  // `tab` is the tab to show with the Swarm.
   async function selectSwarm(
     id,
-    { silent = false, background = false, changes = null } = {},
+    { silent = false, background = false, changes = null, tab = null } = {},
   ) {
     const request = ++selectionRequest;
     if (!silent) {
@@ -436,6 +581,7 @@ export function createSwarmPageModel(host) {
         participantUsage = [];
       }
       selectedSwarm = swarm;
+      if (tab) activeTab = tab;
       if (!silent) editor = null;
       const inspected = swarm.participants?.find(
         (item) => item.id === host.activity.history?.participant.id,
@@ -446,9 +592,6 @@ export function createSwarmPageModel(host) {
           preserve: true,
         });
       }
-      if (!disposed && request === selectionRequest && !silent)
-        await client.replaceRoute(`/swarms/${id}`);
-      if (disposed || request !== selectionRequest) return;
       await loadVisibleTab(swarm, { background, changes });
     } catch (cause) {
       if (!disposed && request === selectionRequest) error = cause.message;
@@ -687,7 +830,11 @@ export function createSwarmPageModel(host) {
     if (!profile.id) {
       profiles = [...profiles, saved.profile];
       selectedProfile = saved.profile;
-      editor = saved.profile;
+      // The new profile's editor becomes its saved profile's editor.
+      if (editor === 'new') {
+        editor = saved.profile;
+        syncRoute({ step: false });
+      }
     } else {
       profiles = profiles.map((item) =>
         item.id === saved.profile.id ? saved.profile : item,
@@ -697,22 +844,27 @@ export function createSwarmPageModel(host) {
     return saved.profile;
   }
 
-  async function openProfile(profile = 'new') {
-    if (pending === 'profile') return;
+  function openProfile(profile = 'new') {
+    return stepTo(`/profiles/${profile === 'new' ? 'new' : profile.id}`);
+  }
+
+  async function showProfile(profile) {
+    const request = ++selectionRequest;
     pending = 'profile';
     error = '';
     try {
-      catalog = (await call('catalog'))?.catalog ?? {};
-      selectionRequest += 1;
+      const nextCatalog = (await call('catalog'))?.catalog ?? {};
+      if (disposed || request !== selectionRequest) return;
+      catalog = nextCatalog;
       host.activity.leaveActivity();
       selectedSwarm = null;
       if (profile !== 'new') selectedProfile = profile;
       editorKey += 1;
       editor = profile;
     } catch (cause) {
-      error = cause.message;
+      if (!disposed && request === selectionRequest) error = cause.message;
     } finally {
-      pending = '';
+      if (pending === 'profile') pending = '';
     }
   }
 
@@ -739,6 +891,7 @@ export function createSwarmPageModel(host) {
         // deleted Swarm and must not be saved again.
         selectionRequest += 1;
         editor = null;
+        syncRoute({ step: false });
       }
       if (selectedProfile?.id === candidate.id) void selectRunProfile(null);
       deleteCandidate = null;
@@ -767,7 +920,10 @@ export function createSwarmPageModel(host) {
         swarmDeleteCandidate = { ...candidate, state: stopped.state };
       }
       await call('swarms.delete', { swarm_id: candidate.id });
-      if (selectedSwarm?.id === candidate.id) newSwarm();
+      if (selectedSwarm?.id === candidate.id) {
+        showStart();
+        syncRoute({ step: false });
+      }
       swarmDeleteCandidate = null;
       await refresh();
     } catch (cause) {
@@ -800,7 +956,7 @@ export function createSwarmPageModel(host) {
       });
       goal = '';
       await refresh();
-      await selectSwarm(result.swarm_id ?? result.id);
+      await stepTo(swarmRoute(result.swarm_id ?? result.id));
     } catch (cause) {
       error = cause.message;
     } finally {
@@ -1015,7 +1171,9 @@ export function createSwarmPageModel(host) {
     const request = ++revealRequest;
     const current = () =>
       !disposed && request === revealRequest && selectedSwarm?.id === swarm.id;
+    // A step to the Board, which loads only what the post needs below.
     activeTab = 'board';
+    syncRoute({ step: true });
     if (number === swarm.goal_post_sequence) {
       await tick();
       const goal = document.querySelector('.swarm-goal-post');
@@ -1083,7 +1241,7 @@ export function createSwarmPageModel(host) {
 
   function openContentLink(event) {
     const link = event.target.closest('a[href]');
-    if (!link || !client) return;
+    if (!link) return;
     event.preventDefault();
     const post = /^#post\/(\d+)$/.exec(link.getAttribute('href') ?? '');
     if (post) {
@@ -1097,7 +1255,7 @@ export function createSwarmPageModel(host) {
     const wiki = /^#wiki\/([^/]+)$/.exec(link.getAttribute('href') ?? '');
     if (wiki) {
       void navigate(async () => {
-        activeTab = 'wiki';
+        openTab('wiki');
         await tick();
         await host.wiki?.openPage(wiki[1]);
       });
@@ -1113,13 +1271,7 @@ export function createSwarmPageModel(host) {
     );
   }
 
-  function routeSelection(route) {
-    const match = /^\/swarms\/([^/]+)$/.exec(route ?? '');
-    if (match && selectedSwarm?.id !== match[1]) selectSwarm(match[1]);
-  }
-
   onMount(() => {
-    client ??= host.bridgeClient ?? createExtensionPageClient();
     const startupTimeout = setTimeout(() => {
       loading = false;
       error = t('swarm.hostUnavailable');
@@ -1127,13 +1279,13 @@ export function createSwarmPageModel(host) {
     let initialized = false;
     const offContext = client.onContext((next) => {
       clearTimeout(startupTimeout);
-      const previousRoute = context?.route;
       applyContext(next);
+      const nextRoute = typeof next.route === 'string' ? next.route : '';
       if (!initialized) {
         initialized = true;
-        routeSelection(next.route);
+        void applyRoute(nextRoute);
         void backgroundRefresh.run();
-      } else if (next.route !== previousRoute) routeSelection(next.route);
+      } else if (nextRoute !== route) void applyRoute(nextRoute);
     });
     const offInvalidation = client.onInvalidation((invalidation) =>
       backgroundRefresh.schedule(invalidation?.change ?? null),
@@ -1205,13 +1357,7 @@ export function createSwarmPageModel(host) {
     get activeTab() {
       return activeTab;
     },
-    set activeTab(value) {
-      if (value === activeTab) return;
-      activeTab = value;
-      void loadVisibleTab().catch((cause) => {
-        if (!disposed) error = cause.message;
-      });
-    },
+    openTab,
     get editor() {
       return editor;
     },
@@ -1335,7 +1481,7 @@ export function createSwarmPageModel(host) {
       return usageRows;
     },
     refresh,
-    selectSwarm,
+    openSwarm,
     loadMoreProfiles,
     loadMoreSwarms,
     loadDiscussions,

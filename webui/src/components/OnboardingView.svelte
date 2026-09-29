@@ -10,6 +10,7 @@
     updateAgent,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { useNavigation } from '$lib/navigation.svelte.js';
   import {
     AGENT_FORM_MODE_EDIT,
     createAgentFormValues,
@@ -192,6 +193,15 @@
     step = 'service';
     void focusStep();
   }
+
+  // The wizard covers every view: Back returns to its first step, and from
+  // there sets the wizard aside like dismissing it.
+  const navigation = useNavigation();
+  $effect(() =>
+    navigation?.registerLayer({
+      close: () => (step === 'model' ? goToServiceStep() : onDismiss()),
+    }),
+  );
 
   function selectModelProvider(providerId) {
     if (providerId !== preferredProviderId) {

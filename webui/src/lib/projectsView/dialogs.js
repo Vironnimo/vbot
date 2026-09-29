@@ -22,6 +22,7 @@ export function createProjectDialogs({
   isActive,
   errorText,
   selectProject,
+  onProjectAdded,
   flushPendingProjects,
   loadProjects,
 }) {
@@ -120,6 +121,7 @@ export function createProjectDialogs({
       await loadProjects();
       if (isActive()) {
         selectProject(project.project_id, result?.scan);
+        onProjectAdded(project.project_id);
       }
     } catch (error) {
       if (isActive()) {

@@ -5,6 +5,7 @@ import { t } from '../../lib/i18n.js';
 
 import {
   flushSync,
+  createStandaloneNavigation,
   addProjectMock,
   listProjectsMock,
   showProjectMock,
@@ -100,6 +101,7 @@ describe('ProjectsView list and selection', () => {
 
   it('opens the remembered project and reports later list selections', async () => {
     const onProjectSelected = vi.fn();
+    const navigation = createStandaloneNavigation();
     listProjectsMock.mockResolvedValue({
       projects: [
         project({ project_id: 'alpha', display_name: 'Alpha' }),
@@ -113,19 +115,37 @@ describe('ProjectsView list and selection', () => {
       }),
     );
 
-    view.mount({ selectedProjectId: 'beta', onProjectSelected });
+    view.mount({ navigation, selectedProjectId: 'beta', onProjectSelected });
 
+    // The empty place shows the remembered Project and names it.
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-panel-beta"]'),
     );
     expect(onProjectSelected).toHaveBeenLastCalledWith('beta');
+    expect(navigation.place).toEqual(['beta']);
 
     buttonByTestId('project-toggle-alpha').click();
     flushSync();
+    expect(navigation.place).toEqual(['alpha']);
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-panel-alpha"]'),
     );
     expect(onProjectSelected).toHaveBeenLastCalledWith('alpha');
+
+    // Back to a Project that is no longer listed keeps the shown one and
+    // corrects the entry.
+    navigation.navigate(['removed']);
+    flushSync();
+    expect(navigation.place).toEqual(['alpha']);
+    expect(
+      document.querySelector('[data-testid="project-panel-alpha"]'),
+    ).toBeTruthy();
+
+    navigation.navigate(['beta']);
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-panel-beta"]'),
+    );
     expect(
       buttonByTestId('project-toggle-alpha').classList.contains(
         'secondary-list__item',
@@ -165,7 +185,8 @@ describe('ProjectsView list and selection', () => {
       },
     });
 
-    view.mount();
+    const navigation = createStandaloneNavigation();
+    view.mount({ navigation });
 
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-add-open"]'),
@@ -187,6 +208,8 @@ describe('ProjectsView list and selection', () => {
     });
 
     await waitForCondition(() => document.body.textContent.includes('Builder'));
+    // Showing the added Project is a step to its place.
+    expect(navigation.place).toEqual(['demo']);
     // A non-clean report surfaces a collapsed summary at the top of the Team
     // section; the findings themselves stay hidden until expanded.
     expect(document.body.textContent).toContain(

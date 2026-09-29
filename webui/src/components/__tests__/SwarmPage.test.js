@@ -269,7 +269,10 @@ describe('SwarmPage overview', () => {
     const { bridge } = createBridge();
     await render(bridge);
     expect(button(NEW_RUN).getAttribute('aria-current')).toBe('page');
-    await openSwarm(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
     expect(button(NEW_RUN).getAttribute('aria-current')).toBeNull();
     button(NEW_RUN).click();
     await tick();
@@ -279,6 +282,44 @@ describe('SwarmPage overview', () => {
     await tick();
     flushSync();
     expect(button(NEW_RUN).getAttribute('aria-current')).toBeNull();
+  });
+
+  it('shows the route the host sends and pushes Swarm and tab choices as steps', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    expect(bridge.pushRoute).toHaveBeenLastCalledWith('/swarms/swr-a');
+    button(t('swarm.tabs.usage')).click();
+    await vi.waitFor(() =>
+      expect(bridge.pushRoute).toHaveBeenLastCalledWith('/swarms/swr-a/usage'),
+    );
+    // Back to the empty route shows the start page, Forward the tab again.
+    bridge.goTo('');
+    await tick();
+    expect(document.querySelector('.swarm-head')).toBeNull();
+    expect(button(NEW_RUN).getAttribute('aria-current')).toBe('page');
+    bridge.goTo('/swarms/swr-a/usage');
+    await vi.waitFor(() =>
+      expect(document.querySelector('.usage-summary')).not.toBeNull(),
+    );
+    // A Swarm that is gone leaves the shown one and corrects the route.
+    overrideOperations(operation, {
+      'swarms.get': (args, fallback) =>
+        args.swarm_id === 'swr-gone'
+          ? Promise.reject(new Error('test-owned missing Swarm'))
+          : fallback(),
+    });
+    bridge.goTo('/swarms/swr-gone');
+    await vi.waitFor(() =>
+      expect(bridge.replaceRoute).toHaveBeenLastCalledWith(
+        '/swarms/swr-a/usage',
+      ),
+    );
+    expect(document.querySelector('.usage-summary')).not.toBeNull();
+    expect(bridge.pushRoute).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the overview usable when the profile catalog fails and retries on request', async () => {
@@ -336,7 +377,7 @@ describe('SwarmPage overview', () => {
     });
     await settle();
     expect(document.querySelector('.board').textContent).toContain('swr-b');
-    expect(bridge.replaceRoute).toHaveBeenLastCalledWith('/swarms/swr-b');
+    expect(bridge.route).toBe('/swarms/swr-b');
     expect(document.getElementById('swarm-discussion').value).toBe('dsc-b');
   });
 });
@@ -473,8 +514,10 @@ describe('Swarm Run controls', () => {
       button(DELETE_RUN).click();
       await tick();
       expect(dialog().textContent).toContain(t('swarm.deleteRun.body'));
-      button(t('common.cancel')).click();
+      // Back in the app dismisses the confirmation like Cancel.
+      bridge.back();
       await tick();
+      expect(dialog()).toBeNull();
       expect(callsTo(operation, 'swarms.delete')).toHaveLength(0);
       button(DELETE_RUN).click();
       await tick();
