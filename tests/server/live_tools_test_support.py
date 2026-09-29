@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,6 +18,11 @@ JsonObject = dict[str, Any]
 CALL_START = datetime(2026, 9, 25, 10, 0, tzinfo=UTC)
 BEFORE = "2026-09-25T09:00:00+00:00"
 AFTER = "2026-09-25T10:05:00+00:00"
+
+# The vBot Project folder in the host's path grammar, and how Live Tools show it to the Model.
+PROJECT_FOLDER, PROJECT_FOLDER_SHOWN = (
+    ("C:\\work\\vbot", "C:/work/vbot") if sys.platform == "win32" else ("/work/vbot", "/work/vbot")
+)
 
 SHELL = "PowerShell 7.6.6\nPS C:\\work\\vbot>"
 CODEX_HEADER = (
@@ -68,7 +74,7 @@ class FakeApp:
             {"id": "coder", "name": "Coder"},
             {"id": "writer", "name": "Writer"},
         ]
-        self.projects = [{"project_id": "vbot", "display_name": "vBot", "cwd": "C:\\work\\vbot"}]
+        self.projects = [{"project_id": "vbot", "display_name": "vBot", "cwd": PROJECT_FOLDER}]
         self.teams = {"vbot": [{"agent_id": "reviewer", "display_name": "Reviewer"}]}
         self.sessions: list[JsonObject] = []
         self.histories: dict[str, JsonObject] = {}
@@ -115,7 +121,7 @@ class FakeApp:
             "state": "ready",
             "command": "pwsh.exe",
             "launch_command": command,
-            "workdir": "C:\\work\\vbot",
+            "workdir": PROJECT_FOLDER,
             "screen_revision": 5,
             **fields,
         }
@@ -259,7 +265,7 @@ class FakeUi:
                 {"agent_id": "coder", "name": "Coder"},
                 {"agent_id": "writer", "name": "Writer"},
             ],
-            "projects": [{"project_id": "vbot", "name": "vBot", "cwd": "C:\\work\\vbot"}],
+            "projects": [{"project_id": "vbot", "name": "vBot", "cwd": PROJECT_FOLDER}],
             "selected_project_team": [{"agent_id": "reviewer@vbot", "name": "Reviewer"}],
         }
 

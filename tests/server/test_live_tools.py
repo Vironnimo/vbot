@@ -9,6 +9,7 @@ from server._live_context import LiveUiError
 from server.rpc.errors import RpcError
 from tests.server.live_tools_test_support import (
     AFTER,
+    PROJECT_FOLDER_SHOWN,
     Fixture,
     session_row,
 )
@@ -55,7 +56,7 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
         "App: chat view; selected Agent: Main; selected Project: vBot.",
         "Agents: Main, Coder, Writer.",
         "Team of Project vBot: Reviewer.",
-        "Projects: vBot (C:/work/vbot).",
+        f"Projects: vBot ({PROJECT_FOLDER_SHOWN}).",
     ]
     assert '- s1 Coder "Fix login": working' in text
     assert (
@@ -66,8 +67,8 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
     assert 'Done."' in text
     assert "Old draft" not in text
     # Folders read with forward slashes, whatever the host writes.
-    assert '- t1 Codex "Build" in C:/work/vbot: idle' in text
-    assert "- t2 pwsh in C:/work/vbot: exited" in text
+    assert f'- t1 Codex "Build" in {PROJECT_FOLDER_SHOWN}: idle' in text
+    assert f"- t2 pwsh in {PROJECT_FOLDER_SHOWN}: exited" in text
     assert fx.app.effects() == []
 
 

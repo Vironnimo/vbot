@@ -30,6 +30,8 @@ from tests.server.live_tools_test_support import (
     CODEX_LOADING,
     CODEX_READY,
     CODEX_UPDATE,
+    PROJECT_FOLDER,
+    PROJECT_FOLDER_SHOWN,
     SHELL,
     STALE,
     Fixture,
@@ -50,11 +52,11 @@ def fx() -> Fixture:
 async def test_starts_codex_and_types_the_task_once_it_is_ready(fx: Fixture) -> None:
     fx.app.screens["term_start1"] = [SHELL, CODEX_LOADING, CODEX_READY]
     text = await fx.ok("start_coding_terminal", program="codex", task='Fix "a" & 100%')
-    assert "in C:/work/vbot: t1." in text
+    assert f"in {PROJECT_FOLDER_SHOWN}: t1." in text
     assert "Typed the task into t1 and sent it." in text
     start = fx.app.params("terminal.start")
     # The task never becomes part of the command line.
-    assert start == [{"command": "codex", "workdir": "C:\\work\\vbot", "group_id": "grp_new2"}]
+    assert start == [{"command": "codex", "workdir": PROJECT_FOLDER, "group_id": "grp_new2"}]
     assert fx.app.params("terminal.group.create") == [{"name": "Codex"}]
     assert [(data, revision) for _id, data, revision in fx.app.inputs] == [
         ('\x1b[200~Fix "a" & 100%\x1b[201~', 5),
