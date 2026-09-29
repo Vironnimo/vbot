@@ -52,7 +52,13 @@ class ToolDisplayField:
 
 @dataclass(frozen=True)
 class ToolDisplayPart:
-    """One computed semantic value returned by a Tool-specific row builder."""
+    """One computed semantic value returned by a Tool-specific row builder.
+
+    `detail` is the complete value a shorter part stands for, such as the
+    command behind a Bash description: the row shows the part, while the value
+    card shows the part as its heading and offers `detail` (of `detail_kind`)
+    in full for copying.
+    """
 
     value: str
     kind: str = "text"
@@ -61,14 +67,20 @@ class ToolDisplayPart:
     full_value: str | None = None
     quote: bool = False
     copyable: bool = False
+    detail: str | None = None
+    detail_kind: str = "text"
 
     def __post_init__(self) -> None:
         if not isinstance(self.value, str) or not self.value.strip():
             raise ValueError("Tool display part value must be a non-empty string")
         if self.full_value is not None and not isinstance(self.full_value, str):
             raise ValueError("Tool display part full_value must be a string or None")
+        if self.detail is not None and not isinstance(self.detail, str):
+            raise ValueError("Tool display part detail must be a string or None")
         if self.kind not in TOOL_DISPLAY_VALUE_KINDS:
             raise ValueError(f"Unsupported Tool display value kind: {self.kind}")
+        if self.detail_kind not in TOOL_DISPLAY_VALUE_KINDS:
+            raise ValueError(f"Unsupported Tool display detail kind: {self.detail_kind}")
         if self.truncate not in TOOL_DISPLAY_TRUNCATION_MODES:
             raise ValueError(f"Unsupported Tool display truncation mode: {self.truncate}")
         if self.tooltip not in TOOL_DISPLAY_TOOLTIP_MODES:
@@ -267,7 +279,7 @@ class ToolDisplay:
                 full_value = model_path(context.resolve_path(full_value))
             except (OSError, RuntimeError, ValueError):
                 full_value = visible_value
-        return {
+        payload: JsonObject = {
             "kind": configured_part.kind,
             "value": _normalize_display_value(visible_value),
             "full_value": _normalize_display_value(full_value),
@@ -277,6 +289,11 @@ class ToolDisplay:
             "quote": configured_part.quote,
             "copyable": configured_part.copyable,
         }
+        detail = _normalize_display_value(configured_part.detail)
+        if detail:
+            payload["detail"] = detail
+            payload["detail_kind"] = configured_part.detail_kind
+        return payload
 
     def _payload_summary(self, arguments: Any, primary: Sequence[JsonObject]) -> str:
         if primary:

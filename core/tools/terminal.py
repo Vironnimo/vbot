@@ -945,8 +945,10 @@ def _terminal_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...
         return tuple(parts)
     command = arguments.get("command")
     if action == "start":
-        command_label = command if isinstance(command, str) and command else "default shell"
-        parts.append(ToolDisplayPart(command_label, kind="command"))
+        if isinstance(command, str) and command:
+            parts.append(ToolDisplayPart(command, kind="command", copyable=True))
+        else:
+            parts.append(ToolDisplayPart("default shell", kind="command"))
     return tuple(parts)
 
 

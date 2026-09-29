@@ -594,15 +594,18 @@ async def test_env_key_for_an_inherited_variable_runs_with_a_note(
 
 
 @pytest.mark.parametrize(
-    ("arguments", "kind", "value"),
+    ("arguments", "kind", "value", "detail"),
     [
-        ({"cmd": "git status"}, "command", "git status"),
-        ({"command": "ls", "explanation": "List files"}, "description", "List files"),
-        ({"action": {"command": ["ls"]}}, "command", "ls"),
+        ({"cmd": "git status"}, "command", "git status", None),
+        ({"command": "ls", "explanation": "List files"}, "description", "List files", "ls"),
+        ({"action": {"command": ["ls"]}}, "command", "ls", None),
         # A call that fails validation still shows what it tried to run.
-        ({"command": "vim", "pty": True}, "command", "vim"),
+        ({"command": "vim", "pty": True}, "command", "vim", None),
     ],
 )
-def test_activity_row_shows_the_command_in_any_shape(arguments, kind, value) -> None:
+def test_activity_row_shows_the_command_in_any_shape(arguments, kind, value, detail) -> None:
     (part,) = shell_display_parts(arguments)
     assert (part.kind, part.value) == (kind, value)
+    # The command stays copyable, also behind a description standing in for it.
+    assert part.copyable is True
+    assert (part.detail, part.detail_kind) == (detail, "command" if detail else "text")

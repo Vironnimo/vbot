@@ -380,7 +380,11 @@ def inherited_env_keys_note(names: list[str]) -> str:
 
 
 def shell_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
-    """Show the description, else the command, whatever dialect the call used."""
+    """Show the description, else the command, whatever dialect the call used.
+
+    The command stays copyable either way: in its own value card, or as the
+    detail of the description that stands in for it.
+    """
     try:
         normalized = normalize_shell_arguments(arguments)
     except ValueError:
@@ -388,11 +392,22 @@ def shell_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     if not isinstance(normalized, dict):
         return ()
     description = normalized.get("description")
+    raw_command = normalized.get("command")
+    command = raw_command if isinstance(raw_command, str) and raw_command.strip() else None
     if isinstance(description, str) and description.strip():
-        return (ToolDisplayPart(description.strip(), kind="description", quote=True),)
-    command = normalized.get("command")
-    if isinstance(command, str) and command.strip():
-        return (ToolDisplayPart(command, kind="command"),)
+        return (
+            ToolDisplayPart(
+                description.strip(),
+                kind="description",
+                quote=True,
+                tooltip="always" if command else "truncated",
+                copyable=command is not None,
+                detail=command,
+                detail_kind="command",
+            ),
+        )
+    if command:
+        return (ToolDisplayPart(command, kind="command", copyable=True),)
     return ()
 
 
