@@ -10,6 +10,7 @@ interrupted.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -287,7 +288,9 @@ class DecisionStore:
             return new_id("evl", claim=claim)
 
         evaluation_id = self.database.write(operation)
-        _LOGGER.info("Decision evaluation started (id=%s experiment=%s)", evaluation_id, identifier)
+        _LOGGER.debug(
+            "Started decision evaluation (evaluation=%s experiment=%s)", evaluation_id, identifier
+        )
         return self.evaluation(evaluation_id)
 
     def finish(
@@ -298,18 +301,28 @@ class DecisionStore:
         encoded_result = json.dumps(result) if result is not None else None
         encoded_error = json.dumps(error) if error is not None else None
 
-        def operation(db: sqlite3.Connection) -> int:
-            return db.execute(
+        def operation(db: sqlite3.Connection) -> str | None:
+            # RETURNING rows are drained so the statement completes at once.
+            rows = db.execute(
                 (
                     "UPDATE evaluations SET "
                     "status=?,result=COALESCE(?,result),error=?,completed_at=? "
-                    "WHERE id=? AND status=?"
+                    "WHERE id=? AND status=? RETURNING experiment_id"
                 ),
                 (status, encoded_result, encoded_error, utc_now_timestamp(), identifier, RUNNING),
-            ).rowcount
+            ).fetchall()
+            return str(rows[0][0]) if rows else None
 
-        if self.database.write(operation):
-            _LOGGER.info("Decision evaluation finished (id=%s status=%s)", identifier, status)
+        experiment = self.database.write(operation)
+        if experiment is not None:
+            # One outcome line per evaluation; a failure is a WARNING.
+            _LOGGER.log(
+                logging.WARNING if status == "failed" else logging.INFO,
+                "Finished decision evaluation (evaluation=%s experiment=%s status=%s)",
+                identifier,
+                experiment,
+                status,
+            )
 
     def progress(self, identifier: str, result: dict[str, Any]) -> None:
         # Keep detailed live history bounded by bytes as well as step count.

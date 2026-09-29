@@ -251,8 +251,8 @@ class ComputerUseService:
                     driver.broken = True
                     self.api.logger.exception("Could not interrupt the Computer Use worker")
             context = self._active_context
-            self.api.logger.info(
-                "Computer Use call interrupted (source=%s run=%s tool_call=%s)",
+            self.api.logger.debug(
+                "Interrupted Computer Use call (source=%s run=%s tool_call=%s)",
                 source,
                 context.run_id if context is not None else None,
                 context.tool_call_id if context is not None else None,

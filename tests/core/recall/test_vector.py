@@ -41,11 +41,11 @@ def small_batches(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class _CapturingLogger:
     def __init__(self) -> None:
-        self.info_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.debug_calls: list[tuple[str, tuple[object, ...]]] = []
         self.warning_calls: list[tuple[str, tuple[object, ...]]] = []
 
-    def info(self, message: str, *args: object) -> None:
-        self.info_calls.append((message, args))
+    def debug(self, message: str, *args: object) -> None:
+        self.debug_calls.append((message, args))
 
     def warning(self, message: str, *args: object) -> None:
         self.warning_calls.append((message, args))
@@ -446,12 +446,10 @@ async def test_typed_search_and_backfill_log_their_own_usage(
     assert recall._backfill_task is not None
     await asyncio.wait_for(recall._backfill_task, timeout=10)
 
-    assert [
-        message.startswith("Embedding usage operation=") for message, _ in logger.info_calls
-    ] == [True, True]
+    assert len(logger.debug_calls) == 2
     # operation, provider, model, requests, token reports, input tokens, total tokens,
     # cost reports, cost, query inputs, document inputs
-    assert logger.info_calls[0][1] == (
+    assert logger.debug_calls[0][1] == (
         "typed_search",
         "openrouter",
         "stub-embed",
@@ -464,7 +462,7 @@ async def test_typed_search_and_backfill_log_their_own_usage(
         1,
         BATCH,
     )
-    assert logger.info_calls[1][1] == (
+    assert logger.debug_calls[1][1] == (
         "recall_backfill",
         "openrouter",
         "stub-embed",

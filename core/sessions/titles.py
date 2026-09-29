@@ -277,8 +277,8 @@ class SessionTitleService:
                 SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
                 title,
             )
-            _LOGGER.info(
-                "Automatic Session title generated (agent=%s session=%s model=%s)",
+            _LOGGER.debug(
+                "Generated automatic Session title (agent=%s session=%s model=%s)",
                 agent_id,
                 session_id,
                 model,
@@ -368,8 +368,8 @@ class SessionTitleService:
         await sessions.set_temporary_group_title_async(
             owner_name=owner_name, group_id=group_id, title=title
         )
-        _LOGGER.info(
-            "Automatic group title generated (owner=%s group=%s model=%s)",
+        _LOGGER.debug(
+            "Generated automatic group title (owner=%s group=%s model=%s)",
             owner_name,
             group_id,
             model,
