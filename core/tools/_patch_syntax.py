@@ -102,6 +102,11 @@ _MESSAGES = {
         "{path} is a binary file, so its text cannot be patched; Delete File and Move File "
         "still work on it."
     ),
+    "nul_text": (
+        "{path}: the new text contains a NUL character (U+0000), which only binary files "
+        "hold. To produce that character in source code, write its escape sequence instead, "
+        "such as \\x00."
+    ),
     "unsupported_encoding": "{path} is not UTF-8 text, so its text cannot be patched.",
     "ambiguous_match": (
         "{where}: the lines to replace occur {occurrences} times ({lines}). Add unchanged "
@@ -138,6 +143,11 @@ _MESSAGES = {
     "context_not_found": (
         '{where}: the @@ line "{hint}" was not found. After @@, put one complete line from '
         "the file, such as the first line of the enclosing function, or leave @@ empty."
+    ),
+    "context_block_not_found": (
+        "{where}: the lines of the @@ block above the lines to replace were not found "
+        "together. That block has no - or + line, so it only locates the lines to replace. "
+        "Copy its lines exactly from the file, or leave that block out."
     ),
     "ambiguous_context": (
         '{where}: the @@ line "{hint}" occurs {occurrences} times ({lines}). Put a line '

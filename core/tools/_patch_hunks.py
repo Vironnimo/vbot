@@ -60,6 +60,23 @@ _FIRST_OF_TWINS_NOTE = (
     "The lines to replace occur {occurrences} times, as many times as hunks of this patch "
     "name them; the hunks change them in order, so the first, at line {line}, was changed."
 )
+_HINT_NOT_FOUND_NOTE = (
+    "The @@ line {hint!r} was not found, but the lines to replace occur once in the file; "
+    "they were changed there, at line {line}."
+)
+_BELOW_HINT_NOTE = (
+    "The + lines were inserted below the @@ line {hint!r}, which stays in the file, and the "
+    "first of them resembles it. If that line was meant to be replaced, remove it with a - "
+    "line."
+)
+_BLOCK_NOT_FOUND_NOTE = (
+    "The lines of the @@ block above the lines to replace were not found together, but the "
+    "lines to replace occur once in the file; they were changed there, at line {line}."
+)
+_NOT_AFTER_HINT_NOTE = (
+    "The lines to replace are not after the @@ line {hint!r}, but they occur once in the "
+    "file; they were changed there, at line {line}."
+)
 # A line this similar to the file's line is a copy of it with a typo, not new text.
 _NEAR_COPY = 0.8
 _BREAK = TEXT_LINE_BREAK
@@ -181,12 +198,15 @@ def _joins_word(left: str, right: str) -> bool:
     return bool(left and right) and all(ch.isalnum() or ch == "_" for ch in left + right)
 
 
-def _not_found(content: str, old: str, *, source: Literal["patch", "old_string"]) -> JsonObject:
+def _not_found(
+    content: str, old: str, *, source: Literal["patch", "old_string"], part_of: bool = True
+) -> JsonObject:
     """Return the closest current text and the first line where it differs.
 
     ``source`` names the argument that holds ``old``, so the report can name it.
+    ``part_of`` allows naming longer lines that hold the first missing line.
     """
-    part = _part_of_lines(content, old) if source == "patch" else None
+    part = _part_of_lines(content, old) if source == "patch" and part_of else None
     # A missing line found inside a few longer lines explains the failure better
     # than the closest text; inside many lines, the closest text is more useful.
     if part is not None and part["count"] <= 3:
@@ -383,18 +403,37 @@ def _unmarked_runs(lines: list[tuple[str, str]]) -> list[range]:
     return runs
 
 
+def _trailing_runs(lines: list[tuple[str, str]]) -> list[range]:
+    """Return the runs of unchanged lines that follow a + line but no + line follows."""
+    runs: list[range] = []
+    start = 0
+    while start < len(lines):
+        end = start
+        while end < len(lines) and lines[end][0] == " ":
+            end += 1
+        followed = end < len(lines) and lines[end][0] == "+"
+        if 0 < start < end and lines[start - 1][0] == "+" and not followed:
+            runs.append(range(start, end))
+        start = end + 1
+    return runs
+
+
 def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]]]:
-    """Return readings of a parsed hunk that add its unprefixed lines between + lines.
+    """Return readings of a parsed hunk that add its unprefixed lines next to + lines.
 
     Models leave the + off some added lines, often a statement's continuation
-    lines or a blank line; such a line parses as unchanged. Each reading is the
-    hunk with the lines of some such runs added (``_unmarked_texts``), paired
-    with their positions: first the runs holding a line the file lacks, then
-    also the blank runs, then all runs. A run whose lines the file has stays
-    unchanged while a reading without it places the hunk. A blank run stays
-    unchanged only between unchanged or removed lines that stay: beyond them,
-    the file's own blank line there would place it and move into the added
-    block. A reading keeps at least one unchanged or removed line to place it.
+    lines, a blank line or the block's last lines; such a line parses as
+    unchanged. Each reading is the hunk with the lines of some such runs added
+    (``_unmarked_texts``), paired with their positions: first the runs between
+    + lines holding a line the file lacks, then also the blank runs, then all
+    runs. A run whose lines the file has stays unchanged while a reading
+    without it places the hunk. A blank run stays unchanged only between
+    unchanged or removed lines that stay: beyond them, the file's own blank
+    line there would place it and move into the added block. After those, the
+    readings also add the unchanged lines after a block's last + line up to the
+    last one the file lacks, then that whole run; lines before a block's first
+    + line are never added. A reading keeps at least one unchanged or removed
+    line to place it.
     """
     lines = hunk.lines
     if len(hunk.written) != len(lines):
@@ -402,16 +441,31 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]
     runs = _unmarked_runs(lines)
     present = {_loose(line) for line in split_text_lines(content)}
 
+    def lacks(index: int) -> bool:
+        text = lines[index][1]
+        return bool(text.strip()) and _loose(text) not in present
+
     def rank(run: range) -> int:
-        texts = [lines[i][1] for i in run if lines[i][1].strip()]
-        if not texts:
+        if not any(lines[i][1].strip() for i in run):
             return 1
-        return 0 if any(_loose(text) not in present for text in texts) else 2
+        return 0 if any(lacks(i) for i in run) else 2
 
     ranks = {run: rank(run) for run in runs}
+    levels = [[run for run in runs if ranks[run] <= most] for most in range(-1, 3)]
+    ends: list[list[range]] = [[]]
+    trailing = []
+    for run in _trailing_runs(lines):
+        end = _block_end(hunk, run)
+        lacking = [i for i in range(run.start, end) if lacks(i)]
+        if lacking:
+            trailing.append((range(run.start, lacking[-1] + 1), range(run.start, end)))
+    if trailing:
+        ends.append([up_to_lacking for up_to_lacking, _ in trailing])
+        ends.append([whole for _, whole in trailing])
     choices = (
-        _with_edge_blanks(lines, runs, [run for run in runs if ranks[run] <= most], ranks)
-        for most in range(3)
+        _with_edge_blanks(lines, runs, [*end, *level], ranks)
+        for end in ends
+        for level in (levels if end else levels[1:])
     )
     readings = []
     for chosen in dict.fromkeys(choices):
@@ -423,6 +477,30 @@ def _unmarked_readings(content: str, hunk: _Hunk) -> list[tuple[_Hunk, list[int]
             reading = replace(hunk, lines=read, written=[], precise_only=True)
             readings.append((reading, list(texts)))
     return readings
+
+
+def _block_end(hunk: _Hunk, run: range) -> int:
+    """Return where the added block before ``run`` can end at the latest, within ``run``.
+
+    A blank line followed by a line indented less than the block's last line
+    starts what the Model took for the text below its block, such as the next
+    section's heading. Evidence: the one trailing re-read that applied wrongly
+    in two Swarm runs added a section heading the file lacked there that way
+    (Sessions, 2026-09).
+    """
+    block = next((text for _, text in reversed(hunk.lines[: run.start]) if text.strip()), None)
+    if block is None:
+        return run.stop
+    depth = len(_leading(block))
+    written = hunk.written
+    for i in run:
+        if written[i].strip():
+            continue
+        following = next((written[j] for j in range(i + 1, run.stop) if written[j].strip()), None)
+        # A line written with the space prefix of unchanged lines is one space deeper.
+        if following is not None and len(_leading(following)) <= depth - 2:
+            return i
+    return run.stop
 
 
 def _with_edge_blanks(
@@ -585,14 +663,14 @@ def _unmarked_note(texts: list[str]) -> str:
     if len(texts) == 1:
         subject = f"The patch line {quoted}" if shown else "A blank patch line"
         return (
-            f"{subject} between + lines has no + prefix, but the file does not have it "
+            f"{subject} next to + lines has no + prefix, but the file does not have it "
             "there, so it was added as a + line. Nothing more is needed for that line; "
             f"{_UNMARKED_ADVICE}"
         )
     subject = f"{len(texts)} patch lines" if shown else f"{len(texts)} blank patch lines"
     example = f"; for example {quoted}" if shown else ""
     return (
-        f"{subject} between + lines have no + prefix, but the file does not have them "
+        f"{subject} next to + lines have no + prefix, but the file does not have them "
         f"there, so they were added as + lines{example}. Nothing more is needed for those "
         f"lines; {_UNMARKED_ADVICE}"
     )
@@ -612,6 +690,29 @@ def _hint_text(hint: str) -> str:
     """Show a context hint in one line; a multi-line context block by its first line."""
     first, _, rest = hint.partition("\n")
     return first[:120] + (" ..." if rest or len(first) > 120 else "")
+
+
+def _hint_line(hint: str) -> str:
+    """Return the last line of a context hint, the line insertions follow, for a note."""
+    line = hint.rsplit("\n", 1)[-1].strip()
+    return line if len(line) <= 120 else line[:117] + "..."
+
+
+def _rewrites_hint(hunk: _Hunk) -> bool:
+    """Tell whether an insertion's first line reads like its @@ line rewritten.
+
+    Most of the @@ line's characters (at least 20) recur in it, in order. Lines
+    after @@ go below the @@ line, which stays; a Model that meant to rewrite
+    that line keeps both. Evidence: one Session inserted a rewritten table row
+    below the row it named after @@ twice, and 7 failed patches followed
+    (Sessions, 2026-09).
+    """
+    hint = _loose(hunk.hints[-1].rsplit("\n", 1)[-1])
+    added = next((_loose(text) for _, text in hunk.lines if text.strip()), "")
+    if len(hint) < 20 or not added:
+        return False
+    matcher = SequenceMatcher(None, hint, added, autojunk=False)
+    return sum(block.size for block in matcher.get_matching_blocks()) >= 0.8 * len(hint)
 
 
 def _inline_context_identifies(content: str, old: str, new: str) -> bool:
@@ -759,12 +860,53 @@ def _apply_hunks(
     """
     notes: list[str] = []
     for hunk in hunks:
-        edited, placed = _apply_hunk(content, hunk, path, previous)
+        try:
+            edited, placed = _apply_hunk(content, hunk, path, previous)
+        except _PatchError as error:
+            placed_once = _without_hints(content, hunk, path, error)
+            if placed_once is None:
+                raise
+            edited, placed = placed_once
         if edited != content:
             previous = _change_end_line(content, edited)
         content = edited
         notes.extend(placed)
     return content, notes, previous
+
+
+def _without_hints(
+    content: str, hunk: _Hunk, path: object, error: _PatchError
+) -> tuple[str, list[str]] | None:
+    """Apply a hunk that its @@ lines do not place, where its lines occur once.
+
+    Models write an @@ line the file lacks, or one below the lines to change.
+    When the unchanged and removed lines then match exactly one place, precisely
+    and not as a copy with errors, that place is meant: the text and a note
+    naming it are returned. Otherwise ``None``, and ``error`` stands. Evidence:
+    in one Swarm run, all 11 such hunks whose lines matched once exactly were
+    later changed there; a copy with errors would have placed one 250 lines off
+    (Sessions, 2026-09).
+    """
+    if error.code not in ("context_not_found", "text_not_found") or not hunk.hints:
+        return None
+    if not any(prefix in " -" for prefix, _ in hunk.lines):
+        return None
+    alone = replace(hunk, hints=[], precise_only=True, twins=0)
+    try:
+        edited, placed = _apply_hunk(content, alone, path)
+    except _PatchError:
+        return None
+    if edited == content:
+        return None
+    changed = len(commonprefix((content, edited)))
+    line = len(_BREAK.findall(edited, 0, changed)) + 1
+    if error.values.get("block"):
+        note = _BLOCK_NOT_FOUND_NOTE.format(line=line)
+    elif error.code == "context_not_found":
+        note = _HINT_NOT_FOUND_NOTE.format(hint=error.values["hint"], line=line)
+    else:
+        note = _NOT_AFTER_HINT_NOTE.format(hint=_hint_text(hunk.hints[-1]).strip(), line=line)
+    return edited, [*placed, note]
 
 
 def _change_end_line(before: str, after: str) -> int:
@@ -809,12 +951,22 @@ def _apply_hunk(
             )
             found = _match(content[offset:], hint, hint, first=True)
         if not isinstance(found, FuzzyReplacement):
+            details = _candidates(content, hint)
+            # A block of unchanged lines before this one locates it; its report names
+            # the first line that differs, like the report for the lines to replace.
+            block = "\n" in hint
+            if block and details["candidates"]:
+                difference = first_difference(content, hint, details["candidates"][0]["line"])
+                if difference is not None:
+                    details["difference"] = {**difference, "source": "patch"}
             raise _PatchError(
                 "context_not_found",
+                template="context_block_not_found" if block else None,
                 path=path,
                 label=hunk.label,
                 hint=_hint_text(hint),
-                details=_candidates(content, hint),
+                block=block,
+                details=details,
             )
         hint_start = offset + found.before_spans[0][0]
         offset += found.before_spans[0][1]
@@ -851,6 +1003,8 @@ def _apply_hunk(
             if position and not _BREAK.search(content[position - 1 : position])
             else ""
         )
+        if hunk.hints and _rewrites_hint(hunk):
+            warnings.append(_BELOW_HINT_NOTE.format(hint=_hint_line(hunk.hints[-1])))
         return content[:position] + separator + inserted + content[position:], warnings
     if hunk.hints:
         # Models sometimes repeat the final hint as the first context/removal
@@ -961,13 +1115,19 @@ def _apply_hunk(
             )
         )
         offset, window, found = start, content[start:], first
+    # Read with its unprefixed lines added, the hunk can match several places;
+    # that ambiguity then explains the failure, not the closest text.
+    reading_ambiguity: _PatchError | None = None
     if found is None:
-        # Only the lines between + lines are re-read, and only a precise match
-        # places the reading: the file must hold the lines around them adjacent.
+        # Only lines between + lines or after a block's last + line are re-read, and
+        # only a precise match places the reading: the file must hold the lines
+        # around them adjacent.
         for reading, added in _unmarked_readings(content, parsed):
             try:
                 edited, notes = _apply_hunk(content, reading, path, previous)
-            except _PatchError:
+            except _PatchError as error:
+                if error.code == "ambiguous_match" and reading_ambiguity is None:
+                    reading_ambiguity = error
                 continue
             if edited != content and not _repeats_neighbors(content, edited, reading, added):
                 return edited, [*notes, _unmarked_note([reading.lines[i][1] for i in added])]
@@ -989,7 +1149,25 @@ def _apply_hunk(
                 label=hunk.label,
                 details=_candidates(content, old),
             )
-        details = _not_found(content, old, source="patch")
+        if reading_ambiguity is not None:
+            raise reading_ambiguity
+        present = {_loose(line) for line in split_text_lines(content)}
+        absent = next(
+            (
+                i
+                for i, (prefix, text) in enumerate(hunk.lines)
+                if prefix in " -" and text.strip() and _loose(text) not in present
+            ),
+            None,
+        )
+        # An unchanged line next to + lines that the file lacks is most often an
+        # added line missing its +, not a piece copied out of a longer line.
+        unmarked = (
+            absent is not None
+            and hunk.lines[absent][0] == " "
+            and _beside_additions(hunk.lines, absent)
+        )
+        details = _not_found(content, old, source="patch", part_of=not unmarked)
         difference = details.get("difference")
         if difference:
             # Number the hunk's unchanged and removed lines as the report counts them.
@@ -1000,15 +1178,6 @@ def _apply_hunk(
         elif not details["candidates"] and "part_of" not in details:
             # Nothing resembles the lines as a whole; a line the file has nowhere
             # is then the one to fix, often a new line written without +.
-            present = {_loose(line) for line in split_text_lines(content)}
-            absent = next(
-                (
-                    i
-                    for i, (prefix, text) in enumerate(hunk.lines)
-                    if prefix in " -" and text.strip() and _loose(text) not in present
-                ),
-                None,
-            )
             if absent is not None:
                 prefix, text = hunk.lines[absent]
                 details["absent"] = {

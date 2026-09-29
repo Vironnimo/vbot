@@ -525,6 +525,28 @@ def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):
     assert path.read_bytes() == before == b"section\ninserted\nnew\ntail\n"
 
 
+@pytest.mark.parametrize(
+    ("added", "noted"),
+    [
+        # Session shape: a rewritten table row was inserted below the row it rewrote.
+        ("timeout_seconds = 60", True),
+        ("retry_delay = 5", False),
+    ],
+)
+def test_insertion_that_resembles_its_at_at_line_is_named(tmp_path, added, noted):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"timeout_seconds = 30\nretries = 2\n")
+    result = apply(tmp_path, update(f"@@ timeout_seconds = 30\n+{added}"))
+    assert result["data"]["status"] == "applied", result
+    assert path.read_bytes() == f"timeout_seconds = 30\n{added}\nretries = 2\n".encode()
+    note = (
+        "Note: The + lines were inserted below the @@ line 'timeout_seconds = 30', which stays "
+        "in the file, and the first of them resembles it. If that line was meant to be "
+        "replaced, remove it with a - line."
+    )
+    assert text(result).endswith(note) is noted
+
+
 @pytest.mark.parametrize("anchor", [" second", " second\n   details"])
 def test_context_block_constrains_later_edit(tmp_path, anchor):
     (tmp_path / "file.txt").write_bytes(b"first\nvalue=1\nsecond\n  details\nvalue=1\n")
@@ -587,6 +609,37 @@ def test_repeated_context_line_places_lines_that_occur_once_after_it(tmp_path):
         b"class Pool:\n    def close(self):\n        self.pool.stop()\n"
     )
     assert "occur" not in text(result)
+
+
+@pytest.mark.parametrize(
+    ("body", "note"),
+    [
+        # Session shape: the @@ line paraphrases a line the file lacks.
+        (
+            "@@ missing\n-value=1\n+value=2",
+            "The @@ line 'missing' was not found, but the lines to replace occur once in the "
+            "file; they were changed there, at line 2.",
+        ),
+        # Session shape: the @@ line names a line below the lines to replace.
+        (
+            "@@ second\n-value=1\n+value=2",
+            "The lines to replace are not after the @@ line 'second', but they occur once in "
+            "the file; they were changed there, at line 2.",
+        ),
+        (
+            "@@\n first\n secnd\n@@\n-value=1\n+value=2",
+            "The lines of the @@ block above the lines to replace were not found together, but "
+            "the lines to replace occur once in the file; they were changed there, at line 2.",
+        ),
+    ],
+)
+def test_lines_that_occur_once_are_changed_where_the_at_at_line_misses_them(tmp_path, body, note):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"first\nvalue=1\nsecond\nend\n")
+    result = apply(tmp_path, update(body))
+    assert result["data"]["status"] == "applied", result
+    assert path.read_bytes() == b"first\nvalue=2\nsecond\nend\n"
+    assert text(result).endswith(f"Note: {note}")
 
 
 @pytest.mark.parametrize(
@@ -780,7 +833,7 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
         b"def f(rows):\n    for row in rows:\n        check(row)\n" + added + b"    return rows\n"
     )
     assert text(result).endswith(
-        "Note: 2 patch lines between + lines have no + prefix, but the file does not have "
+        "Note: 2 patch lines next to + lines have no + prefix, but the file does not have "
         f"them there, so they were added as + lines; for example {example!r}. Nothing more is "
         "needed for those lines; in later patches, start every added line with +."
     )
@@ -793,7 +846,7 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             b"start\nkeep\nend\n",
             "@@\n start\n+one\nkeep\n+two\n    three\n+four\n end",
             b"start\none\nkeep\ntwo\n    three\nfour\nend\n",
-            "The patch line 'three' between + lines has no + prefix, but the file does not "
+            "The patch line 'three' next to + lines has no + prefix, but the file does not "
             "have it there, so it was added as a + line. Nothing more is needed for that line;",
         ),
         # Session shape: the line after a replaced one stays unchanged while
@@ -804,7 +857,7 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             "+    y = 2\n\n+    return x",
             b'__all__ = [\n    "a", "b",\n]\n\n\n'
             b"def b():\n    x = 1\n\n    y = 2\n\n    return x\n",
-            "2 blank patch lines between + lines have no + prefix, but the file does not "
+            "2 blank patch lines next to + lines have no + prefix, but the file does not "
             "have them there, so they were added as + lines. Nothing more is needed for those "
             "lines;",
         ),
@@ -815,7 +868,7 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             "@@\n     start()\n+    if x:\n        new()\n+    done()\n\n+    more()",
             b"def f():\n    start()\n    if x:\n        new()\n    done()\n\n    more()\n\n"
             b"def g():\n    pass\n",
-            "2 patch lines between + lines have no + prefix, but the file does not have them "
+            "2 patch lines next to + lines have no + prefix, but the file does not have them "
             "there, so they were added as + lines; for example 'new()'. Nothing more is needed "
             "for those lines;",
         ),
@@ -827,6 +880,26 @@ def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body,
             b"def f(seed):\n    produced = gen(seed)\n    if not produced:\n"
             b"        raise ValueError(\n            seed)\n    log(seed)\n    return produced\n",
             None,
+        ),
+        # Session shape: after the last + line, a continuation line without +
+        # before an unchanged line the file has is added; that line stays.
+        (
+            b"def f(seed):\n    produced = gen(seed)\n    return produced\n",
+            "@@\n-    produced = gen(seed)\n+    produced = gen(seed,\n"
+            "                   strict=True)\n     return produced",
+            b"def f(seed):\n    produced = gen(seed,\n                   strict=True)\n"
+            b"    return produced\n",
+            "The patch line 'strict=True)' next to + lines has no + prefix, but the file does "
+            "not have it there, so it was added as a + line. Nothing more is needed for that "
+            "line;",
+        ),
+        # The hunk's last lines, written without +, are added when the file lacks them.
+        (
+            b"start\nkeep this line\nend\n",
+            "@@\n start\n+one\n missing",
+            b"start\none\nmissing\nkeep this line\nend\n",
+            "The patch line 'missing' next to + lines has no + prefix, but the file does not "
+            "have it there, so it was added as a + line. Nothing more is needed for that line;",
         ),
     ],
 )
@@ -847,16 +920,18 @@ def test_unprefixed_lines_the_file_lacks_there_are_added(tmp_path, before, body,
         "@@\n start\n+one\n keep this lien\n+two\n end",
         # Without an unchanged line, nothing places the lines.
         "@@\n+one\n missing\n+two",
-        # Only lines between + lines are read as added.
-        "@@\n start\n+one\n missing",
+        # Lines before a block's first + line are never read as added.
         "@@\n missing\n+one\n start",
+        # Session shape: a blank line, then a less indented line the file lacks,
+        # is the Model's view of the text below its block, such as a heading.
+        "@@\n start\n+    one\n+    two\n \n missing section",
     ],
 )
 def test_unprefixed_lines_are_added_only_where_unchanged_lines_place_them(tmp_path, body):
     path = tmp_path / "file.txt"
     path.write_bytes(b"start\nkeep this line\nend\n")
     result = apply(tmp_path, update(body))
-    assert "added as a + line" not in text(result)
+    assert "added as a" not in text(result)
     assert b"lien" not in path.read_bytes() and b"missing" not in path.read_bytes()
 
 
