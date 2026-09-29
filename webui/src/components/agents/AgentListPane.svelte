@@ -3,7 +3,8 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import SortableList from '../ui/SortableList.svelte';
   import { t } from '$lib/i18n.js';
-  import { modelShortName } from '$lib/modelSelection.js';
+  import { modelSelectionParts, modelShortName } from '$lib/modelSelection.js';
+  import { tooltip } from '$lib/tooltip.js';
   import { moveItem } from '../ui/sortable.js';
 
   let {
@@ -21,6 +22,32 @@
     onReorder = async () => {},
     onReorderInteractionChange = () => {},
   } = $props();
+
+  // The row's details card: the full Model (the row shows its short name)
+  // and whether it is inherited, then the id when a name leads.
+  function agentDetails(agent) {
+    const { model } = modelSelectionParts(agent.model);
+    const inherited = agent.effective?.model?.source === 'global_default';
+    return {
+      title: agent.name || agent.id,
+      rows: [
+        {
+          label: t('agents.form.model'),
+          value: model || t('agents.details.modelNotConfigured'),
+          mono: Boolean(model),
+          tone: model ? undefined : 'muted',
+        },
+        { value: inherited ? t('agents.details.modelInherited') : '' },
+        {
+          label: t('agents.details.id'),
+          value: agent.name ? agent.id : '',
+          mono: true,
+        },
+      ],
+      placement: 'right',
+      alignTo: '.agent-item-name',
+    };
+  }
 
   function reorderAgents(from, to) {
     return onReorder(moveItem(agents, from, to).map((agent) => agent.id));
@@ -91,6 +118,7 @@
             class:active={agent.id === selectedAgentId}
             class="agent-item secondary-list__item"
             type="button"
+            use:tooltip={() => agentDetails(agent)}
             onclick={() => onSelect(agent.id)}
           >
             <div class="agent-item-inner">

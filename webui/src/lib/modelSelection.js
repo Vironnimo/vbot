@@ -303,6 +303,23 @@ export function parseModelSelectionValue(selectedValue) {
   };
 }
 
+/**
+ * A stored Model value's parts for display: the Model id and, when the value
+ * pins a Connection, that Connection's label (with its account).
+ */
+export function modelSelectionParts(selectedValue, connections = []) {
+  const { model, connectionLocalId } = parseModelSelectionValue(
+    typeof selectedValue === 'string' ? selectedValue.trim() : '',
+  );
+  const connectionId = connectionIdFromModel(model, connectionLocalId);
+  return {
+    model,
+    connection: connectionId
+      ? connectionDisplayLabel(connectionId, connections)
+      : '',
+  };
+}
+
 export function modelShortName(modelValue) {
   const value = typeof modelValue === 'string' ? modelValue.trim() : '';
   const { model } = parseModelSelectionValue(value);

@@ -111,6 +111,16 @@ describe('AgentsView models', () => {
       t('agents.form.fallbackModels'),
     ]);
     expect(document.querySelectorAll('#agent-model')).toHaveLength(1);
+    // The trigger's card splits the choice into Model and Connection.
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+    getSearchableTrigger('agent-model').focus();
+    const card = document.getElementById('app-tooltip');
+    expect(
+      [...card.querySelectorAll('dd')].map((value) => value.textContent),
+    ).toEqual(['openai/gpt-5.2', 'API Key']);
+    getSearchableTrigger('agent-model').blur();
     // An empty chain renders no row dropdowns, only the single add affordance.
     expect(
       document.querySelectorAll('[id^="agent-fallback-model-"]'),

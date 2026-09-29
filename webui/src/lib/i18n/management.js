@@ -298,7 +298,13 @@ export default Object.freeze({
   'agents.access.allProjectAgents': 'All Project Agents',
   'agents.access.filterAgents': 'Filter Agents',
   'agents.access.filterAgentsPlaceholder': 'Filter Agents…',
-  'agents.access.projectAgentDetail': '{agent} · {project}',
+  'agents.access.project': 'Project',
+  'agents.details.id': 'Agent ID',
+  'agents.details.modelInherited': 'Inherited from the global defaults',
+  'agents.details.modelNotConfigured':
+    'Neither this Agent nor the global defaults set a Model.',
+  'agents.details.connection': 'Connection',
+  'agents.details.anyConnection': 'Chosen when a Run starts',
   'agents.deleteTitle': 'Delete this Agent',
   'agents.deleteDescription':
     'Moves the Agent to the archive. An Agent that is still referenced or has active Runs cannot be deleted.',
