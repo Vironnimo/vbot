@@ -85,10 +85,17 @@ export const changeStatsParts = (stats) => {
 };
 
 // Model of the changed-files card: the heading with the totals, the directory
-// all listed files share (`rootSegments`, empty when they share none), and one
-// row per file with its name, its folder below that shared directory and its
-// own line counts (null when unknown). `unlisted` counts changed files the
-// statistics do not name. Returns null when no file is named.
+// all listed files share (`rootSegments`, empty when they share none), and the
+// files grouped by their folder below that shared directory. A group carries
+// its folder ('' for files directly in the shared directory), its line sums
+// and its rows; a row carries the file's name, its own line counts (null when
+// unknown) and a `bar` (null without known changes) whose added and removed
+// parts are fractions of the full bar width. The bar length grows with the
+// square root of the file's changed lines relative to the largest change in
+// the card, so small changes stay visible next to a large one. `countKinds`
+// names the count columns worth showing ('added', 'removed'): a kind no file
+// has is left out. `unlisted` counts changed files the statistics do not name.
+// Returns null when no file is named.
 export const changedFilesCard = (stats) => {
   const fileStats = Array.isArray(stats?.fileStats) ? stats.fileStats : [];
   if (fileStats.length === 0) {
@@ -97,6 +104,28 @@ export const changedFilesCard = (stats) => {
   const splitPaths = fileStats.map((entry) => splitPath(entry.path));
   const rootLength = sharedDirectoryLength(splitPaths);
   const rootSegments = splitPaths[0].segments.slice(0, rootLength);
+  const largestChange = Math.max(
+    ...fileStats.map((entry) => (entry.added ?? 0) + (entry.removed ?? 0)),
+  );
+  const groups = new Map();
+  fileStats.forEach((entry, index) => {
+    const { segments, separator } = splitPaths[index];
+    const directory = segments.slice(rootLength, -1).join(separator);
+    let group = groups.get(directory);
+    if (!group) {
+      group = { directory, added: 0, removed: 0, rows: [] };
+      groups.set(directory, group);
+    }
+    group.added = sumOrUnknown(group.added, entry.added);
+    group.removed = sumOrUnknown(group.removed, entry.removed);
+    group.rows.push({
+      path: entry.path,
+      name: segments.at(-1),
+      added: entry.added,
+      removed: entry.removed,
+      bar: changeBar(entry, largestChange),
+    });
+  });
   return {
     title: filesChangedLabel(stats.files),
     added: stats.added,
@@ -108,19 +137,40 @@ export const changedFilesCard = (stats) => {
         ? `${segment}${splitPaths[0].separator}`
         : segment,
     ),
-    rows: fileStats.map((entry, index) => {
-      const { segments, separator } = splitPaths[index];
-      return {
-        path: entry.path,
-        name: segments.at(-1),
-        directory: segments.slice(rootLength, -1).join(separator),
-        added: entry.added,
-        removed: entry.removed,
-      };
-    }),
+    countKinds: ['added', 'removed'].filter((kind) =>
+      fileStats.some((entry) => entry[kind] > 0),
+    ),
+    groups: [...groups.values()]
+      .sort((left, right) => compareText(left.directory, right.directory))
+      .map((group) => ({
+        ...group,
+        rows: group.rows.sort((left, right) =>
+          compareText(left.name, right.name),
+        ),
+      })),
     unlisted: Math.max(0, stats.files - fileStats.length),
   };
 };
+
+function sumOrUnknown(sum, value) {
+  return sum === null || value === null ? null : sum + value;
+}
+
+function changeBar(entry, largestChange) {
+  const total = (entry.added ?? 0) + (entry.removed ?? 0);
+  if (entry.added === null || entry.removed === null || total === 0) {
+    return null;
+  }
+  const length = Math.sqrt(total / largestChange);
+  return {
+    added: (length * entry.added) / total,
+    removed: (length * entry.removed) / total,
+  };
+}
+
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 function filesChangedLabel(files) {
   return files === 1
@@ -179,15 +229,13 @@ function addFileLines(byPath, path, added, removed) {
     byPath.set(path, { path, added, removed });
     return;
   }
-  known.added =
-    known.added === null || added === null ? null : known.added + added;
-  known.removed =
-    known.removed === null || removed === null ? null : known.removed + removed;
+  known.added = sumOrUnknown(known.added, added);
+  known.removed = sumOrUnknown(known.removed, removed);
 }
 
 function sortedStats(byPath) {
   return [...byPath.values()].sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    compareText(left.path, right.path),
   );
 }
 
