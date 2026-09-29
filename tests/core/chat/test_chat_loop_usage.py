@@ -381,7 +381,7 @@ async def test_cancel_before_visible_output_keeps_reported_counters(tmp_path: Pa
     run = await build_chat_loop(runtime, streaming=True).start_run(
         "coder", "Work", session_id="session-one"
     )
-    await asyncio.wait_for(waiting.wait(), 3)
+    await waiting.wait()
     run.request_cancel()
     with pytest.raises(RunCancelledError):
         await run.wait()
@@ -424,7 +424,7 @@ async def test_cancel_during_usage_persistence_keeps_visible_answer(tmp_path: Pa
     run = await build_chat_loop(runtime, streaming=True).start_run(
         "coder", "Work", session_id="session-one"
     )
-    await asyncio.wait_for(saving.wait(), 3)
+    await saving.wait()
     run.request_cancel()
     release.set()
     with pytest.raises(RunCancelledError):

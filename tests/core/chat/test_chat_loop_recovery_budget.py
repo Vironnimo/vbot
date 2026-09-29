@@ -381,7 +381,16 @@ async def test_completed_tool_boundaries_allow_long_runs_without_repeating_effec
 
 @pytest.mark.asyncio
 async def test_cancel_during_backoff_stops_before_next_provider_request(tmp_path, monkeypatch):
-    monkeypatch.setattr("core.chat.recovery._sleep", asyncio.sleep)
+    backoff_waits: list[float] = []
+    waiting = asyncio.Event()
+
+    async def wait_out_backoff(delay: float) -> None:
+        # The backoff never elapses here; only the Run's cancellation ends it.
+        backoff_waits.append(delay)
+        waiting.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("core.chat.recovery._sleep", wait_out_backoff)
     monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (60, True))
     adapter = StubAdapter([], stream_responses=[NetworkError("offline")])
     runtime: Any = StubRuntime(
@@ -391,12 +400,12 @@ async def test_cancel_during_backoff_stops_before_next_provider_request(tmp_path
     run = await build_chat_loop(runtime, streaming=True).start_run(
         "coder", "Work", session_id="test"
     )
-    async with asyncio.timeout(5):
-        while not any(
-            event.type == PROVIDER_REQUEST_STATUS_EVENT and event.payload.get("delay_seconds") == 60
-            for event in run.events
-        ):
-            await asyncio.sleep(0.01)
+    await waiting.wait()
+    assert backoff_waits == [60]
+    assert any(
+        event.type == PROVIDER_REQUEST_STATUS_EVENT and event.payload.get("delay_seconds") == 60
+        for event in run.events
+    )
     run.request_cancel(reason="user")
     with pytest.raises(RunCancelledError):
         await run.wait()
