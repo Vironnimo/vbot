@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import pytest
 
@@ -37,7 +38,10 @@ async def test_maintenance_rejects_new_work_but_drains_accepted_queue() -> None:
 
 
 @pytest.mark.asyncio
-async def test_acknowledged_origin_blocks_safe_stop_until_cancellation_finishes() -> None:
+async def test_acknowledged_origin_blocks_safe_stop_until_cancellation_finishes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="vbot.runs")
     manager = ChatRunManager()
     address = SessionAddress(project_id=None, agent_id="main", session_id="session-one")
     release = asyncio.Event()
@@ -50,8 +54,20 @@ async def test_acknowledged_origin_blocks_safe_stop_until_cancellation_finishes(
     status = await manager.maintenance_begin("operation-one", origin=(address, run.id))
     assert status["origin_pending"] is True
     assert status["safe_to_stop"] is False
+    await manager.maintenance_begin("operation-one", origin=(address, run.id))
     await manager.cancel(run.id, reason="application_update")
     assert (await manager.maintenance_status("operation-one"))["safe_to_stop"] is True
+    await manager.maintenance_end("operation-one")
+    await manager.maintenance_end("operation-one")
+
+    # Only the begin and end transitions log, each once at INFO.
+    [began, ended] = [
+        record for record in caplog.records if "operation=operation-one" in record.getMessage()
+    ]
+    assert began.levelno == ended.levelno == logging.INFO
+    begin_fields = (f"origin_run={run.id}", "origin_session=session-one", "active=1", "queued=0")
+    assert all(field in began.getMessage() for field in begin_fields)
+    assert "active=0" in ended.getMessage()
 
 
 @pytest.mark.asyncio

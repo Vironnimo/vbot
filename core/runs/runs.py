@@ -202,12 +202,27 @@ class ChatRunManager:
         async with self._lock:
             if self._maintenance_operation_id not in {None, operation_id}:
                 raise RunAdmissionBlockedError("another maintenance operation is active")
+            began = self._maintenance_operation_id is None
+            if origin is not None and self._maintenance_origin not in {None, origin}:
+                raise RunAdmissionBlockedError("maintenance origin does not match")
             self._maintenance_operation_id = operation_id
             if origin is not None:
-                if self._maintenance_origin not in {None, origin}:
-                    raise RunAdmissionBlockedError("maintenance origin does not match")
                 self._maintenance_origin = origin
-            return self._maintenance_status_locked(operation_id)
+            status = self._maintenance_status_locked(operation_id)
+            if began:
+                origin_address, origin_run_id = origin or (None, None)
+                _LOGGER.info(
+                    "Maintenance began (operation=%s origin_agent=%s origin_session=%s "
+                    "origin_run=%s active=%s queued=%s reservations=%s)",
+                    operation_id,
+                    origin_address.agent_id if origin_address is not None else None,
+                    origin_address.session_id if origin_address is not None else None,
+                    origin_run_id,
+                    status["active_count"],
+                    status["queued_count"],
+                    status["reservation_count"],
+                )
+            return status
 
     async def maintenance_status(self, operation_id: str) -> dict[str, object]:
         """Return drain state for the exact active maintenance operation."""
@@ -221,8 +236,16 @@ class ChatRunManager:
                 return {"operation_id": operation_id, "active": False}
             if self._maintenance_operation_id != operation_id:
                 raise RunAdmissionBlockedError("another maintenance operation is active")
+            status = self._maintenance_status_locked(operation_id)
             self._maintenance_operation_id = None
             self._maintenance_origin = None
+            _LOGGER.info(
+                "Maintenance ended (operation=%s active=%s queued=%s reservations=%s)",
+                operation_id,
+                status["active_count"],
+                status["queued_count"],
+                status["reservation_count"],
+            )
             return {"operation_id": operation_id, "active": False}
 
     def _maintenance_status_locked(self, operation_id: str) -> dict[str, object]:
