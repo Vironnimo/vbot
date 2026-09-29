@@ -7,9 +7,11 @@
     formatDateTime,
     formatInteger,
     shortGroupId,
+    tokenBreakdownTooltip,
     tokenSplit,
+    unfinishedRunsTooltip,
   } from '$lib/statisticsView.js';
-  import { statCard, tokenCell } from './ReportPrimitives.svelte';
+  import { statCard, tokenCell, tokensHeader } from './ReportPrimitives.svelte';
 
   let { report } = $props();
 
@@ -63,6 +65,9 @@
       t('statistics.extensions.unfinishedRuns', {
         count: formatInteger(failedRuns(activity), locale),
       }),
+      failedRuns(activity) > 0
+        ? unfinishedRunsTooltip(activity.run_status, locale)
+        : '',
     )}
     {@render statCard(
       t('statistics.extensions.tokens'),
@@ -73,6 +78,9 @@
             count: formatInteger(tokenSplit(activity).estimated, locale),
           })
         : null,
+      tokenSplit(activity).hasEstimated
+        ? tokenBreakdownTooltip(activity, locale)
+        : '',
     )}
     {@render statCard(
       t('statistics.cost.reported'),
@@ -134,7 +142,7 @@
               >
               <span class="stats-wrap">{groupLabel(group)}</span>
               <span class="stats-call__source">{groupSummary(group)}</span>
-              <strong>{@render tokenCell(group.activity)}</strong>
+              <strong>{@render tokenCell(group.activity, false)}</strong>
             </summary>
             <div class="stats-call__body">
               {@render activityCards(group.activity, null)}
@@ -151,7 +159,11 @@
                       <th>{t('statistics.extensions.participant')}</th>
                       <th>{t('statistics.col.model')}</th>
                       <th>{t('statistics.extensions.runs')}</th>
-                      <th>{t('statistics.extensions.tokens')}</th>
+                      <th
+                        >{@render tokensHeader(
+                          t('statistics.extensions.tokens'),
+                        )}</th
+                      >
                       <th>{t('statistics.cost.reported')}</th>
                       <th>{t('statistics.cost.estimated')}</th>
                       <th>{t('statistics.extensions.toolCalls')}</th>

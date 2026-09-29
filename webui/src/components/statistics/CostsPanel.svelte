@@ -10,7 +10,12 @@
     modelCallKindLabel,
     modelCallStatusLabel,
   } from '$lib/statisticsView.js';
-  import { statCard, agentName } from './ReportPrimitives.svelte';
+  import {
+    statCard,
+    agentName,
+    sessionName,
+    costCell,
+  } from './ReportPrimitives.svelte';
   let { report } = $props();
   const locale = $derived(activeLocaleTag());
   const costs = $derived(
@@ -62,7 +67,7 @@
     {@render statCard(
       t('statistics.cost.estimated'),
       formatCost(costs.totals.estimated_usd, locale),
-      null,
+      t('statistics.cost.subscriptionHint'),
       t('statistics.cost.callCount', {
         count: formatInteger(costs.totals.estimated_calls, locale),
       }),
@@ -70,7 +75,7 @@
     {@render statCard(
       t('statistics.cost.unpriced'),
       formatInteger(costs.totals.unpriced_calls, locale),
-      null,
+      t('statistics.cost.unpricedHint'),
       t('statistics.cost.ofCalls', {
         count: formatInteger(costs.totals.calls, locale),
       }),
@@ -119,10 +124,10 @@
               ><td class="stats-mono stats-wrap">{row.model}</td><td
                 >{formatInteger(row.totals.calls, locale)}</td
               >
-              <td>{formatCost(row.totals.reported_usd, locale)}</td><td
-                >{formatCost(row.totals.estimated_usd, locale)}</td
+              <td>{@render costCell(row.totals, 'reported')}</td><td
+                >{@render costCell(row.totals, 'estimated')}</td
               >
-              <td>{formatInteger(row.totals.unpriced_calls, locale)}</td></tr
+              <td>{@render costCell(row.totals, 'unpriced')}</td></tr
             >
           {/each}</tbody
         >
@@ -149,10 +154,10 @@
         ><tbody
           >{#each costs.daily as row (row.date)}<tr>
               <td>{formatDate(row.date, locale)}</td><td
-                >{formatCost(row.totals.reported_usd, locale)}</td
+                >{@render costCell(row.totals, 'reported')}</td
               >
-              <td>{formatCost(row.totals.estimated_usd, locale)}</td><td
-                >{formatInteger(row.totals.unpriced_calls, locale)}</td
+              <td>{@render costCell(row.totals, 'estimated')}</td><td
+                >{@render costCell(row.totals, 'unpriced')}</td
               >
             </tr>{/each}</tbody
         >
@@ -181,12 +186,13 @@
         ><tbody
           >{#each costs.top_sessions as row (`${row.agent_id}:${row.session_id}`)}<tr
             >
-              <td class="stats-wrap">{row.session_title || row.session_id}</td
-              ><td>{@render agentName(row.agent_id)}</td>
-              <td>{formatCost(row.totals.reported_usd, locale)}</td><td
-                >{formatCost(row.totals.estimated_usd, locale)}</td
+              <td>{@render sessionName(row)}</td><td
+                >{@render agentName(row.agent_id)}</td
               >
-              <td>{formatInteger(row.totals.unpriced_calls, locale)}</td>
+              <td>{@render costCell(row.totals, 'reported')}</td><td
+                >{@render costCell(row.totals, 'estimated')}</td
+              >
+              <td>{@render costCell(row.totals, 'unpriced')}</td>
             </tr>{/each}</tbody
         >
       </table>
@@ -223,7 +229,7 @@
               {#if call.status}
                 · {modelCallStatusLabel(call.status)}{/if}
               {#if call.session_id}
-                · {call.session_title || call.session_id}
+                · {@render sessionName(call)}
               {:else}
                 · {t('statistics.cost.withoutSession')}
               {/if}

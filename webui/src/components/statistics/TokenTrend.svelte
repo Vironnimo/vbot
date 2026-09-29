@@ -16,6 +16,7 @@
     formatPercent,
     formatTokens,
     timelineTicks,
+    tokenPeriodTooltip,
     tokenSplit,
     tokenTimeline,
   } from '$lib/statisticsView.js';
@@ -40,19 +41,11 @@
     return `${activityPeriodLabel(point.date, granularity, locale, true)} · ${t('statistics.legend.measured')}: ${formatTokens(point.measured, locale)} · ${t('statistics.legend.estimated')}: ${formatTokens(point.estimated, locale)}`;
   }
   function tokenTooltipCard(point) {
-    return {
-      title: activityPeriodLabel(point.date, granularity, locale, true),
-      rows: [
-        {
-          label: t('statistics.legend.measured'),
-          value: formatTokens(point.measured, locale),
-        },
-        {
-          label: t('statistics.legend.estimated'),
-          value: formatTokens(point.estimated, locale),
-        },
-      ],
-    };
+    return tokenPeriodTooltip(
+      point,
+      `${activityPeriodLabel(point.date, granularity, locale, true)} · UTC`,
+      locale,
+    );
   }
 </script>
 
@@ -108,7 +101,7 @@
               type="button"
               class="stats-activity__col"
               aria-label={tokenTooltip(point)}
-              use:tooltip={tokenTooltipCard(point)}
+              use:tooltip={() => tokenTooltipCard(point)}
             >
               <span
                 class="stats-activity__bar"

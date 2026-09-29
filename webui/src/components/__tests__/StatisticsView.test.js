@@ -379,7 +379,7 @@ describe('StatisticsView', () => {
     expect(cardValue('statistics.compactions.p95After')).toBe('50,000');
     expect(cardValue('statistics.compactions.reduction')).toBe('57.9%');
     expect(cardValue('statistics.compactions.steps')).toBe('8');
-    expect(document.body.textContent).toContain('summary_tail');
+    expect(document.body.textContent).toContain('With tail');
     expect(document.body.textContent).toContain('compacted-session');
     expect(document.body.textContent).toContain('95,000 → 40,000');
   });

@@ -1,15 +1,18 @@
 <script>
   import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import EmptyState from '../ui/EmptyState.svelte';
   import {
     formatDurationMs,
     formatInteger,
     formatPercent,
     statisticsInsights,
+    toolRejectionTooltip,
   } from '$lib/statisticsView.js';
   import {
     statCard,
     agentName,
+    sessionName,
     countTable,
     agentCountTable,
   } from './ReportPrimitives.svelte';
@@ -82,7 +85,14 @@
                 <td>{formatPercent(tool.error_rate)}</td>
                 <td>{formatDurationMs(tool.average_duration_ms)}</td>
                 <td>{formatDurationMs(tool.p95_duration_ms)}</td>
-                <td class="stats-mono">{tool.top_error_code ?? '—'}</td>
+                <td class="stats-mono"
+                  ><!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach every rejection code here.) --><span
+                    class="stats-value"
+                    tabindex={tool.error_codes?.length ? 0 : undefined}
+                    use:tooltip={toolRejectionTooltip(tool, locale)}
+                    >{tool.top_error_code ?? '—'}</span
+                  ></td
+                >
               </tr>
             {/each}
           </tbody>
@@ -122,11 +132,8 @@
             <tbody>
               {#each tools.top_sessions as session (`${session.agent_id}:${session.session_id}`)}
                 <tr>
-                  <td class="stats-mono"
-                    >{@render agentName(session.agent_id)}</td
-                  >
-                  <td class="stats-mono stats-truncate">{session.session_id}</td
-                  >
+                  <td>{@render agentName(session.agent_id)}</td>
+                  <td>{@render sessionName(session)}</td>
                   <td>{formatInteger(session.calls, locale)}</td>
                 </tr>
               {/each}

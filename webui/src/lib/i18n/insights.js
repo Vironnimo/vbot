@@ -165,7 +165,6 @@ export default Object.freeze({
   'statistics.usage.showMonths': 'Show by month',
   'statistics.none': 'None',
   'statistics.generatedAt': 'Generated {time}',
-  'statistics.estimatedBadge': '~ estimated',
   'statistics.estimatedHint':
     'Estimated tokens are approximated, not provider-reported, and are tracked separately from measured usage.',
   'statistics.derivedHint':
@@ -192,7 +191,6 @@ export default Object.freeze({
   'statistics.col.runs': 'Runs',
   'statistics.col.errors': 'Errors',
   'statistics.col.agent': 'Agent',
-  'statistics.agent.projectBadgeTitle': 'Project: {project}',
   'statistics.agent.extensionBadge': 'Extension',
   'statistics.agent.extensionBadgeTitle':
     'Sessions this Extension runs on its own, such as Swarm participants',
@@ -502,4 +500,54 @@ export default Object.freeze({
   'statistics.overview.inspectCompactions': 'Inspect Compactions',
   'statistics.overview.leadingModels': 'Models using the most tokens',
   'statistics.usage.unreported': 'Calls missing token usage',
+  'statistics.usage.unreportedHint':
+    'Recorded Model calls without any token counts, neither reported by the Provider nor estimated. Their tokens are missing from all token totals.',
+  'statistics.tokens.columnHint':
+    'Provider-reported (measured) tokens. The amber ~ amount is estimated for calls without reported usage and is kept separate. Hover or focus a value for its breakdown.',
+  'statistics.tokens.total': '{count} tokens',
+  'statistics.tokens.totalLabel': 'Total',
+  'statistics.tokens.measuredInput': 'Measured input',
+  'statistics.tokens.measuredOutput': 'Measured output',
+  'statistics.tokens.estimatedInput': 'Estimated input',
+  'statistics.tokens.estimatedOutput': 'Estimated output',
+  'statistics.tokens.reasoning': 'Reasoning',
+  'statistics.tokens.reasoningValue': '{count}, part of output',
+  'statistics.tokens.cacheValue': '{count} · {rate} hit rate',
+  'statistics.tokens.nonePeriod': 'No token usage in this period.',
+  'statistics.errors.hourRange': '{from}–{to} UTC',
+  'statistics.errors.hourAria': '{hour}: {count} errors',
+  'statistics.errors.shareOfTotal': '{share} of {total} errors',
+  'statistics.runs.ofRuns': '{count} of {total} Runs',
+  'statistics.agent.project': 'Project',
+  'statistics.agent.address': 'Agent ID',
+  'statistics.sessionId': 'Session ID',
+  'statistics.cost.callsOf': '{count} of {total} calls',
+  'statistics.cost.exact': 'Exact',
+  'statistics.cost.unpricedDetail':
+    '{calls} have neither a Provider-reported cost nor a catalog price, so they are missing from both amounts.',
+  'statistics.cost.unpricedHint':
+    'Calls with neither a Provider-reported cost nor a matching catalog price. They are missing from both amounts.',
+  'statistics.cost.retrospectiveHint':
+    'Older calls recorded before vBot saved a price snapshot are priced with the current catalog, so their estimate can differ from the price at the time.',
+  'statistics.tools.rejectionsByCode':
+    'Rejection codes of {count} rejected calls',
+  'statistics.skills.conversionDetail':
+    '{activated} of {offered} Sessions that offered this Skill also activated it.',
+  'statistics.skills.activatedWithoutOffer': 'Activated without recorded offer',
+  'statistics.compactions.nonShrinkingHint':
+    'Checkpoints whose context estimate after Compaction was not smaller than before.',
+  'statistics.compactions.rapidHint':
+    'Compactions that followed the previous one in the same Session within two saved Model steps, a sign the first one freed too little context.',
+  'statistics.compactions.strategyId': 'Stored ID',
+  'statistics.limits.used': 'Used',
+  'statistics.limits.sincePrevious': 'Since previous',
+  'statistics.limits.gapDetail': 'No snapshot for {duration}',
+  'statistics.limits.resetDetail': 'Window reset or discontinuity ({values})',
+  'statistics.limits.resets': 'Resets',
+  'statistics.limits.from': 'From',
+  'statistics.limits.to': 'To',
+  'statistics.limits.account': 'Account',
+  'statistics.limits.pointsAria': '{provider} {window} snapshots',
+  'statistics.limits.pointAria': '{time}: {percent}% used',
+  'statistics.limits.noHistoryToDelete': 'No stored snapshots to delete.',
 });

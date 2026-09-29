@@ -9,6 +9,7 @@
     formatUsageRate,
     parseOrigin,
     rollupSkillActivationsByAgent,
+    skillConversionTooltip,
   } from '$lib/statisticsView.js';
   import { statCard, agentCountTable } from './ReportPrimitives.svelte';
 
@@ -89,32 +90,42 @@
                 skill.offered_sessions > 0 &&
                 skill.activated_offered_sessions === 0}
               {@const withoutOfferData = skill.offered_sessions === 0}
-              <tr
-                class:stats-skill-row--candidate={offeredUnactivated}
-                use:tooltip={offeredUnactivated
-                  ? t('statistics.skills.neverUsedRowTitle')
-                  : withoutOfferData
-                    ? t('statistics.skills.noOfferDataRowTitle')
-                    : ''}
-              >
+              <tr class:stats-skill-row--candidate={offeredUnactivated}>
                 <td class="stats-mono">
                   <span class="stats-skill-name">
                     <span>{skill.name}</span>
                     {#if offeredUnactivated}
-                      <Badge variant="warn">
-                        {t('statistics.skills.neverUsedBadge')}
-                      </Badge>
+                      <span
+                        class="tooltip-anchor"
+                        use:tooltip={t('statistics.skills.neverUsedRowTitle')}
+                      >
+                        <Badge variant="warn">
+                          {t('statistics.skills.neverUsedBadge')}
+                        </Badge>
+                      </span>
                     {:else if withoutOfferData}
-                      <Badge variant="neutral">
-                        {t('statistics.skills.noOfferDataBadge')}
-                      </Badge>
+                      <span
+                        class="tooltip-anchor"
+                        use:tooltip={t('statistics.skills.noOfferDataRowTitle')}
+                      >
+                        <Badge variant="neutral">
+                          {t('statistics.skills.noOfferDataBadge')}
+                        </Badge>
+                      </span>
                     {/if}
                   </span>
                 </td>
                 <td>{@render skillOrigins(skill.origins)}</td>
                 <td>{formatInteger(skill.offered_sessions, locale)}</td>
                 <td>{formatInteger(skill.activated_sessions, locale)}</td>
-                <td>{formatUsageRate(skill.usage_rate)}</td>
+                <td
+                  ><!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the conversion basis here.) --><span
+                    class="stats-value"
+                    tabindex="0"
+                    use:tooltip={skillConversionTooltip(skill, locale)}
+                    >{formatUsageRate(skill.usage_rate)}</span
+                  ></td
+                >
                 <td>{formatDateTime(skill.first_activated, locale)}</td>
                 <td>{formatDateTime(skill.last_activated, locale)}</td>
               </tr>

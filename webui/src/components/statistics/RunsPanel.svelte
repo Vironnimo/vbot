@@ -4,18 +4,24 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import {
     barFractions,
+    errorHourTooltip,
     formatChartTick,
     formatDurationMs,
     formatHourLabel,
+    formatHourRange,
     formatInteger,
     formatPercent,
+    runShareDetail,
   } from '$lib/statisticsView.js';
   import {
     statCard,
     agentName,
+    sessionName,
     countTable,
     agentCountTable,
   } from './ReportPrimitives.svelte';
+
+  const HOUR_TICKS = [0, 6, 12, 18];
 
   let { report } = $props();
 
@@ -49,14 +55,20 @@
       {@render statCard(
         t('statistics.runs.cancelRate'),
         formatPercent(runs.cancel_rate),
+        null,
+        runShareDetail(runs.status.cancelled, runs.total_runs, locale),
       )}
       {@render statCard(
         t('statistics.runs.failureRate'),
         formatPercent(runs.failure_rate),
+        null,
+        runShareDetail(runs.status.failed, runs.total_runs, locale),
       )}
       {@render statCard(
         t('statistics.runs.interruptionRate'),
         formatPercent(runs.interruption_rate),
+        null,
+        runShareDetail(runs.status.interrupted, runs.total_runs, locale),
       )}
     </div>
   </div>
@@ -94,6 +106,8 @@
       {@render statCard(
         t('statistics.runs.withTools'),
         formatInteger(runs.runs_with_tool_calls, locale),
+        null,
+        runShareDetail(runs.runs_with_tool_calls, runs.total_runs, locale),
       )}
       {@render statCard(
         t('statistics.runs.avgToolsPerRun'),
@@ -199,7 +213,7 @@
           ><tbody
             >{#each runs.top_sessions_by_runs as session (`${session.agent_id}:${session.session_id}`)}<tr
                 ><td>{@render agentName(session.agent_id)}</td><td
-                  class="stats-mono">{session.session_id}</td
+                  >{@render sessionName(session)}</td
                 ><td>{formatInteger(session.runs, locale)}</td></tr
               >{/each}</tbody
           >
@@ -229,17 +243,35 @@
     <h3 class="stats-block__title">
       {t('statistics.errors.byHour')}
     </h3>
-    <div class="stats-hours">
+    <div
+      class="stats-hours"
+      role="group"
+      aria-label={t('statistics.errors.byHour')}
+    >
       {#each errors.by_hour as entry, index (entry.hour)}
-        <div
+        <button
+          type="button"
           class="stats-hours__col"
-          use:tooltip={`${formatHourLabel(entry.hour)} · ${formatInteger(entry.count, locale)}`}
+          aria-label={t('statistics.errors.hourAria', {
+            hour: formatHourRange(entry.hour),
+            count: formatInteger(entry.count, locale),
+          })}
+          use:tooltip={() =>
+            errorHourTooltip(entry, errors.total_errors, locale)}
         >
           <span
             class="stats-hours__bar"
+            class:stats-hours__bar--empty={!entry.count}
             style={`height: ${Math.round((hourFractions[index] ?? 0) * 100)}%`}
           ></span>
-        </div>
+        </button>
+      {/each}
+    </div>
+    <div class="stats-hours__axis" aria-hidden="true">
+      {#each HOUR_TICKS as hour (hour)}
+        <span style={`left: ${(hour / 24) * 100}%`}
+          >{formatHourLabel(hour)}</span
+        >
       {/each}
     </div>
   </div>
