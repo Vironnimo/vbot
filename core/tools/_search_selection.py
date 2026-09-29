@@ -13,6 +13,7 @@ from pathlib import Path
 
 from core.tools._search_ignores import IgnoreRules
 from core.tools._search_options import SearchOptions, size_bytes
+from core.tools._tool_context import is_link_status
 from core.tools.search import SearchBudget, _expand_brace_alternations
 
 
@@ -279,12 +280,7 @@ class FileSelection:
             try:
                 metadata = root_stat if entry is None else entry.stat(follow_symlinks=False)
                 # Reuse scandir's metadata, including Windows junction tags.
-                # Cloud-file reparse points remain ordinary entries.
-                link = (
-                    stat.S_ISLNK(metadata.st_mode)
-                    or getattr(metadata, "st_reparse_tag", 0) == stat.IO_REPARSE_TAG_MOUNT_POINT
-                )
-                if entry is not None and link:
+                if entry is not None and is_link_status(metadata):
                     if not follow:
                         return
                     metadata = entry.stat()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+import sys
 import threading
 import time
 from dataclasses import replace
@@ -414,9 +414,6 @@ def test_quit_stops_the_view_only_after_the_facade_quits_successfully():
         controller.close()
 
 
-windows = pytest.mark.skipif(os.name != "nt", reason="native Windows tray")
-
-
 class Commands:
     def __init__(self) -> None:
         self.calls: list[object] = []
@@ -432,6 +429,8 @@ class Commands:
 
 
 def _tray(commands: Commands, monkeypatch: pytest.MonkeyPatch, tmp_path):
+    if sys.platform != "win32":
+        pytest.skip("native Windows tray")
     from cli.application import windows_tray
 
     tray = windows_tray.WindowsTray(commands, tmp_path / "icon.ico")
@@ -447,8 +446,9 @@ def _tray(commands: Commands, monkeypatch: pytest.MonkeyPatch, tmp_path):
     return tray, notified
 
 
-@windows
 def test_windows_menu_metrics_scale_for_per_monitor_dpi():
+    if sys.platform != "win32":
+        pytest.skip("native Windows tray")
     from cli.application.windows_native import scale
 
     assert scale(28, 96) == 28
@@ -456,8 +456,9 @@ def test_windows_menu_metrics_scale_for_per_monitor_dpi():
     assert scale(28, 192) == 56
 
 
-@windows
 def test_windows_owner_draw_paints_explicit_dark_hover_background():
+    if sys.platform != "win32":
+        pytest.skip("native Windows tray")
     from ctypes import wintypes
 
     from cli.application import windows_native as native
@@ -480,10 +481,11 @@ def test_windows_owner_draw_paints_explicit_dark_hover_background():
         native.user32.ReleaseDC(None, screen)
 
 
-@windows
 def test_windows_right_click_sets_an_arrow_cursor_and_runs_one_chosen_action(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ):
+    if sys.platform != "win32":
+        pytest.skip("native Windows tray")
     from cli.application import windows_tray
     from cli.application.tray import TrayMenuItem, TrayStatus
 
@@ -512,10 +514,11 @@ def test_windows_right_click_sets_an_arrow_cursor_and_runs_one_chosen_action(
     assert tray._menu_open is False
 
 
-@windows
 def test_windows_toast_click_opens_it_and_switching_to_desktop_dismisses_it(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ):
+    if sys.platform != "win32":
+        pytest.skip("native Windows tray")
     from cli.application import windows_tray
 
     commands = Commands()
@@ -540,16 +543,17 @@ def test_windows_toast_click_opens_it_and_switching_to_desktop_dismisses_it(
     assert notified[-1] == (1, "")  # NIM_MODIFY with empty text removes the toast
 
 
-@windows
 @pytest.mark.parametrize("state", ["stopped", "updating", "error"])
 def test_windows_icon_badges_the_state_and_keeps_the_normal_logo(state: str):
+    if sys.platform != "win32":
+        pytest.skip("native Windows tray")
     from PIL import Image
 
-    from cli.application.windows_tray import render_icon
+    from cli.application import windows_tray
 
     base = Image.new("RGBA", (64, 64), (255, 255, 255, 255))
-    normal = render_icon(base, "normal", 32)
-    badged = render_icon(base, state, 32)
+    normal = windows_tray.render_icon(base, "normal", 32)
+    badged = windows_tray.render_icon(base, state, 32)
     assert normal.getpixel((28, 28)) == (255, 255, 255, 255)
     assert badged.getpixel((28, 28))[:3] != (255, 255, 255)
     assert badged.getpixel((4, 4)) == (255, 255, 255, 255)

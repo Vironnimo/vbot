@@ -688,6 +688,8 @@ def test_native_host_reports_a_missing_runtime_and_runs_the_private_one(tmp_path
 
 
 def _assert_native_server_pseudoterminals_are_windowless(executable: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("Windows pseudoterminals")
     import winpty
 
     # The isolated native fixture loads only its copied standard library. Make

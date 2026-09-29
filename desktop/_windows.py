@@ -2,14 +2,16 @@
 
 DPI bootstrap and screen conversion, the per-user single-instance guard with
 its activation request handoff, the WebView2 browser arguments (secure remote
-HTTP origins, autoplay), and the WebView2 microphone permission hook. Every
-function is a no-op on other platforms and loads Win32/.NET code only on
-Windows.
+HTTP origins, autoplay), the WebView2 microphone permission hook, and the Win32
+DLL loading that the Desktop's ctypes bindings share. Every function is a no-op
+on other platforms and loads Win32/.NET code only on Windows; the DLL helpers
+raise ``OSError`` there.
 """
 
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import hashlib
 import importlib
 import ipaddress
@@ -45,6 +47,20 @@ ACTIVATION_REQUEST_FILE_NAME = "activation-request.json"
 ACTIVATION_REQUEST_MAX_AGE_SECONDS = 60.0
 
 
+def win32_library(name: str) -> ctypes.CDLL:
+    """Load a Win32 system DLL whose calls record their error for :func:`win32_last_error`."""
+    if sys.platform != "win32":
+        raise OSError(f"{name}.dll exists only on Windows")
+    return ctypes.WinDLL(name, use_last_error=True)
+
+
+def win32_last_error() -> int:
+    """Return the error of this thread's latest call into a :func:`win32_library` DLL."""
+    if sys.platform != "win32":
+        raise OSError("Win32 errors exist only on Windows")
+    return ctypes.get_last_error()
+
+
 def configure_dpi() -> None:
     """Select per-monitor rendering before pywebview queries screens or creates HWNDs.
 
@@ -56,7 +72,6 @@ def configure_dpi() -> None:
     if sys.platform != "win32":
         return
 
-    import ctypes
     from ctypes import wintypes
 
     user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -100,7 +115,6 @@ def primary_scale() -> float:
     """Return the primary display scale after per-monitor awareness is enabled."""
     if sys.platform != "win32":
         return 1.0
-    import ctypes
     from ctypes import wintypes
 
     get_dpi = ctypes.WinDLL("user32", use_last_error=True).GetDpiForSystem
@@ -190,12 +204,10 @@ class _Win32InstanceApi:
     """ctypes binding of :class:`InstanceApi` with explicit signatures."""
 
     def __init__(self) -> None:
-        import ctypes
         from ctypes import wintypes
 
-        self._ctypes = ctypes
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = win32_library("kernel32")
+        user32 = win32_library("user32")
         self._create_mutex = kernel32.CreateMutexW
         self._create_mutex.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
         self._create_mutex.restype = wintypes.HANDLE
@@ -223,7 +235,7 @@ class _Win32InstanceApi:
     def create_mutex(self, name: str) -> tuple[int, bool]:
         error_already_exists = 183
         handle = self._create_mutex(None, False, name)
-        already_existed = self._ctypes.get_last_error() == error_already_exists
+        already_existed = win32_last_error() == error_already_exists
         return int(handle or 0), already_existed
 
     def create_event(self, name: str) -> int:

@@ -19,6 +19,8 @@ def _gate_os_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[threading.Event, threading.Event, list[Any]]:
     """Hold OS process creation until the test releases it from the Event Loop."""
+    if sys.platform != "win32":
+        pytest.skip("Proactor subprocess transport")
     from asyncio import windows_utils
 
     entered = threading.Event()

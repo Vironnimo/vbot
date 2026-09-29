@@ -864,10 +864,16 @@ def test_replacement_rechecks_bytes_after_guard(tmp_path, monkeypatch):
     assert path.read_bytes() == b"external change\n"
 
 
+class _WindowsReplaceError(PermissionError):
+    """A failed replace carrying a Windows error code, on every platform."""
+
+    def __init__(self, code: int) -> None:
+        super().__init__("replace temporarily unavailable")
+        self.winerror = code
+
+
 def sharing_error(code: int = 5) -> OSError:
-    error = PermissionError("replace temporarily unavailable")
-    error.winerror = code
-    return error
+    return _WindowsReplaceError(code)
 
 
 def test_windows_retry_replaces_once_without_replaying_earlier_append(tmp_path, monkeypatch):

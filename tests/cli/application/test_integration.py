@@ -181,10 +181,11 @@ def test_uninstall_launches_only_after_the_exact_server_stopped(
         assert result["data_preserved"] is True
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows notification identity")
 def test_notification_identity_is_removed_only_by_the_installation_it_points_into(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    if sys.platform != "win32":
+        pytest.skip("Windows notification identity")
     import winreg
 
     key = rf"Software\vBot-tests\{uuid.uuid4().hex}"
