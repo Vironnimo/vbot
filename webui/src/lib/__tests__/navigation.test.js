@@ -387,9 +387,10 @@ describe('createNavigator', () => {
     expect(browser.location.hash).toBe('#settings');
   });
 
-  it('restores the place, extra state and forward entries after a reload, not in a new document', async () => {
+  it('restores the place, extra state, last places and forward entries after a reload, not in a new document', async () => {
     const storage = createStorage();
     const first = setup({ storage });
+    first.navigator.navigate('settings', ['tools']);
     first.navigator.navigate('chat', ['alpha', 's1'], {
       extra: { subAgent: true },
     });
@@ -408,6 +409,12 @@ describe('createNavigator', () => {
       extra: { subAgent: true },
     });
     expect(navigator.canGoForward).toBe(true);
+    navigator.open('settings');
+    expect(shown(navigator)).toEqual({
+      view: 'settings',
+      place: ['tools'],
+      extra: null,
+    });
 
     // Opening the app again in the same tab starts a new stack.
     const opened = setup({ storage });

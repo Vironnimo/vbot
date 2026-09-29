@@ -345,7 +345,14 @@
       if (location.origin === 'view' || sameLocation(previous, location)) {
         return;
       }
-      if (!previous && location.place.length === 0 && !location.extra) {
+      // Chat names its first shown Session itself once it resolves; when it
+      // already resolved while hidden, the start place is corrected below.
+      if (
+        !previous &&
+        !chatShownSession &&
+        location.place.length === 0 &&
+        !location.extra
+      ) {
         return;
       }
       const [agentId = '', sessionId = ''] = location.place;

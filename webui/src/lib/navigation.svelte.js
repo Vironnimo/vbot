@@ -285,6 +285,10 @@ export function createNavigator({
       entries[position] ??= null;
     }
     topIndex = Math.max(index, entries.length - 1);
+    // The main navigation keeps returning each view to its last place.
+    for (const entry of entries.slice(0, index)) {
+      if (entry) memory[entry.view] = entry;
+    }
   }
 
   function writeEntry(location, index, replace) {

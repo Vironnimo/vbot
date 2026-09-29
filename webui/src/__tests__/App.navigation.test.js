@@ -517,6 +517,29 @@ describe('App navigation', () => {
     expect(document.querySelector('.chat-view__state-banner')).toBeNull();
   });
 
+  it('names the shown Session when Chat is first opened after loading in the background', async () => {
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        agents: [
+          { id: 'alpha', name: 'Alpha', current_session_id: 'session-alpha' },
+        ],
+      }),
+    );
+    window.history.replaceState(null, '', '#logs');
+    mountApp();
+
+    await waitForCondition(() => {
+      expect(logsShown()).toBe(true);
+      expect(rpcMock).toHaveBeenCalledWith('chat.history', expect.anything());
+    });
+
+    sidebarNavButton('chat').click();
+    await waitForCondition(() => {
+      expect(isCurrent('chat')).toBe(true);
+      expect(window.location.hash).toBe('#chat/alpha/session-alpha');
+    });
+  });
+
   it('retains Settings input after a failed topic change and retries the same navigation', async () => {
     rpcMock.mockImplementation(failingSettingsRpc(1));
     mountApp();
