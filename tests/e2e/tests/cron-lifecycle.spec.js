@@ -10,6 +10,23 @@ import { rpc } from "./rpc-support.js";
 const SCHEDULED_JOB_NAME = "E2E One-time Delivery";
 const SCHEDULED_PROMPT = "E2E_SCHEDULED_RUN report back";
 
+// A Schedule row's accessible name starts with its status, then its name.
+function scheduleRow(jobs, status, name) {
+  return jobs.getByRole("button", {
+    name: new RegExp(`^${status} ${name}\\b`),
+  });
+}
+
+// The Repeats planner starts at Daily; its Time field generates the cron
+// expression, which the form shows before saving.
+async function setDailyTime(cron, time, expression) {
+  await expect(
+    cron.getByRole("button", { exact: true, name: "Repeats" }),
+  ).toContainText("Daily");
+  await cron.getByRole("textbox", { exact: true, name: "Time" }).fill(time);
+  await expect(cron.getByLabel("Cron expression")).toHaveText(expression);
+}
+
 test("a Scheduled Run persists through update, pause, and deletion", async ({
   page,
 }) => {
@@ -33,13 +50,11 @@ test("a Scheduled Run persists through update, pause, and deletion", async ({
   await cron
     .getByRole("textbox", { name: "Prompt" })
     .fill("E2E scheduled prompt");
-  await cron.getByPlaceholder("0 9 * * 1-5").fill("0 6 * * *");
+  await setDailyTime(cron, "06:00", "0 6 * * *");
   await cron.getByRole("button", { exact: true, name: "Save" }).click();
 
   const jobs = cron.getByRole("list", { name: "Scheduled Runs" });
-  let job = jobs.getByRole("button", {
-    name: /^E2E Morning Schedule Active\b/,
-  });
+  let job = scheduleRow(jobs, "Active", "E2E Morning Schedule");
   await expect(job).toBeVisible();
   await expect(
     cron.locator('.cron-summary[aria-label="Schedule summary"]'),
@@ -51,12 +66,10 @@ test("a Scheduled Run persists through update, pause, and deletion", async ({
   await cron
     .getByRole("textbox", { name: "Prompt" })
     .fill("E2E updated prompt");
-  await cron.getByPlaceholder("0 9 * * 1-5").fill("30 7 * * *");
+  await setDailyTime(cron, "07:30", "30 7 * * *");
   await cron.getByRole("button", { exact: true, name: "Save" }).click();
 
-  job = jobs.getByRole("button", {
-    name: /^E2E Updated Schedule Active\b/,
-  });
+  job = scheduleRow(jobs, "Active", "E2E Updated Schedule");
   await expect(job).toBeVisible();
   await expect(
     cron.locator('.cron-summary[aria-label="Schedule summary"]'),
@@ -66,9 +79,7 @@ test("a Scheduled Run persists through update, pause, and deletion", async ({
   );
 
   await page.reload();
-  job = jobs.getByRole("button", {
-    name: /^E2E Updated Schedule Active\b/,
-  });
+  job = scheduleRow(jobs, "Active", "E2E Updated Schedule");
   await expect(job).toBeVisible();
   await job.click();
   await expect(
@@ -80,9 +91,7 @@ test("a Scheduled Run persists through update, pause, and deletion", async ({
   await disableJob.click();
 
   await expect(
-    jobs.getByRole("button", {
-      name: /^E2E Updated Schedule Paused\b/,
-    }),
+    scheduleRow(jobs, "Paused", "E2E Updated Schedule"),
   ).toBeVisible();
   await expect(
     cron.getByRole("switch", { name: /^Enable job / }),
@@ -119,7 +128,7 @@ test("a one-time Scheduled Run fires and its result reaches the open Chat", asyn
     await drawer.getByRole("button", { name: "Session list filters" }).click();
     await page
       .getByRole("menu")
-      .getByRole("switch", { name: "Cron runs" })
+      .getByRole("switch", { name: "Schedule runs" })
       .click();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
@@ -152,11 +161,11 @@ test("a one-time Scheduled Run fires and its result reaches the open Chat", asyn
 
     await page.goto("/#cron");
     const cron = page.getByRole("region", { name: "Schedules" });
-    const completedJob = cron
-      .getByRole("list", { name: "Scheduled Runs" })
-      .getByRole("button", {
-        name: new RegExp(`^${SCHEDULED_JOB_NAME} Completed\\b`),
-      });
+    const completedJob = scheduleRow(
+      cron.getByRole("list", { name: "Scheduled Runs" }),
+      "Completed",
+      SCHEDULED_JOB_NAME,
+    );
     await expect(completedJob).toBeVisible();
     await completedJob.click();
     await expect(
