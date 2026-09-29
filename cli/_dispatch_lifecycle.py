@@ -21,6 +21,7 @@ from cli.server_management import (
 )
 from cli.update_management import run_update
 from core.utils.config import DEFAULT_HOST
+from core.utils.logging import LogManager
 
 
 def _launch_desktop(argv: Sequence[str]) -> None:
@@ -79,12 +80,23 @@ def dispatch_autostart_command(
     """Dispatch one parsed autostart command against the local OS."""
 
     instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
-    if args.command == "enable":
-        return enable_fn(
-            instance, start=start, task_name=args.task_name, service_name=args.service_name
+    if args.command in {"enable", "disable"}:
+        # The change is logged into the target's daily file; logging alone never
+        # initializes a data directory.
+        manager = (
+            LogManager(data_dir=instance.data_dir, enable_console=False)
+            if instance.data_dir.is_dir()
+            else None
         )
-    if args.command == "disable":
-        return disable_fn(instance, task_name=args.task_name, service_name=args.service_name)
+        try:
+            if args.command == "enable":
+                return enable_fn(
+                    instance, start=start, task_name=args.task_name, service_name=args.service_name
+                )
+            return disable_fn(instance, task_name=args.task_name, service_name=args.service_name)
+        finally:
+            if manager is not None:
+                manager.close()
     if args.command == "status":
         return status_fn(instance, task_name=args.task_name, service_name=args.service_name)
     raise ValueError(f"Unsupported autostart command: {args.command}")

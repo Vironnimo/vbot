@@ -156,6 +156,17 @@ def dispatch(args: argparse.Namespace) -> int | None:
                 "source-checkout updates retain their existing workflow"
             )
         return None
+    from core.utils.logging import LogManager
+
+    # Commands on an installation log beside its host and update worker.
+    manager = LogManager(data_dir=install.root, enable_console=False)
+    try:
+        return _dispatch_installed(args, install)
+    finally:
+        manager.close()
+
+
+def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int | None:
     from cli.application import operations, processes
 
     if args.area == "application":

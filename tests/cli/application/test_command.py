@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from cli.application.state import ApplicationError, Installation, Operation
 from cli.main import run
 from cli.parser import parse_args
 from cli.server_management import CommandResult, HealthProbeResult, WebUIProbeResult
+from core.utils.logging import resolve_daily_log_path
 
 
 def _install(root: Path) -> Installation:
@@ -114,6 +116,7 @@ def test_source_selection_records_mode_without_starting_or_updating(tmp_path, mo
 
     def select(candidate, mode, *, from_checkout):
         selected.append((candidate.root, mode, from_checkout))
+        logging.getLogger("vbot.application.source_updates").info("probe-record")
         return {"source_track": mode}
 
     monkeypatch.setattr("cli.application.source_updates.select_source", select)
@@ -121,6 +124,8 @@ def test_source_selection_records_mode_without_starting_or_updating(tmp_path, mo
     assert run(["application", "source", "main", "--output", "plain"]) == 0
     assert selected == [(install.root, "main", None)]
     assert json.loads(capsys.readouterr().out)["next_command"] == "vbot update"
+    # A command on an installation logs into that installation's daily file.
+    assert "probe-record" in resolve_daily_log_path(install.root).read_text(encoding="utf-8")
 
 
 def test_source_selection_refuses_pending_update_before_mutation(tmp_path, monkeypatch):
