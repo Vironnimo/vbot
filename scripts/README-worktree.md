@@ -25,6 +25,7 @@ For each created worktree it does all of the following:
 - initializes the canonical empty data-directory structure through `core/storage/layout.py`
 - writes `settings.json` in that data directory with a dedicated `server_port`, a paired local fake-Provider endpoint, and chat/fallback/image/speech fake Models
 - writes a `.vbot-worktree` marker into the worktree root
+- copies the primary checkout's test-impact records (`.testmondata`, `.testfiledeps`), which the branch check before the merge reuses
 - installs frontend dependencies in `webui/`
 - builds the frontend once during creation
 
@@ -141,7 +142,7 @@ the worktree. The important boundary is the current working directory.
 
 ### 6. Merge the finished task into `main`
 
-When every change is committed, merge from anywhere. Each commit already passed the commit hook, which runs the tests it affects; the merge commit passes the same check against the merged result:
+When every change is committed, merge from anywhere. The commits passed the static checks of the commit hook; the merge runs the tests. It first runs the branch check in the worktree: the pytest tests the branch's changes affect, outside the merge lock. Then the merge commit passes the commit check against the merged result, which runs only the tests the branch check did not cover plus the WebUI checks:
 
 ```bash
 python scripts/worktree.py merge my-task
@@ -224,9 +225,9 @@ worktree.
 
 The command refuses to run when the primary checkout is not on `main` or, once it holds the merge lock, has uncommitted changes; while another merge is being checked, `main` holds that merge's staged result, so a second merge waits for the lock instead of refusing. It self-heals one crash scenario: if an earlier merge was killed halfway, it aborts that leftover state before doing anything.
 
-On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts or a merged result the commit check rejected; exit code 1 means refusal, timeout, or cleanup failure.
+On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts, a failed branch check, or a merged result the commit check rejected; exit code 1 means refusal, timeout, or cleanup failure.
 
-A rejected merge also rolls back completely and prints the check's report. Bring `main` into your branch (`git rebase main`), fix the reported problems, commit, and retry the merge.
+A failed branch check stops before the merge and prints its report; fix the reported problems in the worktree, commit, and retry the merge. A rejected merge rolls back completely and prints the check's report. Bring `main` into your branch (`git rebase main`), fix the reported problems, commit, and retry the merge.
 
 ### Conflicts and the protected repair window
 
@@ -370,7 +371,7 @@ python -m pytest tests/scripts/test_test_env.py
 cd webui && npx vitest run src/lib/__tests__/i18n.test.js
 ```
 
-Commits in the worktree run the tracked pre-commit hook (formatting, lint, type check, affected tests), because worktrees share the repository's `core.hooksPath` setting. The first commit check in a worktree copies the primary checkout's test-impact data (`.testmondata`, `.testfiledeps`), so it runs only the tests the commit affects.
+Commits in the worktree run the tracked pre-commit hook's static checks (formatting, lint, type check), because worktrees share the repository's `core.hooksPath` setting; the tests the branch affects run once, at the merge. Run the tests covering your change yourself while you work.
 
 ## Files generated per worktree
 
@@ -516,8 +517,8 @@ The usual cause is a shell whose working directory is still inside the worktree:
 2. Create one worktree per task with `python scripts/worktree.py create <name>`.
 3. Change into that worktree before running any vBot command.
 4. Use normal relative entrypoints from inside the worktree.
-5. Commit through the commit hook; it runs the tests each commit affects.
+5. Run the tests covering your change while you work, and commit through the commit hook (static checks).
 6. Stop the local worktree server when done.
-7. Merge with `python scripts/worktree.py merge <name>` when everything is green; use `delete <name>` only for abandoned tasks.
+7. Merge with `python scripts/worktree.py merge <name>` when everything is green; it runs the tests the branch affects first. Use `delete <name>` only for abandoned tasks.
 
 If you follow those rules, you can run several independent vBot instances in parallel without sharing ports, logs, or data directories, and several sessions can finish and merge at the same time without stepping on each other.

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from scripts import commit_check
+from scripts import _test_impact, commit_check
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -143,6 +143,19 @@ HARMLESS_CALC = "def double(x):\n    return x * 2\n\n\ndef half(x):\n    return 
 BROKEN_CALC = "def double(x):\n    return x * 3\n"
 BROKEN_WIP = "def triple(x):\n    return x * 4\n"
 HARMLESS_WIP = "def triple(x):\n    return x * 3\n\n\ndef third(x):\n    return x / 3\n"
+# Wrong in its first run only, like a test that fails on a busy machine.
+FLAKY_WIP = (
+    "import os\n"
+    "from pathlib import Path\n"
+    "\n"
+    "\n"
+    "def triple(x):\n"
+    '    first_run = Path(os.environ["FLAKY_MARKER"])\n'
+    "    if not first_run.exists():\n"
+    '        first_run.write_text("")\n'
+    "        return x * 4\n"
+    "    return x * 3\n"
+)
 # Keeps test_calc passing, but doubles a factor above 2 to 10 or more.
 SKEWED_CALC = "def double(x):\n    return x * 2 if x < 3 else x * 3\n"
 # The test step as a pre-merge-commit hook, like .githooks/pre-merge-commit.
@@ -182,6 +195,8 @@ def seeded_impact_project(tmp_path_factory: pytest.TempPathFactory) -> Path:
         timeout=120,
     )
     assert seed.returncode == 0, seed.stdout + seed.stderr
+    # As the primary checkout's last commit check would have recorded it.
+    _test_impact.record_tested_state(root, _git(root, "write-tree").strip(), ())
     return root
 
 
@@ -252,17 +267,28 @@ def test_failure_in_unstaged_work_of_another_file_does_not_block(impact_project:
     assert "test_wip.py::test_triple" in details
 
 
-def test_failure_on_committed_code_blocks_every_commit(impact_project: Path) -> None:
-    _write(impact_project, "wip.py", BROKEN_WIP)
+@pytest.mark.parametrize(
+    ("wip", "status"),
+    [
+        (BROKEN_WIP, "FAIL: tests failing on committed code; fix them in a separate commit first"),
+        (FLAKY_WIP, "NOT BLOCKING: failed on committed code, then passed when run again alone"),
+    ],
+    ids=["failing", "passing alone"],
+)
+def test_failure_on_committed_code_blocks_every_commit_unless_it_passes_alone(
+    impact_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wip: str, status: str
+) -> None:
+    monkeypatch.setenv("FLAKY_MARKER", str(tmp_path / "first-run"))
+    _write(impact_project, "wip.py", wip)
     _git(impact_project, "commit", "-q", "-am", "unchecked", "--no-verify")
     _write(impact_project, "calc.py", HARMLESS_CALC)
     _git(impact_project, "add", "calc.py")
 
     results = _check_tests(impact_project)
 
-    status = "FAIL: tests failing on committed code; fix them in a separate commit first"
     blocking, details = results[status]
-    assert blocking
+    assert blocking is status.startswith("FAIL")
+    assert any(result[0] for result in results.values()) is blocking
     assert "test_wip.py::test_triple" in details
 
 
@@ -307,16 +333,22 @@ def _merge_after_checked_commits(
     *,
     rebase: bool = False,
 ) -> str:
-    """Commit *branch_change* in a new worktree and *main_change* in *primary*, each
-    after a passing commit check, and merge the worktree's branch through the test
-    step as pre-merge-commit hook, as ``scripts/worktree.py merge`` does. Return the
-    merge output; *rebase* first rebases the branch, which runs no hook."""
+    """Commit *branch_change* in a new worktree and pass its branch check, commit
+    *main_change* in *primary* after a passing commit check, and merge the worktree's
+    branch through the test step as pre-merge-commit hook, as ``scripts/worktree.py
+    merge`` does. Return the merge output; *rebase* first rebases the branch after
+    its check, as before a hand merge."""
     _git(primary, "worktree", "add", "-q", "-b", "task", str(worktree))
-    for root, (path, content) in ((worktree, branch_change), (primary, main_change)):
-        _write(root, path, content)
-        _git(root, "add", path)
-        assert _check_tests(root) == {"PASS": (False, "")}
-        _git(root, "commit", "-q", "-m", path, "--no-verify")
+    path, content = branch_change
+    _write(worktree, path, content)
+    _git(worktree, "add", path)
+    _git(worktree, "commit", "-q", "-m", path, "--no-verify")
+    assert commit_check.check_branch(worktree) == 0
+    path, content = main_change
+    _write(primary, path, content)
+    _git(primary, "add", path)
+    assert _check_tests(primary) == {"PASS": (False, "")}
+    _git(primary, "commit", "-q", "-m", path, "--no-verify")
     if rebase:
         _git(worktree, "rebase", "-q", _git(primary, "rev-parse", "HEAD").strip())
     hooks = primary / ".git" / "test-hooks"
@@ -378,20 +410,33 @@ def test_merge_commit_runs_a_test_both_sides_changed(
     assert "test_factor.py::test_factor" in output
 
 
-def test_first_commit_in_a_worktree_adopts_the_primary_checkout_data(
-    impact_project: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_worktree_commits_leave_the_tests_to_the_branch_check(
+    impact_project: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     worktree = tmp_path / "worktree"
     _git(impact_project, "worktree", "add", "-q", "-b", "task", str(worktree))
     _write(worktree, "calc.py", BROKEN_CALC)
     _git(worktree, "add", "calc.py")
+    # Ruff and mypy are not under test here.
+    passed = [commit_check.StepResult("mypy", "PASS", False)]
+    monkeypatch.setattr(commit_check, "check_python", lambda *_arguments: passed)
 
-    results = _check_tests(worktree)
+    assert commit_check.main(worktree) == 0
+    assert "NOT RUN in a worktree" in capsys.readouterr().out
+    _git(worktree, "commit", "-q", "-m", "calc", "--no-verify")
 
+    assert commit_check.main(worktree, ["--branch"]) == 1
+
+    # A worktree made without scripts/worktree.py takes the records over now.
     output = capsys.readouterr().out
     assert f"using the test-impact data of {impact_project}" in output
     assert "no usable test-impact data" not in output
-    assert "test_calc.py::test_double" in results["FAIL: tests affected by this commit"][1]
+    assert "FAIL: tests affected by this commit" in output
+    assert "test_calc.py::test_double" in output
+    assert "test_wip.py" not in output
 
 
 @pytest.mark.parametrize(

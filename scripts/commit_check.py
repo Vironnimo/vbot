@@ -6,6 +6,12 @@ once a clone has enabled the tracked hooks with ``git config core.hooksPath
 .githooks``. It covers staged Python files (Ruff, mypy), staged frontend sources
 (Prettier, ESLint) and the tests those changes affect.
 
+Tests run when work lands in the primary checkout: its commits and the merge
+commits of ``scripts/worktree.py merge``. A commit in a linked worktree gets the
+static checks only. Before a merge takes the merge lock, ``worktree.py merge`` runs
+``commit_check.py --branch`` in the worktree: the pytest tests the branch's changes
+affect, so the merge commit only has to run the tests neither side covered.
+
 Formatter and linter fixes are applied and re-staged only for files whose whole
 change is staged, so unstaged work in the same checkout (another session's
 edits included) is never rewritten or swept into the commit. A partially staged
@@ -26,12 +32,14 @@ merge commit runs only the tests that neither this checkout's nor the merged
 worktree's test runs cover as merged.
 A failing test blocks the commit when it depends on a staged file or only on
 committed code; failures that depend on another session's unstaged work are
-reported without blocking. Vitest runs the tests related to staged WebUI
-sources plus the guard tests, and the WebUI build runs.
+reported without blocking. A test failing on committed code runs once more alone
+and is reported without blocking when it passes then. Vitest runs the tests
+related to staged WebUI sources plus the guard tests, and the WebUI build runs.
 """
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import json
 import math
@@ -536,14 +544,20 @@ def _workers(seconds: float) -> list[str]:
     return ["-n", str(min(workers, os.cpu_count() or 1))]
 
 
-def _pytest_command(
-    root: Path, selection: _test_impact.Selection, staged_tests: list[str], arguments_file: Path
-) -> list[str] | None:
+def _pytest() -> list[str]:
     # testmon only records here: this hook selects the tests. testmon's selection
     # plugin would select and order them inside each xdist worker from records the
     # controller rewrites meanwhile, and xdist needs every worker to collect alike.
-    pytest = [sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header"]
-    pytest += ["--testmon-noselect", "-p", "no:TestmonSelect"]
+    return [
+        *[sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header"],
+        *["--testmon-noselect", "-p", "no:TestmonSelect"],
+    ]
+
+
+def _pytest_command(
+    root: Path, selection: _test_impact.Selection, staged_tests: list[str], arguments_file: Path
+) -> list[str] | None:
+    pytest = _pytest()
     if selection.complete:
         print(
             "Commit check: running the complete suite (about 5-10 minutes): no usable "
@@ -556,6 +570,23 @@ def _pytest_command(
         return None
     arguments_file.write_text("\n".join(arguments) + "\n", encoding="utf-8")
     return [*pytest, *_workers(selection.seconds), f"@{arguments_file}"]
+
+
+def _rerun_alone(root: Path, failed: list[str], env: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Run the *failed* tests once more in one process; return ``(failing, passed)``.
+
+    A test that failed only among the parallel test runs of a busy machine passes
+    alone. Collection errors, which name no single test, are not run again.
+    """
+    tests = [test for test in failed if "::" in test and (root / test.split("::")[0]).is_file()]
+    if not tests:
+        return failed, []
+    result = _run([*_pytest(), "-n", "0", *tests], root, env)
+    if result.returncode not in (0, 1):
+        return failed, []
+    failing = set(failed_tests(result.stdout))
+    passed = [test for test in tests if test not in failing]
+    return [test for test in failed if test not in passed], passed
 
 
 def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepResult]:
@@ -585,18 +616,19 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
             _record_tested_state(root, dirty)
             return unaffected
         result = _run(command, root, env)
-        if result.returncode in (0, 1, 5):  # 5: no test selected
-            _record_tested_state(root, dirty)
-    if result.returncode not in (0, 1, 5):
-        return [
-            StepResult("pytest", f"FAIL (exit code {result.returncode})", True, _output(result))
-        ]
-    output = result.stdout
-    failed = failed_tests(output)
-    if not failed:
-        return [StepResult("pytest", "PASS", False)]
+        if result.returncode not in (0, 1, 5):  # 5: no test selected
+            return [
+                StepResult("pytest", f"FAIL (exit code {result.returncode})", True, _output(result))
+            ]
+        _record_tested_state(root, dirty)
+        output = result.stdout
+        failed = failed_tests(output)
+        if not failed:
+            return [StepResult("pytest", "PASS", False)]
+        commit, committed, in_progress = classify_failures(root, failed, set(changed), dirty)
+        # No checked change explains these failures; a busy machine may.
+        committed, flaky = _rerun_alone(root, committed, env)
 
-    commit, committed, in_progress = classify_failures(root, failed, set(changed), dirty)
     results: list[StepResult] = []
     if commit:
         results.append(
@@ -623,6 +655,15 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
                 "NOT BLOCKING: failures depending on uncommitted work in progress",
                 False,
                 _summary_lines(output, in_progress),
+            )
+        )
+    if flaky:
+        results.append(
+            StepResult(
+                "pytest",
+                "NOT BLOCKING: failed on committed code, then passed when run again alone",
+                False,
+                _summary_lines(output, flaky),
             )
         )
     if not commit and not committed:
@@ -659,11 +700,56 @@ def check_frontend_tests(root: Path, changed: list[str]) -> list[StepResult]:
     ]
 
 
-def main(root: Path = PROJECT_ROOT) -> int:
+def _print_report(title: str, results: list[StepResult]) -> None:
+    print(title)
+    for result in results:
+        print(f"  {result.label:<12} {result.status}")
+    for result in results:
+        if result.details:
+            print(f"\n--- {result.label}: {result.status} ---\n{result.details}")
+
+
+def check_branch(root: Path) -> int:
+    """Run the pytest tests a worktree branch affects, before ``worktree.py merge``.
+
+    They are the tests the changes since the checkout's tested state affect; a
+    worktree takes the primary checkout's records over when it is created, so these
+    are the branch's changes. They run outside the merge lock, and the merge commit
+    then runs only the tests neither side covered, plus the frontend tests and the
+    WebUI build, which have no records to reuse.
+    """
+    start = time.monotonic()
+    git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir").strip())
+    _adopt_primary_data(root, git_dir / TESTS_LOCK_NAME)
+    changed = _changed_since_tested(root, root, "HEAD") or set()
+    results = check_tests(root, sorted(changed), dirty_files(root))
+    elapsed = time.monotonic() - start
+    if results:
+        _print_report("Branch check", results)
+    if any(result.blocking for result in results):
+        print(
+            f"\nBranch check failed ({elapsed:.1f}s). Fix the reported problems in the "
+            "worktree, commit, and merge again."
+        )
+        return 1
+    print(f"\nBranch check passed ({elapsed:.1f}s).")
+    return 0
+
+
+def main(root: Path = PROJECT_ROOT, argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check a commit, or a worktree branch.")
+    parser.add_argument(
+        "--branch",
+        action="store_true",
+        help="run the tests the worktree branch affects, as worktree.py merge does first",
+    )
+    arguments = parser.parse_args(argv or [])
     # Tool output may hold characters a legacy Windows code page cannot encode.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
+    if arguments.branch:
+        return check_branch(root)
     # A staged file deleted from the working tree has nothing left to check.
     staged = [path for path in staged_files(root) if (root / path).is_file()]
     changed = sorted({*staged, *staged_deletions(root)})
@@ -672,7 +758,11 @@ def main(root: Path = PROJECT_ROOT) -> int:
     dirty = dirty_files(root)
     start = time.monotonic()
     results = [*check_python(root, staged, dirty), *check_frontend(root, staged, dirty)]
-    if any(result.blocking for result in results):
+    if _primary_checkout(root) is not None:
+        if results:
+            notice = "NOT RUN in a worktree; `python scripts/worktree.py merge` runs them"
+            results.append(StepResult("tests", notice, False))
+    elif any(result.blocking for result in results):
         results.append(StepResult("tests", "NOT RUN until the problems above are fixed", False))
     else:
         results += [*check_tests(root, changed, dirty), *check_frontend_tests(root, changed)]
@@ -680,12 +770,7 @@ def main(root: Path = PROJECT_ROOT) -> int:
         return 0
 
     partial = [path for path in staged if path in dirty]
-    print("Commit check")
-    for result in results:
-        print(f"  {result.label:<12} {result.status}")
-    for result in results:
-        if result.details:
-            print(f"\n--- {result.label}: {result.status} ---\n{result.details}")
+    _print_report("Commit check", results)
     if partial:
         print(
             "\nnote: these staged files also have unstaged changes; they were checked as they "
@@ -704,4 +789,4 @@ def main(root: Path = PROJECT_ROOT) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(argv=sys.argv[1:]))

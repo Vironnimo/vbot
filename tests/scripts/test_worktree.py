@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from contextlib import contextmanager
+import sqlite3
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import pytest
@@ -152,7 +153,7 @@ def test_cmd_create_rejects_unsafe_name(tmp_path, monkeypatch, name):
     assert commands == []
 
 
-def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
+def test_cmd_create_adopts_test_records_then_installs_and_builds_webui(tmp_path, monkeypatch):
     module = _load_worktree_module()
 
     name = "fresh-worktree"
@@ -161,6 +162,9 @@ def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
     webui_path = worktree_path / "webui"
 
     _patch_create_environment(monkeypatch, module, tmp_path)
+    # The primary checkout's test-impact records, which the branch check reuses.
+    with closing(sqlite3.connect(tmp_path / ".testmondata")) as records, records:
+        records.execute("CREATE TABLE test_execution (test_name TEXT)")
 
     commands: list[tuple[list[str], Path | None]] = []
 
@@ -179,6 +183,8 @@ def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
         (["npm", "install"], webui_path),
         (["npm", "run", "build"], webui_path),
     ]
+    with closing(sqlite3.connect(worktree_path / ".testmondata")) as copy:
+        assert copy.execute("SELECT name FROM sqlite_master").fetchall() == [("test_execution",)]
     assert not (worktree_path / ".vorch" / "WORKTREE.md").exists()
     # The port allocation lock lands in the scratch repository, not the real one.
     assert (tmp_path / ".git" / module.PORT_ALLOCATION_LOCK_NAME).is_file()
