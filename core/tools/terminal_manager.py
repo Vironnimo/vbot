@@ -572,7 +572,7 @@ class TerminalManager:
         if changed:
             self._events._publish_state(session)
             _LOGGER.info(
-                "Attached Terminal Session terminal=%s agent=%s session=%s project=%s",
+                "Attached Terminal Session (terminal=%s agent=%s session=%s project=%s)",
                 terminal_id,
                 attachment.agent_id,
                 attachment.session_id,
@@ -588,7 +588,7 @@ class TerminalManager:
         self._io._detach_session(session)
         self._events._publish_state(session)
         _LOGGER.info(
-            "Detached Terminal Session terminal=%s agent=%s session=%s project=%s",
+            "Detached Terminal Session (terminal=%s agent=%s session=%s project=%s)",
             terminal_id,
             attachment.agent_id,
             attachment.session_id,

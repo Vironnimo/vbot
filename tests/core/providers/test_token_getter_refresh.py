@@ -201,7 +201,7 @@ async def test_expired_token_refreshes_through_the_flow_and_publishes_to_its_acc
     route = respx.post(case.config.token_url).mock(return_value=httpx.Response(200, json=reply))
     getter = OAuthTokenGetter(store, "provider", "subscription", case.config, account_id="work")
 
-    with caplog.at_level(logging.INFO, logger="vbot.providers.token_getter"):
+    with caplog.at_level(logging.DEBUG, logger="vbot.providers.token_getter"):
         assert await getter() == reply["access_token"]
 
     request = route.calls.last.request
@@ -215,9 +215,11 @@ async def test_expired_token_refreshes_through_the_flow_and_publishes_to_its_acc
     assert stored.extra == case.refreshed_extra
     assert seconds_until(stored.expires_at) == pytest.approx(case.expires_in, abs=10)
     assert store.load("provider", "subscription") is None
-    assert _getter_logs(caplog) == [
-        "Refreshed OAuth token (provider=provider connection=subscription)"
-    ]
+    # A routine refresh is DEBUG detail and never names the Provider Account.
+    assert _getter_logs(caplog) == []
+    [refreshed] = _getter_logs(caplog, logging.DEBUG)
+    assert "subscription" in refreshed
+    assert "work" not in refreshed
 
 
 @respx.mock

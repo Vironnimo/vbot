@@ -748,9 +748,11 @@ async def _spawn_command(
         # user-command failure — it means the shell executable disappeared or
         # PATH is stale. Re-probe the environment once in case PATH changed,
         # then retry the spawn before giving up.
-        _LOGGER.info(
-            "Shell spawn failed with FileNotFoundError; refreshing shell "
-            "environment cache and retrying once.",
+        _LOGGER.warning(
+            "Shell spawn failed; retrying once with a refreshed environment "
+            "(run=%s shell=%s error=FileNotFoundError)",
+            context.run_id,
+            argv[0],
         )
         reset_shell_env_cache()
         env = await environment()

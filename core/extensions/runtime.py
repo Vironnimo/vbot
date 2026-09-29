@@ -118,7 +118,7 @@ class ExtensionRuntime:
 
         records = new_registry.records()
         self._logger.info(
-            "Extension layer reloaded: %s loaded, %s failed, %s disabled, %s overridden",
+            "Reloaded Extension layer (loaded=%d failed=%d disabled=%d overridden=%d)",
             sum(1 for record in records if record.status == "loaded"),
             sum(1 for record in records if record.status == "failed"),
             sum(1 for record in records if record.status == "disabled"),

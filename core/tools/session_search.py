@@ -198,8 +198,8 @@ async def session_search_handler(
             context, arguments, recall_backend, capabilities, resolved_sessions, zone
         )
         result = tool_success(data)
-        _LOGGER.info(
-            "session_search backend=%s count=%s has_more=%s formatted_bytes=%s duration_ms=%s",
+        _LOGGER.debug(
+            "Searched Sessions (backend=%s count=%s has_more=%s formatted_bytes=%s duration_ms=%s)",
             resolved_name,
             len(data.get("items", [])) if isinstance(data.get("items"), list) else 0,
             data.get("has_more", False),

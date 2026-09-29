@@ -472,12 +472,12 @@ class LocalSpeechExecutor:
             local_id = definition.descriptor.id
             if (progress := _PROGRESS.get()) is not None:
                 progress.update("loading")
-            _LOGGER.info("Loading local STT model (engine=%s)", local_id)
+            _LOGGER.debug("Loading local STT model (engine=%s)", local_id)
             started = monotonic()
             state.engine = definition.create(options)
             state.key = key
             _LOGGER.info(
-                "Local STT model ready (engine=%s, seconds=%.1f)", local_id, monotonic() - started
+                "Loaded local STT model (engine=%s seconds=%.1f)", local_id, monotonic() - started
             )
         return cast(LocalTranscriptionEngine, state.engine)
 
@@ -485,7 +485,7 @@ class LocalSpeechExecutor:
         """Unload after a failure and return the error the caller should see."""
         state.unload()
         _LOGGER.warning(
-            "Local STT failed (engine=%s, error_type=%s)", local_id, type(error).__name__
+            "Local STT failed (engine=%s error_type=%s)", local_id, type(error).__name__
         )
         if isinstance(error, LocalSpeechError):
             return error

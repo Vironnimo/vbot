@@ -663,7 +663,7 @@ class ExtensionRegistry:
         record.declarations = ExtensionDeclarations()
         self._pages = {key: page for key, page in self._pages.items() if key[0] != name}
         self._retire_owner_host(name)
-        _LOGGER.info("Extension %r deactivated live (no restart)", name)
+        _LOGGER.info("Deactivated Extension live (extension=%s)", name)
         return True
 
     async def quiesce(self, name: str) -> bool:

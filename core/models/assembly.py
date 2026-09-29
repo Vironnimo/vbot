@@ -125,7 +125,12 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from core.utils.log_conditions import LoggedConditions
+
 _LOGGER = logging.getLogger("vbot.models")
+# Every assembly (startup and each reload) meets the same data again: log each
+# issue once per process, and a changed issue as a new one.
+_LOGGED_ISSUES = LoggedConditions()
 
 # Receives one message per Model DB file, entry or value that Load ignores. Load
 # logs them; staged validation collects them so a refresh logs each issue once.
@@ -133,9 +138,10 @@ ModelDataIssueReport = Callable[[str], None]
 
 
 def log_model_data_issue(message: str) -> None:
-    """Default :data:`ModelDataIssueReport`: log the ignored data as a warning."""
+    """Default :data:`ModelDataIssueReport`: log the ignored data as a warning, once."""
 
-    _LOGGER.warning("%s", message)
+    if _LOGGED_ISSUES.started(message):
+        _LOGGER.warning("%s", message)
 
 
 # The JSON key that points a provider/override model entry at its canonical id.

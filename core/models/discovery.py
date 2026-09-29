@@ -290,10 +290,10 @@ async def refresh_models(
                 )
                 continue
             if model.model_id in provider_config.catalog_exclusions:
-                _LOGGER.info(
-                    "Excluding unusable catalog model '%s' for provider '%s'",
-                    model.model_id,
+                _LOGGER.debug(
+                    "Excluded unusable catalog model (provider=%s model=%s)",
                     provider_config.id,
+                    model.model_id,
                 )
                 continue
             if model_filter.accepts(model):

@@ -119,7 +119,7 @@ class TerminalCatalog:
         self._operator_store.groups[group.group_id] = group
         self._operator_store.persist_groups()
         self._notify_changed("")
-        _LOGGER.info("Created Terminal group group=%s name=%s", group.group_id, group.name)
+        _LOGGER.info("Created Terminal group (group=%s name=%s)", group.group_id, group.name)
         return self._group_summary(group)
 
     def rename_group_for_operator(self, group_id: str, name: str) -> dict[str, Any]:
@@ -135,7 +135,7 @@ class TerminalCatalog:
         if group.kind == "user":
             self._operator_store.persist_groups()
         self._notify_changed("")
-        _LOGGER.info("Renamed Terminal group group=%s from=%s to=%s", group_id, previous, name)
+        _LOGGER.info("Renamed Terminal group (group=%s from=%s to=%s)", group_id, previous, name)
         return self._group_summary(group)
 
     async def delete_group_for_operator(self, group_id: str) -> dict[str, Any]:
@@ -160,7 +160,7 @@ class TerminalCatalog:
             self._operator_store.persist_groups()
         self._notify_changed("")
         _LOGGER.info(
-            "Deleted Terminal group group=%s name=%s terminals=%d",
+            "Deleted Terminal group (group=%s name=%s terminals=%d)",
             group_id,
             group.name,
             len(terminals),
@@ -213,7 +213,7 @@ class TerminalCatalog:
         )
         self._operator_store.groups[group.group_id] = group
         self._notify_changed("")
-        _LOGGER.info("Created Agent Terminal group group=%s name=%s", group.group_id, name)
+        _LOGGER.info("Created Agent Terminal group (group=%s name=%s)", group.group_id, name)
         return group
 
     def _session_group(self, session: TerminalSession) -> TerminalGroup:

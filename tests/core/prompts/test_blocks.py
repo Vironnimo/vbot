@@ -359,6 +359,25 @@ def test_include_inlines_a_readable_workspace_file_and_reports_only_that_read(
     assert seen == ([soul.resolve()] if setup == "file" else [])
 
 
+def test_a_missing_include_is_logged_when_it_goes_missing_and_returns_not_per_build(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    soul = tmp_path / "SOUL.md"
+
+    def levels_of_builds(count: int) -> list[int]:
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="vbot.prompts"):
+            for _build in range(count):
+                expand_workspace_includes("{include:SOUL.md}", str(tmp_path))
+        return [record.levelno for record in caplog.records]
+
+    assert levels_of_builds(3) == [logging.WARNING]
+    soul.write_text("Soul text", encoding="utf-8")
+    assert levels_of_builds(2) == [logging.INFO]
+    soul.unlink()
+    assert levels_of_builds(2) == [logging.WARNING]
+
+
 @pytest.mark.parametrize(
     ("filename", "safe"),
     [

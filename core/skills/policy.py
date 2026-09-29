@@ -40,6 +40,7 @@ from core.json_documents import (
 )
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
 from core.utils.errors import VBotError
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 POLICY_FORMAT_VERSION = 1
@@ -205,6 +206,15 @@ POLICY_FORMAT = JsonDocumentFormat(
 )
 
 
+def _file_state(path: Path) -> tuple[int, int] | None:
+    """The modification time and size that tell one version of a file from the next."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
 class SkillPolicyService:
     """Load, validate, and mutate ``<data_dir>/skills/policy.json``.
 
@@ -217,6 +227,9 @@ class SkillPolicyService:
     def __init__(self, storage: _PolicyStorage) -> None:
         self._storage = storage
         self._lock = threading.RLock()
+        # Registries re-read the policy on every rebuild: an unusable file is
+        # logged once per file state, and again when it becomes valid.
+        self._conditions = LoggedConditions(limit=4)
 
     @property
     def policy_path(self) -> Path:
@@ -301,22 +314,32 @@ class SkillPolicyService:
         """Return the effective policy and the diagnostics of the file."""
         path = self.policy_path
         if not path.is_file():
+            self._log_policy_usable(path)
             return SkillPolicy(), []
+        state = _file_state(path)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
-            message = f"Cannot read skill policy {path}: {error}"
-            _LOGGER.warning(message)
-            return SkillPolicy(), [message]
+            if self._conditions.started(path, state):
+                _LOGGER.warning("Ignored unreadable skill policy (path=%s): %s", path, error)
+            return SkillPolicy(), [f"Cannot read skill policy {path}: {error}"]
         diagnostics = _validate_policy_document(data)
         messages = [
             f"{diagnostic.severity} {diagnostic.path}: {diagnostic.message}"
             for diagnostic in diagnostics
         ]
         if any(diagnostic.severity == "error" for diagnostic in diagnostics):
-            _LOGGER.warning("Ignoring invalid skill policy %s: %s", path, "; ".join(messages))
+            if self._conditions.started(path, state):
+                _LOGGER.warning(
+                    "Ignored invalid skill policy (path=%s): %s", path, "; ".join(messages)
+                )
             return SkillPolicy(), messages
+        self._log_policy_usable(path)
         return _StoredPolicy.from_document(data).effective(), messages
+
+    def _log_policy_usable(self, path: Path) -> None:
+        if self._conditions.ended(path):
+            _LOGGER.info("Skill policy became usable again (path=%s)", path)
 
     def _read_stored(self) -> _StoredPolicy:
         """Return the stored policy for a mutation; refuse a file that fails to load."""
@@ -352,7 +375,7 @@ class SkillPolicyService:
             raise SkillPolicyError(f"Cannot write skill policy: {error}") from error
         policy = stored.effective()
         _LOGGER.info(
-            "Skill policy %s applied for %s (%d disabled, %d shared owners)",
+            "Applied skill policy change (operation=%s target=%s disabled=%d shared_owners=%d)",
             operation,
             target,
             len(policy.disabled),

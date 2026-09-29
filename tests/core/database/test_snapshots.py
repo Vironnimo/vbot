@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -427,7 +428,7 @@ def test_snapshot_verification_preserves_file_access_failures(
 
 
 def test_a_failed_or_cancelled_snapshot_keeps_the_previous_verified_snapshot(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     database = open_database(notes_spec(data_dir))
     try:
@@ -443,11 +444,28 @@ def test_a_failed_or_cancelled_snapshot_keeps_the_previous_verified_snapshot(
         def failing_backup(*_args: Any, **_kwargs: Any) -> bool:
             raise DatabaseUnavailableError("disk busy")
 
-        monkeypatch.setattr(database, "backup", failing_backup)
-        assert create_data_snapshot(data_dir, reason="test", databases=(database,)) is None
-        assert list_data_snapshots(data_dir) == [first]
-        assert read_snapshot_health(data_dir)["state"] == "degraded"
-        assert data_store_status(data_dir, databases=(database,))["state"] == "snapshot_degraded"
+        with monkeypatch.context() as patched:
+            patched.setattr(database, "backup", failing_backup)
+            with caplog.at_level(logging.INFO, logger="vbot.database"):
+                for _attempt in range(2):
+                    assert (
+                        create_data_snapshot(data_dir, reason="test", databases=(database,)) is None
+                    )
+            assert list_data_snapshots(data_dir) == [first]
+            assert read_snapshot_health(data_dir)["state"] == "degraded"
+            assert (
+                data_store_status(data_dir, databases=(database,))["state"] == "snapshot_degraded"
+            )
+        # The degradation is a transition: a repeated failure does not log it again.
+        assert [record.levelno for record in caplog.records] == [logging.WARNING]
+        caplog.clear()
+
+        with caplog.at_level(logging.INFO, logger="vbot.database"):
+            recovered = create_data_snapshot(data_dir, reason="test", databases=(database,))
+        assert recovered is not None
+        assert read_snapshot_health(data_dir)["state"] == "healthy"
+        assert {record.levelno for record in caplog.records} == {logging.INFO}
+        assert any("recovered" in record.getMessage() for record in caplog.records)
     finally:
         database.close()
     assert not [path for path in snapshot_root(data_dir).iterdir() if path.name.startswith(".")]

@@ -50,6 +50,9 @@ class RecallIntegration:
         self._embeddings = embeddings
         self._extensions = extensions
         self.logger = logger
+        # The configured backend name last reported as unknown: every reload of an
+        # unchanged setting would otherwise warn again.
+        self._unknown_backend: str | None = None
         self._recall_backend_registry = self._build_recall_backend_registry()
         self.backend = self._create_recall_backend(self._recall_backend_registry)
         # Closing replaced backends, kept referenced until they finish.
@@ -93,14 +96,17 @@ class RecallIntegration:
         )
         try:
             backend = registry.create(backend_name, context)
+            self._unknown_backend = None
             return backend
         except KeyError:
-            if self.logger is not None:
+            if self.logger is not None and backend_name != self._unknown_backend:
                 self.logger.warning(
-                    "Unknown recall backend %r; using %s",
+                    "Used default recall backend instead of an unknown one "
+                    "(configured=%s default=%s)",
                     backend_name,
                     DEFAULT_RECALL_BACKEND,
                 )
+            self._unknown_backend = backend_name
             return registry.create(DEFAULT_RECALL_BACKEND, context)
         except Exception as error:
             if backend_name == DEFAULT_RECALL_BACKEND:

@@ -731,16 +731,16 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         operation: str,
         aggregate: _EmbeddingOperationUsage,
     ) -> None:
-        """Emit one normalized usage summary per Search, never provider payloads."""
+        """Emit one normalized DEBUG usage summary per Search, never provider payloads."""
 
         usage = aggregate.usage
         if usage.requests <= 0:
             return
-        if self.logger is not None and hasattr(self.logger, "info"):
-            self.logger.info(
-                "Embedding usage operation=%s provider=%s model=%s requests=%d "
+        if self.logger is not None and hasattr(self.logger, "debug"):
+            self.logger.debug(
+                "Used embeddings (operation=%s provider=%s model=%s requests=%d "
                 "token_reports=%d input_tokens=%d total_tokens=%d cost_reports=%d "
-                "cost=%.12g query_inputs=%d document_inputs=%d",
+                "cost=%.12g query_inputs=%d document_inputs=%d)",
                 operation,
                 aggregate.provider_id,
                 aggregate.model_id,

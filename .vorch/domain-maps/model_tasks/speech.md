@@ -77,9 +77,9 @@ reuses the model; a pending load with the same load identity is not started
 twice; failures are logged and left for the next transcription to report.
 Shutdown cancels a preload that has not started and kills a managed STT child
 that is still loading; an in-process load (source install) cannot be interrupted
-and delays shutdown until it finishes. `Loading local STT model` and `Local STT
-model ready (engine=..., seconds=...)` bracket the real load, including a managed
-child's. Coverage: `test_speech_local.py` (prepare states, dedupe, waiting
+and delays shutdown until it finishes. The real load, including a managed
+child's, logs one INFO line with the engine and load seconds after it completes
+(its start only at DEBUG). Coverage: `test_speech_local.py` (prepare states, dedupe, waiting
 transcription, failed preload, shutdown during a managed preload), `test_speech.py`,
 `test_runtime_settings.py`, `tests/server/test_app.py`.
 

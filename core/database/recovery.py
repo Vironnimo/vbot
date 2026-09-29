@@ -586,18 +586,21 @@ def _restore_member_locked(
     *,
     cause: str,
     failure_detected_at: str,
-) -> bool:
-    """Restore one verified member under the operation lock, with its incident."""
+) -> dict[str, Any] | None:
+    """Restore one verified member under the operation lock, with its incident.
+
+    Returns the completed incident, or ``None`` when this member was not restored.
+    """
     target = canonical_database_path(data_dir, name)
     if has_live_connection(target):
-        return False
+        return None
     source = member_path(snapshot_dir, member)
     if source is None or not _member_compatible(source, spec):
-        return False
+        return None
     try:
         verify_member(snapshot_dir, member, spec=spec)
     except UNUSABLE_COPY_ERRORS:
-        return False
+        return None
     pending = read_incident(data_dir, name)
     if pending is not None and (
         pending["verification"] != "pending"
@@ -633,7 +636,7 @@ def _restore_member_locked(
     # A publication failure is operational, not evidence that this snapshot is
     # unusable: it propagates so auto-restore stops instead of restoring an
     # older candidate over the already verified database.
-    write_incident(
+    return write_incident(
         data_dir,
         name,
         cause=cause,
@@ -645,7 +648,18 @@ def _restore_member_locked(
         incident_id=incident_id,
         previous=pending,
     )
-    return True
+
+
+def _log_automatic_restore(event: str, incident: Mapping[str, Any]) -> None:
+    """Report an automatic restore at ERROR: data written after the snapshot may be lost."""
+    _LOGGER.error(
+        "%s (database=%s snapshot=%s quarantine=%s cause=%s)",
+        event,
+        incident["database"],
+        incident["restored_snapshot_id"],
+        incident["quarantine"] or "none",
+        incident["cause"],
+    )
 
 
 def _confirm_pending(data_dir: Path, spec: DatabaseSpec) -> None:
@@ -664,7 +678,7 @@ def _confirm_pending(data_dir: Path, spec: DatabaseSpec) -> None:
         # An interruption before quarantine left the original usable. It is
         # not evidence that the requested snapshot was restored.
         return
-    write_incident(
+    incident = write_incident(
         data_dir,
         spec.name,
         cause=pending["cause"],
@@ -676,6 +690,7 @@ def _confirm_pending(data_dir: Path, spec: DatabaseSpec) -> None:
         incident_id=pending["incident_id"],
         previous=pending,
     )
+    _log_automatic_restore("Completed interrupted restore from data snapshot", incident)
 
 
 def auto_restore_if_needed(data_dir: Path, spec: DatabaseSpec, expected_database_id: str) -> bool:
@@ -705,7 +720,7 @@ def auto_restore_if_needed(data_dir: Path, spec: DatabaseSpec, expected_database
             data_dir, spec.name, database_id=expected_database_id, spec=spec
         ):
             try:
-                restored = _restore_member_locked(
+                incident = _restore_member_locked(
                     data_dir,
                     spec.name,
                     snapshot_dir,
@@ -716,8 +731,21 @@ def auto_restore_if_needed(data_dir: Path, spec: DatabaseSpec, expected_database
                     failure_detected_at=probe.detected_at,
                 )
             except DatabaseUnavailableError:
+                # The opener only learns that nothing was restored, while the
+                # original may already sit in quarantine: report the reason here.
+                _LOGGER.error(
+                    "Automatic restore from data snapshot failed "
+                    "(database=%s snapshot=%s cause=%s)",
+                    spec.name,
+                    manifest.snapshot_id,
+                    probe.cause,
+                    exc_info=True,
+                )
                 return False
-            if restored:
+            if incident is not None:
+                _log_automatic_restore(
+                    "Automatically restored database from data snapshot", incident
+                )
                 return True
         return False
     finally:
@@ -835,6 +863,18 @@ def restore_data_snapshot(
                 )
         finally:
             lock.release()
+    _LOGGER.info(
+        "Restored data snapshot (snapshot=%s databases=%s%s retired=%s registered=%s cause=%s)",
+        manifest.snapshot_id,
+        ",".join(selected) or "none",
+        ""
+        if document_result is None
+        else f" documents_restored={len(document_result.restored)}"
+        f" documents_removed={len(document_result.removed)}",
+        ",".join(retired) or "none",
+        ",".join(registered) or "none",
+        cause,
+    )
     return SnapshotRestore(
         manifest.snapshot_id, selected, document_result, retired, tuple(registered)
     )
@@ -887,10 +927,10 @@ def unregister_database(data_dir: Path, name: str) -> UnregisteredDatabase:
     finally:
         lock.release()
     _LOGGER.info(
-        "Unregistered the %s database (database_id=%s, quarantine=%s)",
+        "Unregistered database (database=%s database_id=%s quarantine=%s)",
         name,
         entry.database_id,
-        quarantine,
+        quarantine or "none",
     )
     return UnregisteredDatabase(name, entry.database_id, quarantine)
 

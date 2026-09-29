@@ -250,7 +250,7 @@ class DeviceFlowEngine:
                     oauth_config,
                 )
                 session = self._device_session_from_response(oauth_config, response.json())
-        _LOGGER.info(
+        _LOGGER.debug(
             "Started OAuth device flow (provider=%s connection=%s)",
             provider_id,
             local_connection_id,
