@@ -9,10 +9,13 @@ test("Logs reads the daily server log and applies search, level, and order filte
   await expect(logs.getByText(/Current file: /)).toBeVisible();
   await expect(logs.getByRole("list", { name: "Log entries" })).toBeVisible();
 
-  await logs.getByRole("searchbox", { name: "Search" }).fill("vbot.server.app");
+  // The server process writes one start line; search covers logger and text.
+  await logs
+    .getByRole("searchbox", { name: "Search" })
+    .fill("vbot.server Server started");
   const entries = logs.getByRole("listitem");
   await expect(entries).not.toHaveCount(0);
-  await expect(entries.first()).toContainText("vbot.server.app");
+  await expect(entries.first()).toContainText("Server started");
 
   await logs.getByRole("button", { name: "Level" }).click();
   await page.getByRole("option", { name: "INFO" }).click();
