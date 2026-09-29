@@ -36,7 +36,7 @@ from core.providers.adapter import (
 from core.providers.errors import (
     ProviderError,
     classify_in_band_error_type,
-    classify_in_band_provider_error,
+    in_band_error_text,
 )
 from core.providers.reasoning import merge_reasoning_meta
 
@@ -571,36 +571,94 @@ def _responses_error_message(event_data: Mapping[str, Any]) -> str:
 def _classify_responses_stream_error(
     event_data: Mapping[str, Any], *, lenient_unknown: bool = False
 ) -> ProviderError:
-    """Map exact Responses error facts into vBot's shared recovery taxonomy."""
+    """Map exact Responses error facts into vBot's shared recovery taxonomy.
+
+    A WebSocket error frame carries the HTTP ``status`` its request would have
+    received. A client-error status other than 408 or 429 means the request
+    itself was rejected, so leniency never retries its unknown code. The raised
+    message embeds the error facts as trailing JSON, so code and status survive
+    into persisted Run failures.
+    """
 
     payload = _responses_error_payload(event_data)
     error = payload.get("error")
     error_mapping = error if isinstance(error, Mapping) else {}
-    error_type = _non_empty_string_or_none(payload.get("error_type"))
-    if error_type is None:
-        error_type = _non_empty_string_or_none(error_mapping.get("error_type"))
+    error_type = _first_non_empty_string(
+        payload.get("error_type"),
+        error_mapping.get("error_type"),
+        _metadata_error_type(error_mapping),
+        _metadata_error_type(payload),
+    )
     code: Any = error_mapping.get("code")
     if code is None:
         code = payload.get("code")
     classifier = error_type or (_non_empty_string_or_none(code) if isinstance(code, str) else None)
-    numeric_code = code if isinstance(code, int) and not isinstance(code, bool) else None
-    message = _responses_error_message(event_data)
-
-    if lenient_unknown:
-        router_error = {**payload, **error_mapping}
-        if error_type is not None:
-            metadata = router_error.get("metadata")
-            router_error["metadata"] = {
-                **(metadata if isinstance(metadata, Mapping) else {}),
-                "error_type": error_type,
-            }
-        return classify_in_band_provider_error(router_error, lenient_unknown=True)
-
+    status = _error_status(payload)
+    numeric_code = code if _is_integer(code) else status
+    availability = error_mapping.get("availability", payload.get("availability"))
+    rejected_request = (
+        status is not None and 400 <= status < 500 and status not in _WAIT_CLIENT_STATUSES
+    )
     return classify_in_band_error_type(
-        message,
+        in_band_error_text(
+            _responses_error_message(event_data),
+            _responses_error_facts(payload, error_mapping),
+        ),
         classifier=classifier,
         numeric_code=numeric_code,
+        availability=availability if isinstance(availability, Mapping) else None,
+        lenient_unknown=lenient_unknown and not rejected_request,
     )
+
+
+# Client-error statuses that ask the caller to wait rather than reject the request.
+_WAIT_CLIENT_STATUSES = frozenset({408, 429})
+
+# Envelope fields that describe the error itself. A failed response's
+# instructions, output and Usage, or a WebSocket frame's headers, stay out of
+# the persisted error text.
+_ERROR_FACT_FIELDS = (
+    "type",
+    "status",
+    "status_code",
+    "code",
+    "message",
+    "param",
+    "error_type",
+    "metadata",
+    "availability",
+)
+
+
+def _responses_error_facts(
+    payload: Mapping[str, Any], error_mapping: Mapping[str, Any]
+) -> dict[str, Any]:
+    facts = {name: payload[name] for name in _ERROR_FACT_FIELDS if name in payload}
+    if error_mapping:
+        facts["error"] = dict(error_mapping)
+    return facts
+
+
+def _error_status(payload: Mapping[str, Any]) -> int | None:
+    status = payload.get("status", payload.get("status_code"))
+    return status if _is_integer(status) else None
+
+
+def _metadata_error_type(container: Mapping[str, Any]) -> Any:
+    metadata = container.get("metadata")
+    return metadata.get("error_type") if isinstance(metadata, Mapping) else None
+
+
+def _first_non_empty_string(*values: Any) -> str | None:
+    for value in values:
+        text = _non_empty_string_or_none(value)
+        if text is not None:
+            return text
+    return None
+
+
+def _is_integer(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _responses_error_payload(event_data: Mapping[str, Any]) -> Mapping[str, Any]:

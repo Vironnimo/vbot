@@ -433,7 +433,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 stream=True,
                 **self._request_kwargs_with_defaults(kwargs),
             )
-            state = ResponsesStreamState()
+            state = _responses_stream_state()
             response_events = cast(
                 AsyncGenerator[dict[str, Any], None],
                 self._stream_responses(
@@ -810,7 +810,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         conversation_id: str | None = None,
         state: ResponsesStreamState | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        stream_state = state or ResponsesStreamState()
+        stream_state = state or _responses_stream_state()
         if (
             endpoint_path == CODEX_RESPONSES_ENDPOINT
             and cache_scope_id
@@ -946,3 +946,12 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
 def _clamp_codex_cache_scope(cache_scope_id: str) -> str:
     return cache_scope_id[:_CODEX_CACHE_SCOPE_MAX_LENGTH]
+
+
+def _responses_stream_state() -> ResponsesStreamState:
+    """Retry in-band errors whose code is unknown, as OpenAI's Codex client does.
+
+    Only the known deterministic codes stay fatal; Chat's recovery budget
+    bounds the retries.
+    """
+    return ResponsesStreamState(lenient_unknown_errors=True)

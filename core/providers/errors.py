@@ -134,6 +134,9 @@ IN_BAND_TRANSIENT_ERROR_CODES = frozenset(
         "provider_unavailable",
         "server",
         "server_error",
+        # OpenAI's Codex client retries this on a fresh connection whatever
+        # the status of the WebSocket error frame carrying it.
+        "websocket_connection_limit_reached",
     }
 )
 IN_BAND_RETRYABLE_NUMERIC_CODES = frozenset({429, 502, 503, 504})
@@ -141,7 +144,9 @@ IN_BAND_RETRYABLE_NUMERIC_CODES = frozenset({429, 502, 503, 504})
 # Deterministic failures where an identical retry can never help, even on a
 # multi-upstream router: token/context limits, billing, permissions, and
 # content policy. Everything else unclassified may become retryable when the
-# caller opts in via ``lenient_unknown``.
+# caller opts in via ``lenient_unknown``. The quota, spend, prompt and policy
+# codes are the ones OpenAI's Codex client stops on instead of retrying
+# (``openai/codex`` ``codex-api/src/sse/responses_error.rs``, read 2026-09-29).
 IN_BAND_FATAL_ERROR_CODES = frozenset(
     {
         "context_length_exceeded",
@@ -158,6 +163,15 @@ IN_BAND_FATAL_ERROR_CODES = frozenset(
         "not_found_error",
         "permission_error",
         "request_too_large",
+        "insufficient_quota",
+        "credit_balance_exhausted",
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "usage_not_included",
+        "invalid_prompt",
+        "cyber_policy",
+        "bio_policy",
+        "misalignment_policy_violation",
     }
 )
 
@@ -169,7 +183,7 @@ def _first_non_empty_string(*values: Any) -> str | None:
     return None
 
 
-def _error_text(message: str | None, error: Mapping[str, Any]) -> str:
+def in_band_error_text(message: str | None, error: Mapping[str, Any]) -> str:
     """Build the persisted error text with the raw body appended as JSON.
 
     Run failures persist ``str(exception)``, so the structured payload only
@@ -206,7 +220,7 @@ def classify_in_band_provider_error(
     The raised error's message embeds the raw payload as trailing JSON so the
     provider's structured detail (upstream message, code, router metadata)
     survives into persisted run failures and the UI details block; see
-    :func:`_error_text`.
+    :func:`in_band_error_text`.
     """
 
     if not isinstance(error, Mapping):
@@ -214,7 +228,7 @@ def classify_in_band_provider_error(
 
     raw_message = error.get("message")
     message = raw_message if isinstance(raw_message, str) and raw_message else None
-    message = _error_text(message, error)
+    message = in_band_error_text(message, error)
     metadata = error.get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
     code = error.get("code")

@@ -18,7 +18,7 @@ import respx
 
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
-from core.providers.errors import NetworkError
+from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
 from core.providers.openai import CODEX_WEBSOCKET_BETA, OpenAIAdapter
 from core.utils.tls import shared_ssl_context
 
@@ -336,6 +336,103 @@ async def test_codex_websocket_never_chains_across_a_route_change(
     assert connector.headers("chatgpt-account-id") == list(accounts)
     assert connector.headers("session-id") == ["shared-cache-lineage"] * 2
     assert connector.headers("x-client-request-id") == ["shared-cache-lineage"] * 2
+    await adapter.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Error classification
+# ---------------------------------------------------------------------------
+
+
+def _failed(code: str) -> dict[str, Any]:
+    return {
+        "type": "response.failed",
+        "response": {
+            "id": "resp_failed",
+            "status": "failed",
+            "instructions": "test-instructions-sentinel",
+            "error": {"code": code, "message": "Test failure. Please retry."},
+        },
+    }
+
+
+def _error_frame(status: int, **error: str) -> dict[str, Any]:
+    return {
+        "type": "error",
+        "status": status,
+        "error": {"message": "Test failure.", **error},
+        "headers": {"x-test-header": "test-header-sentinel"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("event", "sentinel", "expected_type", "retryable"),
+    [
+        pytest.param(
+            _failed("test_unknown_code"),
+            "test_unknown_code",
+            ProviderError,
+            True,
+            id="unknown-code-retries",
+        ),
+        pytest.param(
+            _failed("insufficient_quota"),
+            "insufficient_quota",
+            ProviderError,
+            False,
+            id="known-fatal-code-stops",
+        ),
+        pytest.param(
+            _error_frame(500, type="test_unknown_type"),
+            "test_unknown_type",
+            ProviderError,
+            True,
+            id="server-status-retries",
+        ),
+        pytest.param(
+            _error_frame(400, type="invalid_request_error", code="test_rejected_value"),
+            "test_rejected_value",
+            ProviderError,
+            False,
+            id="client-status-stops",
+        ),
+        pytest.param(
+            _error_frame(400, code="websocket_connection_limit_reached"),
+            "websocket_connection_limit_reached",
+            ProviderError,
+            True,
+            id="connection-limit-retries",
+        ),
+        pytest.param(
+            _error_frame(401, type="test_auth_type"),
+            "test_auth_type",
+            ProviderAuthError,
+            False,
+            id="auth-status",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_codex_error_events_follow_codex_retry_classification(
+    event: dict[str, Any],
+    sentinel: str,
+    expected_type: type[ProviderError],
+    retryable: bool,
+) -> None:
+    """Unknown codes retry; known fatal codes and rejected requests stop; facts stay visible."""
+
+    connector = _FakeCodexWebSocketConnector([_FakeCodexWebSocket([[event]])])
+    adapter = codex_adapter(codex_websocket_connect=connector)
+
+    with pytest.raises(ProviderError) as caught:
+        await _send(adapter)
+
+    assert type(caught.value) is expected_type
+    assert caught.value.retryable is retryable
+    message = str(caught.value)
+    assert sentinel in message
+    assert "test-instructions-sentinel" not in message
+    assert "test-header-sentinel" not in message
     await adapter.aclose()
 
 
