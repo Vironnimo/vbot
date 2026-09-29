@@ -7,7 +7,9 @@ import copy
 import json
 import re
 import sys
+import threading
 from collections.abc import Callable
+from concurrent.futures import Future
 from typing import Any
 
 import httpx
@@ -120,6 +122,14 @@ def test_anthropic_input_schema_rejects_a_non_object_root(schema: object) -> Non
 # ---------------------------------------------------------------------------
 
 
+# Python 3.14 bounds JSON nesting by the calling thread's C stack instead of a
+# fixed count: an 8 MiB stack admits about 47,000 levels, and a Linux main
+# thread's stack follows `ulimit -s`. The nesting cases therefore run on a thread
+# with a fixed stack and nest far beyond what it admits on every version.
+_NESTING_LIMIT_STACK_BYTES = 8 * 1024 * 1024
+_BEYOND_NESTING_LIMIT = 200_000
+
+
 def _decoder_limit_arguments(kind: str) -> str | dict[str, Any]:
     if kind == "large_integer":
         digit_limit = sys.get_int_max_str_digits()
@@ -127,14 +137,33 @@ def _decoder_limit_arguments(kind: str) -> str | dict[str, Any]:
             pytest.skip("Interpreter integer string limit is disabled")
         return '{"value":' + "1" * (digit_limit + 1) + "}"
     if kind == "deep_text":
-        return '{"value":' + "[" * 20000 + "0" + "]" * 20000 + "}"
+        return '{"value":' + "[" * _BEYOND_NESTING_LIMIT + "0" + "]" * _BEYOND_NESTING_LIMIT + "}"
     nested: dict[str, Any] = {}
     root = nested
-    for _ in range(20000):
+    for _ in range(_BEYOND_NESTING_LIMIT):
         child: dict[str, Any] = {}
         nested["value"] = child
         nested = child
     return root
+
+
+def _on_fixed_stack(call: Callable[[], Any]) -> Any:
+    outcome: Future[Any] = Future()
+
+    def run() -> None:
+        try:
+            outcome.set_result(call())
+        except BaseException as error:
+            outcome.set_exception(error)
+
+    previous = threading.stack_size(_NESTING_LIMIT_STACK_BYTES)
+    try:
+        worker = threading.Thread(target=run, name="fixed-stack")
+        worker.start()
+    finally:
+        threading.stack_size(previous)
+    worker.join()
+    return outcome.result()
 
 
 @pytest.mark.parametrize(
@@ -183,8 +212,10 @@ def test_unusable_attempt_stays_one_correlated_rejected_call(
     if arguments in ("deep_text", "deep_object", "large_integer"):
         arguments = _decoder_limit_arguments(arguments)
 
-    [candidate] = normalize_tool_call_candidates(
-        tool_call_id=tool_call_id, name=name, arguments=arguments, fallback_id="tool_call_0"
+    [candidate] = _on_fixed_stack(
+        lambda: normalize_tool_call_candidates(
+            tool_call_id=tool_call_id, name=name, arguments=arguments, fallback_id="tool_call_0"
+        )
     )
 
     assert {key: candidate[key] for key in ("id", "name", "arguments")} == expected
