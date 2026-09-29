@@ -180,7 +180,9 @@ def test_cmd_merge_rejected_by_the_merge_check_keeps_main_intact(capsys, real_re
     _patch_repo_globals(monkeypatch, module, real_repo)
     hooks = real_repo.parent / "hooks"
     hooks.mkdir()
-    (hooks / "pre-merge-commit").write_bytes(b"#!/bin/sh\necho 'FAIL: tests' >&2\nexit 1\n")
+    hook = hooks / "pre-merge-commit"
+    hook.write_bytes(b"#!/bin/sh\necho 'FAIL: tests' >&2\nexit 1\n")
+    hook.chmod(0o755)  # git skips a hook that is not executable on POSIX
     subprocess.run(
         ["git", "-C", str(real_repo), "config", "core.hooksPath", str(hooks)], check=True
     )
