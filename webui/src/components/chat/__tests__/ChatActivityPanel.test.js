@@ -219,7 +219,9 @@ describe('ChatActivityPanel', () => {
     expect(document.body.textContent).not.toContain('Run foreground checks');
     const subAgentRows = Object.fromEntries(
       [...subagents.querySelectorAll('.chat-activity__task-row')].map((row) => [
-        row.querySelector('.chat-activity__task-name').textContent.trim(),
+        row
+          .querySelector('.chat-activity__task-name')
+          .firstChild.textContent.trim(),
         [
           row
             .querySelector('.chat-activity__task-link')
@@ -251,6 +253,21 @@ describe('ChatActivityPanel', () => {
       rowContaining('builder').querySelector('.chat-activity__task-preview')
         .textContent,
     ).toBe('Implement the sidebar');
+    expect(
+      subagents.querySelector('.chat-activity__running-count').textContent,
+    ).toBe(t('chat.activity.runningCount', { count: 1 }));
+    // The complete task and each complete command sit in copy cards.
+    const cards = Object.fromEntries(
+      [...document.querySelectorAll('.copyable-value-card')].map((card) => [
+        card.querySelector('.copyable-value-card__value').textContent,
+        card.querySelector('button').getAttribute('aria-label'),
+      ]),
+    );
+    expect(cards).toMatchObject({
+      'Implement the sidebar': t('chat.subagent.copyTask'),
+      'npm run dev': t('chat.copyCommand'),
+      'npm test': t('chat.copyCommand'),
+    });
 
     // Bash rows are plain rows that show only their command.
     for (const [command, statusKey, dot] of [
