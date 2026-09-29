@@ -32,7 +32,7 @@
 .cron-view .cron-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -46,36 +46,59 @@
   cursor: pointer;
 }
 
+/* Two quiet lines per row: a status dot and the full-width name, then the
+   status-aware detail (next Run, or status and cadence) aligned under the
+   name. The dot carries the status name as its accessible label. */
 .cron-view .cron-item-inner {
   display: flex;
   min-width: 0;
   flex: 1;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px;
+  gap: 3px;
+  padding: 8px 10px;
 }
 
 .cron-view .cron-item-head {
   display: flex;
   min-width: 0;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
 }
 
+.cron-view .cron-status-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-lo);
+}
+
+.cron-view .cron-status-dot--success {
+  background: var(--green);
+}
+
+.cron-view .cron-status-dot--warn {
+  background: var(--amber);
+}
+
+.cron-view .cron-status-dot--error {
+  background: var(--red);
+}
+
 .cron-view .cron-item-name {
-  display: -webkit-box;
+  min-width: 0;
   overflow: hidden;
   color: var(--text-hi);
   font-size: var(--fs-label-md);
   font-weight: 600;
   line-height: 1.3;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.cron-view .cron-item-next {
+.cron-view .cron-item-detail {
   overflow: hidden;
+  padding-left: 15px;
   color: var(--text-med);
   font-size: var(--fs-label-sm);
   font-variant-numeric: tabular-nums;
@@ -327,61 +350,76 @@
   min-height: 224px;
 }
 
-/* The schedule type stays a three-way segmented control. */
-.cron-view .cron-radio-group {
+/* The generated cron expression sits quietly after its readable sentence. */
+.cron-view .cron-schedule-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.cron-view .cron-schedule-preview__code {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+
+.cron-view .cron-interval-control {
+  display: flex;
+  gap: 8px;
+}
+
+.cron-view .cron-interval-control .cron-interval-value {
+  width: 88px;
+  flex-shrink: 0;
+}
+
+.cron-view .cron-interval-control .cron-dropdown {
+  flex: 1;
+}
+
+/* Weekday toggles follow the shared switch on-state: a light fill with dark
+   text, keeping the accent free for selection and primary actions. */
+.cron-view .cron-weekdays {
   display: grid;
   width: 100%;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
 }
 
-.cron-view .cron-radio-option {
-  position: relative;
+.cron-view .cron-weekday {
   min-width: 0;
-  cursor: pointer;
-}
-
-.cron-view .cron-radio-option input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.cron-view .cron-radio-option span {
-  display: flex;
   min-height: 30px;
-  align-items: center;
-  justify-content: center;
-  padding: 5px 10px;
+  padding: 4px 0;
+  border: 1px solid var(--border);
   border-radius: var(--r-sm);
+  background: var(--surface-2);
   color: var(--text-med);
-  font-size: var(--fs-body-sm);
+  font-size: var(--fs-label-sm);
   font-weight: 500;
+  cursor: pointer;
   transition:
     color 120ms ease,
     background 120ms ease;
 }
 
-.cron-view .cron-radio-option:hover span {
-  color: var(--text-hi);
-}
-
-.cron-view .cron-radio-option input:checked + span {
+.cron-view .cron-weekday:hover:not(:disabled, [aria-pressed='true']) {
   background: var(--surface-3);
   color: var(--text-hi);
 }
 
-.cron-view .cron-radio-option input:focus-visible + span {
-  box-shadow: var(--focus-ring);
+.cron-view .cron-weekday[aria-pressed='true'] {
+  border-color: var(--text-hi);
+  background: var(--text-hi);
+  color: var(--bg);
 }
 
-.cron-view .cron-radio-option input:disabled + span {
+.cron-view .cron-weekday:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.cron-view .cron-weekday:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }

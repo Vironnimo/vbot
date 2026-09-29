@@ -45,16 +45,6 @@ const COMPOSED_KEYS = {
   ],
   // calendarView.js CALENDAR_VIEWS
   'calendar.view.*': ['month', 'week', 'day', 'agenda'],
-  // cronView.js buildCronPresetOptions(): custom and the CRON_PRESETS keys
-  'cron.presets.*': [
-    'custom',
-    'every15Minutes',
-    'hourly',
-    'dailyMorning',
-    'weekdayMornings',
-    'mondayMornings',
-    'monthlyFirst',
-  ],
   // sessions/presentation.js REFLECTION_BADGE_RUN_KINDS
   'sessions.runKind.*': ['memory_reflection', 'skill_reflection', 'reflection'],
   // settingsView/appearance.js CHAT_WIDTH_OPTIONS

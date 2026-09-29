@@ -1,8 +1,10 @@
 <script>
   import {
     displayValue,
-    listNextRun,
-    scheduleKindLabel,
+    frequencyOptions,
+    headerStatusVisible,
+    intervalUnitOptions,
+    listRowDetail,
     scheduleSummary,
     scheduleTechnicalValue,
     sessionSummary,
@@ -12,6 +14,7 @@
     statusChipVariant,
     outcomeLabel,
     isTerminalJob,
+    weekdayOptions,
   } from './cron/presentation.js';
 
   import { t } from '$lib/i18n.js';
@@ -22,10 +25,11 @@
   import StatusChip from './ui/StatusChip.svelte';
   import Toggle from './ui/Toggle.svelte';
   import {
+    CRON_FREQUENCY_DAILY,
+    CRON_FREQUENCY_HOURLY,
+    CRON_FREQUENCY_MONTHLY,
+    CRON_FREQUENCY_WEEKLY,
     CRON_STATUS_ACTIVE,
-    CRON_SCHEDULE_TYPE_INTERVAL,
-    CRON_SCHEDULE_TYPE_ONCE,
-    CRON_SCHEDULE_TYPE_CRON,
     applyAgentListResponse,
     applyCronListResponse,
     buildCronAgentDropdownOptions,
@@ -107,6 +111,15 @@
   let jobs = $derived(
     visibleCronJobs(viewState.jobs, viewState.systemTimezone),
   );
+  const scheduleFrequencies = frequencyOptions();
+  const intervalUnits = intervalUnitOptions();
+  const weekdays = weekdayOptions();
+  // Frequencies that run at a time of day.
+  const TIMED_FREQUENCIES = new Set([
+    CRON_FREQUENCY_DAILY,
+    CRON_FREQUENCY_WEEKLY,
+    CRON_FREQUENCY_MONTHLY,
+  ]);
 
   // Identity agents (bare ids, unchanged) plus project agents addressed as
   // `agent@projekt`. A project option's value IS the address, so saving sends it
@@ -373,6 +386,13 @@
                   <span class="cron-item-inner">
                     <span class="cron-item-head">
                       <span
+                        class="cron-status-dot cron-status-dot--{statusChipVariant(
+                          job,
+                        )}"
+                        role="img"
+                        aria-label={statusLabel(job.status)}
+                      ></span>
+                      <span
                         class="cron-item-name"
                         use:tooltip={{
                           text: job.name,
@@ -382,19 +402,16 @@
                       >
                         {job.name}
                       </span>
-                      <StatusChip variant={statusChipVariant(job)}>
-                        {statusLabel(job.status)}
-                      </StatusChip>
                     </span>
                     <span
-                      class="cron-item-next"
+                      class="cron-item-detail"
                       use:tooltip={{
-                        text: listNextRun(job),
+                        text: listRowDetail(job, viewState.systemTimezone),
                         placement: 'right',
                         whenTruncated: true,
                       }}
                     >
-                      {listNextRun(job)}
+                      {listRowDetail(job, viewState.systemTimezone)}
                     </span>
                   </span>
                 </button>
@@ -435,21 +452,22 @@
             <div class="detail-top">
               <div>
                 <div class="detail-heading">{editor.detailTitle}</div>
-                <div class="detail-sub">
-                  {editor.isCreating
-                    ? t('cron.detail.createSubtitle')
-                    : t('cron.detail.subtitle', {
-                        schedule: scheduleKindLabel(editor.selectedJob),
-                        agent: agentLabel(editor.selectedJob?.agent_id),
-                      })}
-                </div>
+                {#if editor.isCreating}
+                  <div class="detail-sub">
+                    {t('cron.detail.createSubtitle')}
+                  </div>
+                {/if}
               </div>
 
               <div class="detail-btns">
                 {#if !editor.isCreating && editor.selectedJob}
-                  <StatusChip variant={statusChipVariant(editor.selectedJob)}>
-                    {statusLabel(editor.selectedJob.status)}
-                  </StatusChip>
+                  <!-- The Enabled switch already says active or paused; the
+                       chip only names states the switch cannot. -->
+                  {#if headerStatusVisible(editor.selectedJob)}
+                    <StatusChip variant={statusChipVariant(editor.selectedJob)}>
+                      {statusLabel(editor.selectedJob.status)}
+                    </StatusChip>
+                  {/if}
                   {#if !isTerminalJob(editor.selectedJob)}
                     <label class="cron-enabled-control">
                       <span>{t('cron.actions.enabled')}</span>
@@ -496,11 +514,15 @@
                     <strong class="cron-summary-value cron-summary-value--wrap">
                       {scheduleSummary(editor.selectedJob)}
                     </strong>
-                    <span
-                      class="cron-summary-support cron-summary-support--mono"
-                    >
-                      {scheduleTechnicalValue(editor.selectedJob)}
-                    </span>
+                    {#if scheduleTechnicalValue(editor.selectedJob)}
+                      <span
+                        class="cron-summary-support"
+                        class:cron-summary-support--mono={editor.selectedJob
+                          .schedule_type === 'cron'}
+                      >
+                        {scheduleTechnicalValue(editor.selectedJob)}
+                      </span>
+                    {/if}
                   </div>
                   <div class="cron-summary-item">
                     <span class="cron-summary-label">
@@ -676,136 +698,36 @@
                 <div class="s-group">
                   <div class="s-row">
                     <div class="s-row-info">
-                      <span class="s-row-label" id="cron-schedule-type-label">
-                        {t('cron.form.scheduleType')}
-                      </span>
+                      <label class="s-row-label" for="cron-job-frequency">
+                        {t('cron.form.frequency')}
+                      </label>
+                      {#if editor.showsGeneratedExpression}
+                        <div class="s-row-desc cron-schedule-preview">
+                          <span>{editor.scheduleDescription}</span>
+                          <code
+                            class="cron-schedule-preview__code"
+                            aria-label={t('cron.form.cronExpression')}
+                            >{editor.formValues.cron_expression}</code
+                          >
+                        </div>
+                      {/if}
                     </div>
                     <div class="s-row-control">
-                      <div
-                        class="cron-radio-group"
-                        role="radiogroup"
-                        aria-labelledby="cron-schedule-type-label"
-                      >
-                        <label class="cron-radio-option">
-                          <input
-                            type="radio"
-                            name="cron-schedule-type"
-                            value={CRON_SCHEDULE_TYPE_CRON}
-                            checked={editor.isCronSchedule}
-                            disabled={editor.isCreating &&
-                              editor.submittingForm}
-                            onchange={() =>
-                              editor.setScheduleType(CRON_SCHEDULE_TYPE_CRON)}
-                          />
-                          <span>{t('cron.form.scheduleType.cron')}</span>
-                        </label>
-                        <label class="cron-radio-option">
-                          <input
-                            type="radio"
-                            name="cron-schedule-type"
-                            value={CRON_SCHEDULE_TYPE_INTERVAL}
-                            checked={editor.isIntervalSchedule}
-                            disabled={editor.isCreating &&
-                              editor.submittingForm}
-                            onchange={() =>
-                              editor.setScheduleType(
-                                CRON_SCHEDULE_TYPE_INTERVAL,
-                              )}
-                          />
-                          <span>{t('cron.form.scheduleType.interval')}</span>
-                        </label>
-                        <label class="cron-radio-option">
-                          <input
-                            type="radio"
-                            name="cron-schedule-type"
-                            value={CRON_SCHEDULE_TYPE_ONCE}
-                            checked={editor.isOnceSchedule}
-                            disabled={editor.isCreating &&
-                              editor.submittingForm}
-                            onchange={() =>
-                              editor.setScheduleType(CRON_SCHEDULE_TYPE_ONCE)}
-                          />
-                          <span>{t('cron.form.scheduleType.once')}</span>
-                        </label>
-                      </div>
+                      <Dropdown
+                        id="cron-job-frequency"
+                        value={editor.formValues.frequency}
+                        options={scheduleFrequencies}
+                        ariaLabel={t('cron.form.frequency')}
+                        disabled={editor.isCreating && editor.submittingForm}
+                        triggerClass="cron-dropdown"
+                        listClass="cron-dropdown-list"
+                        onValueChange={(frequency) =>
+                          editor.updateSchedule({ frequency })}
+                      />
                     </div>
                   </div>
 
-                  {#if editor.isCronSchedule}
-                    <div class="s-row">
-                      <div class="s-row-info">
-                        <label class="s-row-label" for="cron-job-preset">
-                          {t('cron.form.preset')}
-                        </label>
-                      </div>
-                      <div class="s-row-control">
-                        <Dropdown
-                          id="cron-job-preset"
-                          value={editor.selectedPreset}
-                          options={editor.presetOptions}
-                          ariaLabel={t('cron.form.preset')}
-                          disabled={editor.isCreating && editor.submittingForm}
-                          triggerClass="cron-dropdown"
-                          listClass="cron-dropdown-list"
-                          onValueChange={editor.applyPreset}
-                        />
-                      </div>
-                    </div>
-
-                    <div class="s-row">
-                      <div class="s-row-info">
-                        <label
-                          class="s-row-label cron-label-with-hint"
-                          for="cron-job-expression"
-                        >
-                          {t('cron.form.cronExpression')}
-                          <InfoHint text={t('cron.form.cronExpressionHelp')} />
-                          <span class="cron-required" aria-hidden="true">*</span
-                          >
-                        </label>
-                        {#if editor.cronExpressionPreview}
-                          <div class="s-row-desc">
-                            {editor.cronExpressionPreview}
-                          </div>
-                        {/if}
-                      </div>
-                      <div class="s-row-control">
-                        <TextField
-                          id="cron-job-expression"
-                          code
-                          value={editor.formValues.cron_expression}
-                          placeholder={t('cron.form.cronExpressionPlaceholder')}
-                          disabled={editor.isCreating && editor.submittingForm}
-                          onInput={(next) => editor.updateCronExpression(next)}
-                        />
-                      </div>
-                    </div>
-                  {:else if editor.isIntervalSchedule}
-                    <div class="s-row s-row--compact">
-                      <div class="s-row-info">
-                        <label class="s-row-label" for="cron-job-interval">
-                          {t('cron.form.intervalMinutes')}
-                          <span class="cron-required" aria-hidden="true">*</span
-                          >
-                        </label>
-                      </div>
-                      <div class="s-row-control s-row-control--number">
-                        <TextField
-                          id="cron-job-interval"
-                          type="number"
-                          min="1"
-                          step="1"
-                          value={editor.formValues.interval_minutes}
-                          placeholder={t(
-                            'cron.form.intervalMinutesPlaceholder',
-                          )}
-                          disabled={editor.isCreating && editor.submittingForm}
-                          onInput={(next) =>
-                            editor.updateFormField('interval_minutes', next)}
-                        />
-                      </div>
-                    </div>
-                  {:else}
+                  {#if editor.isOnceSchedule}
                     <div class="s-row">
                       <div class="s-row-info">
                         <label class="s-row-label" for="cron-job-run-at">
@@ -813,6 +735,11 @@
                           <span class="cron-required" aria-hidden="true">*</span
                           >
                         </label>
+                        <div class="s-row-desc">
+                          {t('cron.form.timezoneNote', {
+                            timezone: viewState.systemTimezone,
+                          })}
+                        </div>
                       </div>
                       <div class="s-row-control">
                         <TextField
@@ -825,30 +752,213 @@
                         />
                       </div>
                     </div>
+                  {:else if editor.isIntervalSchedule}
+                    <div class="s-row">
+                      <div class="s-row-info">
+                        <label class="s-row-label" for="cron-job-interval">
+                          {t('cron.form.interval')}
+                          <span class="cron-required" aria-hidden="true">*</span
+                          >
+                        </label>
+                        <div class="s-row-desc">
+                          {t('cron.form.intervalHelp')}
+                        </div>
+                      </div>
+                      <div class="s-row-control cron-interval-control">
+                        <TextField
+                          id="cron-job-interval"
+                          class="cron-interval-value"
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={editor.formValues.interval_value}
+                          disabled={editor.isCreating && editor.submittingForm}
+                          onInput={(interval_value) =>
+                            editor.updateSchedule({ interval_value })}
+                        />
+                        <Dropdown
+                          id="cron-job-interval-unit"
+                          value={editor.formValues.interval_unit}
+                          options={intervalUnits}
+                          ariaLabel={t('cron.form.intervalUnit')}
+                          disabled={editor.isCreating && editor.submittingForm}
+                          triggerClass="cron-dropdown"
+                          listClass="cron-dropdown-list"
+                          onValueChange={(interval_unit) =>
+                            editor.updateSchedule({ interval_unit })}
+                        />
+                      </div>
+                    </div>
+                  {:else if editor.isCustomSchedule}
+                    <div class="s-row">
+                      <div class="s-row-info">
+                        <label
+                          class="s-row-label cron-label-with-hint"
+                          for="cron-job-expression"
+                        >
+                          {t('cron.form.cronExpression')}
+                          <InfoHint text={t('cron.form.cronExpressionHelp')} />
+                          <span class="cron-required" aria-hidden="true">*</span
+                          >
+                        </label>
+                        {#if editor.scheduleDescription}
+                          <div class="s-row-desc">
+                            {editor.scheduleDescription}
+                          </div>
+                        {/if}
+                      </div>
+                      <div class="s-row-control">
+                        <TextField
+                          id="cron-job-expression"
+                          code
+                          value={editor.formValues.cron_expression}
+                          placeholder={t('cron.form.cronExpressionPlaceholder')}
+                          disabled={editor.isCreating && editor.submittingForm}
+                          onInput={(cron_expression) =>
+                            editor.updateSchedule({ cron_expression })}
+                        />
+                      </div>
+                    </div>
+                  {:else}
+                    {#if editor.formValues.frequency === CRON_FREQUENCY_HOURLY}
+                      <div class="s-row">
+                        <div class="s-row-info">
+                          <label class="s-row-label" for="cron-job-minute">
+                            {t('cron.form.minute')}
+                          </label>
+                          <div class="s-row-desc">
+                            {t('cron.form.minuteHelp')}
+                          </div>
+                        </div>
+                        <div class="s-row-control s-row-control--number">
+                          <TextField
+                            id="cron-job-minute"
+                            type="number"
+                            min="0"
+                            max="59"
+                            step="1"
+                            value={editor.formValues.minute}
+                            disabled={editor.isCreating &&
+                              editor.submittingForm}
+                            onInput={(minute) =>
+                              editor.updateSchedule({ minute })}
+                          />
+                        </div>
+                      </div>
+                    {/if}
+
+                    {#if editor.formValues.frequency === CRON_FREQUENCY_WEEKLY}
+                      <div class="s-row">
+                        <div class="s-row-info">
+                          <span class="s-row-label" id="cron-weekdays-label">
+                            {t('cron.form.weekdays')}
+                          </span>
+                        </div>
+                        <div class="s-row-control">
+                          <div
+                            class="cron-weekdays"
+                            role="group"
+                            aria-labelledby="cron-weekdays-label"
+                          >
+                            {#each weekdays as weekday (weekday.day)}
+                              <button
+                                type="button"
+                                class="cron-weekday"
+                                aria-pressed={editor.formValues.weekdays.includes(
+                                  weekday.day,
+                                )}
+                                aria-label={weekday.long}
+                                data-testid={`cron-weekday-${weekday.day}`}
+                                disabled={editor.isCreating &&
+                                  editor.submittingForm}
+                                onclick={() =>
+                                  editor.toggleWeekday(weekday.day)}
+                              >
+                                {weekday.short}
+                              </button>
+                            {/each}
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
+
+                    {#if editor.formValues.frequency === CRON_FREQUENCY_MONTHLY}
+                      <div class="s-row">
+                        <div class="s-row-info">
+                          <label class="s-row-label" for="cron-job-month-day">
+                            {t('cron.form.monthDay')}
+                          </label>
+                          {#if Number(editor.formValues.month_day) > 28}
+                            <div class="s-row-desc">
+                              {t('cron.form.monthDayHelp')}
+                            </div>
+                          {/if}
+                        </div>
+                        <div class="s-row-control s-row-control--number">
+                          <TextField
+                            id="cron-job-month-day"
+                            type="number"
+                            min="1"
+                            max="31"
+                            step="1"
+                            value={editor.formValues.month_day}
+                            disabled={editor.isCreating &&
+                              editor.submittingForm}
+                            onInput={(month_day) =>
+                              editor.updateSchedule({ month_day })}
+                          />
+                        </div>
+                      </div>
+                    {/if}
+
+                    {#if TIMED_FREQUENCIES.has(editor.formValues.frequency)}
+                      <div class="s-row">
+                        <div class="s-row-info">
+                          <label class="s-row-label" for="cron-job-time">
+                            {t('cron.form.time')}
+                          </label>
+                          <div class="s-row-desc">
+                            {t('cron.form.timezoneNote', {
+                              timezone: viewState.systemTimezone,
+                            })}
+                          </div>
+                        </div>
+                        <div class="s-row-control s-row-control--number">
+                          <TextField
+                            id="cron-job-time"
+                            type="time"
+                            value={editor.formValues.time}
+                            disabled={editor.isCreating &&
+                              editor.submittingForm}
+                            onInput={(time) => editor.updateSchedule({ time })}
+                          />
+                        </div>
+                      </div>
+                    {/if}
                   {/if}
 
-                  <div class="s-row s-row--compact">
-                    <div class="s-row-info">
-                      <label class="s-row-label" for="cron-job-repeat">
-                        {t('cron.form.repeat')}
-                      </label>
+                  {#if !editor.isOnceSchedule}
+                    <div class="s-row s-row--compact">
+                      <div class="s-row-info">
+                        <label class="s-row-label" for="cron-job-repeat">
+                          {t('cron.form.repeat')}
+                        </label>
+                      </div>
+                      <div class="s-row-control s-row-control--number">
+                        <TextField
+                          id="cron-job-repeat"
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={editor.formValues.repeat}
+                          placeholder={t('cron.form.repeatPlaceholder')}
+                          disabled={editor.isCreating && editor.submittingForm}
+                          onInput={(next) =>
+                            editor.updateFormField('repeat', next)}
+                        />
+                      </div>
                     </div>
-                    <div class="s-row-control s-row-control--number">
-                      <TextField
-                        id="cron-job-repeat"
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={editor.formValues.repeat}
-                        placeholder={editor.isOnceSchedule
-                          ? '1'
-                          : t('cron.form.repeatPlaceholder')}
-                        disabled={editor.isCreating && editor.submittingForm}
-                        onInput={(next) =>
-                          editor.updateFormField('repeat', next)}
-                      />
-                    </div>
-                  </div>
+                  {/if}
                 </div>
               </div>
             </section>

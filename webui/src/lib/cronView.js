@@ -7,58 +7,258 @@ export const CRON_SCHEDULE_TYPE_CRON = 'cron';
 export const CRON_SCHEDULE_TYPE_INTERVAL = 'interval';
 export const CRON_SCHEDULE_TYPE_ONCE = 'once';
 
-// The "Custom" preset key: the selection state when the cron expression matches
-// none of the named presets (or the field is being hand-edited). It carries no
-// expression of its own — selecting it never rewrites the field.
-export const CRON_PRESET_CUSTOM = 'custom';
+// The schedule planner offers readable frequencies instead of raw cron syntax.
+// `once` and `interval` map to their own schedule types; hourly, daily, weekly
+// and monthly each generate one five-field cron expression; `custom` edits the
+// expression directly. A stored expression that no planner shape can express
+// loads as `custom`, so loading never rewrites a schedule.
+export const CRON_FREQUENCY_ONCE = 'once';
+export const CRON_FREQUENCY_INTERVAL = 'interval';
+export const CRON_FREQUENCY_HOURLY = 'hourly';
+export const CRON_FREQUENCY_DAILY = 'daily';
+export const CRON_FREQUENCY_WEEKLY = 'weekly';
+export const CRON_FREQUENCY_MONTHLY = 'monthly';
+export const CRON_FREQUENCY_CUSTOM = 'custom';
 
-// The named schedule presets, in display order. Each maps a stable key (its i18n
-// label lives in the catalog under `cron.presets.<key>`) to the cron expression
-// it fills in. `custom` is intentionally absent here — it is the no-expression
-// fallback, prepended by the option builder. The component only orchestrates;
-// filling, matching, and deriving are the pure helpers below.
-const CRON_PRESETS = [
-  { key: 'every15Minutes', expression: '*/15 * * * *' },
-  { key: 'hourly', expression: '0 * * * *' },
-  { key: 'dailyMorning', expression: '0 9 * * *' },
-  { key: 'weekdayMornings', expression: '0 9 * * 1-5' },
-  { key: 'mondayMornings', expression: '0 9 * * 1' },
-  { key: 'monthlyFirst', expression: '0 9 1 * *' },
-];
+// Seconds per interval unit, in display order.
+export const CRON_INTERVAL_UNIT_SECONDS = {
+  minutes: 60,
+  hours: 3600,
+  days: 86400,
+};
 
-// Dropdown options for the schedule-preset picker: the "Custom" fallback first,
-// then every named preset. Labels are passed in already-translated (this module
-// stays i18n-free), keyed by preset key via `translateLabel(key)`.
-export function buildCronPresetOptions(translateLabel) {
-  const label =
-    typeof translateLabel === 'function' ? translateLabel : () => '';
-  return [
-    { value: CRON_PRESET_CUSTOM, label: label(CRON_PRESET_CUSTOM) },
-    ...CRON_PRESETS.map((preset) => ({
-      value: preset.key,
-      label: label(preset.key),
-    })),
-  ];
+// Cron weekday numbers (0 = Sunday) in Monday-first display order.
+export const CRON_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0];
+
+const PLANNER_FREQUENCIES = new Set([
+  CRON_FREQUENCY_HOURLY,
+  CRON_FREQUENCY_DAILY,
+  CRON_FREQUENCY_WEEKLY,
+  CRON_FREQUENCY_MONTHLY,
+]);
+
+function defaultScheduleFields() {
+  return {
+    frequency: CRON_FREQUENCY_DAILY,
+    time: '09:00',
+    minute: '0',
+    weekdays: [1, 2, 3, 4, 5],
+    month_day: '1',
+  };
 }
 
-// The expression a preset fills into the cron field. `custom` (or any unknown
-// key) fills nothing — the caller keeps the current expression.
-export function cronPresetExpression(presetKey) {
-  const preset = CRON_PRESETS.find((entry) => entry.key === presetKey);
-  return preset ? preset.expression : '';
-}
-
-// The preset a raw cron expression corresponds to, by EXACT (trimmed) match.
-// No match — including an empty expression — derives `custom`, so a hand-edited
-// field that drifts from its preset flips the selection back to Custom.
-export function cronPresetForExpression(expression) {
-  const normalized = asText(expression).trim();
-  if (!normalized) {
-    return CRON_PRESET_CUSTOM;
+// The planner fields a cron expression corresponds to. Only plain numbers,
+// weekday lists and ranges, and `*` are recognized; anything else (steps,
+// months, day of month combined with weekdays) is `custom` with default fields.
+export function cronScheduleFields(expression) {
+  const fields = defaultScheduleFields();
+  const custom = { ...fields, frequency: CRON_FREQUENCY_CUSTOM };
+  const parts = asText(expression).trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return custom;
   }
 
-  const preset = CRON_PRESETS.find((entry) => entry.expression === normalized);
-  return preset ? preset.key : CRON_PRESET_CUSTOM;
+  const [minutePart, hourPart, dayPart, monthPart, weekdayPart] = parts;
+  const minute = cronNumber(minutePart, 0, 59);
+  if (minute === null || monthPart !== '*') {
+    return custom;
+  }
+  if (hourPart === '*') {
+    return dayPart === '*' && weekdayPart === '*'
+      ? { ...fields, frequency: CRON_FREQUENCY_HOURLY, minute: String(minute) }
+      : custom;
+  }
+
+  const hour = cronNumber(hourPart, 0, 23);
+  if (hour === null) {
+    return custom;
+  }
+  const time = `${pad2(hour)}:${pad2(minute)}`;
+  if (dayPart === '*' && weekdayPart === '*') {
+    return { ...fields, frequency: CRON_FREQUENCY_DAILY, time };
+  }
+  if (dayPart === '*') {
+    const weekdays = parseCronWeekdays(weekdayPart);
+    return weekdays
+      ? { ...fields, frequency: CRON_FREQUENCY_WEEKLY, time, weekdays }
+      : custom;
+  }
+  const monthDay = weekdayPart === '*' ? cronNumber(dayPart, 1, 31) : null;
+  return monthDay === null
+    ? custom
+    : {
+        ...fields,
+        frequency: CRON_FREQUENCY_MONTHLY,
+        time,
+        month_day: String(monthDay),
+      };
+}
+
+// The cron expression the planner fields describe, or '' while they are
+// incomplete (no time, no weekday, a day or minute out of range). Only the
+// planner frequencies build an expression; the others return ''.
+export function buildCronExpression(values) {
+  const frequency = values?.frequency;
+  if (frequency === CRON_FREQUENCY_HOURLY) {
+    const minute = cronNumber(asText(values.minute).trim(), 0, 59);
+    return minute === null ? '' : `${minute} * * * *`;
+  }
+  if (!PLANNER_FREQUENCIES.has(frequency)) {
+    return '';
+  }
+
+  const time = parseTimeOfDay(values.time);
+  if (!time) {
+    return '';
+  }
+  const prefix = `${time.minute} ${time.hour}`;
+  if (frequency === CRON_FREQUENCY_DAILY) {
+    return `${prefix} * * *`;
+  }
+  if (frequency === CRON_FREQUENCY_WEEKLY) {
+    const weekdays = formatCronWeekdays(values.weekdays);
+    return weekdays ? `${prefix} * * ${weekdays}` : '';
+  }
+  const monthDay = cronNumber(asText(values.month_day).trim(), 1, 31);
+  return monthDay === null ? '' : `${prefix} ${monthDay} * *`;
+}
+
+// Apply a planner edit to the form. `patch` holds changed planner fields
+// (`frequency`, `time`, `minute`, `weekdays`, `month_day`, `interval_value`,
+// `interval_unit`) or, for `custom`, `cron_expression`. The persisted fields
+// (`schedule_type`, `cron_expression`) follow, so dirty tracking and payloads
+// only ever see the effective schedule.
+export function updateCronSchedule(formValues, patch) {
+  const previousFrequency = formValues.frequency;
+  Object.assign(formValues, patch);
+  const frequency = formValues.frequency;
+
+  // A one-time schedule runs exactly once: its hidden repeat limit is 1, and
+  // it returns to unlimited when the schedule becomes recurring again.
+  if (frequency === CRON_FREQUENCY_ONCE && previousFrequency !== frequency) {
+    formValues.repeat = '1';
+  } else if (
+    previousFrequency === CRON_FREQUENCY_ONCE &&
+    frequency !== CRON_FREQUENCY_ONCE &&
+    formValues.repeat === '1'
+  ) {
+    formValues.repeat = '';
+  }
+
+  if (frequency === CRON_FREQUENCY_ONCE) {
+    formValues.schedule_type = CRON_SCHEDULE_TYPE_ONCE;
+    return;
+  }
+  if (frequency === CRON_FREQUENCY_INTERVAL) {
+    formValues.schedule_type = CRON_SCHEDULE_TYPE_INTERVAL;
+    return;
+  }
+
+  formValues.schedule_type = CRON_SCHEDULE_TYPE_CRON;
+  if (frequency !== CRON_FREQUENCY_CUSTOM) {
+    formValues.cron_expression = buildCronExpression(formValues);
+    return;
+  }
+  // A hand-edited expression keeps the planner fields in step, so switching
+  // back to a planner frequency starts from the same time and days.
+  const parsed = cronScheduleFields(formValues.cron_expression);
+  if (parsed.frequency !== CRON_FREQUENCY_CUSTOM) {
+    formValues.time = parsed.time;
+    formValues.minute = parsed.minute;
+    formValues.weekdays = parsed.weekdays;
+    formValues.month_day = parsed.month_day;
+  }
+}
+
+// The interval the form describes, in seconds; 0 while it is incomplete.
+export function cronIntervalSeconds(formValues) {
+  const unitSeconds = CRON_INTERVAL_UNIT_SECONDS[formValues?.interval_unit];
+  return unitSeconds
+    ? positiveInteger(formValues?.interval_value) * unitSeconds
+    : 0;
+}
+
+function intervalFormFields(seconds) {
+  if (!Number.isInteger(seconds) || seconds <= 0) {
+    return { interval_value: '1', interval_unit: 'hours' };
+  }
+  for (const unit of ['days', 'hours']) {
+    const unitSeconds = CRON_INTERVAL_UNIT_SECONDS[unit];
+    if (seconds % unitSeconds === 0) {
+      return {
+        interval_value: String(seconds / unitSeconds),
+        interval_unit: unit,
+      };
+    }
+  }
+  return {
+    interval_value: String(Math.round(seconds / 60)),
+    interval_unit: 'minutes',
+  };
+}
+
+function cronNumber(value, min, max) {
+  if (!/^\d{1,2}$/.test(value)) {
+    return null;
+  }
+  const number = Number(value);
+  return number >= min && number <= max ? number : null;
+}
+
+function parseCronWeekdays(value) {
+  const days = new Set();
+  for (const part of value.split(',')) {
+    const range = /^(\d)(?:-(\d))?$/.exec(part);
+    if (!range) {
+      return null;
+    }
+    const first = Number(range[1]);
+    const last = range[2] === undefined ? first : Number(range[2]);
+    if (last > 7 || last < first) {
+      return null;
+    }
+    for (let day = first; day <= last; day += 1) {
+      days.add(day % 7);
+    }
+  }
+  return CRON_WEEKDAYS.filter((day) => days.has(day));
+}
+
+// Ascending cron weekday numbers with runs of three or more as ranges, so
+// Monday to Friday reads `1-5`.
+function formatCronWeekdays(weekdays) {
+  const days = [...new Set(Array.isArray(weekdays) ? weekdays : [])]
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    .sort((left, right) => left - right);
+  const groups = [];
+  for (const day of days) {
+    const group = groups.at(-1);
+    if (group && day === group[1] + 1) {
+      group[1] = day;
+    } else {
+      groups.push([day, day]);
+    }
+  }
+  return groups
+    .flatMap(([first, last]) => {
+      if (last - first >= 2) return [`${first}-${last}`];
+      return first === last ? [String(first)] : [String(first), String(last)];
+    })
+    .join(',');
+}
+
+function parseTimeOfDay(value) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(asText(value).trim());
+  if (!match) {
+    return null;
+  }
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour <= 23 && minute <= 59 ? { hour, minute } : null;
+}
+
+function pad2(value) {
+  return String(value).padStart(2, '0');
 }
 
 // Human-readable plain-text description of a cron expression, e.g.
@@ -98,14 +298,16 @@ export function createCronViewState() {
 
 export function createCronFormValues(job = null, systemTimezone = 'UTC') {
   if (!job) {
+    const schedule = defaultScheduleFields();
     return {
       id: '',
       agent_id: '',
       name: '',
       prompt: '',
       schedule_type: CRON_SCHEDULE_TYPE_CRON,
-      cron_expression: '',
-      interval_minutes: '',
+      cron_expression: buildCronExpression(schedule),
+      ...schedule,
+      ...intervalFormFields(null),
       run_at: '',
       repeat: '',
       session_id: '',
@@ -115,6 +317,12 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
   }
 
   const normalized = normalizeCronJob(job, systemTimezone);
+  const schedule = cronScheduleFields(normalized.cron_expression);
+  if (normalized.schedule_type === CRON_SCHEDULE_TYPE_ONCE) {
+    schedule.frequency = CRON_FREQUENCY_ONCE;
+  } else if (normalized.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
+    schedule.frequency = CRON_FREQUENCY_INTERVAL;
+  }
 
   return {
     id: normalized.id,
@@ -123,10 +331,8 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     prompt: normalized.prompt,
     schedule_type: normalized.schedule_type,
     cron_expression: normalized.cron_expression ?? '',
-    interval_minutes:
-      normalized.interval_seconds === null
-        ? ''
-        : String(normalized.interval_seconds / 60),
+    ...schedule,
+    ...intervalFormFields(normalized.interval_seconds),
     run_at: toDateTimeLocalInput(normalized.run_at, systemTimezone),
     repeat:
       normalized.remaining_runs === null
@@ -172,7 +378,7 @@ export function cronFormFingerprint(formValues) {
     prompt: asText(values.prompt),
     schedule_type: normalizeScheduleType(values.schedule_type),
     cron_expression: asText(values.cron_expression),
-    interval_minutes: asText(values.interval_minutes),
+    interval_seconds: cronIntervalSeconds(values),
     run_at: asText(values.run_at),
     repeat: asText(values.repeat),
     session_id: asText(values.session_id),
@@ -195,8 +401,7 @@ export function buildCreateCronPayload(formValues) {
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
     payload.cron_expression = requiredText(formValues?.cron_expression);
   } else if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
-    payload.interval_seconds =
-      positiveInteger(formValues?.interval_minutes) * 60;
+    payload.interval_seconds = cronIntervalSeconds(formValues);
   } else {
     payload.run_at = requiredText(formValues?.run_at);
   }
@@ -228,8 +433,7 @@ export function buildUpdateCronPayload(formValues) {
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
     payload.cron_expression = requiredText(formValues?.cron_expression);
   } else if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
-    payload.interval_seconds =
-      positiveInteger(formValues?.interval_minutes) * 60;
+    payload.interval_seconds = cronIntervalSeconds(formValues);
   } else {
     payload.run_at = resolveOnceRunAtValue(formValues);
   }

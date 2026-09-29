@@ -66,6 +66,7 @@ describe('CronView', () => {
     }
 
     document.body.innerHTML = '';
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -79,6 +80,9 @@ describe('CronView', () => {
   }
 
   it('lists active, paused, failed, completed, and missed job history', async () => {
+    // Row times are relative to the local date in the schedule timezone.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-05-14T08:00:00Z'));
     listCronJobsMock.mockResolvedValue({
       jobs: [
         cronJob({
@@ -91,6 +95,7 @@ describe('CronView', () => {
           id: 'job-paused',
           prompt: 'Pause me',
           status: 'paused',
+          cron_expression: '0 9 * * 1-5',
         }),
         cronJob({
           id: 'job-failed',
@@ -143,18 +148,27 @@ describe('CronView', () => {
     ).toBe(true);
     expect(document.querySelector('.cron-bar')).toBeNull();
     expect(document.body.textContent).toContain('Nightly summary job');
-    expect(
+    // Status is a labelled dot; the name keeps the full row width.
+    const rowDetail = (id) =>
+      document
+        .querySelector(`[data-testid="cron-item-${id}"] .cron-item-detail`)
+        .textContent.trim();
+    const rowDot = (id) =>
       document.querySelector(
-        '[data-testid="cron-item-job-failed"] .chip.error',
-      ),
-    ).toBeTruthy();
-    expect(
-      document.querySelector('[data-testid="cron-item-job-missed"] .chip.warn'),
-    ).toBeTruthy();
+        `[data-testid="cron-item-${id}"] .cron-status-dot`,
+      );
+    expect(document.querySelector('.cron-list .chip')).toBeNull();
+    expect(rowDot('job-failed').classList).toContain('cron-status-dot--error');
+    expect(rowDot('job-failed').getAttribute('aria-label')).toBe('Failed');
+    expect(rowDot('job-missed').classList).toContain('cron-status-dot--warn');
+    expect(rowDetail('job-active')).toBe('Next Today 10:30');
+    expect(rowDetail('job-paused')).toBe('Paused · Weekdays at 09:00');
+    expect(rowDetail('job-failed')).toBe('Failed · Every 30 minutes');
+    expect(rowDetail('job-completed')).toBe('Completed · Today 10:05');
+    expect(rowDetail('job-missed')).toBe('Missed');
     const activeRow = document.querySelector(
       '[data-testid="cron-item-job-active"]',
     );
-    expect(activeRow.querySelector('.cron-item-next')).toBeTruthy();
     expect(activeRow.textContent).not.toContain('Prompt content must stay out');
     expect(activeRow.textContent).not.toContain('Agent Alpha');
     expect(activeRow.textContent).not.toContain('*/30 * * * *');
@@ -191,9 +205,10 @@ describe('CronView', () => {
       document.querySelectorAll('.cron-detail-scroll .s-section'),
     ).toHaveLength(3);
     expect(document.querySelector('.cron-technical-details')).toBeTruthy();
-    expect(document.querySelector('.detail-sub').textContent).not.toContain(
-      'job-first',
-    );
+    // The Enabled switch states active or paused; no duplicate chip.
+    expect(document.querySelector('.detail-btns .chip')).toBeNull();
+    // An expression the planner cannot express stays editable as Custom.
+    expect(inputById('cron-job-expression').value).toBe('*/30 * * * *');
     expect(
       document.querySelectorAll(
         '.cron-detail-scroll .s-group label.s-row-label',
@@ -259,8 +274,9 @@ describe('CronView', () => {
     inputById('cron-job-prompt').dispatchEvent(
       new Event('input', { bubbles: true }),
     );
-    inputById('cron-job-expression').value = '0 6 * * *';
-    inputById('cron-job-expression').dispatchEvent(
+    // A new schedule starts as a daily planner schedule.
+    inputById('cron-job-time').value = '06:00';
+    inputById('cron-job-time').dispatchEvent(
       new Event('input', { bubbles: true }),
     );
     flushSync();
@@ -300,12 +316,12 @@ describe('CronView', () => {
     });
   });
 
-  it('creates a job from a schedule preset and keeps it saved when a later reload lists it', async () => {
+  it('creates a weekly job from the planner and keeps it saved when a later reload lists it', async () => {
     const createdJob = cronJob({
       id: 'job-created',
       name: '',
       prompt: 'Check the inbox',
-      cron_expression: '0 * * * *',
+      cron_expression: '30 8 * * 1,3',
     });
     listCronJobsMock
       .mockResolvedValueOnce({ jobs: [] })
@@ -322,20 +338,40 @@ describe('CronView', () => {
     buttonByAriaLabel('Create schedule').click();
     flushSync();
 
-    await waitForCondition(() => document.getElementById('cron-job-preset'));
+    await waitForCondition(() => document.getElementById('cron-job-frequency'));
 
-    // Open the preset dropdown and pick "Every hour"; its expression fills the
-    // still-editable cron field.
-    document.getElementById('cron-job-preset').click();
+    // Pick Weekly, keep Monday and Wednesday of the default weekdays, and set
+    // the time; the readable preview shows the generated expression.
+    document.getElementById('cron-job-frequency').click();
     flushSync();
-    const hourlyOption = Array.from(
+    const weeklyOption = Array.from(
       document.querySelectorAll('.dropdown-option'),
-    ).find((option) => option.textContent.trim() === t('cron.presets.hourly'));
-    expect(hourlyOption, 'preset option not found').toBeTruthy();
-    hourlyOption.click();
+    ).find(
+      (option) => option.textContent.trim() === t('cron.frequency.weekly'),
+    );
+    expect(weeklyOption, 'frequency option not found').toBeTruthy();
+    weeklyOption.click();
     flushSync();
 
-    expect(inputById('cron-job-expression').value).toBe('0 * * * *');
+    for (const day of [2, 4, 5]) {
+      buttonByTestId(`cron-weekday-${day}`).click();
+    }
+    flushSync();
+    expect(buttonByTestId('cron-weekday-1').getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    expect(buttonByTestId('cron-weekday-2').getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    inputById('cron-job-time').value = '08:30';
+    inputById('cron-job-time').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    expect(document.getElementById('cron-job-expression')).toBeNull();
+    expect(
+      document.querySelector('.cron-schedule-preview').textContent,
+    ).toContain('30 8 * * 1,3');
 
     inputById('cron-job-prompt').value = 'Check the inbox';
     inputById('cron-job-prompt').dispatchEvent(
@@ -347,7 +383,8 @@ describe('CronView', () => {
     expect(createCronJobMock).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: 'Check the inbox',
-        cron_expression: '0 * * * *',
+        schedule_type: 'cron',
+        cron_expression: '30 8 * * 1,3',
       }),
     );
 

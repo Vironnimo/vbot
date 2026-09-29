@@ -3,34 +3,27 @@ import { describe, expect, it } from 'vitest';
 import {
   applyCronListResponse,
   buildCreateCronPayload,
-  buildCronPresetOptions,
+  buildCronExpression,
   buildUpdateCronPayload,
   createCronFormValues,
   createCronViewState,
-  CRON_PRESET_CUSTOM,
   cronFormFingerprint,
-  cronPresetExpression,
-  cronPresetForExpression,
+  cronScheduleFields,
   describeCronExpression,
+  updateCronSchedule,
   visibleCronJobs,
 } from '../cronView.js';
-
-const PRESET_EXPRESSIONS = {
-  every15Minutes: '*/15 * * * *',
-  hourly: '0 * * * *',
-  dailyMorning: '0 9 * * *',
-  weekdayMornings: '0 9 * * 1-5',
-  mondayMornings: '0 9 * * 1',
-  monthlyFirst: '0 9 1 * *',
-};
 
 describe('cron form payloads and history projection', () => {
   it('builds interval and repeat payloads while allowing an omitted name', () => {
     const form = createCronFormValues();
     form.agent_id = 'main';
     form.prompt = 'Check status';
-    form.schedule_type = 'interval';
-    form.interval_minutes = '120';
+    updateCronSchedule(form, {
+      frequency: 'interval',
+      interval_value: '120',
+      interval_unit: 'minutes',
+    });
     form.repeat = '3';
 
     expect(buildCreateCronPayload(form)).toEqual({
@@ -58,7 +51,9 @@ describe('cron form payloads and history projection', () => {
     const form = createCronFormValues(job);
 
     expect(normalized.schedule_description).toBe('every 3h');
-    expect(form.interval_minutes).toBe('180');
+    expect(form.frequency).toBe('interval');
+    expect(form.interval_value).toBe('3');
+    expect(form.interval_unit).toBe('hours');
     expect(form.repeat).toBe('2');
     // An unchanged form keeps the finite count; clearing it sends an explicit
     // null so the server drops the limit.
@@ -158,7 +153,7 @@ describe('cron form payloads and history projection', () => {
   );
 });
 
-describe('cron expressions and schedule presets', () => {
+describe('cron expressions and the schedule planner', () => {
   it('describes five-field expressions in 24-hour plain text and blanks invalid input', () => {
     expect(describeCronExpression('0 9 * * 1-5')).toBe(
       'At 09:00, Monday through Friday',
@@ -176,26 +171,76 @@ describe('cron expressions and schedule presets', () => {
     }
   });
 
-  it('lists the Custom fallback first, then every named preset', () => {
-    const options = buildCronPresetOptions((key) => `label:${key}`);
-    expect(options).toEqual(
-      [CRON_PRESET_CUSTOM, ...Object.keys(PRESET_EXPRESSIONS)].map((key) => ({
-        value: key,
-        label: `label:${key}`,
-      })),
-    );
+  it.each([
+    ['5 * * * *', { frequency: 'hourly', minute: '5' }],
+    ['30 7 * * *', { frequency: 'daily', time: '07:30' }],
+    ['0 9 * * 1-5', { frequency: 'weekly', weekdays: [1, 2, 3, 4, 5] }],
+    ['0 9 * * 1,3,5', { frequency: 'weekly', weekdays: [1, 3, 5] }],
+    ['0 18 * * 0,6', { frequency: 'weekly', weekdays: [6, 0] }],
+    ['0 9 31 * *', { frequency: 'monthly', month_day: '31' }],
+  ])('reads %s into the planner and builds it back', (expression, fields) => {
+    const parsed = cronScheduleFields(expression);
+    expect(parsed).toMatchObject(fields);
+    expect(buildCronExpression(parsed)).toBe(expression);
   });
 
-  it('maps presets to exact expressions and derives Custom for anything else', () => {
-    for (const [key, expression] of Object.entries(PRESET_EXPRESSIONS)) {
-      expect(cronPresetExpression(key)).toBe(expression);
-      expect(cronPresetForExpression(expression)).toBe(key);
-    }
-    expect(cronPresetForExpression('  */15 * * * *  ')).toBe('every15Minutes');
-    expect(cronPresetExpression(CRON_PRESET_CUSTOM)).toBe('');
-    expect(cronPresetExpression('not-a-preset')).toBe('');
-    for (const expression of ['0 9 * * 2', '', '   ']) {
-      expect(cronPresetForExpression(expression)).toBe(CRON_PRESET_CUSTOM);
-    }
+  it('normalizes equivalent weekday spellings to Monday-first days and ranges', () => {
+    const parsed = cronScheduleFields('0 9 * * 7,1,2,3');
+    expect(parsed.weekdays).toEqual([1, 2, 3, 0]);
+    expect(buildCronExpression(parsed)).toBe('0 9 * * 0-3');
+  });
+
+  it.each([
+    '*/15 * * * *',
+    '0 9 1 1 *',
+    '0 9 1 * 1',
+    '0 8-17 * * *',
+    '0 9 * * MON',
+    'not a cron',
+  ])('keeps %s as a custom expression', (expression) => {
+    expect(cronScheduleFields(expression).frequency).toBe('custom');
+  });
+
+  it('builds no expression while planner fields are incomplete', () => {
+    const base = cronScheduleFields('0 9 * * *');
+    expect(buildCronExpression({ ...base, time: '' })).toBe('');
+    expect(
+      buildCronExpression({ ...base, frequency: 'weekly', weekdays: [] }),
+    ).toBe('');
+    expect(
+      buildCronExpression({ ...base, frequency: 'monthly', month_day: '32' }),
+    ).toBe('');
+    expect(
+      buildCronExpression({ ...base, frequency: 'hourly', minute: '60' }),
+    ).toBe('');
+  });
+
+  it('keeps the persisted schedule in step with planner edits', () => {
+    const form = createCronFormValues();
+    expect(form).toMatchObject({
+      frequency: 'daily',
+      schedule_type: 'cron',
+      cron_expression: '0 9 * * *',
+    });
+
+    updateCronSchedule(form, { frequency: 'weekly', time: '07:30' });
+    expect(form.cron_expression).toBe('30 7 * * 1-5');
+
+    // A one-time schedule gets its fixed repeat limit and gives it back.
+    updateCronSchedule(form, { frequency: 'once' });
+    expect(form).toMatchObject({ schedule_type: 'once', repeat: '1' });
+    updateCronSchedule(form, { frequency: 'interval' });
+    expect(form).toMatchObject({ schedule_type: 'interval', repeat: '' });
+
+    // Custom keeps the last expression editable and syncs the planner fields
+    // from hand edits, so switching back continues from them.
+    updateCronSchedule(form, { frequency: 'custom' });
+    expect(form).toMatchObject({
+      schedule_type: 'cron',
+      cron_expression: '30 7 * * 1-5',
+    });
+    updateCronSchedule(form, { cron_expression: '15 6 * * 2' });
+    updateCronSchedule(form, { frequency: 'weekly' });
+    expect(form.cron_expression).toBe('15 6 * * 2');
   });
 });

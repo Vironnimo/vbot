@@ -2,15 +2,13 @@ import { onDestroy } from 'svelte';
 import {
   createCronFormValues,
   cronFormFingerprint,
-  CRON_PRESET_CUSTOM,
+  cronIntervalSeconds,
+  CRON_FREQUENCY_CUSTOM,
   CRON_SCHEDULE_TYPE_CRON,
   CRON_SCHEDULE_TYPE_INTERVAL,
   CRON_SCHEDULE_TYPE_ONCE,
-  describeCronExpression,
-  buildCronPresetOptions,
-  cronPresetForExpression,
   applyCronListResponse,
-  cronPresetExpression,
+  updateCronSchedule,
   buildCreateCronPayload,
   buildUpdateCronPayload,
   CRON_STATUS_ACTIVE,
@@ -26,6 +24,7 @@ import {
   enableCronJob,
   deleteCronJob,
 } from '$lib/api.js';
+import { describeCron } from './presentation.js';
 
 export function createCronEditor(context) {
   const initialFormValues = createCronFormValues();
@@ -40,8 +39,6 @@ export function createCronEditor(context) {
   let formValues = $state(initialFormValues);
 
   let formBaseline = $state(cronFormFingerprint(initialFormValues));
-
-  let selectedPreset = $state(CRON_PRESET_CUSTOM);
 
   let formErrorMessage = $state('');
 
@@ -109,18 +106,24 @@ export function createCronEditor(context) {
     formValues.schedule_type === CRON_SCHEDULE_TYPE_ONCE,
   );
 
-  let cronExpressionPreview = $derived(
-    describeCronExpression(formValues.cron_expression),
+  // The readable sentence for the cron expression being edited; empty for
+  // one-time and interval schedules, which describe themselves.
+  let scheduleDescription = $derived(
+    isCronSchedule ? describeCron(formValues.cron_expression) : '',
+  );
+
+  // The generated expression is shown next to its sentence for the planner
+  // frequencies; Custom edits it in its own field.
+  let showsGeneratedExpression = $derived(
+    isCronSchedule &&
+      formValues.frequency !== CRON_FREQUENCY_CUSTOM &&
+      Boolean(formValues.cron_expression),
   );
 
   let detailTitle = $derived(
     isCreating
       ? t('cron.detail.createTitle')
       : selectedJob?.name || t('cron.detail.editTitle'),
-  );
-
-  let presetOptions = $derived(
-    buildCronPresetOptions((key) => t(`cron.presets.${key}`)),
   );
 
   function selectJob(job) {
@@ -140,7 +143,6 @@ export function createCronEditor(context) {
     if (!formValues.agent_id) {
       formValues.agent_id = context.viewState.agents[0]?.id ?? '';
     }
-    selectedPreset = cronPresetForExpression(formValues.cron_expression);
     formBaseline = cronFormFingerprint(formValues);
     formErrorMessage = '';
     context.loadProjectTeams();
@@ -154,7 +156,6 @@ export function createCronEditor(context) {
     isCreating = true;
     formValues = createCronFormValues(null, context.viewState.systemTimezone);
     formValues.agent_id = context.viewState.agents[0]?.id ?? '';
-    selectedPreset = CRON_PRESET_CUSTOM;
     formBaseline = cronFormFingerprint(formValues);
     formErrorMessage = '';
     context.loadProjectTeams();
@@ -201,36 +202,24 @@ export function createCronEditor(context) {
     action?.();
   }
 
-  function setScheduleType(scheduleType) {
-    formValues.schedule_type = scheduleType;
-    formErrorMessage = '';
-  }
-
   function updateFormField(fieldName, value) {
     formValues[fieldName] = value;
     formErrorMessage = '';
   }
 
-  // Selecting a preset fills its expression; the field stays editable and the
-  // live preview keeps working. Custom (or an unknown key) fills nothing.
-  function applyPreset(presetKey) {
-    selectedPreset = presetKey;
-    if (presetKey === CRON_PRESET_CUSTOM) {
-      return;
-    }
-    const expression = cronPresetExpression(presetKey);
-    if (expression) {
-      formValues.cron_expression = expression;
-    }
+  // Every planner edit (frequency, time, days, interval, custom expression)
+  // goes through the pure schedule update, which keeps the persisted schedule
+  // fields in step.
+  function updateSchedule(patch) {
+    updateCronSchedule(formValues, patch);
     formErrorMessage = '';
   }
 
-  // Hand-editing the expression re-derives the preset selection, flipping it to
-  // Custom when the text no longer matches the chosen preset.
-  function updateCronExpression(value) {
-    formValues.cron_expression = value;
-    selectedPreset = cronPresetForExpression(value);
-    formErrorMessage = '';
+  function toggleWeekday(day) {
+    const weekdays = formValues.weekdays.includes(day)
+      ? formValues.weekdays.filter((entry) => entry !== day)
+      : [...formValues.weekdays, day];
+    updateSchedule({ weekdays });
   }
 
   function validateFormValues() {
@@ -241,9 +230,7 @@ export function createCronEditor(context) {
     if (isCronSchedule) {
       hasScheduleValue = formValues.cron_expression.trim().length > 0;
     } else if (isIntervalSchedule) {
-      const intervalMinutes = Number(formValues.interval_minutes);
-      hasScheduleValue =
-        Number.isInteger(intervalMinutes) && intervalMinutes > 0;
+      hasScheduleValue = cronIntervalSeconds(formValues) > 0;
     }
     const repeat = formValues.repeat.trim();
     const repeatValue = Number(repeat);
@@ -401,12 +388,6 @@ export function createCronEditor(context) {
     set formValues(value) {
       formValues = value;
     },
-    get selectedPreset() {
-      return selectedPreset;
-    },
-    set selectedPreset(value) {
-      selectedPreset = value;
-    },
     get formErrorMessage() {
       return formErrorMessage;
     },
@@ -482,23 +463,20 @@ export function createCronEditor(context) {
     set isOnceSchedule(value) {
       isOnceSchedule = value;
     },
-    get cronExpressionPreview() {
-      return cronExpressionPreview;
+    get scheduleDescription() {
+      return scheduleDescription;
     },
-    set cronExpressionPreview(value) {
-      cronExpressionPreview = value;
+    get showsGeneratedExpression() {
+      return showsGeneratedExpression;
+    },
+    get isCustomSchedule() {
+      return formValues.frequency === CRON_FREQUENCY_CUSTOM;
     },
     get detailTitle() {
       return detailTitle;
     },
     set detailTitle(value) {
       detailTitle = value;
-    },
-    get presetOptions() {
-      return presetOptions;
-    },
-    set presetOptions(value) {
-      presetOptions = value;
     },
     get selectJob() {
       return selectJob;
@@ -518,17 +496,14 @@ export function createCronEditor(context) {
     get confirmDiscard() {
       return confirmDiscard;
     },
-    get setScheduleType() {
-      return setScheduleType;
-    },
     get updateFormField() {
       return updateFormField;
     },
-    get applyPreset() {
-      return applyPreset;
+    get updateSchedule() {
+      return updateSchedule;
     },
-    get updateCronExpression() {
-      return updateCronExpression;
+    get toggleWeekday() {
+      return toggleWeekday;
     },
     get toggleJob() {
       return toggleJob;
