@@ -111,7 +111,7 @@ function isTodayDateKey(dateKey) {
  * Details rows for something that runs (a Tool call, a Sub-Agent Run, a
  * background process, a Run): when it started and, once settled, when it
  * finished, plus how long it ran or has been running. Unknown moments and
- * durations are left out.
+ * durations are left out, and so is a finish within the second it started.
  */
 export function executionDetailRows({
   startedAt = '',
@@ -128,7 +128,7 @@ export function executionDetailRows({
   const finished = running
     ? ''
     : formatMoment(finishedAt, { nowMs, seconds: true });
-  if (finished) {
+  if (finished && finished !== started) {
     rows.push({ label: t('chat.details.finished'), value: finished });
   }
   const duration = formatDurationMs(durationMs);

@@ -245,6 +245,9 @@ export default Object.freeze({
   'terminals.details.terminals': 'Terminals',
   'terminals.details.terminalCount':
     '{count} · {running} running, {finished} finished',
+  'terminals.details.terminalCountRunning': '{count} running',
+  'terminals.details.terminalCountFinished': '{count} finished',
+  'terminals.details.terminalCountNone': 'None',
   'terminals.state.starting': 'Starting',
   'terminals.state.ready': 'Running · output quiet',
   'terminals.state.working': 'Running · producing output',
