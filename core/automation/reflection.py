@@ -79,8 +79,6 @@ REFLECTION_RUN_KINDS: dict[ReflectionScope, RunKind] = {
     "skill": RunKind.SKILL_REFLECTION,
     "combined": RunKind.REFLECTION,
 }
-_SUMMARY_LOG_LIMIT = 200
-
 _LOGGER = get_logger("automation.reflection")
 
 
@@ -206,24 +204,22 @@ class ReflectionService:
         if not counters.reviews_enabled or not count_run or not should_review:
             return
 
-        due = "+".join(
-            name
-            for name, is_due in (("memory", counters.memory_due), ("skill", counters.skill_due))
-            if is_due
-        )
+        scope = _review_scope(counters.memory_due, counters.skill_due)
+        reviewed_turns = counters.turns if counters.memory_due else 0
+        reviewed_iterations = counters.iterations if counters.skill_due else 0
         self._agents_in_review.add(agent_id)
         try:
-            _LOGGER.info(
-                "Reflection review triggered (agent=%s session=%s due=%s)",
+            _LOGGER.debug(
+                "Reflection review triggered (agent=%s session=%s scope=%s)",
                 agent_id,
                 session_id,
-                due,
+                scope,
             )
             result = await self.run_review(
                 agent_id,
                 session_id,
                 project_id=project_id,
-                review_scope=_review_scope(counters.memory_due, counters.skill_due),
+                review_scope=scope,
             )
             await _REFLECTION_WORKERS.run(
                 self._consume_reviewed_counters,
@@ -231,14 +227,19 @@ class ReflectionService:
                 session_id,
                 project_id=project_id,
                 counter_generation=counters.generation,
-                reviewed_turns=counters.turns if counters.memory_due else 0,
-                reviewed_iterations=counters.iterations if counters.skill_due else 0,
+                reviewed_turns=reviewed_turns,
+                reviewed_iterations=reviewed_iterations,
             )
+            # The review's closing summary is Model output and never enters the log.
             _LOGGER.info(
-                "Reflection review completed (agent=%s fork=%s): %s",
+                "Reflection review completed (agent=%s session=%s fork=%s scope=%s "
+                "turns=%d iterations=%d)",
                 agent_id,
+                session_id,
                 result.session_id,
-                _log_excerpt(result.summary) or "no summary",
+                scope,
+                reviewed_turns,
+                reviewed_iterations,
             )
         except Exception:
             _LOGGER.warning(
@@ -453,13 +454,6 @@ def _final_text(content: str | list[ContentBlock] | None) -> str:
     if isinstance(content, list):
         return "\n".join(block.text for block in content if isinstance(block, TextBlock)).strip()
     return ""
-
-
-def _log_excerpt(summary: str) -> str:
-    collapsed = " ".join(summary.split())
-    if len(collapsed) <= _SUMMARY_LOG_LIMIT:
-        return collapsed
-    return collapsed[: _SUMMARY_LOG_LIMIT - 1] + "…"
 
 
 def _non_negative_int(value: Any) -> int:
