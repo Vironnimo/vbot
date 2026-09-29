@@ -7,6 +7,7 @@
   import { getProviderUsage } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
+  import { formatMoment } from '$lib/timeText.js';
   import {
     clampUsagePercent,
     formatInteger,
@@ -123,7 +124,13 @@
       ></span>
     </span>
     {#if reset}
-      <span class="stats-limit-window__reset" use:tooltip={reset.absolute}>
+      <span
+        class="stats-limit-window__reset"
+        use:tooltip={() => ({
+          title: t('statistics.limits.resets'),
+          text: formatMoment(window.reset_at),
+        })}
+      >
         {reset.relative
           ? t('statistics.limits.resetsIn', {
               duration: reset.relative,
