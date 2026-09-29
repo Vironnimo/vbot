@@ -116,6 +116,9 @@ export default Object.freeze({
   'settings.desktop.connection.removeError': 'Server could not be removed.',
   'settings.desktop.switchModalTitle': 'Switch server',
   'settings.sections.server': 'Server',
+  'settings.general.version': 'Version',
+  'settings.general.versionRelease': 'Release',
+  'settings.general.copyVersion': 'Copy version',
   'settings.general.serverHost': 'Server host',
   'settings.general.dataDirectory': 'Data directory',
   'settings.general.dataDirectoryHelp':

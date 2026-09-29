@@ -822,3 +822,25 @@ describe('HTTP media transfers', () => {
     ).rejects.toMatchObject({ code });
   });
 });
+
+describe('getServedWebuiBuild()', () => {
+  it.each([
+    ['the served build id', new Response('{"build_id":"b1"}'), 'b1'],
+    [
+      'null for the page served for an unknown path',
+      new Response('<html>'),
+      null,
+    ],
+    ['null for a missing file', new Response('', { status: 404 }), null],
+  ])('reads %s past the browser cache', async (_label, response, expected) => {
+    const fetchFunction = vi.fn().mockResolvedValue(response);
+
+    await expect(
+      api.getServedWebuiBuild({ fetch: fetchFunction }),
+    ).resolves.toBe(expected);
+    expect(fetchFunction).toHaveBeenCalledWith(
+      '/build.json',
+      expect.objectContaining({ cache: 'no-store' }),
+    );
+  });
+});

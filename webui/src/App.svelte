@@ -109,10 +109,12 @@
     debugStatus,
     acknowledgeDataStoreIncident,
     getDataStoreStatus,
+    getServedWebuiBuild,
     reportClientMetrics,
     showProject,
   } from '$lib/api.js';
   import { startClientMetrics } from '$lib/clientMetrics.js';
+  import { isWebuiOutdated } from '$lib/webuiBuild.js';
   import {
     createAutosaveCoordinator,
     provideAutosaveContext,
@@ -193,6 +195,7 @@
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
   let sessionInvalidations = $derived(appControllerState.sessionInvalidations);
   let dataStoreIncident = $derived(appControllerState.dataStoreIncident);
+  let webuiOutdated = $derived(appControllerState.webuiOutdated);
   let commandsRefreshToken = $derived(appControllerState.commandsRefreshToken);
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
   let sessionDeletion = $derived(appControllerState.sessionDeletion);
@@ -502,6 +505,16 @@
     }
   };
 
+  // Every (re)connection may follow an update that replaced the served WebUI.
+  const checkWebuiBuild = async () => {
+    try {
+      appControllerState.webuiOutdated =
+        await isWebuiOutdated(getServedWebuiBuild);
+    } catch {
+      // Keep the last answer when the served build cannot be read.
+    }
+  };
+
   const connectServerEvents = () => appController.connectServerEvents();
 
   const navigateToAgentModel = () =>
@@ -574,6 +587,7 @@
     onReloadExtensionPages: extensions.loadExtensionPages,
     onExtensionChange: extensions.publishChange,
     onLoadDataStoreStatus: loadDataStoreStatus,
+    onCheckWebuiBuild: checkWebuiBuild,
   });
   navigator.start();
 
@@ -660,6 +674,16 @@
   onStopVoiceRecording={desktop.handleStopVoiceRecording}
   onToast={desktop.showToast}
 >
+  {#if webuiOutdated}
+    <Banner variant="info" class="app-webui-outdated">
+      <span class="app-webui-outdated__text">
+        {t('app.webuiOutdated')}
+      </span>
+      <Button variant="secondary" onClick={() => window.location.reload()}>
+        {t('app.webuiOutdatedReload')}
+      </Button>
+    </Banner>
+  {/if}
   {#if setup.showFinishSetup}
     <Banner variant="info" class="app-finish-setup">
       <span class="app-finish-setup__text">
@@ -925,7 +949,8 @@
   /* Slim re-entry banner for a dismissed-but-incomplete first-run setup. Sits
      above the active view inside the content column and disappears the instant
      a provider is connected. */
-  :global(.app-finish-setup) {
+  :global(.app-finish-setup),
+  :global(.app-webui-outdated) {
     flex-shrink: 0;
     gap: 14px;
     padding: 8px 20px;
@@ -964,7 +989,8 @@
     font-size: var(--fs-caption) !important;
   }
 
-  .app-finish-setup__text {
+  .app-finish-setup__text,
+  .app-webui-outdated__text {
     color: var(--text-med);
     font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
@@ -980,7 +1006,8 @@
   }
 
   @media (max-width: 640px) {
-    :global(.app-finish-setup) {
+    :global(.app-finish-setup),
+    :global(.app-webui-outdated) {
       padding: 8px 14px;
     }
 

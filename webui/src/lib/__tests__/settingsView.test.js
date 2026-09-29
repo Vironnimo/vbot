@@ -31,6 +31,7 @@ import {
   createSkillDirectoriesUpdatePayload,
   deriveAccountCredentialKey,
   describeAccountSource,
+  formatBuildIdentity,
   formatModelCount,
   formatServerHost,
   getAddProviderCandidates,
@@ -284,6 +285,27 @@ describe('providers and accounts', () => {
 });
 
 describe('general and appearance', () => {
+  it.each([
+    [
+      'a release with its short commit',
+      {
+        version: '0.4.3',
+        revision: 'c'.repeat(40),
+        branch: null,
+        release: true,
+      },
+      () => `0.4.3 · ${t('settings.general.versionRelease')} · cccccccc`,
+    ],
+    [
+      'a branch build without a known commit',
+      { version: '0.4.4', revision: null, branch: 'main', release: false },
+      () => '0.4.4 · main',
+    ],
+    ['an unknown build', undefined, () => t('common.unknown')],
+  ])('names %s', (_label, build, expected) => {
+    expect(formatBuildIdentity(build)).toBe(expected());
+  });
+
   it('formats the server host and lists connected clients with the own row flagged', () => {
     expect(
       formatServerHost({ listen_host: '127.0.0.1', listen_port: 8420 }),

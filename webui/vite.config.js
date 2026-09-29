@@ -3,8 +3,10 @@ import path from 'path';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
+import { webuiBuildIdentity } from './scripts/webui-build-identity.mjs';
+
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte(), webuiBuildIdentity()],
   resolve: {
     alias: {
       $lib: path.resolve(import.meta.dirname, 'src/lib'),

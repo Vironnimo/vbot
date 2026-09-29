@@ -19,6 +19,7 @@
   import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
   import {
     buildClientPresenceRows,
+    formatBuildIdentity,
     formatServerHost,
     getDataDirectoryValue,
   } from '$lib/settingsView.js';
@@ -36,6 +37,14 @@
   } = $props();
 
   let serverHostValue = $derived(formatServerHost(settings?.general?.server));
+  let buildValue = $derived(formatBuildIdentity(settings?.general?.build));
+  let buildCopyValue = $derived(
+    formatBuildIdentity(settings?.general?.build, { fullRevision: true }),
+  );
+  let buildKnown = $derived(
+    typeof settings?.general?.build?.version === 'string' &&
+      settings.general.build.version.length > 0,
+  );
   let dataDirectoryValue = $derived(getDataDirectoryValue(settings));
   // Only a real path is worth copying, not the "Unknown" placeholder.
   let dataDirectoryKnown = $derived(
@@ -259,6 +268,23 @@
           ariaLabel={t('settings.general.keepAwake')}
           onChange={handleKeepAwakeChange}
         />
+      </div>
+    </div>
+    <div class="s-row">
+      <div class="s-row-info">
+        <div class="s-row-label">
+          {t('settings.general.version')}
+        </div>
+      </div>
+      <div class="s-row-control server-fact">
+        <span class="server-fact__value">{buildValue}</span>
+        {#if buildKnown}
+          <CopyButton
+            class="server-fact__copy"
+            text={buildCopyValue}
+            label={t('settings.general.copyVersion')}
+          />
+        {/if}
       </div>
     </div>
     <div class="s-row">

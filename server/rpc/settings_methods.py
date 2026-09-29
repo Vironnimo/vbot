@@ -625,6 +625,7 @@ async def _settings_response(state: Any) -> JsonObject:
         "general": {
             "server": server_bind,
             "data_directory": str(runtime.storage.data_dir),
+            "build": runtime.build.to_payload(),
             "keep_awake": raw_settings.get("keep_awake") is True,
             "timezone": effective_timezone_name(raw_settings),
             "available_timezones": list(available_timezone_names()),

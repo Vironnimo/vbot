@@ -15,6 +15,7 @@ import {
   createSettingsRpcMock,
   debugEnabledToggle,
   debugStatusMock,
+  getServedWebuiBuildMock,
   resetAppHarness,
   rpcMock,
   runServerEvent,
@@ -360,6 +361,38 @@ describe('App', () => {
     vi.advanceTimersByTime(1400);
     flushSync();
     expect(document.querySelector('.server-availability-notice')).toBeNull();
+  });
+
+  it('asks to reload once the server serves a newer WebUI build', async () => {
+    const meta = document.createElement('meta');
+    meta.name = 'vbot-webui-build';
+    meta.content = 'build-loaded';
+    document.head.append(meta);
+    try {
+      const connection = mountApp();
+      getServedWebuiBuildMock.mockResolvedValue('build-loaded');
+      connection.onEvent({ type: 'connection_ready', active_runs: [] });
+      await Promise.resolve();
+      flushSync();
+      expect(document.querySelector('.app-webui-outdated')).toBeNull();
+
+      getServedWebuiBuildMock.mockResolvedValue('build-served');
+      connection.onEvent({
+        type: 'connection_ready',
+        replay_status: 'epoch_changed',
+        active_runs: [],
+      });
+      await waitForCondition(() =>
+        expect(
+          buttonWithText(
+            '.app-webui-outdated button',
+            t('app.webuiOutdatedReload'),
+          ),
+        ).toBeTruthy(),
+      );
+    } finally {
+      meta.remove();
+    }
   });
 
   it('offers Desktop server switching outside the inert app content', async () => {

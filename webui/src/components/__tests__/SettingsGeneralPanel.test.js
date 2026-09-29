@@ -191,7 +191,7 @@ describe('SettingsGeneralPanel', () => {
     expect(onOpenSetupGuide).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the server address and copies the data directory', async () => {
+  it('shows the server facts and copies the version and data directory', async () => {
     listClientsMock.mockResolvedValue({ clients: [] });
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
@@ -206,6 +206,12 @@ describe('SettingsGeneralPanel', () => {
           general: {
             server: { listen_host: '127.0.0.1', listen_port: 8420 },
             data_directory: 'C:/data',
+            build: {
+              version: '0.4.4',
+              revision: 'adf68bf91d57e12362f63ef0e8728849eb9e4cb7',
+              branch: 'main',
+              release: false,
+            },
           },
         },
         clientsRefreshToken: 0,
@@ -215,6 +221,16 @@ describe('SettingsGeneralPanel', () => {
     await flushAsync();
 
     expect(document.body.textContent).toContain('127.0.0.1:8420');
+    expect(document.body.textContent).toContain('0.4.4 · main · adf68bf9');
+    document.body
+      .querySelector(
+        `button[aria-label="${t('settings.general.copyVersion')}"]`,
+      )
+      .click();
+    await flushAsync();
+    expect(writeText).toHaveBeenCalledWith(
+      '0.4.4 · main · adf68bf91d57e12362f63ef0e8728849eb9e4cb7',
+    );
     document.body
       .querySelector(
         `button[aria-label="${t('settings.general.copyDataDirectory')}"]`,

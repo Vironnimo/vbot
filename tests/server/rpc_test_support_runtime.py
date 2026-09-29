@@ -35,6 +35,7 @@ from core.runtime.runtime import Runtime
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
+from core.utils.version import BuildIdentity
 from server.events import ServerEventBus
 from server.file_delivery import FileDelivery
 from tests.core.chat.chat_loop_support import build_chat_loop
@@ -354,6 +355,7 @@ class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self._model_database_refresh_lock = asyncio.Lock()
         self.storage = StorageManager(tmp_path)
+        self.build = BuildIdentity("0.4.4", "a" * 40, branch="main")
         self.agents = StubAgents(
             StubAgent(id="coder", allowed_tools=["*"]),
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),

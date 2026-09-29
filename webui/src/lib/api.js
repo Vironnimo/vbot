@@ -57,6 +57,7 @@ export {
   getDataStoreStatus,
   createDataSnapshot,
   acknowledgeDataStoreIncident,
+  getServedWebuiBuild,
   updateSettings,
   setServiceKey,
   listAgentMemories,

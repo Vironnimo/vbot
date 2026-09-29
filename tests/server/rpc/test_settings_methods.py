@@ -94,6 +94,12 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                 "port_source": "settings.server_port",
             },
             "data_directory": str(tmp_path),
+            "build": {
+                "version": "0.4.4",
+                "revision": "a" * 40,
+                "branch": "main",
+                "release": False,
+            },
             "keep_awake": False,
         },
         "providers": {

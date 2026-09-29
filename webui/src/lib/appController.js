@@ -140,6 +140,8 @@ export function createAppControllerState() {
     // (replay gap or server restart).
     sessionsRefreshToken: 0,
     dataStoreIncident: null,
+    // The server serves a newer WebUI build than this page runs.
+    webuiOutdated: false,
     skillsRefreshToken: 0,
     terminalsRefreshToken: 0,
   };
@@ -158,6 +160,7 @@ export function createAppController({
   onReloadExtensionPages = async () => {},
   onExtensionChange = () => {},
   onLoadDataStoreStatus = async () => {},
+  onCheckWebuiBuild = async () => {},
   unavailableNoticeDelayMs = SERVER_UNAVAILABLE_NOTICE_DELAY_MS,
   restoredNoticeDurationMs = SERVER_RESTORED_NOTICE_DURATION_MS,
 }) {
@@ -261,7 +264,11 @@ export function createAppController({
       state.activeRuns = Array.isArray(event.active_runs)
         ? event.active_runs
         : [];
-      const refreshOwners = [onLoadDataStoreStatus, onReloadExtensionPages];
+      const refreshOwners = [
+        onLoadDataStoreStatus,
+        onReloadExtensionPages,
+        onCheckWebuiBuild,
+      ];
       if (
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
         event.replay_status === CONNECTION_REPLAY_STATUS_EPOCH_CHANGED
