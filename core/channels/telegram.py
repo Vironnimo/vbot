@@ -41,6 +41,7 @@ from ._telegram_api import (
     _markup_to_buttons,
     _observed_polling_request,
     _PollingHealth,
+    _telegram_error_boundary,
     _TelegramInteractionResponder,
 )
 from ._telegram_inbound import TelegramInboundBuffer
@@ -175,23 +176,26 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._application = application
         self._stop_event.clear()
 
-        await application.initialize()
-        # The bot's own identity feeds the addressing facts (@mention and visible-name
-        # detection, reply-to-bot checks, /cmd@botname suffix parsing) for group gating.
-        bot_user = await application.bot.get_me()
-        self._set_bot_identity(bot_user)
-        self._last_update_id = await _STATE_IO_POOL.run(self._load_update_offset)
-        self._last_update_claimed_at = time.monotonic()
-        await application.bot.delete_webhook(drop_pending_updates=False)
-        await application.start()
+        # A start failure reaches the supervisor's log; PTB's own text for a rejected
+        # token quotes the token, so its errors leave through the error boundary.
+        with _telegram_error_boundary(self._config.id):
+            await application.initialize()
+            # The bot's own identity feeds the addressing facts (@mention and visible-name
+            # detection, reply-to-bot checks, /cmd@botname suffix parsing) for group gating.
+            bot_user = await application.bot.get_me()
+            self._set_bot_identity(bot_user)
+            self._last_update_id = await _STATE_IO_POOL.run(self._load_update_offset)
+            self._last_update_claimed_at = time.monotonic()
+            await application.bot.delete_webhook(drop_pending_updates=False)
+            await application.start()
 
-        updater = application.updater
-        if updater is None:
-            raise ChannelError("Telegram updater is unavailable")
+            updater = application.updater
+            if updater is None:
+                raise ChannelError("Telegram updater is unavailable")
 
-        # PTB retries failed polls forever; the health reports the failing and
-        # recovered transitions instead of PTB's traceback on every attempt.
-        await updater.start_polling(error_callback=polling_health.failed)
+            # PTB retries failed polls forever; the health reports the failing and
+            # recovered transitions instead of PTB's traceback on every attempt.
+            await updater.start_polling(error_callback=polling_health.failed)
         self._report_connected()
         await self._stop_event.wait()
 

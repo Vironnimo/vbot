@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 import time
 from collections.abc import Callable, Iterator
 from datetime import timedelta
@@ -16,6 +17,11 @@ from core.extensions import (
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("channels.telegram")
+
+# A run of six or more digits in a PTB error text is taken for a Telegram chat or
+# user id: Telegram's descriptions and PTB's "unknown parameters" suffix are server
+# text vBot cannot enumerate, and no id may reach a message vBot logs.
+_EXTERNAL_ID_PATTERN = re.compile(r"-?\d{6,}")
 
 
 class _TelegramInteractionResponder:
@@ -224,16 +230,37 @@ def _telegram_error_boundary(channel_id: str) -> Iterator[None]:
     try:
         yield
     except telegram_error.TelegramError as error:
-        raise _classify_telegram_error(channel_id, telegram_error, error) from error
+        text = _loggable_telegram_error_text(telegram_error, error)
+        channel_error = _classify_telegram_error(channel_id, telegram_error, error, text)
+        if text == str(error):
+            raise channel_error from error
+        # A traceback prints the cause's own text, which names what ``text`` left out.
+        raise channel_error from None
+
+
+def _loggable_telegram_error_text(telegram_error_module: Any, error: Any) -> str:
+    """Return a PTB error's text without the chat ids or bot token some of them name."""
+    chat_migrated = getattr(telegram_error_module, "ChatMigrated", None)
+    if chat_migrated is not None and isinstance(error, chat_migrated):
+        # PTB's text names the new chat id.
+        return "Group migrated to supergroup"
+    invalid_token = getattr(telegram_error_module, "InvalidToken", None)
+    if invalid_token is not None and isinstance(error, invalid_token):
+        # PTB's text for a token rejected at start quotes the token.
+        return "The bot token was rejected by Telegram"
+    return _EXTERNAL_ID_PATTERN.sub("<id>", str(error))
 
 
 def _classify_telegram_error(
     channel_id: str,
     telegram_error_module: Any,
     error: Any,
+    text: str,
 ) -> ChannelError:
     """Translate one PTB TelegramError into a retry-classified ChannelError."""
-    channel_error = ChannelError(f"Telegram request failed (channel={channel_id}): {error}")
+    channel_error = ChannelError(
+        f"Telegram request failed (channel={channel_id} error_type={type(error).__name__}): {text}"
+    )
     # PTB's permanent BadRequest also inherits NetworkError. Reject it before
     # classifying actual transport failures, or invalid requests retry unchanged.
     bad_request = getattr(telegram_error_module, "BadRequest", None)

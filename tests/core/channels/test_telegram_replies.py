@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import telegram
-from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
+from telegram.error import BadRequest, ChatMigrated, NetworkError, RetryAfter, TimedOut
 
 from core.channels import ChannelError
 from core.channels.adapter import FileData, ReplyPlanFacts
@@ -190,6 +191,35 @@ async def test_send_errors_are_retried_by_their_telegram_classification(
     # The caller must not retry a send whose chunk already exhausted its attempts.
     assert raised.value.retryable is False
     assert raised.value.retry_after == retry_after
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        lambda: ChatMigrated(-1001234567890),
+        # Telegram's texts are server text; PTB appends parameters it does not know.
+        lambda: BadRequest(
+            "Chat not found. The server response contained unknown parameters: "
+            "{'moved_to': -1001234567890}"
+        ),
+    ],
+    ids=["chat-migrated", "unknown-parameters"],
+)
+async def test_send_errors_name_no_telegram_chat_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_error: Callable[[], Exception]
+) -> None:
+    # A lost reply is logged with its error and traceback: no external chat id in either.
+    adapter, _sessions, _trigger, bot = make_adapter(
+        tmp_path, monkeypatch, allowed_chat_ids=[12345]
+    )
+    bot.send_message.side_effect = make_error()
+
+    with pytest.raises(ChannelError) as raised:
+        await adapter.send("hi", "12345")
+
+    assert "1234567890" not in "".join(traceback.format_exception(raised.value))
     await adapter.stop()
 
 

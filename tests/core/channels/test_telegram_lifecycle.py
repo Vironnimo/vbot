@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import traceback
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -340,7 +341,7 @@ async def test_polling_failures_log_once_until_a_poll_is_answered(
         (
             telegram.error.NetworkError("down"),
             True,
-            telegram.error.NetworkError,
+            ChannelError,
             ["updater.stop", "stop"],
         ),
         (_IDENTITY, False, ChannelError, ["stop"]),
@@ -367,6 +368,26 @@ async def test_stop_after_a_failed_start_still_shuts_the_application_down(
     assert application.events[events_before_stop:] == [*stop_events, "shutdown"]
     with pytest.raises(ChannelError, match="not running"):
         await adapter.send("late", "12345")
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_token_never_reaches_the_start_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PTB's own error for a token rejected at start quotes the token, and the
+    # supervisor logs a start failure with its traceback.
+    token = "7001:AAE-secret-token-value"
+    rejected = telegram.error.InvalidToken(f"The token `{token}` was rejected by the server.")
+    adapter, _sessions, _trigger, bot = make_adapter(tmp_path, monkeypatch, running=False)
+    _install_ptb(monkeypatch, _FakeApplication(bot, rejected))
+
+    with pytest.raises(ChannelError) as raised:
+        await adapter.start()
+    await adapter.stop()
+
+    logged = "".join(traceback.format_exception(raised.value))
+    assert "InvalidToken" in logged
+    assert "secret-token-value" not in logged
 
 
 @pytest.mark.asyncio
