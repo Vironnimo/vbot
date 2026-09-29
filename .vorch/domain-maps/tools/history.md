@@ -22,7 +22,7 @@ Session-scoped access to the canonical conversation records hidden by Compaction
 - Prior `history` calls and results are excluded so the Tool cannot recursively retrieve its own output. A mixed Assistant carrier keeps unrelated text and Tool calls while removing only the `history` call portion.
 - Canonical ordering and content are preserved. Matching uses Unicode case-folding and whitespace compaction for deterministic literal search; a record split into segments reassembles exactly into its returned form.
 - `read` and `around` issue bounded SQL reads, `overview` obtains per-section count/bookends through SQL aggregates, and exact search scans canonical records in fixed 128-record batches until it can fill the requested page plus one lookahead. A no-match exact search may still scan the frozen range, but never materializes that range as one Python transcript.
-- The Tool emits only safe presentation metadata and logs request/result metadata rather than message bodies.
+- The Tool emits only safe presentation metadata and logs request/result metadata (at DEBUG, per call) rather than message bodies.
 
 ## Cross-Domain Contracts
 

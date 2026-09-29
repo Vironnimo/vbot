@@ -375,7 +375,7 @@ class SkillPolicyService:
             raise SkillPolicyError(f"Cannot write skill policy: {error}") from error
         policy = stored.effective()
         _LOGGER.info(
-            "Skill policy %s applied for %s (%d disabled, %d shared owners)",
+            "Applied skill policy change (operation=%s target=%s disabled=%d shared_owners=%d)",
             operation,
             target,
             len(policy.disabled),

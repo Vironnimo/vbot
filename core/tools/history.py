@@ -839,8 +839,9 @@ def _log_history(
     duration_ms: int,
     error_code: str | None,
 ) -> None:
-    _LOGGER.info(
-        "History action=%s checkpoint=%s direction=%s count=%d bytes=%d duration_ms=%d error=%s",
+    _LOGGER.debug(
+        "Read history (action=%s checkpoint=%s direction=%s count=%d bytes=%d "
+        "duration_ms=%d error=%s)",
         action or "unknown",
         checkpoint if checkpoint is not None else "all",
         direction or "none",
