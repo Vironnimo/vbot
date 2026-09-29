@@ -1,6 +1,7 @@
 <script>
   import { t } from '$lib/i18n.js';
   import { portal } from '$lib/dropdownPanel.js';
+  import { useNavigation } from '$lib/navigation.svelte.js';
   import Toggle from './ui/Toggle.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -474,6 +475,18 @@
     return () => {
       window.removeEventListener('scroll', handleWindowScroll, true);
     };
+  });
+
+  // Back and Forward close an open row menu or the filter menu first.
+  const shell = useNavigation();
+  $effect(() => {
+    if (menus.openMenuSessionId === null && !menus.filterMenuOpen) return;
+    return shell?.registerLayer({
+      close: () => {
+        menus.closeMenu();
+        menus.closeFilterMenu();
+      },
+    });
   });
 
   const handleListScroll = (event) => {

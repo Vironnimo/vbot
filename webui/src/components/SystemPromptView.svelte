@@ -13,29 +13,30 @@
   import ToolDefinitionsPanel from './ToolDefinitionsPanel.svelte';
   import MarkdownContent from './chat/MarkdownContent.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { useAutosaveContext } from '$lib/autosave.js';
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { createPromptScope } from './prompt/scope.svelte.js';
   import { createPromptEditor } from './prompt/editor.svelte.js';
   import './prompt/prompt.css';
 
   const noop = () => {};
+  const TAB_IDS = ['prompt', 'tools', 'edit'];
+  const AGENT_PREFIX = 'agent:';
 
   let {
+    // The place is `[tab, 'agent:<id>']` for an Agent scope and
+    // `[tab, 'default', 'agent:<id>']` for the default scope previewed with
+    // that Agent. The Agents editor links to `['edit', 'agent:<id>']`, which
+    // shows the default scope when that Agent has no scope of its own. An
+    // empty place shows the Prompt tab with the default scope.
+    navigation = createStandaloneNavigation(),
     onToast = noop,
-    // Scope deep-link (from the Agents editor's "Edit this agent's prompt"): a
-    // target agent id + a fresh request id per request. When the request id
-    // changes, this view selects that agent's scope after scopes have loaded,
-    // falling back silently to the default scope when the target scope is absent.
-    targetScopeAgentId = '',
-    targetScopeRequestId = 0,
   } = $props();
 
-  // The last handled deep-link request id, so a repeated request to the same
-  // agent still re-selects (a new request id) but a re-render does not re-fire.
-  let handledScopeRequestId = -1;
-
-  let activeTab = $state('prompt');
+  let activeTab = $derived(
+    TAB_IDS.includes(navigation.place[0]) ? navigation.place[0] : TAB_IDS[0],
+  );
   let promptFormat = $state('document');
 
   let tabs = $derived([
@@ -55,9 +56,6 @@
   const scope = createPromptScope({
     get showToast() {
       return showToast;
-    },
-    get autosaveContext() {
-      return autosaveContext;
     },
     get clearAutoSaveTimers() {
       return editor.clearAutoSaveTimers;
@@ -102,27 +100,28 @@
     };
   });
 
-  // Apply a scope deep-link once (per request id) and only after scopes have
-  // loaded, so the target agent scope actually exists in `promptScopes`. An
-  // absent target scope falls back silently to the default scope.
+  let scopesLoaded = $derived(scope.promptScopes.length > 0);
+
+  // Place -> shown scope and preview Agent, once the scope list has loaded;
+  // the tab follows the place directly. What cannot be shown (a scope that
+  // no longer exists, an unknown Agent, an empty place) falls back to the
+  // default scope and the first Agent, and the place is corrected without a
+  // step.
   $effect(() => {
-    if (targetScopeRequestId === handledScopeRequestId || scope.isLoadingData) {
-      return;
-    }
-    // Wait until the initial scope list is available before consuming the request.
-    if (scope.promptScopes.length === 0) {
-      return;
-    }
-    handledScopeRequestId = targetScopeRequestId;
-    if (!targetScopeAgentId) {
-      return;
-    }
-    activeTab = 'edit';
-    const targetKey = `agent:${targetScopeAgentId}`;
-    const nextKey = scope.promptScopes.some((scope) => scope.key === targetKey)
-      ? targetKey
-      : 'default';
-    void scope.selectScope(nextKey);
+    const place = navigation.place;
+    if (!scopesLoaded) return;
+    untrack(() => showInPlace(scope.showSelection(selectionFromPlace(place))));
+  });
+
+  // Shown scope -> place: a reload that no longer lists the shown scope
+  // falls back to the default scope and corrects the entry.
+  $effect(() => {
+    const shown = {
+      scopeKey: scope.selectedScopeKey,
+      agentId: scope.selectedAgentId,
+    };
+    if (!scopesLoaded) return;
+    untrack(() => showInPlace(shown));
   });
 
   // Auto-load the preview whenever the settled preview target changes — the
@@ -142,6 +141,59 @@
 
   function showToast(message, variant = 'error') {
     onToast?.({ title: message, variant });
+  }
+
+  function selectionFromPlace(place) {
+    const [, scopeKey = '', agentSegment = ''] = place;
+    if (scopeKey.startsWith(AGENT_PREFIX)) {
+      return { scopeKey, agentId: scopeKey.slice(AGENT_PREFIX.length) };
+    }
+    return {
+      scopeKey: 'default',
+      agentId: agentSegment.startsWith(AGENT_PREFIX)
+        ? agentSegment.slice(AGENT_PREFIX.length)
+        : '',
+    };
+  }
+
+  function placeFor(tab, { scopeKey, agentId }) {
+    if (scopeKey !== 'default') return [tab, scopeKey];
+    return agentId
+      ? [tab, 'default', AGENT_PREFIX + agentId]
+      : [tab, 'default'];
+  }
+
+  function showInPlace(selection) {
+    const place = placeFor(activeTab, selection);
+    const current = navigation.place;
+    if (
+      place.length !== current.length ||
+      place.some((segment, index) => segment !== current[index])
+    ) {
+      navigation.replace(place);
+    }
+  }
+
+  // Tabs, scopes and preview Agents are steps; the navigator saves pending
+  // block edits before any of them is shown.
+  function selectTab(tab) {
+    return navigation.navigate([tab, ...navigation.place.slice(1)]);
+  }
+
+  function selectPreviewAgent(agentId) {
+    if (agentId === scope.selectedAgentId) return false;
+    return openSelection({ scopeKey: AGENT_PREFIX + agentId, agentId });
+  }
+
+  function selectScope(scopeKey) {
+    if (scopeKey === scope.selectedScopeKey) return false;
+    return openSelection({ scopeKey, agentId: scope.selectedAgentId });
+  }
+
+  function openSelection(selection) {
+    return navigation.navigate(
+      placeFor(activeTab, scope.resolveSelection(selection)),
+    );
   }
 </script>
 
@@ -175,7 +227,7 @@
               ariaLabel={t('systemPrompt.preview.agentLabel')}
               triggerClass="sp-agent-dropdown"
               listClass="sp-agent-dropdown-list"
-              onValueChange={scope.selectPreviewAgent}
+              onValueChange={selectPreviewAgent}
             />
           {/if}
           {#if scope.previewTokens !== null}
@@ -217,7 +269,7 @@
           value={activeTab}
           idPrefix="sp-content"
           ariaLabel={t('systemPrompt.tabs.label')}
-          onChange={(value) => (activeTab = value)}
+          onChange={selectTab}
         />
       </div>
     </div>
@@ -244,7 +296,7 @@
               options={scope.scopeOptions}
               ariaLabel={t('systemPrompt.scope.label')}
               triggerClass="sp-scope-dropdown"
-              onValueChange={(value) => scope.selectScope(value)}
+              onValueChange={selectScope}
             />
           </div>
           {#if !scope.isLoadingData}

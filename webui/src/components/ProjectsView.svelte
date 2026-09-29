@@ -12,6 +12,7 @@
   } from '$lib/projectsView.js';
   import StatusChip from './ui/StatusChip.svelte';
   import { tooltip } from '$lib/tooltip.js';
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { onDestroy, onMount, untrack } from 'svelte';
   import {
     createAutosaveParticipant,
@@ -26,6 +27,10 @@
   const noop = () => {};
 
   let {
+    // The place is the shown Project (`[projectId]`); an empty place shows
+    // the shared managed Project or the first one.
+    navigation = createStandaloneNavigation(),
+    // Seeds the empty place; the place decides what the view shows.
     selectedProjectId: preferredProjectId = '',
     onProjectSelected = noop,
     onToast = noop,
@@ -37,7 +42,10 @@
   let projectsState = $state(createProjectsState());
   const projectsController = createProjectsController({
     state: untrack(() => projectsState),
+    targetProjectId: () => navigation.place[0] ?? '',
     onProjectSelected: (projectId) => onProjectSelected(projectId),
+    // Showing the Project just added is a step.
+    onProjectAdded: (projectId) => navigation.navigate([projectId]),
     onToast: (toast) => onToast(toast),
   });
 
@@ -93,6 +101,48 @@
   });
   const unregisterProjectAutosave = autosaveContext.register(projectAutosave);
 
+  // Place -> shown Project. Every list load shows the Project the place
+  // names when it is listed; a place naming no listed Project waits for a
+  // load in flight, else the entry is corrected to the shown Project.
+  $effect(() => {
+    const projectId = navigation.place[0] ?? '';
+    untrack(() => {
+      if (!projectsState.projectsLoaded) return;
+      const listed = (id) =>
+        Boolean(id) &&
+        projectsState.projects.some((project) => project.project_id === id);
+      if (!projectId) {
+        const fallback =
+          [preferredProjectId, projectsState.selectedProjectId].find(listed) ??
+          projectsState.projects[0]?.project_id ??
+          '';
+        if (fallback && fallback !== projectsState.selectedProjectId)
+          projectsController.selectProject(fallback);
+        showSelectionInPlace();
+        return;
+      }
+      if (listed(projectId)) {
+        if (projectId !== projectsState.selectedProjectId)
+          projectsController.selectProject(projectId);
+        return;
+      }
+      if (!projectsState.loadingProjects) showSelectionInPlace();
+    });
+  });
+
+  // Shown Project -> place. A list load that showed another Project (the
+  // place named a removed one, or was empty) corrects the current entry.
+  $effect(() => {
+    const projectId = projectsState.selectedProjectId;
+    if (!projectsState.projectsLoaded || projectsState.loadingProjects) return;
+    untrack(() => showSelectionInPlace(projectId));
+  });
+
+  function showSelectionInPlace(projectId = projectsState.selectedProjectId) {
+    if ((navigation.place[0] ?? '') === projectId) return;
+    navigation.replace(projectId ? [projectId] : []);
+  }
+
   onMount(() => {
     void projectsController.initialize(preferredProjectId);
   });
@@ -139,28 +189,6 @@
 
   function openAdd() {
     projectsController.openAdd();
-  }
-
-  function selectProject(projectId) {
-    if (projectId === projectsState.selectedProjectId) {
-      return;
-    }
-    autosaveContext.requestTransition(() =>
-      projectsController.selectProject(projectId),
-    );
-  }
-
-  // Live voice navigation: the App already passed its autosave transition.
-  export function selectVoiceProject(projectId) {
-    if (
-      !projectsState.projects.some(
-        (project) => project.project_id === projectId,
-      )
-    )
-      return false;
-    if (projectId !== projectsState.selectedProjectId)
-      projectsController.selectProject(projectId);
-    return true;
   }
 
   function refreshScan() {
@@ -250,7 +278,7 @@
               class:active={project.project_id ===
                 projectsState.selectedProjectId}
               data-testid={`project-toggle-${project.project_id}`}
-              onclick={() => selectProject(project.project_id)}
+              onclick={() => navigation.navigate([project.project_id])}
             >
               <span class="project-item-inner">
                 <span class="project-item-head">

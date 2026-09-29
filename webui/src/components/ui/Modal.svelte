@@ -2,14 +2,15 @@
   // Shared modal shell. It owns the dialog semantics every modal needs — the
   // dimmed overlay, overlay-click-to-close, Escape-to-close, `role="dialog"` /
   // `aria-modal`, the header with title + close button, and moving focus into
-  // the dialog on open — so each caller supplies only its own body (and an
-  // optional footer) content. Caller text arrives already translated; the shell
+  // the dialog on open, and closing on Back instead of navigating — so each
+  // caller supplies only its own body (and an optional footer) content. Caller text arrives already translated; the shell
   // only translates its own close-button label, like `Dropdown` does for its
   // placeholder.
 
   import { onDestroy, onMount } from 'svelte';
 
   import { t } from '$lib/i18n.js';
+  import { useNavigation } from '$lib/navigation.svelte.js';
 
   const noop = () => {};
   const FOCUSABLE_SELECTOR = [
@@ -34,6 +35,8 @@
     footer,
   } = $props();
 
+  const navigation = useNavigation();
+  let releaseLayer = noop;
   let modalElement = $state();
   let overlayElement = $state();
   let previouslyFocusedElement;
@@ -128,12 +131,14 @@
         ? document.activeElement
         : undefined;
     isolateBackground();
+    releaseLayer = navigation?.registerLayer({ close: requestClose }) ?? noop;
     // Programmatic focus on the tabindex=-1 box does not trigger :focus-visible,
     // so no focus ring appears — it just lands keyboard focus inside the dialog.
     modalElement?.focus();
   });
 
   onDestroy(() => {
+    releaseLayer();
     restoreBackground();
     if (
       previouslyFocusedElement?.isConnected &&

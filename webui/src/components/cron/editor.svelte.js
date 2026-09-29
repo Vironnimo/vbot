@@ -26,6 +26,9 @@ import {
 } from '$lib/api.js';
 import { describeCron } from './presentation.js';
 
+// The place segment of a new job's form; any other segment is a job id.
+export const NEW_JOB_PLACE = 'new';
+
 export function createCronEditor(context) {
   const initialFormValues = createCronFormValues();
 
@@ -126,6 +129,8 @@ export function createCronEditor(context) {
       : selectedJob?.name || t('cron.detail.editTitle'),
   );
 
+  // Selecting another job is a step; the view shows the job once the place
+  // names it. Leaving a changed new job's form asks first.
   function selectJob(job) {
     if (!job?.id) {
       return;
@@ -133,7 +138,7 @@ export function createCronEditor(context) {
     if (!isCreating && job.id === selectedJobId) {
       return;
     }
-    requestFormTransition(() => selectJobNow(job));
+    requestDraftDiscard(() => context.navigation.navigate([job.id]));
   }
 
   function selectJobNow(job) {
@@ -148,8 +153,14 @@ export function createCronEditor(context) {
     context.loadProjectTeams();
   }
 
+  // Opening the new job's form is a step; a second Create resets the open
+  // form in place.
   function startCreate() {
-    requestFormTransition(startCreateNow);
+    if (isCreating) {
+      requestDraftDiscard(startCreateNow);
+      return;
+    }
+    context.navigation.navigate([NEW_JOB_PLACE]);
   }
 
   function startCreateNow() {
@@ -161,24 +172,21 @@ export function createCronEditor(context) {
     context.loadProjectTeams();
   }
 
-  // Cancel a create draft and return to the previously selected job (if any).
+  // Cancel a create draft and go up to the job it was opened from; without
+  // one the view's empty place shows the first job.
   function cancelCreate() {
     if (submittingForm) {
       return;
     }
-    requestFormTransition(() => {
-      isCreating = false;
-      if (selectedJob) {
-        selectJobNow(selectedJob);
-      } else if (context.jobs.length > 0) {
-        selectJobNow(context.jobs[0]);
-      }
-    });
+    requestDraftDiscard(() =>
+      context.navigation.up(selectedJob ? [selectedJob.id] : []),
+    );
   }
 
-  function requestFormTransition(action) {
-    if (!isCreating) return autosaveContext.requestTransition(action);
-    if (!isDirty) {
+  // A changed new job's form is not autosaved, so leaving it asks first. An
+  // existing job's edits are saved by the navigation's autosave gate.
+  function requestDraftDiscard(action) {
+    if (!isCreating || !isDirty) {
       action();
       return;
     }
@@ -359,10 +367,12 @@ export function createCronEditor(context) {
     try {
       await deleteCronJob(job.id);
       context.showToast(t('cron.messages.deleted'));
+      await context.loadJobs({ silent: true });
+      // The reloaded list moves a shown deleted job to the first job; without
+      // one the view is left empty.
       if (selectedJobId === job.id) {
         selectedJobId = '';
       }
-      await context.loadJobs({ silent: true });
     } catch (error) {
       context.showToast(t('cron.errors.delete'), 'error', error);
     } finally {
@@ -486,6 +496,9 @@ export function createCronEditor(context) {
     },
     get startCreate() {
       return startCreate;
+    },
+    get startCreateNow() {
+      return startCreateNow;
     },
     get cancelCreate() {
       return cancelCreate;

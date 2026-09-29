@@ -11,42 +11,20 @@ import {
 import { MAX_SESSION_INVALIDATIONS } from '../sessionInvalidation.js';
 
 function setup(overrides = {}) {
-  const state = createAppControllerState('chat');
-  const browserHistory = {
-    pushState: vi.fn(),
-    replaceState: vi.fn(),
-    state: null,
-  };
-  const browserWindow = {
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    location: { hash: '#chat' },
-  };
+  const state = createAppControllerState();
   const actions = {
     onAppError: vi.fn(),
     onLoadProjects: vi.fn(),
     onReloadAgents: vi.fn(),
-    onSetOnboardingAside: vi.fn(),
   };
   const controller = createAppController({
     state,
-    knownViewIds: ['chat', 'agents', 'projects', 'settings', 'system-prompt'],
-    defaultViewId: 'chat',
-    currentNavigationSelection: () => ({
-      agentId: 'alpha',
-      projectId: '',
-      projectAgentId: null,
-    }),
-    isDebugEnabled: () => false,
-    isOperational: () => true,
-    browserHistory,
-    browserWindow,
     unavailableNoticeDelayMs: 10,
     restoredNoticeDurationMs: 10,
     ...actions,
     ...overrides,
   });
-  return { actions, browserHistory, browserWindow, controller, state };
+  return { actions, controller, state };
 }
 
 // Every refresh token of the App projection, e.g. { models: 0, cron: 1 }.
@@ -76,179 +54,6 @@ afterEach(() => {
 });
 
 describe('App controller', () => {
-  it('opens calendar results as ordinary Sessions', () => {
-    const { controller, state } = setup();
-    expect(
-      controller.navigateToSession('builder@project', 'calendar-result'),
-    ).toBe(true);
-    expect(state.pendingSessionNavigation).toMatchObject({
-      agentId: 'builder@project',
-      sessionId: 'calendar-result',
-      subAgent: false,
-    });
-  });
-  it.each([
-    [
-      '?accessor=desktop&open_agent=builder%40project&open_session=s-1&desktop_session=a%2Bb',
-      { agentId: 'builder@project', sessionId: 's-1' },
-      '/app/?accessor=desktop&desktop_session=a%2Bb#chat',
-    ],
-    [
-      '?open_session=s-1&open_agent=builder',
-      { agentId: 'builder', sessionId: 's-1' },
-      '/app/#chat',
-    ],
-    [
-      '?open_agent=builder&accessor=desktop',
-      null,
-      '/app/?accessor=desktop#chat',
-    ],
-    ['?open_agent=&open_session=s-1', null, '/app/#chat'],
-  ])(
-    'takes the startup Session link %s out of the address bar',
-    (search, target, url) => {
-      const { browserHistory, browserWindow, controller } = setup();
-      browserWindow.location = { pathname: '/app/', search, hash: '#chat' };
-      browserHistory.state = { marker: 'kept' };
-
-      expect(controller.takeSessionLink()).toEqual(target);
-      expect(browserHistory.replaceState).toHaveBeenCalledExactlyOnceWith(
-        { marker: 'kept' },
-        '',
-        url,
-      );
-    },
-  );
-
-  it('leaves an address without a Session link alone', () => {
-    const { browserHistory, browserWindow, controller } = setup();
-    browserWindow.location = {
-      pathname: '/',
-      search: '?accessor=desktop',
-      hash: '#chat',
-    };
-
-    expect(controller.takeSessionLink()).toBeNull();
-    expect(browserHistory.replaceState).not.toHaveBeenCalled();
-  });
-
-  it('owns view navigation and its browser-history entry', () => {
-    const onSetOnboardingAside = vi.fn();
-    const { browserHistory, controller, state } = setup({
-      isOperational: () => false,
-      onSetOnboardingAside,
-    });
-
-    expect(controller.selectView('agents')).toBe(true);
-
-    expect(state.activeViewId).toBe('agents');
-    expect(onSetOnboardingAside).toHaveBeenCalledOnce();
-    expect(browserHistory.pushState).toHaveBeenCalledWith(
-      expect.objectContaining({ view: 'agents' }),
-      '',
-      '#agents',
-    );
-  });
-
-  it('resolves a startup Extension page link after the page catalog loads', () => {
-    const knownViewIds = ['chat', 'settings'];
-    const { browserHistory, browserWindow, controller, state } = setup({
-      knownViewIds: () => knownViewIds,
-    });
-    // A reload restores the entry's view even without a hash.
-    browserWindow.location.hash = '';
-    browserHistory.state = {
-      marker: 'vbot.navigation',
-      view: 'extension:fixture:main',
-      session: null,
-      selection: null,
-    };
-
-    controller.initializeNavigationHistory();
-    expect(state.activeViewId).toBe('chat');
-    expect(browserHistory.replaceState).not.toHaveBeenCalled();
-
-    knownViewIds.push('extension:fixture:main');
-    expect(controller.resolvePendingExtensionView()).toBe(true);
-    expect(state.activeViewId).toBe('extension:fixture:main');
-    expect(browserHistory.replaceState).toHaveBeenCalledWith(
-      expect.objectContaining({ view: 'extension:fixture:main' }),
-      '',
-      '#extension:fixture:main',
-    );
-    expect(browserHistory.pushState).not.toHaveBeenCalled();
-    // One-shot: later catalog refreshes leave navigation alone.
-    expect(controller.resolvePendingExtensionView()).toBe(false);
-  });
-
-  it('drops a startup Extension page link the page catalog does not contain', () => {
-    const { browserHistory, browserWindow, controller, state } = setup();
-    browserWindow.location.hash = '#extension:missing:page';
-
-    controller.initializeNavigationHistory();
-    expect(controller.resolvePendingExtensionView()).toBe(false);
-
-    expect(state.activeViewId).toBe('chat');
-    expect(browserHistory.replaceState).toHaveBeenCalledWith(
-      expect.objectContaining({ view: 'chat' }),
-      '',
-      '#chat',
-    );
-  });
-
-  it('forgets a startup Extension page link once the user navigates', () => {
-    const knownViewIds = ['chat', 'settings'];
-    const { browserHistory, browserWindow, controller, state } = setup({
-      knownViewIds: () => knownViewIds,
-    });
-    browserWindow.location.hash = '#extension:fixture:main';
-
-    controller.initializeNavigationHistory();
-    controller.selectView('settings');
-    knownViewIds.push('extension:fixture:main');
-
-    expect(controller.resolvePendingExtensionView()).toBe(false);
-    expect(state.activeViewId).toBe('settings');
-    expect(browserHistory.replaceState).not.toHaveBeenCalled();
-  });
-
-  it('marks direct Sub-Agent link navigation for live-tail scrolling only', () => {
-    const { browserHistory, controller, state } = setup();
-
-    expect(controller.navigateToSubAgent('subagent', 'child-session')).toBe(
-      true,
-    );
-    expect(state.pendingSessionNavigation).toMatchObject({
-      agentId: 'subagent',
-      sessionId: 'child-session',
-      subAgent: true,
-      followSession: true,
-    });
-    expect(browserHistory.pushState).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        session: {
-          agentId: 'subagent',
-          sessionId: 'child-session',
-          subAgent: true,
-        },
-      }),
-      '',
-      '#chat',
-    );
-
-    controller.applyNavigationState({
-      view: 'chat',
-      session: {
-        agentId: 'subagent',
-        sessionId: 'other-child-session',
-        subAgent: true,
-      },
-      selection: { agentId: 'alpha', projectId: '', projectAgentId: null },
-    });
-
-    expect(state.pendingSessionNavigation).not.toHaveProperty('followSession');
-  });
-
   it('projects server events into run state and scoped invalidations', async () => {
     const { controller, state } = setup();
     const hello = { type: 'connection_ready', active_runs: [] };
@@ -532,14 +337,9 @@ describe('App controller', () => {
     expect(onExtensionChange).toHaveBeenCalledOnce();
   });
 
-  it('applies an Agent rename mapping before reloading and remaps old history entries', async () => {
+  it('applies an Agent rename mapping before reloading and resolves old ids', async () => {
     const onAgentIdChanged = vi.fn();
-    const { actions, controller, state } = setup({ onAgentIdChanged });
-    controller.applyNavigationState({
-      view: 'chat',
-      session: { agentId: 'alpha', sessionId: 'session-one' },
-      selection: { agentId: 'alpha', projectId: '', projectAgentId: null },
-    });
+    const { actions, controller } = setup({ onAgentIdChanged });
 
     await controller.handleServerEvent(
       resourceChanged('agents', {
@@ -547,25 +347,18 @@ describe('App controller', () => {
         new_agent_id: 'researcher',
       }),
     );
+    await controller.handleServerEvent(
+      resourceChanged('agents', {
+        old_agent_id: 'researcher',
+        new_agent_id: 'analyst',
+      }),
+    );
 
-    expect(onAgentIdChanged).toHaveBeenCalledWith('alpha', 'researcher');
-    expect(actions.onReloadAgents).toHaveBeenCalledOnce();
-    expect(state.pendingSessionNavigation).toMatchObject({
-      agentId: 'researcher',
-      selection: { agentId: 'researcher' },
-    });
-
-    controller.applyNavigationState({
-      view: 'chat',
-      session: { agentId: 'alpha', sessionId: 'older-session' },
-      selection: { agentId: 'alpha', projectId: '', projectAgentId: null },
-    });
-
-    expect(state.pendingSessionNavigation).toMatchObject({
-      agentId: 'researcher',
-      sessionId: 'older-session',
-      selection: { agentId: 'researcher' },
-    });
+    expect(onAgentIdChanged).toHaveBeenNthCalledWith(1, 'alpha', 'researcher');
+    expect(actions.onReloadAgents).toHaveBeenCalledTimes(2);
+    // Remembered places naming any earlier id resolve to the current one.
+    expect(controller.resolveIdentityAgentId('alpha')).toBe('analyst');
+    expect(controller.resolveIdentityAgentId('other')).toBe('other');
   });
 
   it.each([

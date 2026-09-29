@@ -4,7 +4,7 @@
   // and clears it in `onClose`. The primitive owns everything else - the
   // portal to <body>, viewport clamping, keyboard navigation, dismissal and
   // focus return - so every context menu in the app behaves and looks the
-  // same.
+  // same. Back closes an open menu instead of navigating.
   //
   // menu: null | {
   //   x, y,              viewport coordinates of the anchor
@@ -22,6 +22,7 @@
   import { tick } from 'svelte';
 
   import { portal } from '$lib/dropdownPanel.js';
+  import { useNavigation } from '$lib/navigation.svelte.js';
 
   import Button from './Button.svelte';
 
@@ -29,6 +30,7 @@
 
   let { menu = null, onClose = () => {}, icon = undefined } = $props();
 
+  const navigation = useNavigation();
   let element = $state(null);
   let placement = $state.raw(null);
 
@@ -72,6 +74,13 @@
     focusElement(current?.returnFocus);
     item.onSelect?.();
   }
+
+  $effect(() => {
+    if (!menu) return;
+    return navigation?.registerLayer({
+      close: () => close({ restoreFocus: true }),
+    });
+  });
 
   function itemForButton(button) {
     const index = Number(button?.dataset.contextMenuIndex);

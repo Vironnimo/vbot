@@ -1,7 +1,8 @@
 <script>
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, onDestroy, tick, untrack } from 'svelte';
   import { inspectSkill, skillInventory } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { isImeComposing } from '$lib/keyboard.js';
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -45,10 +46,15 @@
   // scroll position, filters and focused row. The server owns precedence and
   // write scopes; skill.inventory projects the effective access this view
   // presents and edits.
+  //
+  // Its place: `[collection]` for a collection page, `[collection, skillId]`
+  // for a package page, `['directories']` for the Skill folders. Filters,
+  // search and content tabs are not places.
 
   const noop = () => {};
 
   let {
+    navigation = createStandaloneNavigation(),
     settings = null,
     onSettingsCommit = noop,
     onToast = noop,
@@ -202,10 +208,69 @@
     clearSelection();
   }
 
+  // Place -> shown page. Package pages wait for the first inventory; an
+  // unknown collection or package corrects the entry to what is shown.
+  let placeApplied = Promise.resolve();
+  $effect(() => {
+    const [collectionKey = '', skillId = ''] = navigation.place;
+    const ready = loaded;
+    untrack(() => {
+      placeApplied = applyPlace(collectionKey, skillId, ready);
+    });
+  });
+
+  async function applyPlace(collectionKey, skillId, ready) {
+    if (!collectionKey) {
+      navigation.replace(['all']);
+      return;
+    }
+    if (collectionKey !== scope) {
+      if (
+        collectionKey !== 'directories' &&
+        ready &&
+        !collections.some((item) => item.key === collectionKey)
+      ) {
+        navigation.replace(['all']);
+        return;
+      }
+      const leavingDirectories = scope === 'directories';
+      if (collectionKey === 'directories') {
+        returnScope = scope;
+        showDirectories = true;
+      }
+      changeScope(collectionKey);
+      if (collectionKey === 'directories') {
+        await tick();
+        directoryEditor?.focusNewDirectory();
+      } else if (leavingDirectories) {
+        await tick();
+        addMenu?.focus();
+      }
+    }
+    if (!skillId) {
+      if (selectedId !== null) await returnToCollection(selected);
+      return;
+    }
+    if (!ready || selectedId === skillId) return;
+    const entry = inventory.find((item) => item.id === skillId);
+    if (entry) await openSkill(entry);
+    else navigation.replace([collectionKey]);
+  }
+
+  // Opening a package page is a step; its back controls go up to the
+  // collection page.
+  function showSkill(entry) {
+    navigation.navigate([scope, entry.id]);
+  }
+
+  function leaveSkill() {
+    navigation.up([scope]);
+  }
+
   // Choosing the collection whose package page is open returns to it.
   function selectCollection(next) {
-    if (next === scope && selected) void returnToCollection();
-    else changeScope(next);
+    if (next === scope && selected) leaveSkill();
+    else navigation.navigate([next]);
   }
 
   function changeSearch(next) {
@@ -273,7 +338,7 @@
     if (event.target !== document.body && !viewElement?.contains(event.target))
       return;
     event.preventDefault();
-    void returnToCollection();
+    leaveSkill();
   }
 
   async function inspect(entry, quiet) {
@@ -316,7 +381,7 @@
 
   function openPackage(item) {
     const entry = packageOf(item);
-    if (entry) void openSkill(entry);
+    if (entry) showSkill(entry);
   }
 
   async function loadInventory() {
@@ -332,7 +397,7 @@
       staleShared = result?.stale_shared ?? [];
       policyDiagnostics = result?.policy_diagnostics ?? [];
       loaded = true;
-      if (scope !== 'directories' && !collection) changeScope('all');
+      if (scope !== 'directories' && !collection) navigation.replace(['all']);
       const installedEntry =
         pendingInstallSelection &&
         inventory.find(
@@ -346,10 +411,11 @@
           (entry) => entry.id === installedEntry.id,
         );
         page = Math.max(0, Math.floor(index / SKILL_PAGE_SIZE));
-        void openSkill(installedEntry);
+        // The install itself was the step; its package page takes that place.
+        navigation.replace([scope, installedEntry.id]);
       } else if (selectedId) {
         const entry = inventory.find((item) => item.id === selectedId);
-        if (!entry) void returnToCollection(null);
+        if (!entry) navigation.replace([scope]);
         else if (!actions.editing) void openSkill(entry, false);
       }
     } catch (error) {
@@ -369,27 +435,24 @@
     showInstall = true;
   }
 
-  async function openDirectories() {
-    if (scope !== 'directories') returnScope = scope;
-    showDirectories = true;
-    changeScope('directories');
-    await tick();
-    directoryEditor?.focusNewDirectory();
+  function openDirectories() {
+    navigation.navigate(['directories']);
   }
 
-  async function closeDirectories() {
-    changeScope(
+  function closeDirectories() {
+    navigation.up([
       collections.some((item) => item.key === returnScope)
         ? returnScope
         : 'all',
-    );
-    await tick();
-    addMenu?.focus();
+    ]);
   }
 
   async function installed(result) {
     showInstall = false;
-    changeScope(result.scope === actions.GLOBAL_SCOPE ? 'global' : 'all');
+    navigation.navigate([
+      result.scope === actions.GLOBAL_SCOPE ? 'global' : 'all',
+    ]);
+    await tick();
     searchQuery = '';
     statusFilter = 'all';
     // A later resource event can supersede our refresh; the winning inventory
@@ -408,7 +471,9 @@
   }
 
   async function editSkill(entry) {
-    await openSkill(entry);
+    showSkill(entry);
+    await tick();
+    await placeApplied;
     if (selectedId === entry.id) actions.startEdit(entry);
   }
 
@@ -425,7 +490,7 @@
   }
 
   const menuActions = {
-    open: (entry) => void openSkill(entry),
+    open: (entry) => showSkill(entry),
     edit: (entry) => void editSkill(entry),
     copyName: (name) => void copyName(name),
     setDisabled: (entry, disabled) => actions.setDisabled(entry, disabled),
@@ -526,7 +591,7 @@
         {projects}
         {inventory}
         busy={actions.busy}
-        onBack={() => returnToCollection()}
+        onBack={leaveSkill}
         onRetry={() => openSkill(selected, false)}
         onTab={(next) => (contentTab = next)}
         onEdit={actions.startEdit}
@@ -665,7 +730,7 @@
               {projects}
               page={currentPage}
               {pageCount}
-              onOpen={(entry) => openSkill(entry)}
+              onOpen={showSkill}
               onContextMenu={openLibraryMenu}
               onPage={changePage}
               onClearFilters={() => {

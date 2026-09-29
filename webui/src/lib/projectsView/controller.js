@@ -65,7 +65,12 @@ export function createProjectsController({
   autoSaveDelayMs = PROJECT_AUTO_SAVE_DEBOUNCE_MS,
   toolAccessOverrideAutoSaveDelayMs = TOOL_ACCESS_OVERRIDE_AUTO_SAVE_DEBOUNCE_MS,
   detectDelayMs = PROJECT_DETECT_DEBOUNCE_MS,
+  // The Project a list load shows when it is listed (the view's place),
+  // before the current selection and the first Project.
+  targetProjectId = () => '',
   onProjectSelected = () => {},
+  // The add dialog created this Project and selected it.
+  onProjectAdded = () => {},
   onToast = () => {},
 } = {}) {
   let active = true;
@@ -94,6 +99,7 @@ export function createProjectsController({
     isActive: () => active,
     errorText,
     selectProject,
+    onProjectAdded,
     flushPendingProjects,
     loadProjects,
   });
@@ -252,10 +258,14 @@ export function createProjectsController({
   function applyProjectList(projects) {
     pendingProjectList = null;
     state.projects = projects;
-    const preferredProject = state.projects.find(
-      (project) => project.project_id === state.selectedProjectId,
-    );
-    const projectToOpen = preferredProject ?? state.projects[0] ?? null;
+    state.projectsLoaded = true;
+    const listed = (projectId) =>
+      state.projects.find((project) => project.project_id === projectId);
+    const projectToOpen =
+      listed(targetProjectId()) ??
+      listed(state.selectedProjectId) ??
+      state.projects[0] ??
+      null;
     if (projectToOpen) {
       selectProject(projectToOpen.project_id);
     } else {

@@ -305,7 +305,7 @@ export function createSwarmPageActivity(host) {
     { activate = true, preserve = false } = {},
   ) {
     if (!host.model.selectedSwarm) return;
-    if (activate) host.model.activeTab = 'participants';
+    if (activate) host.model.openTab('participants');
     if (settledRuns.has(participant.lifecycle_run_id))
       participant = { ...participant, run_active: false };
     if (

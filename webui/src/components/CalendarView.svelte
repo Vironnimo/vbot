@@ -13,9 +13,11 @@
     dayKeyToUtcDate,
     eventById,
     groupByDay,
+    isDayKey,
     monthGridDays,
     monthLabel,
     sortDayEntries,
+    stepAnchor,
     todayKey,
     weekColumnLabel,
     weekRangeLabel,
@@ -33,10 +35,14 @@
   import Dropdown from './Dropdown.svelte';
   import CalendarActions from './CalendarActions.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
-  import { onMount } from 'svelte';
+  import { untrack } from 'svelte';
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { createCalendarEventEditor } from './calendar/editor.svelte.js';
 
   let {
+    // The place is the shown period: [view mode, "YYYY-MM-DD" anchor day]. An
+    // empty place shows the month around today. Layer toggles are not places.
+    navigation = createStandaloneNavigation(),
     onToast = () => {},
     serverUnavailable = false,
     calendarRefreshToken = 0,
@@ -130,9 +136,35 @@
     return entries;
   });
 
-  onMount(() => {
-    controller.load();
+  // Place -> shown period. A missing or unknown mode shows the month, a
+  // missing or invalid day shows today, and the entry is corrected to the
+  // concrete period once today is known in the server timezone.
+  $effect(() => {
+    const [requestedView = '', requestedAnchor = ''] = navigation.place;
+    const zoneResolved = viewState.timeZoneResolved;
+    untrack(() => {
+      const view = CALENDAR_VIEWS.includes(requestedView)
+        ? requestedView
+        : CALENDAR_VIEWS[0];
+      if (isDayKey(requestedAnchor)) {
+        controller.show(view, requestedAnchor);
+      } else if (zoneResolved) {
+        controller.show(view, todayKey(viewState.systemTimeZone));
+      } else {
+        // Today is a guess until the first load reports the server timezone.
+        controller.show(view, todayKey(), { today: true });
+        return;
+      }
+      if (view !== requestedView || viewState.anchorKey !== requestedAnchor) {
+        navigation.replace([view, viewState.anchorKey]);
+      }
+    });
   });
+
+  // Every period change is a step.
+  function showPeriod(view, anchorKey) {
+    navigation.navigate([view, anchorKey]);
+  }
 
   $effect(() => {
     const token = calendarRefreshToken;
@@ -191,19 +223,31 @@
         <Button
           variant="secondary"
           icon
-          onClick={() => controller.navigate(-1)}
+          onClick={() =>
+            showPeriod(
+              viewState.view,
+              stepAnchor(viewState.view, viewState.anchorKey, -1),
+            )}
           ariaLabel={t('calendar.prev')}
           tooltip={t('calendar.prev')}
         >
           ‹
         </Button>
-        <Button variant="secondary" onClick={() => controller.goToday()}>
+        <Button
+          variant="secondary"
+          onClick={() =>
+            showPeriod(viewState.view, todayKey(viewState.systemTimeZone))}
+        >
           {t('calendar.today')}
         </Button>
         <Button
           variant="secondary"
           icon
-          onClick={() => controller.navigate(1)}
+          onClick={() =>
+            showPeriod(
+              viewState.view,
+              stepAnchor(viewState.view, viewState.anchorKey, 1),
+            )}
           ariaLabel={t('calendar.next')}
           tooltip={t('calendar.next')}
         >
@@ -255,7 +299,7 @@
         label: t(`calendar.view.${view}`),
       }))}
       value={viewState.view}
-      onChange={(view) => controller.setView(view)}
+      onChange={(view) => showPeriod(view, viewState.anchorKey)}
       appearance="segmented"
       density="compact"
     />

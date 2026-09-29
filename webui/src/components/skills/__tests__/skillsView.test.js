@@ -5,6 +5,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { fileURLToPath } from 'node:url';
 import { readStyleSheet } from '../../../__tests__/styles.support.js';
 import { init, t } from '../../../lib/i18n.js';
+import { createStandaloneNavigation } from '../../../lib/navigation.svelte.js';
 import { rpcBackedApiMock } from '../../__tests__/apiMock.support.js';
 import {
   filterSkills,
@@ -191,10 +192,11 @@ afterEach(async () => {
   component = null;
   document.body.innerHTML = '';
 });
-async function render() {
+async function render(props = {}) {
   component = mount(SkillsView, {
     target: document.body,
     props: {
+      ...props,
       settings: {},
       onToast,
       get skillsRefreshToken() {
@@ -341,6 +343,32 @@ describe('Skills manager', () => {
     );
     flushSync();
     expect(view.querySelector('.skills-page')).not.toBeNull();
+  });
+
+  it('shows collection, package and folder pages as its places', async () => {
+    const navigation = createStandaloneNavigation(['all', 'private']);
+    await render({ navigation });
+    expect(document.querySelector('.skills-content').textContent).toContain(
+      'content-private',
+    );
+    click(button('Back to All skills'));
+    await settle();
+    expect(navigation.place).toEqual(['all']);
+    expect(document.querySelector('.skills-page')).toBeNull();
+
+    collection('Main');
+    await settle();
+    expect(navigation.place).toEqual(['agent:main']);
+    await addMenuItem('Manage skill folders…');
+    expect(navigation.place).toEqual(['directories']);
+
+    // A package that no longer exists leaves its collection page shown.
+    navigation.navigate(['global', 'gone']);
+    await settle();
+    expect(navigation.place).toEqual(['global']);
+    expect(document.querySelector('#skills-title').textContent.trim()).toBe(
+      'Global',
+    );
   });
 
   it('groups collections into library, Agents and Projects and filters each library source', async () => {

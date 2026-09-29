@@ -1,6 +1,7 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
 
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import Dropdown from './Dropdown.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -40,7 +41,15 @@
   // order follow the visual order in both arrangements.
   const COMPACT_FILTERS_MEDIA_QUERY = '(max-width: 640px)';
 
+  let {
+    // The place is the shown log file; an empty place shows the catalog's
+    // default file. Level, search, order and filters are not places.
+    navigation = createStandaloneNavigation(),
+  } = $props();
+
   let viewState = $state(createLogsViewState());
+  // Set once the first catalog arrived, so the place can be checked against it.
+  let catalogLoaded = $state(false);
   let reconnectAttempt = $state(0);
   let compactFilters = $state(compactFiltersMediaQuery()?.matches === true);
   let filtersOpen = $state(false);
@@ -96,6 +105,46 @@
     };
   });
 
+  // Place -> shown file. Before the first catalog the target waits in the
+  // selection, which the catalog keeps while that file exists; afterwards an
+  // empty place shows the default file and an unknown one keeps the shown
+  // file, and the entry is corrected to what is shown.
+  $effect(() => {
+    const file = navigation.place[0] ?? '';
+    const loaded = catalogLoaded;
+    untrack(() => {
+      if (!loaded) {
+        selectLogFile(viewState, file);
+        return;
+      }
+      const target = viewState.files.includes(file)
+        ? file
+        : file && viewState.selectedFile
+          ? viewState.selectedFile
+          : viewState.defaultFile;
+      if (target && target !== viewState.selectedFile) {
+        selectLogFile(viewState, target);
+        void loadSelectedFile(target);
+      }
+      showFileInPlace();
+    });
+  });
+
+  // Shown file -> place: the catalog replaced a vanished file or chose the
+  // default.
+  $effect(() => {
+    void viewState.selectedFile;
+    if (!catalogLoaded) return;
+    untrack(showFileInPlace);
+  });
+
+  function showFileInPlace() {
+    const file = viewState.selectedFile;
+    if ((navigation.place[0] ?? '') !== file) {
+      navigation.replace(file ? [file] : []);
+    }
+  }
+
   function compactFiltersMediaQuery() {
     return typeof window !== 'undefined' &&
       typeof window.matchMedia === 'function'
@@ -115,6 +164,7 @@
       }
 
       const selectedFile = applyLogCatalog(viewState, result);
+      catalogLoaded = true;
       const shouldLoadSelectedFile =
         Boolean(selectedFile) &&
         (options.forceReload === true ||
@@ -312,13 +362,13 @@
     currentStream = null;
   }
 
-  async function handleFileChange(file) {
+  // Choosing another file is a step; the place effect loads it.
+  function handleFileChange(file) {
     if (!file || file === viewState.selectedFile) {
       return;
     }
 
-    selectLogFile(viewState, file);
-    await loadSelectedFile(file);
+    navigation.navigate([file]);
   }
 
   function handleLevelChange(level) {

@@ -1,21 +1,24 @@
 <script>
   import ExtensionPage from '../ExtensionPage.svelte';
   import { provideAutosaveContext } from '../../lib/autosave.js';
+  import { provideNavigation } from '../../lib/navigation.svelte.js';
 
   let {
     initialDescriptor,
     initialContext = {},
-    onRouteChange = () => {},
+    navigation = undefined,
+    // The App navigator whose layers the page registers with.
+    shell = null,
     onToast = () => {},
     autosaveContext = null,
   } = $props();
   let descriptor = $state(initialDescriptor);
-  let route = $state(initialContext.route ?? '');
   let theme = $state(initialContext.theme ?? {});
   let locale = $state(initialContext.locale ?? 'en');
   let timezone = $state(initialContext.timezone ?? 'UTC');
   const invalidationListeners = [];
   if (autosaveContext) provideAutosaveContext(autosaveContext);
+  if (shell) provideNavigation(shell);
 
   function subscribeInvalidations(listener) {
     invalidationListeners.push(listener);
@@ -30,7 +33,6 @@
 
   export function update(next) {
     if ('descriptor' in next) descriptor = next.descriptor;
-    if ('route' in next) route = next.route;
     if ('theme' in next) theme = next.theme;
     if ('locale' in next) locale = next.locale;
     if ('timezone' in next) timezone = next.timezone;
@@ -39,11 +41,10 @@
 
 <ExtensionPage
   {descriptor}
-  {route}
+  {navigation}
   {theme}
   {locale}
   {timezone}
   {subscribeInvalidations}
-  {onRouteChange}
   {onToast}
 />

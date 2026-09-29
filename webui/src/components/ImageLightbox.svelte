@@ -1,9 +1,14 @@
 <script>
   import { portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
+  import { useNavigation } from '$lib/navigation.svelte.js';
   import { tooltip } from '$lib/tooltip.js';
 
   let { src = '', alt = '', onClose = () => {} } = $props();
+
+  // Back closes the lightbox instead of navigating.
+  const navigation = useNavigation();
+  $effect(() => navigation?.registerLayer({ close: () => onClose() }));
 
   let imageElement = $state();
   let zoomed = $state(false);

@@ -28,6 +28,7 @@
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
+  import { provideNavigation } from '../../../../webui/src/lib/navigation.svelte.js';
   import { createSwarmPageModel } from './pageModel.svelte.js';
   import { createSwarmPageActivity } from './pageActivity.svelte.js';
   import './swarmPage.css';
@@ -51,6 +52,9 @@
       return model;
     },
   });
+  // The page's dialogs register as layers of the app's navigation, so Back
+  // and Forward close them before leaving the page's place.
+  provideNavigation({ registerLayer: model.client.registerLayer });
   // The goal form is the page's home: "New run" is its navigation entry.
   const startVisible = $derived(!model.editor && !model.selectedSwarm);
   // Same route names as the profile editor's delivery settings.
@@ -187,8 +191,7 @@
                 class:active={!model.editor &&
                   model.selectedSwarm?.id === swarm.id}
                 use:tooltip={runTooltip(swarm)}
-                onclick={() =>
-                  model.navigate(() => model.selectSwarm(swarm.id))}
+                onclick={() => model.navigate(() => model.openSwarm(swarm.id))}
               >
                 <span class="sidebar-title">{runTitle(swarm)}</span>
               </button>
@@ -286,8 +289,7 @@
               items={model.tabs}
               value={model.activeTab}
               ariaLabel={t('swarm.details')}
-              onChange={(next) =>
-                model.navigate(() => (model.activeTab = next))}
+              onChange={(next) => model.navigate(() => model.openTab(next))}
             />
           </div>
           {#if model.selectedSwarm.participants?.some( (participant) => ['failed', 'interrupted'].includes(participant.state) )}

@@ -42,6 +42,15 @@ export function dayKeyToUtcDate(key) {
   return new Date(`${key}T00:00:00Z`);
 }
 
+// A real calendar date in day-key form (rejects "2026-02-30").
+export function isDayKey(value) {
+  return (
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    addDaysToKey(value, 0) === value
+  );
+}
+
 // Monday-first weekday index (0..6) of a calendar day key.
 function weekdayIndex(key) {
   const sundayFirst = dayKeyToUtcDate(key).getUTCDay();
@@ -204,7 +213,8 @@ export function windowForView(view, anchorKey) {
   return { from: anchorKey, to: addDaysToKey(anchorKey, AGENDA_DAYS - 1) };
 }
 
-function navigateAnchor(view, anchorKey, direction) {
+// The anchor of the previous (-1) or next (+1) period of a view.
+export function stepAnchor(view, anchorKey, direction) {
   if (view === 'month') {
     const anchor = dayKeyToUtcDate(anchorKey);
     const next = new Date(
@@ -342,7 +352,24 @@ export function createCalendarViewState() {
 
 export function createCalendarController({ state }) {
   let loadRequestId = 0;
-  const initialAnchorKey = state.anchorKey;
+  let started = false;
+  // The anchor only stands for "today", guessed in UTC until the first load
+  // reports the server timezone.
+  let followToday = false;
+
+  // Shows one period and loads its window. `today` marks an anchor that means
+  // the current day, so the first load moves it to the server's day.
+  function show(view, anchorKey, { today = false } = {}) {
+    followToday = today && !state.timeZoneResolved;
+    if (started && state.view === view && state.anchorKey === anchorKey) {
+      return Promise.resolve();
+    }
+    const first = !started;
+    started = true;
+    state.view = view;
+    state.anchorKey = anchorKey;
+    return load({ silent: !first });
+  }
 
   async function load({ silent = false } = {}) {
     if (!silent) {
@@ -360,7 +387,8 @@ export function createCalendarController({ state }) {
       const initialZoneResolution = !state.timeZoneResolved;
       state.systemTimeZone = systemTimeZone;
       state.timeZoneResolved = true;
-      if (initialZoneResolution && state.anchorKey === initialAnchorKey) {
+      if (initialZoneResolution && followToday) {
+        followToday = false;
         const serverToday = todayKey(systemTimeZone);
         if (serverToday !== state.anchorKey) {
           state.anchorKey = serverToday;
@@ -383,26 +411,6 @@ export function createCalendarController({ state }) {
         state.loading = false;
       }
     }
-  }
-
-  function setView(view) {
-    state.view = view;
-    load({ silent: true });
-  }
-
-  function setAnchor(anchorKey) {
-    state.anchorKey = anchorKey;
-    load({ silent: true });
-  }
-
-  function navigate(direction) {
-    state.anchorKey = navigateAnchor(state.view, state.anchorKey, direction);
-    load({ silent: true });
-  }
-
-  function goToday() {
-    state.anchorKey = todayKey(state.systemTimeZone);
-    load({ silent: true });
   }
 
   function toggleLayer(layer) {
@@ -439,11 +447,8 @@ export function createCalendarController({ state }) {
   }
 
   return {
+    show,
     load,
-    setView,
-    setAnchor,
-    navigate,
-    goToday,
     toggleLayer,
     createEvent,
     updateEvent,

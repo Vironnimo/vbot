@@ -356,8 +356,12 @@ export function createChatViewTarget(context) {
       : null;
     initialProjectRestoreDone = true;
     lastLoadedProjectId = projectId;
+    // A later project switch is a user choice: the Session it lands on is a
+    // new history step.
+    const switchProject = (action) =>
+      isInitialRestore ? action() : context.navigation.asStep(action);
     if (!projectId) {
-      clearProjectContext();
+      void switchProject(async () => clearProjectContext());
       if (!isInitialRestore) {
         context.layout.requestComposerFocus();
       }
@@ -366,10 +370,12 @@ export function createChatViewTarget(context) {
     // The initial (reload) restore must not clear a session override that a
     // mount-adopted history entry has just applied — the override stays the
     // displayed session, the member session loads invisibly behind it.
-    void loadProjectTeam(projectId, {
-      restoreAgentId,
-      keepOverride: isInitialRestore,
-    }).then(() => {
+    void switchProject(() =>
+      loadProjectTeam(projectId, {
+        restoreAgentId,
+        keepOverride: isInitialRestore,
+      }),
+    ).then(() => {
       if (
         !isInitialRestore &&
         context.selectedProjectId === projectId &&
@@ -471,17 +477,11 @@ export function createChatViewTarget(context) {
     agentId,
     { keepOverride = false, preferUnread = false } = {},
   ) => {
-    const hadOverride = context.navigation.sessionOverrideActive;
     if (!keepOverride) {
       context.navigation.clearSessionOverride();
     }
     selectedProjectAgentId = agentId;
     context.onProjectAgentSelected?.(agentId);
-    if (!keepOverride && hadOverride) {
-      // An override cleared by switching agents is an override change and
-      // becomes a history entry, mirroring the identity chip path.
-      context.navigation.reportSessionNavigation();
-    }
     const addressing = resolveAgentAddressing(
       agentId,
       context.selectedProjectId,
@@ -592,7 +592,9 @@ export function createChatViewTarget(context) {
     ) {
       return;
     }
-    await openProjectAgent(agentId, { preferUnread: true });
+    await context.navigation.asStep(() =>
+      openProjectAgent(agentId, { preferUnread: true }),
+    );
     context.layout.requestComposerFocus();
   };
 

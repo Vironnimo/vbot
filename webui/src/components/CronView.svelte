@@ -42,7 +42,8 @@
   import TextArea from './ui/TextArea.svelte';
   import InfoHint from './ui/InfoHint.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import {
     listAgents,
     listCronJobs,
@@ -50,19 +51,24 @@
     showProject,
   } from '$lib/api.js';
   import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
-  import { createCronEditor } from './cron/editor.svelte.js';
+  import { createCronEditor, NEW_JOB_PLACE } from './cron/editor.svelte.js';
 
   const noop = () => {};
 
   let {
+    // The place is the shown job, [job id], or ['new'] for a new job's form.
+    // An empty place shows the first job.
+    navigation = createStandaloneNavigation(),
     onToast = noop,
     serverUnavailable = false,
     cronRefreshToken = 0,
     agentsRefreshToken = 0,
     projectsRefreshToken = 0,
-    targetJobId = '',
   } = $props();
   const editor = createCronEditor({
+    get navigation() {
+      return navigation;
+    },
     get jobs() {
       return jobs;
     },
@@ -100,6 +106,11 @@
   });
 
   let destroyed = false;
+  // Set once the first job and agent lists arrived, so the place can be
+  // checked against them (a new job's form needs the agents).
+  let jobsLoaded = $state(false);
+  let agentsLoaded = $state(false);
+  let placeReady = $derived(jobsLoaded && agentsLoaded);
   let jobsRequestId = 0;
   let agentsRequestId = 0;
   let lastCronRefreshToken = 0;
@@ -152,30 +163,69 @@
     };
   });
 
-  // Auto-select the first job once the list loads, unless the user is mid-create
-  // or already has a selection that still exists. A targetJobId (calendar deep
-  // link) wins once; it is consumed so the user can freely change selection.
-  let appliedTargetJobId = $state('');
+  // Place -> shown job. Until the lists arrived the target waits; then an
+  // empty place shows the first job, an unknown one keeps the shown job, and
+  // the entry is corrected to what is shown.
   $effect(() => {
-    if (editor.isCreating || jobs.length === 0) {
-      return;
-    }
-    if (
-      targetJobId &&
-      targetJobId !== appliedTargetJobId &&
-      jobs.some((job) => job.id === targetJobId)
-    ) {
-      appliedTargetJobId = targetJobId;
-      editor.selectJobNow(jobs.find((job) => job.id === targetJobId));
-      return;
-    }
-    if (
-      !jobs.some((job) => job.id === editor.selectedJobId) &&
-      !editor.isDirty
-    ) {
-      editor.selectJobNow(jobs[0]);
-    }
+    const target = navigation.place[0] ?? '';
+    if (!placeReady) return;
+    untrack(() => {
+      showPlace(target);
+      showJobInPlace();
+    });
   });
+
+  // A reloaded list without the shown job shows the first job instead. An
+  // empty list keeps it, so a job saved a moment ago survives a reload that
+  // does not name it yet.
+  $effect(() => {
+    void jobs;
+    if (!placeReady) return;
+    untrack(() => {
+      if (editor.isCreating || jobs.length === 0) return;
+      if (!jobs.some((job) => job.id === editor.selectedJobId)) {
+        editor.selectJobNow(jobs[0]);
+      }
+    });
+  });
+
+  // Shown job -> place: saving turned the new job into a real one, or a
+  // reload or deletion showed another job.
+  $effect(() => {
+    void editor.isCreating;
+    void editor.selectedJobId;
+    if (!placeReady) return;
+    untrack(showJobInPlace);
+  });
+
+  function showPlace(target) {
+    if (target === NEW_JOB_PLACE && hasAgents) {
+      if (!editor.isCreating) editor.startCreateNow();
+      return;
+    }
+    // A job saved a moment ago is shown before the list names it.
+    if (target && !editor.isCreating && target === editor.selectedJobId) {
+      return;
+    }
+    const listed = (id) => jobs.find((job) => job.id === id);
+    const job =
+      listed(target) ??
+      (target && !editor.isCreating ? listed(editor.selectedJobId) : null) ??
+      jobs[0];
+    if (!job) {
+      editor.isCreating = false;
+      editor.selectedJobId = '';
+    } else if (editor.isCreating || job.id !== editor.selectedJobId) {
+      editor.selectJobNow(job);
+    }
+  }
+
+  function showJobInPlace() {
+    const shown = editor.isCreating ? NEW_JOB_PLACE : editor.selectedJobId;
+    if ((navigation.place[0] ?? '') !== shown) {
+      navigation.replace(shown ? [shown] : []);
+    }
+  }
 
   $effect(() => {
     const token = cronRefreshToken;
@@ -231,6 +281,7 @@
     } finally {
       if (!destroyed && requestId === agentsRequestId) {
         viewState.loadingAgents = false;
+        agentsLoaded = true;
       }
     }
   }
@@ -256,6 +307,7 @@
       }
       editor.pendingJobsResult = null;
       applyCronListResponse(viewState, result);
+      jobsLoaded = true;
     } catch (error) {
       if (destroyed || requestId !== jobsRequestId) {
         return;

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
+import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
@@ -420,8 +421,46 @@ describe('DebugView', () => {
     expect(responseBlock?.textContent).toContain('"delta":" there"');
   });
 
+  it('inspects the trace named by the place and steps through rows and back to the list', async () => {
+    const traceA = traceListEntry({ trace_id: 'trace-a', model_id: 'gpt-5.2' });
+    const traceB = traceListEntry({
+      trace_id: 'trace-b',
+      provider_id: 'anthropic',
+      model_id: 'claude-sonnet-4',
+    });
+    debugTraceListMock.mockResolvedValue({ traces: [traceA, traceB] });
+    debugTraceGetMock.mockImplementation(async (traceId) => ({
+      trace: fullTraceFixture(traceId === 'trace-a' ? traceA : traceB),
+    }));
+    const navigation = createStandaloneNavigation(['trace-b']);
+    mountedComponent = mount(DebugView, {
+      target: document.body,
+      props: { navigation },
+    });
+
+    await waitForCondition(
+      () =>
+        document.querySelector('.detail-header h3')?.textContent ===
+        'claude-sonnet-4',
+    );
+    expect(getSelectedTraceId()).toBe('trace-b');
+
+    clickTraceRow('trace-a');
+    expect(navigation.place).toEqual(['trace-a']);
+    await waitForCondition(
+      () =>
+        document.querySelector('.detail-header h3')?.textContent === 'gpt-5.2',
+    );
+
+    document.querySelector('.detail-back button').click();
+    flushSync();
+    expect(navigation.place).toEqual([]);
+    expect(getSelectedTraceId()).toBeNull();
+  });
+
   it('keeps the inspected trace across refreshes while it is listed and closes it once it is gone', async () => {
-    const props = reactiveProps({ debugTracesRefreshToken: 0 });
+    const navigation = createStandaloneNavigation();
+    const props = reactiveProps({ debugTracesRefreshToken: 0, navigation });
     const traceA = traceListEntry({
       trace_id: 'trace-keep',
       provider_id: 'openai',
@@ -444,6 +483,7 @@ describe('DebugView', () => {
     clickTraceRow('trace-keep');
     await switchToDetailTabWhenReady('request');
     await waitForBodyText('"x":1');
+    expect(navigation.place).toEqual(['trace-keep']);
 
     debugTraceListMock.mockResolvedValueOnce({
       traces: [traceA, traceB, traceListEntry({ trace_id: 'trace-fresh' })],
@@ -463,6 +503,8 @@ describe('DebugView', () => {
     );
     expect(document.querySelector('.debug-view__detail-panel')).toBeNull();
     expect(document.querySelector('.debug-view__refresh-btn')).toBeNull();
+    // The vanished trace's entry is corrected to the plain list.
+    expect(navigation.place).toEqual([]);
   });
 
   it('falls back to the placeholder when headers are missing and never shows (none)', async () => {

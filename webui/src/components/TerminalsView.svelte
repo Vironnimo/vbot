@@ -7,7 +7,7 @@
     terminalTitle,
   } from './terminals/terminalLabels.js';
   import './terminals/terminals.css';
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { createTerminalRenderer } from './terminals/terminalRenderer.svelte.js';
   import '@xterm/xterm/css/xterm.css';
 
@@ -22,14 +22,21 @@
     TERMINAL_STREAM_IDLE,
     createTerminalsController,
     createTerminalsViewState,
+    defaultTerminalGroupId,
     layoutForCount,
     terminalIsFinished,
     visibleTerminals,
   } from '$lib/terminalsView.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { tooltip } from '$lib/tooltip.js';
+  import {
+    createStandaloneNavigation,
+    useNavigation,
+  } from '$lib/navigation.svelte.js';
 
   let {
+    // The place is the shown group; an empty place shows the default group.
+    navigation = createStandaloneNavigation(),
     terminalsRefreshToken = 0,
     serverUnavailable = false,
     onToast = () => {},
@@ -39,6 +46,7 @@
   let viewState = $state(createTerminalsViewState());
 
   let maximizedTerminalId = $state('');
+  const shell = useNavigation();
 
   // Single open "…" action menu per group, portaled to <body> like the
   // session row menu. Only one group menu is open at a time.
@@ -124,7 +132,7 @@
     if (action === 'show_group') {
       if (!viewState.groups.some((group) => group.group_id === args.group_id))
         throw new Error('group_not_found');
-      controller.selectGroup(args.group_id);
+      showGroup(args.group_id);
       maximizedTerminalId = '';
       await tick();
       return getVoiceContext();
@@ -133,7 +141,7 @@
       (item) => item.terminal_id === args.terminal_id,
     );
     if (!target) throw new Error('terminal_not_found');
-    controller.selectGroup(target.group_id);
+    showGroup(target.group_id);
     controller.selectTerminal(target.terminal_id);
     if (action === 'maximize' && maximizedTerminalId !== target.terminal_id) {
       await toggleMaximize(target.terminal_id);
@@ -154,6 +162,63 @@
 
   $effect(() => {
     controller.setServerUnavailable(serverUnavailable);
+  });
+
+  // Place -> shown group. Before the first load the target waits in the
+  // selection, which the load keeps while that group exists; a group that no
+  // longer exists leaves the shown one in place and corrects the entry.
+  $effect(() => {
+    const groupId = navigation.place[0] ?? '';
+    const loaded = viewState.groups.length > 0;
+    untrack(() => {
+      if (!loaded) {
+        viewState.selectedGroupId = groupId;
+        return;
+      }
+      controller.selectGroup(groupId || defaultTerminalGroupId(viewState));
+      showGroupInPlace(viewState.selectedGroupId, { step: false });
+    });
+  });
+
+  // Shown group -> place. A group that appears with this change (just created
+  // or started into) is a new step; any other change - a load, a removed
+  // group - corrects the current entry.
+  let knownGroupIds = null;
+  $effect(() => {
+    const groupId = viewState.selectedGroupId;
+    const groupIds = viewState.groups.map((group) => group.group_id);
+    if (groupIds.length === 0) return;
+    untrack(() => {
+      const step = knownGroupIds !== null && !knownGroupIds.has(groupId);
+      knownGroupIds = new Set(groupIds);
+      showGroupInPlace(groupId, { step });
+    });
+  });
+
+  function showGroupInPlace(groupId, { step }) {
+    if ((navigation.place[0] ?? '') === groupId) return;
+    const place = groupId ? [groupId] : [];
+    if (step) navigation.navigate(place);
+    else navigation.replace(place);
+  }
+
+  // Voice requests switch groups as a step, like a click on the group tab.
+  function showGroup(groupId) {
+    controller.selectGroup(groupId);
+    showGroupInPlace(viewState.selectedGroupId, { step: true });
+  }
+
+  // Back restores a maximized terminal before it navigates.
+  $effect(() => {
+    const terminalId = maximizedTerminalId;
+    if (!terminalId) return;
+    return shell?.registerLayer({ close: () => toggleMaximize(terminalId) });
+  });
+
+  // An open group menu closes first, like on Escape.
+  $effect(() => {
+    if (openGroupMenuId === null) return;
+    return shell?.registerLayer({ close: closeGroupMenu });
   });
 
   $effect(() => {
@@ -408,7 +473,7 @@
               : undefined}
             aria-label={`${group.name}: ${t('terminals.count', { count: group.terminal_count })}`}
             use:tooltip={{ text: group.name, whenTruncated: true }}
-            onclick={() => controller.selectGroup(group.group_id)}
+            onclick={() => navigation.navigate([group.group_id])}
           >
             <span class="terminals-view__group-tab-label">
               <span class="terminals-view__group-tab-name">{group.name}</span>

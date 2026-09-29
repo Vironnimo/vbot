@@ -10,6 +10,7 @@
     saveSessionListFilters,
   } from '$lib/sessionListView.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
+  import { useNavigation } from '$lib/navigation.svelte.js';
   import {
     isDesktopAccessor,
     openDesktopExternalUrl,
@@ -103,6 +104,13 @@
     menuTrigger?.setAttribute('aria-expanded', 'false');
     if (restoreFocus) menuTrigger?.focus();
   }
+
+  // Back and Forward close the open file menu before navigating.
+  const shell = useNavigation();
+  $effect(() => {
+    if (!menuFile) return;
+    return shell?.registerLayer({ close: () => closeMenu(true) });
+  });
 
   async function toggleMenu(index, trigger, file = null, point = null) {
     if (!point && menuPane === index && menuTrigger === trigger) {

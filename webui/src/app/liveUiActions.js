@@ -7,24 +7,24 @@
 /**
  * @param {object} deps
  * @param {object} deps.selection App selection state (Agents, Projects, selections).
- * @param {() => object} deps.appController App navigation (views, Chat Sessions).
+ * @param {object} deps.navigator The App navigator (`lib/navigation.svelte.js`).
+ * @param {(agentId: string, sessionId: string) => any} deps.navigateToSession Opens a Chat Session.
  * @param {() => string} deps.activeView The current view id.
  * @param {(action: () => any) => any} deps.requestTransition Autosave-guarded transition.
- * @param {() => object | null} deps.chatSelection The Chat view's voice-relevant selection.
+ * @param {() => object | null} deps.chatSelection The Session Chat shows.
  * @param {(projectId: string) => Promise<object>} deps.loadProject The project.show RPC.
  * @param {() => object | undefined} deps.terminalsView The mounted Terminals view.
- * @param {() => object | undefined} deps.projectsView The mounted Projects view.
  * @param {() => Promise<void>} deps.afterRender Resolves once pending view updates rendered.
  */
 export function createLiveUiActions({
   selection,
-  appController,
+  navigator,
+  navigateToSession,
   activeView,
   requestTransition,
   chatSelection,
   loadProject,
   terminalsView,
-  projectsView,
   afterRender,
 }) {
   async function context() {
@@ -61,16 +61,15 @@ export function createLiveUiActions({
     return requestTransition(() => {
       if (!isCurrent()) return false;
       if (view === 'chat' && target.session_id) {
-        return appController().navigateToSession(
-          target.agent_id,
-          target.session_id,
-        );
+        return navigateToSession(target.agent_id, target.session_id);
       }
       if (view === 'agents' && target.agent_id) {
         if (!selection.agents.some((agent) => agent.id === target.agent_id))
           return false;
         // The Agents view follows the shared Agent selection.
         selection.selectAgent(target.agent_id);
+        navigator.navigate('agents', [target.agent_id]);
+        return true;
       }
       if (view === 'projects' && target.project_id) {
         const { project_id: projectId } = target;
@@ -80,13 +79,10 @@ export function createLiveUiActions({
           )
         )
           return false;
-        // A Projects view opening next starts on this Project; an open one
-        // switches to it itself.
-        selection.selectManagedProject(projectId);
-        const mounted = activeView() === 'projects' ? projectsView() : null;
-        if (mounted) return mounted.selectVoiceProject(projectId);
+        navigator.navigate('projects', [projectId]);
+        return true;
       }
-      if (activeView() !== view) return appController().selectView(view);
+      if (activeView() !== view) navigator.open(view);
       return true;
     });
   }

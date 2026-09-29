@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { activeLocaleTag, t } from '../../lib/i18n.js';
 import { formatDateTime } from '../../lib/statisticsView.js';
+import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import {
   flushSync,
   mount,
@@ -185,6 +186,29 @@ describe('StatisticsView', () => {
     expect(document.querySelector('.stats-panel .stats-table')).toBeTruthy();
     expect(document.body.textContent).toContain('session-ranking-sentinel');
     expect(document.body.textContent).toContain('model-error-sentinel');
+  });
+
+  it('shows the sub-view named by the place and records sub-view switches in it', async () => {
+    rpcMock.mockResolvedValue(makeReport());
+    const navigation = createStandaloneNavigation(['runs']);
+    suite.mountedComponent = mount(StatisticsView, {
+      target: document.body,
+      props: { navigation },
+    });
+    await waitForCondition(() => document.querySelector('.stats-hours__col'));
+
+    buttonNamed('statistics.subview.tools').click();
+    flushSync();
+    expect(navigation.place).toEqual(['tools']);
+    expect(cardValue('statistics.tools.accepted')).toBe('4');
+
+    // The empty place (the view's start page) is corrected to the Overview.
+    navigation.navigate([]);
+    flushSync();
+    expect(navigation.place).toEqual(['overview']);
+    expect(
+      document.querySelector('.stats-panel > .stats-grid .stats-card__value'),
+    ).toBeTruthy();
   });
 
   it('renders Tool outcomes without arguments and keeps unknown results distinct', async () => {

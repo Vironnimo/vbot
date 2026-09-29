@@ -13,6 +13,7 @@ export {
   clampTerminalGrid,
   layoutForCount,
   createTerminalsViewState,
+  defaultTerminalGroupId,
   visibleTerminals,
   terminalIsFinished,
 } from './terminalsView/state.js';

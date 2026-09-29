@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount } from 'svelte';
 
 import { t } from '../../lib/i18n.js';
+import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import {
   applyAppearanceSettings,
   appearancePrefs,
@@ -150,7 +151,13 @@ describe('SettingsView', () => {
 
     it('groups settings by purpose and keeps small controls out of page navigation', async () => {
       const navigate = vi.fn();
-      await mountSettings({}, { onNavigateToAgentDefaults: navigate });
+      const navigation = createStandaloneNavigation();
+      await mountSettings(
+        {},
+        { navigation, onNavigateToAgentDefaults: navigate },
+      );
+      // The empty place shows the start page and records it.
+      expect(navigation.place).toEqual(['general']);
       const visiblePages = () =>
         Array.from(document.querySelectorAll('[data-settings-page]'))
           .filter((page) => !page.hidden)
@@ -223,6 +230,7 @@ describe('SettingsView', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
         flushSync();
         expect(visiblePages()).toHaveLength(1);
+        expect(navigation.place).toEqual(visiblePages());
         expect(document.activeElement.textContent).toBe(button.textContent);
         expect(button.getAttribute('aria-current')).toBe('page');
       }
@@ -232,11 +240,15 @@ describe('SettingsView', () => {
       expect(document.querySelector('#settings-defaults-model')).toBeNull();
     });
 
-    it('opens a deep link at its section inside the owning page', async () => {
+    it('opens a section place inside its page and records opened sections as steps', async () => {
       rpcMock.mockImplementation(createSettingsRpcMock());
+      // An App deep link names a bare section id.
+      const navigation = createStandaloneNavigation(['decision_model']);
+      const replace = vi.spyOn(navigation, 'replace');
+      const navigate = vi.spyOn(navigation, 'navigate');
       mountedComponent = mount(SettingsView, {
         target: document.body,
-        props: { targetPanelId: 'decision_model', targetPanelRequestId: 1 },
+        props: { navigation },
       });
       flushSync();
       await waitForCondition(
@@ -249,6 +261,42 @@ describe('SettingsView', () => {
         document.querySelector('.snav-item[aria-current="page"]').textContent,
       ).toBe('Tools');
       expect(isSectionHidden('web_search')).toBe(false);
+      expect(replace).toHaveBeenCalledWith(['tools', 'decision_model']);
+      expect(navigate).not.toHaveBeenCalled();
+
+      search('timezone');
+      document.querySelector('.settings-search-result').click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      flushSync();
+      expect(navigate).toHaveBeenLastCalledWith(['general', 'preferences']);
+      expect(navigation.place).toEqual(['general', 'preferences']);
+      expect(document.activeElement.id).toBe('settings-section-preferences');
+    });
+
+    it.each([
+      ['resumes on its own page', ['tools'], 640],
+      ['is not applied on another page', ['voice'], 0],
+    ])('a kept reading position %s', async (_case, place, expectedTop) => {
+      rpcMock.mockImplementation(createSettingsRpcMock());
+      mountedComponent = mount(SettingsView, {
+        target: document.body,
+        props: {
+          navigation: createStandaloneNavigation(place),
+          initialScrollPosition: {
+            top: 640,
+            pageId: 'tools',
+            place: ['tools'],
+          },
+        },
+      });
+      flushSync();
+      await waitForCondition(() => buttonByText('Add provider'));
+      const scrollport = document.querySelector('.settings-content');
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(scrollport.scrollTop).toBe(expectedTop);
+      expect(
+        document.querySelector('.snav-item[aria-current="page"]').textContent,
+      ).toBe(place[0] === 'tools' ? 'Tools' : 'Voice');
     });
 
     it('keeps a deep-link destination in view as earlier content loads, until the user scrolls', async () => {
@@ -266,7 +314,9 @@ describe('SettingsView', () => {
       );
       mountedComponent = mount(SettingsView, {
         target: document.body,
-        props: { targetPanelId: 'decision_model', targetPanelRequestId: 1 },
+        props: {
+          navigation: createStandaloneNavigation(['tools', 'decision_model']),
+        },
       });
       flushSync();
       await waitForCondition(
@@ -643,7 +693,7 @@ describe('SettingsView', () => {
       ]);
     });
 
-    it('highlights the Voice section once for a target panel request', async () => {
+    it('opens the Voice page with its Desktop sections from a place naming it', async () => {
       rpcMock.mockImplementation(createSettingsRpcMock());
       window.history.pushState({}, '', '/?accessor=desktop');
       window.pywebview = {
@@ -696,14 +746,13 @@ describe('SettingsView', () => {
             adopt: vi.fn(),
             refresh: vi.fn(),
           },
-          targetPanelId: 'voice',
-          targetPanelRequestId: 1,
+          navigation: createStandaloneNavigation(['voice']),
         },
       });
       flushSync();
 
-      // The Voice section renders (desktop capability) and the target request
-      // marks its index entry active.
+      // The Voice section renders (desktop capability) and the place marks
+      // its index entry active.
       await waitForCondition(
         () =>
           document.querySelector(

@@ -52,6 +52,24 @@ const depthInput = () =>
   );
 const settingsUpdates = () =>
   rpcMock.mock.calls.filter(([method]) => method === 'settings.update');
+const agentButton = (agentId) =>
+  document.querySelector(
+    `.agent-list [data-sortable-key="${agentId}"] button.agent-item`,
+  );
+const agentShown = (agentId) =>
+  agentButton(agentId)?.classList.contains('active') === true;
+const historyButton = (key) =>
+  document.querySelector(`button[aria-label="${t(key)}"]`);
+
+// The Agents view's reads plus the Chat startup reads.
+function agentsAppRpc(options) {
+  const agentsRpc = createAgentsRpcMock(options);
+  const chatRpc = createAppRpcMock();
+  return (method, params) =>
+    ['chat.commands', 'chat.history', 'chat.queue_list'].includes(method)
+      ? chatRpc(method, params)
+      : agentsRpc(method, params);
+}
 
 function typeInto(input, value) {
   input.value = value;
@@ -106,7 +124,7 @@ describe('App navigation', () => {
     });
   }
 
-  it('routes shared defaults search into Agents and returns ordinary navigation to the selected Agent', async () => {
+  it('routes shared defaults search into Agents, returns there from the Main menu and starts over on a second click', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
     mountApp();
     sidebarNavButton('settings').click();
@@ -128,11 +146,117 @@ describe('App navigation', () => {
     await waitForCondition(() =>
       expect(document.querySelector('.settings-content')).toBeTruthy(),
     );
+    // The Main menu returns to the place Agents showed last.
     sidebarNavButton('agents').click();
-    await waitForCondition(() =>
-      expect(document.querySelector('.agent-editor-host')?.hidden).toBe(false),
+    await waitForCondition(() => {
+      expect(document.querySelector('#settings-defaults-model')).toBeTruthy();
+      expect(window.location.hash).toBe('#agents/~defaults');
+    });
+
+    // Choosing the shown view again starts at its start: the selected Agent.
+    sidebarNavButton('agents').click();
+    await waitForCondition(() => {
+      expect(document.querySelector('.agent-editor-host')?.hidden).toBe(false);
+      expect(document.querySelector('.agent-shared-pane')?.hidden).toBe(true);
+    });
+  });
+
+  it('records each chosen record as a step and restores it with Back and Forward', async () => {
+    rpcMock.mockImplementation(
+      agentsAppRpc({
+        agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
+      }),
     );
-    expect(document.querySelector('.agent-shared-pane')).toBeNull();
+    mountApp();
+    sidebarNavButton('agents').click();
+    await waitForCondition(() => expect(agentButton('bravo')).toBeTruthy());
+
+    agentButton('bravo').click();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#agents/bravo');
+      expect(agentShown('bravo')).toBe(true);
+    });
+
+    agentButton('alpha').click();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#agents/alpha');
+      expect(agentShown('alpha')).toBe(true);
+    });
+
+    window.history.back();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#agents/bravo');
+      expect(agentShown('bravo')).toBe(true);
+    });
+
+    window.history.forward();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#agents/alpha');
+      expect(agentShown('alpha')).toBe(true);
+    });
+  });
+
+  it('closes an open dialog on Back and stays at the place', async () => {
+    rpcMock.mockImplementation(agentsAppRpc({ agents: [baseAgent()] }));
+    mountApp();
+    sidebarNavButton('logs').click();
+    sidebarNavButton('agents').click();
+    await waitForCondition(() => expect(agentShown('alpha')).toBe(true));
+    const hash = window.location.hash;
+
+    historyButton('agents.create').click();
+    await waitForCondition(() =>
+      expect(document.querySelector('[role="dialog"]')).toBeTruthy(),
+    );
+
+    window.history.back();
+    await waitForCondition(() => {
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(window.location.hash).toBe(hash);
+    });
+    expect(isCurrent('agents')).toBe(true);
+  });
+
+  it('keeps the Desktop app open at its first entry and offers Back and Forward', async () => {
+    window.history.replaceState(null, '', '/?accessor=desktop');
+    mountApp();
+    await waitForCondition(() =>
+      expect(historyButton('navigation.back')).toBeTruthy(),
+    );
+    expect(historyButton('navigation.back').disabled).toBe(true);
+
+    sidebarNavButton('logs').click();
+    await waitForCondition(() => {
+      expect(logsShown()).toBe(true);
+      expect(historyButton('navigation.back').disabled).toBe(false);
+    });
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowLeft',
+        altKey: true,
+        cancelable: true,
+      }),
+    );
+    await waitForCondition(() => {
+      expect(isCurrent('chat')).toBe(true);
+      expect(historyButton('navigation.forward').disabled).toBe(false);
+    });
+
+    // Back from the first app entry reaches the floor below it, which sends
+    // the WebView forward again.
+    const popped = [];
+    const recordPop = (event) => popped.push(event.state);
+    window.addEventListener('popstate', recordPop);
+    try {
+      window.history.back();
+      await waitForCondition(() => expect(popped).toHaveLength(2));
+    } finally {
+      window.removeEventListener('popstate', recordPop);
+    }
+    expect(popped[0]?.floor).toBe(true);
+    expect(window.history.state?.view).toBe('chat');
+    expect(isCurrent('chat')).toBe(true);
   });
 
   it('retains shared defaults when their transition save fails', async () => {
@@ -244,14 +368,14 @@ describe('App navigation', () => {
       expect(window.location.search).toBe('?desktop_session=launch-1');
       await waitForCondition(() => {
         expect(document.body.textContent).toContain('Older reply');
-        expect(window.history.state?.session?.sessionId).toBe('session-old');
+        expect(window.location.hash).toBe('#chat/alpha/session-old');
       });
 
       // Back returns to the Agent's current Session; no entry keeps the link.
       window.history.back();
       await waitForCondition(() => {
         expect(document.body.textContent).not.toContain('Older reply');
-        expect(window.history.state?.session).toBeNull();
+        expect(window.location.hash).toBe('#chat/alpha/session-alpha');
       });
       expect(window.location.search).toBe('?desktop_session=launch-1');
     });
@@ -313,7 +437,7 @@ describe('App navigation', () => {
       expect(handled).toBe(true);
       await waitForCondition(() => {
         expect(document.body.textContent).toContain('Older reply');
-        expect(window.history.state?.session?.sessionId).toBe('session-old');
+        expect(window.location.hash).toBe('#chat/alpha/session-old');
       });
     });
   });
@@ -325,7 +449,7 @@ describe('App navigation', () => {
     flushSync();
     await waitForCondition(() => {
       expect(logsShown()).toBe(true);
-      expect(window.location.hash).toBe('#logs');
+      expect(window.location.hash).toMatch(/^#logs(\/|$)/);
     });
 
     window.history.back();
@@ -391,6 +515,29 @@ describe('App navigation', () => {
       activityReadsBeforeSwitch,
     );
     expect(document.querySelector('.chat-view__state-banner')).toBeNull();
+  });
+
+  it('names the shown Session when Chat is first opened after loading in the background', async () => {
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        agents: [
+          { id: 'alpha', name: 'Alpha', current_session_id: 'session-alpha' },
+        ],
+      }),
+    );
+    window.history.replaceState(null, '', '#logs');
+    mountApp();
+
+    await waitForCondition(() => {
+      expect(logsShown()).toBe(true);
+      expect(rpcMock).toHaveBeenCalledWith('chat.history', expect.anything());
+    });
+
+    sidebarNavButton('chat').click();
+    await waitForCondition(() => {
+      expect(isCurrent('chat')).toBe(true);
+      expect(window.location.hash).toBe('#chat/alpha/session-alpha');
+    });
   });
 
   it('retains Settings input after a failed topic change and retries the same navigation', async () => {
@@ -495,27 +642,23 @@ describe('App navigation', () => {
 
   it('saves an Agent tool change before leaving the Agents tab', async () => {
     let resolveAgentUpdate;
-    const agentsRpc = createAgentsRpcMock({
-      agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
-      tools: [
-        { name: 'bash', description: 'Run shell commands.' },
-        { name: 'write', description: 'Write files.' },
-      ],
-      agentUpdate: (params) =>
-        new Promise((resolve) => {
-          resolveAgentUpdate = () =>
-            resolve({
-              ...baseAgent(),
-              ...params,
-              current_session_id: 'session-1',
-            });
-        }),
-    });
-    const chatRpc = createAppRpcMock();
-    rpcMock.mockImplementation((method, params) =>
-      ['chat.commands', 'chat.history', 'chat.queue_list'].includes(method)
-        ? chatRpc(method, params)
-        : agentsRpc(method, params),
+    rpcMock.mockImplementation(
+      agentsAppRpc({
+        agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
+        tools: [
+          { name: 'bash', description: 'Run shell commands.' },
+          { name: 'write', description: 'Write files.' },
+        ],
+        agentUpdate: (params) =>
+          new Promise((resolve) => {
+            resolveAgentUpdate = () =>
+              resolve({
+                ...baseAgent(),
+                ...params,
+                current_session_id: 'session-1',
+              });
+          }),
+      }),
     );
     mountApp();
 
@@ -650,32 +793,32 @@ describe('App navigation', () => {
     mountApp();
     await openSubAgentSession();
 
-    // Tab away and back while the persistent Chat owner retains the override.
+    // Tab away and back: the Main menu returns to Chat's last place, the
+    // child Session the persistent Chat owner still shows.
     sidebarNavButton('logs').click();
     flushSync();
     await waitForCondition(() => {
-      expect(window.location.hash).toBe('#logs');
+      expect(window.location.hash).toMatch(/^#logs(\/|$)/);
     });
     sidebarNavButton('chat').click();
     flushSync();
     await waitForCondition(() => {
-      expect(window.location.hash).toBe('#chat');
-    });
-
-    window.history.back();
-    await waitForCondition(() => {
-      expect(window.location.hash).toBe('#logs');
-    });
-
-    // The second back pops the Chat entry with the child Session: passive
-    // restoration must not push a Chat entry without the override over it.
-    window.history.back();
-    await waitForCondition(() => {
-      expect(window.location.hash).toBe('#chat');
+      expect(window.location.hash).toBe('#chat/alpha/sub-session-repeat');
       expect(document.body.textContent).toContain('Sub-agent response');
-      expect(window.history.state?.session?.sessionId).toBe(
-        'sub-session-repeat',
-      );
+    });
+
+    window.history.back();
+    await waitForCondition(() => {
+      expect(window.location.hash).toMatch(/^#logs(\/|$)/);
+    });
+
+    // The second back pops the earlier Chat entry with the child Session:
+    // restoring it must not replace that entry with a place without it.
+    window.history.back();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#chat/alpha/sub-session-repeat');
+      expect(document.body.textContent).toContain('Sub-agent response');
+      expect(window.history.state?.extra?.subAgent).toBe(true);
     });
   });
 });

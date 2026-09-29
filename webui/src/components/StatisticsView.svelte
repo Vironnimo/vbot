@@ -1,5 +1,6 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import InfoHint from './ui/InfoHint.svelte';
@@ -23,6 +24,11 @@
     formatDateTime,
   } from '$lib/statisticsView.js';
 
+  let {
+    // The place is the shown sub-view; an empty place shows the Overview.
+    navigation = createStandaloneNavigation(),
+  } = $props();
+
   let report = $state(null);
   let loading = $state(false);
   let errorMessage = $state('');
@@ -44,6 +50,24 @@
       destroyed = true;
     };
   });
+
+  // Place -> shown sub-view. An empty or unknown place shows the Overview
+  // and corrects the entry to it; the range and granularity are not places.
+  $effect(() => {
+    const requested = navigation.place[0] ?? '';
+    untrack(() => {
+      const subView = STATISTICS_SUB_VIEWS.includes(requested)
+        ? requested
+        : STATISTICS_SUB_VIEWS[0];
+      activeSubView = subView;
+      if (subView === 'limits') limitsOpened = true;
+      if (requested !== subView) navigation.replace([subView]);
+    });
+  });
+
+  function showSubView(subView) {
+    navigation.navigate([subView]);
+  }
 
   async function loadReport(range = requestedRange) {
     if (loading) return;
@@ -117,10 +141,7 @@
       value={activeSubView}
       ariaLabel={t('statistics.title')}
       idPrefix="statistics-subviews"
-      onChange={(value) => {
-        activeSubView = value;
-        if (value === 'limits') limitsOpened = true;
-      }}
+      onChange={showSubView}
     />
   </div>
 
@@ -199,7 +220,7 @@
         {report}
         bind:granularity
         {reportRange}
-        onNavigate={(value) => (activeSubView = value)}
+        onNavigate={showSubView}
       />
     {:else if report && activeSubView === 'usage'}
       <UsagePanel {report} bind:granularity {reportRange} />

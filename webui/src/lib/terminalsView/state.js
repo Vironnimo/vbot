@@ -145,11 +145,16 @@ function reconcileTerminalGroups(state, result) {
       typeof group.name === 'string',
   );
   if (!state.selectedGroupId) {
-    const firstOccupied =
-      state.groups.find((group) => Number(group.terminal_count) > 0) ?? null;
-    state.selectedGroupId = (firstOccupied ?? state.groups[0])?.group_id ?? '';
+    state.selectedGroupId = defaultTerminalGroupId(state);
   }
   return state.groups;
+}
+
+// The group the Terminals view opens on: the first one with terminals.
+export function defaultTerminalGroupId(state) {
+  const firstOccupied =
+    state.groups.find((group) => Number(group.terminal_count) > 0) ?? null;
+  return (firstOccupied ?? state.groups[0])?.group_id ?? '';
 }
 
 export function reconcileTerminalLaunchHistory(state, result) {

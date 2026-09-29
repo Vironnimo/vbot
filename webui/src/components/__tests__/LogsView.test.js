@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
+import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 
 const listLogsMock = vi.fn();
 const readLogFileMock = vi.fn();
@@ -490,6 +491,37 @@ describe('LogsView', () => {
     expect(rows[0].querySelector('.logs-entry__detail').textContent).toBe(
       'Recovered',
     );
+  });
+
+  it('shows the file named by the place and records file switches in it', async () => {
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11', '2026-05-10'],
+      default_file: '2026-05-11',
+    });
+    readLogFileMock.mockImplementation(async (file) => ({
+      file,
+      entries: [entry({ message: `Loaded ${file}` })],
+      cursor: `cursor-${file}`,
+    }));
+    const navigation = createStandaloneNavigation(['2026-05-10']);
+
+    mountedComponent = mount(LogsView, {
+      target: document.body,
+      props: { navigation },
+    });
+    flushSync();
+    await waitForCondition(() => logEntryMessages()[0] === 'Loaded 2026-05-10');
+    expect(readLogFileMock).not.toHaveBeenCalledWith('2026-05-11');
+
+    // The empty place (the view's start page) shows the default file.
+    navigation.navigate([]);
+    await waitForCondition(() => logEntryMessages()[0] === 'Loaded 2026-05-11');
+    expect(navigation.place).toEqual(['2026-05-11']);
+
+    openSimpleDropdown('logs-file');
+    selectSimpleOption('logs-file', '2026-05-10');
+    expect(navigation.place).toEqual(['2026-05-10']);
+    await waitForCondition(() => logEntryMessages()[0] === 'Loaded 2026-05-10');
   });
 
   it('updates the file catalog live without changing a valid selection', async () => {

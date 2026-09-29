@@ -5,6 +5,7 @@
   import { tick } from 'svelte';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
+  import { useNavigation } from '$lib/navigation.svelte.js';
   import Button from '../ui/Button.svelte';
 
   const noop = () => {};
@@ -56,6 +57,13 @@
     open = false;
     if (restoreFocus) trigger()?.focus();
   }
+
+  // Back and Forward close the open menu before navigating.
+  const shell = useNavigation();
+  $effect(() => {
+    if (!open) return;
+    return shell?.registerLayer({ close: () => closeMenu(true) });
+  });
 
   function choose(item) {
     closeMenu(true);

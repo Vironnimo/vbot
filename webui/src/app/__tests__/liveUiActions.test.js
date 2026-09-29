@@ -5,7 +5,6 @@ function fixture({ view = 'chat', pendingTransition = false } = {}) {
   const state = {
     view,
     transitions: [],
-    projectsView: null,
     terminalsView: null,
   };
   const selection = {
@@ -20,19 +19,22 @@ function fixture({ view = 'chat', pendingTransition = false } = {}) {
     selectAgent: vi.fn(),
     selectManagedProject: vi.fn(),
   };
-  const controller = {
-    selectView: vi.fn((next) => {
+  const navigator = {
+    open: vi.fn((next) => {
       state.view = next;
-      return true;
     }),
-    navigateToSession: vi.fn(() => true),
+    navigate: vi.fn((next) => {
+      state.view = next;
+    }),
   };
+  const navigateToSession = vi.fn(() => true);
   const loadProject = vi.fn(async () => ({
     scan: { team: [{ agent_id: 'reviewer', display_name: 'Reviewer' }] },
   }));
   const actions = createLiveUiActions({
     selection,
-    appController: () => controller,
+    navigator,
+    navigateToSession,
     activeView: () => state.view,
     // A pending autosave defers the transition until the test runs it.
     requestTransition: (action) => {
@@ -43,11 +45,18 @@ function fixture({ view = 'chat', pendingTransition = false } = {}) {
     chatSelection: () => ({ agent_id: 'main', session_id: 's1' }),
     loadProject,
     terminalsView: () => state.terminalsView,
-    projectsView: () => state.projectsView,
     afterRender: async () => {},
   });
   const guard = { isCurrent: () => true };
-  return { state, selection, controller, loadProject, actions, guard };
+  return {
+    state,
+    selection,
+    navigator,
+    navigateToSession,
+    loadProject,
+    actions,
+    guard,
+  };
 }
 
 describe('Live voice UI actions', () => {
@@ -77,9 +86,9 @@ describe('Live voice UI actions', () => {
         f.guard,
       ),
     ).toBe(true);
-    expect(f.controller.navigateToSession).toHaveBeenCalledWith('coder', 's2');
+    expect(f.navigateToSession).toHaveBeenCalledWith('coder', 's2');
     expect(f.actions.open({ view: 'terminals' }, f.guard)).toBe(true);
-    expect(f.controller.selectView).toHaveBeenCalledWith('terminals');
+    expect(f.navigator.open).toHaveBeenCalledWith('terminals');
   });
 
   it('opens an Agent page through the shared Agent selection', () => {
@@ -88,29 +97,19 @@ describe('Live voice UI actions', () => {
       true,
     );
     expect(f.selection.selectAgent).toHaveBeenCalledWith('coder');
-    expect(f.controller.selectView).toHaveBeenCalledWith('agents');
+    expect(f.navigator.navigate).toHaveBeenCalledWith('agents', ['coder']);
     expect(f.actions.open({ view: 'agents', agent_id: 'gone' }, f.guard)).toBe(
       false,
     );
     expect(f.selection.selectAgent).toHaveBeenCalledOnce();
   });
 
-  it('opens a Project page in a new or an already open Projects view', () => {
+  it('opens a known Project page', () => {
     const f = fixture();
     expect(
       f.actions.open({ view: 'projects', project_id: 'vbot' }, f.guard),
     ).toBe(true);
-    expect(f.selection.selectManagedProject).toHaveBeenCalledWith('vbot');
-    expect(f.controller.selectView).toHaveBeenCalledWith('projects');
-
-    f.state.projectsView = { selectVoiceProject: vi.fn(() => true) };
-    expect(
-      f.actions.open({ view: 'projects', project_id: 'vbot' }, f.guard),
-    ).toBe(true);
-    expect(f.state.projectsView.selectVoiceProject).toHaveBeenCalledWith(
-      'vbot',
-    );
-    expect(f.controller.selectView).toHaveBeenCalledOnce();
+    expect(f.navigator.navigate).toHaveBeenCalledWith('projects', ['vbot']);
     expect(
       f.actions.open({ view: 'projects', project_id: 'other' }, f.guard),
     ).toBe(false);
@@ -126,7 +125,7 @@ describe('Live voice UI actions', () => {
     current = false;
     expect(f.state.transitions[0]()).toBe(false);
     expect(f.selection.selectAgent).not.toHaveBeenCalled();
-    expect(f.controller.selectView).not.toHaveBeenCalled();
+    expect(f.navigator.navigate).not.toHaveBeenCalled();
   });
 
   it('applies Terminal layout requests in the Terminals view', async () => {
@@ -138,7 +137,7 @@ describe('Live voice UI actions', () => {
     expect(
       await f.actions.terminalView({ op: 'show', terminal_id: 't1' }, f.guard),
     ).toEqual({ visible_order: ['t1'] });
-    expect(f.controller.selectView).toHaveBeenCalledWith('terminals');
+    expect(f.navigator.open).toHaveBeenCalledWith('terminals');
     expect(f.state.terminalsView.applyVoiceAction).toHaveBeenCalledWith(
       'show',
       { terminal_id: 't1' },

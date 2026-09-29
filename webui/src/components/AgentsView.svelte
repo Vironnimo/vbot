@@ -17,6 +17,7 @@
   import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
   import { t } from '$lib/i18n.js';
   import { createModelCatalogLoader } from '$lib/modelSelection.js';
+  import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
 
   import AgentCreateModal from './agents/AgentCreateModal.svelte';
@@ -28,15 +29,21 @@
   import AgentListPane from './agents/AgentListPane.svelte';
 
   const noop = () => {};
+  // The shared defaults place. Agent ids are letters, digits, hyphens and
+  // underscores, so it never names an Agent.
+  const DEFAULTS_PLACE = '~defaults';
   const autosaveContext = useAutosaveContext();
   const modelCatalogLoader = createModelCatalogLoader({
     listModels,
     listConnections,
   });
   let {
+    // The place is the shown Agent (`[agentId]`) or the shared defaults
+    // (`['~defaults']`, `['~defaults', 'compaction']` for that section); an
+    // empty place shows the shared selected Agent.
+    navigation = createStandaloneNavigation(),
+    // Seeds the empty place; the place decides what the view shows.
     sharedSelectedAgentId = '',
-    targetDefaultsPanel = '',
-    onDefaultsTargetHandled = noop,
     onAgentsChanged,
     onAgentSelected,
     onToast = noop,
@@ -54,22 +61,20 @@
   let sharedSettingsLoading = $state(false);
   let sharedContent = $state(null);
   let defaultsRequestId = 0;
+  let defaultsShowRequestId = 0;
   let destroyed = false;
-  $effect(() => {
-    if (targetDefaultsPanel) {
-      const target = targetDefaultsPanel;
-      onDefaultsTargetHandled();
-      untrack(() => void openSharedDefaults(target));
-    }
-  });
-  function openSharedDefaults(panelId = 'defaults') {
-    return autosaveContext.requestTransition(async () => {
-      sharedDefaultsOpen = true;
-      if (!sharedSettings) await loadSharedSettings();
-      await tick();
-      if (panelId === 'compaction') jumpToDefaultsSection(panelId);
-      else sharedContent?.scrollTo?.({ top: 0 });
-    });
+
+  // Shows the shared defaults, scrolled to the section the place names (the
+  // jump links inside the pane only scroll).
+  async function showSharedDefaults(panelId) {
+    const requestId = ++defaultsShowRequestId;
+    sharedDefaultsOpen = true;
+    if (!sharedSettings) await loadSharedSettings();
+    await tick();
+    if (destroyed || requestId !== defaultsShowRequestId || !sharedDefaultsOpen)
+      return;
+    if (panelId === 'compaction') jumpToDefaultsSection(panelId);
+    else sharedContent?.scrollTo?.({ top: 0 });
   }
 
   function jumpToDefaultsSection(panelId) {
@@ -111,17 +116,23 @@
 
   function navigateFromAgent(panelId) {
     if (panelId === 'defaults' || panelId === 'compaction')
-      return openSharedDefaults(panelId);
+      return navigation.navigate([
+        DEFAULTS_PLACE,
+        ...(panelId === 'compaction' ? [panelId] : []),
+      ]);
     return onNavigateToSettingsPanel(panelId);
   }
 
   let agents = $state([]);
   let selectedAgentId = $state('');
+  // The first roster arrived / a roster read is in flight. A read in flight
+  // decides the shown Agent from the place when it lands.
+  let agentsLoaded = $state(false);
+  let rosterLoading = $state(false);
   let agentOrderRevision = $state(0);
   let isReordering = $state(false);
   let reorderInteractionActive = $state(false);
   let pendingAgentReload = false;
-  let lastSharedSelectedAgentId = $state('');
   let isCreateModalOpen = $state(false);
   let isLoading = $state(false);
   let loadError = $state('');
@@ -165,25 +176,67 @@
     }),
   );
 
+  // Place -> shown pane and Agent. Before the first roster read, the read
+  // resolves the place itself. An Agent the roster does not know yet (a
+  // rename or a new Agent from elsewhere) waits for a roster read, which
+  // shows it or falls back and corrects the entry.
   $effect(() => {
-    if (
-      sharedSelectedAgentId &&
-      sharedSelectedAgentId !== lastSharedSelectedAgentId &&
-      agents.some((agent) => agent.id === sharedSelectedAgentId)
-    ) {
-      lastSharedSelectedAgentId = sharedSelectedAgentId;
-      if (sharedSelectedAgentId !== selectedAgentId) {
-        selectAgent(sharedSelectedAgentId);
+    const [target = '', panelId = ''] = navigation.place;
+    untrack(() => {
+      if (target === DEFAULTS_PLACE) {
+        void showSharedDefaults(panelId);
+        return;
       }
-    } else if (!sharedSelectedAgentId) {
-      lastSharedSelectedAgentId = sharedSelectedAgentId;
-    }
+      sharedDefaultsOpen = false;
+      if (!agentsLoaded) return;
+      if (!target) {
+        applyAgentSelection(
+          resolveShownAgentId([sharedSelectedAgentId, selectedAgentId]),
+        );
+        showSelectionInPlace();
+        return;
+      }
+      if (agents.some((agent) => agent.id === target)) {
+        if (target !== selectedAgentId) applyAgentSelection(target);
+        return;
+      }
+      if (!rosterLoading)
+        void loadAgents({ notify: false, showLoading: false });
+    });
   });
+
+  // Shown Agent -> place. A roster read that showed another Agent (the place
+  // named a deleted or unknown one, or was empty) and a rename correct the
+  // current entry.
+  $effect(() => {
+    const agentId = selectedAgentId;
+    const settled = agentsLoaded && !rosterLoading && !sharedDefaultsOpen;
+    if (!settled) return;
+    untrack(() => showSelectionInPlace(agentId));
+  });
+
+  function showSelectionInPlace(agentId = selectedAgentId) {
+    if (sharedDefaultsOpen || (navigation.place[0] ?? '') === agentId) return;
+    navigation.replace(agentId ? [agentId] : []);
+  }
+
+  // The Agent the place names, else the first of `candidates` the roster
+  // knows, else the first Agent.
+  function resolveShownAgentId(candidates) {
+    const [target = ''] = navigation.place;
+    return (
+      [target === DEFAULTS_PLACE ? '' : target, ...candidates].find(
+        (agentId) => agentId && agents.some((agent) => agent.id === agentId),
+      ) ??
+      agents[0]?.id ??
+      ''
+    );
+  }
 
   onMount(() => {
     void loadCatalogs();
     void loadProjectCatalog();
-    void loadAgents({ preferredAgentId: sharedSelectedAgentId });
+    void loadAgents();
   });
 
   onDestroy(() => {
@@ -350,6 +403,7 @@
       isLoading = true;
       loadingAgentListRequestId = requestId;
     }
+    rosterLoading = true;
     loadError = '';
 
     try {
@@ -361,8 +415,10 @@
       agentOrderRevision = Number.isInteger(result?.order_revision)
         ? result.order_revision
         : 0;
-      const preferredAgentId = options.preferredAgentId ?? selectedAgentId;
-      applyAgentSelection(resolveSelectedAgentId(agents, preferredAgentId));
+      applyAgentSelection(
+        resolveShownAgentId([selectedAgentId, sharedSelectedAgentId]),
+      );
+      agentsLoaded = true;
       if (options.notify !== false) {
         notifyAgentsChanged();
       }
@@ -375,6 +431,9 @@
       if (loadingAgentListRequestId === requestId) {
         isLoading = false;
         loadingAgentListRequestId = 0;
+      }
+      if (requestId === agentListRequestId) {
+        rosterLoading = false;
       }
     }
   }
@@ -389,7 +448,6 @@
     }
 
     const previousAgents = agents;
-    const preferredAgentId = selectedAgentId;
     agents = agentIds.map((agentId) => agentsById.get(agentId));
     isReordering = true;
     try {
@@ -405,20 +463,12 @@
         title: viewErrorMessage(error, t('agents.order.saveError')),
         variant: 'error',
       });
-      await loadAgents({
-        preferredAgentId,
-        notify: false,
-        showLoading: false,
-      });
+      await loadAgents({ notify: false, showLoading: false });
     } finally {
       isReordering = false;
       if (pendingAgentReload) {
         pendingAgentReload = false;
-        await loadAgents({
-          preferredAgentId,
-          notify: false,
-          showLoading: false,
-        });
+        await loadAgents({ notify: false, showLoading: false });
       }
     }
   }
@@ -429,26 +479,6 @@
       pendingAgentReload = false;
       void loadAgents({ notify: false, showLoading: false });
     }
-  }
-
-  function resolveSelectedAgentId(nextAgents, preferredAgentId) {
-    if (nextAgents.some((agent) => agent.id === preferredAgentId)) {
-      return preferredAgentId;
-    }
-
-    return nextAgents[0]?.id ?? '';
-  }
-
-  function selectAgent(agentId) {
-    if (agentId === selectedAgentId && !sharedDefaultsOpen) {
-      return false;
-    }
-
-    return autosaveContext.requestTransition(() => {
-      sharedDefaultsOpen = false;
-
-      return applyAgentSelection(agentId);
-    });
   }
 
   function applyAgentSelection(agentId) {
@@ -490,8 +520,6 @@
     // absent-case labels.
     createModalAgentDefaults = {};
 
-    sharedDefaultsOpen = false;
-
     isCreateModalOpen = true;
     try {
       const result = await getSettings();
@@ -503,15 +531,16 @@
     }
   }
 
+  // Showing the new Agent is a step. Creation also emits a roster
+  // invalidation; whichever roster read lands last shows the Agent the place
+  // names.
   async function handleAgentCreated(agentId) {
     isCreateModalOpen = false;
-    // Creation also emits a roster invalidation. Make the intended selection
-    // authoritative before either reload can finish so a competing refresh
-    // cannot preserve the previously selected Agent.
-    applyAgentSelection(agentId);
-    await loadAgents({ preferredAgentId: agentId });
+    navigation.navigate([agentId]);
+    await loadAgents();
   }
 
+  // The roster read falls back to another Agent and corrects the entry.
   async function handleAgentDeleted() {
     await loadAgents();
   }
@@ -531,10 +560,10 @@
       {agents}
       selectedAgentId={sharedDefaultsOpen ? '' : selectedAgentId}
       {sharedDefaultsOpen}
-      onOpenSharedDefaults={() => openSharedDefaults()}
+      onOpenSharedDefaults={() => navigation.navigate([DEFAULTS_PLACE])}
       {isLoading}
       {isReordering}
-      onSelect={selectAgent}
+      onSelect={(agentId) => navigation.navigate([agentId])}
       onCreate={openCreateModal}
       onReorder={handleAgentsReordered}
       onReorderInteractionChange={handleReorderInteractionChange}
@@ -585,7 +614,8 @@
               </div>
               <Button
                 variant="secondary"
-                onClick={() => selectAgent(selectedAgentId)}
+                onClick={() =>
+                  navigation.up(selectedAgentId ? [selectedAgentId] : [])}
                 >{t('agents.shared.back')}</Button
               >
             </div>
