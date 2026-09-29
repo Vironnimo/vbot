@@ -727,7 +727,12 @@ describe('AgentsView behavior and access', () => {
       new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
     );
     getButtonByAriaLabel('Toggle skill sample-skill').focus();
-    expect(document.getElementById('app-tooltip').textContent).toBe(
+    // The card heads with the complete name and holds the description.
+    const card = document.getElementById('app-tooltip');
+    expect(card.querySelector('.app-tooltip__title').textContent).toBe(
+      'sample-skill',
+    );
+    expect(card.querySelector('.app-tooltip__text').textContent).toBe(
       'A loadable sample skill.',
     );
     const skillToggle = getButtonByAriaLabel('Toggle skill warning-skill');

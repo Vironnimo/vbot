@@ -756,9 +756,9 @@ describe('ProjectsView Tool and Skill whitelists', () => {
       new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
     );
     toggleByAriaLabel('Toggle skill debugging').focus();
-    expect(document.getElementById('app-tooltip').textContent).toBe(
-      'Debug the repo.',
-    );
+    expect(
+      document.querySelector('#app-tooltip .app-tooltip__text').textContent,
+    ).toBe('Debug the repo.');
 
     toggleByAriaLabel('Toggle skill debugging').click();
     toggleByAriaLabel('Toggle skill deploy').click();
