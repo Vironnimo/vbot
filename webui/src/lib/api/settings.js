@@ -126,6 +126,15 @@ export function updateSettings(settings, options = {}) {
   return rpc('settings.update', settings, options);
 }
 
+export function setServiceKey(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Service key payload must be an object',
+    'settings.set_service_key',
+  );
+  return rpc('settings.set_service_key', params, options);
+}
+
 export function listAgentMemories(agentId, options = {}) {
   requireNonEmptyString(
     agentId,

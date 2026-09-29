@@ -50,6 +50,8 @@ export {
   buildRecallSettingsPayload,
   buildRecallBackendOptions,
   getWebSearchSettings,
+  getWebServiceKeys,
+  webServiceKeyHint,
   getWebFetchSettings,
   buildWebFetchSettingsPayload,
   buildWebSearchSettingsPayload,

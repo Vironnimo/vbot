@@ -559,13 +559,14 @@ def make_web_fetch_handler(
 
     async def service(url: str, output: str, provider: str) -> JsonObject:
         variable = WEB_FETCH_CREDENTIALS[provider]
-        key = credential_resolver(variable) if credential_resolver else None
+        # A blank value counts as missing, as in web_search and the Settings key status.
+        key = (credential_resolver(variable) or "").strip() if credential_resolver else ""
         if not key:
             return tool_failure(
                 "configuration_error",
-                f"The {provider} fetch service is selected in Settings, but {variable} is not "
-                "set in the .env file of the vBot data directory. Tell the user: they can add "
-                "the key, or set Web Fetch back to Direct in Settings.",
+                f"The {provider} fetch service is selected in Settings, but its API key "
+                f"({variable}) is not set. Tell the user: they can enter the key in Settings "
+                "under Web page reading, or set the service back to Direct there.",
                 retryable=False,
             )
         try:

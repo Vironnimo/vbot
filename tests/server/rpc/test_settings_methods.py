@@ -53,9 +53,23 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-live-secret")
-    for key in ("ANTHROPIC_API_KEY", "OPENAI_OAUTH_TOKEN", "OLLAMA_API_KEY", "OPENROUTER_API_KEY"):
+    monkeypatch.setenv("BRAVE_API_KEY", "brave-live-secret")
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_OAUTH_TOKEN",
+        "OLLAMA_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TAVILY_API_KEY",
+        "EXA_API_KEY",
+        "SERPER_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "PARALLEL_API_KEY",
+    ):
         monkeypatch.delenv(key, raising=False)
     state = make_state(tmp_path, StubAdapter())
+    # Blank entries, like the seeded .env's placeholders, are present but not set.
+    (tmp_path / ".env").write_text('TAVILY_API_KEY=\nEXA_API_KEY="  "\n', encoding="utf-8")
     state.runtime.providers.add(_copilot_device_flow_provider())
     state.runtime.providers.add(openrouter_provider())
     state.runtime.models._models["github-copilot"] = []
@@ -264,24 +278,28 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "firecrawl",
                     "api_key_env": "FIRECRAWL_API_KEY",
                     "configured": False,
+                    "source": None,
                     "pricing_url": "https://www.firecrawl.dev/pricing",
                 },
                 {
                     "id": "tavily",
                     "api_key_env": "TAVILY_API_KEY",
                     "configured": False,
+                    "source": "data_dir",
                     "pricing_url": "https://docs.tavily.com/documentation/api-credits",
                 },
                 {
                     "id": "exa",
                     "api_key_env": "EXA_API_KEY",
                     "configured": False,
+                    "source": "data_dir",
                     "pricing_url": "https://exa.ai/pricing",
                 },
                 {
                     "id": "parallel",
                     "api_key_env": "PARALLEL_API_KEY",
                     "configured": False,
+                    "source": None,
                     "pricing_url": "https://docs.parallel.ai/getting-started/pricing",
                 },
             ],
@@ -300,6 +318,45 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             ],
             "default_count": 12,
             "searxng": {"base_url": "http://localhost:8888"},
+            # Keyed providers only: SearXNG and DuckDuckGo need no key.
+            "services": [
+                {
+                    "id": "brave",
+                    "api_key_env": "BRAVE_API_KEY",
+                    "configured": True,
+                    "source": "process_environment",
+                },
+                {
+                    "id": "tavily",
+                    "api_key_env": "TAVILY_API_KEY",
+                    "configured": False,
+                    "source": "data_dir",
+                },
+                {
+                    "id": "exa",
+                    "api_key_env": "EXA_API_KEY",
+                    "configured": False,
+                    "source": "data_dir",
+                },
+                {
+                    "id": "serper",
+                    "api_key_env": "SERPER_API_KEY",
+                    "configured": False,
+                    "source": None,
+                },
+                {
+                    "id": "firecrawl",
+                    "api_key_env": "FIRECRAWL_API_KEY",
+                    "configured": False,
+                    "source": None,
+                },
+                {
+                    "id": "perplexity",
+                    "api_key_env": "PERPLEXITY_API_KEY",
+                    "configured": False,
+                    "source": None,
+                },
+            ],
         },
         "debug": {
             "enabled": False,
@@ -334,6 +391,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         },
     }
     assert "sk-live-secret" not in str(result)
+    assert "brave-live-secret" not in str(result)
     # Retired settings are not returned: token counts and the live voice opt-in.
     assert "show_token_counts" not in str(result)
     assert "live_voice" not in result

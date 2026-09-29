@@ -206,19 +206,20 @@ async def test_service_page_is_saved_and_followups_never_bill_again(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key", [None, "  "], ids=["missing", "blank"])
 async def test_failed_recovery_keeps_the_direct_failure_and_adds_the_service_reason(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str | None
 ) -> None:
     install_http_get(monkeypatch, lambda url: make_result(status_code=403, url=url))
 
-    result = await fetch(tmp_path, {"url": URL}, **_service("firecrawl", "fallback", key=None))
+    result = await fetch(tmp_path, {"url": URL}, **_service("firecrawl", "fallback", key=key))
 
     assert result["error"]["code"] == "access_denied"
     assert result["error"]["message"].endswith(
         "Try another source. The firecrawl fetch service also failed: The firecrawl fetch "
-        "service is selected in Settings, but FIRECRAWL_API_KEY is not set in the .env file "
-        "of the vBot data directory. Tell the user: they can add the key, or set Web Fetch "
-        "back to Direct in Settings."
+        "service is selected in Settings, but its API key (FIRECRAWL_API_KEY) is not set. "
+        "Tell the user: they can enter the key in Settings under Web page reading, or set "
+        "the service back to Direct there."
     )
 
 

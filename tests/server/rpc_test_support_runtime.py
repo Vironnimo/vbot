@@ -446,6 +446,13 @@ class StubRuntime:
     def resolve_environment_credential(self, key: str) -> str:
         return self._credential_value(key)
 
+    def environment_credential_source(self, key: str) -> str | None:
+        if key in os.environ:
+            return "process_environment"
+        if key in self.storage.load_environment():
+            return "data_dir"
+        return None
+
     def _credential_value(self, key: str) -> str:
         if key in os.environ:
             return os.environ[key]

@@ -58,6 +58,7 @@ export {
   createDataSnapshot,
   acknowledgeDataStoreIncident,
   updateSettings,
+  setServiceKey,
   listAgentMemories,
   addAgentMemory,
   replaceAgentMemory,

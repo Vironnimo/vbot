@@ -16,6 +16,7 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MAX_WEB_SEARCH_PAGE,
     MIN_WEB_SEARCH_COUNT,
+    WEB_SEARCH_CREDENTIALS,
     WEB_SEARCH_PROVIDER_BRAVE,
     WEB_SEARCH_PROVIDER_DUCKDUCKGO,
     WEB_SEARCH_PROVIDER_EXA,
@@ -189,29 +190,29 @@ def _duckduckgo(api_key: str, settings: dict[str, Any]) -> SearchFunction:
     return _search_duckduckgo
 
 
+# Credential keys come from WEB_SEARCH_CREDENTIALS, which Settings also reads to
+# report whether each key is present.
 _PROVIDERS: dict[str, _Provider] = {
-    WEB_SEARCH_PROVIDER_BRAVE: _Provider("Brave Search", "BRAVE_API_KEY", _keyed(_search_brave)),
-    WEB_SEARCH_PROVIDER_TAVILY: _Provider("Tavily", "TAVILY_API_KEY", _keyed(_search_tavily)),
-    WEB_SEARCH_PROVIDER_EXA: _Provider("Exa", "EXA_API_KEY", _keyed(_search_exa)),
-    WEB_SEARCH_PROVIDER_SERPER: _Provider("Serper", "SERPER_API_KEY", _keyed(_search_serper)),
-    WEB_SEARCH_PROVIDER_FIRECRAWL: _Provider(
-        "Firecrawl", "FIRECRAWL_API_KEY", _keyed(_search_firecrawl)
-    ),
-    WEB_SEARCH_PROVIDER_PERPLEXITY: _Provider(
-        "Perplexity", "PERPLEXITY_API_KEY", _keyed(_search_perplexity)
-    ),
-    WEB_SEARCH_PROVIDER_SEARXNG: _Provider("SearXNG", None, _searxng),
-    WEB_SEARCH_PROVIDER_DUCKDUCKGO: _Provider("DuckDuckGo", None, _duckduckgo),
+    provider_id: _Provider(label, WEB_SEARCH_CREDENTIALS.get(provider_id), search)
+    for provider_id, label, search in (
+        (WEB_SEARCH_PROVIDER_BRAVE, "Brave Search", _keyed(_search_brave)),
+        (WEB_SEARCH_PROVIDER_TAVILY, "Tavily", _keyed(_search_tavily)),
+        (WEB_SEARCH_PROVIDER_EXA, "Exa", _keyed(_search_exa)),
+        (WEB_SEARCH_PROVIDER_SERPER, "Serper", _keyed(_search_serper)),
+        (WEB_SEARCH_PROVIDER_FIRECRAWL, "Firecrawl", _keyed(_search_firecrawl)),
+        (WEB_SEARCH_PROVIDER_PERPLEXITY, "Perplexity", _keyed(_search_perplexity)),
+        (WEB_SEARCH_PROVIDER_SEARXNG, "SearXNG", _searxng),
+        (WEB_SEARCH_PROVIDER_DUCKDUCKGO, "DuckDuckGo", _duckduckgo),
+    )
 }
 
 
 def _missing_key(provider: _Provider) -> JsonObject:
     return tool_failure(
         "missing_api_key",
-        f"Web search is not set up: the selected provider, {provider.label}, needs "
-        f"{provider.credential_key} in the .env file of the vBot data directory. Tell the "
-        "user: they can add the key, or choose another provider in Settings under Web "
-        "search (DuckDuckGo needs no key).",
+        f"Web search is not set up: the selected provider, {provider.label}, needs an API "
+        f"key ({provider.credential_key}). Tell the user: they can enter the key in Settings "
+        "under Web search, or choose another provider there (DuckDuckGo needs no key).",
         retryable=False,
     )
 

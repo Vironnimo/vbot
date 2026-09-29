@@ -17,6 +17,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     listExtensionPages: () => call('extensions.pages'),
     reportClientMetrics: (report) => call('performance.client_report', report),
     updateSettings: (params) => call('settings.update', params),
+    setServiceKey: (params) => call('settings.set_service_key', params),
     listAgents: () => call('agent.list'),
     addCalendarAction: (params) => call('calendar.add_action', params),
     updateCalendarAction: (params) => call('calendar.update_action', params),

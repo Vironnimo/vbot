@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
+  import ServiceApiKey from './ServiceApiKey.svelte';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
@@ -13,6 +14,8 @@
   import {
     buildWebFetchSettingsPayload,
     getWebFetchSettings,
+    getWebServiceKeys,
+    webServiceKeyHint,
   } from '$lib/settingsView.js';
 
   const noop = () => {};
@@ -32,27 +35,30 @@
   });
   const unregister = context.register(autosave.participant);
   const saveDisabled = $derived(saving || !hasChanges());
+  // Whether each service's API key is set is a server fact read from the
+  // current settings, never part of the draft or its dirty comparison.
+  const services = $derived(getWebServiceKeys(settings, 'web_fetch'));
   const providers = $derived(
-    (settings?.web_fetch?.available_providers ?? ['direct']).map((id) => ({
-      value: id,
-      label:
-        id === 'direct'
-          ? t('settings.webFetch.direct')
-          : tOr(`settings.webSearch.providers.${id}`, id),
-    })),
+    (settings?.web_fetch?.available_providers ?? ['direct']).map((id) => {
+      const keyed = services.find((item) => item.id === id);
+      return {
+        value: id,
+        label:
+          id === 'direct'
+            ? t('settings.webFetch.direct')
+            : tOr(`settings.webSearch.providers.${id}`, id),
+        ...(keyed ? { secondaryLabel: webServiceKeyHint(keyed) } : {}),
+      };
+    }),
   );
   const service = $derived(
-    settings?.web_fetch?.services?.find((item) => item.id === draft.provider),
+    services.find((item) => item.id === draft.provider) ?? null,
+  );
+  const pricingUrl = $derived(
+    settings?.web_fetch?.services?.find((item) => item.id === draft.provider)
+      ?.pricing_url ?? '',
   );
   const dataDirectory = $derived(settings?.general?.data_directory ?? '');
-  const providerHelp = $derived(
-    dataDirectory
-      ? `${t('settings.webFetch.providerHelp')}\n\n${t(
-          'settings.webFetch.envFileHelp',
-          { path: dataDirectory },
-        )}`
-      : t('settings.webFetch.providerHelp'),
-  );
   const modes = $derived([
     {
       value: 'fallback',
@@ -120,7 +126,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.webFetch.provider')}
-        <InfoHint text={providerHelp} />
+        <InfoHint text={t('settings.webFetch.providerHelp')} />
       </div>
       <div class="s-row-desc">
         {t('settings.webFetch.description')}
@@ -140,30 +146,29 @@
   </div>
 
   {#if draft.provider !== 'direct'}
-    <!-- What opting in means for the chosen service: credential state, then
-         URL sharing and cost. -->
+    <!-- What opting in means for the chosen service: URL sharing and cost,
+         then its API key. -->
     <div class="s-group__block s-group__block--attached s-group__note">
-      {#if service}
-        <p class:web-fetch-note--attention={!service.configured}>
-          {service.configured
-            ? t('settings.webFetch.keyPresent', {
-                variable: service.api_key_env,
-              })
-            : t('settings.webFetch.keyMissing', {
-                variable: service.api_key_env,
-              })}
-        </p>
-      {/if}
       <p>
         {t('settings.webFetch.cost')}
-        {#if service?.pricing_url}
-          <a href={service.pricing_url} target="_blank" rel="noreferrer">
+        {#if pricingUrl}
+          <a href={pricingUrl} target="_blank" rel="noreferrer">
             {t('settings.webFetch.pricing')}
             <span aria-hidden="true">↗</span>
           </a>
         {/if}
       </p>
     </div>
+    {#if service}
+      <ServiceApiKey
+        id="settings-web-fetch-api-key"
+        {service}
+        {dataDirectory}
+        {onCommit}
+        {onToast}
+        {onError}
+      />
+    {/if}
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
@@ -194,10 +199,3 @@
     onClick={manualSave}
   />
 </div>
-
-<style>
-  /* The chosen service cannot work until its API key is set. */
-  .web-fetch-note--attention {
-    color: var(--amber);
-  }
-</style>

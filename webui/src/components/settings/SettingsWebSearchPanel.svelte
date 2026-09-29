@@ -5,6 +5,7 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import TextField from '../ui/TextField.svelte';
+  import ServiceApiKey from './ServiceApiKey.svelte';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
@@ -15,19 +16,10 @@
     buildWebSearchProviderOptions,
     buildWebSearchSettingsPayload,
     getWebSearchSettings,
+    getWebServiceKeys,
   } from '$lib/settingsView.js';
 
   const noop = () => {};
-
-  // Hosted providers read their API key from the data directory's .env file.
-  const API_KEY_VARIABLES = Object.freeze({
-    brave: 'BRAVE_API_KEY',
-    tavily: 'TAVILY_API_KEY',
-    exa: 'EXA_API_KEY',
-    serper: 'SERPER_API_KEY',
-    firecrawl: 'FIRECRAWL_API_KEY',
-    perplexity: 'PERPLEXITY_API_KEY',
-  });
 
   let {
     settings = null,
@@ -41,21 +33,17 @@
   let webSearchSettings = $state(untrack(() => getWebSearchSettings(settings)));
   let saving = $state(false);
 
+  // Whether each keyed provider's API key is set is a server fact read from
+  // the current settings, never part of the draft or its dirty comparison.
+  let services = $derived(getWebServiceKeys(settings, 'web_search'));
   let webSearchProviderOptions = $derived(
-    buildWebSearchProviderOptions(webSearchSettings),
+    buildWebSearchProviderOptions(webSearchSettings, services),
   );
-  let keyVariable = $derived(
-    API_KEY_VARIABLES[webSearchSettings.provider] ?? '',
+  // Keyless providers (SearXNG, DuckDuckGo) have no service entry.
+  let service = $derived(
+    services.find((item) => item.id === webSearchSettings.provider) ?? null,
   );
   let dataDirectory = $derived(settings?.general?.data_directory ?? '');
-  let providerHelp = $derived(
-    dataDirectory
-      ? `${t('settings.webSearch.providerHelp')}\n\n${t(
-          'settings.webSearch.envFileHelp',
-          { path: dataDirectory },
-        )}`
-      : t('settings.webSearch.providerHelp'),
-  );
   let saveDisabled = $derived(saving || !webSearchDraftHasChanges());
   const autosaveContext = useAutosaveContext();
   const webSearchAutosave = createDebouncedAutosave({
@@ -176,7 +164,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.webSearch.provider')}
-        <InfoHint text={providerHelp} />
+        <InfoHint text={t('settings.webSearch.providerHelp')} />
       </div>
     </div>
     <div class="s-row-control s-row-control--web-search">
@@ -191,10 +179,15 @@
       />
     </div>
   </div>
-  {#if keyVariable}
-    <div class="s-group__block s-group__block--attached s-group__note">
-      {t('settings.webSearch.keyHint', { variable: keyVariable })}
-    </div>
+  {#if service}
+    <ServiceApiKey
+      id="settings-web-search-api-key"
+      {service}
+      {dataDirectory}
+      {onCommit}
+      {onToast}
+      {onError}
+    />
   {/if}
   {#if webSearchSettings.provider === 'searxng'}
     <div class="s-row">
