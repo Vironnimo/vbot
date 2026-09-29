@@ -26,8 +26,9 @@ merge commit runs only the tests that neither this checkout's nor the merged
 worktree's test runs cover as merged.
 A failing test blocks the commit when it depends on a staged file or only on
 committed code; failures that depend on another session's unstaged work are
-reported without blocking. Vitest runs the tests related to staged WebUI
-sources plus the guard tests, and the WebUI build runs.
+reported without blocking. A test failing on committed code runs once more alone
+and is reported without blocking when it passes then. Vitest runs the tests
+related to staged WebUI sources plus the guard tests, and the WebUI build runs.
 """
 
 from __future__ import annotations
@@ -536,14 +537,20 @@ def _workers(seconds: float) -> list[str]:
     return ["-n", str(min(workers, os.cpu_count() or 1))]
 
 
-def _pytest_command(
-    root: Path, selection: _test_impact.Selection, staged_tests: list[str], arguments_file: Path
-) -> list[str] | None:
+def _pytest() -> list[str]:
     # testmon only records here: this hook selects the tests. testmon's selection
     # plugin would select and order them inside each xdist worker from records the
     # controller rewrites meanwhile, and xdist needs every worker to collect alike.
-    pytest = [sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header"]
-    pytest += ["--testmon-noselect", "-p", "no:TestmonSelect"]
+    return [
+        *[sys.executable, "-m", "pytest", "-q", "-rfE", "--no-header"],
+        *["--testmon-noselect", "-p", "no:TestmonSelect"],
+    ]
+
+
+def _pytest_command(
+    root: Path, selection: _test_impact.Selection, staged_tests: list[str], arguments_file: Path
+) -> list[str] | None:
+    pytest = _pytest()
     if selection.complete:
         print(
             "Commit check: running the complete suite (about 5-10 minutes): no usable "
@@ -556,6 +563,23 @@ def _pytest_command(
         return None
     arguments_file.write_text("\n".join(arguments) + "\n", encoding="utf-8")
     return [*pytest, *_workers(selection.seconds), f"@{arguments_file}"]
+
+
+def _rerun_alone(root: Path, failed: list[str], env: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Run the *failed* tests once more in one process; return ``(failing, passed)``.
+
+    A test that failed only among the parallel test runs of a busy machine passes
+    alone. Collection errors, which name no single test, are not run again.
+    """
+    tests = [test for test in failed if "::" in test and (root / test.split("::")[0]).is_file()]
+    if not tests:
+        return failed, []
+    result = _run([*_pytest(), "-n", "0", *tests], root, env)
+    if result.returncode not in (0, 1):
+        return failed, []
+    failing = set(failed_tests(result.stdout))
+    passed = [test for test in tests if test not in failing]
+    return [test for test in failed if test not in passed], passed
 
 
 def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepResult]:
@@ -585,18 +609,19 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
             _record_tested_state(root, dirty)
             return unaffected
         result = _run(command, root, env)
-        if result.returncode in (0, 1, 5):  # 5: no test selected
-            _record_tested_state(root, dirty)
-    if result.returncode not in (0, 1, 5):
-        return [
-            StepResult("pytest", f"FAIL (exit code {result.returncode})", True, _output(result))
-        ]
-    output = result.stdout
-    failed = failed_tests(output)
-    if not failed:
-        return [StepResult("pytest", "PASS", False)]
+        if result.returncode not in (0, 1, 5):  # 5: no test selected
+            return [
+                StepResult("pytest", f"FAIL (exit code {result.returncode})", True, _output(result))
+            ]
+        _record_tested_state(root, dirty)
+        output = result.stdout
+        failed = failed_tests(output)
+        if not failed:
+            return [StepResult("pytest", "PASS", False)]
+        commit, committed, in_progress = classify_failures(root, failed, set(changed), dirty)
+        # No checked change explains these failures; a busy machine may.
+        committed, flaky = _rerun_alone(root, committed, env)
 
-    commit, committed, in_progress = classify_failures(root, failed, set(changed), dirty)
     results: list[StepResult] = []
     if commit:
         results.append(
@@ -623,6 +648,15 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
                 "NOT BLOCKING: failures depending on uncommitted work in progress",
                 False,
                 _summary_lines(output, in_progress),
+            )
+        )
+    if flaky:
+        results.append(
+            StepResult(
+                "pytest",
+                "NOT BLOCKING: failed on committed code, then passed when run again alone",
+                False,
+                _summary_lines(output, flaky),
             )
         )
     if not commit and not committed:

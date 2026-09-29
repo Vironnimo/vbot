@@ -16,7 +16,7 @@
 - Both records are per checkout in the git-ignored `.testmondata` and `.testfiledeps`.
 - The tested state is the tree of the index the checkout's last completed test step checked, plus the paths that had uncommitted work then; it is recorded with the records, and records without one describe HEAD. A rebase, a pull or a commit without the hook therefore only widens the next selection.
 - A worktree without records copies the primary checkout's on its first commit check; a checkout without any runs the complete suite once (~10 min).
-- The records attribute each failure: a failed test that depends on a staged file blocks the commit; one that depends on unstaged or untracked work and on no staged file is reported without blocking; any other failure is on committed code and blocks every commit until a separate commit fixes it.
+- The records attribute each failure: a failed test that depends on a staged file blocks the commit; one that depends on unstaged or untracked work and on no staged file is reported without blocking; any other failure is on committed code. That one runs once more, alone in one process: a test that fails only among the parallel runs of a busy machine passes then and is reported without blocking. A test that fails again blocks every commit until a separate commit fixes it.
 - A lock in the checkout's git directory serializes its test runs.
 
 ## Merge commits

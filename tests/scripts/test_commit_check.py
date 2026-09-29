@@ -143,6 +143,19 @@ HARMLESS_CALC = "def double(x):\n    return x * 2\n\n\ndef half(x):\n    return 
 BROKEN_CALC = "def double(x):\n    return x * 3\n"
 BROKEN_WIP = "def triple(x):\n    return x * 4\n"
 HARMLESS_WIP = "def triple(x):\n    return x * 3\n\n\ndef third(x):\n    return x / 3\n"
+# Wrong in its first run only, like a test that fails on a busy machine.
+FLAKY_WIP = (
+    "import os\n"
+    "from pathlib import Path\n"
+    "\n"
+    "\n"
+    "def triple(x):\n"
+    '    first_run = Path(os.environ["FLAKY_MARKER"])\n'
+    "    if not first_run.exists():\n"
+    '        first_run.write_text("")\n'
+    "        return x * 4\n"
+    "    return x * 3\n"
+)
 # Keeps test_calc passing, but doubles a factor above 2 to 10 or more.
 SKEWED_CALC = "def double(x):\n    return x * 2 if x < 3 else x * 3\n"
 # The test step as a pre-merge-commit hook, like .githooks/pre-merge-commit.
@@ -252,17 +265,28 @@ def test_failure_in_unstaged_work_of_another_file_does_not_block(impact_project:
     assert "test_wip.py::test_triple" in details
 
 
-def test_failure_on_committed_code_blocks_every_commit(impact_project: Path) -> None:
-    _write(impact_project, "wip.py", BROKEN_WIP)
+@pytest.mark.parametrize(
+    ("wip", "status"),
+    [
+        (BROKEN_WIP, "FAIL: tests failing on committed code; fix them in a separate commit first"),
+        (FLAKY_WIP, "NOT BLOCKING: failed on committed code, then passed when run again alone"),
+    ],
+    ids=["failing", "passing alone"],
+)
+def test_failure_on_committed_code_blocks_every_commit_unless_it_passes_alone(
+    impact_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wip: str, status: str
+) -> None:
+    monkeypatch.setenv("FLAKY_MARKER", str(tmp_path / "first-run"))
+    _write(impact_project, "wip.py", wip)
     _git(impact_project, "commit", "-q", "-am", "unchecked", "--no-verify")
     _write(impact_project, "calc.py", HARMLESS_CALC)
     _git(impact_project, "add", "calc.py")
 
     results = _check_tests(impact_project)
 
-    status = "FAIL: tests failing on committed code; fix them in a separate commit first"
     blocking, details = results[status]
-    assert blocking
+    assert blocking is status.startswith("FAIL")
+    assert any(result[0] for result in results.values()) is blocking
     assert "test_wip.py::test_triple" in details
 
 
