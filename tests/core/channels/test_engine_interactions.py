@@ -104,7 +104,7 @@ async def test_a_tap_enqueues_an_internal_run_describing_the_keyboard(
     engine, _sessions, _trigger, _transport = make_engine(
         tmp_path, admin_user_ids=["50"], trigger_run=trigger_mock
     )
-    caplog.set_level(logging.INFO, logger="vbot.channels.engine")
+    caplog.set_level(logging.DEBUG, logger="vbot.channels.engine")
     event = _tap_event(
         "run:done",
         (InteractionButton(label="✅ Milk", data="chk:milk"),),

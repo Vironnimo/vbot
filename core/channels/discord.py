@@ -117,7 +117,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             bot_user = getattr(client, "user", None)
             bot_id = getattr(bot_user, "id", None)
             self._bot_id = str(bot_id) if _is_snowflake(bot_id) else None
-            _LOGGER.info("Discord adapter started (channel=%s)", self._config.id)
+            self._report_connected()
 
         async def on_message(message: Any) -> None:
             if self._client is client:

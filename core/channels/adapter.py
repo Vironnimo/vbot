@@ -375,6 +375,21 @@ class ChannelAdapter(ABC):
     """Base class for platform-specific channel adapters."""
 
     platform: str
+    _connection_observer: Callable[[], None] | None = None
+
+    def observe_connection(self, observer: Callable[[], None]) -> None:
+        """Register the callback run each time the platform connection comes up.
+
+        The supervising service logs the adapter's start or recovery from it, so
+        adapters report the fact instead of logging their own start line.
+        """
+        self._connection_observer = observer
+
+    def _report_connected(self) -> None:
+        """Tell the observer that the platform connection is up (again)."""
+        observer = self._connection_observer
+        if observer is not None:
+            observer()
 
     def denied_chats(self) -> list[DeniedChatFacts]:
         """Return recently denied inbound chats for status/discovery surfaces.

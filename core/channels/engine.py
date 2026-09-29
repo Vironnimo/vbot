@@ -176,7 +176,7 @@ class ChannelConversationEngine:
             if conversation.kind == "group" and not self._access._command_sender_authorized(
                 conversation
             ):
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Channel command denied for member (channel=%s)",
                     self._config.id,
                 )
@@ -320,7 +320,7 @@ class ChannelConversationEngine:
         """
         conversation = await self._access._snapshot_group_sender(conversation)
         if not self._access._command_sender_authorized(conversation):
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Run-triggering tap denied for member (channel=%s)",
                 self._config.id,
             )

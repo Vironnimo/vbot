@@ -185,7 +185,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             raise ChannelError("Telegram updater is unavailable")
 
         await updater.start_polling()
-        _LOGGER.info("Telegram adapter started (channel=%s)", self._config.id)
+        self._report_connected()
         await self._stop_event.wait()
 
     def _build_application(self, telegram_ext: Any) -> Any:

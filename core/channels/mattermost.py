@@ -59,6 +59,7 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
                                 raise ChannelError("Mattermost WebSocket authentication failed")
                             break
                 self._connected = True
+                self._report_connected()
                 async for encoded in socket:
                     event = json.loads(encoded)
                     if event.get("event") == "posted":

@@ -68,6 +68,7 @@ class SlackChannelAdapter(NetworkChannelAdapter):
         ) as socket:
             self._socket = socket
             self._connected = True
+            self._report_connected()
             try:
                 async for encoded in socket:
                     event = json.loads(encoded)

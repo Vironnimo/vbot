@@ -83,6 +83,7 @@ def _record_restart_delays(service: object, monkeypatch: pytest.MonkeyPatch) -> 
 @pytest.mark.parametrize(
     ("failures", "expected_delays", "failed_while_retrying"),
     [
+        (0, [], []),
         (1, [1.0], [False]),
         (
             7,
@@ -90,15 +91,17 @@ def _record_restart_delays(service: object, monkeypatch: pytest.MonkeyPatch) -> 
             [False, False, False, True, True, True, True],
         ),
     ],
-    ids=["one-crash", "exhausted-fast-retries"],
+    ids=["no-crash", "one-crash", "exhausted-fast-retries"],
 )
 async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     failures: int,
     expected_delays: list[float],
     failed_while_retrying: list[bool],
 ) -> None:
+    caplog.set_level(logging.INFO, logger="vbot.channels")
     ChannelStorage(tmp_path).save(make_config(enabled=True))
     service = make_service(tmp_path)
     recovered = BlockingAdapter()
@@ -137,6 +140,17 @@ async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers
         assert service.has_enabled_channels() is True
         # The exponent is capped before conversion, even after years offline.
         assert original_delay(1025) == original_delay(1_000_000) == 30.0
+
+        # The first connection logs once: a start, or after crashes one recovery
+        # line with the restart count; stopping the Channel logs once more.
+        await service.aclose()
+        info = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "vbot.channels" and record.levelno == logging.INFO
+        ]
+        assert len(info) == 2
+        assert (f"attempts={failures}" in info[0]) is (failures > 0)
     finally:
         await service.aclose()
         service.close()

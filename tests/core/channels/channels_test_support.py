@@ -90,6 +90,7 @@ class BlockingAdapter(ChannelAdapter):
         self.relayed_runs: list[tuple[Run, ReplyPlanFacts]] = []
 
     async def start(self) -> None:
+        self._report_connected()
         self.started.set()
         await asyncio.Future()
 
