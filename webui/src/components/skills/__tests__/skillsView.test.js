@@ -424,6 +424,15 @@ describe('Skills manager', () => {
     ]);
     click(options[1]);
     expect(rows().map((row) => row.dataset.skillId)).toEqual(['disabled']);
+
+    // A collection's card says what its count counts.
+    key(document.body, 'Tab');
+    [...document.querySelectorAll('.skills-collection')][4].focus();
+    const card = document.getElementById('app-tooltip');
+    expect(card.querySelector('.app-tooltip__title').textContent).toBe('Main');
+    expect(card.querySelector('.app-tooltip__text').textContent).toBe(
+      t('skills.collectionCount.agent', { count: 3 }),
+    );
   });
 
   it('lists each package on one line with its source and who gets it, and its description only as a tooltip', async () => {
@@ -449,9 +458,18 @@ describe('Skills manager', () => {
     expect(list.textContent).not.toContain('Purpose of');
     key(document.body, 'Tab');
     rows()[1].focus();
-    expect(document.getElementById('app-tooltip').textContent).toBe(
+    // The row's details card: the description leads, then where the package
+    // lives and who gets it.
+    const card = document.getElementById('app-tooltip');
+    expect(card.querySelector('.app-tooltip__title').textContent).toBe(
+      'deploy',
+    );
+    expect(card.querySelector('.app-tooltip__text').textContent).toBe(
       'Purpose of deploy',
     );
+    expect(
+      [...card.querySelectorAll('dd')].map((value) => value.textContent),
+    ).toEqual(['Private skill of Main', 'Main only']);
     expect(
       rpcMock.mock.calls.some(([method]) => method === 'skill.inspect'),
     ).toBe(false);
@@ -953,6 +971,18 @@ describe('Skills manager', () => {
     click(button('Back to All skills'));
     await settle();
     expect(document.activeElement.dataset.skillId).toBe('private');
+
+    // A read-only package says why it cannot be edited.
+    choose('bundled');
+    await settle();
+    document
+      .querySelector('.skills-page-meta .tooltip-anchor')
+      .dispatchEvent(new MouseEvent('pointerenter'));
+    await vi.waitFor(() =>
+      expect(document.getElementById('app-tooltip').textContent).toBe(
+        t('skills.readOnlyReason.bundled'),
+      ),
+    );
   });
   it('keeps the inventory visible after refresh failure and supports retry', async () => {
     await render();

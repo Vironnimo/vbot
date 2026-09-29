@@ -149,6 +149,22 @@ export default Object.freeze({
   'skills.menu.deactivateIn': 'Deactivate in {name}',
   'skills.editInstructions': 'Edit instructions',
   'skills.readOnly': 'Read only',
+  'skills.readOnlyReason.invalid':
+    'This package cannot be loaded, so it cannot be edited here.',
+  'skills.readOnlyReason.bundled':
+    'Bundled skills ship with vBot and change only with vBot updates.',
+  'skills.readOnlyReason.project':
+    'Project skills belong to the Project’s repository; edit them there.',
+  'skills.readOnlyReason.source':
+    'This skill comes from {name}; change it at its source.',
+  'skills.readOnlyReason.other': 'This package cannot be edited here.',
+  'skills.details.source': 'Source',
+  'skills.details.access': 'Access',
+  'skills.details.notes': 'Requirements',
+  'skills.details.missing': 'Missing',
+  'skills.collectionCount.library': 'Skill packages: {count}',
+  'skills.collectionCount.agent': 'Skills active for this Agent: {count}',
+  'skills.collectionCount.project': 'Skills active in this Project: {count}',
   'skills.access.title': 'Access',
   'skills.access.privateHelp':
     'Its owner has this private skill unless it turns it off here. Tick other Agents to share it: they use and can edit this original, if their own skill selection allows it.',

@@ -5,6 +5,7 @@
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import Dropdown from '../Dropdown.svelte';
+  import { skillCollectionCountText } from './skillsView.js';
 
   const noop = () => {};
 
@@ -37,6 +38,7 @@
         value: item.key,
         label: item.label,
         secondaryLabel: String(item.count),
+        tooltip: skillCollectionCountText(item),
         group: section.label,
       })),
     )}
@@ -54,16 +56,14 @@
           class="secondary-list__item skills-collection"
           class:active={scope === item.key}
           aria-current={scope === item.key ? 'page' : undefined}
+          use:tooltip={{
+            title: item.label,
+            text: skillCollectionCountText(item),
+            placement: 'right',
+          }}
           onclick={() => onSelect(item.key)}
         >
-          <span
-            class="skills-collection-name"
-            use:tooltip={{
-              text: item.label,
-              placement: 'right',
-              whenTruncated: true,
-            }}>{item.label}</span
-          >
+          <span class="skills-collection-name">{item.label}</span>
           <span class="skills-count">{item.count}</span>
         </button>
       {/each}

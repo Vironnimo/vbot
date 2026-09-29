@@ -1,6 +1,11 @@
 import { t } from '$lib/i18n.js';
 
-import { agentDisplayName, skillCopyLabel } from './skillsView.js';
+import {
+  agentDisplayName,
+  skillCopyLabel,
+  skillDiagnosticLines,
+  skillSourceDetail,
+} from './skillsView.js';
 
 // Skill access as the manager edits it. The server owns precedence and the
 // effective grants (skill.inventory projects them per Agent and Project); the
@@ -177,6 +182,20 @@ function projectName(projectId, projects) {
   );
 }
 
+// The complete list behind a "first +N more" state, for the row's tooltip.
+function missingRows(entry) {
+  const missing = names(entry?.missing);
+  return missing.length > 1
+    ? [
+        {
+          label: t('skills.details.missing'),
+          value: missing.join('\n'),
+          mono: true,
+        },
+      ]
+    : [];
+}
+
 function missingText(entry) {
   const missing = names(entry?.missing);
   if (!missing.length) return t('skills.access.requirementsMissing');
@@ -302,6 +321,7 @@ export function agentSkillView(
         : '',
       lockedBy: locked ? rootProject : '',
       detail: entry?.description || '',
+      detailRows: row.available ? [] : missingRows(entry),
       state,
     });
   }
@@ -678,4 +698,32 @@ export function skillDuplicateNotes(
         });
       return t('skills.detail.duplicate', { copy });
     });
+}
+
+/**
+ * Details card of a Library row: the description leads (never shown inline),
+ * then where the package lives, who gets it, and its requirement notes.
+ */
+export function skillRowDetails(entry, agents = [], projects = []) {
+  return {
+    title: entry.name,
+    text: entry.description || '',
+    rows: [
+      {
+        label: t('skills.details.source'),
+        value: skillSourceDetail(entry, agents, projects),
+      },
+      {
+        label: t('skills.details.access'),
+        value: skillAccessSummary(entry, agents, projects),
+      },
+      {
+        label: t('skills.details.notes'),
+        value: skillDiagnosticLines(entry).join('\n'),
+        tone: 'warning',
+      },
+    ],
+    placement: 'right',
+    alignTo: '.skills-row-name',
+  };
 }
