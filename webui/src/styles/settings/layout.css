@@ -113,8 +113,11 @@
   background: var(--surface-3);
 }
 
+/* The page keeps its content height (no stretch to the scrollport), so the
+   bottom padding stays below the last section. */
 .settings-content {
   display: flex;
+  align-items: flex-start;
   min-width: 0;
   flex: 1;
   overflow-y: auto;
