@@ -117,11 +117,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             bot_user = getattr(client, "user", None)
             bot_id = getattr(bot_user, "id", None)
             self._bot_id = str(bot_id) if _is_snowflake(bot_id) else None
-            _LOGGER.info(
-                "Discord adapter started (channel=%s bot_id=%s)",
-                self._config.id,
-                self._bot_id or "unknown",
-            )
+            _LOGGER.info("Discord adapter started (channel=%s)", self._config.id)
 
         async def on_message(message: Any) -> None:
             if self._client is client:
@@ -276,9 +272,8 @@ class DiscordChannelAdapter(ChannelAdapter):
                 replied_message = await fetch_message(int(message_id))
             except Exception as error:
                 _LOGGER.debug(
-                    "Discord replied-to message unavailable (channel=%s message=%s): %s",
+                    "Discord replied-to message unavailable (channel=%s): %s",
                     self._config.id,
-                    message_id,
                     error,
                 )
                 return QuotedMessageFacts(
@@ -423,9 +418,8 @@ class DiscordChannelAdapter(ChannelAdapter):
                 observed.append((conversation, body))
         except Exception as error:
             _LOGGER.warning(
-                "Discord history backfill failed (channel=%s target=%s): %s",
+                "Discord history backfill failed (channel=%s): %s",
                 self._config.id,
-                target_id,
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
@@ -498,9 +492,8 @@ class DiscordChannelAdapter(ChannelAdapter):
     def _record_denied_inbound(self, conversation: ConversationFacts, message: Any) -> None:
         """Record an allowlist-denied inbound message for status/discovery surfaces.
 
-        The first denial per chat logs at info so operators can find the channel id
-        without any tooling; repeats stay at debug to keep a chatty denied channel
-        from flooding the log.
+        External identifiers and display names stay in channel status only. The first
+        denial per chat logs at info; repeats stay at debug.
         """
         display_name = self._denied_chat_display_name(conversation, message)
         is_new_chat = self._denied_chat_log.record(
@@ -510,12 +503,10 @@ class DiscordChannelAdapter(ChannelAdapter):
         )
         log = _LOGGER.info if is_new_chat else _LOGGER.debug
         log(
-            "Inbound Discord message from channel not in allowlist "
-            "(channel=%s chat=%s kind=%s name=%s); chat id recorded in channel status",
+            "Inbound Discord message from chat not in allowlist "
+            "(channel=%s kind=%s); chat id recorded in channel status",
             self._config.id,
-            conversation.chat_id,
             conversation.kind,
-            display_name or "unknown",
         )
 
     def _denied_chat_display_name(
@@ -572,14 +563,13 @@ class DiscordChannelAdapter(ChannelAdapter):
                 classified = _classify_discord_send_error(error)
                 if classified.retryable:
                     raise classified from error
+                # Resolution errors reach logs; the caller already knows its target.
                 raise ChannelConfigError(
-                    f"Cannot resolve Discord platform_target {platform_target}: {error}"
+                    f"Cannot resolve the Discord platform_target: {error}"
                 ) from error
 
         if not callable(getattr(target, "send", None)):
-            raise ChannelConfigError(
-                f"Discord platform_target is not a message channel: {platform_target}"
-            )
+            raise ChannelConfigError("Discord platform_target is not a message channel")
         self._remember_conversation(self._conversation_facts_for_target(target))
         return target
 
@@ -661,11 +651,11 @@ class DiscordChannelAdapter(ChannelAdapter):
             partial_message = target.get_partial_message(message_id)
             return partial_message.to_reference(fail_if_not_exists=False)
         except (AttributeError, ChannelConfigError, TypeError, ValueError) as error:
+            # The error text may echo the rejected message id.
             _LOGGER.debug(
-                "Ignoring invalid Discord reply target (channel=%s target=%r): %s",
+                "Ignoring invalid Discord reply target (channel=%s error_type=%s)",
                 self._config.id,
-                reply_to_message_id,
-                error,
+                type(error).__name__,
             )
             return None
 
@@ -677,10 +667,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             await indicator.__aenter__()
         except Exception as error:
             _LOGGER.debug(
-                "Discord typing indicator unavailable (channel=%s target=%s): %s",
-                self._config.id,
-                platform_target,
-                error,
+                "Discord typing indicator unavailable (channel=%s): %s", self._config.id, error
             )
             yield
             return
@@ -692,10 +679,7 @@ class DiscordChannelAdapter(ChannelAdapter):
                 await indicator.__aexit__(None, None, None)
             except Exception as error:
                 _LOGGER.debug(
-                    "Discord typing indicator close failed (channel=%s target=%s): %s",
-                    self._config.id,
-                    platform_target,
-                    error,
+                    "Discord typing indicator close failed (channel=%s): %s", self._config.id, error
                 )
 
     async def _store_inbound_attachment(self, attachment: Any) -> Any:

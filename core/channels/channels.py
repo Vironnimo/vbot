@@ -551,12 +551,8 @@ class ChannelService:
             if old_chat_id not in config.allowed_chat_ids:
                 return
             self._storage.save(_with_migrated_chat_id(config, old_chat_id, new_chat_id))
-        _LOGGER.info(
-            "Channel allowlist migrated (channel=%s old=%s new=%s)",
-            normalized_id,
-            old_chat_id,
-            new_chat_id,
-        )
+        # Both chat ids are Telegram-owned; the allowlist itself shows them.
+        _LOGGER.info("Channel allowlist migrated (channel=%s)", normalized_id)
 
     def has_active_channels(self) -> bool:
         """Return whether at least one channel adapter task is currently running."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -345,14 +346,24 @@ async def test_thread_inherits_parent_allowlist_and_uses_own_session(tmp_path: P
     ids=["guild-channel", "direct-message"],
 )
 async def test_denied_chat_is_recorded_with_its_display_name(
-    tmp_path: Path, guild: object | None, kind: str, display_name: str
+    tmp_path: Path,
+    guild: object | None,
+    kind: str,
+    display_name: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     channel = FakeChannel(200, guild=guild, name="general", recipient_id=None if guild else 50)
     h = make_adapter(tmp_path, target=channel, allowed_chat_ids=[100])
+    caplog.set_level(logging.DEBUG, logger="vbot.channels.discord")
 
     await h.receive(make_message(channel, message_id=201, author_id=50, content="hello"))
+    await h.receive(make_message(channel, message_id=202, author_id=50, content="again"))
 
     h.reserve_waiting_work.assert_not_called()
     denied = [(entry.chat_id, entry.kind, entry.display_name) for entry in h.adapter.denied_chats()]
     assert denied == [("200", kind, display_name)]
+    # Chat ids and names stay in channel status; the log names only the kind.
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages
+    assert not [message for message in messages if "200" in message or display_name in message]
     await h.adapter.stop()
