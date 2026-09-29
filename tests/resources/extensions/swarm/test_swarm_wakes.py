@@ -95,7 +95,7 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
         snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
         participant = snapshot["participants"][0]
         await lifecycle.runtime.chat_run_manager.get(participant["lifecycle_run_id"]).wait()
-    await settled()
+    await settled(lifecycle)
     assert len(adapter.requests) == 2
     assert all(
         f"burst-sentinel-{index}" in str(adapter.requests[1]["messages"]) for index in range(15)
@@ -303,7 +303,7 @@ async def test_human_post_wakes_idle_participant_with_delivery_policy(
         "board.post",
         {"swarm_id": started["swarm_id"], "text": "wake message", "request_id": "post"},
     )
-    await settled()
+    await settled(lifecycle)
     participant = (await lifecycle.service.store.get_swarm(started["swarm_id"]))["participants"][0][
         "id"
     ]
@@ -449,16 +449,16 @@ async def test_runs_without_tools_pace_wakes_until_addressed_or_quiet_ends(
 
     async def post(text: str) -> int:
         await participant_post(lifecycle, sid, sender["id"], text)
-        await settled()
+        await settled(lifecycle)
         return len(requests)
 
     # Both first Runs used no Tool, so an ordinary post waits for the quiet period, and its
     # end wakes the reader.
-    await settled()
+    await settled(lifecycle)
     assert [timer.delay for timer in quiet.timers] == [30.0, 30.0]
     assert await post("ordinary-sentinel") == 2
     next(timer for timer in quiet.timers if timer.args[0] == (sid, reader["id"])).fire()
-    await settled()
+    await settled(lifecycle)
     assert len(requests) == 3 and "ordinary-sentinel" in str(requests[2]["messages"])
 
     # The second Run without a Tool starts a longer period; a post addressing the reader ends

@@ -238,16 +238,27 @@ async def wait_idle(service: Any, swarm_id: str) -> dict[str, Any]:
             await asyncio.sleep(0.01)
 
 
-async def settled() -> None:
-    """Wait until every other task on the loop finished: wake scans, Runs and their cleanup.
+async def settled(env: Any) -> None:
+    """Wait until every task started since the ``lifecycle`` fixture began has finished.
 
-    A post that must not wake anyone is checked after this, instead of after a guessed delay.
+    Those are the test's wake scans, Runs and their cleanup. A post that must not wake
+    anyone is checked after this, instead of after a guessed delay. Tasks that were
+    already on the session-scoped Event Loop belong to earlier tests on this worker and
+    may run much longer, so they are not waited for.
     """
 
     current = asyncio.current_task()
-    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
-        while any(task is not current and not task.done() for task in asyncio.all_tasks()):
-            await asyncio.sleep(0.001)
+
+    def running() -> list[asyncio.Task[Any]]:
+        tasks = asyncio.all_tasks() - env.earlier_tasks
+        return [task for task in tasks if task is not current and not task.done()]
+
+    try:
+        async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
+            while running():
+                await asyncio.sleep(0.001)
+    except TimeoutError:
+        raise AssertionError(f"tasks still running: {running()}") from None
 
 
 class PausedSwarmAdapter(StubAdapter):
