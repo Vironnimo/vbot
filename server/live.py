@@ -209,6 +209,11 @@ class _LiveCallEntry:
         return self.call.id if self.call is not None else ""
 
     @property
+    def log_id(self) -> str:
+        """The call's vBot-owned log id; ``call_id`` may be the Provider's."""
+        return self.call.log_id if self.call is not None else ""
+
+    @property
     def has_undelivered_updates(self) -> bool:
         return bool(self._buffer)
 
@@ -295,10 +300,10 @@ class _LiveCallEntry:
             try:
                 await asyncio.wait_for(call.close(), self._limits.shutdown_close_timeout_seconds)
             except TimeoutError:
-                _LOGGER.warning("Live call did not close during shutdown (call_id=%s)", call.id)
+                _LOGGER.warning("Live call did not close during shutdown (call=%s)", call.log_id)
                 await self._abort()
             except Exception:
-                _LOGGER.exception("Live call close failed during shutdown (call_id=%s)", call.id)
+                _LOGGER.exception("Live call close failed during shutdown (call=%s)", call.log_id)
                 await self._abort()
         watcher = self._watcher
         if watcher is not None and not watcher.done():
@@ -315,7 +320,7 @@ class _LiveCallEntry:
         try:
             await call.close()
         except Exception:
-            _LOGGER.exception("Live call close failed; aborting (call_id=%s)", call.id)
+            _LOGGER.exception("Live call close failed; aborting (call=%s)", call.log_id)
             await self._abort()
 
     async def _abort(self) -> None:
@@ -325,15 +330,15 @@ class _LiveCallEntry:
         try:
             await asyncio.wait_for(call.abort(), self._limits.abort_timeout_seconds)
         except TimeoutError:
-            _LOGGER.warning("Live call abort timed out (call_id=%s)", call.id)
+            _LOGGER.warning("Live call abort timed out (call=%s)", call.log_id)
         except Exception:
-            _LOGGER.exception("Live call abort failed (call_id=%s)", call.id)
+            _LOGGER.exception("Live call abort failed (call=%s)", call.log_id)
 
     async def _watch(self, call: LiveCall) -> None:
         try:
             await call.wait_closed()
         except Exception:
-            _LOGGER.exception("Live call ended with an error (call_id=%s)", call.id)
+            _LOGGER.exception("Live call ended with an error (call=%s)", call.log_id)
         await self._finalize()
 
     async def _finalize(self) -> None:
@@ -387,8 +392,8 @@ class _LiveCallEntry:
             if not self._malformed_audio_logged:
                 self._malformed_audio_logged = True
                 _LOGGER.warning(
-                    "Live owner sent a malformed audio frame; dropping it (call_id=%s bytes=%d)",
-                    self.call_id,
+                    "Live owner sent a malformed audio frame; dropping it (call=%s bytes=%d)",
+                    self.log_id,
                     len(pcm),
                 )
             return
@@ -403,7 +408,7 @@ class _LiveCallEntry:
         self._buffer.append(frame)
 
     def _owner_lagged(self, owner: LiveOwnerStream) -> None:
-        _LOGGER.warning("Live owner socket fell behind (call_id=%s)", self.call_id)
+        _LOGGER.warning("Live owner socket fell behind (call=%s)", self.log_id)
         self._owner = None
         owner.end(LIVE_SOCKET_CLOSE_LAGGED)
         self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
@@ -423,7 +428,7 @@ class _LiveCallEntry:
         await asyncio.sleep(seconds)
         # From here on an attaching socket no longer cancels this abort.
         self._timer = None
-        _LOGGER.warning("Live call owner %s; ending call (call_id=%s)", reason, self.call_id)
+        _LOGGER.warning("Live call owner %s; ending call (call=%s)", reason, self.log_id)
         self.active = False
         await self._abort()
 

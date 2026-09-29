@@ -83,6 +83,7 @@ from core.providers.errors import (
 )
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -211,7 +212,14 @@ class LiveCall(Protocol):
     """
 
     @property
-    def id(self) -> str: ...
+    def id(self) -> str:
+        """The call id of the transport contract; the Provider may own it."""
+        ...
+
+    @property
+    def log_id(self) -> str:
+        """The vBot-owned id naming this call in logs, never a Provider id."""
+        ...
 
     @property
     def media(self) -> JsonObject: ...
@@ -392,14 +400,17 @@ class LiveVoiceService:
             status = "cancelled"
             raise
         except ControlJoinError as exc:
+            # The created call has a Provider call id; it never enters the log.
             _LOGGER.warning(
-                "Live call control join failed: target=%s call_id=%s", label, exc.call_id
+                "Live call control join failed (target=%s error_type=%s)",
+                label,
+                exc.error_type,
             )
             raise LiveStartRejected("control_failed", str(exc)) from exc
         except VBotError as exc:
             code = _start_failure_code(exc)
             _LOGGER.warning(
-                "Live call creation failed: target=%s code=%s error_type=%s",
+                "Live call creation failed (target=%s code=%s error_type=%s)",
                 label,
                 code,
                 type(exc).__name__,
@@ -410,13 +421,15 @@ class LiveVoiceService:
         finally:
             if wire is None:
                 await accounting.finish(usage_call_id, status=status)
+        # OpenAI assigns the call id; logs and derived ids use this one instead.
+        log_id = new_id("live")
         brain_target = plan.brain_target
         brain = (
             LiveBrain(
                 self._runtime,
                 brain_target,
                 host.execute_tool,
-                conversation_id=f"live:{wire.call_id}",
+                conversation_id=f"live:{log_id}",
                 record=host.record,
                 usage_recorder=self._usage_recorder,
             )
@@ -428,14 +441,15 @@ class LiveVoiceService:
             brain=brain,
             host=host,
             target=label,
+            log_id=log_id,
             usage_accounting=accounting,
             usage_call_id=usage_call_id,
         )
         call.start()
         _LOGGER.info(
-            "Live call started: call_id=%s target=%s media=%s backend_model=%s backend_effort=%s "
-            "wake_phrases=%d",
-            call.id,
+            "Live call started (call=%s target=%s media=%s backend_model=%s backend_effort=%s "
+            "wake_phrases=%d)",
+            call.log_id,
             label,
             plan.wire.media,
             brain_target.model_id if brain_target is not None else "none",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -646,19 +647,24 @@ async def test_unusable_configuration_is_not_configured(model_tasks, candidates)
         (ControlJoinError("rtc_1", "OSError"), "control_failed"),
     ],
 )
-async def test_creation_failures_map_to_stable_codes(error, code, candidates, monkeypatch):
+async def test_creation_failures_map_to_stable_codes(error, code, candidates, monkeypatch, caplog):
     async def failing_wire(*args: Any, **kwargs: Any) -> None:
         raise error
 
     monkeypatch.setattr(live_module, "open_openai_live_wire", failing_wire)
+    caplog.set_level(logging.DEBUG)
     with pytest.raises(LiveStartRejected) as caught:
         await _service().start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
     assert caught.value.code == code
+    # A call the Provider created but vBot could not join keeps its id out of the log.
+    assert "rtc_1" not in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
-    candidates: list[tuple[Any, ...]], monkeypatch: pytest.MonkeyPatch
+    candidates: list[tuple[Any, ...]],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     opened: list[dict[str, Any]] = []
     wire = FakeWire()
@@ -669,6 +675,7 @@ async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
 
     monkeypatch.setattr(live_module, "open_openai_live_wire", open_wire)
     host = FakeHost()
+    caplog.set_level(logging.DEBUG)
 
     call = await _service().start_call(media="webrtc", offer_sdp=OFFER, host=host)
 
@@ -680,6 +687,10 @@ async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
     assert call.id == "rtc_1"
     assert host.updates == [{"type": "state", "phase": "connecting"}]
     await call.close()
+    # Logs name the call by its vBot-owned id; the Provider's call id never enters them.
+    assert call.log_id.startswith("live_")
+    assert call.log_id in caplog.text
+    assert "rtc_1" not in caplog.text
 
 
 @pytest.mark.asyncio
