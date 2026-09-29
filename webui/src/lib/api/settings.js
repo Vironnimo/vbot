@@ -1,4 +1,7 @@
 import {
+  ApiClientError,
+  RPC_ERROR_NETWORK,
+  buildHttpUrl,
   rpc,
   requireNonEmptyString,
   requirePlainObject,
@@ -10,6 +13,7 @@ import {
   buildProviderConnectPayload,
   buildProviderDisconnectPayload,
 } from '../settingsView.js';
+import { WEBUI_BUILD_FILE, servedWebuiBuild } from '../webuiBuild.js';
 
 export function getSettings(options = {}) {
   return rpc('settings.get', {}, options);
@@ -115,6 +119,32 @@ export function acknowledgeDataStoreIncident(incidentId, options = {}) {
     { incident_id: incidentId },
     options,
   );
+}
+
+// The WebUI build the server serves now, read past the browser cache; null
+// when the served files name none.
+export async function getServedWebuiBuild(options = {}) {
+  const fetchFunction = options.fetch ?? globalThis.fetch;
+  let response;
+  try {
+    response = await fetchFunction(
+      buildHttpUrl(`/${WEBUI_BUILD_FILE}`, options.baseUrl),
+      { cache: 'no-store', signal: options.signal },
+    );
+  } catch (error) {
+    throw new ApiClientError(
+      RPC_ERROR_NETWORK,
+      'The served WebUI build could not be read',
+      { cause: error },
+    );
+  }
+  if (!response.ok) return null;
+  try {
+    return servedWebuiBuild(await response.json());
+  } catch {
+    // The server answers an unknown path with the page itself.
+    return null;
+  }
 }
 
 export function updateSettings(settings, options = {}) {

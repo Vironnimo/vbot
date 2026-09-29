@@ -294,9 +294,11 @@ describe('App controller', () => {
       throw failure;
     });
     const onReloadExtensionPages = vi.fn();
+    const onCheckWebuiBuild = vi.fn();
     const { actions, controller, state } = setup({
       onLoadDataStoreStatus,
       onReloadExtensionPages,
+      onCheckWebuiBuild,
     });
     await expect(
       controller.handleServerEvent({
@@ -309,6 +311,7 @@ describe('App controller', () => {
     expect(actions.onLoadProjects).toHaveBeenCalledOnce();
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
     expect(onReloadExtensionPages).toHaveBeenCalledOnce();
+    expect(onCheckWebuiBuild).toHaveBeenCalledOnce();
   });
 
   it('hands an owner-scoped Extension change to its owner without reloading page descriptors', async () => {

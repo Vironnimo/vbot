@@ -51,6 +51,9 @@ export default Object.freeze({
     'Live voice could not announce a finished Run. Check the chat for its result.',
   'live.error.generic': 'Live voice reported a problem ({code}).',
   'app.title': 'vBot',
+  'app.webuiOutdated':
+    'vBot was updated. Reload the page to use the new version.',
+  'app.webuiOutdatedReload': 'Reload',
   'navigation.primary': 'Primary navigation',
   'navigation.sections': 'Sections',
   'navigation.more': 'More',

@@ -19,6 +19,7 @@ export const subscribeServerEventsMock = vi.fn(() => ({
   socket: null,
 }));
 export const debugStatusMock = vi.fn().mockResolvedValue({ enabled: false });
+export const getServedWebuiBuildMock = vi.fn();
 const listClientsMock = vi.fn();
 const listQueueMock = vi.fn();
 const listSessionsMock = vi.fn();
@@ -42,6 +43,7 @@ vi.mock('$lib/api.js', () =>
     RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
     RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
     debugStatus: (...args) => debugStatusMock(...args),
+    getServedWebuiBuild: (...args) => getServedWebuiBuildMock(...args),
     listClients: (...args) => listClientsMock(...args),
     listQueue: (...args) => listQueueMock(...args),
     listSessions: (...args) => listSessionsMock(...args),
@@ -74,6 +76,8 @@ export function resetAppHarness() {
   init('en');
   listClientsMock.mockReset();
   listClientsMock.mockResolvedValue({ clients: [] });
+  getServedWebuiBuildMock.mockReset();
+  getServedWebuiBuildMock.mockResolvedValue(null);
   listQueueMock.mockReset();
   listQueueMock.mockResolvedValue({ items: [] });
   listSessionsMock.mockReset();
