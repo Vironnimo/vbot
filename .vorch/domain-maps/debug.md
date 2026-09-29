@@ -4,7 +4,7 @@ Captures complete raw provider HTTP or WebSocket exchanges for local inspection,
 
 ## Overview
 
-`core/debug/` owns trace storage, structured secret redaction, and the recorder capturing provider wire traffic exactly as it crosses the socket. Enabled via `settings.json` (`debug.enabled`, read live per request). All Provider traffic feeds one canonical recorder contract: HTTP capture happens inside a debug-aware client built by the shared Provider HTTP factory, and the sanctioned non-HTTP exception is OpenAI Subscription WebSocket streaming - each `response.create` exchange opens its own capture because those frames never pass through httpx.
+`core/debug/` owns trace storage, structured secret redaction, and the recorder capturing provider wire traffic exactly as it crosses the socket. Enabled via `settings.json` (`debug.enabled`, read live per request); turning it on or off logs one INFO `Debug Mode enabled|disabled` line when the Settings change is applied (`core/runtime/_settings.py`). All Provider traffic feeds one canonical recorder contract: HTTP capture happens inside a debug-aware client built by the shared Provider HTTP factory, and the sanctioned non-HTTP exception is OpenAI Subscription WebSocket streaming - each `response.create` exchange opens its own capture because those frames never pass through httpx.
 
 Traces are local-only JSON files under `<data_dir>/artifacts/debug/traces/` plus a metadata-only `index.json` for listing without reading bodies (placement owned by Storage; schema/redaction/retention/authorization owned here). Retention caps file count at `debug.trace_limit` (default 50, max 500), pruning oldest after each write. The domain does **not** normalize or interpret captured bodies - the only mutation is secret redaction.
 

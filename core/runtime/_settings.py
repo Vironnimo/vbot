@@ -6,8 +6,13 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from core.settings.normalizers import normalize_debug_settings
+from core.utils.logging import get_logger
+
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
+
+_LOGGER = get_logger("runtime.settings")
 
 
 @dataclass(frozen=True)
@@ -64,12 +69,20 @@ async def apply_settings_change(
         runtime.reload_timezone()
     if _speech_to_text_binding(previous) != _speech_to_text_binding(current):
         runtime.speech.preload_configured()
+    debug_enabled = _debug_enabled(current)
+    if _debug_enabled(previous) != debug_enabled:
+        # Provider traffic capture is a privacy-relevant mode an operator must see.
+        _LOGGER.info("Debug Mode %s", "enabled" if debug_enabled else "disabled")
 
     extension_layer_changed = rebuild_extensions or bool(newly_disabled)
     return SettingsChangeEffects(
         commands_changed=extension_layer_changed,
         skills_changed=extension_layer_changed or skills_changed,
     )
+
+
+def _debug_enabled(settings: Mapping[str, Any]) -> bool:
+    return bool(normalize_debug_settings(settings.get("debug"))["enabled"])
 
 
 def _speech_to_text_binding(settings: Mapping[str, Any]) -> Any:
