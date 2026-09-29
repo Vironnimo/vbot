@@ -128,6 +128,25 @@ async def test_http_transports(host, server, transport):
         http_server.should_exit = True
         await asyncio.wait_for(serving, 5)
         listener.close()
+        await _stop_sse_shutdown_watcher()
+
+
+async def _stop_sse_shutdown_watcher() -> None:
+    """Cancel the shutdown watcher sse-starlette leaves behind after an in-process server.
+
+    sse-starlette runs one watcher per Event Loop that polls until a running uvicorn
+    server exits. Since 3.5.0 it looks the server up again on every poll, and once
+    ``serve()`` has returned there is none, so the watcher would keep polling on the
+    worker's shared Event Loop during every later test.
+    """
+    watchers = [
+        task
+        for task in asyncio.all_tasks()
+        if getattr(task.get_coro(), "__qualname__", None) == "_shutdown_watcher"
+    ]
+    for task in watchers:
+        task.cancel()
+    await asyncio.gather(*watchers, return_exceptions=True)
 
 
 @pytest.mark.asyncio

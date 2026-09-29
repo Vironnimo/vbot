@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -186,6 +187,8 @@ async def board(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator
 async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
     """Load the production Extension into a real ChatLoop whose Provider answers forty Runs."""
 
+    # Tasks of earlier tests on this worker's shared Event Loop, which ``settled`` ignores.
+    earlier_tasks = asyncio.all_tasks()
     responses = [{"content": "Run finished"} for index in range(40)] + [
         {"content": "completion recorded"} for _ in range(40)
     ]
@@ -258,6 +261,7 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
             tools=tools,
             titled=titled,
             workspace=tmp_path,
+            earlier_tasks=earlier_tasks,
         )
     finally:
         await service.close()
