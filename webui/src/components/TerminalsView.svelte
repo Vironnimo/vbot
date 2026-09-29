@@ -2,7 +2,9 @@
   import TerminalDialogs from './terminals/TerminalDialogs.svelte';
   import {
     groupCanEdit,
+    terminalDetails,
     terminalError,
+    terminalGroupDetails,
     terminalTarget,
     terminalTitle,
   } from './terminals/terminalLabels.js';
@@ -472,7 +474,7 @@
               ? 'true'
               : undefined}
             aria-label={`${group.name}: ${t('terminals.count', { count: group.terminal_count })}`}
-            use:tooltip={{ text: group.name, whenTruncated: true }}
+            use:tooltip={() => terminalGroupDetails(group, viewState.terminals)}
             onclick={() => navigation.navigate([group.group_id])}
           >
             <span class="terminals-view__group-tab-label">
@@ -672,10 +674,8 @@
               <div class="terminals-view__tile-bar-primary">
                 <span
                   class="terminals-view__tile-title"
-                  use:tooltip={{
-                    text: terminalTitle(item),
-                    whenTruncated: true,
-                  }}>{terminalTitle(item)}</span
+                  use:tooltip={() => terminalDetails(item)}
+                  >{terminalTitle(item)}</span
                 >
                 <span
                   class="terminals-view__tile-target"
@@ -776,8 +776,8 @@
                       ? t('terminals.restore')
                       : t('terminals.maximize')}
                     tooltip={isMaximized
-                      ? t('terminals.restore')
-                      : t('terminals.maximize')}
+                      ? t('terminals.restoreHint')
+                      : t('terminals.maximizeHint')}
                     onClick={() => toggleMaximize(item.terminal_id)}
                   >
                     {#if isMaximized}

@@ -9,6 +9,7 @@
     groupKindLabel,
     groupCanEdit,
     terminalError,
+    launchHistoryDetails,
     launchHistoryLabel,
     launchHistoryWorkdir,
   } from './terminalLabels.js';
@@ -58,6 +59,7 @@
       value: entry.id,
       label: launchHistoryLabel(entry),
       secondaryLabel: launchHistoryWorkdir(entry),
+      tooltip: launchHistoryDetails(entry),
     })),
   );
 

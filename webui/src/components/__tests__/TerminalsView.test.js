@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { t } from '../../lib/i18n.js';
 import {
   flushSync,
   listTerminalsMock,
@@ -409,7 +410,14 @@ describe('TerminalsView launch and close', () => {
   );
 
   it('keeps a finished Terminal Session available as read-only history', async () => {
-    const finished = terminal({ group_id: 'finished', state: 'exited' });
+    const finished = terminal({
+      group_id: 'finished',
+      state: 'exited',
+      exit_code: 1,
+      finished_at: '2026-08-03T12:05:00+00:00',
+      launch_command: 'npm',
+      launch_args: ['run', 'build'],
+    });
     await view.mountWith(
       [finished],
       [
@@ -434,6 +442,54 @@ describe('TerminalsView launch and close', () => {
     expect(findButtonByAriaLabel('Close terminal')).toBeTruthy();
     expect(terminalInstances[0].options.disableStdin).toBe(true);
     expect(document.querySelector('.terminals-view__append-tile')).toBeNull();
+
+    // The title's details card says how the terminal ended and what ran where.
+    document
+      .querySelector('.terminals-view__tile-title')
+      .dispatchEvent(new MouseEvent('pointerenter'));
+    await vi.waitFor(() =>
+      expect(document.getElementById('app-tooltip')?.dataset.floatingOpen).toBe(
+        'true',
+      ),
+    );
+    const card = document.getElementById('app-tooltip');
+    const rows = Object.fromEntries(
+      [...card.querySelectorAll('dt')].map((term) => [
+        term.textContent,
+        term.nextElementSibling,
+      ]),
+    );
+    expect(rows[t('terminals.details.command')].textContent).toBe(
+      'npm run build',
+    );
+    expect(rows[t('terminals.details.directory')].textContent).toBe(
+      'C:\\Development\\vBot',
+    );
+    const state = rows[t('terminals.details.state')];
+    expect(state.textContent).toBe(
+      t('terminals.state.exitedWithCode', { code: 1 }),
+    );
+    expect(state.classList).toContain('app-tooltip__value--danger');
+    expect(rows[t('terminals.details.finished')].textContent).toContain(' · ');
+    // A finished process has no process id any more.
+    expect(rows).not.toHaveProperty(t('terminals.details.pid'));
+
+    // A group tab names what the group is and splits its count.
+    const finishedTab = [
+      ...document.querySelectorAll('.terminals-view__group-tab'),
+    ].find((element) => element.textContent.includes('Finished'));
+    finishedTab.focus();
+    flushSync();
+    expect(card.querySelector('.app-tooltip__text').textContent).toBe(
+      t('terminals.groupHint.finished'),
+    );
+    expect(card.querySelector('dd').textContent).toBe(
+      t('terminals.details.terminalCount', {
+        count: 1,
+        running: 0,
+        finished: 1,
+      }),
+    );
   });
 });
 
