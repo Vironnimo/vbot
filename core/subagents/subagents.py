@@ -537,6 +537,7 @@ async def _handle_subagent(
                         batch_tracker=batch_tracker,
                         parent_key=parent_key,
                         parent_reason=parent_run.cancel_reason if parent_run is not None else None,
+                        initiator=f"parent_run:{context.run_id}",
                     )
                 raise
 
@@ -601,7 +602,7 @@ async def _handle_subagent(
                 timeout=max(0.0, foreground_deadline - loop.time()),
             )
         except TimeoutError:
-            sub_run.request_cancel()
+            sub_run.request_cancel(initiator="subagent_timeout")
             timeout_message = (
                 f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes"
             )

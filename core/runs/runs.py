@@ -681,10 +681,12 @@ class ChatRunManager:
         except KeyError as exc:
             raise RunNotFoundError(f"run not found: {run_id}") from exc
 
-    async def cancel(self, run_id: str, reason: str | None = None) -> Run:
+    async def cancel(
+        self, run_id: str, reason: str | None = None, *, initiator: str | None = None
+    ) -> Run:
         """Request cancellation and wait until the run reaches a terminal state."""
         run = self.get(run_id)
-        run.request_cancel(reason=reason)
+        run.request_cancel(reason=reason, initiator=initiator)
         await run._done.wait()  # noqa: SLF001 - manager owns run lifecycle internals.
         return run
 
@@ -695,13 +697,14 @@ class ChatRunManager:
         *,
         project_id: str | None,
         reason: str | None = None,
+        initiator: str | None = None,
     ) -> Run:
         """Request cancellation for the active run in one session."""
         address = _session_address(project_id, agent_id, session_id)
         run = self._active_by_session.get(address)
         if run is None or run.status != RunStatus.RUNNING:
             raise RunNotFoundError(f"no active run for agent '{agent_id}' session '{session_id}'")
-        run.request_cancel(reason=reason)
+        run.request_cancel(reason=reason, initiator=initiator)
         return run
 
     def active_run(self, *, agent_id: str, session_id: str, project_id: str | None) -> Run | None:
@@ -738,7 +741,7 @@ class ChatRunManager:
                 self._waiting_work_admissions.clear()
                 active_runs = list(self._active_by_session.values())
         for run in active_runs:
-            run.request_cancel(reason="shutdown")
+            run.request_cancel(reason="shutdown", initiator="shutdown")
         active_tasks = [
             run._task  # noqa: SLF001 - manager owns Run execution tasks.
             for run in active_runs

@@ -156,6 +156,7 @@ async def test_stop_cancels_the_active_run_only_when_executed() -> None:
 
     assert result.feedback is not None and result.feedback.kind == "notice"
     assert (run.cancel_requested, run.cancel_reason) == (True, "user")
+    assert run.cancel_initiator == "webui_command"
     release.set()
     with pytest.raises(RunCancelledError):
         await run.wait()

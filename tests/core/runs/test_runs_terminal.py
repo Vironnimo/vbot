@@ -113,7 +113,7 @@ _NETWORK_FAILURE = VBotError("connection reset")
     ("outcome", "level", "fields", "traceback"),
     [
         ("completed", logging.INFO, (), False),
-        ("cancelled", logging.INFO, ("reason=user",), False),
+        ("cancelled", logging.INFO, ("reason=user", "cancelled_by=rpc"), False),
         ("expected-failure", logging.WARNING, ("expected boom",), False),
         ("unexpected-failure", logging.ERROR, (), True),
         ("interrupted", logging.WARNING, ("cause=network", "connection reset"), False),
@@ -149,7 +149,7 @@ async def test_every_run_outcome_logs_one_terminal_line_at_its_level(
     run = await ChatRunManager().start(address, execute)
     await started.wait()
     if outcome == "cancelled":
-        run.request_cancel(reason="user")
+        run.request_cancel(reason="user", initiator="rpc")
     with contextlib.suppress(Exception):
         await run.wait()
 

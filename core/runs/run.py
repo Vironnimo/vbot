@@ -327,6 +327,8 @@ class Run:
         self.error: BaseException | None = None
         self.cancel_requested = False
         self.cancel_reason: str | None = None
+        # Who asked for the cancel, for the terminal log line only.
+        self.cancel_initiator: str | None = None
         self._next_sequence = 1
         self._event_stream = ReplayEventStream[RunEvent](
             event_retention_limit=event_retention_limit,
@@ -481,11 +483,16 @@ class Run:
             return
         self._cancel_callbacks.append(callback)
 
-    def request_cancel(self, reason: str | None = None) -> None:
-        """Request best-effort cancellation of this run."""
+    def request_cancel(self, reason: str | None = None, *, initiator: str | None = None) -> None:
+        """Request best-effort cancellation of this run.
+
+        ``reason`` is the semantic cause Run owners act on; ``initiator`` names
+        who asked and only reaches the terminal log line.
+        """
         if self.status != RunStatus.RUNNING or self.cancel_requested or self._completion_started:
             return
         self.cancel_reason = reason
+        self.cancel_initiator = initiator
         self.cancel_requested = True
         # A Run cancel subsumes every still-active per-call cancel. Fire those
         # callbacks before cancelling the executor task so Tool-owned processes,
@@ -808,6 +815,8 @@ class Run:
         fields = self._terminal_log_fields(payload)
         if self.cancel_reason is not None:
             fields += f" reason={self.cancel_reason}"
+        if self.cancel_initiator is not None:
+            fields += f" cancelled_by={self.cancel_initiator}"
         _LOGGER.info("Run cancelled (%s)", fields)
         self.emit(RUN_CANCELLED_EVENT, payload)
         self._settle()

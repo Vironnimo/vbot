@@ -122,7 +122,9 @@ async def _maintenance_begin(state: Any, params: JsonObject) -> JsonObject:
                 project_id=address.project_id,
             )
             if active is not None and active.id == run_id:
-                await state.chat_runs.cancel(run_id, reason="application_update")
+                await state.chat_runs.cancel(
+                    run_id, reason="application_update", initiator="update_maintenance"
+                )
                 result = cast(JsonObject, await state.chat_runs.maintenance_status(operation_id))
         return result
     except Exception as exc:
