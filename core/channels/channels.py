@@ -159,12 +159,22 @@ class ChannelService:
                     reason = str(error) or type(error).__name__
                     self._mark_channel_failed(config.id, reason)
                     self._schedule_restart(config.id)
-                    _LOGGER.error(
-                        "Cannot start channel adapter during service startup (channel=%s): %s",
-                        config.id,
-                        error,
-                        exc_info=(type(error), error, error.__traceback__),
-                    )
+                    if isinstance(error, ChannelError):
+                        # Expected, such as a missing credential: recovery retries it.
+                        _LOGGER.warning(
+                            "Cannot start channel adapter during service startup "
+                            "(channel=%s error_type=%s): %s",
+                            config.id,
+                            type(error).__name__,
+                            error,
+                        )
+                    else:
+                        _LOGGER.error(
+                            "Cannot start channel adapter during service startup (channel=%s): %s",
+                            config.id,
+                            error,
+                            exc_info=(type(error), error, error.__traceback__),
+                        )
 
     def stop(self) -> None:
         """Stop all active channel adapter tasks. Idempotent."""

@@ -54,6 +54,7 @@ class _FakeApplication:
         self.bot = bot
         self.events: list[str] = []
         self.handlers: list[Any] = []
+        self.error_handlers: list[Callable[[object, Any], Awaitable[None]]] = []
         self.polling = asyncio.Event()
         self.drain_on_stop: Callable[[], Awaitable[None]] | None = None
         self.error_callback: Callable[[telegram.error.TelegramError], None] | None = None
@@ -78,6 +79,9 @@ class _FakeApplication:
 
     def add_handler(self, handler: Any) -> None:
         self.handlers.append(handler)
+
+    def add_error_handler(self, handler: Callable[[object, Any], Awaitable[None]]) -> None:
+        self.error_handlers.append(handler)
 
     async def initialize(self) -> None:
         self.events.append("initialize")
@@ -227,7 +231,7 @@ def test_constructor_refuses_a_missing_token(
 
 @pytest.mark.asyncio
 async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     earlier_tasks = asyncio.all_tasks()
     storage = channel_state(tmp_path)
@@ -255,6 +259,20 @@ async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
     await drain_chat_queue(adapter, 12345)
     assert [awaited.args[1] for awaited in trigger.await_args_list] == ["hello"]
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="ok")
+
+    # A failing update handler is logged once with its Channel; the update never is.
+    caplog.set_level(logging.ERROR, logger="vbot.channels.telegram")
+    [log_handler_error] = application.error_handlers
+    await log_handler_error(
+        _text_update(99, "private words"), SimpleNamespace(error=RuntimeError("handler broke"))
+    )
+    [record] = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.channels.telegram" and record.levelno == logging.ERROR
+    ]
+    assert "tg-assistant" in record.getMessage()
+    assert "private words" not in caplog.text
 
     async def drain_pending_updates() -> None:
         await _deliver(application, _text_update(9, "last question"))

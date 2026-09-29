@@ -173,6 +173,9 @@ class TelegramChannelAdapter(ChannelAdapter):
         application = self._build_application(telegram_ext, polling_health)
         for handler in self._build_message_handlers(telegram_ext):
             application.add_handler(handler)
+        # Without a registered handler PTB logs a failing update handler itself, with
+        # no Channel attribution.
+        application.add_error_handler(self._log_update_handler_error)
         self._application = application
         self._stop_event.clear()
 
@@ -198,6 +201,18 @@ class TelegramChannelAdapter(ChannelAdapter):
             await updater.start_polling(error_callback=polling_health.failed)
         self._report_connected()
         await self._stop_event.wait()
+
+    async def _log_update_handler_error(self, _update: object, context: Any) -> None:
+        # The update itself is never logged: it carries message text and platform ids.
+        error = getattr(context, "error", None)
+        _LOGGER.error(
+            "Telegram update handler failed (channel=%s error_type=%s)",
+            self._config.id,
+            type(error).__name__,
+            exc_info=(type(error), error, error.__traceback__)
+            if isinstance(error, BaseException)
+            else None,
+        )
 
     def _build_application(self, telegram_ext: Any, polling_health: _PollingHealth) -> Any:
         # AIORateLimiter paces outbound calls against Telegram's flood limits (~30 msg/s

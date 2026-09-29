@@ -409,7 +409,9 @@ async def test_construction_failure_does_not_end_automatic_recovery(
             # A constructor failure at startup marks only that Channel failed.
             assert service.is_failed(config.id)
             assert service.failure_reason(config.id) == "credential temporarily unavailable"
-            assert "Cannot start channel adapter during service startup" in caplog.text
+            # The expected failure warns without a traceback; recovery retries it.
+            [startup] = [r for r in caplog.records if r.name == "vbot.channels"]
+            assert (startup.levelno, startup.exc_info) == (logging.WARNING, None)
         await asyncio.wait_for(recovered.started.wait(), timeout=1)
         assert attempts == 4
         assert delays == [1.0, 2.0, 4.0]
