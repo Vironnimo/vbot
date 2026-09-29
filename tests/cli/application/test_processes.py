@@ -7,6 +7,7 @@ import pytest
 from cli.application import processes
 from cli.application.state import Installation
 from cli.server_management import HealthProbeResult, WebUIProbeResult
+from core.utils.logging import CONSOLE_LOGGING_ENV_VAR
 
 
 def _install(root: Path) -> Installation:
@@ -104,6 +105,37 @@ def test_server_start_detaches_only_when_parent_is_not_already_independent(
         else processes.start(install)
     )
     assert result.ok
+
+
+def test_server_start_keeps_only_process_output_in_a_bounded_startup_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path)
+    startup_log = tmp_path / "logs" / "server-startup.log"
+    startup_log.parent.mkdir()
+    startup_log.write_bytes(b"old crash output")
+    monkeypatch.setattr(processes, "STARTUP_LOG_ROTATE_BYTES", 8)
+    monkeypatch.setattr(
+        processes, "probe_health", lambda _instance: SimpleNamespace(reachable=False)
+    )
+    monkeypatch.setattr(processes, "running_server_matches", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        processes, "probe_webui", lambda _instance: WebUIProbeResult(available=True)
+    )
+    spawned: list[dict] = []
+
+    def spawn(_args, **kwargs):
+        spawned.append(kwargs)
+        return SimpleNamespace(pid=123, poll=lambda: None)
+
+    monkeypatch.setattr(processes.subprocess, "Popen", spawn)
+
+    assert processes.start(install).ok
+    # Log lines go to the daily log only; the startup file receives raw process output.
+    assert spawned[0]["env"][CONSOLE_LOGGING_ENV_VAR] == "0"
+    assert spawned[0]["stdout"].name == str(startup_log)
+    assert startup_log.read_bytes() == b""
+    assert startup_log.with_name("server-startup.log.1").read_bytes() == b"old crash output"
 
 
 def test_already_running_result_preserves_health_for_cli_output(tmp_path, monkeypatch):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import locale
+import logging
 import os
 import re
 import shlex
@@ -13,6 +14,7 @@ import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,7 @@ from core.storage.layout import initialize_data_directory
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager
 from core.utils.processes import subprocess_creation_flags
 from core.utils.server_control import (
+    CONTROL_INITIATOR_HEADER,
     CONTROL_SHUTDOWN_PATH,
     CONTROL_TOKEN_HEADER,
     read_server_control,
@@ -208,7 +211,7 @@ def start_server(
     try:
         initial_health = probe_health_patiently(instance)
         if initial_health.is_vbot:
-            logger.info("CLI-managed background server already running at %s", instance.url)
+            logger.debug("CLI-managed background server already running at %s", instance.url)
             return CommandResult(
                 ok=True,
                 message="already running",
@@ -246,9 +249,9 @@ def start_server(
                 log_path=instance.log_path,
             )
 
-        logger.info("Starting CLI-managed background server at %s", instance.url)
+        logger.debug("Starting CLI-managed background server at %s", instance.url)
         process = start_server_process(instance)
-        logger.info("Started CLI-managed background server process %s", process.pid)
+        logger.debug("Started CLI-managed background server process %s", process.pid)
         started_at = time.monotonic()
         deadline = started_at + startup_timeout_seconds
         health = initial_health
@@ -256,7 +259,12 @@ def start_server(
         while time.monotonic() < deadline:
             health = probe_health(instance)
             if health.is_vbot:
-                logger.info("CLI-managed background server became ready at %s", instance.url)
+                logger.info(
+                    "CLI-managed background server started (pid=%s url=%s ready=%.1fs)",
+                    process.pid,
+                    instance.url,
+                    time.monotonic() - started_at,
+                )
                 return CommandResult(
                     ok=True,
                     message="started",
@@ -358,8 +366,13 @@ def stop_server(
     instance: ServerInstance,
     *,
     shutdown_timeout_seconds: float = DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
+    initiator: str = "cli",
 ) -> CommandResult:
-    """Request Runtime shutdown, with bounded terminate/kill fallback."""
+    """Request Runtime shutdown, with bounded terminate/kill fallback.
+
+    *initiator* names the caller in the server's stop line (``STOP_INITIATORS``).
+    A stop that bypasses the server's own shutdown is logged to the target's log.
+    """
 
     if not is_local_target(instance):
         return CommandResult(
@@ -383,7 +396,7 @@ def stop_server(
     elif not health.reachable:
         process = _resolve_control_process(instance)
         if process is not None:
-            return _finish_unreachable_control_process(
+            return _await_process_exit(
                 instance,
                 health,
                 process,
@@ -407,38 +420,21 @@ def stop_server(
                 health=health,
             )
 
-    cooperative = _request_cooperative_shutdown(instance, process)
-    forced = False
-    try:
-        if not cooperative:
-            process.terminate()
-        process.wait(timeout=shutdown_timeout_seconds)
-    except psutil.TimeoutExpired:
-        forced = True
+    if not _request_cooperative_shutdown(instance, process, initiator=initiator):
         try:
-            process.kill()
-            process.wait(timeout=shutdown_timeout_seconds)
-        except psutil.TimeoutExpired:
-            return CommandResult(
-                ok=False,
-                message="forced termination timed out",
-                instance=instance,
-                health=health,
-                process_id=process.pid,
-                forced=True,
-            )
+            process.terminate()
         except psutil.NoSuchProcess:
-            pass
-    except psutil.NoSuchProcess:
-        pass
-
-    return CommandResult(
-        ok=True,
-        message="stopped",
-        instance=instance,
-        health=health,
-        process_id=process.pid,
-        forced=forced,
+            return CommandResult(
+                ok=True, message="stopped", instance=instance, health=health, process_id=process.pid
+            )
+        _log_forced_stop(
+            instance,
+            logging.WARNING,
+            "Server process terminated after its shutdown request failed (pid=%s)",
+            process.pid,
+        )
+    return _await_process_exit(
+        instance, health, process, shutdown_timeout_seconds=shutdown_timeout_seconds
     )
 
 
@@ -460,24 +456,37 @@ def _resolve_control_process(instance: ServerInstance) -> psutil.Process | None:
     return process
 
 
-def _finish_unreachable_control_process(
+def _await_process_exit(
     instance: ServerInstance,
     health: HealthProbeResult,
     process: psutil.Process | Any,
     *,
     shutdown_timeout_seconds: float,
 ) -> CommandResult:
-    """Wait for teardown after the listener closes, then kill only its exact owner."""
+    """Wait for the exact server process to finish teardown, killing it after the timeout."""
 
     forced = False
     try:
         process.wait(timeout=shutdown_timeout_seconds)
     except psutil.TimeoutExpired:
         forced = True
+        _log_forced_stop(
+            instance,
+            logging.WARNING,
+            "Server process killed after stop timeout (pid=%s timeout=%.0fs)",
+            process.pid,
+            shutdown_timeout_seconds,
+        )
         try:
             process.kill()
             process.wait(timeout=shutdown_timeout_seconds)
         except psutil.TimeoutExpired:
+            _log_forced_stop(
+                instance,
+                logging.ERROR,
+                "Server process did not exit after kill (pid=%s)",
+                process.pid,
+            )
             return CommandResult(
                 ok=False,
                 message="forced termination timed out",
@@ -501,10 +510,24 @@ def _finish_unreachable_control_process(
     )
 
 
+def _log_forced_stop(instance: ServerInstance, level: int, message: str, *args: object) -> None:
+    """Record a stop that bypassed the server's own shutdown in the target's log."""
+
+    if not instance.data_dir.is_dir():
+        # A stop must not initialize a data directory as a side effect.
+        return
+    manager = _create_cli_log_manager(instance)
+    try:
+        manager.get_logger(CLI_SERVER_LOGGER_NAME).log(level, message, *args)
+    finally:
+        manager.close()
+
+
 def _request_cooperative_shutdown(
     instance: ServerInstance,
     process: psutil.Process | Any,
     *,
+    initiator: str = "cli",
     timeout_seconds: float = DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS,
 ) -> bool:
     """Ask the exact listener process to enter its application shutdown path."""
@@ -515,7 +538,7 @@ def _request_cooperative_shutdown(
     try:
         response = httpx.post(
             _probe_url(instance, CONTROL_SHUTDOWN_PATH),
-            headers={CONTROL_TOKEN_HEADER: control.token},
+            headers={CONTROL_TOKEN_HEADER: control.token, CONTROL_INITIATOR_HEADER: initiator},
             timeout=timeout_seconds,
             trust_env=False,
         )
@@ -950,7 +973,11 @@ def _run_scheduled_restart(argv: list[str]) -> int:
             )
             return 1
         time.sleep(_SCHEDULED_RESTART_SETTLE_SECONDS)
-        result = restart_server(instance, service_name=arguments.service_name)
+        result = restart_server(
+            instance,
+            service_name=arguments.service_name,
+            stop=partial(stop_server, initiator="scheduled_restart"),
+        )
         log = logger.info if result.ok else logger.error
         log("Scheduled update restart result: %s", result.message)
         return 0 if result.ok else 1

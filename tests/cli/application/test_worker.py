@@ -129,7 +129,7 @@ def _patch_server_update(monkeypatch: pytest.MonkeyPatch, install: Installation)
         lambda _target: SimpleNamespace(is_vbot=True, reachable=True),
     )
     monkeypatch.setattr(worker, "quiesce", lambda *_args: None)
-    monkeypatch.setattr(worker.processes, "stop", lambda _install: _ok())
+    monkeypatch.setattr(worker.processes, "stop", lambda _install, **_kwargs: _ok())
 
 
 def test_client_only_execution_never_targets_snapshots_or_starts_servers(
@@ -289,7 +289,7 @@ def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
         lambda *_args, **_kwargs: sequence.append("snapshot"),
     )
 
-    def stop(_install):
+    def stop(_install, **_kwargs):
         sequence.append("stop")
         return _ok()
 

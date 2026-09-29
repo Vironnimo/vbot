@@ -51,7 +51,9 @@ def test_removal_marker_blocks_lifecycle_and_update_dispatch_without_spawning(
     ):
         pass
     monkeypatch.setattr(
-        host.processes, "stop", lambda _install: SimpleNamespace(ok=True, message="stopped")
+        host.processes,
+        "stop",
+        lambda _install, **_kwargs: SimpleNamespace(ok=True, message="stopped"),
     )
     host.ApplicationFacade(install).stop_server()
 

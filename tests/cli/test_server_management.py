@@ -270,15 +270,11 @@ def test_start_server_waits_for_health_and_logs_its_lifecycle(
     else:
         [marker] = markers_at_spawn
         assert marker is not None and marker.databases == {}
-    log_lines = instance.log_path.read_text(encoding="utf-8").splitlines()
-    assert log_lines
-    assert all(re.match(MANAGED_CLI_LOG_PATTERN, line) for line in log_lines)
-    for event in [
-        "Starting CLI-managed background server at http://127.0.0.1:8420",
-        "Started CLI-managed background server process 4321",
-        "CLI-managed background server became ready at http://127.0.0.1:8420",
-    ]:
-        assert any(event in line for line in log_lines), event
+    # One outcome line names the spawned process and where it answers.
+    [log_line] = instance.log_path.read_text(encoding="utf-8").splitlines()
+    assert re.match(MANAGED_CLI_LOG_PATTERN, log_line)
+    assert "[INFO]" in log_line
+    assert "pid=4321" in log_line and "url=http://127.0.0.1:8420" in log_line
 
 
 @pytest.mark.parametrize(
@@ -408,10 +404,29 @@ def test_stop_server_does_not_inspect_processes_behind_a_non_vbot_answer(
 
 
 @pytest.mark.parametrize(
-    ("cooperative", "timeouts", "ok", "message", "forced", "calls"),
+    ("cooperative", "timeouts", "ok", "message", "forced", "calls", "logged"),
     [
-        pytest.param(False, 0, True, "stopped", False, ["terminate", ("wait", 2.0)], id="term"),
-        pytest.param(True, 0, True, "stopped", False, [("wait", 2.0)], id="cooperative"),
+        pytest.param(
+            False,
+            0,
+            True,
+            "stopped",
+            False,
+            ["terminate", ("wait", 2.0)],
+            ["WARN"],
+            id="term",
+        ),
+        pytest.param(True, 0, True, "stopped", False, [("wait", 2.0)], [], id="cooperative"),
+        pytest.param(
+            True,
+            1,
+            True,
+            "stopped",
+            True,
+            [("wait", 2.0), "kill", ("wait", 2.0)],
+            ["WARN"],
+            id="cooperative-timeout-kills",
+        ),
         pytest.param(
             False,
             1,
@@ -419,6 +434,7 @@ def test_stop_server_does_not_inspect_processes_behind_a_non_vbot_answer(
             "stopped",
             True,
             ["terminate", ("wait", 2.0), "kill", ("wait", 2.0)],
+            ["WARN", "WARN"],
             id="terminate-timeout-kills",
         ),
         pytest.param(
@@ -428,6 +444,7 @@ def test_stop_server_does_not_inspect_processes_behind_a_non_vbot_answer(
             "forced termination timed out",
             True,
             ["terminate", ("wait", 2.0), "kill", ("wait", 2.0)],
+            ["WARN", "WARN", "ERROR"],
             id="kill-timeout-fails",
         ),
     ],
@@ -441,19 +458,35 @@ def test_stop_server_shuts_down_the_confirmed_vbot_listener(
     message: str,
     forced: bool,
     calls: list[Any],
+    logged: list[str],
 ) -> None:
+    instance.data_dir.mkdir()
     process = FakeProcess(pid=789, timeouts=timeouts)
+    initiators: list[str] = []
+
+    def request_shutdown(_instance: ServerInstance, _process: FakeProcess, *, initiator: str):
+        initiators.append(initiator)
+        return cooperative
+
     answer_health(monkeypatch, VBOT)
     monkeypatch.setattr(server_management, "find_listening_process", lambda _instance: process)
-    monkeypatch.setattr(
-        server_management, "_request_cooperative_shutdown", lambda *_args: cooperative
-    )
+    monkeypatch.setattr(server_management, "_request_cooperative_shutdown", request_shutdown)
 
-    result = stop_server(instance, shutdown_timeout_seconds=2.0)
+    result = stop_server(instance, shutdown_timeout_seconds=2.0, initiator="tray_quit")
 
     assert (result.ok, result.message, result.forced) == (ok, message, forced)
     assert (result.process_id, result.health, result.instance) == (789, VBOT, instance)
     assert process.calls == calls
+    assert initiators == ["tray_quit"]
+    # A stop that bypassed the server's own shutdown is visible in the target's log.
+    lines = (
+        instance.log_path.read_text(encoding="utf-8").splitlines()
+        if instance.log_path.exists()
+        else []
+    )
+    assert all(re.match(MANAGED_CLI_LOG_PATTERN, line) for line in lines)
+    assert [line.split("[", 1)[1].split("]", 1)[0] for line in lines] == logged
+    assert all("pid=789" in line for line in lines)
 
 
 @pytest.mark.parametrize(
@@ -542,7 +575,7 @@ def test_stop_server_asks_a_busy_listener_to_shut_down_instead_of_killing_it(
     process = FakeProcess(pid=456)
     requested: list[int] = []
 
-    def request_shutdown(_instance: ServerInstance, target: FakeProcess) -> bool:
+    def request_shutdown(_instance: ServerInstance, target: FakeProcess, **_kwargs: Any) -> bool:
         requested.append(target.pid)
         return cooperative
 
@@ -574,8 +607,14 @@ def test_cooperative_shutdown_requires_control_record_for_listener_pid(
 
     monkeypatch.setattr(server_management.httpx, "post", post)
 
-    assert server_management._request_cooperative_shutdown(instance, process) is True
-    assert posts[0]["headers"] == {"X-VBot-Control-Token": "secret"}
+    assert (
+        server_management._request_cooperative_shutdown(instance, process, initiator="update")
+        is True
+    )
+    assert posts[0]["headers"] == {
+        "X-VBot-Control-Token": "secret",
+        "X-VBot-Stop-Initiator": "update",
+    }
 
     record.pid = 999
     assert server_management._request_cooperative_shutdown(instance, process) is False
@@ -748,7 +787,7 @@ def test_scheduled_restart_waits_then_runs_once_and_logs_result(
     monkeypatch.setattr(
         server_management,
         "restart_server",
-        lambda target, *, service_name: CommandResult(
+        lambda target, *, service_name, **_options: CommandResult(
             ok=True, message=f"restarted {service_name}", instance=target
         ),
     )

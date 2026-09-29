@@ -316,7 +316,7 @@ def recover_interrupted(install: Installation, operation: Operation) -> bool:
         if install.owns_server and processes.running_server_matches(
             install, version_id=operation.candidate_version, verification=True
         ):
-            require_ok(processes.stop(install))
+            require_ok(processes.stop(install, initiator="update"))
         previous_server_running = install.owns_server and processes.running_server_matches(
             install, version_id=operation.previous_version, verification=False
         )
@@ -414,7 +414,7 @@ def execute(install: Installation, operation: Operation) -> None:
         operation.transition(
             install, "stopping", "Stopping the current server after draining accepted work"
         )
-        require_ok(processes.stop(install))
+        require_ok(processes.stop(install, initiator="update"))
         # Taken only now: no server can write between this snapshot and a rollback.
         operation.transition(install, "stopping", "Saving a recovery snapshot of the data")
         try:
@@ -438,7 +438,7 @@ def execute(install: Installation, operation: Operation) -> None:
         )
         if verified.ok:
             # From here on the snapshot is stale: it is never restored automatically.
-            require_ok(processes.stop(install))
+            require_ok(processes.stop(install, initiator="update"))
         else:
             operation.error = verified.message
             data_note = roll_back_data(install, operation, update_snapshot)
@@ -448,7 +448,7 @@ def execute(install: Installation, operation: Operation) -> None:
                 install, version_id=previous, verification=True, breakaway=False
             )
             if old_check.ok:
-                require_ok(processes.stop(install))
+                require_ok(processes.stop(install, initiator="update"))
                 if operation.server_was_running:
                     require_ok(processes.start(install, version_id=previous, breakaway=False))
                 operation.transition(
