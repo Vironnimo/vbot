@@ -10,6 +10,9 @@ export default defineConfig({
       $lib: path.resolve(import.meta.dirname, 'src/lib'),
     },
   },
+  test: {
+    setupFiles: ['src/__tests__/environment.support.js'],
+  },
   build: {
     chunkSizeWarningLimit: 800,
     minify: 'terser',

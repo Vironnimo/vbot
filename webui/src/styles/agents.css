@@ -25,69 +25,16 @@
   text-align: left;
 }
 
-.agents-view .agent-list-row {
-  position: relative;
-  display: block;
-  min-width: 0;
-}
-
-.agents-view .agent-order-handle {
-  position: absolute;
-  z-index: 1;
-  top: 4px;
-  right: 4px;
+.agents-view .agent-list {
   display: flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  margin: 0;
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  color: var(--text-lo);
-  background: var(--surface-2);
-  cursor: grab;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease,
-    background 120ms ease;
+  list-style: none;
 }
 
-.agents-view .agent-list-row:hover .agent-order-handle:not(:disabled),
-.agents-view .agent-list-row:focus-within .agent-order-handle:not(:disabled) {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.agents-view .agent-order-handle:hover:not(:disabled) {
-  border-color: var(--border-2);
-  color: var(--text-med);
-  background: var(--surface-2);
-}
-
-.agents-view .agent-order-handle:focus-visible {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-  color: var(--accent);
-  opacity: 1;
-  outline: none;
-  pointer-events: auto;
-}
-
-.agents-view .agent-order-handle:active:not(:disabled) {
-  cursor: grabbing;
-}
-
-.agents-view .agent-order-handle:disabled {
-  cursor: default;
-  opacity: 0;
-}
-
-.agents-view .agent-list-row--drop-target .agent-item {
-  box-shadow: inset 0 0 0 1px var(--accent-40);
+.agents-view .agent-list-row {
+  min-width: 0;
 }
 
 .agents-view .agent-item-inner {
@@ -113,18 +60,6 @@
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agents-view .agent-list-pane__sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
   white-space: nowrap;
 }
 

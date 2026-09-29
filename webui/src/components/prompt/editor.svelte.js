@@ -22,12 +22,10 @@ export function createPromptEditor(context) {
   const SLUG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
 
   // Blocks come from `prompt.list` in layout order. Each block is keyed by its
-  // stable `id` (never an array index), so autosave timers and DnD identity
+  // stable `id` (never an array index), so autosave timers and row identity
   // survive a reorder. Editable text blocks carry `editedContent`/`isDirty`
   // live-edit state; data blocks (`kind === 'data'`) have none.
   let blocks = $state([]);
-
-  let reorderAnnouncement = $state('');
 
   // Autosave timers keyed by block id (a reorder must not reassign a timer to a
   // different block, which an index key would do). A plain null-proto object,
@@ -47,14 +45,6 @@ export function createPromptEditor(context) {
   const unregisterPromptAutosave = context.autosaveContext.register(
     promptAutosaveParticipant,
   );
-
-  // The block id whose reorder handle should regain focus after a keyboard move,
-  // so the focus follows the moving row across the DOM re-render.
-  let pendingFocusBlockId = null;
-
-  // The drag source index for a native HTML5 drag (mirrored from dataTransfer so
-  // a same-document drop can reorder without parsing the payload defensively).
-  let dragSourceIndex = null;
 
   // Pending confirmations (null = the dialog is closed). Each destructive action
   // opens its own dialog and runs only once the user confirms. `resetBlock` and
@@ -381,100 +371,13 @@ export function createPromptEditor(context) {
     }
   }
 
-  // -- Drag-and-drop reorder (native HTML5) --------------------------------
-  function handleDragStart(index, event) {
-    dragSourceIndex = index;
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = 'move';
-      // A payload is required for a valid drag in some browsers; the index is
-      // also mirrored in `dragSourceIndex` for the same-document drop path.
-      event.dataTransfer.setData('text/plain', String(index));
-    }
-  }
-
-  function handleDragOver(index, event) {
-    if (dragSourceIndex === null) {
-      return;
-    }
-    // preventDefault marks this row as a valid drop target.
-    event.preventDefault();
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = 'move';
-    }
-  }
-
-  async function handleDrop(index, event) {
-    event.preventDefault();
-    const from = dragSourceIndex;
-    dragSourceIndex = null;
-    if (from === null || from === index) {
-      return;
-    }
-    moveBlock(from, index);
-    await persistLayout();
-  }
-
-  function handleDragEnd() {
-    dragSourceIndex = null;
-  }
-
-  // -- Keyboard reorder (accessibility, T2) --------------------------------
-  async function handleHandleKeydown(index, event) {
-    let target;
-    if (event.key === 'ArrowUp') {
-      target = index - 1;
-    } else if (event.key === 'ArrowDown') {
-      target = index + 1;
-    } else {
-      return;
-    }
-
-    event.preventDefault();
-    if (target < 0 || target >= blocks.length) {
-      return;
-    }
-
-    const movedId = blocks[index].id;
-    moveBlock(index, target);
-    pendingFocusBlockId = movedId;
-    announceReorder(target);
-    await persistLayout();
-    await tick();
-    focusPendingHandle();
-  }
-
-  function moveBlock(from, to) {
+  // -- Reorder (SortableList: pointer drag and Alt+Arrow keys) ------------
+  async function reorderBlocks(from, to) {
     const next = [...blocks];
     const [moved] = next.splice(from, 1);
     next.splice(to, 0, moved);
     blocks = next;
-  }
-
-  function announceReorder(position) {
-    reorderAnnouncement = t('systemPrompt.blockList.reorderAnnouncement', {
-      position: position + 1,
-      total: blocks.length,
-    });
-  }
-
-  function focusPendingHandle() {
-    if (!pendingFocusBlockId) {
-      return;
-    }
-    const handle = document.querySelector(
-      `[data-block-handle="${cssEscape(pendingFocusBlockId)}"]`,
-    );
-    pendingFocusBlockId = null;
-    if (handle instanceof HTMLElement) {
-      handle.focus();
-    }
-  }
-
-  function cssEscape(value) {
-    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-      return CSS.escape(value);
-    }
-    return value.replace(/["\\]/gu, '\\$&');
+    await persistLayout();
   }
 
   // -- Custom block create / remove (T1) -----------------------------------
@@ -567,12 +470,6 @@ export function createPromptEditor(context) {
     set blocks(value) {
       blocks = value;
     },
-    get reorderAnnouncement() {
-      return reorderAnnouncement;
-    },
-    set reorderAnnouncement(value) {
-      reorderAnnouncement = value;
-    },
     get resetConfirmBlockId() {
       return resetConfirmBlockId;
     },
@@ -639,20 +536,8 @@ export function createPromptEditor(context) {
     get togglePreview() {
       return togglePreview;
     },
-    get handleDragStart() {
-      return handleDragStart;
-    },
-    get handleDragOver() {
-      return handleDragOver;
-    },
-    get handleDrop() {
-      return handleDrop;
-    },
-    get handleDragEnd() {
-      return handleDragEnd;
-    },
-    get handleHandleKeydown() {
-      return handleHandleKeydown;
+    get reorderBlocks() {
+      return reorderBlocks;
     },
     get createCustomBlock() {
       return createCustomBlock;

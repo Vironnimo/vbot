@@ -1,10 +1,10 @@
 <script>
-  import { tick } from 'svelte';
-
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import SortableList from '../ui/SortableList.svelte';
   import { t } from '$lib/i18n.js';
   import { modelShortName } from '$lib/modelSelection.js';
+  import { moveItem } from '../ui/sortable.js';
 
   let {
     agents = [],
@@ -22,88 +22,8 @@
     onReorderInteractionChange = () => {},
   } = $props();
 
-  let dragSourceIndex = $state(null);
-  let dragTargetIndex = $state(null);
-  let reorderAnnouncement = $state('');
-
-  function handleDragStart(index, event) {
-    if (isReordering || agents.length < 2) {
-      event.preventDefault();
-      return;
-    }
-    dragSourceIndex = index;
-    dragTargetIndex = index;
-    onReorderInteractionChange(true);
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('text/plain', agents[index].id);
-    }
-  }
-
-  function handleDragOver(index, event) {
-    if (dragSourceIndex === null || isReordering) {
-      return;
-    }
-
-    event.preventDefault();
-    dragTargetIndex = index;
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = 'move';
-    }
-  }
-
-  function handleDrop(index, event) {
-    event.preventDefault();
-    const sourceIndex = dragSourceIndex;
-    clearDragState();
-    if (sourceIndex === null || sourceIndex === index) {
-      return;
-    }
-    void moveAgent(sourceIndex, index);
-  }
-
-  function handleDragEnd() {
-    clearDragState();
-  }
-
-  function clearDragState() {
-    dragSourceIndex = null;
-    dragTargetIndex = null;
-    onReorderInteractionChange(false);
-  }
-
-  function handleHandleKeydown(index, event) {
-    let targetIndex;
-    if (event.key === 'ArrowUp') {
-      targetIndex = index - 1;
-    } else if (event.key === 'ArrowDown') {
-      targetIndex = index + 1;
-    } else {
-      return;
-    }
-
-    event.preventDefault();
-    if (isReordering || targetIndex < 0 || targetIndex >= agents.length) {
-      return;
-    }
-    void moveAgent(index, targetIndex);
-  }
-
-  async function moveAgent(sourceIndex, targetIndex) {
-    const nextAgents = [...agents];
-    const [movedAgent] = nextAgents.splice(sourceIndex, 1);
-    nextAgents.splice(targetIndex, 0, movedAgent);
-    const persistence = onReorder(nextAgents.map((agent) => agent.id));
-    reorderAnnouncement = t('agents.order.announcement', {
-      name: movedAgent.name || movedAgent.id,
-      position: targetIndex + 1,
-      total: nextAgents.length,
-    });
-    await persistence;
-    await tick();
-    document
-      .querySelector(`[data-agent-order-handle="${movedAgent.id}"]`)
-      ?.focus();
+  function reorderAgents(from, to) {
+    return onReorder(moveItem(agents, from, to).map((agent) => agent.id));
   }
 </script>
 
@@ -137,10 +57,7 @@
     >
   </div>
 
-  <div
-    class="agent-list-scroll secondary-pane__scroll secondary-list"
-    role={!isLoading && agents.length > 0 ? 'list' : undefined}
-  >
+  <div class="agent-list-scroll secondary-pane__scroll secondary-list">
     {#if isLoading}
       <p class="agents-view__list-state">
         {t('agents.loading')}
@@ -159,15 +76,17 @@
         {/snippet}
       </EmptyState>
     {:else}
-      {#each agents as agent, index (agent.id)}
-        <div
-          class="agent-list-row"
-          role="listitem"
-          class:agent-list-row--drop-target={dragTargetIndex === index &&
-            dragSourceIndex !== index}
-          ondragover={(event) => handleDragOver(index, event)}
-          ondrop={(event) => handleDrop(index, event)}
-        >
+      <SortableList
+        class="agent-list"
+        itemClass="agent-list-row"
+        items={agents}
+        getLabel={(agent) => agent.name || agent.id}
+        disabled={isReordering}
+        aria-label={t('agents.title')}
+        onReorder={reorderAgents}
+        onDragActiveChange={onReorderInteractionChange}
+      >
+        {#snippet item(agent)}
           <button
             class:active={agent.id === selectedAgentId}
             class="agent-item secondary-list__item"
@@ -181,40 +100,8 @@
               </div>
             </div>
           </button>
-          <button
-            type="button"
-            class="agent-order-handle"
-            draggable={!isReordering && agents.length > 1}
-            disabled={isReordering || agents.length < 2}
-            data-agent-order-handle={agent.id}
-            aria-label={t('agents.order.handle', {
-              name: agent.name || agent.id,
-            })}
-            ondragstart={(event) => handleDragStart(index, event)}
-            ondragend={handleDragEnd}
-            onkeydown={(event) => handleHandleKeydown(index, event)}
-          >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 12 12"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <circle cx="3.5" cy="2.5" r="1.1" fill="currentColor" />
-              <circle cx="8.5" cy="2.5" r="1.1" fill="currentColor" />
-              <circle cx="3.5" cy="6" r="1.1" fill="currentColor" />
-              <circle cx="8.5" cy="6" r="1.1" fill="currentColor" />
-              <circle cx="3.5" cy="9.5" r="1.1" fill="currentColor" />
-              <circle cx="8.5" cy="9.5" r="1.1" fill="currentColor" />
-            </svg>
-          </button>
-        </div>
-      {/each}
+        {/snippet}
+      </SortableList>
     {/if}
-  </div>
-
-  <div class="agent-list-pane__sr-only" aria-live="polite" role="status">
-    {reorderAnnouncement}
   </div>
 </aside>

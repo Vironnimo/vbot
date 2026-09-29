@@ -237,8 +237,6 @@ export default Object.freeze({
   'agents.loadError': 'Agents could not be loaded.',
   'agents.saveError': 'Agent could not be saved.',
   'agents.deleteError': 'Agent could not be deleted.',
-  'agents.order.handle': 'Reorder {name} (use arrow keys)',
-  'agents.order.announcement': 'Moved {name} to position {position} of {total}',
   'agents.order.saveError': 'Agent order could not be saved.',
   'agents.form.id': 'Agent ID',
   'agents.form.name': 'Name',
@@ -474,9 +472,6 @@ export default Object.freeze({
   'projects.manage.autoLoadPlaceholder': 'Add a file path…',
   'projects.manage.autoLoadAdd': 'Add',
   'projects.manage.autoLoadRemove': 'Remove {file}',
-  'projects.manage.autoLoadReorder': 'Reorder {file} (drag or use arrow keys)',
-  'projects.manage.autoLoadMoved':
-    'Moved {file} to position {position} of {total}',
   'projects.manage.autoLoadEmpty': 'No auto-load files',
   'projects.manage.allowedToolsHelp':
     'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
@@ -696,9 +691,6 @@ export default Object.freeze({
   'systemPrompt.blockList.hidePreview': 'Hide preview',
   'systemPrompt.blockList.empty': 'No prompt blocks for this scope.',
   'systemPrompt.blockList.toggleAria': 'Toggle {id}',
-  'systemPrompt.blockList.reorderHandle': 'Reorder {id} (use arrow keys)',
-  'systemPrompt.blockList.reorderAnnouncement':
-    'Moved to position {position} of {total}',
   'systemPrompt.blockList.ownerHint.always':
     'Included when enabled and non-empty.',
   'systemPrompt.blockList.ownerHint.tool':

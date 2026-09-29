@@ -46,38 +46,27 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 const { default: AgentsView } = await import('../AgentsView.svelte');
 
 function listedAgentIds() {
-  return Array.from(document.body.querySelectorAll('button.agent-item')).map(
-    (button) =>
-      button.closest('.agent-list-row').querySelector('.agent-order-handle')
-        .dataset.agentOrderHandle,
+  return Array.from(
+    document.body.querySelectorAll('.agent-list [data-sortable-key]'),
+  ).map((row) => row.dataset.sortableKey);
+}
+
+function agentButton(agentId) {
+  return document.body.querySelector(
+    `.agent-list [data-sortable-key="${agentId}"] button.agent-item`,
   );
 }
 
-function agentOrderHandle(agentId) {
-  return document.body.querySelector(`[data-agent-order-handle="${agentId}"]`);
-}
-
-function createDataTransfer() {
-  const values = new Map();
-  return {
-    effectAllowed: 'none',
-    dropEffect: 'none',
-    setData(type, value) {
-      values.set(type, String(value));
-    },
-    getData(type) {
-      return values.get(type) ?? '';
-    },
-  };
-}
-
-function dragEvent(type, dataTransfer) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, 'dataTransfer', {
-    configurable: true,
-    value: dataTransfer,
-  });
-  return event;
+function pressMoveUp(target) {
+  target.focus();
+  target.dispatchEvent(
+    new KeyboardEvent('keydown', {
+      key: 'ArrowUp',
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
 }
 
 function isBefore(first, second) {
@@ -333,9 +322,9 @@ describe('AgentsView', () => {
     expect(agentItem.querySelector('.agent-item-sub').textContent.trim()).toBe(
       'gpt-5.2',
     );
-    const row = agentItem.closest('.agent-list-row');
-    expect(row.firstElementChild).toBe(agentItem);
-    expect(row.lastElementChild).toBe(agentOrderHandle('alpha'));
+    expect(agentItem.closest('.agent-list-row').firstElementChild).toBe(
+      agentItem,
+    );
   });
 
   it('opens Add as a compact modal and sends selected create payload', async () => {
@@ -512,7 +501,7 @@ describe('AgentsView', () => {
     expect(labels.slice(1)).toEqual(['none', 'high', 'xhigh']);
   });
 
-  it('reorders agents by drag-and-drop and persists the roster revision', async () => {
+  it('reorders agents with Alt+Arrow keys, keeps focus and persists the roster revision', async () => {
     const agents = [
       baseAgent(),
       { ...baseAgent(), id: 'bravo', name: 'Bravo' },
@@ -529,61 +518,24 @@ describe('AgentsView', () => {
     flushSync();
     await waitForCondition(() => listedAgentIds().length === 3, 100);
 
-    const dataTransfer = createDataTransfer();
-    agentOrderHandle('alpha').dispatchEvent(
-      dragEvent('dragstart', dataTransfer),
-    );
-    agentOrderHandle('charlie')
-      .closest('.agent-list-row')
-      .dispatchEvent(dragEvent('drop', dataTransfer));
+    pressMoveUp(agentButton('charlie'));
     flushSync();
 
     await waitForCondition(
       () => rpcMock.mock.calls.some(([method]) => method === 'agent.reorder'),
       100,
     );
-    expect(listedAgentIds()).toEqual(['bravo', 'charlie', 'alpha']);
+    expect(listedAgentIds()).toEqual(['alpha', 'charlie', 'bravo']);
     expect(
       rpcMock.mock.calls.find(([method]) => method === 'agent.reorder')[1],
     ).toEqual({
-      agent_ids: ['bravo', 'charlie', 'alpha'],
+      agent_ids: ['alpha', 'charlie', 'bravo'],
       expected_revision: 7,
     });
-  });
-
-  it('reorders agents with arrow keys and announces the new position', async () => {
-    rpcMock.mockImplementation(
-      createAgentsRpcMock({
-        agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
-      }),
-    );
-
-    mountedComponent = mount(AgentsView, { target: document.body });
-    flushSync();
-    await waitForCondition(() => listedAgentIds().length === 2, 100);
-
-    const handle = agentOrderHandle('bravo');
-    handle.focus();
-    handle.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'ArrowUp',
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    flushSync();
-
     await waitForCondition(
-      () => rpcMock.mock.calls.some(([method]) => method === 'agent.reorder'),
+      () => document.activeElement === agentButton('charlie'),
       100,
     );
-    expect(listedAgentIds()).toEqual(['bravo', 'alpha']);
-    expect(
-      document.body.querySelector('.agent-list-pane__sr-only').textContent,
-    ).toContain(
-      t('agents.order.announcement', { name: 'Bravo', position: 1, total: 2 }),
-    );
-    expect(document.activeElement.dataset.agentOrderHandle).toBe('bravo');
   });
 
   it('reloads authoritative order and reports a failed reorder', async () => {
@@ -604,13 +556,7 @@ describe('AgentsView', () => {
     flushSync();
     await waitForCondition(() => listedAgentIds().length === 2, 100);
 
-    agentOrderHandle('bravo').dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'ArrowUp',
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    pressMoveUp(agentButton('bravo'));
     flushSync();
 
     await waitForCondition(
