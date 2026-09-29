@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import {
     createDebouncedAutosave,
@@ -42,6 +43,15 @@
   );
   const service = $derived(
     settings?.web_fetch?.services?.find((item) => item.id === draft.provider),
+  );
+  const dataDirectory = $derived(settings?.general?.data_directory ?? '');
+  const providerHelp = $derived(
+    dataDirectory
+      ? `${t('settings.webFetch.providerHelp')}\n\n${t(
+          'settings.webFetch.envFileHelp',
+          { path: dataDirectory },
+        )}`
+      : t('settings.webFetch.providerHelp'),
   );
   const modes = $derived([
     {
@@ -110,6 +120,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.webFetch.provider')}
+        <InfoHint text={providerHelp} />
       </div>
       <div class="s-row-desc">
         {t('settings.webFetch.description')}
@@ -129,13 +140,35 @@
   </div>
 
   {#if draft.provider !== 'direct'}
+    <!-- What opting in means for the chosen service: credential state, then
+         URL sharing and cost. -->
+    <div class="s-group__block s-group__block--attached s-group__note">
+      {#if service}
+        <p class:web-fetch-note--attention={!service.configured}>
+          {service.configured
+            ? t('settings.webFetch.keyPresent', {
+                variable: service.api_key_env,
+              })
+            : t('settings.webFetch.keyMissing', {
+                variable: service.api_key_env,
+              })}
+        </p>
+      {/if}
+      <p>
+        {t('settings.webFetch.cost')}
+        {#if service?.pricing_url}
+          <a href={service.pricing_url} target="_blank" rel="noreferrer">
+            {t('settings.webFetch.pricing')}
+            <span aria-hidden="true">↗</span>
+          </a>
+        {/if}
+      </p>
+    </div>
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.webFetch.mode')}
-        </div>
-        <div class="s-row-desc">
-          {t('settings.webFetch.modeDescription')}
+          <InfoHint text={t('settings.webFetch.modeHelp')} />
         </div>
       </div>
       <div class="s-row-control s-row-control--web-search">
@@ -150,26 +183,6 @@
         />
       </div>
     </div>
-    <div class="s-group__block s-group__note">
-      <p>
-        {t('settings.webFetch.cost')}
-      </p>
-      {#if service}
-        <p>
-          {service.configured
-            ? t('settings.webFetch.keyPresent')
-            : t('settings.webFetch.keyMissing')}
-          <code>{service.api_key_env}</code>
-          {#if !service.configured}
-            {t('settings.webFetch.keyHint')}
-            <code>{settings?.general?.data_directory ?? ''}</code>
-          {/if}
-          <a href={service.pricing_url} target="_blank" rel="noreferrer"
-            >{t('settings.webFetch.pricing')}</a
-          >
-        </p>
-      {/if}
-    </div>
   {/if}
 </div>
 
@@ -181,3 +194,10 @@
     onClick={manualSave}
   />
 </div>
+
+<style>
+  /* The chosen service cannot work until its API key is set. */
+  .web-fetch-note--attention {
+    color: var(--amber);
+  }
+</style>

@@ -29,7 +29,7 @@ import {
   createSkillDirectoriesUpdatePayload,
   deriveAccountCredentialKey,
   describeAccountSource,
-  describeProvider,
+  formatModelCount,
   formatServerHost,
   getAddProviderCandidates,
   getAddableConnections,
@@ -246,25 +246,12 @@ describe('providers and accounts', () => {
     });
   });
 
-  it('describes provider metadata through i18n keys', () => {
-    expect(
-      describeProvider({
-        credential_key: 'OPENAI_API_KEY',
-        base_url: 'https://api.openai.com/v1',
-        model_count: 2,
-      }),
-    ).toBe(
-      [
-        t('settings.providers.description.credentialKey', {
-          credentialKey: 'OPENAI_API_KEY',
-        }),
-        t('settings.providers.description.baseUrl', {
-          baseUrl: 'https://api.openai.com/v1',
-        }),
-        t('settings.providers.description.modelCount', { count: 2 }),
-      ].join(' '),
+  it('formats the Model count of a collapsed Provider row', () => {
+    expect(formatModelCount(1)).toBe(t('settings.providers.modelCountOne'));
+    expect(formatModelCount(2)).toBe(
+      t('settings.providers.modelCount', { count: 2 }),
     );
-    expect(describeProvider({})).toBe(t('settings.providers.description.none'));
+    expect(formatModelCount(undefined)).toBe('');
   });
 });
 

@@ -1,26 +1,3 @@
-/* The debug capture warning continues the debug toggle row inside its group:
-   an amber marker and prose, no box of its own. */
-.s-debug-warning {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  max-width: 66ch;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
-  line-height: 1.5;
-}
-
-.s-debug-warning-icon {
-  flex-shrink: 0;
-  margin-top: 2px;
-  color: var(--amber);
-}
-
-.s-debug-warning-text {
-  margin: 0;
-  min-width: 0;
-}
-
 .s-footer {
   display: flex;
   justify-content: flex-end;
@@ -33,8 +10,8 @@
 
 /* --- Channels panel --- */
 
-/* The Channel form is its own group while creating a Channel and continues
-   the edited Channel's row while editing one. */
+/* The Channel settings are label/control rows. Creating shows them in their
+   own group above the list; editing shows them in the expanded row. */
 .s-channel-form-body {
   display: flex;
   flex-direction: column;
@@ -51,10 +28,20 @@
   font: 600 var(--fs-body-md) / 1.4 var(--font-ui);
 }
 
-.s-channel-form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.s-channel-form:not(.s-group) {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+}
+
+/* Inside a form the rows sit on the form's own padding; hairlines keep
+   the label/control pairs readable. */
+.s-group__rows.s-channel-settings > .s-row {
+  padding: 10px 0;
+}
+
+.s-group__rows.s-channel-settings > .s-row + .s-row {
+  border-top: 1px solid var(--border);
 }
 
 .s-channel-form-actions {
@@ -63,26 +50,37 @@
   gap: 10px;
 }
 
-/* Channel rows: identity and settings summary on the left, status chips
-   above the row actions on the right; setup, the edit form, group access and
-   denied chats continue below inside the same row. */
-.s-channel-head {
-  align-items: flex-start;
+/* Channel rows: name, platform and Agent on the left; run status, the
+   enabled switch and the details disclosure at the end. The head toggles the
+   details like a Provider row. */
+.s-channel-failure {
+  color: var(--red);
+  overflow-wrap: anywhere;
 }
 
-.s-channel-controls {
+/* Setup that still needs doing and blocked chats stay visible under the
+   head, indented like the details. */
+.s-channel-attention {
   display: flex;
-  flex-shrink: 0;
   flex-direction: column;
-  align-items: flex-end;
+  gap: 12px;
+  padding: 0 18px 16px 34px;
+}
+
+/* A connected WhatsApp setup renders nothing in a collapsed row. */
+.s-channel-attention:not(:has(*)) {
+  display: none;
+}
+
+.s-channel-details {
+  gap: 20px;
+}
+
+.s-channel-details-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
-}
-
-.s-channel-body {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 0 18px 16px;
 }
 
 .s-channel-access,
@@ -90,6 +88,23 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Blocked chats need a decision, so they sit on a quiet inset. */
+.s-channel-denied {
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+@media (max-width: 640px) {
+  .s-channel-attention {
+    padding: 0 14px 14px 24px;
+  }
+
+  .s-channel-denied-row {
+    flex-wrap: wrap;
+  }
 }
 
 .s-channel-access-heading {
@@ -159,10 +174,6 @@
   justify-items: stretch;
 }
 
-.s-task-model-details > button {
-  justify-self: start;
-}
-
 .s-task-memory {
   display: flex;
   flex-direction: column;
@@ -177,46 +188,45 @@
 
 /* --- Extensions panel --- */
 
-/* The "Waiting for: …" tail of the waiting hint gets its own visual beat so
-   the two sentences don't run together in one grey line. It names setting
-   labels, so it stays in the interface face. */
+/* An Extension row is its name and one clamped description line; the head
+   toggles its details like a Provider row. Attention lines (error, missing
+   setup, capability warnings) add lines under the description. */
+.s-ext-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.s-ext-desc--full {
+  white-space: normal;
+}
+
+/* The missing setup names setting labels, so it stays in the interface
+   face. */
 .s-ext-waiting-for {
   color: var(--amber);
-  font-size: var(--fs-label-sm);
-}
-
-.s-ext-waiting-for::before {
-  content: '· ';
-  color: var(--text-lo);
-}
-
-/* Extension rows carry several description lines, so their end controls
-   sit on the first line instead of the vertical centre. */
-.s-ext-head {
-  align-items: flex-start;
-}
-
-.s-ext-head .s-row-info {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.s-ext-head .s-row-desc {
-  margin-top: 0;
-}
-
-.s-ext-name-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
 }
 
 /* Extension names are package identifiers. */
 .s-ext-name {
   font-family: var(--font-mono);
   font-size: var(--fs-mono-body);
+}
+
+.s-ext-name--off {
+  color: var(--text-med);
+}
+
+.s-ext-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.s-ext-facts .s-row-desc,
+.s-ext-details > .s-row-desc {
+  margin-top: 0;
 }
 
 .s-ext-capabilities {

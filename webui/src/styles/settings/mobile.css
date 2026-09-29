@@ -69,8 +69,7 @@
 
   /* Heads with long descriptions and several end controls put the controls
      on their own line. */
-  .s-provider-connection-head > .s-row-info,
-  .s-ext-head > .s-row-info {
+  .s-provider-connection-head > .s-row-info {
     flex-basis: 100%;
   }
 
@@ -126,29 +125,15 @@
     width: 40px;
   }
 
-  .s-channel-form-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .s-channel-form-actions {
     justify-content: stretch;
     flex-direction: column;
   }
 
-  .s-channel-head,
-  .s-channel-controls,
   .s-channel-access-row {
     align-items: stretch;
     flex-direction: column;
     width: 100%;
-  }
-
-  .s-channel-controls > .s-entity__end {
-    justify-content: flex-start;
-  }
-
-  .s-channel-body {
-    padding: 0 14px 14px;
   }
 
   .s-task-model-options {

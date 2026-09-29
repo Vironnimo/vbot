@@ -168,23 +168,7 @@ function normalizeChannelAccessGroup(value) {
   };
 }
 
-export function channelEnabledChipVariant(enabled) {
-  return enabled ? 'success' : 'warn';
-}
-
-export function channelRunningChipVariant(running) {
-  if (running === true) {
-    return 'success';
-  }
-
-  if (running === false) {
-    return 'warn';
-  }
-
-  return 'info';
-}
-
-export function formatAllowedChatIds(value) {
+function formatAllowedChatIds(value) {
   if (!Array.isArray(value)) {
     return '';
   }

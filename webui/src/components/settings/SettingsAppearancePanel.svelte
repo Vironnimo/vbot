@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import { updateSettings } from '$lib/api.js';
   import {
@@ -188,37 +189,33 @@
   }
 </script>
 
+<!-- The Language row appears only when there is a language to choose. -->
 <div class="s-group">
-  <div class="s-row">
-    <div class="s-row-info">
-      <div class="s-row-label">
-        {t('settings.appearance.language')}
+  {#if availableLanguageOptions.length > 1}
+    <div class="s-row">
+      <div class="s-row-info">
+        <div class="s-row-label">
+          {t('settings.appearance.language')}
+        </div>
       </div>
-      <div class="s-row-desc">
-        {t('settings.appearance.languageDescription')}
+      <div class="s-row-control s-row-control--appearance">
+        <Dropdown
+          id="settings-appearance-language"
+          value={selectedLanguageId}
+          options={languageDropdownOptions}
+          ariaLabel={t('settings.appearance.language')}
+          triggerClass="settings-view__dropdown"
+          listClass="settings-view__thinking-list"
+          onValueChange={handleLanguageChange}
+        />
       </div>
     </div>
-    <div class="s-row-control s-row-control--appearance">
-      <Dropdown
-        id="settings-appearance-language"
-        value={selectedLanguageId}
-        options={languageDropdownOptions}
-        ariaLabel={t('settings.appearance.language')}
-        disabled={availableLanguageOptions.length <= 1}
-        triggerClass="settings-view__dropdown"
-        listClass="settings-view__thinking-list"
-        onValueChange={handleLanguageChange}
-      />
-    </div>
-  </div>
+  {/if}
 
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.appearance.chatWidth.label')}
-      </div>
-      <div class="s-row-desc">
-        {t('settings.appearance.chatWidth.description')}
       </div>
     </div>
     <div class="s-row-control s-row-control--appearance">
@@ -238,6 +235,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.appearance.chatWorkingMode.label')}
+        <InfoHint text={t('settings.appearance.chatWorkingMode.help')} />
       </div>
       <div class="s-row-desc">
         {t('settings.appearance.chatWorkingMode.description')}

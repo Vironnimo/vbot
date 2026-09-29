@@ -102,16 +102,35 @@ function normalizeExtensionCapabilities(capabilities) {
   };
 }
 
-export function extensionStatusChipVariant(status) {
-  if (status === 'loaded') {
-    return 'success';
-  }
+/**
+ * The one status chip an Extension row shows, or ``null`` in the normal
+ * states: loaded and ready, or switched off (its Toggle already says so).
+ * Only states that need attention or explain a missing Toggle get a chip.
+ */
+export function extensionStatusChip(extension) {
+  const status = extension?.status;
   if (status === 'failed') {
-    return 'error';
+    return { label: t('settings.extensions.statusFailed'), variant: 'error' };
   }
-  // ``disabled`` and ``overridden`` share the same muted/neutral variant: both
-  // are inert records the user cannot act on directly.
-  return 'warn';
+  if (status === 'overridden') {
+    return {
+      label: t('settings.extensions.statusOverridden'),
+      variant: 'neutral',
+    };
+  }
+  if (extension?.disabled === true || status === 'disabled') {
+    return null;
+  }
+  const waiting = describeExtensionWaiting(extension);
+  if (waiting) {
+    return { label: waiting.hint, variant: 'warn' };
+  }
+  if (status === 'loaded') {
+    return null;
+  }
+  return typeof status === 'string' && status
+    ? { label: status, variant: 'neutral' }
+    : null;
 }
 
 // One entry per capability kind: a translated `label` plus the code-like

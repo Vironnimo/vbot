@@ -1,6 +1,7 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
+  import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -135,12 +136,15 @@
   }
 </script>
 
-<!-- The capture warning continues the toggle row it explains. -->
+<!-- The description states what debug mode captures; the Trace limit only
+     applies while it records, so it appears with it. Its draft stays in the
+     form while the row is hidden. -->
 <div class="s-group">
   <div class="s-row s-row--compact">
     <div class="s-row-info">
       <div class="s-row-label">
         {t('debug.enabled')}
+        <InfoHint text={t('debug.enabledHelp')} />
       </div>
       <div class="s-row-desc">
         {t('debug.enabledDescription')}
@@ -160,35 +164,12 @@
       />
     </div>
   </div>
-  <div class="s-group__block s-group__block--attached s-debug-warning">
-    <div class="s-debug-warning-icon" aria-hidden="true">
-      <svg
-        viewBox="0 0 16 16"
-        width="14"
-        height="14"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <path d="M8 2L1 14h14L8 2z" />
-        <path d="M8 7v2" />
-        <circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none" />
-      </svg>
-    </div>
-    <p class="s-debug-warning-text">
-      {t('debug.localWarning')}
-    </p>
-  </div>
 
-  <div class="s-row s-row--compact">
+  <div class="s-row s-row--compact" hidden={debugSettings.enabled !== true}>
     <div class="s-row-info">
       <div class="s-row-label">
         {t('debug.traceLimit')}
-      </div>
-      <div class="s-row-desc">
-        {t('debug.traceLimitDescription')}
+        <InfoHint text={t('debug.traceLimitHelp')} />
       </div>
     </div>
     <div class="s-row-control s-row-control--number">

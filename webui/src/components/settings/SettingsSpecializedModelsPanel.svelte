@@ -9,6 +9,7 @@
   import Button from '../ui/Button.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import FormField from '../ui/FormField.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -586,17 +587,29 @@
   {@const jsonError =
     field.type === JSON_OPTION_TYPE ? taskModelJsonError(taskType, field) : ''}
   {@const fieldControlId = `task-model-${taskType}-${field.name}`}
+  <!-- The field's explanation from the backend schema sits behind the
+       label's "?"; the controls name themselves, so the hint does not become
+       part of their accessible name. -->
   <FormField
     controlId={fieldControlId}
     full={field.type === JSON_OPTION_TYPE}
-    label={field.label}
-    help={field.description ?? ''}
     error={jsonError
       ? t('settings.specializedModels.jsonInvalid', {
           error: jsonError,
         })
       : ''}
   >
+    {#snippet labelContent()}
+      {field.label}
+      {#if field.description}
+        <InfoHint
+          text={field.description}
+          ariaLabel={t('settings.specializedModels.aboutAria', {
+            name: field.label,
+          })}
+        />
+      {/if}
+    {/snippet}
     {#snippet children(formField)}
       {#if field.type === 'select'}
         <Dropdown
@@ -613,6 +626,7 @@
         <TextArea
           id={formField.controlId}
           rows="3"
+          ariaLabel={field.label}
           aria-describedby={formField.describedBy}
           value={taskModelOptionValue(taskType, field)}
           onInput={(_value, event) =>
@@ -627,6 +641,7 @@
           spellcheck="false"
           autocapitalize="off"
           autocorrect="off"
+          ariaLabel={field.label}
           aria-describedby={formField.describedBy}
           placeholder={t('settings.specializedModels.jsonPlaceholder')}
           value={taskModelOptionValue(taskType, field)}
@@ -637,6 +652,7 @@
         <TextField
           id={formField.controlId}
           type="number"
+          ariaLabel={field.label}
           aria-describedby={formField.describedBy}
           min={field.min ?? undefined}
           max={field.max ?? undefined}
@@ -657,6 +673,7 @@
         <TextField
           id={formField.controlId}
           value={taskModelOptionValue(taskType, field)}
+          ariaLabel={field.label}
           aria-describedby={formField.describedBy}
           onInput={(_next, event) =>
             handleTaskModelOptionChange(taskType, field, event)}
@@ -672,20 +689,36 @@
       target: '',
       options: {},
     }}
-    {@const fields = taskModelFields(row.taskType)}
+    {@const visibleFields = taskModelFields(row.taskType).filter(
+      (field) => !taskModelFieldHidden(row.taskType, field),
+    )}
+    {@const plainFields = visibleFields.filter(
+      (field) => field.type !== JSON_OPTION_TYPE,
+    )}
+    {@const jsonFields = visibleFields.filter(
+      (field) => field.type === JSON_OPTION_TYPE,
+    )}
+    {@const canReset = Object.keys(binding.options).length > 0}
     {@const selectedTarget = taskModelTargets(row.taskType).find(
       (target) => target.id === binding.target,
     )}
+    {@const localSpeech =
+      ['speech_to_text', 'text_to_speech'].includes(row.taskType) &&
+      selectedTarget?.kind === 'local'}
     <div class="s-row s-task-model-row">
       <div class="s-row-info">
-        {#if showTaskLabels}
-          <div class="s-row-label">
-            {row.title()}
-          </div>
-        {/if}
-        <div class="s-row-desc">
-          {row.description()}
+        <div class="s-row-label">
+          {showTaskLabels || !row.label ? row.title() : row.label()}
+          <InfoHint
+            text={row.help()}
+            ariaLabel={t('settings.specializedModels.aboutAria', {
+              name: row.title(),
+            })}
+          />
         </div>
+        {#if row.description}
+          <div class="s-row-desc">{row.description()}</div>
+        {/if}
       </div>
       <div class="s-row-control s-row-control--task-model">
         <SearchableDropdown
@@ -702,41 +735,51 @@
       </div>
     </div>
 
-    {#if binding.target}
-      <!-- The chosen target's options continue its row. -->
+    {#if binding.target && (visibleFields.length > 0 || canReset || localSpeech)}
+      <!-- The chosen target's options continue its row: ordinary options
+           (fields another option's value makes irrelevant stay hidden),
+           then the closed JSON disclosures with the quiet reset action on
+           their line, then local speech setup. -->
       <div class="s-group__block s-group__block--attached s-task-model-details">
-        {#if fields.length > 0}
+        {#if plainFields.length > 0}
           <div class="s-task-model-options">
-            {#each fields as field (field.name)}
-              {#if taskModelFieldHidden(row.taskType, field)}
-                <!-- Irrelevant for the current value of another option. -->
-              {:else if field.type === JSON_OPTION_TYPE}
-                <details class="s-task-model-advanced">
-                  <summary
-                    >{field.label}<span aria-hidden="true">JSON</span></summary
-                  >
-                  {@render optionField(row.taskType, field)}
-                </details>
-              {:else}
-                {@render optionField(row.taskType, field)}
-              {/if}
+            {#each plainFields as field (field.name)}
+              {@render optionField(row.taskType, field)}
             {/each}
           </div>
-        {:else}
-          <div class="s-group__note">
-            {t('settings.specializedModels.noOptions')}
+        {/if}
+
+        {#if jsonFields.length > 0 || canReset}
+          <div class="s-task-model-more">
+            {#if jsonFields.length > 0}
+              <div class="s-task-model-more__json">
+                {#each jsonFields as field (field.name)}
+                  <details class="s-task-model-advanced">
+                    <summary
+                      >{field.label}<span aria-hidden="true">JSON</span
+                      ></summary
+                    >
+                    {@render optionField(row.taskType, field)}
+                  </details>
+                {/each}
+              </div>
+            {/if}
+            {#if canReset}
+              <Button
+                variant="tertiary"
+                class="s-task-model-reset"
+                ariaLabel={t('settings.specializedModels.resetOptionsAria', {
+                  task: row.title(),
+                })}
+                disabled={taskModelSaving || taskModelLoading}
+                onClick={() => resetTaskModelOptions(row.taskType)}
+                >{t('settings.specializedModels.resetOptions')}</Button
+              >
+            {/if}
           </div>
         {/if}
 
-        {#if Object.keys(binding.options).length > 0}
-          <Button
-            disabled={taskModelSaving || taskModelLoading}
-            onClick={() => resetTaskModelOptions(row.taskType)}
-            >{t('settings.specializedModels.resetOptions')}</Button
-          >
-        {/if}
-
-        {#if ['speech_to_text', 'text_to_speech'].includes(row.taskType) && selectedTarget?.kind === 'local'}
+        {#if localSpeech}
           {#key binding.target}
             <LocalSpeechSupport
               target={binding.target}
@@ -753,9 +796,14 @@
 
 {#if showSpeechMemory}
   <div class="s-task-memory" data-local-speech-memory>
-    <div class="s-subhead">
+    <div class="s-subhead s-task-memory__head">
       <h4 class="s-subhead__title">{t('settings.localSpeech.memoryTitle')}</h4>
-      <p class="s-subhead__desc">{t('settings.localSpeech.memoryHelp')}</p>
+      <InfoHint
+        text={t('settings.localSpeech.memoryHelp')}
+        ariaLabel={t('settings.specializedModels.aboutAria', {
+          name: t('settings.localSpeech.memoryTitle'),
+        })}
+      />
     </div>
     {#if speechMemoryError}<div role="alert">{speechMemoryError}</div>{/if}
     {#if !speechMemory && !speechMemoryError}
@@ -814,3 +862,31 @@
     onClick={handleManualTaskModelSave}
   />
 </div>
+
+<style>
+  /* The JSON disclosures and the reset action share one line below the
+     ordinary options; an opened disclosure grows downwards while the reset
+     action stays at the line's end. */
+  .s-task-model-more {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .s-task-model-more__json {
+    display: grid;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .s-task-model-more :global(.s-task-model-reset) {
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
+  .s-task-memory__head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+</style>

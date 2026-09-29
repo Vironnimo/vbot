@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import TextField from '../ui/TextField.svelte';
   import {
@@ -18,6 +19,16 @@
 
   const noop = () => {};
 
+  // Hosted providers read their API key from the data directory's .env file.
+  const API_KEY_VARIABLES = Object.freeze({
+    brave: 'BRAVE_API_KEY',
+    tavily: 'TAVILY_API_KEY',
+    exa: 'EXA_API_KEY',
+    serper: 'SERPER_API_KEY',
+    firecrawl: 'FIRECRAWL_API_KEY',
+    perplexity: 'PERPLEXITY_API_KEY',
+  });
+
   let {
     settings = null,
     onCommit = noop,
@@ -33,8 +44,18 @@
   let webSearchProviderOptions = $derived(
     buildWebSearchProviderOptions(webSearchSettings),
   );
-  // Hosted providers need an API key in the data directory's .env file.
-  let keyHint = $derived(webSearchKeyHint(webSearchSettings.provider));
+  let keyVariable = $derived(
+    API_KEY_VARIABLES[webSearchSettings.provider] ?? '',
+  );
+  let dataDirectory = $derived(settings?.general?.data_directory ?? '');
+  let providerHelp = $derived(
+    dataDirectory
+      ? `${t('settings.webSearch.providerHelp')}\n\n${t(
+          'settings.webSearch.envFileHelp',
+          { path: dataDirectory },
+        )}`
+      : t('settings.webSearch.providerHelp'),
+  );
   let saveDisabled = $derived(saving || !webSearchDraftHasChanges());
   const autosaveContext = useAutosaveContext();
   const webSearchAutosave = createDebouncedAutosave({
@@ -148,25 +169,6 @@
       applyResult: (next) => (webSearchSettings = getWebSearchSettings(next)),
     });
   }
-
-  function webSearchKeyHint(provider) {
-    switch (provider) {
-      case 'brave':
-        return t('settings.webSearch.braveKeyHint');
-      case 'tavily':
-        return t('settings.webSearch.tavilyKeyHint');
-      case 'exa':
-        return t('settings.webSearch.exaKeyHint');
-      case 'serper':
-        return t('settings.webSearch.serperKeyHint');
-      case 'firecrawl':
-        return t('settings.webSearch.firecrawlKeyHint');
-      case 'perplexity':
-        return t('settings.webSearch.perplexityKeyHint');
-      default:
-        return '';
-    }
-  }
 </script>
 
 <div class="s-group">
@@ -174,9 +176,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.webSearch.provider')}
-      </div>
-      <div class="s-row-desc">
-        {t('settings.webSearch.providerDescription')}
+        <InfoHint text={providerHelp} />
       </div>
     </div>
     <div class="s-row-control s-row-control--web-search">
@@ -191,9 +191,9 @@
       />
     </div>
   </div>
-  {#if keyHint}
+  {#if keyVariable}
     <div class="s-group__block s-group__block--attached s-group__note">
-      {keyHint}
+      {t('settings.webSearch.keyHint', { variable: keyVariable })}
     </div>
   {/if}
   {#if webSearchSettings.provider === 'searxng'}
@@ -201,6 +201,7 @@
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.webSearch.searxngBaseUrl')}
+          <InfoHint text={t('settings.webSearch.searxngBaseUrlHelp')} />
         </div>
         <div class="s-row-desc">
           {t('settings.webSearch.searxngBaseUrlDescription')}
@@ -223,9 +224,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.webSearch.defaultCount')}
-      </div>
-      <div class="s-row-desc">
-        {t('settings.webSearch.defaultCountDescription')}
+        <InfoHint text={t('settings.webSearch.defaultCountHelp')} />
       </div>
     </div>
     <div class="s-row-control s-row-control--number">

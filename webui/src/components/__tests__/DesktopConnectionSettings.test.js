@@ -99,15 +99,23 @@ describe('DesktopConnectionSettings', () => {
     flushSync();
     await waitForText(t('settings.desktop.connection.emptyTitle'));
 
+    // The add form stays closed until "Add server" opens it.
+    expect(document.querySelector('form')).toBeNull();
+    buttonsByText(t('settings.desktop.connection.addAction'))[0].click();
+    await waitForCondition(
+      () => document.activeElement?.id === 'desktop-settings-server-host',
+    );
+
     setInput('desktop-settings-server-host', 'pi.lan');
     setInput('desktop-settings-server-port', '9000');
     setInput('desktop-settings-server-label', 'Pi');
-    buttonsByText(t('settings.desktop.connection.addAction'))[0].click();
+    document.querySelector('form button[type="submit"]').click();
     flushSync();
 
     await waitForCondition(() => addServer.mock.calls.length === 1);
     expect(addServer).toHaveBeenCalledWith('pi.lan', 9000, 'Pi');
     await waitForText('pi.lan:9000');
+    await waitForCondition(() => document.querySelector('form') === null);
   });
 });
 

@@ -5,7 +5,7 @@ export function createLocalProviderModels(context) {
   const LOCAL_CONTEXT_DEFAULT_CAP = 32768;
 
   // Flagged-local models (model.list → local: true), grouped per provider for
-  // the "Local model context" editor inside that provider's card.
+  // the "Context windows" editor inside that provider's details.
   let localModels = $state([]);
 
   // Draft input values for the context editor, keyed by full model id.

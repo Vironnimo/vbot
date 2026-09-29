@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import {
     createDebouncedAutosave,
@@ -14,6 +15,10 @@
     buildRecallSettingsPayload,
     getRecallSettings,
   } from '$lib/settingsView.js';
+  import { normalizeTaskModelSettings } from '$lib/taskModelSettings.js';
+
+  // Backends that rank by meaning and therefore embed conversation text.
+  const EMBEDDING_BACKENDS = new Set(['vector', 'hybrid']);
 
   const noop = () => {};
 
@@ -31,6 +36,11 @@
 
   let recallBackendOptions = $derived(
     buildRecallBackendOptions(recallSettings),
+  );
+  let usesEmbeddings = $derived(EMBEDDING_BACKENDS.has(recallSettings.backend));
+  // The saved embedding binding (edited in the Embedding model section).
+  let embeddingConfigured = $derived(
+    Boolean(normalizeTaskModelSettings(settings).text_embedding?.target),
   );
   let saveDisabled = $derived(
     saving || recallSettingsMatch(recallSettings, getRecallSettings(settings)),
@@ -119,6 +129,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.recall.backend')}
+        <InfoHint text={t('settings.recall.backendHelp')} />
       </div>
       <div class="s-row-desc">
         {t('settings.recall.backendDescription')}
@@ -137,10 +148,16 @@
     </div>
   </div>
 
-  {#if recallSettings.backend === 'vector'}
-    <div class="s-group__block s-group__block--attached s-group__note">
+  {#if usesEmbeddings}
+    <div
+      class="s-group__block s-group__block--attached s-group__note"
+      class:recall-note--attention={!embeddingConfigured}
+      data-recall-embedding-note={embeddingConfigured ? 'in-use' : 'missing'}
+    >
       <p>
-        {t('settings.recall.vectorHint')}
+        {embeddingConfigured
+          ? t('settings.recall.embeddingInUse')
+          : t('settings.recall.embeddingMissing')}
       </p>
     </div>
   {/if}
@@ -154,3 +171,10 @@
     onClick={handleManualRecallSettingsSave}
   />
 </div>
+
+<style>
+  /* The chosen method cannot work until an embedding model is set. */
+  .recall-note--attention {
+    color: var(--amber);
+  }
+</style>

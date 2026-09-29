@@ -30,7 +30,7 @@ const { default: SettingsView } = await import('../SettingsView.svelte');
 const { default: AutosaveContextHost } =
   await import('./AutosaveContextHost.support.svelte');
 
-const DEPTH = 'input[aria-label="Max sub-agent depth"]';
+const DEPTH = '#settings-subagents-max-depth';
 
 function subagents(depth) {
   return {

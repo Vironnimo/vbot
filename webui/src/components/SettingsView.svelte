@@ -2,6 +2,7 @@
   import { onMount, tick, untrack } from 'svelte';
 
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
+  import TranscriptionAudioSettings from './voice/TranscriptionAudioSettings.svelte';
   import DesktopConnectionSettings from './settings/DesktopConnectionSettings.svelte';
   import DesktopLiveVoiceShortcut from './settings/DesktopLiveVoiceShortcut.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
@@ -86,7 +87,11 @@
     },
     {
       id: 'voice_controls',
-      label: () => t('settings.sections.voiceControls'),
+      label: () => t('settings.sections.wakeword'),
+    },
+    {
+      id: 'transcription_audio',
+      label: () => t('settings.sections.transcriptionAudio'),
     },
     {
       id: 'speech_models',
@@ -159,11 +164,13 @@
       id: 'general',
       label: () => t('settings.pages.general'),
       description: () => t('settings.pages.generalDescription'),
+      // Everyday display first; the time zone and the setup guide are
+      // rarely revisited.
       sections: [
         'appearance',
         'session_titles',
-        'preferences',
         'notifications',
+        'preferences',
       ],
     },
     {
@@ -176,18 +183,21 @@
       id: 'voice',
       label: () => t('settings.voice.title'),
       description: () => t('settings.pages.voiceDescription'),
+      // Models first, the Live voice shortcut right after its Model, the
+      // Desktop wakeword next, and the rarely changed recording format last.
       sections: [
         'speech_models',
         'live_voice_model',
         ...(desktopCapabilities?.liveHotkey ? ['live_voice_shortcut'] : []),
         'voice_controls',
+        'transcription_audio',
       ],
     },
     {
       id: 'memory',
       label: () => t('settings.pages.memory'),
       description: () => t('settings.pages.memoryDescription'),
-      sections: ['recall', 'embedding_model', 'reflection'],
+      sections: ['reflection', 'recall', 'embedding_model'],
     },
     {
       id: 'tools',
@@ -320,11 +330,17 @@
         const section = documentRoot?.querySelector(
           `[data-settings-section="${panel.id}"]`,
         );
+        // Explanations behind a closed "?" still count as section text.
+        const helpTexts = Array.from(
+          section?.querySelectorAll('[data-help-text]') ?? [],
+          (element) => element.dataset.helpText,
+        );
         const text = normalizedSearch(
           [
             pageForDestination(panel.id)?.label(),
             panel.label(),
             section?.textContent ?? '',
+            ...helpTexts,
           ].join(' '),
         );
         if (terms.every((term) => text.includes(term))) results.push(panel.id);
@@ -594,11 +610,14 @@
   {:else if panelId === 'voice_controls'}
     <WakewordVoiceSettings
       {agents}
-      {settings}
       wakewordAvailable={desktopCapabilities?.wakeword === true}
       {desktopVoice}
-      onCommit={commitSettings}
       {onToast}
+    />
+  {:else if panelId === 'transcription_audio'}
+    <TranscriptionAudioSettings
+      {settings}
+      onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'web_fetch'}
@@ -781,17 +800,16 @@
                 <p>{page.description()}</p>
               </header>
               {#if page.id === 'providers'}
-                <div class="settings-related">
-                  <span>{t('settings.agentShortcut.hint')}</span>
-                  <Button
+                <p class="settings-related">
+                  {t('settings.agentShortcut.hint')}
+                  <button
+                    type="button"
                     class="settings-defaults-link"
-                    variant="tertiary"
-                    onClick={navigateToDefaults}
+                    onclick={navigateToDefaults}
                   >
-                    {t('agents.shared.title')}
-                    <span aria-hidden="true">↗</span>
-                  </Button>
-                </div>
+                    {t('agents.shared.title')}<span aria-hidden="true">↗</span>
+                  </button>
+                </p>
               {/if}
               {#each page.sections as panelId (panelId)}
                 {@const panel = panelById.get(panelId)}

@@ -297,7 +297,6 @@ export default Object.freeze({
   'sessions.subagentHint':
     'A session run by a Subagent working on behalf of a parent session. The parent is shown below.',
   'sessions.last_active': 'Last active',
-  'sessions.link_channel_id': 'Channel ID',
   'sessions.platform_telegram': 'Telegram',
   'sessions.platform_discord': 'Discord',
   'sessions.platform_channel': 'Channel',

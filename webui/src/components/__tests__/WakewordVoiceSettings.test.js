@@ -25,12 +25,7 @@ vi.mock('$lib/desktopBridge.js', async (importOriginal) => ({
   restartVoiceCalibration: vi.fn(),
   stopVoiceCalibration: vi.fn(),
 }));
-vi.mock('$lib/api.js', () => ({
-  updateSettings: vi.fn(),
-}));
-
 const desktopBridge = await import('$lib/desktopBridge.js');
-const { updateSettings } = await import('$lib/api.js');
 const { default: WakewordVoiceSettings } =
   await import('../WakewordVoiceSettings.svelte');
 
@@ -201,7 +196,6 @@ describe('WakewordVoiceSettings', () => {
       sequence: owner.status.sequence + 1,
       calibration: null,
     }));
-    updateSettings.mockImplementation(async (payload) => payload);
   });
 
   afterEach(async () => {
@@ -649,23 +643,32 @@ describe('WakewordVoiceSettings', () => {
     });
 
     it.each([
-      ['starting', 'Starting'],
-      ['active', 'Active'],
-      ['no_reference', 'NoReference'],
-      ['unavailable', 'Unavailable'],
-    ])('explains the echo cancellation state %s', async (state, key) => {
-      await mountPanel({
-        status: voiceStatus({ echo_cancellation: { enabled: true, state } }),
-      });
+      ['starting', 'Starting', true],
+      ['active', 'Active', false],
+      ['no_reference', 'NoReference', true],
+      ['unavailable', 'Unavailable', true],
+    ])(
+      'shows the echo cancellation state %s',
+      async (state, key, explained) => {
+        await mountPanel({
+          status: voiceStatus({ echo_cancellation: { enabled: true, state } }),
+        });
 
-      const control = document.querySelector('.voice-echo-control');
-      expect(control.querySelector('.chip').textContent).toContain(
-        t(`settings.voice.echo${key}`),
-      );
-      expect(control.closest('.s-row').textContent).toContain(
-        t(`settings.voice.echo${key}Detail`),
-      );
-    });
+        const control = document.querySelector('.voice-echo-control');
+        expect(control.querySelector('.chip').textContent).toContain(
+          t(`settings.voice.echo${key}`),
+        );
+        // Only a state that lets speaker output through is explained.
+        const detail = control.closest('.s-row').querySelector('.s-row-desc');
+        if (explained) {
+          expect(detail.textContent).toContain(
+            t(`settings.voice.echo${key}Detail`),
+          );
+        } else {
+          expect(detail).toBeNull();
+        }
+      },
+    );
 
     it('turns echo cancellation off', async () => {
       await mountPanel();
@@ -963,35 +966,6 @@ describe('WakewordVoiceSettings', () => {
         customModel.id,
       );
       expect(desktopBridge.updateVoiceConfig).not.toHaveBeenCalled();
-    });
-  });
-
-  it('saves one server-wide transcription profile for both microphone paths', async () => {
-    await mountPanel({
-      settings: {
-        speech: {
-          transcription_audio: {
-            profile: 'compatibility',
-            format: 'wav',
-            sample_rate_hz: 16000,
-          },
-        },
-      },
-    });
-
-    buttonByLabel('Transcription audio').click();
-    flushSync();
-    option(t('settings.voice.transcriptionProfileCustom')).click();
-    await settle();
-
-    expect(updateSettings).toHaveBeenLastCalledWith({
-      speech: {
-        transcription_audio: {
-          profile: 'custom',
-          format: 'wav',
-          sample_rate_hz: 16000,
-        },
-      },
     });
   });
 });

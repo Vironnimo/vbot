@@ -12,6 +12,10 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
+vi.mock('svelte/reactivity', async () => {
+  return import('../../../node_modules/svelte/src/reactivity/index-client.js');
+});
+
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: SettingsExtensionsPanel } =
@@ -116,15 +120,28 @@ describe('SettingsExtensionsPanel', () => {
     await flushAsync();
   }
 
-  it('renders extension cards with status, capabilities, and failure detail', async () => {
+  it('renders extension rows with attention-only status, details, and failure detail', async () => {
     serveExtensions([guardBash(), brokenExtension()]);
     await mountPanel();
 
     const [card, brokenCard] = document.querySelectorAll('.s-ext-card');
     expect(card.textContent).toContain('guard_bash');
-    expect(card.querySelector('.chip').textContent.trim()).toBe(
-      t('settings.extensions.statusLoaded'),
+    // A healthy Extension needs no chip; a failed one does.
+    expect(card.querySelector('.chip')).toBeNull();
+    expect(brokenCard.querySelector('.chip').textContent.trim()).toBe(
+      t('settings.extensions.statusFailed'),
     );
+    // Version and capabilities open in the row's details.
+    const details = card.querySelector('.s-disclosure-sub');
+    const disclosure = card.querySelector(
+      'button[aria-label="Details for extension guard_bash"]',
+    );
+    expect(details.hidden).toBe(true);
+    disclosure.click();
+    flushSync();
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    expect(details.hidden).toBe(false);
+    expect(details.textContent).toContain('v1.2.0');
     expect(
       Array.from(
         card.querySelectorAll('.s-ext-capabilities__part'),
@@ -212,20 +229,19 @@ describe('SettingsExtensionsPanel', () => {
   });
 
   it.each([
-    ['disables', guardBash(), 'Disable', ['guard_bash']],
-    [
-      'enables',
-      guardBash({ disabled: true, status: 'disabled' }),
-      'Enable',
-      [],
-    ],
+    ['disables', guardBash(), 'true', ['guard_bash']],
+    ['enables', guardBash({ disabled: true, status: 'disabled' }), 'false', []],
   ])(
     '%s an extension live through the disabled set',
-    async (_label, extension, action, disabled) => {
+    async (_label, extension, checked, disabled) => {
       serveExtensions([extension]);
       await mountPanel();
 
-      buttonByText(action).click();
+      const toggle = document.querySelector(
+        'button[role="switch"][aria-label="Enable extension guard_bash"]',
+      );
+      expect(toggle.getAttribute('aria-checked')).toBe(checked);
+      toggle.click();
       await flushAsync();
 
       expect(settingsUpdates()).toEqual([
@@ -313,15 +329,11 @@ describe('SettingsExtensionsPanel', () => {
     ]);
     await mountPanel();
 
+    expect(document.querySelector('[id^="extension-guard_bash-"]')).toBeNull();
     expect(
-      document.querySelector(
-        'button[aria-label="Configuration for extension guard_bash"]',
-      ),
-    ).toBeNull();
-    expect(
-      document.querySelector(
-        'button[aria-label="Configuration for extension homeassistant"]',
-      ),
+      document
+        .querySelector('#extension-homeassistant-url')
+        .closest('.s-disclosure-sub'),
     ).toBeTruthy();
     // No free-form JSON config editor.
     expect(document.querySelector('textarea')).toBeNull();
@@ -343,7 +355,7 @@ describe('SettingsExtensionsPanel', () => {
       'toggle',
       { key: 'verbose', type: 'toggle', label: 'Verbose', default: false },
       (control) => control.click(),
-      'button[role="switch"]',
+      '.s-ext-schema button[role="switch"]',
       { verbose: true },
     ],
   ])(

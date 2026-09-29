@@ -249,41 +249,27 @@ export function describeSharedOpenCodeKey() {
   return t('settings.providers.opencode.sharedKey');
 }
 
-export function describeProvider(provider) {
-  const fragments = [];
+// The one short fact a collapsed Provider row shows next to its status.
+export function formatModelCount(count) {
+  if (!Number.isFinite(count)) {
+    return '';
+  }
 
+  return count === 1
+    ? t('settings.providers.modelCountOne')
+    : t('settings.providers.modelCount', { count });
+}
+
+// Billing notes the OpenCode Providers need so users do not misread what
+// their subscription or credits pay for; empty for every other Provider.
+export function describeProviderBilling(provider) {
   if (provider?.id === 'opencode-go') {
-    fragments.push(t('settings.providers.opencode.go'));
-  } else if (provider?.id === 'opencode-zen') {
-    fragments.push(t('settings.providers.opencode.zen'));
+    return t('settings.providers.opencode.goHelp');
   }
 
-  if (
-    typeof provider?.credential_key === 'string' &&
-    provider.credential_key.length > 0
-  ) {
-    fragments.push(
-      t('settings.providers.description.credentialKey', {
-        credentialKey: provider.credential_key,
-      }),
-    );
+  if (provider?.id === 'opencode-zen') {
+    return t('settings.providers.opencode.zenHelp');
   }
 
-  if (typeof provider?.base_url === 'string' && provider.base_url.length > 0) {
-    fragments.push(
-      t('settings.providers.description.baseUrl', {
-        baseUrl: provider.base_url,
-      }),
-    );
-  }
-
-  if (Number.isFinite(provider?.model_count)) {
-    fragments.push(
-      t('settings.providers.description.modelCount', {
-        count: provider.model_count,
-      }),
-    );
-  }
-
-  return fragments.join(' ') || t('settings.providers.description.none');
+  return '';
 }

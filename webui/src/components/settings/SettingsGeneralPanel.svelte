@@ -6,10 +6,11 @@
   } from '$lib/autosave.js';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import CopyButton from '../ui/CopyButton.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
-  import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import { listClients, updateSettings } from '$lib/api.js';
@@ -36,6 +37,11 @@
 
   let serverHostValue = $derived(formatServerHost(settings?.general?.server));
   let dataDirectoryValue = $derived(getDataDirectoryValue(settings));
+  // Only a real path is worth copying, not the "Unknown" placeholder.
+  let dataDirectoryKnown = $derived(
+    typeof settings?.general?.data_directory === 'string' &&
+      settings.general.data_directory.length > 0,
+  );
   let keepAwakeValue = $state(
     untrack(() => settings?.general?.keep_awake === true),
   );
@@ -155,13 +161,6 @@
     return t('settings.general.clients.accessor.unknown');
   }
 
-  function statusLabel(status) {
-    if (status === 'connected') {
-      return t('settings.general.clients.status.connected');
-    }
-    return status;
-  }
-
   function connectedAtLabel(connectedAt) {
     if (!connectedAt) {
       return '';
@@ -202,9 +201,7 @@
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.general.timezone')}
-        </div>
-        <div class="s-row-desc">
-          {t('settings.general.timezoneDescription')}
+          <InfoHint text={t('settings.general.timezoneHelp')} />
         </div>
       </div>
       <div class="s-row-control s-row-control--input">
@@ -218,6 +215,13 @@
         />
       </div>
     </div>
+  </div>
+
+  {@render saveFooter()}
+
+  <!-- The setup guide is an action, not a setting: its own group after the
+       region settings. -->
+  <div class="s-group">
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">
@@ -228,49 +232,25 @@
         </div>
       </div>
       <div class="s-row-control">
-        <Button variant="secondary" onClick={onOpenSetupGuide}>
-          {t('settings.general.setupGuideAction')}
+        <Button
+          variant="secondary"
+          ariaLabel={t('settings.general.setupGuideAction')}
+          onClick={onOpenSetupGuide}
+        >
+          {t('settings.general.setupGuideOpen')}
         </Button>
       </div>
     </div>
   </div>
-
-  {@render saveFooter()}
 {:else}
+  <!-- The one setting comes first; the read-only facts about this server
+       follow as plain values. -->
   <div class="s-group">
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.general.serverHost')}
-        </div>
-        <div class="s-row-desc">
-          {t('settings.general.serverHostDescription')}
-        </div>
-      </div>
-      <div class="s-row-control s-row-control--input">
-        <TextField readonly value={serverHostValue} />
-      </div>
-    </div>
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.general.dataDirectory')}
-        </div>
-        <div class="s-row-desc">
-          {t('settings.general.dataDirectoryDescription')}
-        </div>
-      </div>
-      <div class="s-row-control s-row-control--input">
-        <TextField readonly value={dataDirectoryValue} />
-      </div>
-    </div>
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.general.keepAwake')}
-        </div>
-        <div class="s-row-desc">
-          {t('settings.general.keepAwakeDescription')}
+          <InfoHint text={t('settings.general.keepAwakeHelp')} />
         </div>
       </div>
       <div class="s-row-control">
@@ -281,6 +261,34 @@
         />
       </div>
     </div>
+    <div class="s-row">
+      <div class="s-row-info">
+        <div class="s-row-label">
+          {t('settings.general.serverHost')}
+        </div>
+      </div>
+      <div class="s-row-control server-fact">
+        <span class="server-fact__value">{serverHostValue}</span>
+      </div>
+    </div>
+    <div class="s-row">
+      <div class="s-row-info">
+        <div class="s-row-label">
+          {t('settings.general.dataDirectory')}
+          <InfoHint text={t('settings.general.dataDirectoryHelp')} />
+        </div>
+      </div>
+      <div class="s-row-control server-fact">
+        <span class="server-fact__value">{dataDirectoryValue}</span>
+        {#if dataDirectoryKnown}
+          <CopyButton
+            class="server-fact__copy"
+            text={dataDirectoryValue}
+            label={t('settings.general.copyDataDirectory')}
+          />
+        {/if}
+      </div>
+    </div>
   </div>
 
   {@render saveFooter()}
@@ -289,9 +297,6 @@
     <h4 class="s-subhead__title">
       {t('settings.general.clients.title')}
     </h4>
-    <p class="s-subhead__desc">
-      {t('settings.general.clients.description')}
-    </p>
   </div>
 
   {#if clientsError}
@@ -306,6 +311,7 @@
       description={t('settings.general.clients.empty')}
     />
   {:else}
+    <!-- Every listed client is connected, so rows carry no status chip. -->
     <div class="s-group s-clients-list">
       {#each clientRows as row (row.id)}
         <div
@@ -322,9 +328,6 @@
               {/if}
             </div>
             <div class="s-row-desc">{clientDetail(row)}</div>
-          </div>
-          <div class="s-row-control">
-            <StatusChip variant="success">{statusLabel(row.status)}</StatusChip>
           </div>
         </div>
       {/each}
@@ -344,3 +347,27 @@
     />
   </div>
 {/snippet}
+
+<style>
+  /* Read-only server facts read as plain values, not as input boxes. They
+     start where the page's controls start, so they line up with the fields
+     on other pages; the copy action sits at the row end. */
+  .s-row > .s-row-control.server-fact {
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .server-fact__value {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .server-fact :global(.server-fact__copy) {
+    flex-shrink: 0;
+  }
+</style>

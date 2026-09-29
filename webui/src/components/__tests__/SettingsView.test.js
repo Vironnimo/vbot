@@ -172,11 +172,16 @@ describe('SettingsView', () => {
         general: [
           'appearance',
           'session_titles',
-          'preferences',
           'notifications',
+          'preferences',
         ],
-        voice: ['speech_models', 'live_voice_model', 'voice_controls'],
-        memory: ['recall', 'embedding_model', 'reflection'],
+        voice: [
+          'speech_models',
+          'live_voice_model',
+          'voice_controls',
+          'transcription_audio',
+        ],
+        memory: ['reflection', 'recall', 'embedding_model'],
         tools: [
           'web_search',
           'web_fetch',
@@ -317,6 +322,22 @@ describe('SettingsView', () => {
         input,
       );
       expect(input.value).toBe('9');
+    });
+
+    it('matches explanations behind a closed help hint and settings hidden while off', async () => {
+      await mountSettings();
+      const resultTitles = () =>
+        Array.from(
+          document.querySelectorAll('.settings-search-result__title'),
+          (title) => title.textContent,
+        );
+
+      search('sleep');
+      expect(resultTitles()).toEqual([t('settings.general.title')]);
+
+      // Debug is off, so its trace limit row is hidden.
+      search('trace limit');
+      expect(resultTitles()).toEqual([t('debug.settings')]);
     });
 
     it('routes shared Agent defaults search to Agents without duplicating its editor', async () => {
@@ -473,6 +494,12 @@ describe('SettingsView', () => {
       await mountSettings({}, { onToast: toastMock });
       await openSettingsSection('General', 'session_titles');
 
+      // The Title model only appears while automatic titles are on.
+      expect(
+        document
+          .querySelector('#settings-session-title-model')
+          .closest('.s-row').hidden,
+      ).toBe(true);
       document
         .querySelector(
           'button[role="switch"][aria-label="Automatic Session titles"]',
@@ -558,7 +585,9 @@ describe('SettingsView', () => {
       ).toBeNull();
       expect(buttonByText('Voice')).toBeTruthy();
       expect(
-        document.querySelector('button[aria-label="Transcription audio"]'),
+        document.querySelector(
+          '[data-settings-section="transcription_audio"] button[aria-label="Transcription audio profile"]',
+        ),
       ).toBeTruthy();
       expect(
         document.querySelector(
@@ -610,6 +639,7 @@ describe('SettingsView', () => {
         'live_voice_model',
         'live_voice_shortcut',
         'voice_controls',
+        'transcription_audio',
       ]);
     });
 
@@ -719,15 +749,17 @@ describe('SettingsView', () => {
       settings.recall.available_backends = ['sqlite_fts', 'vector', 'hybrid'];
       await mountSettings({ settings }, { onToast: toastMock });
       await openRecallPanel();
-      const vectorHint = t('settings.recall.vectorHint');
-      expect(document.body.textContent).not.toContain(vectorHint);
+      const embeddingNote = () =>
+        document.querySelector('[data-recall-embedding-note]');
+      expect(embeddingNote()).toBeNull();
 
       openSimpleDropdown('settings-recall-backend');
       selectSimpleOption(
         'settings-recall-backend',
         t('settings.recall.backends.vector'),
       );
-      expect(document.body.textContent).toContain(vectorHint);
+      // No embedding model is saved yet, so the section asks for one.
+      expect(embeddingNote().dataset.recallEmbeddingNote).toBe('missing');
       getButton('Save').click();
       await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
 

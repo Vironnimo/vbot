@@ -82,6 +82,27 @@ describe('WhatsApp setup', () => {
     expect(document.body.textContent).toContain('WhatsApp connected');
   });
 
+  it('leaves a collapsed row once connected but still shows failures', async () => {
+    getWhatsAppStatus.mockResolvedValue({
+      installed: true,
+      state: 'connected',
+    });
+    component = mount(WhatsAppSetup, {
+      target: document.body,
+      props: { channelId: 'wa', hideWhenConnected: true },
+    });
+    await settle();
+    expect(document.querySelector('.whatsapp-setup')).toBeNull();
+    getWhatsAppStatus.mockResolvedValue({
+      installed: true,
+      state: 'connected',
+      error: 'Session expired',
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    await settle();
+    expect(document.body.textContent).toContain('Session expired');
+  });
+
   it('shows failures and stops polling after unmount', async () => {
     getWhatsAppStatus.mockResolvedValue({
       installed: true,

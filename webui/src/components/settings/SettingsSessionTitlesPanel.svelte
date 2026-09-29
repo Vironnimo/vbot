@@ -2,6 +2,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import SearchableDropdown from '../SearchableDropdown.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { listConnections, listModels } from '$lib/api.js';
@@ -164,11 +165,14 @@
   }
 </script>
 
+<!-- The Title model only matters while automatic titles are on; its draft
+     stays in the form while the row is hidden. -->
 <div class="s-group">
-  <div class="s-row">
+  <div class="s-row s-row--compact">
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.sessionTitles.enabled')}
+        <InfoHint text={t('settings.sessionTitles.enabledHelp')} />
       </div>
       <div class="s-row-desc">
         {t('settings.sessionTitles.enabledDescription')}
@@ -183,13 +187,11 @@
     </div>
   </div>
 
-  <div class="s-row">
+  <div class="s-row" hidden={!formValues.enabled}>
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.sessionTitles.model')}
-      </div>
-      <div class="s-row-desc">
-        {t('settings.sessionTitles.modelDescription')}
+        <InfoHint text={t('settings.sessionTitles.modelHelp')} />
       </div>
     </div>
     <div class="s-row-control s-row-control--model">
@@ -197,7 +199,6 @@
         id="settings-session-title-model"
         value={modelSelectValue}
         options={modelOptions}
-        disabled={!formValues.enabled}
         placeholder={t('settings.sessionTitles.agentModel')}
         searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
         emptyLabel={t('agents.form.modelSearchEmpty')}

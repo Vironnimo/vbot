@@ -144,11 +144,10 @@
   <div class="voice-model-card__header">
     <div class="voice-model-card__identity">
       <span class="voice-model-card__name">{model.label}</span>
-      <Badge variant={model.source === 'built_in' ? 'info' : 'neutral'}>
-        {model.source === 'built_in'
-          ? t('settings.voice.modelBuiltIn')
-          : t('settings.voice.modelImported')}
-      </Badge>
+      <!-- Built-in phrases are the norm; only an imported one is marked. -->
+      {#if model.source !== 'built_in'}
+        <Badge variant="neutral">{t('settings.voice.modelImported')}</Badge>
+      {/if}
       {#if active && problem}
         <Badge variant="warn" class="voice-model-card__problem-badge">
           {t('settings.voice.phraseNotReady')}
@@ -204,10 +203,6 @@
         onchange={onSensitivityCommit}
         disabled={sensitivityDisabled || !sliderAvailable}
       />
-      <div class="voice-slider-labels">
-        <span>{t('settings.voice.lessSensitive')}</span>
-        <span>{t('settings.voice.moreSensitive')}</span>
-      </div>
 
       <div class="voice-model-card__action">
         <span aria-hidden="true">

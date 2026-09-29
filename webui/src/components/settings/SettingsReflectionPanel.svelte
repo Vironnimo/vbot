@@ -1,6 +1,7 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
+  import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -175,6 +176,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.reflection.enabled')}
+        <InfoHint text={t('settings.reflection.enabledHelp')} />
       </div>
       <div class="s-row-desc">
         {t('settings.reflection.enabledDescription')}
@@ -195,10 +197,16 @@
     </div>
   </div>
 
-  <div class="s-row s-row--compact">
+  <!-- The intervals only matter while reflection is on. Hidden rows stay
+       mounted so settings search still finds them. -->
+  <div
+    class="s-row s-row--compact"
+    hidden={reflectionSettings.enabled !== true}
+  >
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.reflection.memoryInterval')}
+        <InfoHint text={t('settings.reflection.memoryIntervalHelp')} />
       </div>
       <div class="s-row-desc">
         {t('settings.reflection.memoryIntervalDescription')}
@@ -217,10 +225,14 @@
     </div>
   </div>
 
-  <div class="s-row s-row--compact">
+  <div
+    class="s-row s-row--compact"
+    hidden={reflectionSettings.enabled !== true}
+  >
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.reflection.skillInterval')}
+        <InfoHint text={t('settings.reflection.skillIntervalHelp')} />
       </div>
       <div class="s-row-desc">
         {t('settings.reflection.skillIntervalDescription')}

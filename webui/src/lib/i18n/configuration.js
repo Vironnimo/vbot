@@ -11,41 +11,45 @@ export default Object.freeze({
   'extensions.declineInput': 'Decline',
   'settings.providers.opencode.sharedKey':
     'This Account key is shared by OpenCode Go and Zen. Replacing or removing it affects both. Each connection can be enabled separately.',
-  'settings.providers.opencode.go':
+  'settings.providers.opencode.sharedKeyShort':
+    'Shared by OpenCode Go and Zen.',
+  'settings.providers.opencode.goHelp':
     'Uses your OpenCode Go subscription. OpenCode may charge Zen credits if you enabled Use balance in your OpenCode account.',
-  'settings.providers.opencode.zen':
+  'settings.providers.opencode.zenHelp':
     'Paid Models use Zen credits. Free Models are restricted to the OpenCode app and cannot be used in vBot, even with another key.',
   'settings.providers.opencode.removeKey': 'Remove shared key',
   'settings.pages.general': 'General',
   'settings.pages.generalDescription':
-    'Display, conversation titles, regional preferences, and desktop notifications.',
+    'Display, Session titles, notifications, time zone, and setup.',
   'settings.pages.providersDescription':
     'Connect the services and local runtimes that supply your Models.',
   'settings.pages.voiceDescription':
     'Speaking, listening, live conversations, and voice activation.',
   'settings.pages.memory': 'Memory',
   'settings.pages.memoryDescription':
-    'Find past conversations and learn from them.',
+    'How Agents learn from conversations and find past ones.',
   'settings.pages.tools': 'Tools',
   'settings.pages.toolsDescription':
-    'Web access, media, evaluation, and delegation.',
+    'How Agents search and read the web, create media, and delegate work.',
   'settings.pages.integrations': 'Integrations',
   'settings.pages.integrationsDescription':
     'Messaging Channels, Extensions, and MCP connections.',
   'settings.pages.system': 'System',
   'settings.pages.systemDescription':
     'Server information, connections, and diagnostics.',
-  'settings.sections.voiceControls': 'Voice controls',
+  'settings.sections.wakeword': 'Wakeword',
+  'settings.sections.transcriptionAudio': 'Transcription audio',
   'settings.sections.speechModels': 'Speech models',
   'settings.sections.liveVoice': 'Live voice',
   'settings.sections.liveVoiceShortcut': 'Live voice shortcut',
   'settings.liveShortcut.enabled': 'Global shortcut',
   'settings.liveShortcut.enabledAria': 'Enable the Live voice shortcut',
   'settings.liveShortcut.description':
-    'Start or stop Live voice with a key combination, even while another app is in front.',
+    'Starts or stops Live voice, even while another app is in front.',
   'settings.liveShortcut.combination': 'Key combination',
-  'settings.liveShortcut.combinationDescription':
-    'Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win. F13 to F24 also work alone.',
+  'settings.liveShortcut.combinationHelp':
+    'Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win. F13 to F24 also work alone.\n\nClick the combination, then press the new keys. Escape cancels.',
+  'settings.liveShortcut.combinationHelpAria': 'About the key combination',
   'settings.liveShortcut.captureHint':
     'Press the new key combination. Escape cancels.',
   'settings.liveShortcut.capturing': 'Press keys…',
@@ -84,22 +88,19 @@ export default Object.freeze({
   'settings.search.label': 'Search settings',
   'settings.search.noMatches': 'No settings match your search.',
   'settings.desktop.connection.title': 'Connection',
-  'settings.desktop.connection.savedTitle': 'Saved servers',
-  'settings.desktop.connection.savedDescription':
-    'The active server supplies this WebUI. Switching reloads the Desktop app without moving Sessions or Runs.',
+  'settings.desktop.connection.count': '{count} saved',
+  'settings.desktop.connection.help':
+    'This Desktop app shows the WebUI of the connected server. Connect switches it to another saved server and reloads it; Sessions and Runs stay on the server that holds them.\n\nSaved servers are remembered only by the Desktop app on this computer.',
   'settings.desktop.connection.loading': 'Loading saved servers…',
   'settings.desktop.connection.loadError': 'Saved servers could not be loaded.',
   'settings.desktop.connection.emptyTitle': 'No saved servers',
   'settings.desktop.connection.emptyDescription':
-    'Add a server below to make it available for this Desktop app.',
+    'Save a local or remote vBot server to switch this Desktop app to it.',
   'settings.desktop.connection.active': 'Connected',
   'settings.desktop.connection.connect': 'Connect',
   'settings.desktop.connection.connecting': 'Connecting…',
   'settings.desktop.connection.connectError':
     'The Desktop app could not connect to that server.',
-  'settings.desktop.connection.addTitle': 'Add server',
-  'settings.desktop.connection.addDescription':
-    'Save a local or remote vBot server for this Windows app.',
   'settings.desktop.connection.host': 'Host',
   'settings.desktop.connection.hostRequired': 'Enter a server host.',
   'settings.desktop.connection.port': 'Port',
@@ -113,27 +114,25 @@ export default Object.freeze({
   'settings.desktop.connection.removeSuccess': 'Server removed.',
   'settings.desktop.connection.removeError': 'Server could not be removed.',
   'settings.desktop.switchModalTitle': 'Switch server',
-  'settings.general.title': 'Server info',
+  'settings.general.title': 'Server',
   'settings.general.serverHost': 'Server host',
-  'settings.general.serverHostDescription':
-    'Address and port the vBot server listens on.',
   'settings.general.dataDirectory': 'Data directory',
-  'settings.general.dataDirectoryDescription':
-    'Root path for agents, sessions, and workspace files.',
+  'settings.general.dataDirectoryHelp':
+    'The folder on the computer running the vBot server that holds its settings, Agents, Sessions, and logs.',
+  'settings.general.copyDataDirectory': 'Copy data directory',
   'settings.general.timezone': 'Time zone',
-  'settings.general.timezoneDescription':
-    'Used by Agents, Calendar, Cron, and every displayed date and time.',
+  'settings.general.timezoneHelp':
+    'vBot shows every date and time in this time zone. Agents, Schedules, and Calendar events use it for the current time.\n\nIt starts as the time zone of the computer running the vBot server.',
   'settings.general.timezoneSearch': 'Search time zones…',
   'settings.general.keepAwake': 'Keep computer awake',
-  'settings.general.keepAwakeDescription':
-    'Prevent automatic sleep while vBot is running, so channels such as Telegram stay reachable. Manual sleep still works.',
+  'settings.general.keepAwakeHelp':
+    'Keeps the computer running the vBot server from going to sleep on its own, so Channels such as Telegram and scheduled work stay reachable. You can still put it to sleep yourself.\n\nOnly Windows supports this; other systems ignore it.',
   'settings.general.setupGuide': 'Setup guide',
   'settings.general.setupGuideDescription':
-    'Reopen the guided first-run setup to connect a provider and assign a model.',
+    'Connect a Provider and choose a Model step by step.',
+  'settings.general.setupGuideOpen': 'Open',
   'settings.general.setupGuideAction': 'Open setup guide',
   'settings.general.clients.title': 'Connected clients',
-  'settings.general.clients.description':
-    'Apps currently connected to this server (browser tabs, the Desktop app and the vBot tray).',
   'settings.general.clients.loading': 'Loading connected clients…',
   'settings.general.clients.empty': 'No apps connected.',
   'settings.general.clients.loadError':
@@ -144,7 +143,6 @@ export default Object.freeze({
   'settings.general.clients.accessor.desktop': 'Desktop',
   'settings.general.clients.accessor.tray': 'vBot tray',
   'settings.general.clients.accessor.unknown': 'Unknown',
-  'settings.general.clients.status.connected': 'Connected',
   'settings.defaults.model': 'Model',
   'settings.defaults.modelDescription': 'Used when an agent model is empty.',
   'settings.defaults.fallbackModels': 'Fallback models',
@@ -187,83 +185,88 @@ export default Object.freeze({
   'settings.skills.deleted': 'Skill deleted.',
   'settings.skills.deleteError': 'Skill could not be deleted.',
   'settings.skills.deleteConfirmTitle': 'Delete skill',
-  'settings.subagents.maxDepth': 'Max sub-agent depth',
-  'settings.subagents.maxDepthDescription':
-    'Maximum nesting level allowed when sub-agents spawn their own sub-agents.',
-  'settings.subagents.maxPerTurn': 'Max sub-agents per turn',
-  'settings.subagents.maxPerTurnDescription':
-    'Maximum number of sub-agent sessions one parent run may spawn.',
-  'settings.subagents.timeoutMinutes': 'Timeout minutes',
+  'settings.subagents.maxDepth': 'Maximum nesting depth',
+  'settings.subagents.maxDepthHelp':
+    'Sub-Agents can start Sub-Agents of their own. This sets how many levels deep that can go; at the limit, a Sub-Agent has to do the work itself. Default: 4.',
+  'settings.subagents.maxPerTurn': 'Maximum Sub-Agents per Run',
+  'settings.subagents.maxPerTurnHelp':
+    'The most Sub-Agents an Agent may start during one Run. Further requests in that Run are refused, and the Agent is told to wait for results or do the work itself. Default: 8.',
+  'settings.subagents.timeoutMinutes': 'Nested Sub-Agent timeout',
   'settings.subagents.timeoutMinutesDescription':
-    'Maximum wait time for foreground sub-agent calls before they fail.',
-  'settings.subagents.saveSuccess': 'Sub-agent settings updated.',
+    'Minutes a Sub-Agent waits for its own Sub-Agent.',
+  'settings.subagents.timeoutMinutesHelp':
+    'When a Sub-Agent starts a Sub-Agent of its own, it waits for the result. After this many minutes the nested Sub-Agent is cancelled and reported as failed. Default: 60.\n\nSub-Agents started directly by the Agent you talk to run in the background and have no time limit.',
+  'settings.subagents.saveSuccess': 'Sub-Agent limits updated.',
   'settings.reflection.title': 'Reflection',
-  'settings.reflection.enabled': 'Enable background reflection',
+  'settings.reflection.enabled': 'Background reflection',
   'settings.reflection.enabledDescription':
-    'After a run finishes, the agent periodically reviews the conversation in a forked session and saves durable memory and skill updates. The original conversation is never touched.',
-  'settings.reflection.memoryInterval': 'Memory review interval (turns)',
+    'Agents review finished conversations to update Memory and Skills.',
+  'settings.reflection.enabledHelp':
+    'From time to time after a Run, the Agent reviews the conversation in a separate copy and saves lasting facts to Memory and reusable procedures as Skills. The original conversation is never changed.\n\nReviews are ordinary Runs with the Agent’s own Model, so they use tokens. Only Agents that can use the memory Tool are reviewed; Sub-Agent conversations are skipped.\n\nEach review is kept as its own Session, so you can see what it changed. Type /reflect in a chat to start a review yourself.',
+  'settings.reflection.memoryInterval': 'Memory review interval',
   'settings.reflection.memoryIntervalDescription':
-    'A memory review becomes due after this many of your messages in a conversation.',
-  'settings.reflection.skillInterval': 'Skill review interval (Iterations)',
+    'Your messages per conversation between Memory reviews.',
+  'settings.reflection.memoryIntervalHelp':
+    'A Memory review becomes due after this many completed Runs in one conversation, usually one per message you send. When the Agent saves to Memory on its own, the count starts over. Default: 10.',
+  'settings.reflection.skillInterval': 'Skill review interval',
   'settings.reflection.skillIntervalDescription':
-    'A skill review becomes due after this many completed Model request/response pairs in a conversation.',
+    'Agent steps per conversation between Skill reviews.',
+  'settings.reflection.skillIntervalHelp':
+    'A Skill review becomes due after this many Agent steps in one conversation. Every Model response is one step, including each round of Tool calls, so one message can add several steps. When the Agent edits a Skill on its own, the count starts over. Default: 10.',
   'settings.reflection.saveSuccess': 'Reflection settings updated.',
   'settings.notifications.title': 'Desktop notifications',
-  'settings.notifications.intro':
-    'Windows notifications shown by the vBot tray app of an installed vBot on Windows. A notification about a Session is skipped while you are already looking at that Session.',
+  'settings.notifications.intro': 'Shown by the vBot tray app on Windows.',
+  'settings.notifications.help':
+    'The vBot tray app of an installed vBot on Windows shows these notifications.\n\nRun completed and Run failed cover Agent Runs in your Sessions, not Sub-Agent, Channel, or other background work. They are skipped while a vBot window already shows that Session.\n\nAutomation failed covers Schedules and Calendar actions that fail. Update result reports how a vBot update ended. Server stopped appears when the server the tray started stops unexpectedly.',
   'settings.notifications.runCompleted': 'Run completed',
-  'settings.notifications.runCompletedDescription':
-    'Notify when an Agent finishes a Run in a Session.',
   'settings.notifications.runFailed': 'Run failed',
-  'settings.notifications.runFailedDescription':
-    'Notify when an Agent Run in a Session ends with an error.',
   'settings.notifications.automationFailed': 'Automation failed',
-  'settings.notifications.automationFailedDescription':
-    'Notify when a Cron job or Calendar action fails.',
   'settings.notifications.updateResult': 'Update result',
-  'settings.notifications.updateResultDescription':
-    'Notify when an application update finishes or fails.',
   'settings.notifications.serverStopped': 'Server stopped',
-  'settings.notifications.serverStoppedDescription':
-    'Notify when the local vBot server stops unexpectedly.',
   'settings.notifications.saveSuccess': 'Notification settings updated.',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.summaryModelPlaceholder': 'Active agent model',
   'settings.compaction.saved': 'Compaction settings saved.',
-  'settings.recall.backend': 'Recall backend',
+  'settings.recall.backend': 'Search method',
   'settings.recall.backendDescription':
-    'How the session search looks through stored conversations.',
-  'settings.recall.backends.sqlite_fts':
-    'Full-text search — fast keyword search with an index',
-  'settings.recall.backends.vector':
-    'Semantic — finds matches by meaning, needs an embedding model',
-  'settings.recall.backends.hybrid':
-    'Hybrid — combines full-text and semantic search',
-  'settings.recall.vectorHint':
-    'Semantic search uses the embedding model configured below.',
-  'settings.recall.saveSuccess': 'Recall backend updated.',
+    'How Agents search your past conversations.',
+  'settings.recall.backendHelp':
+    'Agents look through earlier conversations with the session_search Tool.\n\nKeyword finds the words searched for, using a fast local index.\n\nSemantic finds passages by meaning, so a search for “vehicles” also finds “cars”. It needs an embedding model: your conversation text is sent to that Model to build the index in the background, which can cost tokens.\n\nKeyword + semantic combines both rankings. Without a working embedding model it returns keyword matches only.',
+  'settings.recall.backends.sqlite_fts': 'Keyword',
+  'settings.recall.backends.vector': 'Semantic',
+  'settings.recall.backends.hybrid': 'Keyword + semantic',
+  'settings.recall.embeddingMissing':
+    'Choose an embedding model below to search by meaning.',
+  'settings.recall.embeddingInUse':
+    'Your conversation text is sent to the embedding model below.',
+  'settings.recall.saveSuccess': 'Conversation search updated.',
   'settings.webFetch.direct': 'Direct (no service)',
-  'settings.webFetch.fallback': 'Only when direct fetch fails',
+  'settings.webFetch.fallback': 'Only when direct reading fails',
   'settings.webFetch.prefer': 'Prefer this service',
-  'settings.webFetch.provider': 'Page extraction service',
+  'settings.webFetch.provider': 'Extraction service',
   'settings.webFetch.description':
-    'Read pages directly, or use an optional service for difficult websites and JavaScript content.',
+    'Optional service for sites that block bots or need JavaScript.',
+  'settings.webFetch.providerHelp':
+    'By default, vBot reads web pages itself when an Agent opens one (web_fetch Tool). An extraction service can read pages that block automated visitors or only show their content with JavaScript.\n\nThe service receives every URL it reads and may charge per page; free allowances and prices vary. Paging through or searching a page that was already read makes no new service request.',
+  'settings.webFetch.envFileHelp':
+    'API keys go in the .env file in {path}. Restart the vBot server after editing it.',
   'settings.webFetch.mode': 'When to use it',
-  'settings.webFetch.modeDescription':
-    'Fallback uses the service for blocked, failed or unreadable pages. Prefer uses it first for page URLs and tries direct fetch if it fails.',
+  'settings.webFetch.modeHelp':
+    'Only when direct reading fails: vBot reads the page itself first and uses the service for blocked, failed or unreadable pages.\n\nPrefer this service: the service reads pages first; if it fails, vBot reads the page itself. Images and documents are always read directly first.',
   'settings.webFetch.cost':
-    'The selected service receives requested URLs and may charge per page. Free allowances and prices vary. Reading or searching an already saved page makes no additional service request.',
-  'settings.webFetch.keyPresent': 'API key configured.',
-  'settings.webFetch.keyMissing': 'API key required:',
-  'settings.webFetch.keyHint':
-    'Set this variable in the .env file in the vBot data directory.',
-  'settings.webFetch.pricing': 'Service pricing',
-  'settings.webFetch.title': 'Web Fetch',
-  'settings.webFetch.saveSuccess': 'Web fetch settings updated.',
+    'The service receives the URLs it reads and may charge per page.',
+  'settings.webFetch.keyPresent': 'API key found ({variable}).',
+  'settings.webFetch.keyMissing':
+    'API key missing: add {variable} to the .env file of the data directory.',
+  'settings.webFetch.pricing': 'Pricing',
+  'settings.webFetch.title': 'Web page reading',
+  'settings.webFetch.saveSuccess': 'Web page reading updated.',
   'settings.webSearch.title': 'Web search',
   'settings.webSearch.provider': 'Search provider',
-  'settings.webSearch.providerDescription':
-    'Provider used whenever an agent calls web_search.',
+  'settings.webSearch.providerHelp':
+    'The service Agents use when they search the web (web_search Tool). The choice applies to every Agent.\n\nDuckDuckGo needs no API key but may block frequent searches. SearXNG needs an instance you run or can reach. The other services need an API key and may charge per search.',
+  'settings.webSearch.envFileHelp':
+    'API keys go in the .env file in {path}. Restart the vBot server after editing it.',
   'settings.webSearch.providers.brave': 'Brave Search',
   'settings.webSearch.providers.duckduckgo': 'DuckDuckGo',
   'settings.webSearch.providers.tavily': 'Tavily',
@@ -273,25 +276,17 @@ export default Object.freeze({
   'settings.webSearch.providers.perplexity': 'Perplexity',
   'settings.webSearch.providers.searxng': 'SearXNG',
   'settings.webSearch.providers.parallel': 'Parallel',
-  'settings.webSearch.defaultCount': 'Default result count',
-  'settings.webSearch.defaultCountDescription':
-    'Number of results a web_search call returns when the agent does not ask for a specific count (1-20).',
-  'settings.webSearch.searxngBaseUrl': 'SearXNG base URL',
+  'settings.webSearch.defaultCount': 'Results per search',
+  'settings.webSearch.defaultCountHelp':
+    'How many results a web search returns when the Agent does not ask for a specific number: 1 to 20, default 12.\n\nMore results give the Agent more to choose from but take more room in its context.',
+  'settings.webSearch.searxngBaseUrl': 'SearXNG URL',
   'settings.webSearch.searxngBaseUrlDescription':
-    'Address of the SearXNG instance to use. SearXNG is a self-hosted metasearch engine — you need to run one yourself or point this at a reachable instance.',
+    'A SearXNG instance you run yourself or can reach.',
+  'settings.webSearch.searxngBaseUrlHelp':
+    'SearXNG is a free, self-hosted metasearch engine; vBot does not include one. Enter the address of your own instance or of one you can reach.\n\nThe instance must allow JSON results (add json to search.formats in its settings.yml); otherwise every search fails with HTTP 403.',
   'settings.webSearch.searxngBaseUrlPlaceholder': 'http://localhost:8888',
-  'settings.webSearch.braveKeyHint':
-    'Brave Search requires an API key: set BRAVE_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-  'settings.webSearch.tavilyKeyHint':
-    'Tavily requires an API key: set TAVILY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-  'settings.webSearch.exaKeyHint':
-    'Exa requires an API key: set EXA_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-  'settings.webSearch.serperKeyHint':
-    'Serper requires an API key: set SERPER_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-  'settings.webSearch.firecrawlKeyHint':
-    'Firecrawl requires an API key: set FIRECRAWL_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-  'settings.webSearch.perplexityKeyHint':
-    'Perplexity requires an API key: set PERPLEXITY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
+  'settings.webSearch.keyHint':
+    'Needs {variable} in the .env file of the data directory.',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.localSpeech.memoryTitle': 'Local speech memory',
   'settings.localSpeech.memoryLoaded': 'Loaded in memory',
@@ -309,7 +304,7 @@ export default Object.freeze({
   'settings.localSpeech.unloadError':
     'Could not unload the speech model. Try again.',
   'settings.localSpeech.ttsReady':
-    'Runs locally on the vBot server. The first preview or Tool request downloads and loads the model. You can use the audio player when generation finishes.',
+    'Runs on the vBot server. The first preview or Tool request downloads and loads the model, which can take several minutes.',
   'settings.localSpeech.ttsMissing':
     'Install support for this local voice engine. Setup may download several gigabytes and can take a few minutes.',
   'settings.localSpeech.phase.queued':
@@ -330,7 +325,7 @@ export default Object.freeze({
   'settings.localSpeech.options.exaggeration.label': 'Expressiveness',
   'settings.localSpeech.options.cfg_weight.label': 'Guidance',
   'settings.localSpeech.ready':
-    'Runs on the vBot server. The first transcription downloads and loads the selected model, which can take several minutes. Downloaded models are reused automatically without online checks.',
+    'Runs on the vBot server. The first transcription downloads and loads the model, which can take several minutes; after that it works offline.',
   'settings.localSpeech.state.checking': 'Checking local speech support…',
   'settings.localSpeech.state.missing':
     'Local speech support is not installed on this server. Installation supports all local speech-to-text engines and may download several gigabytes.',
@@ -394,51 +389,63 @@ export default Object.freeze({
   'settings.specializedModels.saveSuccess':
     'Specialized model bindings updated.',
   'settings.specializedModels.speechToText': 'Speech to text',
-  'settings.specializedModels.speechToTextDescription':
-    'Used by the chat microphone transcription flow.',
+  'settings.specializedModels.speechToTextHelp':
+    'Transcribes what you say into the Chat or Terminal microphone and the commands spoken after a wake phrase. Audio attachments are also transcribed with it when the Agent’s Model cannot take audio.\n\nThe recording format is set under Transcription audio at the end of this page.',
   'settings.specializedModels.textToSpeech': 'Text to speech',
-  'settings.specializedModels.textToSpeechDescription':
-    'Used by the agent text_to_speech tool.',
+  'settings.specializedModels.textToSpeechHelp':
+    'Speaks text aloud when an Agent uses the text_to_speech Tool.',
   'settings.specializedModels.liveVoice': 'Live voice',
+  'settings.specializedModels.liveVoiceModel': 'Voice model',
   'settings.specializedModels.liveVoiceDescription':
-    'Realtime voice model for spoken conversations with vBot. Delegating models also use a backend model to operate the app.',
+    'Live voice appears in the sidebar once a Model is chosen.',
+  'settings.specializedModels.liveVoiceHelp':
+    'The realtime Model you talk with in Live voice.\n\nSome voice Models hand work in the app to a backend Model. Choose it in the options that appear once the voice Model is set.\n\nThe Provider bills voice time, including pauses, and backend requests separately.',
   'settings.specializedModels.imageUnderstanding': 'Image understanding',
   'settings.specializedModels.imageUnderstandingDescription':
-    'Used by analyze_image. Available by default for Agents without vision, or with vision when explicitly enabled in the Agent’s Tool settings.',
+    'Describes images for Agents whose Model cannot see them.',
+  'settings.specializedModels.imageUnderstandingHelp':
+    'Used by the analyze_image Tool. Agents whose Model cannot see images can use it; Agents with vision only when it is enabled in their Tool settings.\n\nThe images are sent to this Model’s Provider.',
   'settings.specializedModels.imageGeneration': 'Image generation',
-  'settings.specializedModels.imageGenerationDescription':
-    'Used for image generation requests.',
+  'settings.specializedModels.imageGenerationHelp':
+    'Used by the image_generation Tool. Agents can also edit existing images when this Model accepts images as input.\n\nThe options below apply to every request; an Agent can set only the aspect ratio and resolution per request.',
   'settings.specializedModels.videoGeneration': 'Video generation',
-  'settings.specializedModels.videoGenerationDescription':
-    'Used by the agent generate_video tool.',
+  'settings.specializedModels.videoGenerationHelp':
+    'Used by the generate_video Tool.',
   'settings.specializedModels.musicGeneration': 'Music generation',
-  'settings.specializedModels.musicGenerationDescription':
-    'Used by the agent generate_music tool.',
+  'settings.specializedModels.musicGenerationHelp':
+    'Used by the generate_music Tool.',
   'settings.specializedModels.embeddingModel': 'Embedding model',
+  'settings.specializedModels.embeddingModelLabel': 'Model',
   'settings.specializedModels.embeddingModelDescription':
-    'Turns text into numeric vectors for meaning-based search. Required when Recall is set to Semantic.',
+    'Needed to search past conversations by meaning.',
+  'settings.specializedModels.embeddingModelHelp':
+    'Conversation search uses it to find passages by meaning. Your conversation text is sent to this Model’s Provider to build the search index in the background.\n\nSwitching to another Model rebuilds that index from all stored conversations, which adds Provider usage.',
   'settings.specializedModels.noTarget': 'Not configured',
   'settings.specializedModels.customTarget': 'Custom target: {target}',
-  'settings.specializedModels.noOptions':
-    'This target has no configurable options.',
+  'settings.specializedModels.aboutAria': 'About {name}',
+  'settings.specializedModels.resetOptionsAria': 'Reset options for {task}',
   'settings.specializedModels.jsonPlaceholder':
     'e.g. [{"text":"hello","bbox":[[0,0],[1,0],[1,1],[0,1]]}]',
   'settings.specializedModels.jsonInvalid': 'Invalid JSON: {error}',
   'settings.specializedModels.decision': 'Decision model',
-  'settings.specializedModels.decisionDescription':
-    'Structured judgments for the evaluate Tool and Jev experiments.',
+  'settings.specializedModels.decisionHelp':
+    'Makes the structured judgments of the evaluate Tool and of Jev experiments.',
   'settings.providers.title': 'Providers',
   'settings.providers.noneConnected':
     'No providers connected yet. Add one to make its models available.',
-  'settings.providers.description.credentialKey':
-    'Credential key: {credentialKey}.',
-  'settings.providers.description.baseUrl': 'Endpoint: {baseUrl}.',
-  'settings.providers.description.modelCount': '{count} models available.',
-  'settings.providers.description.none':
-    'Provider metadata is not available yet.',
-  'settings.providers.refreshModels': 'Update Model DB',
-  'settings.providers.refreshModelsHint':
-    'Fetches the current model lists from your connected providers and the public model catalog. Run it when a provider ships new models — your hand-maintained overrides are never touched.',
+  'settings.providers.modelCount': '{count} Models',
+  'settings.providers.modelCountOne': '1 Model',
+  'settings.providers.billingInfoAria': 'Billing for {provider}',
+  'settings.providers.unreachableHint':
+    'Start the local server; its Models appear automatically.',
+  'settings.providers.endpoint': 'Endpoint',
+  'settings.providers.modelDb.title': 'Model DB',
+  'settings.providers.modelDb.description':
+    'Fetch new Models after a Provider releases them.',
+  'settings.providers.modelDb.help':
+    'Fetches the current Model lists from your connected Providers and the public Model catalog. Run it when a Provider ships new Models.\n\nYour hand-maintained Model overrides are never changed.',
+  'settings.providers.refreshModels': 'Update',
+  'settings.providers.refreshModelsAria': 'Update Model DB',
   'settings.providers.refreshingModels': 'Updating…',
   'settings.providers.refreshSuccess':
     'Model DB updated: {providerCount} providers, {count} models available.',
@@ -456,7 +463,7 @@ export default Object.freeze({
   'settings.providers.disableAria': 'Disable connection {id}',
   'settings.providers.detailsAria': 'Details for {id}',
   'settings.providers.disabledDescription':
-    'Disabled — not probed and offering no models until you enable it.',
+    'Not used or probed until you enable it.',
   'settings.providers.enabledReachableToast':
     '{connection} enabled — endpoint reachable, model catalog refreshed.',
   'settings.providers.enabledUnreachableToast':
@@ -467,26 +474,22 @@ export default Object.freeze({
     'Provider connection could not be started.',
   'settings.providers.disconnectError':
     'Provider connection could not be disconnected.',
-  'settings.providers.apiKeyDescription':
-    'Static credential configured from environment or data directory.',
-  'settings.providers.oauthDescription':
-    'OAuth device authorization managed by the provider.',
-  'settings.providers.oauthTokenDescription':
-    'OAuth token configured from environment or data directory.',
-  'settings.providers.keylessDescription':
-    'No key required — this endpoint is keyless.',
-  'settings.providers.localContext.title': 'Local model context',
-  'settings.providers.localContext.description':
-    'The context window vBot budgets against and requests from the local server per call. Empty uses the default (32k, capped at the model max).',
+  'settings.providers.oauthTokenHelp':
+    'vBot reads this sign-in token from the process environment or the data directory .env file; it cannot be changed here.',
+  'settings.providers.localContext.title': 'Context windows',
+  'settings.providers.localContext.help':
+    'The context window vBot budgets against and requests from the local server per call.\n\nLeave a field empty to use the default of 32k tokens, capped at the Model maximum.',
   'settings.providers.localContext.inputLabel': 'Context window for {model}',
-  'settings.providers.localContext.maxHint': 'model max {max}',
+  'settings.providers.localContext.maxHint': 'max {max}',
   'settings.providers.localContext.invalidValue':
     'Context window must be a positive whole number',
   'settings.providers.openrouter.title': 'Routing',
-  'settings.providers.openrouter.description':
-    'Control which upstream providers OpenRouter may use. vBot sends a stable Session identifier so OpenRouter can apply Sticky Routing.',
-  'settings.providers.openrouter.stabilityHint':
-    'Sticky Routing is best effort. To prevent provider switches, allow one exact endpoint and turn provider fallbacks off.',
+  'settings.providers.openrouter.help':
+    'Choose which upstream providers OpenRouter may use. vBot sends a stable Session identifier so OpenRouter can apply Sticky Routing.\n\nSticky Routing is best effort. To prevent provider switches, allow one exact endpoint and turn provider fallbacks off.',
+  'settings.providers.openrouter.helpAria': 'About OpenRouter routing',
+  'settings.providers.openrouter.summary.automatic': 'Automatic',
+  'settings.providers.openrouter.summary.allowed': 'Allowed providers only',
+  'settings.providers.openrouter.summary.ordered': 'Preferred order',
   'settings.providers.openrouter.scopeLabel': 'Scope',
   'settings.providers.openrouter.scopeHelp':
     'Global routing applies to every OpenRouter model unless that model has an override.',
@@ -505,7 +508,7 @@ export default Object.freeze({
   'settings.providers.openrouter.mode.allowed': 'Only allowed providers',
   'settings.providers.openrouter.mode.ordered': 'Preferred provider order',
   'settings.providers.openrouter.orderWarning':
-    'A manual provider order overrides OpenRouter Sticky Routing. OpenRouter tries the listed providers first, but automatic cache affinity is disabled.',
+    'A manual order overrides Sticky Routing and turns off automatic cache affinity.',
   'settings.providers.openrouter.preferredProviders': 'Provider priority',
   'settings.providers.openrouter.allowedProviders': 'Allowed providers',
   'settings.providers.openrouter.blockedProviders': 'Blocked providers',
@@ -532,8 +535,8 @@ export default Object.freeze({
   'settings.providers.openrouter.providerConflict':
     '{provider} is both selected and blocked in {scope}.',
   'settings.providers.openrouter.fallbacks': 'Provider fallbacks',
-  'settings.providers.openrouter.fallbacksHelp':
-    'When disabled, OpenRouter returns an error instead of trying a backup provider when the primary is unavailable.',
+  'settings.providers.openrouter.fallbacksDescription':
+    'When off, OpenRouter fails the request instead of using a backup.',
   'settings.providers.openrouter.fallbacksAria':
     'Allow OpenRouter provider fallbacks',
   'settings.providers.openrouter.save': 'Save routing',
@@ -557,13 +560,13 @@ export default Object.freeze({
   'settings.providers.replaceKey': 'Replace key…',
   'settings.providers.accounts.defaultLabel': 'Default',
   'settings.providers.accounts.notUsable': 'Not usable',
-  'settings.providers.accounts.source.processEnv': 'Process env',
-  'settings.providers.accounts.source.dataDir': '.env file',
-  'settings.providers.accounts.source.oauth': 'OAuth',
+  'settings.providers.accounts.source.processEnv': 'Environment variable',
+  'settings.providers.accounts.source.dataDir': 'Data directory .env',
+  'settings.providers.accounts.source.oauth': 'OAuth sign-in',
   'settings.providers.accounts.addButton': 'Add account…',
   'settings.providers.accounts.nameLabel': 'Account',
   'settings.providers.accounts.nameHint':
-    'Optional name for this account. Only needed if you add more than one — otherwise leave it empty.',
+    'Optional. Only needed when you add more than one account.',
   'settings.providers.accounts.invalidId':
     'Account names use 1–32 lowercase letters, digits, or underscores and start with a letter or digit.',
   'settings.providers.accounts.removeEnvHint':
@@ -606,9 +609,8 @@ export default Object.freeze({
   'settings.providers.custom.addButton': 'Add custom',
   'settings.providers.custom.addTitle': 'Add Custom Provider',
   'settings.providers.custom.editTitle': 'Edit Custom Provider',
-  'settings.providers.custom.eyebrow': 'OpenAI-compatible endpoint',
   'settings.providers.custom.intro':
-    'Connect an endpoint you control and describe the Models it exposes. Secrets are stored separately in the data-directory .env.',
+    'Connect an OpenAI-compatible endpoint you control and describe its Models.',
   'settings.providers.custom.id': 'Provider id',
   'settings.providers.custom.idHint':
     'Stable id used in Model references, for example local-ai.',
@@ -620,7 +622,7 @@ export default Object.freeze({
   'settings.providers.custom.authNone': 'No API key',
   'settings.providers.custom.baseUrl': 'Endpoint URL',
   'settings.providers.custom.baseUrlHint':
-    'Base URL including the API prefix, for example http://127.0.0.1:8080/v1.',
+    'Include the API prefix, for example /v1.',
   'settings.providers.custom.baseUrlPlaceholder': 'http://127.0.0.1:8080/v1',
   'settings.providers.custom.modelsEndpoint': 'Model discovery path',
   'settings.providers.custom.modelsEndpointHint':
@@ -629,7 +631,7 @@ export default Object.freeze({
   'settings.providers.custom.apiKey': 'API key (optional)',
   'settings.providers.custom.replaceApiKey': 'Replace API key (optional)',
   'settings.providers.custom.apiKeyHint':
-    'Write-only. Leave empty to keep the existing key or connect it later.',
+    'Stored in the data directory .env. Leave empty to keep the current key.',
   'settings.providers.custom.modelsTitle': 'Manual Models',
   'settings.providers.custom.modelsHint':
     'Manual facts override discovered Models with the same wire id.',
@@ -684,12 +686,17 @@ export default Object.freeze({
   'settings.channels.add': 'Add channel',
   'settings.channels.count': '{count} configured',
   'settings.channels.edit': 'Edit channel {id}',
-  'settings.channels.enable': 'Enable',
   'settings.channels.enableAria': 'Enable channel {id}',
-  'settings.channels.disable': 'Disable',
-  'settings.channels.disableAria': 'Disable channel {id}',
   'settings.channels.delete': 'Delete channel {id}',
+  'settings.channels.id': 'Channel ID',
   'settings.channels.platform': 'Platform',
+  'settings.channels.platform.telegram': 'Telegram',
+  'settings.channels.platform.discord': 'Discord',
+  'settings.channels.platform.slack': 'Slack',
+  'settings.channels.platform.mattermost': 'Mattermost',
+  'settings.channels.platform.whatsapp': 'WhatsApp',
+  'settings.channels.platform.help':
+    'Changing the platform of an existing Channel clears its own identity and group access, because user and group IDs from one platform mean nothing on another.',
   'settings.channels.agent': 'Agent',
   'settings.channels.agent.placeholder': 'Select agent',
   'settings.channels.agent.none': 'No agents available',
@@ -703,20 +710,21 @@ export default Object.freeze({
   'settings.channels.token_env_var': 'Token env var',
   'settings.channels.token_env_var.help':
     'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
-  'settings.channels.idHelp':
-    'A name you choose for this channel. It cannot be changed after creation.',
+  'settings.channels.idHelp': 'A name you choose; it cannot be changed later.',
   'settings.channels.dm_scope.help':
-    'How direct messages are grouped into chat sessions:\n\nMain — all DMs share one session. Per peer — one session per person. Per conversation — one session per chat. Per account, channel & peer — one session per chat and person.\n\nGroup chats always share one session per group, regardless of this setting.',
+    'How direct messages are grouped into Sessions:\n\nMain — all DMs share one Session. Per peer — one Session per person. Per conversation — one Session per chat. Per account, channel & peer — one Session per chat and person.\n\nGroup chats always share one Session per group, regardless of this setting.',
   'settings.channels.allowed_chat_ids.help':
-    'Comma-separated chat IDs allowed to talk to this channel. An empty list allows nobody. Messages from chats not on the list are rejected and appear on the channel card below with a one-click Allow.',
-  'settings.channels.allowed_chat_ids': 'Allowed chat IDs (inbound)',
+    'The chats that may send messages to this Channel, separated by commas. An empty list allows nobody. WhatsApp accepts only self, your own chat.\n\nMessages from other chats are rejected and listed under Blocked chats in the Channel row, where Allow adds the chat to this list.',
+  'settings.channels.allowed_chat_ids': 'Allowed chat IDs',
+  'settings.channels.allowed_chat_ids.description':
+    'Separate IDs with commas. An empty list allows nobody.',
   'settings.channels.allowed_chat_ids.placeholder': '12345, -1009876543210',
-  'settings.channels.allowed_chat_ids.none': 'None',
-  'settings.channels.enabled': 'Enabled',
-  'settings.channels.disabled': 'Disabled',
   'settings.channels.running': 'Running',
   'settings.channels.stopped': 'Stopped',
-  'settings.channels.empty': 'No channels configured.',
+  'settings.channels.failed': 'Failed',
+  'settings.channels.empty': 'No Channels yet',
+  'settings.channels.emptyHint':
+    'Talk to your Agents from Telegram, Discord, Slack, Mattermost or WhatsApp.',
   'settings.channels.delete_confirm_title': 'Delete channel',
   'settings.channels.delete_confirm':
     'Delete channel "{id}" permanently? vBot stops listening on it and its configuration is removed.',
@@ -726,11 +734,13 @@ export default Object.freeze({
   'settings.channels.disableSuccess': 'Channel disabled.',
   'settings.channels.deleteSuccess': 'Channel deleted.',
   'settings.channels.access.title': 'Group access',
+  'settings.channels.access.help':
+    'Groups where this Channel has seen messages, with the people who wrote there.\n\nIn a group, only admins can use commands and the Agent’s Tools. For members, the Agent can only search and read the web.\n\nThis is me marks your own account on this platform. It is an admin in every group and cannot be demoted.',
+  'settings.channels.access.helpAria': 'About group access',
   'settings.channels.access.identity': 'Own identity',
-  'settings.channels.access.identityUnset': 'Not set',
   'settings.channels.access.identitySuccess': 'Own identity updated.',
   'settings.channels.access.roleSuccess': 'Group role updated.',
-  'settings.channels.access.empty': 'No group participants have been seen yet.',
+  'settings.channels.access.empty': 'No groups seen yet.',
   'settings.channels.access.group': 'Group',
   'settings.channels.access.noParticipants': 'No seen participants.',
   'settings.channels.access.admin': 'Admin',
@@ -745,20 +755,26 @@ export default Object.freeze({
   'settings.channels.denied.allowSuccess': 'Chat allowed.',
   'settings.channels.denied.group': 'Group',
   'settings.channels.denied.direct': 'Direct',
-  'settings.channels.denied.title':
-    'Recent requests from chats not on the allowlist',
+  'settings.channels.denied.title': 'Blocked chats',
+  'settings.channels.denied.help':
+    'Recent messages from chats that are not in Allowed chat IDs. Allow adds the chat to the list.\n\nThe list is kept only while the Channel runs.',
+  'settings.channels.denied.helpAria': 'About blocked chats',
   'settings.channels.denied.allowAria': 'Allow chat {id}',
   'settings.channels.denied.allow': 'Allow',
-  'settings.channels.app_token_env': 'App token environment variable',
+  'settings.channels.app_token_env': 'App token env var',
   'settings.channels.app_token_help':
     'Slack needs a second token for Socket Mode. Enter the name of the variable holding the xapp token with connections:write permission.',
   'settings.channels.server_url': 'Mattermost server URL',
   'settings.channels.whatsapp.help':
-    'Link your existing WhatsApp account and talk to vBot in your self chat. Other conversations cannot trigger Runs. This uses an unofficial connection; WhatsApp may restrict the account. Node.js 22 or newer is required on the vBot server.',
+    'Link your existing WhatsApp account and talk to vBot in your self chat: send a message to yourself to reach this Channel’s Agent. Other conversations cannot trigger Runs.\n\nThis uses an unofficial linked-device connection; WhatsApp may restrict the account.\n\nRequires Node.js 22 or newer on the vBot server.',
+  'settings.channels.whatsapp.helpAria': 'About WhatsApp linking',
+  'settings.channels.whatsapp.risk':
+    'Unofficial connection; WhatsApp may restrict the account.',
+  'settings.channels.whatsapp.notInstalled':
+    'WhatsApp support is not installed yet.',
   'settings.channels.whatsapp.installing': 'Installing WhatsApp support…',
   'settings.channels.whatsapp.install': 'Install WhatsApp support',
-  'settings.channels.whatsapp.connected':
-    'WhatsApp connected. Send a message to yourself to talk to your Agent.',
+  'settings.channels.whatsapp.connected': 'WhatsApp connected.',
   'settings.channels.whatsapp.scan':
     'In WhatsApp, open Settings → Linked devices → Link a device, then scan this QR code.',
   'settings.channels.whatsapp.qr': 'WhatsApp device linking QR code',
@@ -769,17 +785,12 @@ export default Object.freeze({
   'settings.extensions.title': 'Extensions',
   'settings.extensions.count': '{count} discovered',
   'settings.extensions.empty': 'No extensions discovered.',
-  'settings.extensions.statusLoaded': 'Loaded',
   'settings.extensions.statusFailed': 'Failed',
-  'settings.extensions.statusDisabled': 'Disabled',
   'settings.extensions.statusOverridden': 'Overridden',
   'settings.extensions.overriddenBy': 'Overridden by your copy at {path}',
-  'settings.extensions.waiting': 'On, waiting for configuration',
+  'settings.extensions.waiting': 'Needs setup',
   'settings.extensions.waitingFor': 'Waiting for: {fields}',
-  'settings.extensions.enable': 'Enable',
-  'settings.extensions.disable': 'Disable',
   'settings.extensions.enableAria': 'Enable extension {name}',
-  'settings.extensions.disableAria': 'Disable extension {name}',
   'settings.extensions.enableSuccess': 'Extension enabled.',
   'settings.extensions.disableSuccess': 'Extension disabled.',
   'settings.extensions.error': 'Error',
@@ -790,7 +801,7 @@ export default Object.freeze({
   'settings.extensions.recallBackends': 'Recall backends',
   'settings.extensions.startup': 'startup',
   'settings.extensions.shutdown': 'shutdown',
-  'settings.extensions.configToggleAria': 'Configuration for extension {name}',
+  'settings.extensions.detailsAria': 'Details for extension {name}',
   'settings.extensions.saveSettings': 'Save settings',
   'settings.extensions.settingsSaveSuccess': 'Extension settings saved.',
   'settings.extensions.fieldAria': '{label} for extension {name}',
@@ -810,40 +821,41 @@ export default Object.freeze({
     'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
   'settings.appearance.title': 'Appearance',
   'settings.appearance.language': 'Language',
-  'settings.appearance.languageDescription': 'Interface language.',
   'settings.appearance.chatWidth.label': 'Chat width',
-  'settings.appearance.chatWidth.description':
-    'Reading width of the chat column on wide screens.',
   'settings.appearance.chatWidth.comfortable': 'Comfortable',
   'settings.appearance.chatWidth.wide': 'Wide',
   'settings.appearance.chatWidth.full': 'Full width',
   'settings.appearance.chatWorkingMode.label': 'Work details',
   'settings.appearance.chatWorkingMode.description':
-    'Show Thinking and Tool activity inline or group it into Working blocks.',
+    'How Thinking and Tool activity appear in Chat.',
+  'settings.appearance.chatWorkingMode.help':
+    'Normal shows each Thinking block and Tool call in the Chat as it happens.\n\nCompact groups consecutive Thinking and Tool activity into one collapsible Working block, so the Agent’s replies stand out.',
   'settings.appearance.chatWorkingMode.normal': 'Normal',
   'settings.appearance.chatWorkingMode.compact': 'Compact',
   'settings.appearance.saveSuccess': 'Appearance updated.',
   'settings.language.en': 'English',
   'settings.voice.title': 'Voice',
-  'settings.voice.transcriptionProfile': 'Transcription audio',
-  'settings.voice.transcriptionProfileDescription':
-    'The audio sent to the Speech-to-text Model from both the Chat microphone and a command recorded after a wake phrase. Local wakeword detection keeps its optimized 16 kHz stream.',
+  'settings.voice.aboutAria': 'About {name}',
+  'settings.voice.transcriptionProfile': 'Transcription audio profile',
+  'settings.voice.transcriptionProfileLabel': 'Audio profile',
+  'settings.voice.transcriptionProfileHelp':
+    'Every recording for the Speech to text Model, from the Chat or Terminal microphone and from commands spoken after a wake phrase, is converted to this format first. Wakeword detection itself always listens at 16 kHz.\n\nMaximum compatibility sends 16 kHz WAV. High fidelity sends 48 kHz FLAC, which keeps more detail but makes larger uploads. Custom lets you choose the format and sample rate.',
   'settings.voice.transcriptionProfileCompatibility':
     'Maximum compatibility (recommended)',
   'settings.voice.transcriptionProfileHighQuality': 'High fidelity',
   'settings.voice.transcriptionProfileCustom': 'Custom',
   'settings.voice.transcriptionFormat': 'Format',
-  'settings.voice.transcriptionFormatDescription':
+  'settings.voice.transcriptionFormatHelp':
     'Mono, signed 16-bit audio. WAV has the broadest Provider support; FLAC is lossless and smaller.',
   'settings.voice.transcriptionFormatWav': 'WAV (PCM16)',
   'settings.voice.transcriptionFormatFlac': 'FLAC (lossless PCM16)',
   'settings.voice.transcriptionSampleRate': 'Sample rate',
-  'settings.voice.transcriptionSampleRateDescription':
+  'settings.voice.transcriptionSampleRateHelp':
     '16 kHz is the speech-focused default. Higher rates retain more source detail but create larger uploads.',
   'settings.voice.transcriptionSampleRate16': '16 kHz (recommended for speech)',
   'settings.voice.enabled': 'Wakeword listening',
-  'settings.voice.enabledDescription':
-    'Listen on this device for wake phrases that send a spoken command to an Agent or start Live voice.',
+  'settings.voice.enabledHelp':
+    'Listens on this device for wake phrases that send a spoken command to an Agent or start Live voice.\n\nWhile listening is on, microphone audio is analyzed continuously on this device. Nothing is sent unless a wake phrase matches. After a match, the command recording, including up to 320 ms of audio from just before the phrase was detected, is sent to the Speech to text Model for transcription.\n\nTo discard a command, say “abbrechen” or “vergiss es” at the end of the same recording; no Run starts.',
   'settings.voice.desktopUpdateRequired':
     'Update the vBot Desktop app to use Voice with this server.',
   'settings.voice.phraseLimit': '{count} of {max} phrases active',
@@ -867,14 +879,16 @@ export default Object.freeze({
   'settings.voice.calibrateAria': 'Calibrate {name}',
   'settings.voice.defaultAgent': 'Default Agent',
   'settings.voice.defaultAgentDescription':
-    'Receives the spoken commands of phrases without their own Agent. Applies to the server this Desktop app is connected to.',
+    'For phrases without an Agent of their own.',
+  'settings.voice.defaultAgentHelp':
+    'Receives the spoken commands of phrases that name no Agent of their own.\n\nThis choice applies to the server this Desktop app is connected to.',
   'settings.voice.noDefaultAgent': 'None',
   'settings.voice.defaultSession': 'Default Session behavior',
-  'settings.voice.defaultSessionDescription':
-    'Whether commands continue the Agent’s active Session or start a new one, unless a phrase chooses otherwise.',
+  'settings.voice.defaultSessionHelp':
+    'Whether spoken commands continue the Agent’s active Session or start a new one each time, unless a phrase chooses otherwise.',
   'settings.voice.echoCancellation': 'Echo cancellation',
-  'settings.voice.echoCancellationDescription':
-    'Removes speaker output such as Live voice or read-aloud replies from the microphone signal.',
+  'settings.voice.echoCancellationHelp':
+    'Removes speaker output, such as Live voice or read-aloud replies, from the microphone signal before phrases are detected and commands are recorded.',
   'settings.voice.echoCancellationAria': 'Use echo cancellation',
   'settings.voice.echoOff': 'Off',
   'settings.voice.echoOffDetail':
@@ -883,8 +897,6 @@ export default Object.freeze({
   'settings.voice.echoStartingDetail':
     'Echo cancellation is still loading. Until it is ready, the microphone signal is used unprocessed.',
   'settings.voice.echoActive': 'Active',
-  'settings.voice.echoActiveDetail':
-    'Speaker output is removed from the microphone signal before phrases are detected and commands are recorded.',
   'settings.voice.echoNoReference': 'No speaker signal',
   'settings.voice.echoNoReferenceDetail':
     'The Desktop cannot capture the speaker output, so the microphone signal is used unprocessed.',
@@ -909,10 +921,9 @@ export default Object.freeze({
   'settings.voice.error.calibrationInactive':
     'No calibration is running anymore. Start the calibration again.',
   'settings.voice.models': 'Wake phrases',
-  'settings.voice.modelDescription':
-    'Choose the phrases to listen for. Each active phrase has its own sensitivity and action; Calibrate measures the room and your voice to set its sensitivity while listening is on.',
-  'settings.voice.modelBuiltIn': 'Built-in',
-  'settings.voice.modelImported': 'Imported TFLite',
+  'settings.voice.modelsHelp':
+    'Turn on the phrases to listen for. Each active phrase has its own sensitivity and action: send a spoken command to an Agent, or start or end Live voice.\n\nHigher sensitivity hears a phrase more easily but also reacts to similar sounds more often. Calibrate measures the room and your voice to suggest a value; it works while listening is on.\n\nTo add your own phrase, import a wakeword model in TFLite format.',
+  'settings.voice.modelImported': 'Imported',
   'settings.voice.modelToggleAria': 'Listen for {name}',
   'settings.voice.importModel': 'Import TFLite model',
   'settings.voice.removeModel': 'Remove imported model',
@@ -933,15 +944,10 @@ export default Object.freeze({
   'settings.voice.modelActionAria': 'When {name} is heard',
   'settings.voice.sessionBehaviorActive': 'Use active Session',
   'settings.voice.sessionBehaviorNew': 'New Session each time',
-  'settings.voice.state': 'Status',
-  'settings.voice.privacyNote':
-    'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is sent unless a wake phrase matches. After a match, the command recording—including up to 320 ms of locally buffered audio immediately before detection—is sent to your configured vBot speech backend for transcription.',
   'settings.voice.systemAutomaticMic': 'Automatic selection',
   'settings.voice.compatibleMic': 'Compatible',
   'settings.voice.incompatibleMic': 'Unsupported format',
   'settings.voice.configuredMicUnavailable': 'Configured device unavailable',
-  'settings.voice.lessSensitive': 'Less sensitive',
-  'settings.voice.moreSensitive': 'More sensitive',
   'settings.voice.calibrationNoiseInstruction':
     'Stay quiet for {seconds} seconds while vBot measures the room.',
   'settings.voice.calibrationPhraseInstruction':
@@ -976,15 +982,12 @@ export default Object.freeze({
   'settings.voice.calibrationNoiseHighWarning':
     'Room noise is high ({level}). Consider moving to a quieter environment or reducing background noise for better results.',
   'settings.voice.calibrationCurrentSensitivity': 'Current',
-  'settings.voice.desktopOnly':
-    'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
+  'settings.voice.desktopOnly': 'Available in the vBot Desktop app.',
   'settings.voice.statusUnavailableTitle': 'Desktop Voice status unavailable',
   'settings.voice.statusUnavailableMessage':
     'The Desktop bridge did not return Voice settings. Retrying automatically…',
   'settings.voice.mockWarning':
     'Voice is running in demo mode. State changes are simulated; no microphone is heard and no command is sent. Restart Desktop without --mock-wakeword for real detection.',
-  'settings.voice.cancelPhrases':
-    'Say “abbrechen” or “vergiss es” at the end of the same recording to discard the entire command before it starts a Run.',
   'settings.voice.error.serverUnreachable':
     'Voice could not reach the active server. Check the Desktop connection and try again.',
   'settings.voice.error.speechToTextUnconfigured':
@@ -1026,10 +1029,12 @@ export default Object.freeze({
   'settings.sessionTitles.saveSuccess': 'Session title settings updated.',
   'settings.sessionTitles.enabled': 'Automatic Session titles',
   'settings.sessionTitles.enabledDescription':
-    'Creates one additional Model request from a bounded excerpt of the first message in each new Session. When off, the first 40 normalized characters remain as the local title.',
+    'Uses one extra Model request for each new Session.',
+  'settings.sessionTitles.enabledHelp':
+    'Every new Session first gets a local title from the start of its first message, up to 40 characters.\n\nWhen this is on, vBot also sends an excerpt of that first message to the Title model once and replaces the local title with a short generated one. If the request fails, the local title stays.',
   'settings.sessionTitles.model': 'Title model',
-  'settings.sessionTitles.modelDescription':
-    'Uses the active Agent Model when no separate Model is selected. A failed request keeps the local title and never triggers another paid Model request.',
+  'settings.sessionTitles.modelHelp':
+    'Agent Model (default) uses the Model of the Agent the Session belongs to. A small, inexpensive Model keeps titles cheap.',
   'settings.sessionTitles.agentModel': 'Agent Model (default)',
   'settings.content': 'Settings content',
   'settings.models.loadError': 'Model catalog could not be loaded.',

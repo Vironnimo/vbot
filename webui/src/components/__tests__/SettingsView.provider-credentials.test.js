@@ -280,7 +280,8 @@ describe('SettingsView provider credentials', () => {
       expect(
         defaultRow.querySelector('.s-connection-account-id').textContent,
       ).toContain('Default');
-      expect(defaultRow.querySelector('.chip.success')).toBeTruthy();
+      // Only an Account that needs attention carries a status chip.
+      expect(defaultRow.querySelector('.chip')).toBeNull();
       expect(
         workRow.querySelector('.s-connection-account-id').textContent,
       ).toContain('work');

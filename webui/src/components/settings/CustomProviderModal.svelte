@@ -250,14 +250,9 @@
       class="modal-body custom-provider-form"
       onsubmit={submit}
     >
-      <div class="custom-provider-form__intro">
-        <span class="custom-provider-form__eyebrow">
-          {t('settings.providers.custom.eyebrow')}
-        </span>
-        <p>
-          {t('settings.providers.custom.intro')}
-        </p>
-      </div>
+      <p class="custom-provider-form__intro">
+        {t('settings.providers.custom.intro')}
+      </p>
 
       <div class="custom-provider-form__grid">
         <FormField
@@ -620,25 +615,17 @@
   }
 
   .custom-provider-form__intro {
-    padding: var(--space-md);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-  }
-
-  .custom-provider-form__intro p,
-  .custom-models__head p {
-    margin: var(--space-xs) 0 0;
+    margin: 0;
     color: var(--text-med);
     font-size: var(--fs-body-md);
     line-height: 1.45;
   }
 
-  .custom-provider-form__eyebrow {
-    color: var(--text-hi);
-    font-size: var(--fs-body-sm);
-    font-weight: 600;
+  .custom-models__head p {
+    margin: var(--space-xs) 0 0;
+    color: var(--text-med);
+    font-size: var(--fs-body-md);
+    line-height: 1.45;
   }
 
   .custom-provider-form__grid {

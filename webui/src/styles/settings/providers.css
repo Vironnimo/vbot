@@ -2,8 +2,19 @@
    head toggles its details; the details drawer opens inside the same row,
    indented under the name, so everything about a Provider stays between the
    same two group hairlines. */
-.s-provider-head--toggle {
-  cursor: pointer;
+/* The head is one line: the name, then at its end the one short fact, the
+   status and the disclosure button. The status slot keeps one width so the
+   facts and statuses line up down the list like table columns. */
+.s-provider-fact {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.s-provider-status {
+  display: inline-flex;
+  min-width: 7.5rem;
 }
 
 .s-provider-connections {
@@ -32,39 +43,6 @@
   font-weight: 500;
 }
 
-/* Entity disclosure: a quiet 28px icon button at the end of an entity row
-   carrying the shared `.disclosure-chevron`, and the drawer it opens inside
-   the same row. The drawer stays in the DOM while collapsed (hidden
-   attribute) so settings search still matches its text. Provider rows also
-   toggle from anywhere on their head; the button is the keyboard and
-   screen-reader control. */
-.s-disclosure-btn.btn-tertiary.btn-icon {
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
-  color: var(--text-lo);
-}
-
-.s-disclosure-btn .disclosure-chevron {
-  margin: 0 0 0 -2px;
-  color: inherit;
-}
-
-.s-disclosure-btn .disclosure-chevron--open {
-  margin: 0 0 3px;
-}
-
-.s-disclosure-btn.btn-tertiary.btn-icon:hover,
-.s-provider-head--toggle:hover .s-disclosure-btn.btn-tertiary.btn-icon {
-  color: var(--text-hi);
-  background: var(--surface-3);
-}
-
-.s-disclosure-spacer {
-  width: 28px;
-  flex-shrink: 0;
-}
-
 .s-disclosure-sub {
   display: flex;
   flex-direction: column;
@@ -76,13 +54,19 @@
   display: none;
 }
 
+/* Accounts belong to the connection above them and indent under its
+   label. */
 .s-connection-accounts {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin: 0;
-  padding: 0;
+  padding: 0 0 0 14px;
   list-style: none;
+}
+
+.s-connection-add-account {
+  padding-left: 14px;
 }
 
 .s-connection-account-row {
@@ -127,6 +111,78 @@
   gap: 8px;
 }
 
+/* Rarely changed blocks and technical facts follow the connections, each
+   after a hairline: OpenRouter routing and local context windows open on
+   demand (ProviderDetailDisclosure), the endpoint line closes the details. */
+.s-disclosure-sub > :is(.openrouter-routing, .s-provider-detail),
+.s-disclosure-sub > .s-provider-endpoint {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.s-provider-detail {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.s-provider-detail__head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.s-provider-detail__toggle {
+  display: inline-flex;
+  align-items: center;
+  margin: -4px 0 -4px -6px;
+  padding: 4px 8px 4px 6px;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.s-provider-detail__toggle .disclosure-chevron--open {
+  margin-bottom: 4px;
+}
+
+.s-provider-detail__toggle:hover {
+  background: var(--surface-2);
+}
+
+.s-provider-detail__toggle:hover .disclosure-chevron {
+  color: var(--text-hi);
+}
+
+.s-provider-detail__toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.s-provider-detail__summary {
+  margin-left: auto;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The body indents to the label after the chevron. */
+.s-provider-detail__body {
+  min-width: 0;
+  padding-left: 15px;
+}
+
+.s-provider-detail__body[hidden] {
+  display: none;
+}
+
 .s-provider-local-context {
   display: flex;
   flex-direction: column;
@@ -134,36 +190,99 @@
   gap: 8px;
 }
 
+/* The endpoint is a technical fact: a quiet label and the Mono URL, with a
+   custom Provider's Edit and Delete at the end of the same line. */
+.s-provider-endpoint {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.s-provider-endpoint__label {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
+.s-provider-endpoint__value {
+  min-width: 0;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  overflow-wrap: anywhere;
+}
+
+.s-provider-endpoint__actions {
+  margin-left: auto;
+}
+
+/* Model DB is its own group after the list: a different, rarely needed
+   task, set a little apart from it. */
+.s-provider-model-db {
+  margin-top: 8px;
+}
+
+/* OpenRouter routing: label-and-control rows like a settings group, sized
+   for the details drawer. Labels are a step quieter than the Provider name;
+   explanations live in the "?" hints. */
 .openrouter-routing {
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
-.openrouter-routing .form-field {
-  gap: 6px;
-}
-
-.openrouter-routing__override-row,
-.openrouter-routing__fallback-row {
+.openrouter-routing__rows {
   display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.openrouter-routing__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 340px);
+  column-gap: 24px;
+  row-gap: 8px;
+  align-items: start;
+}
+
+.openrouter-routing__row > .s-row-info {
+  padding-top: 7px;
+}
+
+.openrouter-routing__row--compact {
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+}
+
+.openrouter-routing__row--compact > .s-row-info {
+  padding-top: 0;
+}
+
+.openrouter-routing .s-row-label {
+  font-size: var(--fs-body-sm);
+}
+
+.openrouter-routing__control {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.openrouter-routing__control > :is(.dropdown, .searchable-dropdown),
+.openrouter-routing__add-row > .searchable-dropdown {
+  width: 100%;
 }
 
 .openrouter-routing__disabled {
   opacity: 0.55;
 }
 
-.openrouter-routing__list-block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .openrouter-routing__add-row {
-  width: min(420px, 100%);
+  width: 100%;
 }
 
 .openrouter-routing__provider-list {
@@ -206,6 +325,32 @@
 .openrouter-routing__save-row {
   display: flex;
   justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  /* Phones keep the Provider head on one line: the name, its status and
+     the disclosure button; the Model count is left out. */
+  .s-provider-head.s-entity__head {
+    flex-wrap: nowrap;
+  }
+
+  .s-provider-fact {
+    display: none;
+  }
+
+  .s-provider-status {
+    min-width: 0;
+  }
+
+  /* Routing rows stack their control under the label; switches stay at
+     the end of their row. */
+  .openrouter-routing__row:not(.openrouter-routing__row--compact) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .openrouter-routing__row > .s-row-info {
+    padding-top: 0;
+  }
 }
 
 .s-local-context-row {

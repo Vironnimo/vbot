@@ -9,6 +9,7 @@
   import Toggle from './ui/Toggle.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import InfoHint from './ui/InfoHint.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import Dropdown from './Dropdown.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
@@ -36,7 +37,6 @@
     rebaseVoiceConfig,
     voiceConfigFromStatus,
   } from '$lib/wakewordSettings.js';
-  import TranscriptionAudioSettings from './voice/TranscriptionAudioSettings.svelte';
   import VoicePhraseCard from './voice/VoicePhraseCard.svelte';
   import VoiceUnavailablePhraseCard from './voice/VoiceUnavailablePhraseCard.svelte';
   import WakewordCalibration from './voice/WakewordCalibration.svelte';
@@ -57,15 +57,12 @@
 
   let {
     agents = [],
-    settings = null,
     // The Desktop advertises wakeword support (any Voice bridge version).
     wakewordAvailable = false,
     // The app-level Desktop Voice owner: `{available, status, adopt,
     // refresh}`; null outside the Desktop app.
     desktopVoice = null,
-    onCommit = () => {},
     onToast = () => {},
-    onError = () => {},
   } = $props();
 
   // The Desktop status is authoritative. `baseline` is the configuration of
@@ -82,7 +79,6 @@
   let listsRetryTimer = null;
   let destroyed = false;
   let saveState = $state('idle');
-  let transcriptionSaveStatus = $state('idle');
   let modelFileInput = $state();
   let modelActionState = $state('idle');
   let enablePending = $state(null);
@@ -233,7 +229,7 @@
         return {
           variant: 'success',
           label: t('settings.voice.echoActive'),
-          detail: t('settings.voice.echoActiveDetail'),
+          detail: '',
         };
       case 'no_reference':
         return {
@@ -257,18 +253,10 @@
       baseline !== null &&
       Object.keys(buildVoiceConfigChanges(draft, baseline)).length > 0,
   );
-  let wakewordSaveStatus = $derived(
+  // A confirmation only while nothing new is pending.
+  let voiceSaveStatus = $derived(
     saveState === 'saved' && dirty ? 'idle' : saveState,
   );
-  // The section shows one save state for its two autosaved parts; a write in
-  // flight wins over a failure, and a failure over a confirmation.
-  let voiceSaveStatus = $derived.by(() => {
-    const states = [transcriptionSaveStatus, wakewordSaveStatus];
-    for (const candidate of ['saving', 'error', 'saved']) {
-      if (states.includes(candidate)) return candidate;
-    }
-    return 'idle';
-  });
   // Changes that restart listening wait while a calibration or a model
   // action runs.
   let captureLocked = $derived(
@@ -601,14 +589,9 @@
 </script>
 
 <div class="voice-settings">
-  <TranscriptionAudioSettings
-    {settings}
-    {onCommit}
-    {onError}
-    onSaveStatusChange={(next) => (transcriptionSaveStatus = next)}
-  />
-
   {#if !voiceReady}
+    <!-- Browsers and Desktop apps without Voice only learn where wakeword
+         listening is set up. -->
     <div class="s-group">
       <div class="s-row">
         <div class="s-row-info">
@@ -637,19 +620,29 @@
       </Banner>
     {/if}
 
-    <!-- Wakeword listening: the phrases, what each one does, and the
-         microphone they are heard through. -->
+    <!-- Wakeword listening: the switch with the live listening state, the
+         phrases and where their commands go, then the audio input. -->
     <div class="s-group">
       <div class="s-row s-row--compact">
         <div class="s-row-info">
           <div class="s-row-label">
             {t('settings.voice.enabled')}
-          </div>
-          <div class="s-row-desc">
-            {t('settings.voice.enabledDescription')}
+            <InfoHint
+              text={t('settings.voice.enabledHelp')}
+              ariaLabel={t('settings.voice.aboutAria', {
+                name: t('settings.voice.enabled'),
+              })}
+            />
           </div>
         </div>
-        <div class="s-row-control">
+        <div class="s-row-control voice-listening-control">
+          <span class="voice-state" aria-live="polite">
+            <span
+              class="voice-state-dot voice-dot--{indicator.tone}"
+              aria-hidden="true"
+            ></span>
+            <span class="voice-state-label">{indicator.label}</span>
+          </span>
           <Toggle
             checked={enabled}
             onChange={handleEnabledChange}
@@ -670,23 +663,6 @@
           </div>
         </div>
       {/if}
-
-      <div class="s-row s-row--compact">
-        <div class="s-row-info">
-          <div class="s-row-label">
-            {t('settings.voice.state')}
-          </div>
-        </div>
-        <div class="s-row-control">
-          <span class="voice-state" aria-live="polite">
-            <span
-              class="voice-state-dot voice-dot--{indicator.tone}"
-              aria-hidden="true"
-            ></span>
-            <span class="voice-state-label">{indicator.label}</span>
-          </span>
-        </div>
-      </div>
 
       {#if attention}
         <div class="s-group__block s-group__block--attached">
@@ -722,9 +698,12 @@
         <div class="s-row-info">
           <div class="s-row-label">
             {t('settings.voice.models')}
-          </div>
-          <div class="s-row-desc">
-            {t('settings.voice.modelDescription')}
+            <InfoHint
+              text={t('settings.voice.modelsHelp')}
+              ariaLabel={t('settings.voice.aboutAria', {
+                name: t('settings.voice.models'),
+              })}
+            />
           </div>
         </div>
         <div class="s-row-control voice-model-control">
@@ -821,6 +800,12 @@
         <div class="s-row-info">
           <div class="s-row-label">
             {t('settings.voice.defaultAgent')}
+            <InfoHint
+              text={t('settings.voice.defaultAgentHelp')}
+              ariaLabel={t('settings.voice.aboutAria', {
+                name: t('settings.voice.defaultAgent'),
+              })}
+            />
           </div>
           <div class="s-row-desc">
             {t('settings.voice.defaultAgentDescription')}
@@ -842,9 +827,12 @@
         <div class="s-row-info">
           <div class="s-row-label">
             {t('settings.voice.defaultSession')}
-          </div>
-          <div class="s-row-desc">
-            {t('settings.voice.defaultSessionDescription')}
+            <InfoHint
+              text={t('settings.voice.defaultSessionHelp')}
+              ariaLabel={t('settings.voice.aboutAria', {
+                name: t('settings.voice.defaultSession'),
+              })}
+            />
           </div>
         </div>
         <div class="s-row-control">
@@ -881,10 +869,17 @@
         <div class="s-row-info">
           <div class="s-row-label">
             {t('settings.voice.echoCancellation')}
+            <InfoHint
+              text={t('settings.voice.echoCancellationHelp')}
+              ariaLabel={t('settings.voice.aboutAria', {
+                name: t('settings.voice.echoCancellation'),
+              })}
+            />
           </div>
-          <div class="s-row-desc">
-            {echo?.detail ?? t('settings.voice.echoCancellationDescription')}
-          </div>
+          <!-- Only a state that lets speaker output through is explained. -->
+          {#if echo?.detail}
+            <div class="s-row-desc">{echo.detail}</div>
+          {/if}
         </div>
         <div class="s-row-control voice-echo-control">
           {#if echo}
@@ -898,21 +893,12 @@
           />
         </div>
       </div>
-
-      <div class="s-group__block s-group__note">
-        <p>
-          {t('settings.voice.privacyNote')}
-        </p>
-        <p>
-          {t('settings.voice.cancelPhrases')}
-        </p>
-      </div>
     </div>
   {/if}
 </div>
 
-<!-- One save state for the whole section: transcription audio and the
-     Desktop Voice configuration both save as they change. -->
+<!-- The section's save state: the Desktop Voice configuration saves as it
+     changes. -->
 <div class="s-footer voice-save-state" aria-live="polite">
   {#if voiceSaveStatus === 'saving'}
     {t('common.saving')}

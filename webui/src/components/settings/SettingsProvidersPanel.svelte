@@ -2,8 +2,10 @@
   import { t } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import {
-    describeProvider,
+    describeProviderBilling,
+    formatModelCount,
     isSharedOpenCodeConnection,
     describeSharedOpenCodeKey,
     getConfiguredConnections,
@@ -43,6 +45,7 @@
   } from '$lib/api.js';
   import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
   import { createLocalProviderModels } from './providers/localModels.svelte.js';
+  import ProviderDetailDisclosure from './providers/ProviderDetailDisclosure.svelte';
 
   const noop = () => {};
 
@@ -58,6 +61,7 @@
     onRefreshProviderSettings = noop,
     modelsRefreshToken = 0,
   } = $props();
+  const uid = $props.id();
   const localModels = createLocalProviderModels({
     get settings() {
       return settings;
@@ -92,6 +96,9 @@
   // accounts, and the local-context editor live in its sub. The sub stays in
   // the DOM while collapsed so search matches.
   const expandedProviders = new SvelteSet();
+  // The per-Model context-window editor of a local Provider opens separately
+  // inside its expanded row.
+  let contextWindowsOpen = $state({});
 
   function toggleProviderDetails(provider) {
     if (expandedProviders.has(provider.id)) {
@@ -126,7 +133,8 @@
 
   // The collapsed provider row needs a status at a glance: the head chip
   // shows the best state across its connections (connected beats a warning,
-  // any warning beats all-disabled).
+  // any warning beats all-disabled). A connection repeats a chip only where
+  // its own state differs from this summary.
   function providerSummaryStatus(provider) {
     const statuses = getConfiguredConnections(provider).map(connectionStatus);
     if (statuses.includes('connected')) {
@@ -141,8 +149,7 @@
     return 'disabled';
   }
 
-  function providerSummaryChip(provider) {
-    const status = providerSummaryStatus(provider);
+  function statusChip(status) {
     if (status === 'connected') {
       return {
         variant: 'success',
@@ -291,23 +298,29 @@
     }
   }
 
-  function connectionDescription(connection) {
-    if (isSharedOpenCodeConnection(connection)) {
-      return describeSharedOpenCodeKey();
-    }
+  // A connection shows a visible line only for a consequence that is not
+  // obvious from its label and actions; longer explanations go into its "?".
+  function connectionNote(connection) {
     if (!isConnectionEnabled(connection)) {
       return t('settings.providers.disabledDescription');
     }
-    if (isKeylessConnection(connection)) {
-      return t('settings.providers.keylessDescription');
+    if (isSharedOpenCodeConnection(connection)) {
+      return t('settings.providers.opencode.sharedKeyShort');
     }
-    if (isOAuthDeviceFlowConnection(connection)) {
-      return t('settings.providers.oauthDescription');
+    return '';
+  }
+
+  function connectionHelp(connection) {
+    if (isSharedOpenCodeConnection(connection)) {
+      return describeSharedOpenCodeKey();
     }
-    if (isOAuthConnection(connection)) {
-      return t('settings.providers.oauthTokenDescription');
+    if (
+      isOAuthConnection(connection) &&
+      !isOAuthDeviceFlowConnection(connection)
+    ) {
+      return t('settings.providers.oauthTokenHelp');
     }
-    return t('settings.providers.apiKeyDescription');
+    return '';
   }
 
   function openAddProviderModal() {
@@ -528,19 +541,6 @@
   }
 </script>
 
-{#snippet refreshModelsButton()}
-  <Button
-    variant="tertiary"
-    disabled={refreshingModels}
-    tooltip={t('settings.providers.refreshModelsHint')}
-    onClick={refreshModelDatabase}
-  >
-    {refreshingModels
-      ? t('settings.providers.refreshingModels')
-      : t('settings.providers.refreshModels')}
-  </Button>
-{/snippet}
-
 {#if visible}
   {#if displayedProviders.length === 0}
     <EmptyState
@@ -557,23 +557,17 @@
         >
           {t('settings.providers.custom.addButton')}
         </Button>
-        {#if hasRefreshEligibleProvider}
-          {@render refreshModelsButton()}
-        {/if}
       {/snippet}
     </EmptyState>
   {:else}
-    <!-- The count and the catalog refresh describe the whole list; adding
-         sits at the far end of the same line. -->
+    <!-- The count describes the whole list; adding sits at the far end of
+         the same line. -->
     <div class="s-group-toolbar s-list-toolbar">
       <span class="s-group-toolbar__meta">
         {t('settings.providers.connectedCount', {
           count: displayedProviders.length,
         })}
       </span>
-      {#if hasRefreshEligibleProvider}
-        {@render refreshModelsButton()}
-      {/if}
       <div class="s-group-toolbar__actions s-list-toolbar__end">
         <Button
           variant="tertiary"
@@ -588,12 +582,20 @@
     </div>
 
     <div class="s-group s-provider-list">
-      {#each displayedProviders as provider (provider.id)}
+      {#each displayedProviders as provider, index (provider.id)}
         {@const expanded = expandedProviders.has(provider.id)}
+        {@const summaryStatus = providerSummaryStatus(provider)}
+        {@const summaryChip = statusChip(summaryStatus)}
+        {@const modelCount = formatModelCount(provider.model_count)}
+        {@const billingHelp = describeProviderBilling(provider)}
+        {@const contextModels =
+          localModels.localModelsByProvider[provider.id] ?? []}
         <div class="s-provider-card s-entity">
+          <!-- One line per Provider: name, one short fact and its status. A
+               problem adds a short hint; everything technical opens below. -->
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (Pointer shortcut for the row; the Details disclosure button is the keyboard control.) -->
           <div
-            class="s-provider-head s-entity__head s-provider-head--toggle"
+            class="s-provider-head s-entity__head s-entity__head--toggle"
             onclick={(event) => {
               if (
                 !event.target.closest('button, a, input, select, textarea') &&
@@ -606,19 +608,35 @@
             <div class="s-row-info">
               <div class="s-row-label">
                 {providerDisplayName(provider)}
+                {#if billingHelp}
+                  <InfoHint
+                    text={billingHelp}
+                    ariaLabel={t('settings.providers.billingInfoAria', {
+                      provider: providerDisplayName(provider),
+                    })}
+                  />
+                {/if}
               </div>
-              <div class="s-row-desc">
-                {describeProvider(provider)}
-              </div>
+              {#if summaryStatus === 'unreachable'}
+                <div class="s-row-desc">
+                  {t('settings.providers.unreachableHint')}
+                </div>
+              {/if}
             </div>
             <div class="s-entity__end">
-              <StatusChip variant={providerSummaryChip(provider).variant}>
-                {providerSummaryChip(provider).label}
-              </StatusChip>
+              {#if modelCount}
+                <span class="s-provider-fact">{modelCount}</span>
+              {/if}
+              <span class="s-provider-status">
+                <StatusChip variant={summaryChip.variant}>
+                  {summaryChip.label}
+                </StatusChip>
+              </span>
               <Button
                 variant="tertiary"
                 icon
                 class="s-disclosure-btn"
+                aria-controls={`${uid}-details-${index}`}
                 ariaLabel={t('settings.providers.detailsAria', {
                   id: provider.id,
                 })}
@@ -634,25 +652,37 @@
             </div>
           </div>
 
-          <div class="s-disclosure-sub" hidden={!expanded}>
+          <div
+            id={`${uid}-details-${index}`}
+            class="s-disclosure-sub"
+            hidden={!expanded}
+          >
             <div class="s-provider-connections">
               {#each getConfiguredConnections(provider) as connection (connection.id)}
+                {@const status = connectionStatus(connection)}
+                {@const note = connectionNote(connection)}
+                {@const help = connectionHelp(connection)}
                 <div class="s-provider-connection-row">
                   <div class="s-provider-connection-head">
                     <div class="s-row-info">
                       <div class="s-provider-connection-label">
                         {connection.label ?? connection.id}
+                        {#if help}
+                          <InfoHint text={help} />
+                        {/if}
                       </div>
-                      <div class="s-row-desc">
-                        {connectionDescription(connection)}
-                      </div>
+                      {#if note}
+                        <div class="s-row-desc">{note}</div>
+                      {/if}
                     </div>
 
                     <div class="s-entity__end">
-                      {#if !isConnectionEnabled(connection)}
-                        <StatusChip variant="warn">
-                          {t('settings.providers.disabledChip')}
+                      {#if status !== summaryStatus}
+                        <StatusChip variant={statusChip(status).variant}>
+                          {statusChip(status).label}
                         </StatusChip>
+                      {/if}
+                      {#if !isConnectionEnabled(connection)}
                         <Button
                           variant="secondary"
                           disabled={connectionToggleBusy}
@@ -665,19 +695,6 @@
                           {t('settings.providers.enable')}
                         </Button>
                       {:else}
-                        {#if connectionReachability(connection) === false}
-                          <StatusChip variant="warn">
-                            {t('settings.providers.notReachableChip')}
-                          </StatusChip>
-                        {:else if getConnectionAccounts(connection).length === 0 || isKeylessConnection(connection) || connectionAccountsUsable(connection)}
-                          <StatusChip variant="success">
-                            {t('settings.providers.connected')}
-                          </StatusChip>
-                        {:else}
-                          <StatusChip variant="warn">
-                            {t('settings.providers.accounts.notUsable')}
-                          </StatusChip>
-                        {/if}
                         <Button
                           variant="secondary"
                           disabled={connectionToggleBusy}
@@ -701,15 +718,11 @@
                             <span class="s-connection-account-id">
                               {accountDisplayName(account)}
                             </span>
-                            <StatusChip
-                              variant={isAccountUsable(account)
-                                ? 'success'
-                                : 'warn'}
-                            >
-                              {isAccountUsable(account)
-                                ? t('settings.providers.connected')
-                                : t('settings.providers.accounts.notUsable')}
-                            </StatusChip>
+                            {#if !isAccountUsable(account)}
+                              <StatusChip variant="warn">
+                                {t('settings.providers.accounts.notUsable')}
+                              </StatusChip>
+                            {/if}
                             <span class="s-connection-account-source">
                               {describeAccountSource(account)}
                             </span>
@@ -773,7 +786,9 @@
                       </ul>
                     {/if}
                     {#if connectionSupportsAddAccount(connection)}
-                      <div class="s-provider-inline-actions">
+                      <div
+                        class="s-provider-inline-actions s-connection-add-account"
+                      >
                         <Button
                           variant="tertiary"
                           onClick={() =>
@@ -788,94 +803,141 @@
               {/each}
             </div>
 
-            {#if getAddableConnections(provider).length > 0 || provider.custom === true}
+            {#if getAddableConnections(provider).length > 0}
               <div class="s-provider-inline-actions">
-                {#if getAddableConnections(provider).length > 0}
-                  <Button
-                    variant="secondary"
-                    onClick={() => openAddConnectionModal(provider)}
-                  >
-                    {t('settings.providers.add.connectionButton')}
-                  </Button>
-                {/if}
-                {#if provider.custom === true}
-                  <Button
-                    variant="secondary"
-                    onClick={() =>
-                      openCustomProviderModal(
-                        customProviderSettings(provider.id),
-                      )}
-                  >
-                    {t('common.edit')}
-                  </Button>
-                  <Button
-                    variant="danger"
-                    onClick={() => {
-                      deleteCustomCandidate = provider;
-                    }}
-                  >
-                    {t('common.delete')}
-                  </Button>
-                {/if}
+                <Button
+                  variant="secondary"
+                  onClick={() => openAddConnectionModal(provider)}
+                >
+                  {t('settings.providers.add.connectionButton')}
+                </Button>
               </div>
             {/if}
 
             {#if provider.id === 'openrouter'}
               <OpenRouterRoutingSettings
                 {provider}
-                active={expanded &&
-                  providerSummaryStatus(provider) === 'connected'}
+                active={expanded && summaryStatus === 'connected'}
                 {onRefreshProviderSettings}
                 {onToast}
                 {onError}
               />
             {/if}
 
-            {#if (localModels.localModelsByProvider[provider.id] ?? []).length > 0}
-              <div class="s-provider-local-context">
-                <div class="s-row-info">
-                  <div class="s-provider-connection-label">
-                    {t('settings.providers.localContext.title')}
-                  </div>
-                  <div class="s-row-desc">
-                    {t('settings.providers.localContext.description')}
-                  </div>
-                </div>
-                {#each localModels.localModelsByProvider[provider.id] as model (model.id)}
-                  <div class="s-local-context-row">
-                    <span class="s-local-context-model">{model.model_id}</span>
-                    <input
-                      class="s-local-context-input"
-                      type="number"
-                      min="1024"
-                      step="1024"
-                      placeholder={localModels.localContextPlaceholder(model)}
-                      value={localModels.localContextDraftValue(model)}
-                      disabled={localModels.localContextBusy}
-                      aria-label={t(
-                        'settings.providers.localContext.inputLabel',
-                        { model: model.model_id },
-                      )}
-                      onchange={(event) =>
-                        localModels.saveLocalContextWindow(
-                          model,
-                          event.currentTarget.value,
-                        )}
-                    />
-                    {#if model.context_window}
-                      <span class="s-local-context-max">
-                        {t('settings.providers.localContext.maxHint', {
-                          max: model.context_window.toLocaleString(),
-                        })}
+            {#if contextModels.length > 0}
+              <ProviderDetailDisclosure
+                id={`provider-context-${provider.id}`}
+                label={t('settings.providers.localContext.title')}
+                help={t('settings.providers.localContext.help')}
+                summary={formatModelCount(contextModels.length)}
+                bind:open={contextWindowsOpen[provider.id]}
+              >
+                <div class="s-provider-local-context">
+                  {#each contextModels as model (model.id)}
+                    <div class="s-local-context-row">
+                      <span class="s-local-context-model">
+                        {model.model_id}
                       </span>
-                    {/if}
+                      <input
+                        class="s-local-context-input"
+                        type="number"
+                        min="1024"
+                        step="1024"
+                        placeholder={localModels.localContextPlaceholder(model)}
+                        value={localModels.localContextDraftValue(model)}
+                        disabled={localModels.localContextBusy}
+                        aria-label={t(
+                          'settings.providers.localContext.inputLabel',
+                          { model: model.model_id },
+                        )}
+                        onchange={(event) =>
+                          localModels.saveLocalContextWindow(
+                            model,
+                            event.currentTarget.value,
+                          )}
+                      />
+                      <span class="s-local-context-max">
+                        {#if model.context_window}
+                          {t('settings.providers.localContext.maxHint', {
+                            max: model.context_window.toLocaleString(),
+                          })}
+                        {/if}
+                      </span>
+                    </div>
+                  {/each}
+                </div>
+              </ProviderDetailDisclosure>
+            {/if}
+
+            {#if provider.base_url || provider.custom === true}
+              <!-- Technical facts and whole-Provider actions close the
+                   details. -->
+              <div class="s-provider-endpoint">
+                {#if provider.base_url}
+                  <span class="s-provider-endpoint__label">
+                    {t('settings.providers.endpoint')}
+                  </span>
+                  <code class="s-provider-endpoint__value">
+                    {provider.base_url}
+                  </code>
+                {/if}
+                {#if provider.custom === true}
+                  <div
+                    class="s-provider-inline-actions s-provider-endpoint__actions"
+                  >
+                    <Button
+                      variant="secondary"
+                      onClick={() =>
+                        openCustomProviderModal(
+                          customProviderSettings(provider.id),
+                        )}
+                    >
+                      {t('common.edit')}
+                    </Button>
+                    <Button
+                      variant="danger"
+                      onClick={() => {
+                        deleteCustomCandidate = provider;
+                      }}
+                    >
+                      {t('common.delete')}
+                    </Button>
                   </div>
-                {/each}
+                {/if}
               </div>
             {/if}
           </div>
         </div>
       {/each}
+    </div>
+  {/if}
+
+  {#if hasRefreshEligibleProvider}
+    <!-- Rarely needed: fetching new Model lists after a Provider release. -->
+    <div class="s-group s-provider-model-db">
+      <div class="s-row s-row--compact">
+        <div class="s-row-info">
+          <div class="s-row-label">
+            {t('settings.providers.modelDb.title')}
+            <InfoHint text={t('settings.providers.modelDb.help')} />
+          </div>
+          <div class="s-row-desc">
+            {t('settings.providers.modelDb.description')}
+          </div>
+        </div>
+        <div class="s-row-control">
+          <Button
+            variant="secondary"
+            disabled={refreshingModels}
+            ariaLabel={t('settings.providers.refreshModelsAria')}
+            onClick={refreshModelDatabase}
+          >
+            {refreshingModels
+              ? t('settings.providers.refreshingModels')
+              : t('settings.providers.refreshModels')}
+          </Button>
+        </div>
+      </div>
     </div>
   {/if}
 
