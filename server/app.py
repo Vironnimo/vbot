@@ -929,7 +929,7 @@ async def _stream_speech(
                 + "\n"
             )
         except Exception:
-            logging.getLogger(__name__).exception("Speech stream failed")
+            logging.getLogger("vbot.server.app").exception("Speech stream failed")
             yield (
                 json.dumps({"type": "error", "detail": "Speech request failed", "status": 500})
                 + "\n"
