@@ -108,7 +108,7 @@ async def _reorder_agents(state: Any, params: JsonObject) -> JsonObject:
 
     if listing.order_changed:
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
-        _LOGGER.info("Agent order updated (agents=%s)", ",".join(agent_ids))
+        _LOGGER.debug("Agent order updated (agents=%s)", ",".join(agent_ids))
     return _agent_list_response(state, listing)
 
 

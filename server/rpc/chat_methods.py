@@ -574,7 +574,7 @@ async def _mark_current_session(state: Any, agent_id: str, session_id: str) -> N
         )
     else:
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
-        _LOGGER.info(
+        _LOGGER.debug(
             "Current session marked (agent=%s session=%s)",
             agent_id,
             session_id,
