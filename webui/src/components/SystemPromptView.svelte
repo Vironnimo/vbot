@@ -9,6 +9,7 @@
   import Toggle from './ui/Toggle.svelte';
   import TextArea from './ui/TextArea.svelte';
   import EmptyState from './ui/EmptyState.svelte';
+  import SortableList from './ui/SortableList.svelte';
   import ToolDefinitionsPanel from './ToolDefinitionsPanel.svelte';
   import MarkdownContent from './chat/MarkdownContent.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
@@ -57,12 +58,6 @@
     },
     get autosaveContext() {
       return autosaveContext;
-    },
-    get reorderAnnouncement() {
-      return editor.reorderAnnouncement;
-    },
-    set reorderAnnouncement(value) {
-      editor.reorderAnnouncement = value;
     },
     get clearAutoSaveTimers() {
       return editor.clearAutoSaveTimers;
@@ -309,207 +304,184 @@
             </div>
           </details>
 
-          <ul class="sp-blocks" role="list">
-            {#each editor.blocks as block, index (block.id)}
-              <li
-                class="sp-block"
-                class:sp-block--off={!block.enabled}
-                class:sp-block--inherited={scope.isAgentScope &&
-                  editor.isInherited(block)}
-                ondragover={(event) => editor.handleDragOver(index, event)}
-                ondrop={(event) => editor.handleDrop(index, event)}
-              >
-                <div class="sp-block-row">
-                  <button
-                    type="button"
-                    class="sp-drag-handle"
-                    draggable="true"
-                    data-block-handle={block.id}
-                    aria-label={t('systemPrompt.blockList.reorderHandle', {
-                      id: block.id,
-                    })}
-                    ondragstart={(event) =>
-                      editor.handleDragStart(index, event)}
-                    ondragend={editor.handleDragEnd}
-                    onkeydown={(event) =>
-                      editor.handleHandleKeydown(index, event)}
+          <SortableList
+            class="sp-blocks"
+            items={editor.blocks}
+            itemClass={(block) =>
+              [
+                'sp-block',
+                !block.enabled && 'sp-block--off',
+                scope.isAgentScope &&
+                  editor.isInherited(block) &&
+                  'sp-block--inherited',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+            getLabel={(block) =>
+              tOr(`systemPrompt.blockTitle.${block.id}`, block.id)}
+            disabled={editor.isBusy}
+            aria-label={t('systemPrompt.tabs.edit')}
+            onReorder={editor.reorderBlocks}
+          >
+            {#snippet item(block)}
+              <div class="sp-block-row">
+                <div class="sp-block-meta">
+                  <strong class="sp-block-title"
+                    >{tOr(
+                      `systemPrompt.blockTitle.${block.id}`,
+                      block.id,
+                    )}</strong
                   >
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      aria-hidden="true"
-                      focusable="false"
-                    >
-                      <circle cx="3.5" cy="2.5" r="1.1" fill="currentColor" />
-                      <circle cx="8.5" cy="2.5" r="1.1" fill="currentColor" />
-                      <circle cx="3.5" cy="6" r="1.1" fill="currentColor" />
-                      <circle cx="8.5" cy="6" r="1.1" fill="currentColor" />
-                      <circle cx="3.5" cy="9.5" r="1.1" fill="currentColor" />
-                      <circle cx="8.5" cy="9.5" r="1.1" fill="currentColor" />
-                    </svg>
-                  </button>
-
-                  <div class="sp-block-meta">
-                    <strong class="sp-block-title"
-                      >{tOr(
-                        `systemPrompt.blockTitle.${block.id}`,
-                        block.id,
-                      )}</strong
-                    >
-                    <div class="sp-block-id-row">
-                      <span class="sp-block-id">{block.id}</span>
-                      {#if !block.enabled}<Badge variant="neutral"
-                          >{t('systemPrompt.blockList.off')}</Badge
-                        >{/if}
-                      {#if editor.isCustomBlock(block)}
-                        <Badge variant="info">
-                          {t('systemPrompt.blockList.customBadge')}
+                  <div class="sp-block-id-row">
+                    <span class="sp-block-id">{block.id}</span>
+                    {#if !block.enabled}<Badge variant="neutral"
+                        >{t('systemPrompt.blockList.off')}</Badge
+                      >{/if}
+                    {#if editor.isCustomBlock(block)}
+                      <Badge variant="info">
+                        {t('systemPrompt.blockList.customBadge')}
+                      </Badge>
+                    {/if}
+                    {#if block.kind === 'data'}
+                      <span
+                        class="tooltip-anchor"
+                        use:tooltip={t('systemPrompt.blockList.dataHint')}
+                      >
+                        <Badge variant="neutral">
+                          {t('systemPrompt.blockList.dataBadge')}
                         </Badge>
-                      {/if}
-                      {#if block.kind === 'data'}
-                        <span
-                          class="tooltip-anchor"
-                          use:tooltip={t('systemPrompt.blockList.dataHint')}
-                        >
-                          <Badge variant="neutral">
-                            {t('systemPrompt.blockList.dataBadge')}
-                          </Badge>
-                        </span>
-                      {/if}
-                      {#if scope.isAgentScope && editor.isInherited(block)}
-                        <span
-                          class="tooltip-anchor"
-                          use:tooltip={t(
-                            'systemPrompt.blockList.inheritedHint',
-                          )}
-                        >
-                          <Badge variant="neutral">
-                            {t('systemPrompt.blockList.inheritedBadge')}
-                          </Badge>
-                        </span>
-                      {:else if block.editable && block.isModified}
-                        <span
-                          class="tooltip-anchor"
-                          use:tooltip={t(
-                            'systemPrompt.fragmentEditor.modifiedHint',
-                          )}
-                        >
-                          <Badge variant="info">
-                            {t('systemPrompt.fragmentEditor.modifiedIndicator')}
-                          </Badge>
-                        </span>
-                      {/if}
-                      {#if block.editable && block.isDirty}
-                        <span
-                          class="tooltip-anchor"
-                          use:tooltip={t(
-                            'systemPrompt.fragmentEditor.dirtyIndicator',
-                          )}
-                        >
-                          <Badge variant="warn">
-                            {t('systemPrompt.fragmentEditor.dirtyIndicator')}
-                          </Badge>
-                        </span>
-                      {/if}
-                    </div>
-                    <span class="sp-block-owner"
-                      >{editor.ownerHint(block.owner)}</span
-                    >
+                      </span>
+                    {/if}
+                    {#if scope.isAgentScope && editor.isInherited(block)}
+                      <span
+                        class="tooltip-anchor"
+                        use:tooltip={t('systemPrompt.blockList.inheritedHint')}
+                      >
+                        <Badge variant="neutral">
+                          {t('systemPrompt.blockList.inheritedBadge')}
+                        </Badge>
+                      </span>
+                    {:else if block.editable && block.isModified}
+                      <span
+                        class="tooltip-anchor"
+                        use:tooltip={t(
+                          'systemPrompt.fragmentEditor.modifiedHint',
+                        )}
+                      >
+                        <Badge variant="info">
+                          {t('systemPrompt.fragmentEditor.modifiedIndicator')}
+                        </Badge>
+                      </span>
+                    {/if}
+                    {#if block.editable && block.isDirty}
+                      <span
+                        class="tooltip-anchor"
+                        use:tooltip={t(
+                          'systemPrompt.fragmentEditor.dirtyIndicator',
+                        )}
+                      >
+                        <Badge variant="warn">
+                          {t('systemPrompt.fragmentEditor.dirtyIndicator')}
+                        </Badge>
+                      </span>
+                    {/if}
                   </div>
+                  <span class="sp-block-owner"
+                    >{editor.ownerHint(block.owner)}</span
+                  >
+                </div>
 
-                  <div class="sp-block-actions">
+                <div class="sp-block-actions">
+                  <Button
+                    variant="secondary"
+                    aria-expanded={block.editorExpanded}
+                    aria-controls={`sp-block-body-${block.id}`}
+                    onClick={() =>
+                      (block.editorExpanded = !block.editorExpanded)}
+                  >
+                    {block.editorExpanded
+                      ? t('systemPrompt.blockList.close')
+                      : block.editable
+                        ? t('systemPrompt.blockList.edit')
+                        : t('systemPrompt.blockList.inspect')}
+                  </Button>
+                  {#if block.editable && !(scope.isAgentScope && editor.isInherited(block) && !block.isModified)}
                     <Button
                       variant="secondary"
-                      aria-expanded={block.editorExpanded}
-                      aria-controls={`sp-block-body-${block.id}`}
-                      onClick={() =>
-                        (block.editorExpanded = !block.editorExpanded)}
+                      class="sp-btn-sm"
+                      disabled={block.isBusy || block.isSaving}
+                      onClick={() => editor.resetBlock(block.id)}
                     >
-                      {block.editorExpanded
-                        ? t('systemPrompt.blockList.close')
-                        : block.editable
-                          ? t('systemPrompt.blockList.edit')
-                          : t('systemPrompt.blockList.inspect')}
+                      {block.isBusy
+                        ? t('common.loading')
+                        : t('systemPrompt.fragmentEditor.reset')}
                     </Button>
-                    {#if block.editable && !(scope.isAgentScope && editor.isInherited(block) && !block.isModified)}
-                      <Button
-                        variant="secondary"
-                        class="sp-btn-sm"
-                        disabled={block.isBusy || block.isSaving}
-                        onClick={() => editor.resetBlock(block.id)}
-                      >
-                        {block.isBusy
-                          ? t('common.loading')
-                          : t('systemPrompt.fragmentEditor.reset')}
-                      </Button>
-                    {/if}
-                    {#if editor.isCustomBlock(block)}
-                      <Button
-                        variant="danger"
-                        class="sp-btn-sm"
-                        onClick={() => editor.removeCustomBlock(block.id)}
-                      >
-                        {t('common.remove')}
-                      </Button>
-                    {/if}
-                    <Toggle
-                      checked={block.enabled}
-                      size="sm"
-                      ariaLabel={t('systemPrompt.blockList.toggleAria', {
-                        id: block.id,
-                      })}
-                      onChange={() => editor.toggleBlock(block.id)}
-                    />
-                  </div>
+                  {/if}
+                  {#if editor.isCustomBlock(block)}
+                    <Button
+                      variant="danger"
+                      class="sp-btn-sm"
+                      onClick={() => editor.removeCustomBlock(block.id)}
+                    >
+                      {t('common.remove')}
+                    </Button>
+                  {/if}
+                  <Toggle
+                    checked={block.enabled}
+                    size="sm"
+                    ariaLabel={t('systemPrompt.blockList.toggleAria', {
+                      id: block.id,
+                    })}
+                    onChange={() => editor.toggleBlock(block.id)}
+                  />
                 </div>
+              </div>
 
-                <div
-                  id={`sp-block-body-${block.id}`}
-                  hidden={!block.editorExpanded}
-                >
-                  {#if block.editable}
-                    <TextArea
-                      ariaLabel={block.id}
-                      rows={12}
-                      variant="inset"
-                      spellcheck="false"
-                      value={block.editedContent}
-                      onInput={(value) =>
-                        editor.handleTextareaInput(block.id, value)}
-                    />
-                  {:else}
-                    <div class="sp-data-block">
-                      <div class="sp-data-block-head">
-                        <span class="sp-data-block-label"
-                          >{editor.dataKindLabel()}</span
+              <div
+                id={`sp-block-body-${block.id}`}
+                hidden={!block.editorExpanded}
+              >
+                {#if block.editable}
+                  <TextArea
+                    ariaLabel={block.id}
+                    rows={12}
+                    variant="inset"
+                    spellcheck="false"
+                    value={block.editedContent}
+                    onInput={(value) =>
+                      editor.handleTextareaInput(block.id, value)}
+                  />
+                {:else}
+                  <div class="sp-data-block">
+                    <div class="sp-data-block-head">
+                      <span class="sp-data-block-label"
+                        >{editor.dataKindLabel()}</span
+                      >
+                      {#if block.preview}
+                        <button
+                          type="button"
+                          class="sp-data-toggle"
+                          aria-expanded={block.previewExpanded}
+                          onclick={() => editor.togglePreview(block.id)}
                         >
-                        {#if block.preview}
-                          <button
-                            type="button"
-                            class="sp-data-toggle"
-                            aria-expanded={block.previewExpanded}
-                            onclick={() => editor.togglePreview(block.id)}
-                          >
-                            {block.previewExpanded
-                              ? t('systemPrompt.blockList.hidePreview')
-                              : t('systemPrompt.blockList.showPreview')}
-                          </button>
-                        {/if}
-                      </div>
-                      {#if block.preview && block.previewExpanded}
-                        <pre class="sp-data-preview">{block.preview}</pre>
-                      {:else if !block.preview}
-                        <span class="sp-data-empty">
-                          {t('systemPrompt.blockList.dataEmpty')}
-                        </span>
+                          {block.previewExpanded
+                            ? t('systemPrompt.blockList.hidePreview')
+                            : t('systemPrompt.blockList.showPreview')}
+                        </button>
                       {/if}
                     </div>
-                  {/if}
-                </div>
-              </li>
-            {/each}
-          </ul>
+                    {#if block.preview && block.previewExpanded}
+                      <pre class="sp-data-preview">{block.preview}</pre>
+                    {:else if !block.preview}
+                      <span class="sp-data-empty">
+                        {t('systemPrompt.blockList.dataEmpty')}
+                      </span>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/snippet}
+          </SortableList>
 
           {#if editor.blocks.length === 0}
             <EmptyState
@@ -601,10 +573,6 @@
         </div>
       {/if}
     </div>
-  </div>
-
-  <div class="sp-sr-only" aria-live="polite" role="status">
-    {editor.reorderAnnouncement}
   </div>
 
   {#if editor.resetConfirmBlockId}

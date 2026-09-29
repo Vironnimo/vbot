@@ -145,7 +145,6 @@ export function createPromptScope(context) {
     previewTokens = null;
     previewToolTokens = null;
     previewToolCount = null;
-    context.reorderAnnouncement = '';
     context.clearAutoSaveTimers();
     await loadBlocksForScope(nextScopeKey);
     return true;

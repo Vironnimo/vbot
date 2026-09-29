@@ -92,6 +92,9 @@ export default Object.freeze({
   'common.saved': 'Saved',
   'common.saving': 'Saving…',
   'common.unknown': 'Unknown',
+  'common.sortable.instructions':
+    'Drag a row to reorder it, or press Alt+Up or Alt+Down to move the focused row.',
+  'common.sortable.moved': 'Moved {name} to position {position} of {total}',
   'common.details': 'Details',
   'common.yes': 'Yes',
   'common.no': 'No',

@@ -292,21 +292,11 @@
   gap: 8px;
   flex-wrap: wrap;
 }
-.sp-view .sp-drag-handle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  color: var(--text-med);
-  background: transparent;
+/* The block header has no click action of its own: it is where a block is
+   picked up (text areas and controls keep their own pointer behavior). */
+.sp-view .sp-block.sortable-item--draggable .sp-block-row {
   cursor: grab;
-  flex-shrink: 0;
 }
-.sp-view .sp-drag-handle:focus-visible,
 .sp-view .sp-blocklist-guide__intro:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -358,17 +348,6 @@
   color: var(--text-med);
   font-size: var(--fs-body-sm);
 }
-.sp-view .sp-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
 @media (max-width: 640px) {
   .sp-view .sp-subtitle {
     display: none;
@@ -404,10 +383,6 @@
   }
   .sp-view .sp-blocklist-guide__details {
     grid-template-columns: 1fr;
-  }
-  .sp-view .sp-drag-handle {
-    width: 40px;
-    height: 40px;
   }
   .sp-view .sp-global-footer {
     bottom: -16px;

@@ -186,8 +186,10 @@ function blockElement(blockId) {
   return element;
 }
 
-function blockHandle(blockId) {
-  return blockElement(blockId).querySelector('[data-block-handle]');
+// A block moves with Alt+Arrow keys from any of its focusable controls; its
+// enable switch is one every block has.
+function blockToggle(blockId) {
+  return blockElement(blockId).querySelector('button[role="switch"]');
 }
 
 function clickToolbarButton(label) {
@@ -224,37 +226,14 @@ function lastCall(method) {
   return calls[calls.length - 1];
 }
 
-function pressKey(element, key) {
+function pressKey(element, key, options = {}) {
   const event = new KeyboardEvent('keydown', {
     key,
     bubbles: true,
     cancelable: true,
+    ...options,
   });
   element.dispatchEvent(event);
-  return event;
-}
-
-// jsdom has no real DataTransfer; a minimal stub backs the drag payload.
-function createDataTransfer() {
-  const store = new Map();
-  return {
-    effectAllowed: 'none',
-    dropEffect: 'none',
-    setData(type, value) {
-      store.set(type, String(value));
-    },
-    getData(type) {
-      return store.get(type) ?? '';
-    },
-  };
-}
-
-function dragEvent(type, dataTransfer) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, 'dataTransfer', {
-    configurable: true,
-    value: dataTransfer,
-  });
   return event;
 }
 
@@ -385,14 +364,12 @@ export {
   inheritedBadges,
   blockIds,
   blockElement,
-  blockHandle,
+  blockToggle,
   clickToolbarButton,
   buttonByText,
   confirmDialog,
   lastCall,
   pressKey,
-  createDataTransfer,
-  dragEvent,
   scopeTrigger,
   agentTrigger,
   dropdownOptionButtons,

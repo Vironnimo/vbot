@@ -391,9 +391,7 @@ describe('UI primitive guard', () => {
       /\.sp-block-row\s*\{[^}]*background:\s*var\(--prompt-header-surface\);/s,
     );
     expect(SYSTEM_PROMPT_SOURCE).not.toMatch(/\.sp-block--data \.sp-block-row/);
-    expect(SYSTEM_PROMPT_SOURCE).toContain(
-      'class:sp-block--off={!block.enabled}',
-    );
+    expect(SYSTEM_PROMPT_SOURCE).toContain("!block.enabled && 'sp-block--off'");
     // Disabled and inherited state must not dim readable instructions.
     expect(SYSTEM_PROMPT_SOURCE).not.toMatch(
       /\.sp-block--(?:off|inherited)[^{]*\{[^}]*opacity:/s,

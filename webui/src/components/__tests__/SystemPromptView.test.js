@@ -10,13 +10,11 @@ import {
   createRpcMock,
   blockIds,
   blockElement,
-  blockHandle,
+  blockToggle,
   clickToolbarButton,
   confirmDialog,
   lastCall,
   pressKey,
-  createDataTransfer,
-  dragEvent,
   waitForCondition,
   clickTab,
   setupSystemPromptViewSuite,
@@ -164,16 +162,16 @@ describe('SystemPromptView blocks', () => {
     ).toBeGreaterThan(previewCallsBefore);
   });
 
-  it('reorders via the keyboard, announces the position, and autosaves the moved block by id', async () => {
+  it('reorders with Alt+Arrow keys, keeps focus, persists the layout and autosaves the moved block by id', async () => {
     await mountView();
 
     const moveWithKey = async (blockId, key) => {
       const layoutCalls = rpcMock.mock.calls.filter(
         (call) => call[0] === 'prompt.set_layout',
       ).length;
-      const handle = blockHandle(blockId);
-      handle.focus();
-      pressKey(handle, key);
+      const toggle = blockToggle(blockId);
+      toggle.focus();
+      pressKey(toggle, key, { altKey: true });
       flushSync();
       await waitForCondition(
         () =>
@@ -195,14 +193,7 @@ describe('SystemPromptView blocks', () => {
     expect(
       lastCall('prompt.set_layout')[1].layout.map((entry) => entry.id),
     ).toEqual(movedOrder);
-    expect(
-      document.body.querySelector('[aria-live="polite"]').textContent,
-    ).toContain(
-      t('systemPrompt.blockList.reorderAnnouncement', {
-        position: 2,
-        total: 4,
-      }),
-    );
+    expect(document.activeElement).toBe(blockToggle('tool:bash'));
 
     // The autosave targets core:intro by id even though its index changed.
     vi.useFakeTimers();
@@ -212,35 +203,6 @@ describe('SystemPromptView blocks', () => {
       id: 'core:intro',
       content: 'edited after move',
     });
-  });
-
-  it('reorders via native drag-and-drop and persists the new order', async () => {
-    await mountView();
-
-    const dataTransfer = createDataTransfer();
-    // Drag the first handle (core:intro) onto the third row (tool:bash).
-    blockHandle('core:intro').dispatchEvent(
-      dragEvent('dragstart', dataTransfer),
-    );
-    flushSync();
-    blockElement('tool:bash').dispatchEvent(
-      dragEvent('dragover', dataTransfer),
-    );
-    flushSync();
-    blockElement('tool:bash').dispatchEvent(dragEvent('drop', dataTransfer));
-    flushSync();
-
-    await waitForCondition(() => hasCall('prompt.set_layout'), 100);
-    const movedOrder = [
-      'memory:guidance',
-      'tool:bash',
-      'core:intro',
-      'data:soul',
-    ];
-    expect(blockIds()).toEqual(movedOrder);
-    expect(
-      lastCall('prompt.set_layout')[1].layout.map((entry) => entry.id),
-    ).toEqual(movedOrder);
   });
 
   it('resets a block through prompt.reset after confirmation', async () => {

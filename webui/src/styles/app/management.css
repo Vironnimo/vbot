@@ -67,6 +67,10 @@
     overflow-x: auto;
     overflow-y: hidden;
   }
+  .agents-view .agent-list {
+    flex-direction: row;
+    gap: 8px;
+  }
   .agents-view .agent-list-row,
   .projects-view .project-item {
     width: 180px;
