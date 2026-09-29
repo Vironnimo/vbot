@@ -25,6 +25,7 @@
     selectTrace,
   } from '../lib/debugView.js';
   import { t } from '../lib/i18n.js';
+  import { tooltip } from '../lib/tooltip.js';
   import DebugModelProbe from './debug/DebugModelProbe.svelte';
   import DebugTraceDetail from './debug/DebugTraceDetail.svelte';
   import DebugTraceList from './debug/DebugTraceList.svelte';
@@ -372,7 +373,15 @@
   <header class="view-header debug-header">
     <div class="debug-heading">
       <h2 id="debug-title">{t('debug.title')}</h2>
-      <span class="capture-state" class:capture-state--enabled={status.enabled}>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the capture explanation here.) -->
+      <span
+        class="capture-state"
+        class:capture-state--enabled={status.enabled}
+        tabindex="0"
+        use:tooltip={status.enabled
+          ? t('debug.captureEnabledHint')
+          : t('debug.captureDisabledHint')}
+      >
         <span aria-hidden="true">●</span>
         {status.enabled
           ? t('debug.captureEnabled')
@@ -385,11 +394,17 @@
   </header>
 
   <div class="debug-utilities view-toolbar view-toolbar--split">
-    <Badge variant="neutral"
-      >{t('debug.statusCount', {
-        count: status.traceCount,
-        limit: status.traceLimit,
-      })}</Badge
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the limit explanation here.) -->
+    <span
+      class="tooltip-anchor count-anchor"
+      tabindex="0"
+      use:tooltip={t('debug.statusCountHint', { limit: status.traceLimit })}
+      ><Badge variant="neutral"
+        >{t('debug.statusCount', {
+          count: status.traceCount,
+          limit: status.traceLimit,
+        })}</Badge
+      ></span
     >
     <span class="debug-local-note">{t('debug.fullCapture')}</span>
     <details class="debug-storage">
@@ -540,6 +555,16 @@
   }
   .capture-state--enabled > span {
     color: var(--green);
+  }
+  .capture-state,
+  .count-anchor {
+    border-radius: var(--r-sm);
+    cursor: default;
+  }
+  .capture-state:focus-visible,
+  .count-anchor:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
   .debug-utilities {
     justify-content: flex-start;

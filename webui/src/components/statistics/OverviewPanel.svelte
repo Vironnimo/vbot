@@ -2,6 +2,7 @@
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import {
     cacheHitRate,
     formatCost,
@@ -9,9 +10,10 @@
     formatOptionalTokens,
     formatPercent,
     formatTokens,
+    tokenBreakdownTooltip,
     tokenSplit,
   } from '$lib/statisticsView.js';
-  import { statCard } from './ReportPrimitives.svelte';
+  import { statCard, costCell } from './ReportPrimitives.svelte';
   import TokenTrend from './TokenTrend.svelte';
   let { report, granularity = $bindable(), reportRange, onNavigate } = $props();
   const locale = $derived(activeLocaleTag());
@@ -35,6 +37,7 @@
       t('statistics.overview.estimatedExtra', {
         count: formatTokens(tokenSplit(usage).estimated, locale),
       }),
+      tokenBreakdownTooltip(usage, locale),
     )}
     {@render statCard(
       t('statistics.cost.reported'),
@@ -73,18 +76,26 @@
           <dd>{formatInteger(costs.calls, locale)}</dd>
         </div>
         <div>
-          <dt>{t('statistics.cost.unpriced')}</dt>
+          <dt>
+            {t('statistics.cost.unpriced')}<InfoHint
+              text={t('statistics.cost.unpricedHint')}
+            />
+          </dt>
           <dd>{formatInteger(costs.unpriced_calls, locale)}</dd>
         </div>
         <div>
           <dt>
-            {t('statistics.usage.unreported')}
+            {t('statistics.usage.unreported')}<InfoHint
+              text={t('statistics.usage.unreportedHint')}
+            />
           </dt>
           <dd>{formatInteger(usage.unreported_calls, locale)}</dd>
         </div>
         <div>
           <dt>
-            {t('statistics.cost.retrospective')}
+            {t('statistics.cost.retrospective')}<InfoHint
+              text={t('statistics.cost.retrospectiveHint')}
+            />
           </dt>
           <dd>{formatInteger(costs.retrospective_calls, locale)}</dd>
         </div>
@@ -151,9 +162,8 @@
                 <td>{formatTokens(tokenSplit(row).estimated, locale)}</td><td
                   >{formatPercent(cacheHitRate(row))}</td
                 >
-                <td>{formatCost(modelCost(row.model).reported_usd, locale)}</td
-                ><td
-                  >{formatCost(modelCost(row.model).estimated_usd, locale)}</td
+                <td>{@render costCell(modelCost(row.model), 'reported')}</td><td
+                  >{@render costCell(modelCost(row.model), 'estimated')}</td
                 ></tr
               >
             {/each}
@@ -182,14 +192,17 @@
       {@render statCard(
         t('statistics.compactions.reduction'),
         formatPercent(context.reduction_ratio),
+        t('statistics.compactions.reductionHint'),
       )}
       {@render statCard(
         t('statistics.compactions.nonShrinking'),
         formatInteger(context.non_shrinking, locale),
+        t('statistics.compactions.nonShrinkingHint'),
       )}
       {@render statCard(
         t('statistics.compactions.rapid'),
         formatInteger(context.rapid_recompactions, locale),
+        t('statistics.compactions.rapidHint'),
       )}
     </div>
     <p class="stats-note stats-spaced">

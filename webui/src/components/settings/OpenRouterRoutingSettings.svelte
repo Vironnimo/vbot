@@ -510,6 +510,9 @@
                               'settings.providers.openrouter.moveUp',
                               { provider: slug },
                             )}
+                            tooltip={t('settings.providers.openrouter.moveUp', {
+                              provider: slug,
+                            })}
                             onClick={() => moveProvider(index, -1)}>↑</Button
                           >
                           <Button
@@ -521,6 +524,12 @@
                               'settings.providers.openrouter.moveDown',
                               { provider: slug },
                             )}
+                            tooltip={t(
+                              'settings.providers.openrouter.moveDown',
+                              {
+                                provider: slug,
+                              },
+                            )}
                             onClick={() => moveProvider(index, 1)}>↓</Button
                           >
                         {/if}
@@ -531,6 +540,12 @@
                           ariaLabel={t(
                             'settings.providers.openrouter.removeProvider',
                             { provider: slug },
+                          )}
+                          tooltip={t(
+                            'settings.providers.openrouter.removeProvider',
+                            {
+                              provider: slug,
+                            },
                           )}
                           onClick={() => removeProvider(slug, 'providers')}
                           >×</Button
@@ -577,6 +592,12 @@
                       ariaLabel={t(
                         'settings.providers.openrouter.unblockProvider',
                         { provider: slug },
+                      )}
+                      tooltip={t(
+                        'settings.providers.openrouter.unblockProvider',
+                        {
+                          provider: slug,
+                        },
                       )}
                       onClick={() => removeProvider(slug, 'blocked')}>×</Button
                     >

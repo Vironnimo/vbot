@@ -117,6 +117,18 @@
   color: var(--text-med);
   font-size: var(--fs-body-sm);
 }
+/* A detail with a breakdown behind it, like the changed-files count. */
+.stats-view .stats-card__detail--more {
+  align-self: flex-start;
+  cursor: default;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--text-faint);
+  text-underline-offset: 3px;
+}
+.stats-view .stats-card__detail--more:hover {
+  color: var(--text-hi);
+  text-decoration-color: currentColor;
+}
 .stats-view .stats-card {
   min-width: 0;
   display: flex;
@@ -228,11 +240,41 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Session cells: a title or an id, shortened by layout; the tooltip carries
+   the full name and the id. */
+.stats-view .stats-session {
+  display: inline-block;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.stats-view .stats-session.stats-mono {
+  max-width: 160px;
+}
 .stats-view .stats-tokens {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  border-radius: var(--r-sm);
   font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.stats-view .stats-value {
+  border-radius: var(--r-sm);
+  cursor: default;
+}
+.stats-view .stats-tokens:focus-visible,
+.stats-view .stats-card__detail--more:focus-visible,
+.stats-view .stats-value:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.stats-view .stats-th-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 .stats-view .stats-tokens__est {
   color: var(--amber);
@@ -663,17 +705,48 @@
   gap: 2px;
   height: 60px;
 }
+/* Each hour is a focusable column; hover and focus show its count and share. */
 .stats-view .stats-hours__col {
+  appearance: none;
   flex: 1 1 0;
   display: flex;
   align-items: flex-end;
+  min-width: 0;
   height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: transparent;
+  cursor: default;
+}
+.stats-view .stats-hours__col:hover,
+.stats-view .stats-hours__col:focus-visible {
+  background: var(--surface-2);
+}
+.stats-view .stats-hours__col:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .stats-view .stats-hours__bar {
   width: 100%;
   background: var(--blue);
   border-radius: var(--r-sm) var(--r-sm) 0 0;
   min-height: 1px;
+}
+.stats-view .stats-hours__bar--empty {
+  background: var(--border-2);
+}
+.stats-view .stats-hours__axis {
+  position: relative;
+  height: 18px;
+  margin-top: 4px;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+.stats-view .stats-hours__axis span {
+  position: absolute;
+  top: 0;
 }
 .stats-view .stats-block--narrow .stats-table {
   font-size: var(--fs-label-sm);

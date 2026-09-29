@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { setApplicationTimeZone } from '../dateTimePrefs.svelte.js';
+
 import {
   applyDebugStatus,
   applyModelProbeProviders,
@@ -11,6 +13,7 @@ import {
   createDebugViewState,
   filterTraces,
   formatHeadersForDisplay,
+  formatTraceStatus,
   formattedBodyText,
   hasParseableBody,
   modelProbeCanProbe,
@@ -19,7 +22,10 @@ import {
   selectModelProbeConnection,
   selectModelProbeProvider,
   selectTrace,
+  traceLabel,
   traceStatusTone,
+  traceTooltip,
+  traceTypeLabel,
 } from '../debugView.js';
 
 describe('debugView trace state', () => {
@@ -225,6 +231,79 @@ describe('debugView trace list projections', () => {
     ]);
     expect(filterTraces(traces, '', 'unknown')).toEqual([traces[2]]);
     expect(filterTraces(traces)).toEqual(traces);
+  });
+  it('names traces by Model, Model Probe or request path', () => {
+    expect(
+      traceLabel({ model_id: 'openai/gpt-5', type: 'provider_request' }),
+    ).toEqual({ text: 'openai/gpt-5', mono: true });
+    expect(traceLabel({ model_id: '', type: 'model_probe' })).toEqual({
+      text: 'Model Probe',
+      mono: false,
+    });
+    // A detail trace keeps its URL under `request`.
+    expect(
+      traceLabel({
+        type: 'provider_request',
+        request: { url: 'https://api.example.com/v1/embeddings?key=x' },
+      }),
+    ).toEqual({ text: '/v1/embeddings', mono: true });
+    expect(traceLabel({ type: 'provider_request', url: 'not a url' })).toEqual({
+      text: 'Provider request',
+      mono: false,
+    });
+    expect(traceTypeLabel('future_type')).toBe('future_type');
+    expect(formatTraceStatus(429)).toBe('429 Too Many Requests');
+    expect(formatTraceStatus(418)).toBe('418');
+    expect(formatTraceStatus(null)).toBe('');
+  });
+
+  it('builds one trace details card from list and detail shapes alike', () => {
+    setApplicationTimeZone('UTC');
+    const now = Date.parse('2026-09-29T15:16:00Z');
+    const card = traceTooltip(
+      {
+        trace_id: 'tr_1',
+        type: 'provider_request',
+        timestamp: '2026-09-29T15:04:05Z',
+        provider_id: 'openai',
+        model_id: 'openai/gpt-5',
+        method: 'POST',
+        url: 'https://api.openai.com/v1/responses',
+        status_code: 429,
+        duration_ms: 1234,
+      },
+      now,
+    );
+
+    expect(card.title).toBe('openai/gpt-5');
+    expect(card.text).toBe('Provider request');
+    expect(card.placement).toBe('right');
+    const rows = Object.fromEntries(card.rows.map((row) => [row.label, row]));
+    expect(rows.Request).toMatchObject({
+      value: 'POST https://api.openai.com/v1/responses',
+      mono: true,
+    });
+    expect(rows.Status).toMatchObject({
+      value: '429 Too Many Requests',
+      tone: 'danger',
+    });
+    expect(rows.Started.value).toMatch(/3:04:05 PM · 12 minutes ago$/);
+    expect(rows.Duration.value).toBe('1,234 ms');
+    expect(rows.Type).toMatchObject({ value: 'provider_request', mono: true });
+    expect(rows['Trace ID'].value).toBe('tr_1');
+
+    const probe = traceTooltip({
+      trace_id: 'tr_2',
+      type: 'model_probe',
+      request: { method: 'GET', url: 'https://api.example.com/v1/models' },
+      response: { status_code: 200 },
+    });
+    // The title already names the type, so no lead line repeats it.
+    expect(probe).toMatchObject({ title: 'Model Probe', text: '' });
+    expect(probe.rows.find((row) => row.label === 'Status')).toMatchObject({
+      value: '200 OK',
+      tone: 'success',
+    });
   });
 });
 

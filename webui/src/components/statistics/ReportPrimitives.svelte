@@ -6,24 +6,33 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import {
     agentDisplay,
+    agentTooltip,
+    costCellTooltip,
+    formatCost,
     formatInteger,
     formatShare,
     formatTokens,
+    sessionTooltip,
+    tokenBreakdownTooltip,
     tokenSplit,
     topN,
   } from '$lib/statisticsView.js';
   export {
     statCard,
-    estimatedBadge,
     agentName,
+    sessionName,
     barRows,
     tokenCell,
+    tokensHeader,
+    costCell,
     countTable,
     agentCountTable,
   };
 </script>
 
-{#snippet statCard(label, value, hint, detail)}
+<!-- `detailTooltip` breaks the detail line down further (for example a
+     "not completed" count into its statuses). -->
+{#snippet statCard(label, value, hint, detail, detailTooltip = '')}
   <div class="stats-card">
     <span class="stats-card__label">
       {label}
@@ -32,40 +41,44 @@
       {/if}
     </span>
     <span class="stats-card__value">{value}</span>
-    {#if detail}<span class="stats-card__detail">{detail}</span>{/if}
+    {#if detail}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the breakdown here.) -->
+      <span
+        class="stats-card__detail"
+        class:stats-card__detail--more={Boolean(detailTooltip)}
+        tabindex={detailTooltip ? 0 : undefined}
+        use:tooltip={detailTooltip}>{detail}</span
+      >
+    {/if}
   </div>
 {/snippet}
 
-{#snippet estimatedBadge()}
-  <span class="tooltip-anchor" use:tooltip={t('statistics.estimatedHint')}>
-    <Badge variant="warn">
-      {t('statistics.estimatedBadge')}
-    </Badge>
-  </span>
-{/snippet}
-
+<!-- One tooltip for the whole Agent cell: the Project and full address of a
+     Project Agent, what an Extension's Sessions are, or a truncated name. -->
 {#snippet agentName(agentId)}
   {@const display = agentDisplay(agentId)}
-  <span class="stats-agent">
+  <span class="stats-agent" use:tooltip={agentTooltip(agentId)}>
     <span class="stats-agent__name">{display.name}</span>
     {#if display.projectId}
-      <span
-        class="stats-agent__project tooltip-anchor"
-        use:tooltip={t('statistics.agent.projectBadgeTitle', {
-          project: display.projectId,
-        })}
-      >
+      <span class="stats-agent__project">
         <Badge variant="info">{display.projectId}</Badge>
       </span>
     {:else if display.extension}
-      <span
-        class="stats-agent__project tooltip-anchor"
-        use:tooltip={t('statistics.agent.extensionBadgeTitle')}
-      >
+      <span class="stats-agent__project">
         <Badge variant="neutral">{t('statistics.agent.extensionBadge')}</Badge>
       </span>
     {/if}
   </span>
+{/snippet}
+
+<!-- A Session named by its title (id as a tooltip row), or by its id. -->
+{#snippet sessionName(row)}
+  <span
+    class="stats-session"
+    class:stats-mono={!row.session_title}
+    use:tooltip={sessionTooltip(row)}
+    >{row.session_title || row.session_id}</span
+  >
 {/snippet}
 
 {#snippet barRows(entries, total)}
@@ -96,17 +109,49 @@
   </ul>
 {/snippet}
 
-{#snippet tokenCell(record)}
+<!-- Measured tokens, the separately kept estimate in amber, and the full
+     breakdown on hover or focus. Pass `focusable = false` inside an already
+     interactive element (a <summary>). -->
+{#snippet tokenCell(record, focusable = true)}
   {@const split = tokenSplit(record)}
-  <span class="stats-tokens">
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the token breakdown here.) -->
+  <span
+    class="stats-tokens"
+    tabindex={focusable ? 0 : undefined}
+    use:tooltip={() => tokenBreakdownTooltip(record, activeLocaleTag())}
+  >
     <span>{formatTokens(split.measured, activeLocaleTag())}</span>
     {#if split.hasEstimated}
       <span class="stats-tokens__est"
-        >+{formatTokens(split.estimated, activeLocaleTag())}</span
+        >+&#8239;~{formatTokens(split.estimated, activeLocaleTag())}</span
       >
-      {@render estimatedBadge()}
     {/if}
   </span>
+{/snippet}
+
+<!-- A cost table cell ('reported', 'estimated' or 'unpriced') with the calls
+     it covers and its exact amount. -->
+{#snippet costCell(totals, kind)}
+  {@const content = costCellTooltip(totals, kind, activeLocaleTag())}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the cost basis here.) -->
+  <span
+    class="stats-value"
+    tabindex={content ? 0 : undefined}
+    use:tooltip={content}
+    >{kind === 'unpriced'
+      ? formatInteger(totals?.unpriced_calls, activeLocaleTag())
+      : formatCost(
+          kind === 'reported' ? totals?.reported_usd : totals?.estimated_usd,
+          activeLocaleTag(),
+        )}</span
+  >
+{/snippet}
+
+<!-- The Tokens column header explains measured and estimated values once. -->
+{#snippet tokensHeader(label)}
+  <span class="stats-th-hint"
+    >{label}<InfoHint text={t('statistics.tokens.columnHint')} /></span
+  >
 {/snippet}
 
 {#snippet countTable(title, entries)}

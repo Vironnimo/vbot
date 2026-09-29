@@ -9,6 +9,12 @@ export default Object.freeze({
   'toolAccess.automatic': 'Automatic',
   'toolAccess.unavailable': 'Currently unavailable',
   'toolAccess.explicitPermission': 'Explicit permission required',
+  'toolAccess.facts.source': 'Source',
+  'toolAccess.facts.access': 'Access',
+  'toolAccess.source.builtIn': 'Built-in',
+  'toolAccess.source.extension': 'Extension',
+  'toolAccess.access.explicit': 'Explicit permission; selecting grants it',
+  'toolAccess.access.selected': 'Allowed while selected',
   'agents.modelOptions': 'Temperature & fallback models',
   'agents.storageDetails': 'Workspace & advanced',
   'projects.repositorySection': 'Repository',
@@ -16,8 +22,6 @@ export default Object.freeze({
   'projects.defaultsSummary':
     'Shared starting values for the Team. Individual Agents can override them.',
   'projects.repositoryActions': 'Repository management',
-  'toolAccess.requiresOptIn':
-    'Requires explicit permission. Selecting this Tool grants it.',
   'skills.descriptionLabel': 'When to use this skill',
   'skills.descriptionHelp':
     'Agents use this description to decide when this playbook is relevant.',

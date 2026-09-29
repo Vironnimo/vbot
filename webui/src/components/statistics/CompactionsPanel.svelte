@@ -1,7 +1,11 @@
 <script>
   import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import EmptyState from '../ui/EmptyState.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import {
+    compactionStrategyLabel,
+    compactionStrategyTooltip,
     formatCost,
     formatDateTime,
     formatDurationMs,
@@ -9,13 +13,19 @@
     formatOptionalTokens,
     formatPercent,
   } from '$lib/statisticsView.js';
-  import { statCard, agentName } from './ReportPrimitives.svelte';
+  import { statCard, agentName, sessionName } from './ReportPrimitives.svelte';
   let { report } = $props();
   const locale = $derived(activeLocaleTag());
   const compactions = $derived(report.compactions);
   const context = $derived(compactions.context ?? {});
   const costs = $derived(report.costs?.compactions ?? {});
 </script>
+
+{#snippet strategyName(strategy)}
+  <span use:tooltip={compactionStrategyTooltip(strategy)}
+    >{compactionStrategyLabel(strategy)}</span
+  >
+{/snippet}
 
 <div class="stats-panel">
   <div class="stats-grid">
@@ -99,13 +109,17 @@
         </div>
         <div>
           <dt>
-            {t('statistics.compactions.nonShrinking')}
+            {t('statistics.compactions.nonShrinking')}<InfoHint
+              text={t('statistics.compactions.nonShrinkingHint')}
+            />
           </dt>
           <dd>{formatInteger(context.non_shrinking, locale)}</dd>
         </div>
         <div>
           <dt>
-            {t('statistics.compactions.rapid')}
+            {t('statistics.compactions.rapid')}<InfoHint
+              text={t('statistics.compactions.rapidHint')}
+            />
           </dt>
           <dd>{formatInteger(context.rapid_recompactions, locale)}</dd>
         </div>
@@ -160,7 +174,7 @@
             </tr></thead
           ><tbody
             >{#each compactions.by_strategy as row (row.strategy)}<tr>
-                <td class="stats-mono">{row.strategy}</td><td
+                <td>{@render strategyName(row.strategy)}</td><td
                   >{formatInteger(row.compactions, locale)}</td
                 >
                 <td
@@ -205,12 +219,12 @@
           ><tbody
             >{#each compactions.recent as row (row)}<tr>
                 <td class="stats-wrap"
-                  >{row.session_title || row.session_id}<small
-                    class="stats-note">{@render agentName(row.agent_id)}</small
+                  >{@render sessionName(row)}<small class="stats-note"
+                    >{@render agentName(row.agent_id)}</small
                   ></td
                 >
                 <td>{formatDateTime(row.timestamp, locale)}</td><td
-                  class="stats-mono">{row.strategy}</td
+                  >{@render strategyName(row.strategy)}</td
                 >
                 <td
                   >{formatOptionalTokens(row.before_tokens, locale)} → {formatOptionalTokens(

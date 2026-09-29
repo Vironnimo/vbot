@@ -227,6 +227,64 @@
   vector-effect: non-scaling-stroke;
 }
 
+/* Hover and focus slots over the plot: each shows one snapshot's guide
+   line and dot, and its tooltip. */
+.limit-trace__slots {
+  position: absolute;
+  inset: 7px 34px 7px 0;
+}
+
+.limit-trace__slot {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.limit-trace__slot::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--at);
+  width: 1px;
+  background: var(--border-2);
+  opacity: 0;
+}
+
+.limit-trace__dot {
+  position: absolute;
+  top: var(--y);
+  left: var(--at);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--blue);
+  box-shadow: 0 0 0 2px var(--surface);
+  opacity: 0;
+  transform: translate(-50%, -50%);
+}
+
+.limit-trace__slot:hover::before,
+.limit-trace__slot:focus-visible::before,
+.limit-trace__slot:hover .limit-trace__dot,
+.limit-trace__slot:focus-visible .limit-trace__dot {
+  opacity: 1;
+}
+
+.limit-trace__slot:focus-visible {
+  outline: none;
+}
+
+.limit-trace__slot:focus-visible .limit-trace__dot {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    var(--focus-ring);
+}
+
 .limit-trace__axis {
   position: absolute;
   right: 0;

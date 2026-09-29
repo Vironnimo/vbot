@@ -1,7 +1,12 @@
 <script>
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
-  import { filterTraces, traceStatusTone } from '$lib/debugView.js';
+  import {
+    filterTraces,
+    traceLabel,
+    traceStatusTone,
+    traceTooltip,
+  } from '$lib/debugView.js';
   import { tooltip } from '$lib/tooltip.js';
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
@@ -92,6 +97,7 @@
     aria-label={t('debug.traceList')}
   >
     {#each visible as trace (trace.trace_id)}
+      {@const label = traceLabel(trace)}
       <div
         role="listitem"
         class="debug-trace"
@@ -103,17 +109,12 @@
           class="debug-trace__row"
           aria-pressed={selectedTraceId === trace.trace_id}
           onclick={() => onSelect(trace.trace_id)}
+          use:tooltip={() => traceTooltip(trace)}
         >
           <span class="trace-topline">
             <span
               class="debug-trace__model"
-              class:debug-trace__model--id={Boolean(trace.model_id)}
-              use:tooltip={{
-                text: trace.model_id || trace.type,
-                mono: true,
-                placement: 'right',
-                whenTruncated: Boolean(trace.model_id),
-              }}>{trace.model_id || t('debug.modelProbe')}</span
+              class:debug-trace__model--id={label.mono}>{label.text}</span
             >
             <span
               class="trace-status"
@@ -122,14 +123,7 @@
             >
           </span>
           <span class="trace-middle">
-            <span
-              class="debug-trace__provider"
-              use:tooltip={{
-                text: trace.provider_id,
-                mono: true,
-                placement: 'right',
-                whenTruncated: true,
-              }}>{trace.provider_id || '—'}</span
+            <span class="debug-trace__provider">{trace.provider_id || '—'}</span
             >
             <span>{trace.method || '—'}</span>
           </span>
@@ -261,8 +255,8 @@
     font-weight: 500;
     font-size: var(--fs-body-lg);
   }
-  /* Model ids and Provider ids/methods are code-like values: Mono. The Model
-     Probe fallback label stays Sans. */
+  /* Model ids, request paths and Provider ids/methods are code-like values:
+     Mono. The Model Probe label stays Sans. */
   .debug-trace__model--id {
     font-family: var(--font-mono);
     font-size: var(--fs-mono-body);

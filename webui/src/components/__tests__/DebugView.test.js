@@ -95,7 +95,7 @@ describe('DebugView', () => {
     ).toBeTruthy();
   });
 
-  it('exposes full provider and model values via the quick tooltip on trace rows', async () => {
+  it('shows one details card per trace row with the full Model, Provider and status', async () => {
     debugTraceListMock.mockResolvedValue({
       traces: [
         traceListEntry({
@@ -111,16 +111,14 @@ describe('DebugView', () => {
 
     await waitForText('gpt-5.2-with-extra-context-and-suffix');
 
-    const providerCell = document.querySelector('.debug-trace__provider');
-    const modelCell = document.querySelector('.debug-trace__model');
+    const row = document.querySelector('.debug-trace__row');
 
     vi.useFakeTimers();
-    expect(await hoveredTooltipText(providerCell)).toBe(
-      'openai-subscription-with-a-very-long-name',
-    );
-    expect(await hoveredTooltipText(modelCell)).toBe(
-      'gpt-5.2-with-extra-context-and-suffix',
-    );
+    const card = await hoveredTooltipText(row);
+    expect(card).toContain('gpt-5.2-with-extra-context-and-suffix');
+    expect(card).toContain('openai-subscription-with-a-very-long-name');
+    expect(card).toContain('200 OK');
+    expect(card).toContain('POST https://api.openai.com/v1/responses');
   });
 
   it('combines list search, status and Provider filters without changing the inspected trace', async () => {

@@ -6,6 +6,7 @@
   import SaveButton from '../ui/SaveButton.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
+  import { tooltip } from '$lib/tooltip.js';
   import { listConnections, listModels } from '$lib/api.js';
   import {
     createDebouncedAutosave,
@@ -373,7 +374,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.defaults.thinkingEffort')}
-        <InfoHint text={t('agents.form.thinkingEffortHelp')} />
+        <InfoHint text={t('settings.defaults.thinkingEffortHelp')} />
       </div>
       <div class="s-row-desc">
         {t('settings.defaults.thinkingEffortDescription')}
@@ -397,7 +398,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.defaults.temperature')}
-        <InfoHint text={t('agents.form.temperatureHelp')} />
+        <InfoHint text={t('settings.defaults.temperatureHelp')} />
       </div>
       <div class="s-row-desc">
         {t('settings.defaults.temperatureDescription')}
@@ -445,6 +446,7 @@
             type="button"
             class="settings-view__fallback-remove"
             aria-label={t('agents.form.removeFallbackModel')}
+            use:tooltip={t('agents.form.removeFallbackModel')}
             onclick={() => removeFallbackModelEntry(index)}
           >
             ×

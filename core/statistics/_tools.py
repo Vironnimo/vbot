@@ -35,6 +35,7 @@ class ToolAccumulator:
         self.tools: dict[str, _ToolAcc] = {}
         self.by_agent: Counter[str] = Counter()
         self.by_session: Counter[tuple[str, str]] = Counter()
+        self.session_titles: dict[tuple[str, str], str | None] = {}
 
     def load(self, scan: UnitScan, ledger: ReportLedger) -> None:
         source, where = scan.source("stat_tools", "t"), scan.where("t")
@@ -88,7 +89,10 @@ class ToolAccumulator:
             report_unit = ledger.units[unit]
             self.total_calls += calls
             self.by_agent[report_unit.display_key] += calls
-            self.by_session[(report_unit.display_key, report_unit.session_id)] += calls
+            session = (report_unit.display_key, report_unit.session_id)
+            self.by_session[session] += calls
+            if self.session_titles.get(session) is None:
+                self.session_titles[session] = report_unit.title
             unit_slice = ledger.slices[unit]
             if unit_slice is not None:
                 unit_slice.tool_calls += calls
@@ -102,7 +106,12 @@ class ToolAccumulator:
             ),
             by_agent=_count_entries(self.by_agent),
             top_sessions=[
-                ToolSessionCount(agent_id=agent_id, session_id=session_id, calls=calls)
+                ToolSessionCount(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    calls=calls,
+                    session_title=self.session_titles.get((agent_id, session_id)),
+                )
                 for (agent_id, session_id), calls in self.by_session.most_common(TOP_TOOL_SESSIONS)
             ],
         )

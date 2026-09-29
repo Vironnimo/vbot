@@ -148,6 +148,23 @@ describe('LimitHistory', () => {
     expect(document.querySelector('.limit-run__tokens').textContent).toContain(
       '120',
     );
+    expect(document.querySelector('.limit-run__head').textContent).toContain(
+      'Completed',
+    );
+
+    // Every snapshot is a focusable slot; the trace keeps one Tab stop, on
+    // the latest snapshot, and arrow keys move it between snapshots.
+    const slots = () => [...document.querySelectorAll('.limit-trace__slot')];
+    expect(slots()).toHaveLength(2);
+    expect(slots().map((slot) => slot.tabIndex)).toEqual([-1, 0]);
+    expect(slots()[1].getAttribute('aria-label')).toMatch(/: 30% used$/);
+    slots()[1].focus();
+    slots()[1].dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Home', bubbles: true }),
+    );
+    flushSync();
+    expect(document.activeElement).toBe(slots()[0]);
+    expect(slots().map((slot) => slot.tabIndex)).toEqual([0, -1]);
   });
 
   it('deletes the history only after confirmation', async () => {

@@ -2,6 +2,7 @@
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import { debugModelProbe } from '$lib/api.js';
   import {
     applyModelProbeResult,
@@ -24,6 +25,15 @@
   );
   let connectionOptions = $derived(modelProbeConnectionOptions(viewState));
   let canProbe = $derived(modelProbeCanProbe(viewState));
+  // Always set, so the button keeps its element while it becomes available;
+  // it shows only while the button is disabled.
+  let probeUnavailableReason = $derived(
+    !viewState.modelProbeProvider
+      ? t('debug.modelProbe.needsProvider')
+      : !canProbe
+        ? t('debug.modelProbe.needsConnection')
+        : t('debug.modelProbe.running'),
+  );
 
   function handleProviderChange(providerId) {
     selectModelProbeProvider(viewState, providerId);
@@ -67,7 +77,7 @@
 
 <section class="debug-view__probe" aria-labelledby="probe-title">
   <h3 id="probe-title" class="debug-view__probe-title">
-    {t('debug.modelProbe')}
+    {t('debug.modelProbe')}<InfoHint text={t('debug.modelProbe.hint')} />
   </h3>
 
   <div class="debug-view__probe-controls">
@@ -108,6 +118,7 @@
       class="debug-view__probe-btn"
       onClick={handleProbe}
       disabled={!canProbe || viewState.modelProbeLoading}
+      disabledReason={probeUnavailableReason}
     >
       {viewState.modelProbeLoading
         ? t('common.loading')
