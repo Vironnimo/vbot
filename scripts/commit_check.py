@@ -19,7 +19,9 @@ file is checked as it is in the working tree and blocks the commit when it
 needs a fix.
 
 mypy checks the whole configured project, because a staged change can break a
-caller elsewhere. Its errors block the commit when they are in a staged file or
+caller elsewhere, once for Windows and once for Linux (the platforms CI
+type-checks), so a Windows-only name without a platform check fails on any host.
+Its errors block the commit when they are in a staged file or
 in a file without uncommitted changes; errors in files with unstaged or untracked
 work in progress are reported without blocking.
 
@@ -52,6 +54,7 @@ import sys
 import time
 import tomllib
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
@@ -70,6 +73,9 @@ WEBUI_SOURCE_ROOTS = ("webui/src/", "webui/scripts/")
 EXTENSION_UI_PATTERN = re.compile(
     r"^(?:resources/extensions|tests/fixtures/extension-pages)/[^/]+/ui/"
 )
+# The platforms CI type-checks (.github/workflows/ci.yml, static job). mypy keeps
+# the host platform in its default cache and every other one in its own.
+MYPY_PLATFORMS = ("win32", "linux")
 MYPY_LINE_PATTERN = re.compile(r"^(?P<path>[^:\n]+?):\d+(?::\d+)?: (?P<kind>error|note):")
 PYTEST_SUMMARY_PATTERN = re.compile(r"^(?:FAILED|ERROR) (?P<test>.+?)(?: - .*)?$")
 TESTS_LOCK_NAME = "vbot-commit-tests.lock"
@@ -256,23 +262,43 @@ def check_python(root: Path, staged: list[str], dirty: set[str]) -> list[StepRes
         results.append(_gate("ruff check", [*ruff, "check", "--", *python_files], root))
 
     targets = _mypy_targets(root, python_files)
-    if not targets:
-        return results
-    mypy = _run([sys.executable, "-m", "mypy", *targets], root)
-    if mypy.returncode == 0:
-        results.append(StepResult("mypy", "PASS", False))
-    elif mypy.returncode != 1:
-        results.append(StepResult("mypy", "FAIL", True, _output(mypy)))
-    else:
-        blocking, in_progress = split_mypy_output(mypy.stdout, set(staged), dirty)
-        if blocking:
-            results.append(StepResult("mypy", "FAIL", True, "\n".join(blocking)))
-        else:
-            results.append(StepResult("mypy", "PASS", False))
+    if targets:
+        results.extend(check_types(root, targets, set(staged), dirty))
+    return results
+
+
+def check_types(
+    root: Path, targets: list[str], staged: set[str], dirty: set[str]
+) -> list[StepResult]:
+    """Run mypy over *targets* for every platform in ``MYPY_PLATFORMS``, concurrently."""
+
+    def run(platform: str) -> subprocess.CompletedProcess[str]:
+        command = [sys.executable, "-m", "mypy"]
+        if platform != sys.platform:
+            command += ["--platform", platform, "--cache-dir", f".mypy_cache/{platform}"]
+        return _run([*command, *targets], root)
+
+    with ThreadPoolExecutor() as pool:
+        runs = list(pool.map(run, MYPY_PLATFORMS))
+    results: list[StepResult] = []
+    for platform, mypy in zip(MYPY_PLATFORMS, runs, strict=True):
+        label = f"mypy {platform}"
+        if mypy.returncode == 0:
+            results.append(StepResult(label, "PASS", False))
+            continue
+        if mypy.returncode != 1:
+            results.append(StepResult(label, "FAIL", True, _output(mypy)))
+            continue
+        blocking, in_progress = split_mypy_output(mypy.stdout, staged, dirty)
+        results.append(
+            StepResult(label, "FAIL", True, "\n".join(blocking))
+            if blocking
+            else StepResult(label, "PASS", False)
+        )
         if in_progress:
             results.append(
                 StepResult(
-                    "mypy",
+                    label,
                     "NOT BLOCKING: errors in files with uncommitted work in progress",
                     False,
                     "\n".join(in_progress),
