@@ -110,6 +110,23 @@ describe('floatingHoverCard action', () => {
     expect(card.dataset.floatingOpen).toBe('true');
   });
 
+  it('opens a completing card only while its anchor clips its text', () => {
+    Object.defineProperty(anchor, 'clientWidth', { value: 100 });
+    let scrollWidth = 100;
+    Object.defineProperty(anchor, 'scrollWidth', { get: () => scrollWidth });
+    action = floatingHoverCard(card, { whenTruncated: true });
+
+    open();
+    expect(card.dataset.floatingOpen).toBe('false');
+    anchor.dispatchEvent(pointerEvent('pointerdown', 'touch'));
+    expect(card.dataset.floatingOpen).toBe('false');
+
+    anchor.dispatchEvent(new Event('pointerleave'));
+    scrollWidth = 180;
+    open();
+    expect(card.dataset.floatingOpen).toBe('true');
+  });
+
   it('keeps an interactive card open while the pointer crosses the gap', () => {
     action = floatingHoverCard(card);
     open();

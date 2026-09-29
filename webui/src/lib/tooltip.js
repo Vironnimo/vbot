@@ -40,6 +40,8 @@
 //   intent, at once on keyboard focus or touch, stays open while the pointer
 //   travels to and within it, and supports keyboard entry: Tab from the anchor
 //   moves into the card's controls, Shift+Tab or Escape returns to the anchor.
+//   Its `whenTruncated` option opens it only while the anchor clips its text,
+//   like the quick tooltip's.
 // - Info popover: components/ui/InfoHint.svelte builds the pinnable "?"
 //   explanation on `createFloatingLayer`, with the same delays and pointer
 //   exit.

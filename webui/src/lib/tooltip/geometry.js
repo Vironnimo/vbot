@@ -157,3 +157,27 @@ export function pointInCorridor(point, polygon) {
   }
   return true;
 }
+
+/**
+ * True while `node`, or an element inside it (a tab's name label), clips its
+ * text. Overflow layers repeat or complete text their anchor already shows,
+ * so they only appear then. An anchor without any measurable box (inline
+ * elements, no layout) counts as clipping, so its layer stays available.
+ */
+export function clipsContent(node) {
+  let measurable = false;
+  for (const element of [node, ...node.querySelectorAll('*')]) {
+    const { clientWidth, clientHeight } = element;
+    if (!clientWidth && !clientHeight) {
+      continue;
+    }
+    measurable = true;
+    if (
+      element.scrollWidth > clientWidth + 1 ||
+      element.scrollHeight > clientHeight + 2
+    ) {
+      return true;
+    }
+  }
+  return !measurable;
+}
