@@ -86,7 +86,7 @@ Tests guard behavior against regressions from concurrent and later work. Every t
 **Tests run automatically when work lands on `main`.**
 
 - Commits on `main` and worktree merges run the pytest tests whose executed code or read files the change affects, the Vitest tests related to changed WebUI and Extension page sources plus the WebUI guard tests, and the WebUI build (PROJECT.md -> Testing). Commits inside a worktree get the static checks only; `worktree.py merge` runs the branch's tests before it merges. No separate test run is needed before committing or merging.
-- While working, run the tests that cover your change with the test runners directly; they are your feedback before the merge. Run the complete suites only when the user asks; CI runs them as the release gate.
+- While working, run the tests that cover your change with the test runners directly; they are your feedback before the merge. Run the complete suites only when the user asks; CI runs them every night and as the release gate.
 - Report the test result of your merge, or of your commits on `main`.
 
 ## Dependencies

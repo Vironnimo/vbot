@@ -1353,8 +1353,9 @@ npx vitest run src/lib
 ```
 
 The first commit in a checkout runs the complete Python suite once (about ten
-minutes) to record which files each test depends on. Every release runs the
-complete suites on Linux and Windows in CI (`.github/workflows/ci.yml`).
+minutes) to record which files each test depends on. CI
+(`.github/workflows/ci.yml`) runs the complete suites on Linux and Windows every
+night and before every release.
 
 The Playwright E2E suite under `tests/e2e/` is separate from the regular test runs because it controls a real server and browser environment. Local runs remain explicit opt-in and follow the repository workflow instructions; Release CI calls the same reusable Chromium job as a required pre-publish gate.
 
