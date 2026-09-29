@@ -77,6 +77,26 @@ describe('message presentation', () => {
       'Provider error: 500 overloaded',
       '"raw": "overloaded"',
     ],
+    [
+      'an in-band message its prefix repeats only once',
+      'Test failure. Please retry.: {"type":"error","status":503,' +
+        '"error":{"message":"Test failure. Please retry.","code":"test_code"}}',
+      'Test failure. Please retry.',
+      '"status": 503',
+    ],
+    [
+      'a repeated in-band message once with its router Provider name',
+      'Provider returned error: {"message":"Provider returned error","code":502,' +
+        '"metadata":{"provider_name":"Morph"}}',
+      `Provider returned error ${via('Morph')}`,
+      '"code": 502',
+    ],
+    [
+      'the prefix without its separator when the body has no message',
+      'Responses request failed: {"code":"test_code"}',
+      'Responses request failed',
+      '"code": "test_code"',
+    ],
     ['plain text unchanged', 'Connection refused', 'Connection refused', ''],
     [
       'the full text when the embedded JSON does not parse',

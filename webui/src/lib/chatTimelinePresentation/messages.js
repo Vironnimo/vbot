@@ -100,7 +100,9 @@ export const textFromMessage = (message) => {
 // human-readable message buried inside the JSON (usually `error.message`,
 // sometimes top-level `message`). Splits such a text into a readable summary
 // and the pretty-printed raw body for a collapsible details block. Texts
-// without a parseable embedded JSON object stay summary-only.
+// without a parseable embedded JSON object stay summary-only. In-band errors
+// are persisted as "<message>: <json-body>"; a prefix the summary message
+// already starts with is shown only once.
 export const errorMessagePresentation = (text) => {
   const fullText = typeof text === 'string' ? text.trim() : '';
   const jsonStart = fullText.indexOf('{');
@@ -119,6 +121,7 @@ export const errorMessagePresentation = (text) => {
   }
 
   const prefix = fullText.slice(0, jsonStart).trim();
+  const lead = prefix.replace(/:$/, '').trimEnd();
   const errorBody = isPlainObject(parsedBody.error)
     ? parsedBody.error
     : parsedBody;
@@ -127,9 +130,13 @@ export const errorMessagePresentation = (text) => {
     embeddedErrorMessage(parsedBody),
     metadata,
   );
-  const summary = summaryMessage
-    ? [prefix, summaryMessage].filter(Boolean).join(' ')
-    : prefix || fullText;
+  let summary = lead || fullText;
+  if (summaryMessage) {
+    summary =
+      lead && summaryMessage.startsWith(lead)
+        ? summaryMessage
+        : [prefix, summaryMessage].filter(Boolean).join(' ');
+  }
 
   return { summary, details: JSON.stringify(parsedBody, null, 2) };
 };
