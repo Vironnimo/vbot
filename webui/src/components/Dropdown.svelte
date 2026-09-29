@@ -52,6 +52,18 @@
   );
   let triggerLabel = $derived(selectedOption?.label || placeholder);
   let hasSelection = $derived(Boolean(selectedOption));
+  // A clipped selection or option shows in full on hover unless the caller
+  // supplies its own tooltip; options sit in a vertical list, so theirs
+  // opens beside the row.
+  let triggerHint = $derived(
+    triggerTooltip ||
+      (hasSelection ? clippedLabelHint(selectedOption, 'top') : ''),
+  );
+  const clippedLabelHint = (option, placement) => ({
+    text: [option.label, option.secondaryLabel].filter(Boolean).join('\n'),
+    placement,
+    whenTruncated: true,
+  });
   let listboxId = $derived(id ? `${id}-listbox` : `${componentId}-listbox`);
   let activeOptionId = $derived(
     activeOptionValue !== null
@@ -377,7 +389,7 @@
     disabled={option.disabled}
     aria-label={option.ariaLabel || undefined}
     aria-selected={option.value === value}
-    use:tooltip={option.tooltip}
+    use:tooltip={option.tooltip || clippedLabelHint(option, 'right')}
     onclick={() => selectOption(option)}
   >
     {#if option.statusDot}
@@ -419,7 +431,7 @@
     aria-haspopup="listbox"
     aria-expanded={isOpen}
     aria-controls={isOpen ? listboxId : undefined}
-    use:tooltip={triggerTooltip}
+    use:tooltip={triggerHint}
     onclick={toggleOpen}
     onkeydown={handleTriggerKeyDown}
   >

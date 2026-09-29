@@ -32,6 +32,8 @@ function normalizeText(value) {
   return value == null ? '' : String(value).trim();
 }
 
+const ROW_TONES = new Set(['success', 'warning', 'danger', 'muted']);
+
 function normalizeRows(rows) {
   if (!Array.isArray(rows)) {
     return [];
@@ -41,12 +43,20 @@ function normalizeRows(rows) {
       label: normalizeText(row?.label),
       value: normalizeText(row?.value),
       mono: row?.mono === true,
+      tone: ROW_TONES.has(row?.tone) ? row.tone : '',
     }))
     .filter((row) => row.value);
 }
 
-/** A string is a plain label; an object may carry structure and options. */
+/**
+ * A string is a plain label; an object may carry structure and options; a
+ * function returns either and is called each time the tooltip shows, so
+ * relative times stay current and long lists build no content up front.
+ */
 export function normalizeTooltipContent(value) {
+  if (typeof value === 'function') {
+    return normalizeTooltipContent(value());
+  }
   if (value === null || typeof value !== 'object') {
     const text = normalizeText(value);
     return text ? { ...EMPTY_CONTENT, text } : EMPTY_CONTENT;
@@ -124,6 +134,7 @@ function renderContent(element, content) {
       const valueClass = [
         'app-tooltip__value',
         row.mono ? 'app-tooltip__mono' : '',
+        row.tone ? `app-tooltip__value--${row.tone}` : '',
         row.label ? '' : 'app-tooltip__value--full',
       ]
         .filter(Boolean)
@@ -333,10 +344,19 @@ function enclosingAnchorEntry(node, target) {
  * it, so conditional hints can pass '' safely.
  */
 export function tooltip(node, content = '') {
-  let currentContent = normalizeTooltipContent(content);
+  let contentSource = content;
+  // Function content is resolved only when the tooltip is about to show:
+  // again at every hover, focus or tap.
+  let currentContent =
+    typeof content === 'function'
+      ? EMPTY_CONTENT
+      : normalizeTooltipContent(content);
   const releaseModality = trackInputModality();
 
   function available() {
+    if (typeof contentSource === 'function') {
+      currentContent = normalizeTooltipContent(contentSource);
+    }
     return (
       !isEmpty(currentContent) &&
       (!currentContent.whenTruncated || clipsContent(node))
@@ -461,6 +481,10 @@ export function tooltip(node, content = '') {
 
   return {
     update(nextContent = '') {
+      contentSource = nextContent;
+      if (typeof nextContent === 'function' && activeAnchor !== node) {
+        return;
+      }
       currentContent = normalizeTooltipContent(nextContent);
       if (isEmpty(currentContent)) {
         clearOwnPendingShow(node);

@@ -10,6 +10,7 @@ vi.mock('svelte', async () => {
 });
 
 const { default: Dropdown } = await import('../Dropdown.svelte');
+const { TOOLTIP_SHOW_DELAY_MS } = await import('../../lib/tooltip.js');
 
 describe('Dropdown', () => {
   let mountedComponent;
@@ -283,6 +284,71 @@ describe('Dropdown', () => {
     expect(delta.hasAttribute('aria-label')).toBe(false);
     expect(delta.querySelector('.tab-indicator')).toBeNull();
     expect(delta.querySelector('.count-badge')).toBeNull();
+  });
+
+  it('shows a clipped selection or option in full on hover', async () => {
+    mountedComponent = mount(Dropdown, {
+      target: document.body,
+      props: {
+        id: 'model-dropdown',
+        value: 'long',
+        options: [
+          {
+            value: 'long',
+            label: 'anthropic/claude-sonnet-4-5-20250929',
+            secondaryLabel: 'Work account',
+          },
+          { value: 'short', label: 'gpt-5' },
+        ],
+      },
+    });
+    flushSync();
+    const setWidths = (element, clientWidth, scrollWidth) => {
+      Object.defineProperty(element, 'clientWidth', { value: clientWidth });
+      Object.defineProperty(element, 'scrollWidth', { value: scrollWidth });
+    };
+    const hoverText = (anchor) => {
+      anchor.dispatchEvent(new Event('pointerenter'));
+      vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
+      const bubble = document.getElementById('app-tooltip');
+      const text =
+        bubble?.dataset.floatingOpen === 'true' ? bubble.textContent : '';
+      anchor.dispatchEvent(new Event('pointerleave'));
+      vi.runAllTimers();
+      return text;
+    };
+
+    const trigger = document.querySelector('#model-dropdown');
+    setWidths(
+      trigger.querySelector('.dropdown-primitive__trigger-label'),
+      120,
+      260,
+    );
+    trigger.click();
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('[role="option"]')).toHaveLength(2);
+    });
+    const [long, short] = document.querySelectorAll('[role="option"]');
+    setWidths(
+      long.querySelector('.dropdown-primitive__option-label'),
+      120,
+      260,
+    );
+    setWidths(
+      short.querySelector('.dropdown-primitive__option-label'),
+      120,
+      40,
+    );
+
+    vi.useFakeTimers();
+    try {
+      const full = 'anthropic/claude-sonnet-4-5-20250929\nWork account';
+      expect(hoverText(trigger)).toBe(full);
+      expect(hoverText(long)).toBe(full);
+      expect(hoverText(short)).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders consecutive options of a group under its label and keeps one keyboard order', async () => {
