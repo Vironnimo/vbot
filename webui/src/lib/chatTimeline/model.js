@@ -21,6 +21,7 @@ export const RUN_HISTORY_CONTENT_ROLES = new Set([
   'assistant',
   'tool',
   'compaction_checkpoint',
+  'model_fallback',
 ]);
 
 export const TERMINAL_RUN_EVENTS = new Set([

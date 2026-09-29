@@ -7,6 +7,7 @@ import {
 import {
   historyTimelineItems,
   appendHistoryAssistantMessage,
+  appendHistoryModelFallback,
   appendHistoryToolResult,
 } from './history.js';
 import { appendLiveRunEvent } from './live.js';
@@ -155,6 +156,8 @@ function mergeRun(messages, liveRun) {
       appendHistoryAssistantMessage(historyRun, message);
     else if (message.role === 'tool')
       appendHistoryToolResult(historyRun, message);
+    else if (message.role === 'model_fallback')
+      appendHistoryModelFallback(historyRun, message);
     else if (message.role === 'compaction_checkpoint')
       appendLiveRunEvent(historyRun, {
         type: 'compaction_completed',
@@ -233,6 +236,11 @@ function childrenMatch(saved, live, phaseMessageId) {
     );
   if (saved.type === 'compaction_separator')
     return saved.message?.id && saved.message.id === live.message?.id;
+  // A Run's fallback chain never switches to the same Model twice.
+  if (saved.type === 'model_fallback')
+    return (
+      saved.from_model === live.from_model && saved.to_model === live.to_model
+    );
   const ids = new Set(
     (saved.messages ?? []).map((message) => message.id).filter(Boolean),
   );

@@ -644,28 +644,61 @@ describe('ChatTimeline Runs', () => {
     expect(toolLine.querySelector('.te-dot.cancelled')).not.toBeNull();
   });
 
-  it('renders model fallback notices inside Assistant Runs', () => {
-    const sessionState = timelineSession();
-    appendEvents(sessionState, 'run-model-fallback', [
-      {
-        type: 'model_fallback_activated',
-        payload: {
-          from_model: 'openai/gpt-5',
-          to_model: 'openrouter/anthropic/claude-sonnet-4',
-        },
-      },
-    ]);
-    timeline.render(sessionState);
+  it.each(['live', 'mixed', 'history'])(
+    'renders a model fallback notice once inside its Assistant Run in %s',
+    (mode) => {
+      const sessionState = timelineSession();
+      const models = {
+        from_model: 'openai/gpt-5',
+        to_model: 'openrouter/anthropic/claude-sonnet-4',
+      };
+      const answer = { id: 'answer', role: 'assistant', content: 'Recovered' };
+      if (mode !== 'history') {
+        startRun(sessionState, { run_id: 'run-model-fallback' });
+        appendEvents(sessionState, 'run-model-fallback', [
+          { type: 'model_fallback_activated', payload: models },
+          assistantOutput(answer.content, answer),
+        ]);
+      }
+      // History keeps the notice after the Run and across a reload.
+      if (mode !== 'live')
+        loadHistory(
+          sessionState,
+          historyRows('run-model-fallback', [
+            { id: 'user', role: 'user', content: 'Hi' },
+            { id: 'fallback-note', role: 'model_fallback', ...models },
+            answer,
+            ...(mode === 'history'
+              ? [
+                  {
+                    id: 'summary',
+                    role: 'run_summary',
+                    run_id: 'run-model-fallback',
+                    status: 'completed',
+                  },
+                ]
+              : []),
+          ]),
+        );
+      timeline.render(sessionState);
 
-    expect(
-      document.querySelector('.assistant-run .run-inline-banner.banner--info')
-        .textContent,
-    ).toContain(
-      t('chat.modelFallbackActivated', {
-        model: 'openrouter/anthropic/claude-sonnet-4',
-      }),
-    );
-  });
+      const notices = document.querySelectorAll(
+        '.assistant-run .run-inline-banner.banner--info',
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0].textContent.trim()).toBe(
+        t('chat.modelFallbackFrom', {
+          from: 'openai/gpt-5',
+          to: 'openrouter/anthropic/claude-sonnet-4',
+        }),
+      );
+      const run = notices[0].closest('.assistant-run');
+      expect(run.textContent).toContain('Recovered');
+      expect(run.textContent.includes(t('chat.runStatus.running'))).toBe(
+        mode !== 'history',
+      );
+    },
+  );
 
   it('keeps interrupted Assistant output without a recovery marker', () => {
     const sessionState = timelineSession();
