@@ -66,6 +66,7 @@ const tools = [
     family_label: 'Home Assistant',
     activation: 'configurable',
     ready: true,
+    extension: 'homeassistant',
   },
   {
     name: 'ha_call_service',
@@ -208,6 +209,12 @@ describe('ToolAccessEditor', () => {
     expect(toolChip('read').textContent.trim()).toBe('read');
     const readTip = toolTipWithText('Read a file from disk.');
     expect(readTip.textContent).toContain('Read a file from disk.');
+    // Every card names the Tool's source and how access works.
+    expect(readTip.textContent).toContain(t('toolAccess.source.builtIn'));
+    expect(readTip.textContent).toContain(t('toolAccess.access.selected'));
+    expect(toolTipWithText('homeassistant Extension').textContent).toContain(
+      'ha_get_state',
+    );
     expect(readTip.dataset.floatingOpen).toBe('false');
 
     vi.useFakeTimers();

@@ -73,6 +73,18 @@
     if (tool.automatic) return { text: t('toolAccess.automatic') };
     return null;
   }
+  // Facts every Tool card states: who provides the Tool and how access to
+  // it works.
+  function toolSource(tool) {
+    return typeof tool.extension === 'string' && tool.extension
+      ? t('toolAccess.source.extension', { name: tool.extension })
+      : t('toolAccess.source.builtIn');
+  }
+  function toolAccessFact(tool) {
+    if (tool.automatic) return t('toolAccess.automatic');
+    if (tool.requires_opt_in) return t('toolAccess.access.explicit');
+    return t('toolAccess.access.selected');
+  }
   function familyUnavailable(group) {
     return group.members.every((tool) => tool.ready === false);
   }
@@ -166,6 +178,16 @@
               <div class="floating-card tool-access-tip" use:floatingHoverCard>
                 <strong>{tool.name}</strong>
                 {#if tool.description}<p>{tool.description}</p>{/if}
+                <dl class="tool-access-facts">
+                  <div>
+                    <dt>{t('toolAccess.facts.source')}</dt>
+                    <dd>{toolSource(tool)}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('toolAccess.facts.access')}</dt>
+                    <dd>{toolAccessFact(tool)}</dd>
+                  </div>
+                </dl>
                 {#each tool.notes ?? [] as note, index (`${tool.name}-${index}`)}<p
                   >
                     {note}
@@ -266,6 +288,25 @@
   .tool-access-tip p {
     margin: 6px 0 0;
     white-space: pre-wrap;
+  }
+  /* Source and access as aligned label/value rows, like a details tooltip. */
+  .tool-access-facts {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 3px 12px;
+    margin: 8px 0 0;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  .tool-access-facts div {
+    display: contents;
+  }
+  .tool-access-facts dt {
+    color: var(--text-lo);
+  }
+  .tool-access-facts dd {
+    margin: 0;
+    color: var(--text-hi);
   }
   @media (max-width: 640px) {
     .tool-catalog-search {
