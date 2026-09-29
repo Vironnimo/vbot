@@ -1,0 +1,52 @@
+# Logging
+
+Cross-cutting policy for what vBot writes to its application logs and at which level, plus the writing pipeline in `core/utils/logging.py`. Reading and displaying log files is the log viewer's job (`logs.md`).
+
+## Overview
+
+Every domain logs through per-module `vbot.<domain>` loggers into one pipeline: `LogManager` writes daily files `<data_dir>/logs/YYYY-MM-DD.log` in the canonical line format `timestamp [LEVEL] name - message` (parse contract: `logs.md`). The default level is INFO; the `LOG_LEVEL` configuration value selects DEBUG. The standalone Desktop writes the same format to its own config directory (`desktop.md`); the Windows application host and update worker log under `<install root>/logs/` (`cli/windows-application.md`).
+
+This map is a policy. Code that logs differently is a finding, not a precedent: before changing a level or removing a line, check it against the purpose below, not only against the "silent" list.
+
+## Purpose of INFO
+
+The INFO log alone must let an operator reconstruct what the server did:
+
+- which version ran, in which mode, and why each process started and stopped;
+- what work finished and how: one terminal line per Run, per scheduled job firing, per update phase;
+- which control-plane state changed, by whom, with stable ids and changed field names;
+- which health transitions happened - degradation and recovery.
+
+Everything that happens per step, per call, per attempt or per poll belongs at DEBUG. A quieter log that loses this thread is a regression, not a cleanup; a louder log that buries it is one too.
+
+## Level rules
+
+- **INFO** - process lifecycle (one start line, one stop line with the reason); Run terminal outcome; each material control-plane mutation, once, after the change; recovery back to healthy; rare significant events (update phases, schema evolution, data snapshots).
+- **WARNING** - expected operational failures and degradation: a failed Run, a Provider or Channel that stops working, a scheduled job disabled after failures, an invalid user file that is ignored.
+- **ERROR** - unexpected failures (with traceback) and events that risk or cause data loss (automatic restore after corruption, a Channel reply that could not be delivered).
+- **DEBUG** - per-attempt retries, per-Tool-call statistics, request and stream traffic, reads, polls, acknowledgements, cache maintenance, Run starts, internal mechanics.
+- **Silent** - effective no-ops, appearance and UI-selection changes.
+
+## Conventions
+
+- **Line format:** `<Event in past tense> (key=value key=value)` - stable vBot ids, changed field names (not values), counts, durations. Multi-value fields are comma-separated inside one value. `extra=` is not rendered by the formatter; everything an operator needs goes into the message.
+- **One event, one line.** A "started" plus "completed" pair for one short operation is merged into the outcome line; the start moves to DEBUG.
+- **Log at the owner.** A mutation logs in the core owner that performs it, so RPC, Tool, command and CLI paths are all covered; an `actor=` field (for example `rpc`, `tool`, `command`, `agent=<id>`) says who caused it. The RPC layer does not add a second line.
+- **Transitions, not repetitions.** A persistent condition (unreachable server, invalid configuration file, missing include, unsupported SQLite build) logs once when it starts and once when it ends - not on every read, build, poll or attempt. Retry loops log attempts at DEBUG and the final outcome once.
+- **Failures are never INFO.** An outcome field such as `outcome=failed` on an INFO line is a WARNING.
+
+## Never log
+
+At any level, including DEBUG and exception messages built by vBot:
+
+- credentials, token values, OAuth codes, Provider Account ids;
+- Prompt, Skill, Cron, Memory and Workspace file content; Model output; user message text; titles generated from them;
+- external conversation, chat, user, thread or call ids and platform display names (Channel platforms, Provider-assigned call or conversation ids), including ids derived from them.
+
+Use the vBot-owned id of the same object instead (`core/utils/ids.py`).
+
+## Constraints & Gotchas
+
+- Only loggers under the `vbot` namespace reach the daily files. Third-party libraries log through their own loggers; uvicorn is routed into `vbot.server.uvicorn` by `build_uvicorn_log_config`, with routine websocket lifecycle lines filtered (`logs.md`).
+- `LogManager` attaches its handlers lazily, on the first `get_logger` call. Constructing a manager alone configures nothing.
+- Tests that assert log output own the behavior they assert (for example "no external id is logged"); do not add tests that merely pin a message's wording (`PROJECT.md` -> Testing).

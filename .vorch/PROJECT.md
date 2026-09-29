@@ -76,6 +76,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | cli.md | `cli/` | Server lifecycle commands, targeting, output contract |
 | desktop.md | `desktop/` | pywebview shell contract, bridge, Desktop Voice, Live voice support |
 | webui.md | `webui/` | Frontend accessor boundary, shared invariants |
+| logging.md | cross-cutting | What to log at which level, line format, never-log rules, writing pipeline |
 | logs.md | log viewer subsystem | Log parsing, RPC/socket contract, Logs tab |
 | debug.md | `core/debug/` | Debug Mode, traces, redaction, recorder |
 | performance.md | `core/performance/` | Always-on metrics, Event Loop stalls, Perfetto Recordings, metric catalog |
@@ -88,7 +89,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 
 **Errors:** Base classes in `core/utils/errors.py`, domain subclasses per module. Expected errors: handle locally, log `warn`; unexpected: rethrow, log `error`. Never silently swallow. Transient HTTP retries use shared `core/utils/retry.py` backoff and idempotency-aware statuses in `core/utils/http_status.py`. Chat owns ordinary Model retries through one Run-local recovery budget and suppresses nested utility retries for each Model attempt; other callers retain their retry policy. Provider errors are `retryable` or `fatal`.
 
-**Logging:** Structured logs via `LogManager` (`core/utils/logging`), per-module `vbot.<domain>` loggers, `<data_dir>/logs/`. Standalone Desktop uses the same format without importing core logging. No `print()` or `logging.basicConfig()`. Each material control-plane mutation emits one post-change `INFO` event: operation, stable target ids, changed fields. Never log credentials, token values, Provider Account ids, Prompt/Skill/Cron content, or external conversation ids. Reads, polls, appearance changes, acknowledgements, routine traffic, and effective no-ops stay silent. Operational failures and health transitions use `WARNING`/`ERROR`.
+**Logging:** Structured logs via `LogManager` (`core/utils/logging`), per-module `vbot.<domain>` loggers, `<data_dir>/logs/`. No `print()` or `logging.basicConfig()`. The INFO log alone must let an operator reconstruct what the server did: process start/stop with version and reason, each Run's terminal outcome, each material control-plane mutation (once, at its owner, with actor), and health degradation and recovery; per-step, per-call, per-attempt and per-poll detail is DEBUG. Never log credentials, content (Prompt, Skill, Memory, Model output, user text) or external ids. Before adding, removing or re-leveling a log line, read `logging.md`.
 
 **Time:** Persist ISO 8601 UTC timestamps with explicit offset; database tables store the canonical fixed-width form `YYYY-MM-DDTHH:MM:SS.ffffffZ` (`core/utils/timestamps.py`, `database.md`). Optional IANA `timezone` defaults to the server host zone; once Settings resolve, it alone controls Agent context, wall-clock Calendar/Cron behavior, and UI rendering, never implicit browser/host time. No implicit `datetime.now()`.
 
