@@ -45,6 +45,8 @@
   let typeaheadAt = 0;
 
   let normalizedOptions = $derived(normalizeOptions(options));
+  // Consecutive options that name the same `group` render under its label.
+  let optionSections = $derived(groupOptions(normalizedOptions));
   let selectedOption = $derived(
     normalizedOptions.find((option) => option.value === value) ?? null,
   );
@@ -73,9 +75,23 @@
         label: option?.label ?? option?.value ?? '',
         disabled: Boolean(option?.disabled),
         secondaryLabel: option?.secondaryLabel ?? '',
+        group: option?.group ?? '',
         ...optionDecorations(option),
       };
     });
+  }
+
+  function groupOptions(items) {
+    const sections = [];
+    items.forEach((option, index) => {
+      const last = sections.at(-1);
+      if (last && last.label === option.group) {
+        last.items.push({ option, index });
+      } else {
+        sections.push({ label: option.group, items: [{ option, index }] });
+      }
+    });
+    return sections;
   }
 
   // Also opens the list from a related control elsewhere (via bind:this).
@@ -349,6 +365,39 @@
 
 <svelte:window onresize={handleWindowResize} />
 
+{#snippet optionButton(option, optionIndex)}
+  <button
+    class="dropdown-option dropdown-primitive__option"
+    class:selected={option.value === value}
+    class:active={option.value === activeOptionValue}
+    id={`${listboxId}-option-${optionIndex}`}
+    type="button"
+    role="option"
+    tabindex="-1"
+    disabled={option.disabled}
+    aria-label={option.ariaLabel || undefined}
+    aria-selected={option.value === value}
+    use:tooltip={option.tooltip}
+    onclick={() => selectOption(option)}
+  >
+    {#if option.statusDot}
+      <span
+        class="dropdown-status-dot tab-indicator tab-indicator--{option.statusDot}"
+        aria-hidden="true"
+      ></span>
+    {/if}
+    <span class="dropdown-primitive__option-label">{option.label}</span>
+    {#if option.secondaryLabel}
+      <span class="dropdown-primitive__option-meta">
+        {option.secondaryLabel}
+      </span>
+    {/if}
+    {#if option.badge}
+      <span class="count-badge">{option.badge}</span>
+    {/if}
+  </button>
+{/snippet}
+
 <div
   bind:this={rootElement}
   class="dropdown dropdown-primitive {triggerClass}"
@@ -411,37 +460,28 @@
       style={listStyle}
       onkeydown={handleListKeyDown}
     >
-      {#each normalizedOptions as option, optionIndex (option.value)}
-        <button
-          class="dropdown-option dropdown-primitive__option"
-          class:selected={option.value === value}
-          class:active={option.value === activeOptionValue}
-          id={`${listboxId}-option-${optionIndex}`}
-          type="button"
-          role="option"
-          tabindex="-1"
-          disabled={option.disabled}
-          aria-label={option.ariaLabel || undefined}
-          aria-selected={option.value === value}
-          use:tooltip={option.tooltip}
-          onclick={() => selectOption(option)}
-        >
-          {#if option.statusDot}
-            <span
-              class="dropdown-status-dot tab-indicator tab-indicator--{option.statusDot}"
-              aria-hidden="true"
-            ></span>
-          {/if}
-          <span class="dropdown-primitive__option-label">{option.label}</span>
-          {#if option.secondaryLabel}
-            <span class="dropdown-primitive__option-meta">
-              {option.secondaryLabel}
-            </span>
-          {/if}
-          {#if option.badge}
-            <span class="count-badge">{option.badge}</span>
-          {/if}
-        </button>
+      {#each optionSections as section, sectionIndex (sectionIndex)}
+        {#if section.label}
+          <div
+            class="dropdown-primitive__group"
+            role="group"
+            aria-labelledby={`${listboxId}-group-${sectionIndex}`}
+          >
+            <div
+              class="dropdown-primitive__group-label"
+              id={`${listboxId}-group-${sectionIndex}`}
+            >
+              {section.label}
+            </div>
+            {#each section.items as item (item.option.value)}
+              {@render optionButton(item.option, item.index)}
+            {/each}
+          </div>
+        {:else}
+          {#each section.items as item (item.option.value)}
+            {@render optionButton(item.option, item.index)}
+          {/each}
+        {/if}
       {/each}
     </div>
   {/if}

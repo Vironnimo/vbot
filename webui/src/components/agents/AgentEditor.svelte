@@ -37,8 +37,7 @@
     availableModels = [],
     availableConnections = [],
     availableTools = [],
-    availableSkills = [],
-    invalidSkills = [],
+    skillCatalog = undefined,
     availableAgentTargets = [],
     agentTargetCatalogError = '',
     projectOptions = [],
@@ -329,6 +328,9 @@
       allowed_skills: Array.isArray(values.allowed_skills)
         ? [...values.allowed_skills]
         : [],
+      excluded_skills: Array.isArray(values.excluded_skills)
+        ? [...values.excluded_skills]
+        : [],
       tool_access: cloneTools(values.tool_access),
       tools: cloneTools(values.tools),
     };
@@ -596,8 +598,7 @@
     />
     <AgentAccessPanel
       {availableTools}
-      {availableSkills}
-      {invalidSkills}
+      {skillCatalog}
       {availableAgentTargets}
       {agentTargetCatalogError}
       bind:formValues

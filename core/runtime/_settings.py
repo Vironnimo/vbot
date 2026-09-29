@@ -3,10 +3,25 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
+
+
+@dataclass(frozen=True)
+class SettingsChangeEffects:
+    """Which operator-visible catalogs a live Settings change may have changed.
+
+    ``commands_changed``: the Extension layer was rebuilt or narrowed, so its
+    Commands and page registrations may differ. ``skills_changed``: the Skill
+    layer was rescanned (Skill directories, or Extension Skill folders), so the
+    Skill inventory may differ.
+    """
+
+    commands_changed: bool = False
+    skills_changed: bool = False
 
 
 async def apply_settings_change(
@@ -15,8 +30,8 @@ async def apply_settings_change(
     current: Mapping[str, Any],
     *,
     refresh_sections: Collection[str] = (),
-) -> bool:
-    """Refresh live consumers after persistence; return Command catalog invalidation."""
+) -> SettingsChangeEffects:
+    """Refresh live consumers after persistence; return the catalogs to invalidate."""
     newly_enabled = _disabled_names(previous) - _disabled_names(current)
     newly_disabled = _disabled_names(current) - _disabled_names(previous)
     rebuild_extensions = bool(newly_enabled) or previous.get(
@@ -50,7 +65,11 @@ async def apply_settings_change(
     if _speech_to_text_binding(previous) != _speech_to_text_binding(current):
         runtime.speech.preload_configured()
 
-    return rebuild_extensions or bool(newly_disabled)
+    extension_layer_changed = rebuild_extensions or bool(newly_disabled)
+    return SettingsChangeEffects(
+        commands_changed=extension_layer_changed,
+        skills_changed=extension_layer_changed or skills_changed,
+    )
 
 
 def _speech_to_text_binding(settings: Mapping[str, Any]) -> Any:

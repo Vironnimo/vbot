@@ -35,6 +35,7 @@ from core.agents._config import (
     _validate_agent_id,
     _validate_allowed_items,
     _validate_bool_field,
+    _validate_excluded_skills,
     _validate_fallback_models,
     _validate_memory_prompt_mode,
     _validate_root_project_id,
@@ -202,6 +203,7 @@ class AgentStore:
         memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE,
         tool_access: ToolAccess | Mapping[str, Any] | None = None,
         allowed_skills: list[str] | None = None,
+        excluded_skills: list[str] | None = None,
         tools: Mapping[str, Any] | None = None,
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
         compaction_policy: dict[str, Any] | None = None,
@@ -223,6 +225,7 @@ class AgentStore:
             validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
             validated_tool_access = _validate_tool_access(tool_access)
             validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
+            validated_excluded_skills = _validate_excluded_skills(excluded_skills)
             validated_tools = _normalize_agent_tools(tools)
             validated_custom_system_prompt_enabled = _validate_bool_field(
                 "custom_system_prompt_enabled", custom_system_prompt_enabled
@@ -260,6 +263,7 @@ class AgentStore:
                 memory_prompt_mode=validated_memory_prompt_mode,
                 tool_access=validated_tool_access,
                 allowed_skills=validated_allowed_skills,
+                excluded_skills=validated_excluded_skills,
                 tools=validated_tools,
                 custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
                 compaction_policy=validated_compaction_policy,
@@ -328,17 +332,25 @@ class AgentStore:
         their directory all yield ``False`` so a broken Agent is never treated as
         an available target.
         """
+        return self.find(agent_id) is not None
+
+    def find(self, agent_id: str) -> Agent | None:
+        """Return the persisted config of a valid identity Agent, or ``None``.
+
+        The same side-effect-free, never-raising probe as :meth:`exists`: it neither
+        seeds the Workspace nor verifies the current-Session pointer, and it returns
+        the raw persisted values without ``defaults.agent`` applied.
+        """
         with self._write_lock:
             if not is_valid_agent_id(agent_id):
-                return False
+                return None
             try:
                 agent_path = self._stored_agent_path(agent_id)
                 if agent_path is None:
-                    return False
-                self._read_agent_config(agent_path)
+                    return None
+                return self._read_agent_config(agent_path)
             except (AgentError, OSError):
-                return False
-            return True
+                return None
 
     def list(self) -> list[Agent]:
         """Return valid persisted Agents in the canonical roster order."""
@@ -568,6 +580,8 @@ class AgentStore:
                 changes["allowed_skills"] = _validate_allowed_items(
                     "allowed_skills", changes["allowed_skills"]
                 )
+            if "excluded_skills" in changes:
+                changes["excluded_skills"] = _validate_excluded_skills(changes["excluded_skills"])
             if "tools" in changes:
                 changes["tools"] = _normalize_agent_tools(changes["tools"])
             if "custom_system_prompt_enabled" in changes:

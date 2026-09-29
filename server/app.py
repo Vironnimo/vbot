@@ -52,6 +52,7 @@ from server._app_lifecycle import (
     _unregister_run_event_bridge,
     _unregister_session_completion_read_bridge,
     _unregister_session_title_bridge,
+    _unregister_skill_change_bridge,
     _unregister_terminal_change_bridge,
 )
 from server._bind import ServerBindState, _resolve_server_bind, _runtime_config
@@ -309,6 +310,7 @@ def create_app(
             _unregister_session_completion_read_bridge(app.state)
             _unregister_cron_change_bridge(app.state)
             _unregister_calendar_change_bridge(app.state)
+            _unregister_skill_change_bridge(app.state)
             _unregister_terminal_change_bridge(app.state)
             _unregister_bash_process_change_bridge(app.state)
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)

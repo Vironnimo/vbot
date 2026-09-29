@@ -316,6 +316,16 @@ def test_skill_dependency_respects_agent_allowlist(tmp_path: Path) -> None:
         "helper",
         "main-task",
     ]
+    # An Agent's exclusion withholds the dependency like a missing grant, but the
+    # excluded Skill stays loaded.
+    excluding = SkillRegistry.load(tmp_path, environment={}, allowlist_exclusions={"helper"})
+    availability = excluding.availability_for("main-task", ["*"])
+    assert (availability.state, availability.missing) == (
+        "unavailable",
+        ("skill 'helper' is not allowed for this agent",),
+    )
+    assert excluding.filter_allowed(["*"]) == []
+    assert excluding.get("helper").name == "helper"
 
 
 @pytest.mark.parametrize(
@@ -436,21 +446,43 @@ def test_metadata_diagnostic_is_logged_once_per_process_with_its_path(
 
 
 @pytest.mark.parametrize(
-    ("allowed", "expected"),
+    ("allowed", "exclusions", "always_allowed", "expected"),
     [
-        (["*"], ["agent-cli", "research"]),
-        ([], []),
-        (["research"], ["research"]),
-        (["missing", "agent-cli"], ["agent-cli"]),
+        (["*"], set(), set(), ["agent-cli", "research"]),
+        ([], set(), set(), []),
+        (["research"], set(), set(), ["research"]),
+        (["missing", "agent-cli"], set(), set(), ["agent-cli"]),
+        # Exclusions narrow the wildcard and exact grants alike ...
+        (["*"], {"research"}, set(), ["agent-cli"]),
+        (["research"], {"research"}, set(), []),
+        # ... but never an always-allowed (own or Project-granted) Skill.
+        (["*"], {"research"}, {"research"}, ["agent-cli", "research"]),
+        ([], {"research"}, {"research"}, ["research"]),
+    ],
+    ids=[
+        "wildcard",
+        "empty",
+        "exact",
+        "unknown-entry",
+        "excluded-from-wildcard",
+        "excluded-from-exact",
+        "always-allowed-beats-exclusion",
+        "always-allowed-without-grant",
     ],
 )
 def test_allowlist_filters_skills_sorted_by_name(
-    tmp_path: Path, allowed: list[str], expected: list[str]
+    tmp_path: Path,
+    allowed: list[str],
+    exclusions: set[str],
+    always_allowed: set[str],
+    expected: list[str],
 ) -> None:
     write_skill(tmp_path, "z-dir", name="research")
     write_skill(tmp_path, "a-dir", name="agent-cli")
 
-    registry = SkillRegistry.load(tmp_path)
+    registry = SkillRegistry.load(
+        tmp_path, always_allowed=always_allowed, allowlist_exclusions=exclusions
+    )
 
     assert [skill.name for skill in registry.list_all()] == ["agent-cli", "research"]
     assert [skill.name for skill in registry.filter_allowed(allowed)] == expected

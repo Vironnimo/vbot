@@ -5,10 +5,6 @@ import { SvelteMap } from 'svelte/reactivity';
 import { fileURLToPath } from 'node:url';
 import { readStyleSheet } from '../../../__tests__/styles.support.js';
 import { init, t } from '../../../lib/i18n.js';
-import {
-  FLOATING_HOVER_CLOSE_DELAY_MS,
-  TOOLTIP_SHOW_DELAY_MS,
-} from '../../../lib/tooltip.js';
 import { rpcBackedApiMock } from '../../__tests__/apiMock.support.js';
 import {
   filterSkills,
@@ -34,6 +30,7 @@ const entry = (id, name, extra = {}) => ({
   description: `Purpose of ${name}`,
   origin: 'agent',
   owner_id: 'main',
+  project_id: null,
   editable_scope: 'agent:main',
   shared: false,
   shared_with: [],
@@ -61,6 +58,61 @@ const base = () => [
     warnings: ['diagnostic-sentinel'],
   }),
 ];
+const grant = (name, packageId, kind) => ({
+  name,
+  package_id: packageId,
+  grant: kind,
+  available: true,
+});
+const agent = (id, name, allowed, skills) => ({
+  id,
+  name,
+  root_project_id: null,
+  allowed_skills: allowed,
+  excluded_skills: [],
+  mode: allowed.includes('*') ? 'all' : 'selected',
+  skills,
+});
+// Main owns deploy and notes (shared with Reviewer, whose selection does not
+// allow it); both Agents allow the bundled teach, which Repo does not activate.
+const baseAgents = () => [
+  agent(
+    'main',
+    'Main',
+    ['*'],
+    [
+      grant('deploy', 'private', 'own'),
+      grant('notes', 'shared', 'own'),
+      grant('teach', 'bundled', 'allowed'),
+    ],
+  ),
+  agent(
+    'reviewer',
+    'Reviewer',
+    ['teach'],
+    [
+      grant('notes', 'shared', 'not_selected'),
+      grant('teach', 'bundled', 'allowed'),
+    ],
+  ),
+];
+const baseProjects = () => [
+  {
+    project_id: 'repo',
+    name: 'Repo',
+    skills_project_disabled: [],
+    skills_global_enabled: [],
+    skills_bundled_enabled: [],
+    skills: [
+      {
+        name: 'teach',
+        package_id: 'bundled',
+        source: 'bundled',
+        active: false,
+      },
+    ],
+  },
+];
 const button = (name, root = document.body) =>
   [...root.querySelectorAll('button')].find(
     (el) => (el.getAttribute('aria-label') || el.textContent.trim()) === name,
@@ -75,6 +127,10 @@ const input = (el, value) => {
   el.dispatchEvent(new Event('input', { bubbles: true }));
   flushSync();
 };
+const key = (el, name) => {
+  el.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true }));
+  flushSync();
+};
 const rows = () => [...document.querySelectorAll('[data-skill-id]')];
 const choose = (id) => click(document.querySelector(`[data-skill-id="${id}"]`));
 const collection = (name) =>
@@ -83,6 +139,10 @@ const collection = (name) =>
       (el) => el.querySelector('.skills-collection-name').textContent === name,
     ),
   );
+const texts = (selector, root = document) =>
+  [...root.querySelectorAll(selector)].map((el) => el.textContent.trim());
+const calls = (method) =>
+  rpcMock.mock.calls.filter(([name]) => name === method).map(([, p]) => p);
 async function settle() {
   for (let i = 0; i < 5; i++) {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -90,32 +150,40 @@ async function settle() {
   }
 }
 
-let component, inventory, agents;
+let component, inventory, agents, projects;
+const onToast = vi.fn();
 const refreshState = new SvelteMap();
 function notifySkillsChanged() {
   flushSync(() => refreshState.set('token', refreshState.get('token') + 1));
+}
+const snapshot = () => ({
+  skills: inventory,
+  agents,
+  projects,
+  stale_shared: [],
+  policy_diagnostics: [],
+});
+function defaultRpc(method, params) {
+  if (method === 'skill.inventory') return snapshot();
+  if (method === 'skill.inspect')
+    return {
+      id: params.id,
+      content: `# Instructions\n\ncontent-${params.id}`,
+    };
+  return {};
 }
 beforeEach(() => {
   init('en');
   refreshState.set('token', 0);
   document.body.innerHTML = '';
   inventory = base();
-  agents = [
-    { id: 'main', name: 'Main' },
-    { id: 'reviewer', name: 'Reviewer' },
-  ];
+  agents = baseAgents();
+  projects = baseProjects();
+  onToast.mockReset();
   rpcMock.mockReset();
-  rpcMock.mockImplementation(async (method, params) => {
-    if (method === 'skill.inventory')
-      return { skills: inventory, stale_shared: [], policy_diagnostics: [] };
-    if (method === 'agent.list') return { agents };
-    if (method === 'skill.inspect')
-      return {
-        id: params.id,
-        content: `# Instructions\n\ncontent-${params.id}`,
-      };
-    return {};
-  });
+  rpcMock.mockImplementation(async (method, params) =>
+    defaultRpc(method, params),
+  );
 });
 afterEach(async () => {
   if (component) await unmount(component);
@@ -127,12 +195,23 @@ async function render() {
     target: document.body,
     props: {
       settings: {},
+      onToast,
       get skillsRefreshToken() {
         return refreshState.get('token');
       },
     },
   });
   flushSync();
+  await settle();
+}
+async function openAddMenu() {
+  click(button('Add skills'));
+  await settle();
+  return document.querySelector('[role="menu"]');
+}
+async function addMenuItem(label) {
+  const menu = await openAddMenu();
+  click(button(label, menu));
   await settle();
 }
 
@@ -144,7 +223,7 @@ describe('Skills manager', () => {
       const pendingReads = [];
       await render();
       collection('Main');
-      click(button('Add skills'));
+      await addMenuItem('Install from link or file…');
       input(
         document.querySelector('#skill-install-source'),
         'https://example.test/demo.skill',
@@ -163,14 +242,11 @@ describe('Skills manager', () => {
           inventory = [...inventory, entry('installed-private', 'demo')];
           return { operation: 'installed', scope: 'agent:main', name: 'demo' };
         }
-        if (method === 'skill.inventory') {
-          if (deferInventory)
-            return new Promise((resolve) => pendingReads.push(resolve));
-          return { skills: inventory };
-        }
+        if (method === 'skill.inventory' && deferInventory)
+          return new Promise((resolve) => pendingReads.push(resolve));
         if (method === 'skill.inspect')
           return { id: params.id, content: 'installed-instructions-sentinel' };
-        return {};
+        return defaultRpc(method, params);
       });
       click(button(t('skills.install.check')));
       await settle();
@@ -186,9 +262,9 @@ describe('Skills manager', () => {
         notifySkillsChanged();
         await settle();
         expect(pendingReads).toHaveLength(2);
-        pendingReads[0]({ skills: inventory });
+        pendingReads[0](snapshot());
         await settle();
-        pendingReads[1]({ skills: inventory });
+        pendingReads[1](snapshot());
       }
       await settle();
       expect(rpcMock).toHaveBeenCalledWith(
@@ -225,130 +301,144 @@ describe('Skills manager', () => {
     expect(getComputedStyle(button('Back to list', view)).display).toBe('none');
   });
 
-  it('puts global and bundled before shared skills and filters each source', async () => {
+  it('groups collections into library, Agents and Projects and filters each library source', async () => {
     await render();
-    const names = [...document.querySelectorAll('.skills-collection-name')].map(
-      (el) => el.textContent,
-    );
-    expect(names).toEqual([
-      'All skills',
-      'Global',
-      'Bundled',
-      'Shared skills',
-      'Skill locations',
-      'Main',
-      'Reviewer',
+    expect(texts('.skills-nav-label')).toEqual([
+      'Library',
+      'Agents',
+      'Projects',
     ]);
     expect(
-      [...document.querySelectorAll('.skills-nav-label')].map(
-        (el) => el.textContent,
-      ),
-    ).toEqual(['Library', 'Agents']);
+      [...document.querySelectorAll('.skills-collection')].map((el) => [
+        el.querySelector('.skills-collection-name').textContent,
+        el.querySelector('.skills-count').textContent,
+      ]),
+    ).toEqual([
+      ['All skills', '4'],
+      ['Global', '1'],
+      ['Bundled', '1'],
+      ['Shared skills', '1'],
+      ['Main', '3'],
+      ['Reviewer', '1'],
+      ['Repo', '0'],
+    ]);
     collection('Global');
     expect(rows().map((row) => row.dataset.skillId)).toEqual(['disabled']);
     collection('Bundled');
     expect(rows().map((row) => row.dataset.skillId)).toEqual(['bundled']);
+    collection('Shared skills');
+    expect(rows().map((row) => row.dataset.skillId)).toEqual(['shared']);
     collection('All skills');
     expect(rows()).toHaveLength(4);
 
     click(button('Skill collections'));
+    expect(texts('.dropdown-primitive__group-label')).toEqual([
+      'Library',
+      'Agents',
+      'Projects',
+    ]);
     const options = [...document.querySelectorAll('[role="option"]')];
-    expect(options.slice(0, 4).map((el) => el.textContent.trim())).toEqual([
-      'All skills (4)',
-      'Global (1)',
-      'Bundled (1)',
-      'Shared skills (1)',
+    expect(
+      options.map((el) => [
+        el.querySelector('.dropdown-primitive__option-label').textContent,
+        el.querySelector('.dropdown-primitive__option-meta').textContent.trim(),
+      ]),
+    ).toEqual([
+      ['All skills', '4'],
+      ['Global', '1'],
+      ['Bundled', '1'],
+      ['Shared skills', '1'],
+      ['Main', '3'],
+      ['Reviewer', '1'],
+      ['Repo', '0'],
     ]);
     click(options[1]);
     expect(rows().map((row) => row.dataset.skillId)).toEqual(['disabled']);
   });
-  it('keeps actions beside search and opens folder setup from the installation dialog with the location draft', async () => {
-    await render();
-    expect(document.querySelector('.skills-header button')).toBeNull();
-    expect(button('Refresh')).toBeUndefined();
-    const add = button('Add skills');
-    expect(add.closest('.skills-toolbar')).toBeTruthy();
-    expect(add.textContent.trim()).toBe('');
-    collection('Skill locations');
-    expect(document.querySelector('.skills-directories').hidden).toBe(false);
-    expect(document.querySelector('#skills-title').textContent.trim()).toBe(
-      'Skill locations',
-    );
-    input(
-      document.querySelector('.skills-directory-add input'),
-      '/draft/location',
-    );
-    collection('All skills');
-    expect(rows()).toHaveLength(4);
 
-    click(button('Add skills'));
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
-    expect(
-      button('Create a custom skill…').classList.contains('btn-tertiary'),
-    ).toBe(true);
-    click(button('Add a skill folder…'));
-    await settle();
-    const directories = document.querySelector('.skills-directories');
-    expect(directories.hidden).toBe(false);
-    expect(document.activeElement).toBe(
-      directories.querySelector('.skills-directory-add input'),
-    );
-    expect(document.activeElement.value).toBe('/draft/location');
-    expect(button('Skill locations').getAttribute('aria-current')).toBe('page');
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
-  });
-  it('shows direct actions and exposes descriptions only through hover or focus', async () => {
+  it('lists each package with its description, source and who gets it', async () => {
     await render();
-    expect(rows()).toHaveLength(4);
-    expect(document.querySelector('.skills-row-description')).toBeNull();
-    for (const row of rows()) {
-      expect(row.closest('.skills-row').textContent).not.toContain(
-        'Purpose of',
-      );
-      expect(row.querySelector('button')).toBeNull();
-      expect(
-        row.closest('.skills-row').querySelector('[role="switch"]'),
-      ).toBeTruthy();
-    }
-    const row = document.querySelector('[data-skill-id="private"]');
-    const visibleTooltip = () =>
-      document.querySelector('#app-tooltip[data-floating-open="true"]');
-    row.dispatchEvent(new MouseEvent('pointerenter'));
-    await new Promise((resolve) =>
-      setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 30),
-    );
-    expect(visibleTooltip().textContent).toBe('Purpose of deploy');
-    row.dispatchEvent(new MouseEvent('pointerleave'));
-    await new Promise((resolve) =>
-      setTimeout(resolve, FLOATING_HOVER_CLOSE_DELAY_MS + 30),
-    );
-    expect(visibleTooltip()).toBeNull();
-    row.focus();
-    expect(visibleTooltip().textContent).toBe('Purpose of deploy');
-    row.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
-    );
-    expect(visibleTooltip()).toBeNull();
-    for (const name of ['Share deploy', 'Delete deploy']) {
-      expect(button(name).textContent.trim()).toBe('');
-      expect(button(name).querySelector('svg')).toBeTruthy();
-    }
-    expect(button('Share teach')).toBeUndefined();
-    expect(button('Delete teach')).toBeUndefined();
+    const list = document.querySelector('.skills-list');
+    expect(
+      list.querySelectorAll('[role="switch"], [role="checkbox"]'),
+    ).toHaveLength(0);
+    expect(
+      rows().map((row) => [
+        row.dataset.skillId,
+        row.querySelector('.skills-row-description').textContent,
+        row.querySelector('.skills-row-source').textContent,
+        row.querySelector('.skills-row-summary').textContent,
+        row.querySelector('button'),
+      ]),
+    ).toEqual([
+      ['disabled', 'Purpose of broken', 'Global', 'Off everywhere', null],
+      ['private', 'Purpose of deploy', 'Private', 'Main only', null],
+      [
+        'shared',
+        'Purpose of notes',
+        'Private',
+        'Main + 0 shared (1 blocked)',
+        null,
+      ],
+      ['bundled', 'Purpose of teach', 'Bundled', '2 of 2 Agents', null],
+    ]);
     expect(
       rpcMock.mock.calls.some(([method]) => method === 'skill.inspect'),
     ).toBe(false);
   });
+
+  it('offers install, create and folder setup from one keyboard-operable add menu', async () => {
+    await render();
+    const trigger = button('Add skills');
+    expect(trigger.closest('.skills-toolbar')).toBeTruthy();
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+    const menu = await openAddMenu();
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(texts('[role="menuitem"]', menu)).toEqual([
+      'Install from link or file…',
+      'Create skill…',
+      'Manage skill folders…',
+    ]);
+    expect(document.activeElement.textContent).toBe(
+      'Install from link or file…',
+    );
+    key(document.activeElement, 'ArrowDown');
+    expect(document.activeElement.textContent).toBe('Create skill…');
+    key(document.activeElement, 'End');
+    expect(document.activeElement.textContent).toBe('Manage skill folders…');
+    key(document.activeElement, 'Escape');
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+
+    collection('Bundled');
+    await addMenuItem('Manage skill folders…');
+    const directories = document.querySelector('.skills-directories');
+    expect(directories.hidden).toBe(false);
+    expect(document.querySelector('#skills-title').textContent.trim()).toBe(
+      'Skill folders',
+    );
+    expect(document.activeElement).toBe(
+      directories.querySelector('.skills-directory-add input'),
+    );
+    input(document.activeElement, '/draft/location');
+    click(button('← Back'));
+    await settle();
+    expect(directories.hidden).toBe(true);
+    expect(rows().map((row) => row.dataset.skillId)).toEqual(['bundled']);
+    expect(document.activeElement).toBe(button('Add skills'));
+    await addMenuItem('Manage skill folders…');
+    expect(document.activeElement.value).toBe('/draft/location');
+  });
+
   it('bounds 750 skills to 50 rows, reaches the last page, and searches the whole collection', async () => {
-    agents = Array.from({ length: 15 }, (_, i) => ({
-      id: `agent-${i}`,
-      name: `Agent ${i}`,
-    }));
-    inventory = agents.flatMap((agent, i) =>
+    agents = Array.from({ length: 15 }, (_, i) =>
+      agent(`agent-${i}`, `Agent ${i}`, ['*'], []),
+    );
+    inventory = agents.flatMap((owner, i) =>
       Array.from({ length: 50 }, (_, j) =>
         entry(`id-${i}-${j}`, `skill-${String(i * 50 + j).padStart(3, '0')}`, {
-          owner_id: agent.id,
-          editable_scope: `agent:${agent.id}`,
+          owner_id: owner.id,
+          editable_scope: `agent:${owner.id}`,
         }),
       ),
     );
@@ -360,24 +450,6 @@ describe('Skills manager', () => {
     input(document.querySelector('input[type="search"]'), 'skill-749');
     expect(rows()).toHaveLength(1);
     expect(rows()[0].dataset.skillId).toBe('id-14-49');
-    input(document.querySelector('input[type="search"]'), '');
-    collection('Agent 14');
-    expect(rows()).toHaveLength(50);
-    expect(
-      rows().every((row) => row.dataset.skillId.startsWith('id-14-')),
-    ).toBe(true);
-  });
-  it('keeps shared originals with their owner and also finds them in Shared skills', async () => {
-    await render();
-    collection('Main');
-    expect(rows().map((row) => row.dataset.skillId)).toEqual([
-      'private',
-      'shared',
-    ]);
-    collection('Shared skills');
-    expect(rows().map((row) => row.dataset.skillId)).toEqual(['shared']);
-    collection('Reviewer');
-    expect(rows()).toHaveLength(0);
   });
   it('opens the exact duplicate-name package and rejects late detail responses', async () => {
     inventory = [
@@ -385,18 +457,19 @@ describe('Skills manager', () => {
       entry('second', 'duplicate', {
         origin: 'project:Second',
         owner_id: null,
+        project_id: 'second',
         editable_scope: null,
       }),
     ];
     let finish;
     rpcMock.mockImplementation(async (method, params) => {
-      if (method === 'skill.inventory') return { skills: inventory };
-      if (method === 'agent.list') return { agents };
       if (method === 'skill.inspect' && params.id === 'first')
         return new Promise((resolve) => {
           finish = resolve;
         });
-      return { id: params.id, content: 'second-sentinel' };
+      if (method === 'skill.inspect')
+        return { id: params.id, content: 'second-sentinel' };
+      return defaultRpc(method, params);
     });
     await render();
     choose('first');
@@ -413,6 +486,9 @@ describe('Skills manager', () => {
     );
     expect(button('Edit instructions')).toBeUndefined();
     expect(rpcMock).toHaveBeenCalledWith('skill.inspect', { id: 'second' });
+    expect(document.querySelector('.skills-detail-note').textContent).toBe(
+      'Also exists as Main’s private copy.',
+    );
   });
   it('edits a shared original using its owner scope', async () => {
     await render();
@@ -429,45 +505,18 @@ describe('Skills manager', () => {
       content: 'updated-content-sentinel',
     });
   });
-  it.each([
-    ['deploy', true, ['reviewer']],
-    // Deselecting every recipient stops sharing.
-    ['notes', false, []],
-  ])(
-    'toggles the only receiver of %s and saves the sharing policy',
-    async (name, shared, receivers) => {
-      await render();
-      click(button(`Share ${name}`));
-      const dialog = document.querySelector('[role="dialog"]');
-      expect(dialog.querySelectorAll('[role="switch"]')).toHaveLength(1);
-      click(dialog.querySelector('[role="switch"]'));
-      click(button(t('common.save'), dialog));
-      await settle();
-      expect(rpcMock).toHaveBeenCalledWith('skill.share', {
-        agent_id: 'main',
-        name,
-        shared,
-        receivers,
-      });
-    },
-  );
   it('creates in the selected Agent scope and retains draft content during inventory refresh', async () => {
     await render();
     collection('Main');
-    click(button('Add skills'));
-    click(button('Create a custom skill…'));
+    await addMenuItem('Create skill…');
     const dialog = document.querySelector('[role="dialog"]');
     input(dialog.querySelector('#new-skill-name'), 'new-sentinel');
     input(dialog.querySelector('#new-skill-description'), 'Use for: reports');
     input(dialog.querySelector('#new-skill-content'), 'draft-sentinel');
-    const callsBefore = rpcMock.mock.calls.filter(
-      ([method]) => method === 'skill.inventory',
-    ).length;
+    const callsBefore = calls('skill.inventory').length;
     notifySkillsChanged();
     await settle();
-    expect(
-      rpcMock.mock.calls.filter(([method]) => method === 'skill.inventory'),
-    ).toHaveLength(callsBefore + 1);
+    expect(calls('skill.inventory')).toHaveLength(callsBefore + 1);
     expect(dialog.querySelector('textarea').value).toBe('draft-sentinel');
     click(button('Create skill', dialog));
     await settle();
@@ -478,91 +527,157 @@ describe('Skills manager', () => {
         '---\nname: "new-sentinel"\ndescription: "Use for: reports"\n---\n\ndraft-sentinel',
     });
   });
-  it('disables directly from the list using the master policy and reconciles all same-name copies', async () => {
-    inventory.push(
-      entry('duplicate', 'deploy', {
-        owner_id: null,
-        origin: 'bundled',
-        editable_scope: null,
-      }),
-    );
+
+  it('saves an Agent skill selection immediately from its collection', async () => {
     await render();
+    collection('Main');
+    expect(document.querySelector('.skills-list')).toBeNull();
+    expect(texts('.s-check-group__title')).toEqual(['Own skills', 'Bundled']);
+    expect(button('Toggle skill deploy').disabled).toBe(true);
+    click(button('Toggle skill teach'));
+    await settle();
+    expect(calls('agent.update')).toEqual([
+      { id: 'main', excluded_skills: ['teach'] },
+    ]);
+
+    collection('Reviewer');
+    expect(
+      document
+        .querySelector('.skills-selection__auto [role="switch"]')
+        .getAttribute('aria-checked'),
+    ).toBe('false');
+    click(document.querySelector('.skills-selection__auto [role="switch"]'));
+    await settle();
+    // Turning on auto-add keeps the unticked shared Skill off.
+    expect(calls('agent.update').at(-1)).toEqual({
+      id: 'reviewer',
+      allowed_skills: ['*'],
+      excluded_skills: ['notes'],
+    });
+
+    click(document.querySelector('[data-item-key="teach"]'));
+    await settle();
+    expect(rpcMock).toHaveBeenCalledWith('skill.inspect', { id: 'bundled' });
+    expect(document.querySelector('#skill-detail-name').textContent).toBe(
+      'teach',
+    );
+  });
+
+  it('saves Project activation from the Project collection', async () => {
+    await render();
+    collection('Repo');
+    click(button('Toggle skill teach'));
+    await settle();
+    expect(calls('project.set')).toEqual([
+      { project_id: 'repo', skills_bundled_enabled: ['teach'] },
+    ]);
+  });
+
+  it('changes Agent and Project access from the Skill detail', async () => {
+    await render();
+    choose('bundled');
+    await settle();
+    const access = document.querySelector('.skills-access');
+    expect(button('Allow for Main', access).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    click(button('Allow for Main', access));
+    await settle();
+    expect(calls('agent.update')).toEqual([
+      { id: 'main', excluded_skills: ['teach'] },
+    ]);
+    click(button('Active in project Repo', access));
+    await settle();
+    expect(calls('project.set')).toEqual([
+      { project_id: 'repo', skills_bundled_enabled: ['teach'] },
+    ]);
+  });
+
+  it('shares a private Skill through its Agent rows and allows a blocked receiver', async () => {
+    await render();
+    choose('shared');
+    await settle();
+    let access = document.querySelector('.skills-access');
+    const owner = button('Allow for Main', access);
+    expect(owner.disabled).toBe(true);
+    expect(owner.querySelector('.s-check-row__state').textContent).toBe(
+      'Owner',
+    );
+    const share = button('Share with Reviewer', access);
+    expect(share.getAttribute('aria-checked')).toBe('true');
+    expect(share.textContent).toContain(
+      'Blocked by this Agent’s skill selection',
+    );
+    click(button('Allow notes for Reviewer', access));
+    await settle();
+    expect(calls('agent.update')).toEqual([
+      { id: 'reviewer', allowed_skills: ['teach', 'notes'] },
+    ]);
+    click(button('Share with Reviewer', access));
+    await settle();
+    choose('private');
+    await settle();
+    access = document.querySelector('.skills-access');
+    click(button('Share with Reviewer', access));
+    await settle();
+    expect(calls('skill.share')).toEqual([
+      { agent_id: 'main', name: 'notes', shared: false, receivers: [] },
+      {
+        agent_id: 'main',
+        name: 'deploy',
+        shared: true,
+        receivers: ['reviewer'],
+      },
+    ]);
+  });
+
+  it('turns a Skill off everywhere from the detail and back on from its banner', async () => {
+    await render();
+    choose('private');
+    await settle();
+    rpcMock.mockRejectedValueOnce(new Error('mutation-sentinel'));
+    click(button('Turn off everywhere'));
+    await settle();
+    expect(onToast).toHaveBeenCalledWith({
+      title: `${t('skills.toggleError')} mutation-sentinel`,
+      variant: 'error',
+    });
     let finish;
     rpcMock.mockImplementation(async (method, params) => {
       if (method === 'skill.set_disabled')
         return new Promise((resolve) => {
-          finish = () => {
-            inventory = inventory.map((item) =>
-              item.name === params.name
-                ? { ...item, disabled: true, status: 'disabled' }
-                : item,
-            );
-            resolve({});
-          };
+          finish = resolve;
         });
-      if (method === 'skill.inventory') return { skills: inventory };
-      return {};
+      return defaultRpc(method, params);
     });
-    const toggle = document
-      .querySelector('[data-skill-id="private"]')
-      .closest('.skills-row')
-      .querySelector('[role="switch"]');
-    click(toggle);
-    expect(toggle.disabled).toBe(true);
-    expect(toggle.getAttribute('aria-checked')).toBe('true');
-    toggle.click();
+    click(button('Turn off everywhere'));
+    expect(button('Turn off everywhere').disabled).toBe(true);
+    finish({});
+    await settle();
+    expect(calls('skill.set_disabled')).toEqual([
+      { name: 'deploy', disabled: true },
+      { name: 'deploy', disabled: true },
+    ]);
+
+    choose('disabled');
+    await settle();
+    const detail = document.querySelector('.skills-detail');
+    expect(button('Turn off everywhere', detail)).toBeUndefined();
     expect(
-      rpcMock.mock.calls.filter(([method]) => method === 'skill.set_disabled'),
-    ).toHaveLength(1);
-    finish();
+      [...detail.querySelectorAll('.skills-access [role="checkbox"]')].every(
+        (box) => box.disabled,
+      ),
+    ).toBe(true);
+    click(button('Turn on', detail));
     await settle();
-    for (const id of ['private', 'duplicate']) {
-      const control = document
-        .querySelector(`[data-skill-id="${id}"]`)
-        .closest('.skills-row')
-        .querySelector('[role="switch"]');
-      expect(control.getAttribute('aria-checked')).toBe('false');
-      expect(control.disabled).toBe(false);
-    }
-    expect(rpcMock).toHaveBeenCalledWith('skill.set_disabled', {
-      name: 'deploy',
-      disabled: true,
-    });
-    expect(
-      rpcMock.mock.calls.some(([method]) => method === 'skill.inspect'),
-    ).toBe(false);
-  });
-  it('retains authoritative state and restores actions when disabling fails', async () => {
-    await render();
-    rpcMock.mockRejectedValueOnce(new Error('mutation-sentinel'));
-    const toggle = document
-      .querySelector('[data-skill-id="private"]')
-      .closest('.skills-row')
-      .querySelector('[role="switch"]');
-    click(toggle);
-    await settle();
-    expect(toggle.getAttribute('aria-checked')).toBe('true');
-    expect(toggle.disabled).toBe(false);
-    expect(document.querySelector('.skills-detail')).toBeNull();
-  });
-  it('re-enables a disabled Skill directly from the list', async () => {
-    await render();
-    click(
-      document
-        .querySelector('[data-skill-id="disabled"]')
-        .closest('.skills-row')
-        .querySelector('[role="switch"]'),
-    );
-    await settle();
-    expect(rpcMock).toHaveBeenCalledWith('skill.set_disabled', {
+    expect(calls('skill.set_disabled').at(-1)).toEqual({
       name: 'broken',
       disabled: false,
     });
   });
   it('refreshes the list immediately after connecting a Skill folder', async () => {
     await render();
-    click(button('Add skills'));
-    click(button('Add a skill folder…'));
+    await addMenuItem('Manage skill folders…');
     rpcMock.mockImplementation(async (method, params) => {
       if (method === 'settings.update') {
         inventory = [
@@ -575,8 +690,7 @@ describe('Skills manager', () => {
         ];
         return { skills: { directories: params.skills.directories } };
       }
-      if (method === 'skill.inventory') return { skills: inventory };
-      return {};
+      return defaultRpc(method, params);
     });
     input(
       document.querySelector('.skills-directory-add input'),
@@ -592,61 +706,38 @@ describe('Skills manager', () => {
     expect(rows().map((row) => row.dataset.skillId)).toContain(
       'folder-sentinel',
     );
-    expect(button('Delete folder-skill')).toBeUndefined();
   });
-  it('confirms deletion directly from the owner row without inspection', async () => {
+  it('confirms deletion from the detail header', async () => {
     await render();
-    click(button('Delete notes'));
+    choose('shared');
+    await settle();
+    click(button('Delete notes', document.querySelector('.skills-detail')));
     const dialog = document.querySelector('[role="dialog"]');
-    expect(
-      rpcMock.mock.calls.some(([method]) => method === 'skill.inspect'),
-    ).toBe(false);
-    expect(
-      rpcMock.mock.calls.some(([method]) => method === 'skill.delete'),
-    ).toBe(false);
+    expect(calls('skill.delete')).toEqual([]);
     click(button('Delete', dialog));
     await settle();
-    expect(rpcMock).toHaveBeenCalledWith('skill.delete', {
-      scope: 'agent:main',
-      name: 'notes',
-    });
+    expect(calls('skill.delete')).toEqual([
+      { scope: 'agent:main', name: 'notes' },
+    ]);
   });
-  it('opens a Skill detail with header actions, keyboard content tabs, and focus return', async () => {
+  it('opens a Skill detail with its source, keyboard content tabs, and focus return', async () => {
     await render();
     choose('private');
     await settle();
     const detail = document.querySelector('.skills-detail');
     expect(document.activeElement).toBe(detail);
     expect(button('Delete deploy', detail)).toBeTruthy();
-    expect(button('Share deploy', detail)).toBeTruthy();
-    const enable = detail.querySelector(
-      '.skills-detail-header [role="switch"]',
-    );
-    expect(enable.getAttribute('aria-label')).toBe(
-      t('skills.enabledNamed', { name: 'deploy' }),
-    );
-    expect(enable.closest('label').textContent.trim()).toBe(
-      t('skills.enabled'),
-    );
+    expect(button('Turn off everywhere', detail)).toBeTruthy();
     expect(
-      document
-        .querySelector('[data-skill-id="private"]')
-        .closest('.skills-row')
-        .querySelector('[role="switch"]')
-        .closest('label'),
-    ).toBeNull();
+      detail.querySelector('.skills-detail-source').textContent.trim(),
+    ).toBe('Private skill of Main');
     expect(
-      detail.querySelector('.skills-detail-scroll .skills-actions'),
-    ).toBeNull();
-    expect(detail.querySelector('.skills-description')).toBeNull();
-    expect(detail.querySelector('.skills-management')).toBeNull();
+      detail.querySelector('.skills-detail-description').textContent.trim(),
+    ).toBe('Purpose of deploy');
 
     const tab = document.querySelector('[role="tab"]');
     tab.focus();
-    tab.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
-    );
-    flushSync();
+    key(tab, 'ArrowRight');
     expect(
       document
         .querySelector('[role="tab"][aria-selected="true"]')
@@ -660,7 +751,7 @@ describe('Skills manager', () => {
     await render();
     rpcMock.mockImplementation(async (method) => {
       if (method === 'skill.inventory') throw new Error('refresh-sentinel');
-      return { agents };
+      return {};
     });
     notifySkillsChanged();
     await settle();
@@ -668,7 +759,9 @@ describe('Skills manager', () => {
     expect(document.querySelector('[role="alert"]')).not.toBeNull();
     expect(button('Retry')).toBeTruthy();
     inventory = [...inventory, entry('arrived', 'new-skill')];
-    rpcMock.mockImplementation(async () => ({ skills: inventory }));
+    rpcMock.mockImplementation(async (method, params) =>
+      defaultRpc(method, params),
+    );
     click(button('Retry'));
     await settle();
     expect(document.querySelector('[role="alert"]')).toBeNull();
@@ -700,30 +793,26 @@ describe('skill projections', () => {
     expect(
       filterSkills(entries, '', 'all', 'attention').map((item) => item.id),
     ).toEqual(['disabled']);
-    expect(filterSkills(entries, '', 'agent:reviewer')).toEqual([]);
+    expect(filterSkills(entries, '', 'shared').map((item) => item.id)).toEqual([
+      'shared',
+    ]);
   });
-  it('labels owner, Project, and external source without presenting them as authors', () => {
-    expect(
-      skillSourceLabel(entry('a', 'a'), [
-        { id: 'main', name: 'Owner sentinel' },
-      ]),
-    ).toBe('Agent: Owner sentinel');
-    expect(
-      skillSourceLabel(
-        entry('b', 'b', { owner_id: null, origin: 'project:Repo sentinel' }),
-        [],
-      ),
-    ).toBe('Project: Repo sentinel');
-    expect(
-      skillSourceLabel(
-        entry('c', 'c', {
-          owner_id: null,
-          origin: 'global',
-          source_label: 'Folder sentinel',
-        }),
-        [],
-      ),
-    ).toBe('Source: Folder sentinel');
+  it.each([
+    ['a private package', {}, 'Private'],
+    [
+      'a Project package',
+      { owner_id: null, origin: 'project:Repo sentinel' },
+      'Project',
+    ],
+    ['a bundled package', { owner_id: null, origin: 'bundled' }, 'Bundled'],
+    [
+      'an added folder or Extension',
+      { owner_id: null, origin: 'global', source_label: 'computer_use' },
+      'Computer use',
+    ],
+    ['the global folder', { owner_id: null, origin: 'global' }, 'Global'],
+  ])('labels %s by where it lives', (_label, extra, text) => {
+    expect(skillSourceLabel(entry('a', 'a', extra))).toBe(text);
   });
   it('omits only a complete frontmatter block for presentation', () => {
     expect(skillInstructionBody('---\nname: x\n---\n# Body')).toBe('# Body');

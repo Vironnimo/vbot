@@ -1,41 +1,39 @@
 <script>
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { inspectSkill, skillInventory } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
-  import Button from '../ui/Button.svelte';
-  import { tooltip } from '$lib/tooltip.js';
-  import Toggle from '../ui/Toggle.svelte';
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
+  import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
+  import AgentSkillsPanel from './AgentSkillsPanel.svelte';
+  import SkillAddMenu from './SkillAddMenu.svelte';
+  import SkillCollectionNav from './SkillCollectionNav.svelte';
+  import SkillDetail from './SkillDetail.svelte';
+  import SkillDialogs from './SkillDialogs.svelte';
   import SkillDirectoryEditor from './SkillDirectoryEditor.svelte';
   import SkillInstallDialog from './SkillInstallDialog.svelte';
-  import TextField from '../ui/TextField.svelte';
-  import EmptyState from '../ui/EmptyState.svelte';
-  import StatusChip from '../ui/StatusChip.svelte';
-  import {
-    skillStatusVariant,
-    skillStatusLabel,
-    skillDiagnosticLines,
-    skillSourceLabel,
-    agentDisplayName,
-    skillInstructionBody,
-    filterSkills,
-    skillCollections,
-    SKILL_PAGE_SIZE,
-  } from './skillsView.js';
-  import Badge from '../ui/Badge.svelte';
-  import TabList from '../ui/TabList.svelte';
-  import CopyButton from '../ui/CopyButton.svelte';
-  import MarkdownContent from '../chat/MarkdownContent.svelte';
-  import Modal from '../ui/Modal.svelte';
-  import InfoHint from '../ui/InfoHint.svelte';
-  import TextArea from '../ui/TextArea.svelte';
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
-  import { onMount, onDestroy, tick } from 'svelte';
-  import { listAgents, inspectSkill, skillInventory } from '$lib/api.js';
+  import SkillLibraryList from './SkillLibraryList.svelte';
+  import SkillSelectionPanel from './SkillSelectionPanel.svelte';
   import { createSkillActions } from './actions.svelte.js';
+  import {
+    projectSkillView,
+    projectionSkillSections,
+    skillAccessOf,
+  } from './skillAccess.js';
+  import {
+    filterSkills,
+    LIBRARY_SCOPES,
+    SKILL_PAGE_SIZE,
+    skillCollectionText,
+    skillCollections,
+  } from './skillsView.js';
   import './skills.css';
 
-  // Collection navigation, bounded results, and inspection of one exact Skill.
-  // Runtime policy and write scopes remain server-owned.
+  // The Skills manager: collections (library filters, Agents, Projects), the
+  // package list or an Agent's / Project's Skill selection, and the detail of
+  // one package. The server owns precedence and write scopes; skill.inventory
+  // projects the effective access this view presents and edits.
 
   const noop = () => {};
 
@@ -44,13 +42,52 @@
     onSettingsCommit = noop,
     onToast = noop,
     skillsRefreshToken = 0,
+    agentsRefreshToken = 0,
+    projectsRefreshToken = 0,
   } = $props();
+
+  let inventory = $state([]);
+  let agents = $state([]);
+  let projects = $state([]);
+  let staleShared = $state([]);
+  let policyDiagnostics = $state([]);
+  let loading = $state(true);
+  let loaded = $state(false);
+  let loadError = $state('');
+
+  let scope = $state('all');
+  let returnScope = 'all';
+  let statusFilter = $state('all');
+  let searchQuery = $state('');
+  let page = $state(0);
+  let selectedId = $state(null);
+  let inspected = $state(null);
+  let inspectLoading = $state(false);
+  let inspectError = $state('');
+  let contentTab = $state('instructions');
+
+  let showDirectories = $state(false);
+  let directoryError = $state('');
+  let showInstall = $state(false);
+  let installScope = $state('global');
+
+  let detail = $state();
+  let list = $state();
+  let addMenu = $state();
+  let resultsElement = $state();
+  let directoryEditor = $state();
+
+  let inventoryVersion = 0;
+  let inspectVersion = 0;
+  let disposed = false;
+  let pendingInstallSelection = null;
+
   const actions = createSkillActions({
     get agents() {
       return agents;
     },
-    get scope() {
-      return scope;
+    get inspected() {
+      return inspected;
     },
     get onToast() {
       return onToast;
@@ -58,55 +95,31 @@
     get loadInventory() {
       return loadInventory;
     },
-    get inspected() {
-      return inspected;
-    },
-    get agentError() {
-      return agentError;
-    },
   });
 
-  let agents = $state([]);
-  let inventory = $state([]);
-  let staleShared = $state([]);
-  let loading = $state(true);
-  let loadError = $state('');
-
-  // View-mode state: group by source (origin) or by agent (owner-centric).
-  let scope = $state('all');
-  let statusFilter = $state('all');
-  let page = $state(0);
-  let selectedId = $state(null);
-  let inspected = $state(null);
-  let inspectLoading = $state(false);
-  let inspectError = $state('');
-  let contentTab = $state('instructions');
-  let detailElement = $state();
-  let listElement = $state();
-  let agentError = $state('');
-  let directoryError = $state('');
-  let policyDiagnostics = $state([]);
-  let inventoryVersion = 0;
-  let inspectVersion = 0;
-  let disposed = false;
-  let pendingInstallSelection = null;
-  onDestroy(() => {
-    disposed = true;
-    inventoryVersion++;
-    inspectVersion++;
-  });
-  let searchQuery = $state('');
-
-  // selected receiver agent ids
-
-  let showDirectories = $state(false);
-  let showInstall = $state(false);
-  let installScope = $state('global');
-  let directoryEditor = $state();
-  let collections = $derived(skillCollections(inventory, agents));
+  let collections = $derived(skillCollections(inventory, agents, projects));
   let collection = $derived(collections.find((item) => item.key === scope));
+  let collectionText = $derived(skillCollectionText(collection));
+  let isLibrary = $derived(LIBRARY_SCOPES.includes(scope));
+  let scopeAgent = $derived(
+    collection?.section === 'agents'
+      ? agents.find((agent) => agent.id === collection.id)
+      : null,
+  );
+  let scopeProject = $derived(
+    collection?.section === 'projects'
+      ? projects.find((project) => project.project_id === collection.id)
+      : null,
+  );
+  let projectView = $derived(
+    scopeProject
+      ? projectSkillView(projectionSkillSections(scopeProject, inventory))
+      : null,
+  );
   let filtered = $derived(
-    filterSkills(inventory, searchQuery, scope, statusFilter, agents),
+    isLibrary
+      ? filterSkills(inventory, searchQuery, scope, statusFilter, agents)
+      : [],
   );
   let pageCount = $derived(
     Math.max(1, Math.ceil(filtered.length / SKILL_PAGE_SIZE)),
@@ -121,104 +134,126 @@
   let selected = $derived(
     inventory.find((entry) => entry.id === selectedId) ?? null,
   );
-  let diagnostics = $derived(selected ? skillDiagnosticLines(selected) : []);
   let statusOptions = $derived([
     { value: 'all', label: t('skills.filter.all') },
-    {
-      value: 'attention',
-      label: t('skills.filter.attention'),
-    },
+    { value: 'attention', label: t('skills.filter.attention') },
     { value: 'disabled', label: t('skills.status.disabled') },
     { value: 'available', label: t('skills.status.available') },
   ]);
-  let contentTabs = $derived([
-    { id: 'instructions', label: t('skills.instructions') },
-    { id: 'original', label: t('skills.original') },
-  ]);
+
+  onMount(() => {
+    void loadInventory();
+  });
+
+  onDestroy(() => {
+    disposed = true;
+    inventoryVersion++;
+    inspectVersion++;
+  });
+
+  // Skills, Agent and Project resource events (our own writes included) bump
+  // these tokens; refresh server truth without tearing down open drafts.
+  let lastTokens = null;
+  $effect(() => {
+    const tokens = [
+      skillsRefreshToken,
+      agentsRefreshToken,
+      projectsRefreshToken,
+    ];
+    const changed =
+      lastTokens && tokens.some((token, index) => token !== lastTokens[index]);
+    lastTokens = tokens;
+    if (changed) void loadInventory();
+  });
 
   function clearSelection() {
     pendingInstallSelection = null;
     selectedId = null;
     inspected = null;
     inspectError = '';
+    inspectLoading = false;
     inspectVersion++;
   }
+
   function changeScope(next) {
     scope = next;
     page = 0;
     clearSelection();
   }
+
   function changeSearch(next) {
     searchQuery = next;
     page = 0;
-    clearSelection();
+    if (isLibrary) clearSelection();
   }
+
   function changeStatus(next) {
     statusFilter = next;
     page = 0;
     clearSelection();
   }
+
   function changePage(next) {
     page = next;
     clearSelection();
-    listElement?.scrollTo?.(0, 0);
+    list?.scrollToTop();
   }
 
-  async function openSkill(entry, focus = true) {
-    pendingInstallSelection = null;
-    selectedId = entry.id;
-    if (inspected?.id !== entry.id) inspected = null;
-    inspectError = '';
-    inspectLoading = true;
+  async function inspect(entry, quiet) {
     const version = ++inspectVersion;
-    if (focus) {
-      contentTab = 'instructions';
-      await tick();
-      detailElement?.focus();
+    if (!quiet) {
+      inspectLoading = true;
+      inspectError = '';
     }
     try {
       const result = await inspectSkill(entry.id);
-      if (!disposed && version === inspectVersion) inspected = result;
+      if (!disposed && version === inspectVersion) {
+        inspected = result;
+        inspectError = '';
+      }
     } catch (error) {
-      if (!disposed && version === inspectVersion) inspectError = error.message;
+      if (!disposed && version === inspectVersion && !quiet)
+        inspectError = error.message;
     } finally {
       if (!disposed && version === inspectVersion) inspectLoading = false;
     }
   }
 
-  async function closeDetail() {
-    const id = selectedId;
-    clearSelection();
-    await tick();
-    listElement?.querySelector(`[data-skill-id="${id}"]`)?.focus();
-  }
-
-  onMount(() => {
-    void loadAgents();
-    void loadInventory();
-  });
-
-  // A skills resource event (our own mutations included) bumps the token;
-  // refresh server truth without tearing down open drafts.
-  let lastSkillsRefreshToken = 0;
-  $effect(() => {
-    const token = skillsRefreshToken;
-    if (token === lastSkillsRefreshToken) {
+  async function openSkill(entry, focus = true) {
+    pendingInstallSelection = null;
+    const quiet = inspected?.id === entry.id && !focus;
+    selectedId = entry.id;
+    if (inspected?.id !== entry.id) inspected = null;
+    if (focus) {
+      contentTab = 'instructions';
+      const request = inspect(entry, false);
+      await tick();
+      detail?.focus();
+      await request;
       return;
     }
-    lastSkillsRefreshToken = token;
-    void loadInventory();
-  });
+    await inspect(entry, quiet);
+  }
 
-  async function loadAgents() {
-    agentError = '';
-    try {
-      const result = await listAgents();
-      if (!disposed)
-        agents = Array.isArray(result?.agents) ? result.agents : [];
-    } catch (error) {
-      if (!disposed) agentError = `${t('skills.agentsError')} ${error.message}`;
+  function openPackage(item) {
+    const entry = inventory.find(
+      (candidate) => candidate.id === item.packageId,
+    );
+    if (entry) void openSkill(entry);
+  }
+
+  async function closeDetail() {
+    const entry = selected;
+    clearSelection();
+    await tick();
+    if (!entry) return;
+    if (isLibrary) {
+      list?.focusRow(entry.id);
+      return;
     }
+    [...(resultsElement?.querySelectorAll('[data-item-key]') ?? [])]
+      .find((element) => element.dataset.itemKey === entry.name)
+      ?.focus();
   }
 
   async function loadInventory() {
@@ -229,8 +264,12 @@
       const result = await skillInventory();
       if (disposed || version !== inventoryVersion) return;
       inventory = Array.isArray(result?.skills) ? result.skills : [];
+      agents = Array.isArray(result?.agents) ? result.agents : [];
+      projects = Array.isArray(result?.projects) ? result.projects : [];
       staleShared = result?.stale_shared ?? [];
       policyDiagnostics = result?.policy_diagnostics ?? [];
+      loaded = true;
+      if (scope !== 'directories' && !collection) changeScope('all');
       const installedEntry =
         pendingInstallSelection &&
         inventory.find(
@@ -258,26 +297,36 @@
     }
   }
 
-  async function openDirectories(focusAdd = false) {
-    actions.createScope = scope.startsWith('agent:')
-      ? scope
-      : actions.GLOBAL_SCOPE;
-    showDirectories = true;
-    changeScope('directories');
-    if (focusAdd) {
-      await tick();
-      directoryEditor?.focusNewDirectory();
-    }
+  function ownScope() {
+    return scopeAgent ? `agent:${scopeAgent.id}` : actions.GLOBAL_SCOPE;
   }
 
   function openInstall() {
-    installScope = scope.startsWith('agent:') ? scope : 'global';
+    installScope = ownScope();
     showInstall = true;
+  }
+
+  async function openDirectories() {
+    if (scope !== 'directories') returnScope = scope;
+    showDirectories = true;
+    changeScope('directories');
+    await tick();
+    directoryEditor?.focusNewDirectory();
+  }
+
+  async function closeDirectories() {
+    changeScope(
+      collections.some((item) => item.key === returnScope)
+        ? returnScope
+        : 'all',
+    );
+    await tick();
+    addMenu?.focus();
   }
 
   async function installed(result) {
     showInstall = false;
-    changeScope(result.scope);
+    changeScope(result.scope === actions.GLOBAL_SCOPE ? 'global' : 'all');
     searchQuery = '';
     statusFilter = 'all';
     // A later resource event can supersede our refresh; the winning inventory
@@ -294,192 +343,59 @@
       onToast({ title: result.warnings.join('\n'), variant: 'warn' });
     await loadInventory();
   }
-</script>
 
-{#snippet skillActions(entry, labelled = false)}
-  <div
-    class="skills-actions"
-    role="group"
-    aria-label={t('skills.actionsFor', { name: entry.name })}
-  >
-    {#if entry.owner_id}
-      <Button
-        variant="tertiary"
-        icon
-        disabled={actions.busy || Boolean(agentError)}
-        ariaLabel={t('skills.shareNamed', { name: entry.name })}
-        tooltip={t('skills.sharing')}
-        onClick={() => actions.openShareModal(entry)}
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          aria-hidden="true"
-          ><circle cx="4" cy="8" r="2" /><circle cx="12" cy="3" r="2" /><circle
-            cx="12"
-            cy="13"
-            r="2"
-          /><path d="m6 7 4-3M6 9l4 3" /></svg
-        >
-      </Button>
-    {/if}
-    {#if entry.editable_scope}
-      <Button
-        variant="danger"
-        icon
-        disabled={actions.busy}
-        ariaLabel={t('skills.deleteNamed', { name: entry.name })}
-        tooltip={t('common.delete')}
-        onClick={() => actions.requestDelete(entry)}
-      >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          aria-hidden="true"
-          ><path d="M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10M7 6v6M9 6v6" /></svg
-        >
-      </Button>
-    {/if}
-    {#if labelled}
-      <label
-        class="skills-enable skills-enable--labelled"
-        use:tooltip={t('skills.disableHelp')}
-      >
-        <span>{t('skills.enabled')}</span>
-        <Toggle
-          checked={!entry.disabled}
-          disabled={actions.busy}
-          ariaLabel={t('skills.enabledNamed', { name: entry.name })}
-          onChange={() => actions.toggleDisabled(entry)}
-        />
-      </label>
-    {:else}
-      <!-- List rows use the small switch so a long list of enabled Skills
-           stays calm. -->
-      <span class="skills-enable" use:tooltip={t('skills.disableHelp')}>
-        <Toggle
-          size="sm"
-          checked={!entry.disabled}
-          disabled={actions.busy}
-          ariaLabel={t('skills.enabledNamed', { name: entry.name })}
-          onChange={() => actions.toggleDisabled(entry)}
-        />
-      </span>
-    {/if}
-  </div>
-{/snippet}
+  function setProjectGroup(groupId, on) {
+    const group = projectView?.groups.find((item) => item.id === groupId);
+    if (group)
+      void actions.updateProjectSkills(
+        scopeProject,
+        groupId,
+        group.items.map((item) => item.name),
+        on,
+      );
+  }
+</script>
 
 <section class="skills-view view active" aria-labelledby="skills-title">
   <aside class="skills-nav secondary-pane" aria-label={t('skills.collections')}>
-    <nav class="secondary-list">
-      {#each ['library', 'agents', 'projects'] as section (section)}
-        {#if collections.some((item) => item.section === section)}
-          <h3 class="skills-nav-label">
-            {section === 'library'
-              ? t('skills.library')
-              : t(`skills.section.${section}`)}
-          </h3>
-          {#each collections.filter((item) => item.section === section) as item (item.key)}
-            <button
-              type="button"
-              class="secondary-list__item skills-collection"
-              class:active={scope === item.key}
-              aria-current={scope === item.key ? 'page' : undefined}
-              onclick={() => changeScope(item.key)}
-            >
-              <span
-                class="skills-collection-name"
-                use:tooltip={{
-                  text: item.label,
-                  placement: 'right',
-                  whenTruncated: true,
-                }}>{item.label}</span
-              >
-              <span class="skills-count">{item.count}</span>
-            </button>
-          {/each}
-          {#if section === 'library'}
-            <button
-              type="button"
-              class="secondary-list__item skills-collection"
-              class:active={scope === 'directories'}
-              aria-current={scope === 'directories' ? 'page' : undefined}
-              onclick={() => openDirectories()}
-            >
-              <span class="skills-collection-name">{t('skills.locations')}</span
-              >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                aria-hidden="true"><path d="M2 4V3h4l2 2h6v8H2V4Z" /></svg
-              >
-            </button>
-          {/if}
-        {/if}
-      {/each}
-    </nav>
+    <SkillCollectionNav {collections} {scope} onSelect={changeScope} />
   </aside>
 
   <div class="skills-main">
-    <div class="skills-mobile-nav">
-      <Dropdown
-        value={scope}
-        options={[
-          ...collections.slice(0, 4).map((item) => ({
-            value: item.key,
-            label: `${item.label} (${item.count})`,
-          })),
-          { value: 'directories', label: t('skills.locations') },
-          ...collections.slice(4).map((item) => ({
-            value: item.key,
-            label: `${item.label} (${item.count})`,
-          })),
-        ]}
-        ariaLabel={t('skills.collections')}
-        onValueChange={(next) => {
-          if (next === 'directories') void openDirectories();
-          else changeScope(next);
-        }}
+    <div class="skills-mobile-nav" class:skills-mobile-hidden={selected}>
+      <SkillCollectionNav
+        variant="dropdown"
+        {collections}
+        {scope}
+        onSelect={changeScope}
       />
     </div>
-    <header class="view-header skills-header">
+    <header
+      class="view-header skills-header"
+      class:skills-mobile-hidden={selected}
+    >
       <div class="view-header__intro">
         <h2 id="skills-title" class="view-header__title">
           {scope === 'directories'
-            ? t('skills.locations')
+            ? t('skills.folders.title')
             : collection?.label || t('skills.title')}
         </h2>
         <p class="view-header__subtitle">
           {scope === 'directories'
             ? t('skills.locationsSubtitle')
-            : scope.startsWith('agent:')
-              ? t('skills.agentSubtitle', { name: collection?.label })
-              : scope === 'shared'
-                ? t('skills.sharedSubtitle')
-                : t('skills.librarySubtitle')}
+            : collectionText.subtitle}
         </p>
       </div>
+      {#if scope === 'directories'}
+        <Button variant="secondary" onClick={closeDirectories}
+          >← {t('common.back')}</Button
+        >
+      {/if}
     </header>
 
     {#if loadError}
       <Banner variant="error" role="alert"
         >{loadError}<Button variant="secondary" onClick={loadInventory}
-          >{t('common.retry')}</Button
-        ></Banner
-      >
-    {/if}
-    {#if agentError}
-      <Banner variant="warn" role="alert"
-        >{agentError}<Button variant="secondary" onClick={loadAgents}
           >{t('common.retry')}</Button
         ></Banner
       >
@@ -491,7 +407,11 @@
             count: staleShared.length + policyDiagnostics.length,
           })}</summary
         >
-        <p>{t('skills.staleShared', { count: staleShared.length })}</p>
+        {#if staleShared.length}<p>
+            {staleShared.length === 1
+              ? t('skills.staleSharedOne')
+              : t('skills.staleShared', { count: staleShared.length })}
+          </p>{/if}
         <ul>
           {#each staleShared as item, index (index)}<li>
               {item.agent_id} / {item.name}
@@ -516,40 +436,17 @@
           {onToast}
           onError={(message) => (directoryError = message)}
         />
-        <div class="skills-create-secondary">
-          <Button
-            variant="secondary"
-            disabled={actions.busy}
-            onClick={openInstall}>{t('skills.install.title')}</Button
-          >
-          <Button
-            variant="tertiary"
-            disabled={actions.busy}
-            onClick={actions.openCreateModal}>{t('skills.createCustom')}</Button
-          >
-        </div>
       {/if}
     </div>
     {#if scope !== 'directories'}
       <div class="skills-toolbar" class:skills-mobile-hidden={selected}>
-        <Button
-          variant="secondary"
-          icon
-          ariaLabel={t('skills.addSkills')}
-          tooltip={t('skills.addSkills')}
+        <SkillAddMenu
+          bind:this={addMenu}
           disabled={actions.busy}
-          onClick={openInstall}
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 18 18"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            aria-hidden="true"><path d="M9 3v12M3 9h12" /></svg
-          >
-        </Button>
+          onInstall={openInstall}
+          onCreate={() => actions.openCreateModal(ownScope())}
+          onFolders={openDirectories}
+        />
         <div class="skills-search">
           <svg
             viewBox="0 0 16 16"
@@ -564,244 +461,110 @@
             type="search"
             value={searchQuery}
             onInput={changeSearch}
-            placeholder={t('skills.searchLibrary')}
-            ariaLabel={t('skills.searchLibrary')}
+            placeholder={isLibrary
+              ? t('skills.searchLibrary')
+              : t('skills.panel.filterPlaceholder')}
+            ariaLabel={isLibrary
+              ? t('skills.searchLibrary')
+              : t('skills.panel.filter')}
           />
         </div>
-        <Dropdown
-          value={statusFilter}
-          options={statusOptions}
-          ariaLabel={t('skills.filter.label')}
-          onValueChange={changeStatus}
-        />
+        {#if isLibrary}
+          <Dropdown
+            value={statusFilter}
+            options={statusOptions}
+            ariaLabel={t('skills.filter.label')}
+            onValueChange={changeStatus}
+          />
+        {/if}
       </div>
       <div class="skills-workspace" class:skills-workspace--selected={selected}>
         <section
           class="skills-results"
           class:skills-mobile-hidden={selected}
           aria-label={t('skills.results')}
+          aria-busy={actions.busy}
+          bind:this={resultsElement}
         >
-          <div class="s-group-toolbar skills-results-meta" aria-live="polite">
-            <span class="s-group-toolbar__meta"
-              >{t('skills.resultCount', { count: filtered.length })}</span
-            >
-            {#if loading}<span class="s-group-toolbar__meta"
-                >{t('skills.refreshing')}</span
-              >{/if}
-            {#if searchQuery || statusFilter !== 'all'}
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  searchQuery = '';
-                  changeStatus('all');
-                }}>{t('skills.clearFilters')}</Button
-              >
-            {/if}
-          </div>
-          <div class="skills-list" bind:this={listElement}>
-            {#if loading && !inventory.length}
-              <Banner variant="neutral">{t('skills.loading')}</Banner>
-            {:else if !filtered.length}
-              <EmptyState
-                title={searchQuery || statusFilter !== 'all'
-                  ? t('skills.noMatches')
-                  : t('skills.noCollectionSkills')}
-                description={searchQuery || statusFilter !== 'all'
-                  ? t('skills.noMatchesHelp')
-                  : t('skills.noCollectionSkillsHelp')}
+          {#if isLibrary}
+            <SkillLibraryList
+              bind:this={list}
+              entries={visibleSkills}
+              total={filtered.length}
+              {selectedId}
+              {loading}
+              {loaded}
+              filtersActive={Boolean(searchQuery) || statusFilter !== 'all'}
+              emptyTitle={collectionText.empty}
+              emptyHelp={collectionText.emptyHelp}
+              {agents}
+              {projects}
+              page={currentPage}
+              {pageCount}
+              onOpen={(entry) => openSkill(entry)}
+              onPage={changePage}
+              onClearFilters={() => {
+                searchQuery = '';
+                changeStatus('all');
+              }}
+            />
+          {:else if scopeAgent}
+            <div class="skills-panel-scroll">
+              <AgentSkillsPanel
+                agent={scopeAgent}
+                access={skillAccessOf(scopeAgent)}
+                {inventory}
+                {agents}
+                {projects}
+                query={searchQuery}
+                onChange={(next) => actions.updateAgentAccess(scopeAgent, next)}
+                onOpen={openPackage}
               />
-            {:else}
-              <div class="s-group skills-group">
-                {#each visibleSkills as entry (entry.id)}
-                  <div
-                    class="skills-row"
-                    class:skills-row--selected={selectedId === entry.id}
-                    class:skills-row--disabled={entry.disabled}
-                  >
-                    <button
-                      type="button"
-                      class="skills-row-open"
-                      data-skill-id={entry.id}
-                      aria-pressed={selectedId === entry.id}
-                      aria-label={entry.name}
-                      use:tooltip={entry.description ||
-                        t('skills.noDescription')}
-                      onclick={() => openSkill(entry)}
-                    >
-                      <span class="skills-row-copy">
-                        <span class="skills-row-title">
-                          <span class="skills-row-name">{entry.name}</span>
-                          {#if entry.status !== 'available'}<StatusChip
-                              variant={skillStatusVariant(entry)}
-                              >{skillStatusLabel(entry)}</StatusChip
-                            >
-                          {:else if skillDiagnosticLines(entry).length}<Badge
-                              variant="warn">{t('skills.notes')}</Badge
-                            >{/if}
-                        </span>
-                        <span class="skills-row-source">
-                          {skillSourceLabel(entry, agents)}{#if entry.shared}
-                            <span
-                              class="skills-source-divider"
-                              aria-hidden="true">·</span
-                            >{t('skills.sharedBadge')}{/if}
-                        </span>
-                      </span>
-                    </button>
-                    {@render skillActions(entry)}
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-          {#if pageCount > 1}
-            <div class="skills-pagination">
-              <Button
-                variant="secondary"
-                disabled={currentPage === 0}
-                onClick={() => changePage(currentPage - 1)}
-                ariaLabel={t('skills.previousPage')}>←</Button
-              >
-              <span
-                >{t('skills.page', {
-                  page: currentPage + 1,
-                  pages: pageCount,
-                })}</span
-              >
-              <Button
-                variant="secondary"
-                disabled={currentPage + 1 === pageCount}
-                onClick={() => changePage(currentPage + 1)}
-                ariaLabel={t('skills.nextPage')}>→</Button
-              >
+            </div>
+          {:else if projectView}
+            <div class="skills-panel-scroll">
+              <SkillSelectionPanel
+                groups={projectView.groups}
+                active={projectView.active}
+                total={projectView.total}
+                query={searchQuery}
+                onToggle={(groupId, name, on) =>
+                  actions.updateProjectSkills(
+                    scopeProject,
+                    groupId,
+                    [name],
+                    on,
+                  )}
+                onSetAll={setProjectGroup}
+                onOpen={openPackage}
+                emptyTitle={collectionText.empty}
+                emptyHelp={collectionText.emptyHelp}
+              />
             </div>
           {/if}
         </section>
         {#if selected}
-          <section
-            class="skills-detail"
-            tabindex="-1"
-            bind:this={detailElement}
-            aria-labelledby="skill-detail-name"
-          >
-            <div class="skills-detail-top">
-              <Button
-                variant="secondary"
-                class="skills-detail-back"
-                ariaLabel={t('skills.backToList')}
-                onClick={closeDetail}>← {t('skills.backToList')}</Button
-              >
-              <StatusChip variant={skillStatusVariant(selected)}
-                >{skillStatusLabel(selected)}</StatusChip
-              >
-            </div>
-            <header class="skills-detail-header">
-              <h3
-                id="skill-detail-name"
-                use:tooltip={selected.description || t('skills.noDescription')}
-              >
-                {selected.name}
-              </h3>
-              <p class="skills-detail-source">
-                {skillSourceLabel(selected, agents)}
-              </p>
-              {@render skillActions(selected, true)}
-            </header>
-            <div class="skills-detail-scroll">
-              <div class="skills-access">
-                <h4>{t('skills.access')}</h4>
-                {#if selected.owner_id}
-                  <p>
-                    {t('skills.ownerAccess', {
-                      name: agentDisplayName(selected.owner_id, agents),
-                    })}
-                  </p>
-                  <p>
-                    {selected.shared
-                      ? t('skills.receivers', {
-                          names: selected.shared_with
-                            .map((id) => agentDisplayName(id, agents))
-                            .join(', '),
-                        })
-                      : t('skills.privateAccess')}
-                  </p>
-                  {#if selected.shared}<p class="skills-secondary">
-                      {t('skills.sharedAccessHelp')}
-                    </p>{/if}
-                {:else}<p>
-                    {selected.origin?.startsWith('project:')
-                      ? t('skills.projectAccess')
-                      : t('skills.poolAccess')}
-                  </p>{/if}
-                {#if selected.disabled}<p>{t('skills.disabledEffect')}</p>{/if}
-              </div>
-              {#if diagnostics.length}
-                <details
-                  class="skills-diagnostics"
-                  open={['invalid', 'unavailable'].includes(selected.status)}
-                >
-                  <summary
-                    >{t('skills.diagnostics', {
-                      count: diagnostics.length,
-                    })}</summary
-                  >
-                  <ul>
-                    {#each diagnostics as line, index (index)}<li>
-                        {line}
-                      </li>{/each}
-                  </ul>
-                </details>
-              {/if}
-              <div class="skills-content-head">
-                <TabList
-                  items={contentTabs}
-                  value={contentTab}
-                  idPrefix="skill-content"
-                  ariaLabel={t('skills.contentView')}
-                  onChange={(next) => (contentTab = next)}
-                />
-                <div class="skills-content-actions">
-                  {#if selected.editable_scope}<Button
-                      variant="tertiary"
-                      disabled={actions.busy ||
-                        inspectLoading ||
-                        inspected?.id !== selected.id}
-                      onClick={() => actions.startEdit(selected)}
-                      >{t('skills.editInstructions')}</Button
-                    >{:else}<Badge>{t('skills.readOnly')}</Badge>{/if}
-                  {#if inspected}<CopyButton
-                      text={inspected.content}
-                      label={t('skills.copyContent')}
-                    />{/if}
-                </div>
-              </div>
-              <div
-                class="skills-content"
-                role="tabpanel"
-                id={`skill-content-panel-${contentTab}`}
-                aria-labelledby={`skill-content-tab-${contentTab}`}
-                tabindex="0"
-              >
-                {#if inspectLoading}<Banner variant="neutral"
-                    >{t('skills.loadingContent')}</Banner
-                  >
-                {:else if inspectError}<Banner variant="error" role="alert"
-                    >{inspectError}<Button
-                      variant="secondary"
-                      onClick={() => openSkill(selected, false)}
-                      >{t('common.retry')}</Button
-                    ></Banner
-                  >
-                {:else if inspected}
-                  {#if contentTab === 'original'}<pre>{inspected.content}</pre>
-                  {:else}<MarkdownContent
-                      class="msg-markdown"
-                      source={skillInstructionBody(inspected.content)}
-                    />{/if}
-                {/if}
-              </div>
-            </div>
-          </section>
+          <SkillDetail
+            bind:this={detail}
+            entry={selected}
+            {inspected}
+            {inspectLoading}
+            {inspectError}
+            {contentTab}
+            {agents}
+            {projects}
+            {inventory}
+            busy={actions.busy}
+            onBack={closeDetail}
+            onRetry={() => openSkill(selected, false)}
+            onTab={(next) => (contentTab = next)}
+            onEdit={actions.startEdit}
+            onDelete={actions.requestDelete}
+            onSetDisabled={actions.setDisabled}
+            onAgentAccess={actions.updateAgentAccess}
+            onShare={actions.setSharing}
+            onProjectSkills={actions.updateProjectSkills}
+          />
         {/if}
       </div>
     {/if}
@@ -814,226 +577,7 @@
     scopeOptions={actions.scopeOptions}
     onClose={() => (showInstall = false)}
     onInstalled={installed}
-    onLocations={() => {
-      showInstall = false;
-      void openDirectories(true);
-    }}
-    onCreate={(targetScope) => {
-      showInstall = false;
-      actions.openCreateModal();
-      actions.createScope = targetScope;
-    }}
   />
 {/if}
 
-{#if actions.showCreateModal}
-  <Modal
-    title={t('settings.skills.newSkill')}
-    class="skills-editor-modal"
-    labelledById="skill-create-modal-title"
-    closeDisabled={actions.busy}
-    onClose={actions.closeCreateModal}
-  >
-    {#snippet body()}
-      <div class="skills-modal-body">
-        <div class="skills-field">
-          <label class="skills-field-label" for="create-scope">
-            {t('skills.createScopeLabel')}
-          </label>
-          <Dropdown
-            id="create-scope"
-            value={actions.createScope}
-            options={actions.scopeOptions}
-            ariaLabel={t('skills.createScopeLabel')}
-            onValueChange={(value) => (actions.createScope = value)}
-          />
-          <p class="skills-secondary">
-            {actions.createScope === 'global'
-              ? t('skills.createGlobalHelp')
-              : t('skills.createPrivateHelp')}
-          </p>
-        </div>
-        <div class="skills-field">
-          <label class="skills-field-label" for="new-skill-name">
-            {t('settings.skills.nameLabel')}
-          </label>
-          <TextField
-            id="new-skill-name"
-            value={actions.newName}
-            onInput={(next) => (actions.newName = next)}
-            placeholder={t('settings.skills.namePlaceholder')}
-          />
-        </div>
-        <div class="skills-field">
-          <label class="skills-field-label" for="new-skill-description">
-            {t('skills.descriptionLabel')}
-            <InfoHint text={t('skills.descriptionHelp')} />
-          </label>
-          <TextField
-            id="new-skill-description"
-            value={actions.newDescription}
-            onInput={(value) => (actions.newDescription = value)}
-            placeholder={t('skills.descriptionPlaceholder')}
-          />
-        </div>
-        <div class="skills-field">
-          <label class="skills-field-label" for="new-skill-content">
-            {t('skills.instructions')}
-          </label>
-          <TextArea
-            id="new-skill-content"
-            rows="12"
-            value={actions.newContent}
-            onInput={(value) => (actions.newContent = value)}
-            placeholder={t('skills.instructionsPlaceholder')}
-          />
-        </div>
-      </div>
-    {/snippet}
-    {#snippet footer()}
-      <Button
-        variant="secondary"
-        disabled={actions.busy}
-        onClick={actions.closeCreateModal}
-      >
-        {t('common.cancel')}
-      </Button>
-      <Button
-        variant="primary"
-        disabled={actions.createDisabled}
-        onClick={actions.createSkill}
-      >
-        {t('settings.skills.create')}
-      </Button>
-    {/snippet}
-  </Modal>
-{/if}
-
-{#if actions.editing}
-  <Modal
-    title={t('skills.editTitle', { name: actions.editing.name })}
-    class="skills-editor-modal"
-    labelledById="skill-edit-modal-title"
-    closeDisabled={actions.busy}
-    onClose={actions.closeEditModal}
-  >
-    {#snippet body()}
-      <div class="skills-modal-body">
-        {#if actions.editing.shared}<Banner variant="info"
-            >{t('skills.editSharedHelp')}</Banner
-          >{/if}
-        <div class="skills-field">
-          <label
-            class="skills-field-label"
-            for={`skill-content-${actions.editing.name}`}
-          >
-            {t('settings.skills.contentLabel')}
-          </label>
-          <TextArea
-            id={`skill-content-${actions.editing.name}`}
-            code
-            rows="16"
-            value={actions.editContent}
-            onInput={(value) => (actions.editContent = value)}
-          />
-        </div>
-      </div>
-    {/snippet}
-    {#snippet footer()}
-      <Button
-        variant="secondary"
-        disabled={actions.busy}
-        onClick={actions.closeEditModal}
-      >
-        {t('common.cancel')}
-      </Button>
-      <Button
-        variant="primary"
-        disabled={actions.busy}
-        onClick={actions.saveEdit}
-      >
-        {actions.busy ? t('common.saving') : t('common.save')}
-      </Button>
-    {/snippet}
-  </Modal>
-{/if}
-
-{#if actions.shareTarget}
-  <Modal
-    title={t('skills.shareTitle', {
-      name: actions.shareTarget.name,
-    })}
-    labelledById="skill-share-modal-title"
-    closeDisabled={actions.busy}
-    onClose={actions.closeShareModal}
-  >
-    {#snippet body()}
-      <div class="skills-modal-body">
-        {#if agentError}<Banner variant="warn">{agentError}</Banner>{/if}
-        <p class="skills-share-desc">
-          {t('skills.shareExplanation')}
-        </p>
-        {#if actions.shareableAgents.length === 0}
-          <EmptyState
-            density="compact"
-            description={t('skills.noOtherAgents')}
-          />
-        {:else}
-          <div class="skills-share-list">
-            {#each actions.shareableAgents as agent (agent.id)}
-              <button
-                type="button"
-                class="skills-share-option"
-                class:skills-share-option--selected={actions.shareReceivers.includes(
-                  agent.id,
-                )}
-                role="switch"
-                aria-checked={actions.shareReceivers.includes(agent.id)}
-                aria-label={t('skills.toggleReceiver', {
-                  name: agent.name || agent.id,
-                })}
-                onclick={() => actions.toggleReceiver(agent.id)}
-              >
-                <span class="skills-receiver-check" aria-hidden="true"
-                  >{actions.shareReceivers.includes(agent.id) ? '✓' : ''}</span
-                >
-                <span class="skills-share-agent-name"
-                  >{agent.name || agent.id}</span
-                >
-                {#if agent.name && agent.name !== agent.id}
-                  <span class="skills-share-agent-id">{agent.id}</span>
-                {/if}
-              </button>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    {/snippet}
-    {#snippet footer()}
-      <Button
-        variant="secondary"
-        disabled={actions.busy}
-        onClick={actions.closeShareModal}
-      >
-        {t('common.cancel')}
-      </Button>
-      <Button
-        variant="primary"
-        disabled={actions.shareSaveDisabled}
-        onClick={actions.saveShare}
-      >
-        {t('skills.saveShare')}
-      </Button>
-    {/snippet}
-  </Modal>
-{/if}
-
-{#if actions.deleteTarget}
-  <ConfirmDialog
-    title={t('settings.skills.deleteConfirmTitle')}
-    body={t('skills.deletePackageConfirm', { name: actions.deleteTarget.name })}
-    confirmLabel={t('common.delete')}
-    onConfirm={actions.confirmDelete}
-    onCancel={actions.cancelDelete}
-  />
-{/if}
+<SkillDialogs {actions} />

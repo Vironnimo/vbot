@@ -206,6 +206,8 @@ def make_skill_manage_handler(
     invalidate_agent_skills: Callable[[str | None], None],
     resolve_shared_skills_dir: Callable[[str, str], Path | None] | None = None,
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
+    *,
+    on_changed: Callable[[], None] | None = None,
 ) -> Callable[[ToolContext, JsonObject], JsonObject]:
     """Return the direct Skill-management handler.
 
@@ -220,6 +222,9 @@ def make_skill_manage_handler(
     agent's visible pool (``bundled``/``global``/``project``/``shared``), so the
     tool can fail with a scope refusal instead of a misleading not-found for a
     Skill the agent can see but not write. ``None`` keeps the plain not-found.
+
+    ``on_changed()`` optionally reports each successful mutation, after the
+    affected scoped caches were invalidated, so open Skill views can refresh.
     """
 
     def skill_manage_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -274,6 +279,8 @@ def make_skill_manage_handler(
         # An own-home invalidation also reaches its shared receivers. Receiver
         # edits conservatively invalidate all Agent scopes through the same owner.
         invalidate_agent_skills(None if shared_target else context.agent_id)
+        if on_changed is not None:
+            on_changed()
         _LOGGER.info(
             "Skill mutated (skill=%s scope=%s owner=%s action=%s actor_agent=%s)",
             result.name,
@@ -870,6 +877,7 @@ def register_skill_manage_tool(
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
     *,
     lifecycle_guard: Callable[[], AbstractContextManager[object]] = nullcontext,
+    on_changed: Callable[[], None] | None = None,
 ) -> None:
     """Register identity-only direct Skill management."""
     handler = make_skill_manage_handler(
@@ -878,6 +886,7 @@ def register_skill_manage_tool(
         invalidate_agent_skills,
         resolve_shared_skills_dir,
         resolve_external_skill_scope,
+        on_changed=on_changed,
     )
 
     def guarded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:

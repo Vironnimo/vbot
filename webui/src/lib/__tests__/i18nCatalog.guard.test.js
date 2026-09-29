@@ -68,8 +68,6 @@ const COMPOSED_KEYS = {
     'restart_required',
     'restarting',
   ],
-  // SkillsView.svelte: collection sections besides the library
-  'skills.section.*': ['agents', 'projects'],
   // statisticsView.js MODEL_CALL_KINDS
   'statistics.kind.*': [
     'chat',

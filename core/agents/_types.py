@@ -60,6 +60,9 @@ class Agent:
     created_at: str
     updated_at: str
     tools: dict[str, Any] = field(default_factory=dict)
+    # Skill names removed from what ``allowed_skills`` grants. Never hides the Agent's
+    # own private Skills or the active Project's Skills.
+    excluded_skills: list[str] = field(default_factory=list)
     root_project_id: str | None = None
     current_session_id: str = ""
     custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED

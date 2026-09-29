@@ -94,6 +94,8 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
                 {"process_id": "process-one", "status": "completed"}
             )
         )
+        # An Agent's Skill authoring Tool reports its package changes.
+        skill_events = publishes(lambda: runtime.skill_changed_callbacks[0]())
 
     # Runs started outside RPC reach /ws too, and invalidate their exact Session.
     assert [event_type for event_type, _payload in run_events] == [
@@ -115,5 +117,7 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     assert process_events == [
         ("bash_process_status_changed", {"process_id": "process-one", "status": "completed"})
     ]
+    assert skill_events == [("resource_changed", {"kind": "skills"})]
     # App shutdown releases the bridges.
     assert process_manager.terminal_callbacks == []
+    assert runtime.skill_changed_callbacks == []

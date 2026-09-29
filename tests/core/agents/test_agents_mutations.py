@@ -147,6 +147,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
         tools={"subagent": {"allowed_agents": []}},
         memory_prompt_mode="off",
         custom_system_prompt_enabled=True,
+        excluded_skills=["pdf"],
     )
 
     assert updated.id == "coder"
@@ -158,8 +159,12 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.tools == {"subagent": {"allowed_agents": []}}
     assert updated.memory_prompt_mode == "off"
     assert updated.custom_system_prompt_enabled is True
+    assert updated.excluded_skills == ["pdf"]
     assert updated.current_session_id == current_session_id
     assert store.get("coder") == updated
+    # Clearing the exclusions removes the optional field from agent.json.
+    store.update("coder", excluded_skills=[])
+    assert "excluded_skills" not in persisted(store, "coder")
 
 
 @pytest.mark.parametrize("name", [None, "   "])
@@ -282,6 +287,7 @@ def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
             "overlap",
         ),
         ({"allowed_skills": "debugging"}, "allowed_skills must be a list of strings"),
+        ({"excluded_skills": ["*"]}, 'excluded_skills cannot contain "*"'),
         (
             {"tools": {"bash": {"allowed_env": ["OPENAI_API_KEY", "bad-key"]}}},
             "invalid environment key name",

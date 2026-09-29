@@ -21,6 +21,7 @@ def _valid_agent_data() -> dict[str, Any]:
         "memory_prompt_mode": "agent_user",
         "tool_access": {"mode": "all"},
         "allowed_skills": ["*"],
+        "excluded_skills": ["pdf"],
         "custom_system_prompt_enabled": False,
         "created_at": "2026-05-03T12:00:00Z",
         "updated_at": "2026-05-03T12:00:00Z",
@@ -109,6 +110,17 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
             {"fallback_models": [f"openai/model-{index}" for index in range(6)]},
             ("$.fallback_models", "accepts at most 5 entries, got 6"),
         ),
+        (
+            {"excluded_skills": ["pdf", ""]},
+            ("$.excluded_skills[1]", "must be a non-empty string"),
+        ),
+        (
+            {"excluded_skills": ["*"]},
+            (
+                "$.excluded_skills",
+                'cannot contain "*"; set allowed_skills to [] to allow no Skills',
+            ),
+        ),
     ],
     ids=[
         "missing-id",
@@ -122,6 +134,8 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
         "fallback-entry",
         "fallback-duplicates",
         "fallback-length",
+        "excluded-skill-entry",
+        "excluded-skills-wildcard",
     ],
 )
 def test_validate_agent_data_reports_one_error_per_invalid_field(

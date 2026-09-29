@@ -679,6 +679,7 @@
           {memoriesRefreshToken}
           {modelsRefreshToken}
           {projectsRefreshToken}
+          {skillsRefreshToken}
         />
       {:else if activeViewId === 'terminals'}
         <TerminalsView
@@ -725,6 +726,8 @@
           settings={setup.settings}
           onSettingsCommit={(nextSettings) => (setup.settings = nextSettings)}
           {skillsRefreshToken}
+          agentsRefreshToken={selection.agentsRefreshToken}
+          {projectsRefreshToken}
         />
       {:else if activeViewId === 'system-prompt'}
         <SystemPromptView

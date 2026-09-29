@@ -124,6 +124,8 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["tool_access"] = tool_access
     if args.allowed_skills is not None:
         changes["allowed_skills"] = list(args.allowed_skills)
+    if args.excluded_skills is not None:
+        changes["excluded_skills"] = list(args.excluded_skills)
     if args.subagent_allow is not None:
         changes["tools"] = {"subagent": {"allowed_agents": list(args.subagent_allow)}}
     if getattr(args, "clear_compaction_policy", False):

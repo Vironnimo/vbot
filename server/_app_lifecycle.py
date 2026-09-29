@@ -19,6 +19,7 @@ from server.events import (
     RESOURCE_KIND_CALENDAR,
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_EXTENSIONS,
+    RESOURCE_KIND_SKILLS,
     RESOURCE_KIND_TERMINALS,
     ServerEventBus,
 )
@@ -74,6 +75,7 @@ def _initialize_app_state(
     )
     app.state.cron_change_bridge_unsubscribe = _register_cron_change_bridge(app.state)
     app.state.calendar_change_bridge_unsubscribe = _register_calendar_change_bridge(app.state)
+    app.state.skill_change_bridge_unsubscribe = _register_skill_change_bridge(app.state)
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
     app.state.bash_process_change_bridge_unsubscribe = _register_bash_process_change_bridge(
         app.state
@@ -199,6 +201,20 @@ def _unregister_calendar_change_bridge(state: Any) -> None:
     if callable(unsubscribe):
         unsubscribe()
     state.calendar_change_bridge_unsubscribe = None
+
+
+def _register_skill_change_bridge(state: Any) -> Any:
+    """Publish Skill changes an Agent makes through its Skill authoring Tool."""
+    return state.runtime.add_skill_changed_callback(
+        lambda: publish_resource_changed(state, RESOURCE_KIND_SKILLS)
+    )
+
+
+def _unregister_skill_change_bridge(state: Any) -> None:
+    unsubscribe = getattr(state, "skill_change_bridge_unsubscribe", None)
+    if callable(unsubscribe):
+        unsubscribe()
+    state.skill_change_bridge_unsubscribe = None
 
 
 def _register_terminal_change_bridge(state: Any) -> Any:

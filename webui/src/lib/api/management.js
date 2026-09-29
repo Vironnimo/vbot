@@ -104,20 +104,6 @@ export function listTools(options = {}) {
   return rpc('tool.list', {}, options);
 }
 
-export function listSkills(params = {}, options = {}) {
-  requirePlainObject(params, 'Skill filters must be an object', 'skill.list');
-  return rpc('skill.list', params, options);
-}
-
-export function readSkills(scope, options = {}) {
-  requireNonEmptyString(
-    scope,
-    'Skill scope must be a non-empty string',
-    'skill.read',
-  );
-  return rpc('skill.read', { scope }, options);
-}
-
 export function createSkill(params = {}, options = {}) {
   requirePlainObject(params, 'Skill payload must be an object', 'skill.create');
   return rpc('skill.create', params, options);

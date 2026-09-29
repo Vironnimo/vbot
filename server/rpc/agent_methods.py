@@ -416,6 +416,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "thinking_effort",
         "tool_access",
         "allowed_skills",
+        "excluded_skills",
         "tools",
         "custom_system_prompt_enabled",
         "compaction_policy",
@@ -517,6 +518,20 @@ def _validate_agent_field(key: str, value: Any) -> Any:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     if key == "allowed_skills":
         return _validate_string_list(key, value)
+    if key == "excluded_skills":
+        names = _validate_string_list(key, value)
+        if any(not name.strip() for name in names):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.excluded_skills must be a list of non-empty strings",
+            )
+        if "*" in names:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                'params.excluded_skills cannot contain "*"; '
+                "set allowed_skills to [] to allow no Skills",
+            )
+        return names
     if key == "tools":
         if not isinstance(value, dict):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.tools must be an object")

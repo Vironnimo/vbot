@@ -45,6 +45,9 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["tool_access"] == {"mode": "all"}
     assert data["allowed_skills"] == ["*"]
     assert "tools" not in data
+    # No exclusions is the default and is not written.
+    assert "excluded_skills" not in data
+    assert agent.excluded_skills == []
     assert data["custom_system_prompt_enabled"] is False
     assert isinstance(data["current_session_id"], str)
     assert data["current_session_id"]
@@ -201,6 +204,7 @@ def test_create_with_custom_values_persists_schema_and_keeps_workspace_files(
         memory_prompt_mode="agent",
         tool_access={"mode": "selected", "allowed": []},
         allowed_skills=["memory"],
+        excluded_skills=["pdf", "xlsx", "pdf"],
         tools={**tools, "bash": {"allowed_env": ["OPENAI_API_KEY", "OPENAI_API_KEY"]}},
         custom_system_prompt_enabled=True,
     )
@@ -208,12 +212,15 @@ def test_create_with_custom_values_persists_schema_and_keeps_workspace_files(
     assert agent.workspace == str(custom_workspace.resolve())
     assert agent.tool_access == ToolAccess(mode="selected")
     assert agent.allowed_skills == ["memory"]
+    assert agent.excluded_skills == ["pdf", "xlsx"]  # duplicates collapse in order
     assert agent.tools == tools  # duplicate env grants collapse
     assert agent.memory_prompt_mode == "agent"
     assert agent.custom_system_prompt_enabled is True
     data = persisted(store, "researcher_1")
     assert data["workspace"] == str(custom_workspace.resolve())
     assert data["tools"] == tools
+    assert data["excluded_skills"] == ["pdf", "xlsx"]
+    assert store.get("researcher_1") == agent
     # Seeding never overwrites an existing workspace file, and memory files belong to
     # the memory system.
     assert (custom_workspace / "SOUL.md").read_text(encoding="utf-8") == "custom soul"
@@ -297,6 +304,13 @@ def test_workspace_inside_data_dir_persists_relative_and_follows_a_moved_data_di
             "tool_access.allowed must be a list of strings",
         ),
         ("allowed_skills", ["debugging", None], "allowed_skills must be a list of strings"),
+        ("excluded_skills", "pdf", "excluded_skills must be a list of non-empty strings"),
+        ("excluded_skills", ["pdf", " "], "excluded_skills must be a list of non-empty strings"),
+        (
+            "excluded_skills",
+            ["*"],
+            'excluded_skills cannot contain "*"; set allowed_skills to [] to allow no Skills',
+        ),
         ("tools", [], "tools must be an object"),
         (
             "tools",

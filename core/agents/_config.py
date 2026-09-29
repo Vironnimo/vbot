@@ -31,6 +31,7 @@ from core.config_validation import (
     validate_json_file,
     validate_non_empty_string,
     validate_optional_path_string,
+    validate_optional_string_list,
     validate_positive_integer,
     validate_required_fields,
     validate_string,
@@ -87,6 +88,12 @@ DEFAULT_THINKING_EFFORT: str | None = None
 
 DEFAULT_ALLOWED_ITEMS = ("*",)
 
+_ALLOWLIST_WILDCARD = "*"
+
+_EXCLUDED_SKILLS_WILDCARD_ERROR = (
+    'excluded_skills cannot contain "*"; set allowed_skills to [] to allow no Skills'
+)
+
 _AGENT_CONFIG_FIELDS = frozenset(
     {
         "allowed_skills",
@@ -94,6 +101,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "created_at",
         "current_session_id",
         "custom_system_prompt_enabled",
+        "excluded_skills",
         "fallback_models",
         "id",
         "memory_prompt_mode",
@@ -239,6 +247,14 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             add_error(diagnostics, "$.tool_access", str(error))
     if data.get("allowed_skills") is not None:
         validate_string_list(diagnostics, "$.allowed_skills", data["allowed_skills"])
+    excluded_skills = data.get("excluded_skills")
+    validate_optional_string_list(diagnostics, "$.excluded_skills", excluded_skills)
+    if isinstance(excluded_skills, list) and _ALLOWLIST_WILDCARD in excluded_skills:
+        add_error(
+            diagnostics,
+            "$.excluded_skills",
+            _EXCLUDED_SKILLS_WILDCARD_ERROR.removeprefix("excluded_skills "),
+        )
     if data.get("tools") is not None:
         _validate_agent_tools_diagnostics(diagnostics, data["tools"])
     if data.get("custom_system_prompt_enabled") is not None and not isinstance(
@@ -385,6 +401,19 @@ def _validate_allowed_items(field: str, items: list[str] | None) -> list[str]:
     return list(items)
 
 
+def _validate_excluded_skills(items: Any) -> list[str]:
+    """Return the Skill names removed from the allowlist grant, deduplicated in order."""
+    if items is None:
+        return []
+    if not isinstance(items, list) or any(
+        not isinstance(item, str) or not item.strip() for item in items
+    ):
+        raise AgentError("excluded_skills must be a list of non-empty strings")
+    if _ALLOWLIST_WILDCARD in items:
+        raise AgentError(_EXCLUDED_SKILLS_WILDCARD_ERROR)
+    return list(dict.fromkeys(items))
+
+
 def _validate_fallback_models(field: str, items: Any) -> list[str]:
     if not isinstance(items, list) or any(not isinstance(item, str) for item in items):
         raise AgentError(f"{field} must be a list of strings")
@@ -521,6 +550,7 @@ def _agent_from_dict(
         memory_prompt_mode=cast(MemoryPromptMode, memory_prompt_mode or DEFAULT_MEMORY_PROMPT_MODE),
         tool_access=_validate_tool_access(data.get("tool_access")),
         allowed_skills=_validate_allowed_items("allowed_skills", data.get("allowed_skills")),
+        excluded_skills=_validate_excluded_skills(data.get("excluded_skills")),
         tools=_normalize_agent_tools(data.get("tools")),
         custom_system_prompt_enabled=bool(
             data.get("custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED)
@@ -542,6 +572,8 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
     persisted["tool_access"] = agent.tool_access.to_dict()
     if not persisted["tools"]:
         persisted.pop("tools")
+    if not persisted["excluded_skills"]:
+        persisted.pop("excluded_skills")
     persisted["workspace"] = workspace
     return persisted
 

@@ -181,6 +181,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "memory_prompt_mode": agent.memory_prompt_mode,
         "tool_access": agent.tool_access.to_dict(),
         "allowed_skills": list(agent.allowed_skills),
+        "excluded_skills": list(getattr(agent, "excluded_skills", ()) or ()),
         "tools": dict(getattr(agent, "tools", {})),
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
         "compaction_policy": dict(agent_policy) if agent_policy is not None else None,

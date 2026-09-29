@@ -746,7 +746,9 @@ describe('ProjectsView Tool and Skill whitelists', () => {
     expect(
       document.querySelectorAll('button[aria-label="Toggle skill debugging"]'),
     ).toHaveLength(1);
-    expect(document.querySelectorAll('.projects-skill-row')).toHaveLength(3);
+    expect(
+      document.querySelectorAll('button[aria-label^="Toggle skill "]'),
+    ).toHaveLength(3);
     expect(document.body.textContent).toContain('Debug the repo.');
 
     toggleByAriaLabel('Toggle skill debugging').click();

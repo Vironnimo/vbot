@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from contextlib import suppress
 from copy import deepcopy
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.debug.store import DebugTraceStore
 from core.extensions import validate_extension_config
@@ -29,7 +29,7 @@ from core.settings.normalizers import normalize_model_task_settings
 from core.settings.settings import available_timezone_names, effective_timezone_name
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
-from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS
+from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS, RESOURCE_KIND_SKILLS
 from server.rpc._mutations import serialized_mutation
 from server.rpc.connection_methods import custom_provider_items
 from server.rpc.dispatcher import RpcMethodHandler
@@ -42,6 +42,9 @@ from server.rpc.validation import (
     _reject_unsupported,
     _required_string,
 )
+
+if TYPE_CHECKING:
+    from core.runtime import SettingsChangeEffects
 
 JsonObject = dict[str, Any]
 
@@ -148,7 +151,7 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
         previous, saved, changed_paths = storage.patch_settings(
             operations, validate_candidate=validate_candidate
         )
-        commands_changed = await state.runtime.apply_settings_change(
+        effects = await state.runtime.apply_settings_change(
             previous,
             saved,
         )
@@ -163,8 +166,7 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
 
     if changed_paths:
         _LOGGER.info("Settings paths updated (paths=%s)", ",".join(changed_paths))
-    if commands_changed:
-        _publish_extension_layer_changed(state)
+    _publish_settings_effects(state, effects)
     return {
         "changed": list(changed_paths),
         "changes": changes,
@@ -213,7 +215,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     try:
         storage.update_settings_sections(settings_update)
         saved_settings = storage.load_settings()
-        commands_changed = await state.runtime.apply_settings_change(
+        effects = await state.runtime.apply_settings_change(
             previous_settings,
             saved_settings,
             refresh_sections=settings_update,
@@ -239,19 +241,23 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             ",".join(logged_sections),
             details,
         )
-    if commands_changed:
-        _publish_extension_layer_changed(state)
+    _publish_settings_effects(state, effects)
     return response
 
 
-def _publish_extension_layer_changed(state: Any) -> None:
-    """Invalidate what a reloaded, enabled or disabled Extension changed.
+def _publish_settings_effects(state: Any, effects: SettingsChangeEffects) -> None:
+    """Invalidate the catalogs the Runtime reports a Settings change affected.
 
-    Its Commands and page registrations (descriptors, epochs) differ, like
-    after an explicit ``extensions.reload``.
+    A reloaded, enabled or disabled Extension changes its Commands and page
+    registrations (descriptors, epochs), like an explicit ``extensions.reload``.
+    A rescanned Skill layer (Skill directories or Extension Skill folders)
+    changes the Skill inventory.
     """
-    publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
-    publish_resource_changed(state, RESOURCE_KIND_EXTENSIONS)
+    if effects.commands_changed:
+        publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
+        publish_resource_changed(state, RESOURCE_KIND_EXTENSIONS)
+    if effects.skills_changed:
+        publish_resource_changed(state, RESOURCE_KIND_SKILLS)
 
 
 def _validate_public_settings_candidate(

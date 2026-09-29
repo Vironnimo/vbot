@@ -562,8 +562,9 @@ _NO_EFFECTS: JsonObject = {
     "skills_reloaded": False,
     "recall_reloads": 0,
     "keep_awake": [],
-    "extension_layer_invalidated": False,
+    "invalidated": [],
 }
+_EXTENSION_LAYER = ["commands", "extensions", "skills"]
 
 
 def _extensions(disabled: list[str]) -> JsonObject:
@@ -573,8 +574,9 @@ def _extensions(disabled: list[str]) -> JsonObject:
 # Which live services a Settings change refreshes is the Runtime's decision
 # (tests/core/runtime/test_runtime_settings.py). These rows cover the RPC
 # wiring: both methods hand over the persisted before/after Settings, an
-# explicit section save requests its refresh, and a changed Extension layer
-# invalidates its Commands and page descriptors.
+# explicit section save requests its refresh, a changed Extension layer
+# invalidates its Commands and page descriptors, and a rescanned Skill layer
+# invalidates the Skill inventory.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("seed", "method", "params", "effects"),
@@ -583,7 +585,7 @@ def _extensions(disabled: list[str]) -> JsonObject:
             {},
             "settings.patch",
             _patch(_set("extensions.directories", ["~/extra-extensions"])),
-            {"extension_reloads": 1, "extension_layer_invalidated": True},
+            {"extension_reloads": 1, "invalidated": _EXTENSION_LAYER},
             id="patch-extension-directories",
         ),
         # A patch elsewhere neither re-validates nor reloads an extension-provided backend.
@@ -598,8 +600,15 @@ def _extensions(disabled: list[str]) -> JsonObject:
             {},
             "settings.update",
             _extensions(["homeassistant"]),
-            {"disabled_changes": [{"homeassistant"}], "extension_layer_invalidated": True},
+            {"disabled_changes": [{"homeassistant"}], "invalidated": _EXTENSION_LAYER},
             id="update-disable",
+        ),
+        pytest.param(
+            {},
+            "settings.update",
+            {"skills": {"directories": ["~/extra-skills"]}},
+            {"skills_reloaded": True, "invalidated": ["skills"]},
+            id="update-skill-directories",
         ),
         # A valid config passes the Extension's schema and applies live through
         # its config reader.
@@ -653,8 +662,7 @@ async def test_saved_settings_apply_their_live_effects(
         "skills_reloaded": runtime.skills is not previous_skills,
         "recall_reloads": runtime.recall_reload_count,
         "keep_awake": keep_awake,
-        "extension_layer_invalidated": resource_changes(state)
-        == [{"kind": "commands"}, {"kind": "extensions"}],
+        "invalidated": [change["kind"] for change in resource_changes(state)],
     } == {**_NO_EFFECTS, **effects}
 
 

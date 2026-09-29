@@ -210,6 +210,7 @@ class SkillRegistry:
         environment: Mapping[str, str] | None = None,
         always_allowed: Iterable[str] | None = None,
         excluded_skills: Mapping[str, SkillMetadata] | None = None,
+        allowlist_exclusions: Iterable[str] | None = None,
     ) -> None:
         self._skills = skills
         self._diagnostics = list(diagnostics or [])
@@ -221,6 +222,11 @@ class SkillRegistry:
         # agent-scoped registry always exposes the agent's own skills while a
         # shared registry (global/project) leaves it empty and filters as before.
         self._always_allowed = frozenset(always_allowed or ())
+        # An Identity Agent's ``excluded_skills``: names removed from what its
+        # ``allowed_skills`` grants (including ``*``). They never remove an
+        # ``always_allowed`` name, and an excluded Skill stays loaded, so a
+        # dependency on it reports "not allowed" like any other unallowed Skill.
+        self._allowlist_exclusions = frozenset(allowlist_exclusions or ())
         # Skills hidden by the policy disable switch: loaded, then moved out of the
         # effective pool. They are invisible to every read answer (get/list_all/
         # filter_allowed/availability) but stay reachable for the human manager via
@@ -236,6 +242,7 @@ class SkillRegistry:
         always_allowed: Iterable[str] | None = None,
         origins: Sequence[str | None] | None = None,
         excluded_names: Iterable[str] | None = None,
+        allowlist_exclusions: Iterable[str] | None = None,
     ) -> SkillRegistry:
         """Load all valid skills from immediate subdirectories of scan roots.
 
@@ -253,6 +260,9 @@ class SkillRegistry:
         before exclusion, so one disabled name hides every origin's copy. Runtime
         consumers pass the policy's disabled set; editor-scope loads omit it so
         disabled skills stay visible and editable for the human manager.
+        ``allowlist_exclusions`` (an Identity Agent's ``excluded_skills``) keeps
+        matching skills loaded but removes them from every allowlist grant; it
+        never overrides ``always_allowed``.
         """
         skills: dict[str, SkillMetadata] = {}
         diagnostics: list[SkillDiagnostic] = []
@@ -273,7 +283,18 @@ class SkillRegistry:
             environment=environment,
             always_allowed=always_allowed,
             excluded_skills=excluded_skills,
+            allowlist_exclusions=allowlist_exclusions,
         )
+
+    @property
+    def always_allowed(self) -> frozenset[str]:
+        """Names that bypass the allowlist and its exclusions in this registry."""
+        return self._always_allowed
+
+    @property
+    def allowlist_exclusions(self) -> frozenset[str]:
+        """Names removed from every allowlist grant in this registry."""
+        return self._allowlist_exclusions
 
     def reload_environment(self, environment: dict[str, str]) -> None:
         """Refresh requirement inputs while preserving loaded packages and policy."""
@@ -328,6 +349,8 @@ class SkillRegistry:
         ``["*"]`` exposes every skill, ``[]`` exposes none, and any other list
         exposes only exact skill-name matches.  Unknown allowlist entries are
         ignored because skills are prompt metadata, not hard execution gates.
+        The registry's ``allowlist_exclusions`` are removed from that grant, and
+        its ``always_allowed`` names are visible regardless of both.
         Skills with unmet vBot requirements remain loadable but are not returned
         for prompt/tool visibility.
         """
@@ -372,8 +395,10 @@ class SkillRegistry:
 
     def _allowed_names(self, allowed_skills: Sequence[str] | None) -> set[str]:
         if allowed_skills is None or WILDCARD_ALLOWLIST in allowed_skills:
-            return set(self._skills)
-        allowed = {name for name in allowed_skills if name in self._skills}
+            allowed = set(self._skills)
+        else:
+            allowed = {name for name in allowed_skills if name in self._skills}
+        allowed -= self._allowlist_exclusions
         allowed |= {name for name in self._always_allowed if name in self._skills}
         return allowed
 

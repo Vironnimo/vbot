@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from core.runtime import Runtime
+from core.runtime import Runtime, SettingsChangeEffects
 from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import (
     CAPABILITY_EXT_SOURCE,
@@ -48,11 +48,11 @@ def test_extension_change_also_applies_recall_and_skill_changes(
         recall_reload = Mock(wraps=runtime.reload_recall_backend)
         monkeypatch.setattr(runtime, "reload_recall_backend", recall_reload)
 
-        commands_changed = asyncio.run(
+        effects = asyncio.run(
             runtime.apply_settings_change(previous, runtime.storage.load_settings())
         )
 
-        assert commands_changed is True
+        assert effects == SettingsChangeEffects(commands_changed=True, skills_changed=True)
         assert (runtime.recall_backend.__class__.__name__ == "ExtBackend") is enable
         assert ("ext_echo" in {tool.name for tool in runtime.tools.list_tools()}) is enable
         assert "new-skill" in {skill.name for skill in runtime.skills_for(None).list_all()}
@@ -72,6 +72,7 @@ _NO_EFFECTS: dict[str, Any] = {
     "timezone_reloads": 0,
     "speech_preloads": 0,
     "commands_changed": False,
+    "skills_changed": False,
 }
 _SKILLS: dict[str, Any] = {"skill_directories": ["~/extra-skills"]}
 _RECALL: dict[str, Any] = {"recall": {"backend": "sqlite_fts"}}
@@ -82,7 +83,7 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
 
 
 @pytest.mark.parametrize(
-    ("previous", "current", "refresh_sections", "effects"),
+    ("previous", "current", "refresh_sections", "expected"),
     [
         pytest.param({}, {}, (), {}, id="unchanged"),
         pytest.param({}, {"web_search": {"provider": "searxng"}}, (), {}, id="unrelated"),
@@ -90,12 +91,20 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             {},
             {"extension_directories": ["~/extra-extensions"]},
             (),
-            {"extension_reloads": 1, "commands_changed": True},
+            {"extension_reloads": 1, "commands_changed": True, "skills_changed": True},
             id="extension-directories",
         ),
-        pytest.param({}, _SKILLS, (), {"skills_reloads": 1}, id="skill-directories"),
+        pytest.param(
+            {},
+            _SKILLS,
+            (),
+            {"skills_reloads": 1, "skills_changed": True},
+            id="skill-directories",
+        ),
         # An explicit section save refreshes even when its values are unchanged.
-        pytest.param({}, {}, ("skills",), {"skills_reloads": 1}, id="skills-resave"),
+        pytest.param(
+            {}, {}, ("skills",), {"skills_reloads": 1, "skills_changed": True}, id="skills-resave"
+        ),
         pytest.param({}, _RECALL, (), {"recall_reloads": 1}, id="recall"),
         pytest.param({}, {}, ("recall",), {"recall_reloads": 1}, id="recall-resave"),
         # Disabling takes the surgical path, which refreshes Skills itself but
@@ -104,14 +113,19 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             {},
             _extensions("one"),
             (),
-            {"disabled_changes": [{"one"}], "commands_changed": True},
+            {"disabled_changes": [{"one"}], "commands_changed": True, "skills_changed": True},
             id="disable",
         ),
         pytest.param(
             {},
             {**_extensions("one"), **_SKILLS, **_RECALL},
             (),
-            {"disabled_changes": [{"one"}], "recall_reloads": 1, "commands_changed": True},
+            {
+                "disabled_changes": [{"one"}],
+                "recall_reloads": 1,
+                "commands_changed": True,
+                "skills_changed": True,
+            },
             id="disable-with-skills-and-recall",
         ),
         # Enabling any name rebuilds the whole Extension layer, which applies
@@ -120,14 +134,14 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             _extensions("one"),
             _extensions(),
             (),
-            {"extension_reloads": 1, "commands_changed": True},
+            {"extension_reloads": 1, "commands_changed": True, "skills_changed": True},
             id="enable",
         ),
         pytest.param(
             _extensions("one"),
             {**_extensions("two"), **_SKILLS, **_RECALL},
             ("skills", "recall"),
-            {"extension_reloads": 1, "commands_changed": True},
+            {"extension_reloads": 1, "commands_changed": True, "skills_changed": True},
             id="enable-and-disable-with-skills-and-recall",
         ),
         # Extension config applies live through the Extension's config reader.
@@ -160,7 +174,7 @@ def test_settings_changes_refresh_only_their_live_services(
     previous: dict[str, Any],
     current: dict[str, Any],
     refresh_sections: tuple[str, ...],
-    effects: dict[str, Any],
+    expected: dict[str, Any],
 ) -> None:
     extension_reload = AsyncMock()
     disabled_change = AsyncMock()
@@ -177,7 +191,7 @@ def test_settings_changes_refresh_only_their_live_services(
     monkeypatch.setattr(shared_runtime, "reload_timezone", timezone_reload)
     monkeypatch.setattr(shared_runtime.speech, "preload_configured", speech_preload)
 
-    commands_changed = asyncio.run(
+    effects = asyncio.run(
         shared_runtime.apply_settings_change(previous, current, refresh_sections=refresh_sections)
     )
 
@@ -189,8 +203,9 @@ def test_settings_changes_refresh_only_their_live_services(
         "keep_awake_reloads": keep_awake_reload.call_count,
         "timezone_reloads": timezone_reload.call_count,
         "speech_preloads": speech_preload.call_count,
-        "commands_changed": commands_changed,
-    } == {**_NO_EFFECTS, **effects}
+        "commands_changed": effects.commands_changed,
+        "skills_changed": effects.skills_changed,
+    } == {**_NO_EFFECTS, **expected}
 
 
 def test_session_search_periods_follow_the_current_timezone_setting(config: Config) -> None:

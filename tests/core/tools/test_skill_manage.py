@@ -52,6 +52,8 @@ class _Harness:
     def __init__(self, tmp_path: Path, scopes: dict[str, str] | None = None) -> None:
         self.root = tmp_path
         self.invalidated: list[str | None] = []
+        # One entry per reported change, after its invalidation.
+        self.changes: list[list[str | None]] = []
         # Names the Agent ``owner`` shares with every other Agent.
         self.shared: set[str] = set()
         self.tools = ToolRegistry()
@@ -64,6 +66,7 @@ class _Harness:
                 self.home("owner") if agent_id != "owner" and name in self.shared else None
             ),
             lambda _agent_id, name, _project_id: (scopes or {}).get(name),
+            on_changed=lambda: self.changes.append(list(self.invalidated)),
         )
 
     def home(self, agent_id: str) -> Path:
@@ -214,6 +217,8 @@ def test_create_is_immediately_live_and_invalidates(tmp_path: Path, caplog: Any)
     assert harness.document().is_file()
     assert SkillRegistry.load(harness.home("main")).get("demo").description == "Do a demo task."
     assert harness.invalidated == ["main"]
+    # The change is reported once, after the caches it affects were invalidated.
+    assert harness.changes == [["main"]]
     assert "action=create" in caplog.text
     assert "private body" not in caplog.text
     assert str(harness.home("main")) not in str(result)
@@ -280,6 +285,7 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
     assert "---\nname: demo\ndescription: <what it covers and when to load it>\n---" in message
     assert not harness.home("main").exists()
     assert harness.invalidated == []
+    assert harness.changes == []
 
 
 # --- Patch tolerance --------------------------------------------------------

@@ -9,6 +9,7 @@ import pytest
 
 from core.runtime.runtime import Runtime
 from core.skills.skills import SKILL_ORIGIN_AGENT, SKILL_ORIGIN_GLOBAL, SkillRegistry
+from core.tools import ToolContext
 from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import (
     write_agent_skill,
@@ -138,6 +139,54 @@ def test_project_context_grants_its_enabled_project_and_bundled_skills(
     assert [skill.name for skill in runtime.project_own_skills(claude.project_id)] == [
         "claude-skill"
     ]
+
+
+def test_agent_exclusions_narrow_its_allowlist_but_never_its_own_or_project_skills(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    data_dir = runtime.storage.data_dir
+    write_skill(runtime.global_skills_dir, "alpha", "Alpha playbook.")
+    write_skill(runtime.global_skills_dir, "beta", "Beta playbook.")
+    runtime.reload_skills()
+    runtime.agents.create("two", "Two")
+    write_agent_skill(data_dir, "two", "two-private", "Two's playbook.")
+    repo = tmp_path / "repo"
+    write_project_skill(repo, "project-playbook", "Project playbook.")
+    runtime.projects.create("p", "P", repo)
+    runtime.agents.create("three", "Three")
+
+    def granted(project_id: str | None, agent_id: str) -> set[str]:
+        registry = runtime.skills_for(project_id, agent_id)
+        return {skill.name for skill in registry.filter_allowed(["*"])}
+
+    before = runtime.skills_for(None, "two")
+    runtime.agents.update(
+        "two", excluded_skills=["alpha", "two-private", "project-playbook", "unknown"]
+    )
+
+    # The update alone replaces the cached registry: "*" now means all but "alpha",
+    # which stays loaded for the manager and for dependency diagnostics.
+    excluding = runtime.skills_for(None, "two")
+    assert excluding is not before
+    assert runtime.skills_for(None, "two") is excluding
+    assert excluding.get("alpha").name == "alpha"
+    assert {"beta", "two-private"} <= granted(None, "two")
+    assert "alpha" not in granted(None, "two")
+    # Neither the Agent's own Skills nor the active Project's Skills can be excluded.
+    assert {"beta", "two-private", "project-playbook"} <= granted("p", "two")
+    assert "alpha" not in granted("p", "two")
+
+    # An Agent without private Skills still gets its exclusions applied.
+    assert runtime.skills_for(None, "three") is runtime.skills
+    runtime.agents.update("three", excluded_skills=["beta"])
+    assert "beta" not in granted(None, "three")
+    assert "alpha" in granted(None, "three")
+
+    runtime.agents.update("three", excluded_skills=[])
+    assert runtime.skills_for(None, "three") is runtime.skills
+    runtime.agents.update("two", excluded_skills=[])
+    assert "alpha" in granted(None, "two")
+    assert "alpha" in granted("p", "two")
 
 
 def test_scoped_skill_registries_stay_cached_until_their_sources_are_invalidated(
@@ -281,6 +330,38 @@ def test_skill_reload_updates_the_prompt_catalog_but_keeps_the_tool_set(
     assert [
         definition["name"] for definition in runtime.system_prompts.provider_tool_definitions(agent)
     ] == expected_tools
+
+
+def test_agent_authored_skill_changes_reach_subscribers(runtime: Runtime, tmp_path: Path) -> None:
+    changes: list[set[str]] = []
+    unsubscribe = runtime.add_skill_changed_callback(
+        lambda: changes.append(_names(runtime.skills_for(None, "main")))
+    )
+    context = ToolContext(
+        agent_id="main",
+        session_id="session-one",
+        run_id="run-one",
+        tool_call_id="call-one",
+        tool_name="skill_manage",
+        tool_call_index=0,
+        workspace=tmp_path,
+        vbot_root=tmp_path,
+        data_root=runtime.storage.data_dir,
+        cwd=tmp_path,
+    )
+
+    def manage(arguments: dict[str, object]) -> dict[str, object]:
+        return asyncio.run(runtime.tools.dispatch(context, arguments, ["skill_manage"]))
+
+    content = "---\nname: authored\ndescription: An authored playbook.\n---\n\n# Authored\n"
+    assert manage({"action": "create", "name": "authored", "content": content})["ok"] is True
+    # Subscribers learn of the change once, after the Agent's Skills were refreshed.
+    assert len(changes) == 1
+    assert "authored" in changes[0]
+
+    unsubscribe()
+    assert manage({"action": "delete", "name": "authored"})["ok"] is True
+    assert len(changes) == 1
 
 
 def test_disabled_skills_leave_every_scope_until_re_enabled(

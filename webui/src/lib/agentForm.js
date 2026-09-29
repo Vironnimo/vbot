@@ -48,6 +48,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'root_project_id',
   'tool_access',
   'allowed_skills',
+  'excluded_skills',
   'tools',
   'custom_system_prompt_enabled',
   'compaction_policy',
@@ -81,6 +82,7 @@ export function createAgentFormValues(agent = {}) {
       agent.allowed_skills,
       DEFAULT_AGENT_ALLOWED_SKILLS,
     ),
+    excluded_skills: normalizeArrayList(agent.excluded_skills, []),
     tools: normalizeAgentTools(agent.tools),
     custom_system_prompt_enabled: Boolean(agent.custom_system_prompt_enabled),
     compaction_policy: isPlainObject(raw.compaction_policy)
@@ -189,6 +191,7 @@ function normalizeValues(values = {}) {
     memory_prompt_mode: normalizeMemoryPromptMode(values.memory_prompt_mode),
     tool_access: normalizeToolAccess(values.tool_access),
     allowed_skills: normalizeArrayList(values.allowed_skills),
+    excluded_skills: normalizeArrayList(values.excluded_skills, []),
     tools: normalizeAgentTools(values.tools),
     custom_system_prompt_enabled: Boolean(values.custom_system_prompt_enabled),
     compaction_policy: isPlainObject(values.compaction_policy)
@@ -233,6 +236,7 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     memory_prompt_mode: normalized.memory_prompt_mode,
     tool_access: normalized.tool_access,
     allowed_skills: normalized.allowed_skills,
+    excluded_skills: normalized.excluded_skills,
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
     compaction_policy: normalized.compaction_policy,
   };

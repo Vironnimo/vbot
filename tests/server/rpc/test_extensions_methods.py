@@ -347,7 +347,12 @@ async def test_extensions_reload_rebuilds_then_returns_the_catalog(closing: bool
         return
     assert state.runtime.extension_reloads == 1
     assert [item["name"] for item in response["result"]["extensions"]] == ["guard_bash"]
-    assert resource_changes(state) == [{"kind": "commands"}, {"kind": "extensions"}]
+    # The rebuild also rescans Extension Skill folders.
+    assert resource_changes(state) == [
+        {"kind": "commands"},
+        {"kind": "extensions"},
+        {"kind": "skills"},
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -1,10 +1,12 @@
 <script>
   import { t } from '$lib/i18n.js';
-  import { floatingHoverCard } from '$lib/tooltip.js';
+  import SkillSelectionPanel from '../skills/SkillSelectionPanel.svelte';
+  import {
+    projectSkillPatch,
+    projectSkillView,
+  } from '../skills/skillAccess.js';
   import ToolCatalogEditor from '../tools/ToolCatalogEditor.svelte';
   import Button from '../ui/Button.svelte';
-  import Checkbox from '../ui/Checkbox.svelte';
-  import EmptyState from '../ui/EmptyState.svelte';
   import {
     buildToolToggleList,
     buildSkillToggleSections,
@@ -40,87 +42,45 @@
     })),
   );
 
-  // Each Skill source is one selection list: a group checkbox selects or
-  // clears the whole source, a row checkbox one Skill.
-  let skillGroups = $derived(
-    [
-      {
-        id: 'project',
-        title: t('projects.manage.projectSkills'),
-        allLabel: t('projects.manage.allProjectSkills'),
-        items: skillToggleSections.project,
-        toggle: toggleProjectSkill,
-        setAll: setAllProjectSkills,
-      },
-      {
-        id: 'bundled',
-        title: t('projects.manage.bundledSkills'),
-        allLabel: t('projects.manage.allBundledSkills'),
-        items: skillToggleSections.bundled,
-        toggle: toggleBundledSkill,
-        setAll: setAllBundledSkills,
-      },
-      {
-        id: 'global',
-        title: t('projects.manage.globalSkills'),
-        allLabel: t('projects.manage.allGlobalSkills'),
-        items: skillToggleSections.global,
-        toggle: toggleGlobalSkill,
-        setAll: setAllGlobalSkills,
-      },
-    ].filter((group) => group.items.length > 0),
+  // Each Skill pool is one selection group, shared with the Skills manager's
+  // Project view; toggles edit the draft's Project Skill lists.
+  let skillView = $derived(
+    projectSkillView({
+      project: skillToggleSections.project.map(activeRow),
+      bundled: skillToggleSections.bundled.map(activeRow),
+      global: skillToggleSections.global.map(activeRow),
+    }),
   );
 
   let skillQuery = $state('');
 
-  let visibleSkillGroups = $derived(
-    skillGroups
-      .map((group) => ({
-        ...group,
-        visible: group.items.filter((skill) =>
-          [skill.name, skill.description ?? '']
-            .join(' ')
-            .toLocaleLowerCase()
-            .includes(skillQuery.trim().toLocaleLowerCase()),
-        ),
-      }))
-      .filter((group) => group.visible.length > 0),
-  );
+  function activeRow(skill) {
+    return { ...skill, active: skill.enabled };
+  }
 
-  let skillTotal = $derived(
-    skillGroups.reduce((sum, group) => sum + group.items.length, 0),
-  );
+  function setProjectSkills(source, names, active) {
+    const patch = projectSkillPatch(
+      projectsState.editForm,
+      source,
+      names,
+      active,
+    );
+    for (const [field, values] of Object.entries(patch))
+      projectsController.replaceListField(field, values);
+  }
 
-  let skillEnabledTotal = $derived(
-    skillGroups.reduce(
-      (sum, group) => sum + group.items.filter((skill) => skill.enabled).length,
-      0,
-    ),
-  );
-
-  function groupState(group) {
-    const count = group.items.filter((skill) => skill.enabled).length;
-    return count === group.items.length ? 'on' : count ? 'mixed' : 'off';
+  function setSkillGroup(source, active) {
+    const group = skillView.groups.find((item) => item.id === source);
+    if (group)
+      setProjectSkills(
+        source,
+        group.items.map((item) => item.name),
+        active,
+      );
   }
 
   function toggleTool(name, enabled) {
     projectsController.updateListField('allowed_tools', name, enabled);
-  }
-
-  function toggleProjectSkill(name, active) {
-    projectsController.updateListField(
-      'skills_project_disabled',
-      name,
-      !active,
-    );
-  }
-
-  function toggleBundledSkill(name, enabled) {
-    projectsController.updateListField('skills_bundled_enabled', name, enabled);
-  }
-
-  function toggleGlobalSkill(name, enabled) {
-    projectsController.updateListField('skills_global_enabled', name, enabled);
   }
 
   function resetToolsToDefaults() {
@@ -134,27 +94,6 @@
     projectsController.replaceListField(
       'allowed_tools',
       enabled ? toolToggleRows.map((tool) => tool.name) : [],
-    );
-  }
-
-  function setAllProjectSkills(enabled) {
-    projectsController.replaceListField(
-      'skills_project_disabled',
-      enabled ? [] : skillToggleSections.project.map((skill) => skill.name),
-    );
-  }
-
-  function setAllBundledSkills(enabled) {
-    projectsController.replaceListField(
-      'skills_bundled_enabled',
-      enabled ? skillToggleSections.bundled.map((skill) => skill.name) : [],
-    );
-  }
-
-  function setAllGlobalSkills(enabled) {
-    projectsController.replaceListField(
-      'skills_global_enabled',
-      enabled ? skillToggleSections.global.map((skill) => skill.name) : [],
     );
   }
 </script>
@@ -224,80 +163,20 @@
       {t('projects.manage.allowedSkillsHelp')}
     </p>
     <div class="s-section__body">
-      {#if skillGroups.length === 0}
-        <EmptyState
-          density="compact"
-          description={t('projects.manage.skillsEmpty')}
-        />
-      {:else}
-        <div class="s-group-toolbar projects-skill-toolbar">
-          <span class="s-group-toolbar__meta projects-skill-summary">
-            {t('projects.manage.skillSelectionCount', {
-              enabled: skillEnabledTotal,
-              total: skillTotal,
-            })}
-          </span>
-          <label class="projects-skill-search">
-            <input
-              type="search"
-              bind:value={skillQuery}
-              placeholder={t('projects.manage.skillSearchPlaceholder')}
-              aria-label={t('projects.manage.skillSearchLabel')}
-            />
-          </label>
-        </div>
-        {#if visibleSkillGroups.length === 0}
-          <EmptyState
-            density="compact"
-            title={t('projects.manage.skillsNoMatch')}
-          />
-        {/if}
-        <div class="s-check-groups">
-          {#each visibleSkillGroups as group (group.id)}
-            {@const state = groupState(group)}
-            <section class="s-group s-check-group">
-              <header class="s-check-group__head">
-                <Checkbox
-                  checked={state === 'on'}
-                  indeterminate={state === 'mixed'}
-                  ariaLabel={group.allLabel}
-                  onChange={(next) => group.setAll(next)}
-                />
-                <h4 class="s-check-group__title">{group.title}</h4>
-                <span class="s-check-group__count">
-                  {group.items.filter((skill) => skill.enabled).length}/{group
-                    .items.length}
-                </span>
-              </header>
-              <div class="s-check-group__rows">
-                {#each group.visible as skill (skill.name)}
-                  <div class="projects-skill-row">
-                    <Checkbox
-                      class="s-check-row"
-                      checked={skill.enabled}
-                      ariaLabel={t('projects.manage.toggleSkill', {
-                        name: skill.name,
-                      })}
-                      onChange={(next) => group.toggle(skill.name, next)}
-                    >
-                      <span class="s-check-row__name">{skill.name}</span>
-                    </Checkbox>
-                    {#if skill.description}
-                      <div
-                        class="floating-card projects-skill-tip"
-                        use:floatingHoverCard
-                      >
-                        <strong>{skill.name}</strong>
-                        <p>{skill.description}</p>
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            </section>
-          {/each}
-        </div>
-      {/if}
+      <SkillSelectionPanel
+        groups={skillView.groups}
+        active={skillView.active}
+        total={skillView.total}
+        query={skillQuery}
+        showFilter
+        onQuery={(next) => (skillQuery = next)}
+        onToggle={(source, name, active) =>
+          setProjectSkills(source, [name], active)}
+        onSetAll={setSkillGroup}
+        columns
+        emptyTitle={t('skills.empty.project')}
+        emptyHelp={t('skills.empty.projectHelp')}
+      />
     </div>
   </section>
 </div>

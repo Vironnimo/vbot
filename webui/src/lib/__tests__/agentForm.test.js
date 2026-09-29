@@ -25,6 +25,7 @@ describe('createAgentFormValues', () => {
       memory_prompt_mode: 'agent_user',
       tool_access: { mode: 'all' },
       allowed_skills: ['*'],
+      excluded_skills: [],
       tools: {},
       compaction_policy: null,
       custom_system_prompt_enabled: false,
@@ -118,6 +119,7 @@ describe('normalizeAgentForm', () => {
         allowed: [' read ', '', 'write '],
       },
       allowed_skills: [' debugging ', ''],
+      excluded_skills: [' ctx7 ', ''],
       tools: {
         subagent: { allowed_agents: [' worker ', 'builder@vbot'] },
       },
@@ -136,6 +138,7 @@ describe('normalizeAgentForm', () => {
       memory_prompt_mode: 'off',
       tool_access: { mode: 'selected', allowed: ['read', 'write'] },
       allowed_skills: ['debugging'],
+      excluded_skills: ['ctx7'],
       tools: {
         subagent: { allowed_agents: ['worker', 'builder@vbot'] },
       },
@@ -245,6 +248,7 @@ describe('normalizeAgentForm', () => {
       root_project_id: 'vbot',
       custom_system_prompt_enabled: true,
       memory_prompt_mode: 'agent',
+      excluded_skills: ['debugging'],
     };
 
     expect(edit({})).toEqual({ id: 'coder' });
