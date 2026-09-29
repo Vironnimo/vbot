@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { startIsolatedChat } from "./chat-run-support.js";
+import { chatTimeline, startIsolatedChat } from "./chat-run-support.js";
 import {
   expectToolSucceeded,
   openToolRow,
@@ -17,7 +17,9 @@ test("Compaction grants lossless access to original Session history", async ({
     .fill("E2E_HISTORY_SEED Store the deterministic archive marker");
   await chat.getByRole("button", { name: "Send message" }).click();
   await expect(
-    chat.getByText("Archived obsidian record 8642.", { exact: true }),
+    chatTimeline(chat).getByText("Archived obsidian record 8642.", {
+      exact: true,
+    }),
   ).toBeVisible();
 
   await chat.getByRole("textbox", { name: "Message" }).fill("/compact");

@@ -1,12 +1,16 @@
 import { expect } from "@playwright/test";
 
+import { chatTimeline } from "./chat-run-support.js";
+
 export async function runToolScenario(
   chat,
   { finalText, prompt, timeout = 30_000 },
 ) {
   await chat.getByRole("textbox", { name: "Message" }).fill(prompt);
   await chat.getByRole("button", { name: "Send message" }).click();
-  await expect(chat.getByText(finalText, { exact: true })).toBeVisible({
+  await expect(
+    chatTimeline(chat).getByText(finalText, { exact: true }),
+  ).toBeVisible({
     timeout,
   });
   await expect(chat.getByRole("button", { name: "Cancel run" })).toHaveCount(0);

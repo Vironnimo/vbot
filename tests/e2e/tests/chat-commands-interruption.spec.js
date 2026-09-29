@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 test("a normal message resumes interrupted work without recovery controls", async ({
   page,
@@ -11,7 +15,9 @@ test("a normal message resumes interrupted work without recovery controls", asyn
     chat,
     "E2E_SLOW E2E_COMMAND_CONTINUE retain this interrupted work",
   );
-  await expect(chat.getByText(/Slow response started\./)).toBeVisible();
+  await expect(
+    chatTimeline(chat).getByText(/Slow response started\./),
+  ).toBeVisible();
 
   await chat.getByRole("textbox", { name: "Message" }).fill("/stop");
   await chat.getByRole("button", { name: "Queue message" }).click();
@@ -23,7 +29,9 @@ test("a normal message resumes interrupted work without recovery controls", asyn
 
   await sendChatMessage(chat, "Resume after cancellation");
   await expect(
-    chat.getByText("Continued interrupted work completed.", { exact: true }),
+    chatTimeline(chat).getByText("Continued interrupted work completed.", {
+      exact: true,
+    }),
   ).toBeVisible();
 
   await sendChatMessage(
@@ -31,7 +39,9 @@ test("a normal message resumes interrupted work without recovery controls", asyn
     "E2E_ERROR E2E_COMMAND_CONTINUE simulate a Provider interruption",
   );
   await expect(
-    chat.getByText("Provider error: 400 E2E provider failure", { exact: true }),
+    chatTimeline(chat).getByText("Provider error: 400 E2E provider failure", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(
     chat.getByText("Interrupted work retained", { exact: true }),
@@ -39,7 +49,9 @@ test("a normal message resumes interrupted work without recovery controls", asyn
 
   await sendChatMessage(chat, "Resume after provider interruption");
   await expect(
-    chat.getByText("Continued interrupted work completed.", { exact: true }),
+    chatTimeline(chat).getByText("Continued interrupted work completed.", {
+      exact: true,
+    }),
   ).toHaveCount(2);
   await expect(
     chat.getByRole("button", { exact: true, name: "Continue" }),

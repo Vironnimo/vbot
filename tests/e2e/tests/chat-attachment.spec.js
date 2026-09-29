@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 
 import { expect, test } from "@playwright/test";
 
-import { startIsolatedChat } from "./chat-run-support.js";
+import { chatTimeline, startIsolatedChat } from "./chat-run-support.js";
 
 test("a text attachment is uploaded, rendered, and reaches provider context", async ({
   page,
@@ -25,9 +25,12 @@ test("a text attachment is uploaded, rendered, and reaches provider context", as
   await chat.getByRole("button", { name: "Send message" }).click();
 
   await expect(
-    chat.getByText("Fake provider received the attachment content.", {
-      exact: true,
-    }),
+    chatTimeline(chat).getByText(
+      "Fake provider received the attachment content.",
+      {
+        exact: true,
+      },
+    ),
   ).toBeVisible();
   await expect(
     chat.getByText("e2e-attachment.txt", { exact: true }),

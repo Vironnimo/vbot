@@ -4,7 +4,8 @@ import { startIsolatedChat } from "./chat-run-support.js";
 import { runToolScenario } from "./chat-tool-support.js";
 
 // Earlier specs share the E2E data directory, so counts are lower bounds.
-const POSITIVE_COUNT = /^[1-9]\d*$/;
+// Statistics formats them with thousands separators (en-US browser locale).
+const POSITIVE_COUNT = /^[1-9]\d{0,2}(?:,\d{3})*$/;
 
 function definitionFor(region, term) {
   return region

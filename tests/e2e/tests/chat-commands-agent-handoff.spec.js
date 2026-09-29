@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  chatTimeline,
   getAgentPicker,
   sendChatMessage,
   startIsolatedChat,
@@ -20,7 +21,9 @@ test("agent moves a Session while handoff starts a fresh cross-Agent Session", a
     const chat = await startIsolatedChat(page, { agentName: "Main" });
     await sendChatMessage(chat, "E2E_STREAM Session content before move");
     await expect(
-      chat.getByText("Fake provider streaming response.", { exact: true }),
+      chatTimeline(chat).getByText("Fake provider streaming response.", {
+        exact: true,
+      }),
     ).toBeVisible();
 
     await sendChatMessage(
@@ -34,7 +37,7 @@ test("agent moves a Session while handoff starts a fresh cross-Agent Session", a
         .filter({ hasText: "E2E_STREAM Session content before move" }),
     ).toBeVisible();
     await expect(
-      chat.getByText("Fake provider response.", { exact: true }),
+      chatTimeline(chat).getByText("Fake provider response.", { exact: true }),
     ).toBeVisible();
 
     await sendChatMessage(
@@ -49,7 +52,9 @@ test("agent moves a Session while handoff starts a fresh cross-Agent Session", a
         .getByText("E2E handoff brief 9182.", { exact: true }),
     ).toBeVisible();
     await expect(
-      chat.getByText("E2E handoff received by target Agent.", { exact: true }),
+      chatTimeline(chat).getByText("E2E handoff received by target Agent.", {
+        exact: true,
+      }),
     ).toBeVisible();
   } finally {
     await deleteAgentIfPresent(request, "e2e-command-agent");

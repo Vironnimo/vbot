@@ -4,7 +4,11 @@ import path from "node:path";
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 
 import { environment } from "../environment.js";
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 import { rpc } from "./rpc-support.js";
 
 const PROVIDER_ID = "e2e-custom";
@@ -224,7 +228,9 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
       "E2E_CUSTOM_PROVIDER_LIVE Exercise the newly created Provider",
     );
     await expect(
-      chat.getByText("Dynamic Custom Provider response.", { exact: true }),
+      chatTimeline(chat).getByText("Dynamic Custom Provider response.", {
+        exact: true,
+      }),
     ).toBeVisible();
 
     providers = await openProviders(page);
@@ -273,7 +279,9 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
       "E2E_CUSTOM_PROVIDER_LIVE Confirm the edited Provider remains active",
     );
     await expect(
-      chat.getByText("Dynamic Custom Provider response.", { exact: true }),
+      chatTimeline(chat).getByText("Dynamic Custom Provider response.", {
+        exact: true,
+      }),
     ).toBeVisible();
     await sendChatMessage(chat, "/model reset");
     await expect(chat.getByText("Model reset.", { exact: true })).toBeVisible();

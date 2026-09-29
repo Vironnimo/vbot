@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 
 import {
+  chatTimeline,
   ensureEmptyChat,
   getAgentTab,
   sendChatMessage,
@@ -143,9 +144,12 @@ test("a Project keeps Source Formats isolated from scan through Provider context
       "E2E_PROJECT_AGENT_CONTEXT Verify the selected repository Agent prompt",
     );
     await expect(
-      chat.getByText("OpenCode Project Agent context reached the Provider.", {
-        exact: true,
-      }),
+      chatTimeline(chat).getByText(
+        "OpenCode Project Agent context reached the Provider.",
+        {
+          exact: true,
+        },
+      ),
     ).toBeVisible();
 
     await page.goto("/#projects");
@@ -173,9 +177,12 @@ test("a Project keeps Source Formats isolated from scan through Provider context
       "E2E_PROJECT_AGENT_CONTEXT Verify the switched repository Agent prompt",
     );
     await expect(
-      chat.getByText("Claude Project Agent context reached the Provider.", {
-        exact: true,
-      }),
+      chatTimeline(chat).getByText(
+        "Claude Project Agent context reached the Provider.",
+        {
+          exact: true,
+        },
+      ),
     ).toBeVisible();
   } finally {
     if (projectCreated) {

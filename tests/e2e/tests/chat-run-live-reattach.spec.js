@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 const PROMPT = "E2E_SLOW Follow this Run across a reload and a second tab";
 // The fake Provider streams one opening chunk plus 80 continuation chunks.
@@ -25,7 +29,9 @@ test("a running Chat Run survives a reload and streams live into a second tab", 
   test.setTimeout(60_000);
   const chat = await startIsolatedChat(page);
   await sendChatMessage(chat, PROMPT);
-  await expect(chat.getByText(/Slow response started\./)).toBeVisible();
+  await expect(
+    chatTimeline(chat).getByText(/Slow response started\./),
+  ).toBeVisible();
 
   // A fresh page load has no client state: it must reattach to the server-owned
   // Run and keep streaming instead of showing a stale or empty answer.

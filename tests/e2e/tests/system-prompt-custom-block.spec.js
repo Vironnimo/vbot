@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 test("a custom System Prompt block persists, reaches the Provider, and can be removed", async ({
   page,
@@ -40,7 +44,7 @@ test("a custom System Prompt block persists, reaches the Provider, and can be re
   const chat = await startIsolatedChat(page, { agentName: "Main" });
   await sendChatMessage(chat, "Confirm the active custom context");
   await expect(
-    chat.getByText("Custom System Prompt reached the Provider.", {
+    chatTimeline(chat).getByText("Custom System Prompt reached the Provider.", {
       exact: true,
     }),
   ).toBeVisible();

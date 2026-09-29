@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { startIsolatedChat } from "./chat-run-support.js";
+import { chatTimeline, startIsolatedChat } from "./chat-run-support.js";
 
 test("a retryable primary failure switches the Chat Run to its fallback model", async ({
   page,
@@ -18,7 +18,9 @@ test("a retryable primary failure switches the Chat Run to its fallback model", 
     timeout: 45_000,
   });
   await expect(
-    chat.getByText("Fallback provider response.", { exact: true }),
+    chatTimeline(chat).getByText("Fallback provider response.", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(chat.getByText("· Running", { exact: true })).toHaveCount(0);
 });
