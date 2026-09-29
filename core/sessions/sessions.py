@@ -47,6 +47,7 @@ from core.sessions.errors import FtsHealth, SessionNotFoundError
 from core.sessions.session import ChatSession
 from core.sessions.store import SessionStore
 from core.settings import is_valid_project_id
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
     from core.runs import Run
 
 _Result = TypeVar("_Result")
+_LOGGER = get_logger("sessions")
 
 
 class ChatSessionManager:
@@ -126,8 +128,19 @@ class ChatSessionManager:
             return self._write_locks[address]
 
     def create(
-        self, agent_id: str, session_id: str | None = None, project_id: str | None = None
+        self,
+        agent_id: str,
+        session_id: str | None = None,
+        project_id: str | None = None,
+        *,
+        actor: str | None = None,
     ) -> ChatSession:
+        """Create a Session.
+
+        ``actor`` names who asked for it (``rpc``, ``command``): that creation is a
+        control-plane change and logs at INFO. A Session created as a side effect of
+        other work (a triggered Run, a Sub-Agent) passes none and logs at DEBUG.
+        """
         _validate_agent_id(agent_id)
         if project_id is not None and not is_valid_project_id(project_id):
             raise ChatSessionError("invalid project id")
@@ -136,12 +149,27 @@ class ChatSessionManager:
         address = self._store.create(
             SessionAddress(project_id, agent_id, session_id or ""), generate_id=session_id is None
         )
+        _LOGGER.log(
+            logging.INFO if actor is not None else logging.DEBUG,
+            "Session created (agent=%s%s session=%s actor=%s)",
+            address.agent_id,
+            f" project={address.project_id}" if address.project_id else "",
+            address.session_id,
+            actor or "internal",
+        )
         return ChatSession(self._store, address)
 
     async def create_async(
-        self, agent_id: str, session_id: str | None = None, project_id: str | None = None
+        self,
+        agent_id: str,
+        session_id: str | None = None,
+        project_id: str | None = None,
+        *,
+        actor: str | None = None,
     ) -> ChatSession:
-        return await self._store.run_async(self.create, agent_id, session_id, project_id)
+        return await self._store.run_async(
+            lambda: self.create(agent_id, session_id, project_id, actor=actor)
+        )
 
     def exists(self, address: SessionAddress) -> bool:
         _validate_session_id(address.session_id)
@@ -450,9 +478,17 @@ class ChatSessionManager:
 
     async def delete_temporary_group(self, *, owner_name: str, group_id: str) -> int:
         """Delete bound participant Sessions after their owner has drained execution."""
-        return await self._store.run_async(
+        deleted = await self._store.run_async(
             lambda: self._store.delete_temporary_group(owner_name=owner_name, group_id=group_id)
         )
+        if deleted:
+            _LOGGER.info(
+                "Temporary Sessions deleted (owner=%s group=%s sessions=%d)",
+                owner_name,
+                group_id,
+                deleted,
+            )
+        return deleted
 
     async def temporary_bindings_async(
         self,

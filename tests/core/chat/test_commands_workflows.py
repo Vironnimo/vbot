@@ -92,7 +92,9 @@ class _NewSessions:
     def __init__(self) -> None:
         self.created: list[tuple[str, str | None]] = []
 
-    def create(self, agent_id: str, *, project_id: str | None = None) -> SimpleNamespace:
+    def create(
+        self, agent_id: str, *, project_id: str | None = None, actor: str | None = None
+    ) -> SimpleNamespace:
         self.created.append((agent_id, project_id))
         return SimpleNamespace(id="new-session")
 
