@@ -1,6 +1,6 @@
 """The wake phrase model catalog and the multi-phrase engine.
 
-Scripted tests replace the pyopen-wakeword feature extractor and detector heads
+Scripted tests replace the openWakeWord feature stream and phrase heads
 through the engine's model factories; the real-audio tests at the end run the
 bundled models on recorded phrases.
 """
@@ -45,14 +45,14 @@ FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "wakeword"
 
 
 class ScriptedFeatures:
-    """Feature extractor double: every chunk yields ``frames`` feature frames."""
+    """Feature stream double: every chunk yields ``frames`` feature frames."""
 
     def __init__(self, frames: int = 1) -> None:
         self.frames = frames
         self.chunks: list[bytes] = []
         self.closed = False
 
-    def process_streaming(self, chunk: bytes) -> list[str]:
+    def process(self, chunk: bytes) -> list[str]:
         self.chunks.append(chunk)
         return [f"features-{len(self.chunks)}-{frame}" for frame in range(self.frames)]
 
@@ -61,7 +61,7 @@ class ScriptedFeatures:
 
 
 class ScriptedHead:
-    """Detector head double answering each feature frame with the next scripted score."""
+    """Phrase head double answering each feature frame with the next scripted score."""
 
     def __init__(self, scores: Iterable[float] = (), *, constant: float | None = None) -> None:
         self._scores = iter(scores)
@@ -69,9 +69,11 @@ class ScriptedHead:
         self.frames: list[str] = []
         self.closed = False
 
-    def process_streaming(self, frame: str) -> list[float]:
-        self.frames.append(frame)
-        return [self._constant if self._constant is not None else next(self._scores)]
+    def scores(self, frames: list[str]) -> list[float]:
+        self.frames.extend(frames)
+        return [
+            self._constant if self._constant is not None else next(self._scores) for _ in frames
+        ]
 
     def close(self) -> None:
         self.closed = True
@@ -84,8 +86,8 @@ class ScriptedModels:
         self.features = ScriptedFeatures()
         self.heads: dict[str, ScriptedHead] = {}
         self.created: list[WakewordModelDescriptor] = []
-        monkeypatch.setattr(engine_module, "_create_pyopenwakeword_features", self._features)
-        monkeypatch.setattr(engine_module, "_create_pyopenwakeword_model", self._head)
+        monkeypatch.setattr(engine_module, "_create_feature_stream", self._features)
+        monkeypatch.setattr(engine_module, "_create_phrase_head", self._head)
 
     def _features(self) -> ScriptedFeatures:
         return self.features
@@ -199,7 +201,7 @@ def test_catalog_cleans_up_a_model_that_fails_validation(
     def reject(_descriptor: WakewordModelDescriptor) -> None:
         raise WakewordModelError("bad model")
 
-    monkeypatch.setattr(engine_module, "_create_pyopenwakeword_model", reject)
+    monkeypatch.setattr(engine_module, "_create_phrase_head", reject)
 
     with pytest.raises(WakewordModelError, match="not a compatible TFLite wakeword model"):
         catalog.import_model("bad.tflite", b"not-tflite")
@@ -571,3 +573,124 @@ def test_bundled_nabu_models_activate_once_per_phrase_on_real_audio(
         assert set(matches) <= set(DEFAULT_MODEL_IDS)
     else:
         assert matches == expected
+
+
+_PHRASE_FIXTURES = ("okay_nabu.wav", "hey_nabu.wav", "unrelated_hey_jarvis.wav")
+
+
+def _reference_scores(fixture_name: str) -> list[dict[str, float]]:
+    """Per-chunk scores of pyopen-wakeword's own streaming, which the thresholds were tuned on."""
+    from pyopen_wakeword import Model, OpenWakeWord, OpenWakeWordFeatures
+
+    features = OpenWakeWordFeatures.from_builtin()
+    heads = {
+        OKAY: OpenWakeWord.from_builtin(Model("okay_nabu")),
+        HEY: OpenWakeWord.from_model(engine_module._BUNDLED_HEY_NABU_PATH),
+    }
+    scores: list[dict[str, float]] = []
+    try:
+        for chunk in _chunks(FIXTURES / fixture_name):
+            batches = list(features.process_streaming(chunk))
+            scores.append(
+                {
+                    model_id: max(
+                        (
+                            min(1.0, max(0.0, score))
+                            for batch in batches
+                            for score in head.process_streaming(batch)
+                        ),
+                        default=0.0,
+                    )
+                    for model_id, head in heads.items()
+                }
+            )
+    finally:
+        features.close()
+        for head in heads.values():
+            head.close()
+    return scores
+
+
+def _chunks(path: Path) -> list[bytes]:
+    padding = np.zeros(_SAMPLE_RATE, dtype=np.int16).tobytes()
+    stream = padding + _read_pcm16_mono(path) + padding
+    return [
+        stream[offset : offset + _CHUNK_BYTES].ljust(_CHUNK_BYTES, b"\0")
+        for offset in range(0, len(stream), _CHUNK_BYTES)
+    ]
+
+
+@pytest.fixture(scope="module")
+def reference_scores(real_models: None) -> dict[str, list[dict[str, float]]]:
+    return {name: _reference_scores(name) for name in _PHRASE_FIXTURES}
+
+
+# vBot runs openWakeWord on its own interpreters (one thread, XNNPACK when the
+# library has it); every chunk must still score like the reference streaming.
+# Without XNNPACK only the kernels differ, so one phrase covers that fallback.
+@pytest.mark.parametrize(
+    ("xnnpack", "fixture_names"),
+    [(True, _PHRASE_FIXTURES), (False, ("okay_nabu.wav",))],
+    ids=["xnnpack", "builtin-kernels"],
+)
+def test_engine_scores_real_audio_like_pyopen_wakeword(
+    reference_scores: dict[str, list[dict[str, float]]],
+    xnnpack: bool,
+    fixture_names: tuple[str, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword import _openwakeword
+
+    if not xnnpack:
+        monkeypatch.setattr(_openwakeword._TfLite, "create_xnnpack_delegate", lambda _self: None)
+    for fixture_name in fixture_names:
+        expected = reference_scores[fixture_name]
+        observed: list[dict[str, float]] = []
+        engine = WakewordModelCatalog(FIXTURES / "settings.json").create_engine(
+            [PhraseConfig(model_id) for model_id in DEFAULT_MODEL_IDS],
+            score_listener=observed.append,
+        )
+        engine.start()
+        try:
+            for chunk in _chunks(FIXTURES / fixture_name):
+                engine.detect(chunk)
+        finally:
+            engine.stop()
+
+        assert len(observed) == len(expected)
+        for chunk_scores, reference in zip(observed, expected, strict=True):
+            assert chunk_scores == pytest.approx(reference, abs=1e-3)
+
+
+def _pyopen_model_bytes(name: str) -> bytes:
+    import pyopen_wakeword
+
+    return (Path(pyopen_wakeword.__file__).parent / "models" / name).read_bytes()
+
+
+# Only openWakeWord phrase heads (embedding windows in, one probability out) are
+# importable; another TFLite model would load but score nonsense at runtime.
+@pytest.mark.parametrize(
+    ("content", "accepted"),
+    [
+        (lambda: engine_module._BUNDLED_HEY_NABU_PATH.read_bytes(), True),
+        (lambda: _pyopen_model_bytes("melspectrogram.tflite"), False),
+        (lambda: b"TFL3" + b"\0" * 64, False),
+    ],
+    ids=["phrase-head", "other-tflite-model", "corrupt"],
+)
+def test_catalog_imports_only_real_phrase_models(
+    real_models: None, tmp_path: Path, content: Callable[[], bytes], accepted: bool
+) -> None:
+    catalog = WakewordModelCatalog(tmp_path / "settings.json")
+
+    if accepted:
+        imported = catalog.import_model("phrase.tflite", content())
+        engine = catalog.create_engine([PhraseConfig(imported.id)])
+        engine.start()
+        engine.stop()
+    else:
+        with pytest.raises(WakewordModelError) as error:
+            catalog.import_model("phrase.tflite", content())
+        assert error.value.error_code == "wakeword_model_invalid"
+        assert list((tmp_path / "wakewords").iterdir()) == []

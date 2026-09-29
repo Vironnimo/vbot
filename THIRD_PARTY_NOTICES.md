@@ -58,6 +58,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 `tests/fixtures/wakeword/hey_nabu.wav` is a generated test fixture containing the spoken phrase "Hey Naboo", synthesized with the Microsoft Zira Desktop voice at rate -2. Its SHA-256 is `2bc6ddba7c57e6451de96d621bba95479b24085677f58fc933861e102e966679`.
 
+## pyopen-wakeword streaming
+
+`desktop/wakeword/_openwakeword.py` reimplements the streaming feature and phrase-model windows of [rhasspy/pyopen-wakeword](https://github.com/rhasspy/pyopen-wakeword) 1.1.0, distributed under the Apache License 2.0, and loads the TensorFlow Lite library and openWakeWord models that the separately installed package ships. vBot's version creates its own single-threaded TensorFlow Lite interpreters with the XNNPACK delegate and validates imported phrase models; the streaming windows are unchanged.
+
 ## Wakeword audio dependencies
 
 The Desktop wakeword pipeline uses [python-soxr](https://github.com/dofuuz/python-soxr), distributed under the GNU Lesser General Public License v2.1 or later (following its underlying libsoxr), for anti-aliased streaming resampling of native microphone rates to the detector's 16 kHz contract. It remains a separately installed dependency; its source distribution and license text are available from the linked upstream project and installed package metadata.

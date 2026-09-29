@@ -47,15 +47,13 @@ def _engine_with_scripted_head(
     head_scores: list[float],
     score_listener: Callable[[dict[str, float]], None],
 ) -> MultiWakewordEngine:
-    """A real engine whose feature extractor and detector head are scripted per chunk."""
+    """A real engine whose feature stream and phrase head are scripted per chunk."""
     features = Mock()
-    features.process_streaming.return_value = ["features"]
+    features.process.return_value = ["features"]
     head = Mock()
-    head.process_streaming.side_effect = [[score] for score in head_scores]
-    monkeypatch.setattr(
-        engine_module, "_create_pyopenwakeword_features", Mock(return_value=features)
-    )
-    monkeypatch.setattr(engine_module, "_create_pyopenwakeword_model", Mock(return_value=head))
+    head.scores.side_effect = [[score] for score in head_scores]
+    monkeypatch.setattr(engine_module, "_create_feature_stream", Mock(return_value=features))
+    monkeypatch.setattr(engine_module, "_create_phrase_head", Mock(return_value=head))
     return WakewordModelCatalog(tmp_path / "settings.json").create_engine(
         [PhraseConfig(DEFAULT_MODEL_IDS[0])], score_listener=score_listener
     )
