@@ -105,6 +105,9 @@ describe('CronView', () => {
           id: 'job-failed',
           prompt: 'Never ran',
           status: 'failed',
+          last_outcome: 'failed',
+          last_error: 'Provider timed out',
+          consecutive_failures: 3,
         }),
         cronJob({
           id: 'job-completed',
@@ -179,6 +182,40 @@ describe('CronView', () => {
     expect(activeRow.querySelector('.cron-item-prompt')).toBeNull();
     expect(activeRow.querySelector('.cron-item-schedule')).toBeNull();
     expect(document.getElementById('cron-job-timezone')).toBeNull();
+
+    // The row's details card explains the dot and carries what the row omits.
+    document.querySelector('[data-testid="cron-item-job-failed"]').focus();
+    flushSync();
+    const card = document.getElementById('app-tooltip');
+    expect(card.querySelector('.app-tooltip__title').textContent).toBe(
+      'Default scheduled run',
+    );
+    expect(card.querySelector('.app-tooltip__text').textContent).toBe(
+      'Provider timed out',
+    );
+    const cardRows = Object.fromEntries(
+      [...card.querySelectorAll('dt')].map((term) => [
+        term.textContent,
+        term.nextElementSibling,
+      ]),
+    );
+    expect(cardRows[t('cron.card.status')].textContent).toBe(
+      t('cron.card.statusFailures', { status: 'Failed', count: 3 }),
+    );
+    expect(cardRows[t('cron.card.status')].classList).toContain(
+      'app-tooltip__value--danger',
+    );
+    expect(cardRows[t('cron.card.expression')].textContent).toBe(
+      '*/30 * * * *',
+    );
+    expect(cardRows[t('cron.detail.lastResult')].textContent).toContain(
+      t('cron.outcome.failed'),
+    );
+    expect(cardRows[t('cron.detail.target')].textContent).toBe('Agent Alpha');
+    expect(cardRows[t('cron.card.session')].textContent).toBe(
+      t('cron.detail.newSessionEachRun'),
+    );
+    expect(card.dataset.floatingSide).toBe('right');
   });
 
   it('auto-selects the first job so its detail form renders on load', async () => {

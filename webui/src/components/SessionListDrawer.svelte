@@ -10,6 +10,7 @@
     asText,
     autofocusRename,
     sessionHoverDetails,
+    unreadRunDetails,
     resolvePlatformLabel,
     reflectionBadgeKinds,
   } from './sessions/presentation.js';
@@ -165,6 +166,21 @@
       label: () => t('sessions.filters.cron'),
     },
   ];
+
+  // The filter trigger names the hidden categories it currently shows.
+  function filterTooltip() {
+    const active = SESSION_FILTER_ROWS.filter((row) => filters[row.key]);
+    if (active.length === 0) {
+      return {
+        title: t('sessions.filtersAria'),
+        text: t('sessions.filters.noneActive'),
+      };
+    }
+    return {
+      title: t('sessions.filters.activeTitle'),
+      text: active.map((row) => row.label()).join('\n'),
+    };
+  }
 
   let loadedListKey = '';
   let loadVersion = 0;
@@ -526,7 +542,9 @@
         class:session-drawer__filter-trigger--active={filters.allAgents}
         aria-label={t('sessions.filters.allAgents')}
         aria-pressed={filters.allAgents}
-        use:tooltip={t('sessions.filters.allAgents')}
+        use:tooltip={filters.allAgents
+          ? t('sessions.filters.allAgentsOn')
+          : t('sessions.filters.allAgentsOff')}
         onclick={() => setFilter('allAgents', !filters.allAgents)}
       >
         <svg
@@ -551,6 +569,7 @@
         aria-label={t('sessions.filtersAria')}
         aria-haspopup="menu"
         aria-expanded={menus.filterMenuOpen}
+        use:tooltip={filterTooltip}
         onclick={(event) => menus.toggleFilterMenu(event.currentTarget)}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -679,7 +698,11 @@
                   (session.agent_address || asText(agentId))}
               class="session-row__select"
               onclick={() => handleSelectSession(session)}
-              use:tooltip={sessionHoverDetails(session)}
+              use:tooltip={() =>
+                sessionHoverDetails(session, {
+                  sessions: sessionsWithLiveActivity,
+                  agents: rosterAgents,
+                })}
             >
               <div class="session-row__heading">
                 {#if session.has_active_run}
@@ -702,7 +725,7 @@
                     <span
                       class="session-row__unread"
                       aria-label={t('sessions.unreadCompletion')}
-                      use:tooltip={t('sessions.unreadCompletionHint')}
+                      use:tooltip={() => unreadRunDetails(session)}
                     >
                       <span
                         class="tab-indicator tab-indicator--unread session-row__unread-dot"
