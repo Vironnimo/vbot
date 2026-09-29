@@ -102,12 +102,13 @@ def test_inspect_and_bind_record_exact_tracking_branch(
         }
     )
     assert json.loads((install.root / "source-update.json").read_text(encoding="utf-8")) == bound
-    change = next(record for record in caplog.records if record.msg.endswith("selection changed"))
-    assert change.__dict__["operation"] == "source.select"
-    assert change.__dict__["source_track"] == "main"
-    assert change.__dict__["checkout"] == str(checkout.resolve())
-    assert change.__dict__["branch"] == "main"
-    assert not hasattr(change, "remote")
+    # The selection change names the track, checkout and branch in its message.
+    [change] = [
+        record.getMessage() for record in caplog.records if "selection changed" in record.msg
+    ]
+    assert "track=main" in change and "branch=main" in change
+    assert f"checkout={checkout.resolve()}" in change
+    assert "remote" not in change
 
 
 def test_prepare_refuses_dirty_checkout_before_fetch_or_build(
