@@ -131,8 +131,7 @@ def bootstrap(runtime: Runtime) -> None:
     more than once is a no-op (logged at debug level).
     """
     if runtime._started:
-        logger = runtime._log_manager.get_logger("core")
-        logger.debug("Runtime already started — skipping")
+        runtime._open_log_manager().get_logger("core").debug("Runtime already started — skipping")
         return
 
     try:
@@ -146,7 +145,7 @@ def bootstrap(runtime: Runtime) -> None:
         if storage is None:
             raise RuntimeError("Storage service not available")
         runtime._storage.ensure_directories()
-        runtime.logger = runtime._log_manager.get_logger("core")
+        runtime.logger = runtime._open_log_manager().get_logger("core")
         runtime.logger.info("Runtime startup initiated")
         runtime._storage.temporary_files.start()
         settings = runtime._storage.load_settings()
@@ -699,7 +698,7 @@ def _log_startup_failure(runtime: Runtime) -> None:
     if not runtime._data_dir.exists():
         return
     with suppress(Exception):
-        runtime._log_manager.get_logger("core").exception("Runtime startup failed")
+        runtime._open_log_manager().get_logger("core").exception("Runtime startup failed")
 
 
 def _log_startup_inventory(

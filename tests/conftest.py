@@ -129,16 +129,25 @@ def _vbot_loggers() -> dict[str, logging.Logger]:
     }
 
 
+def _managed_root_handlers() -> list[logging.Handler]:
+    return [
+        handler
+        for handler in logging.getLogger().handlers
+        if getattr(handler, "_vbot_managed_handler", None) is not None
+    ]
+
+
 @pytest.fixture(autouse=True)
 def _isolate_vbot_loggers() -> Iterator[None]:
     """Keep ``vbot`` logger configuration isolated across tests.
 
     ``LogManager`` configures the ``vbot`` namespace for production: it sets the
     configured level (``INFO`` by default) on ``vbot`` and on every child logger
-    it hands out, disables ``vbot`` propagation, and attaches its handlers.
+    it hands out, disables ``vbot`` propagation, attaches its handlers, and adds
+    a router for other libraries' warnings to the root logger.
     ``LogManager.close()`` detaches handlers and restores propagation but keeps
-    the levels, and tests that build a ``Runtime`` without closing it leak all
-    of it process-wide. A leaked ``vbot`` level lets later ``caplog`` tests
+    the child levels, and tests that start a ``Runtime`` without closing it leak
+    all of it process-wide. A leaked ``vbot`` level lets later ``caplog`` tests
     capture records their default ``WARNING`` threshold should filter; leaked
     propagation hides ``vbot.*`` records from ``caplog`` entirely, and leaked
     handlers keep writing into earlier tests' log files and streams.
@@ -146,12 +155,22 @@ def _isolate_vbot_loggers() -> Iterator[None]:
     Snapshot level, propagation, ``disabled`` and handlers of every existing
     ``vbot``/``vbot.*`` logger before each test and restore them afterwards.
     Loggers first created during the test return to the pristine default state
-    because the ``logging`` module cannot forget a created logger.
+    because the ``logging`` module cannot forget a created logger. Managed root
+    handlers are restored the same way; the root's other handlers belong to
+    pytest, which swaps them per test phase.
     """
     snapshot = {name: _LoggerState.capture(logger) for name, logger in _vbot_loggers().items()}
+    managed_root_handlers = _managed_root_handlers()
     yield
     for name, logger in _vbot_loggers().items():
         snapshot.get(name, _PRISTINE_LOGGER_STATE).apply(logger)
+    root = logging.getLogger()
+    for handler in _managed_root_handlers():
+        if handler not in managed_root_handlers:
+            root.removeHandler(handler)
+    for handler in managed_root_handlers:
+        if handler not in root.handlers:
+            root.addHandler(handler)
 
 
 @pytest.fixture(autouse=True)

@@ -134,9 +134,9 @@ class Runtime:
         self._config = config
         self.safe_startup_mode = safe_startup_mode
         self._data_dir = _resolve_data_dir(config)
-        self._log_manager = LogManager(
-            level=config.get("LOG_LEVEL", "INFO"), data_dir=self._data_dir
-        )
+        # Opened by startup and closed by shutdown; constructing a Runtime
+        # leaves the process logging configuration alone.
+        self._log_manager: LogManager | None = None
         self.logger: LoggerProtocol | None = None
         self._speech_upload_max_size_bytes = DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
         self._extension_change_publisher: Callable[[str, str, Sequence[str], int], None] | None = (
@@ -444,7 +444,7 @@ class Runtime:
         if self._usage_recorder is not None:
             self._usage_recorder.close()
         self._clear_service_references()
-        self._log_manager.close()
+        self._close_log_manager()
         if terminal_error is not None:
             raise terminal_error
 
@@ -529,7 +529,7 @@ class Runtime:
             self._chat_sessions.close()
 
         self._clear_service_references()
-        self._log_manager.close()
+        self._close_log_manager()
         if terminal_error is not None:
             raise terminal_error
 
@@ -537,6 +537,19 @@ class Runtime:
         """Close Extension databases a shutdown handler did not release."""
         if self._extension_host_factory is not None:
             self._extension_host_factory.databases.close()
+
+    def _open_log_manager(self) -> LogManager:
+        """Return the Runtime's log manager, activating it on first use."""
+        if self._log_manager is None:
+            self._log_manager = LogManager(
+                level=self._config.get("LOG_LEVEL", "INFO"), data_dir=self._data_dir
+            )
+        return self._log_manager
+
+    def _close_log_manager(self) -> None:
+        manager, self._log_manager = self._log_manager, None
+        if manager is not None:
+            manager.close()
 
     def _log_shutdown(self) -> None:
         if self.logger is not None:
@@ -580,7 +593,7 @@ class Runtime:
             with suppress(Exception):
                 self._chat_sessions.close()
         self._clear_service_references()
-        self._log_manager.close()
+        self._close_log_manager()
 
     def _live_extension_config(self, name: str) -> dict[str, Any]:
         """Read one extension's persisted config **live** from ``settings.json``.

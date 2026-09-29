@@ -730,13 +730,13 @@ async def test_runtime_finishes_cleanup_before_reporting_terminal_shutdown_failu
     temporary_files = SimpleNamespace(stop=Mock(), aclose=AsyncMock())
     sessions = SimpleNamespace(close=Mock())
     speech = SimpleNamespace(close=Mock(), aclose=AsyncMock())
-    logging_close = Mock()
+    log_manager = SimpleNamespace(close=Mock())
     monkeypatch.setattr(runtime, "_terminal_manager", terminal)
     monkeypatch.setattr(runtime, "_keep_awake", keep_awake)
     monkeypatch.setattr(runtime, "_storage", SimpleNamespace(temporary_files=temporary_files))
     monkeypatch.setattr(runtime, "_chat_sessions", sessions)
     monkeypatch.setattr(runtime, "_speech", speech)
-    monkeypatch.setattr(runtime._log_manager, "close", logging_close)  # noqa: SLF001
+    monkeypatch.setattr(runtime, "_log_manager", log_manager)
 
     with pytest.raises(TerminalManagerError) as raised:
         if async_close:
@@ -747,7 +747,7 @@ async def test_runtime_finishes_cleanup_before_reporting_terminal_shutdown_failu
     assert raised.value is failure
     keep_awake.close.assert_called_once_with()
     sessions.close.assert_called_once_with()
-    logging_close.assert_called_once_with()
+    log_manager.close.assert_called_once_with()
     if async_close:
         terminal.aclose.assert_awaited_once_with()
         temporary_files.aclose.assert_awaited_once_with()
