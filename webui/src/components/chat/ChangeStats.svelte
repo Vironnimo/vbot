@@ -1,7 +1,7 @@
 <script>
   // Inline change summary ("3 files changed, +12 -4") whose hover card lists
-  // every changed file grouped by folder, with its own line counts, a bar of
-  // its share of the largest change and a Copy action for its full path.
+  // every changed file grouped by folder, with its own line counts and a Copy
+  // action for its full path.
   // Shared by the Run footer and the Session information panel.
   import {
     changeStatsParts,
@@ -39,13 +39,9 @@
       ? t('chat.changedFiles.folderFilesOne')
       : t('chat.changedFiles.folderFilesMany', { count });
 
-  const percent = (fraction) => `${Math.round(fraction * 1000) / 10}%`;
-
-  // Name, one column per shown count kind, the bar and the Copy action.
+  // Name, one column per shown count kind, and the Copy action.
   const listColumns = (countKinds) =>
-    ['minmax(0, 1fr)', ...countKinds.map(() => 'auto'), '44px', 'auto'].join(
-      ' ',
-    );
+    ['minmax(0, 1fr)', ...countKinds.map(() => 'auto'), 'auto'].join(' ');
 </script>
 
 {#snippet counts(line, quiet)}
@@ -144,7 +140,6 @@
                   </span>
                   {@render counts(group, true)}
                   <span></span>
-                  <span></span>
                 </li>
               {/if}
               {#each group.rows as row (row.path)}
@@ -162,20 +157,6 @@
                     }}>{row.name}</span
                   >
                   {@render counts(row, false)}
-                  <span class="changed-files-card__bar" aria-hidden="true">
-                    {#if row.bar?.added}
-                      <span
-                        class="changed-files-card__bar-added"
-                        style:width={percent(row.bar.added)}
-                      ></span>
-                    {/if}
-                    {#if row.bar?.removed}
-                      <span
-                        class="changed-files-card__bar-removed"
-                        style:width={percent(row.bar.removed)}
-                      ></span>
-                    {/if}
-                  </span>
                   <CopyButton
                     text={row.path}
                     class="changed-files-card__copy"
@@ -304,7 +285,7 @@
     overflow-wrap: anywhere;
   }
 
-  /* One grid for every row, so counts and bars line up in columns. */
+  /* One grid for every row, so the counts line up in columns. */
   .changed-files-card__list {
     display: grid;
     min-height: 0;
@@ -402,29 +383,6 @@
 
   .changed-files-card__count--zero {
     color: var(--text-lo);
-  }
-
-  /* The share of the largest change in the card: added then removed lines. */
-  .changed-files-card__bar {
-    display: flex;
-    gap: 1px;
-    height: 4px;
-    overflow: hidden;
-    border-radius: 2px;
-    background: var(--border);
-  }
-
-  .changed-files-card__bar-added,
-  .changed-files-card__bar-removed {
-    min-width: 2px;
-  }
-
-  .changed-files-card__bar-added {
-    background: var(--green);
-  }
-
-  .changed-files-card__bar-removed {
-    background: var(--red);
   }
 
   /* The Copy action appears with its row; touch has no hover, so it stays.

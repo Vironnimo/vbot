@@ -464,33 +464,20 @@ describe('change statistics', () => {
     },
   );
 
-  it("scales each file's bar to the largest change and shows only count columns some file has", () => {
-    const card = changedFilesCard({
-      files: 3,
-      added: 8,
-      removed: 2,
-      fileStats: [
-        lines('a.txt', 6, 2),
-        lines('b.txt', 2, 0),
-        lines('c.txt', null, null),
-      ],
-    });
-
-    // The bar length is the square root of the share of the largest change.
-    expect(card.groups[0].rows.map((row) => row.bar)).toEqual([
-      { added: 0.75, removed: 0.25 },
-      { added: 0.5, removed: 0 },
-      null,
-    ]);
-    expect(card.countKinds).toEqual(['added', 'removed']);
-    expect(
+  it('shows only the count columns some file has', () => {
+    const card = (fileStats) =>
       changedFilesCard({
-        files: 1,
-        added: 2,
-        removed: 0,
-        fileStats: [lines('b.txt', 2, 0)],
-      }).countKinds,
-    ).toEqual(['added']);
+        files: fileStats.length,
+        added: 1,
+        removed: 1,
+        fileStats,
+      });
+
+    expect(
+      card([lines('a.txt', 6, 2), lines('b.txt', null, null)]).countKinds,
+    ).toEqual(['added', 'removed']);
+    expect(card([lines('b.txt', 2, 0)]).countKinds).toEqual(['added']);
+    expect(card([lines('c.txt', null, null)]).countKinds).toEqual([]);
   });
 
   it('heads the changed-files card with the totals and counts unnamed files', () => {
