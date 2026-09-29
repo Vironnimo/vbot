@@ -2,6 +2,7 @@ import {
   formatDurationMs,
   timestampToMs,
   elapsedSinceTimestamp,
+  executionDetailRows,
   formatTime,
 } from './time.js';
 import { t } from '$lib/i18n.js';
@@ -12,6 +13,7 @@ import {
   toolStatus,
   isToolPreparing,
   toolStartedTimestamp,
+  executionStateTitle,
 } from './toolFacts.js';
 import { trimmedString, parseJsonValue, truncateToolLabel } from './values.js';
 import {
@@ -23,6 +25,7 @@ import {
   isBackgroundSubAgentSpawn,
   subAgentAgentId,
   subAgentPreview,
+  subAgentTask,
   subAgentNavigationTarget,
   isStartingForegroundSubAgent,
 } from './subagents.js';
@@ -106,6 +109,28 @@ export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
     parts.push(endTimeLabel);
   }
   return parts;
+};
+
+// Tooltip details behind the Run footer: the Run's state, what its "iter"
+// count stands for (as the lead line, so the moment rows keep a narrow label
+// column), when it started and finished, and how long it ran.
+export const runFooterDetails = (assistantRun, nowMs = Date.now()) => {
+  const running = assistantRun.status === 'running';
+  const rows = executionDetailRows({
+    startedAt: assistantRun.startTimestamp ?? assistantRun.timestamp,
+    finishedAt: assistantRun.endTimestamp,
+    durationMs: runDurationMs(assistantRun, nowMs),
+    running,
+    nowMs,
+  });
+  const iterationCount = assistantRun?.iterationCount;
+  const text =
+    !Number.isInteger(iterationCount) || iterationCount < 0
+      ? ''
+      : iterationCount === 1
+        ? t('chat.details.modelResponseOne')
+        : t('chat.details.modelResponseCount', { count: iterationCount });
+  return { title: runStatusLabel(assistantRun.status), text, rows };
 };
 
 // SSE keepalive comments from gateways like OpenRouter arrive every few
@@ -267,6 +292,7 @@ export const backgroundTasks = (
           label: subAgentAgentId(child),
           agentId: subAgentAgentId(child),
           preview: subAgentPreview(child),
+          taskText: subAgentTask(child),
           target: subAgentNavigationTarget(child),
           lastToolName:
             dotStatus === 'running'
@@ -297,7 +323,9 @@ export const backgroundTasks = (
         dotStatus: bashRowState.dotStatus,
         label: bashRowState.command,
         command: bashRowState.command,
+        fullCommand: bashRowState.fullCommand,
         processId: bashRowState.processId,
+        rowState: bashRowState,
         target: null,
         timeLabel: backgroundBashToolStatusLabel(child, bashRowState, nowMs),
         order,
@@ -348,22 +376,73 @@ export const backgroundBashRowState = (
     durableStatus ||
     trimmedString(data.status) ||
     'running';
+  const fullCommand = bashCommand(tool);
   return {
     processId,
-    command: commandPreview(tool),
+    command: commandPreview(fullCommand),
+    fullCommand,
     dotStatus: backgroundBashDotStatus(status),
     terminal,
   };
 };
 
-function commandPreview(tool) {
+function bashCommand(tool) {
   const args = parseJsonValue(toolArguments(tool));
-  const command = truncateToolLabel(
-    trimmedString(isPlainObject(args) ? args.command : '').replace(/\s+/g, ' '),
-    MAX_BACKGROUND_BASH_LABEL_LENGTH,
-  );
-  return command || t('chat.activity.bashFallback');
+  return trimmedString(isPlainObject(args) ? args.command : '');
 }
+
+function commandPreview(command) {
+  return (
+    truncateToolLabel(
+      command.replace(/\s+/g, ' '),
+      MAX_BACKGROUND_BASH_LABEL_LENGTH,
+    ) || t('chat.activity.bashFallback')
+  );
+}
+
+// Tooltip details behind a handed-off Bash row's status: the process state in
+// words, its start, end and runtime, its exit code and its process id.
+export const backgroundBashStatusDetails = (
+  tool,
+  rowState,
+  nowMs = Date.now(),
+) => {
+  if (!isPlainObject(rowState)) {
+    return null;
+  }
+  const running = rowState.dotStatus === 'running';
+  const terminal = rowState.terminal;
+  const startedAt =
+    trimmedString(terminal?.startedAt) || toolStartedTimestamp(tool);
+  const rows = executionDetailRows({
+    startedAt,
+    finishedAt: terminal?.finishedAt,
+    durationMs: running
+      ? elapsedSinceTimestamp(startedAt, nowMs)
+      : backgroundBashDurationMs(terminal),
+    running,
+    nowMs,
+  });
+  if (Number.isInteger(terminal?.exitCode)) {
+    rows.push({
+      label: t('chat.details.exitCode'),
+      value: String(terminal.exitCode),
+      tone: terminal.exitCode === 0 ? 'success' : 'danger',
+    });
+  }
+  rows.push({
+    label: t('chat.details.process'),
+    value: rowState.processId,
+    mono: true,
+  });
+  return {
+    title: running
+      ? t('chat.toolState.background')
+      : executionStateTitle(rowState.dotStatus),
+    text: running ? t('chat.toolState.backgroundHint') : '',
+    rows,
+  };
+};
 
 // Status label for a handed-off Bash row. While the process runs the label
 // ticks from the Tool call's own start timestamp (the command spawns at call
@@ -568,22 +647,28 @@ function runEndTimeLabel(assistantRun) {
 }
 
 function formatRunDuration(assistantRun, nowMs = Date.now()) {
-  const durationFromTiming = formatDurationMs(assistantRun.durationMs);
-  if (durationFromTiming) {
-    return durationFromTiming;
+  return formatDurationMs(runDurationMs(assistantRun, nowMs));
+}
+
+function runDurationMs(assistantRun, nowMs = Date.now()) {
+  if (
+    Number.isFinite(assistantRun.durationMs) &&
+    assistantRun.durationMs >= 0
+  ) {
+    return assistantRun.durationMs;
   }
   const start = timestampToMs(
     assistantRun.startTimestamp ?? assistantRun.timestamp,
   );
   const end = timestampToMs(assistantRun.endTimestamp);
   if (start === null) {
-    return '';
+    return null;
   }
   if (assistantRun.status === 'running') {
-    return formatDurationMs(Math.max(0, nowMs - start));
+    return Math.max(0, nowMs - start);
   }
   if (end === null || end < start) {
-    return '';
+    return null;
   }
-  return formatDurationMs(end - start);
+  return end - start;
 }

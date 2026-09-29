@@ -3,6 +3,7 @@ export default Object.freeze({
   'live.startButton': 'Start Live',
   'live.stopButton': 'Stop Live',
   'live.mute': 'Mute microphone',
+  'live.unmute': 'Unmute microphone',
   'live.busy': 'Working…',
   'live.state.connecting': 'Connecting…',
   'live.state.listening': 'Listening…',

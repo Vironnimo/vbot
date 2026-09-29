@@ -699,13 +699,13 @@
                   : t('chat.agentActivity.idle', {
                       name: memberName,
                     })}
-            {@const memberActivityTooltip = agentActivityTooltip(
-              memberActivityLabel,
-              {
-                model: member.effective?.model?.value,
-                thinkingEffort: member.effective?.thinking_effort?.value,
-              },
-            )}
+            {@const memberActivityTooltip = agentActivityTooltip({
+              name: memberName,
+              id: member.agent_id,
+              status: memberStatus,
+              model: member.effective?.model?.value,
+              thinkingEffort: member.effective?.thinking_effort?.value,
+            })}
             <button
               type="button"
               class="agent-tab chat-view__project-tab"
@@ -840,9 +840,13 @@
                 { runId, toolCallId },
               )}
             onCancelSubAgent={actions.handleCancelSubAgent}
-            messageEditingDisabled={chatState.loadingHistory ||
-              isRunActive(target.activeSessionState) ||
-              (target.activeSessionState?.queue?.length ?? 0) > 0}
+            messageEditingDisabledReason={chatState.loadingHistory
+              ? t('chat.editUnavailableLoading')
+              : isRunActive(target.activeSessionState)
+                ? t('chat.editUnavailableRunning')
+                : (target.activeSessionState?.queue?.length ?? 0) > 0
+                  ? t('chat.editUnavailableQueued')
+                  : ''}
             onEditMessage={actions.handleEditMessage}
           />
         </div>

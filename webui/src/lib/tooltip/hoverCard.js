@@ -14,7 +14,7 @@ import {
   tabbablesIn,
   trackInputModality,
 } from './layers.js';
-import { normalizePlacement } from './geometry.js';
+import { clipsContent, normalizePlacement } from './geometry.js';
 
 const INTERACTIVE_SELECTOR = [
   'a[href]',
@@ -33,6 +33,7 @@ function normalizeHoverCardOptions(value) {
     accessible: value?.accessible !== false,
     touch: value?.touch !== false,
     openOnPress: value?.openOnPress === true,
+    whenTruncated: value?.whenTruncated === true,
     placement: normalizePlacement(value?.placement),
     showDelayMs:
       Number.isFinite(showDelayMs) && showDelayMs >= 0
@@ -58,6 +59,9 @@ function normalizeHoverCardOptions(value) {
  * - `openOnPress: true` opens the card at once on a mouse press, for an
  *   anchor whose only purpose is revealing the card (the context ring);
  *   otherwise a press belongs to the anchor's own control.
+ * - `whenTruncated: true` opens the card only while its anchor clips its
+ *   text, for a card that completes a value the anchor shows in full
+ *   whenever there is room (a Tool argument with a Copy action).
  */
 export function floatingHoverCard(node, options = {}) {
   const anchor = node.parentElement;
@@ -243,6 +247,9 @@ export function floatingHoverCard(node, options = {}) {
   function show(focusTarget = null) {
     cancelScheduledShow();
     cancelScheduledClose();
+    if (!open && currentOptions.whenTruncated && !clipsContent(anchor)) {
+      return;
+    }
     open = true;
     node.dataset.floatingOpen = 'true';
     applySemantics();

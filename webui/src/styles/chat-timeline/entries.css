@@ -245,6 +245,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Status, duration, iterations and end time: one hover target for the Run
+   details tooltip, separate from the change statistics. */
+.run-footer__summary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
 .run-footer__part {
   white-space: nowrap;
 }

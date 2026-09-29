@@ -4,6 +4,8 @@
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
 
+  import { agentActivityState } from './agentActivityTooltip.js';
+
   // Chips collapse to their status dot at the same width as the Chat header's
   // mobile layout.
   const COMPACT_MEDIA_QUERY = '(max-width: 640px)';
@@ -38,9 +40,15 @@
           count: hiddenAgents.length,
         }),
   );
-  let moreTooltip = $derived(
-    hiddenAgents.map((agent) => agent.label).join('\n'),
-  );
+  // Each hidden Agent by name with its activity in words.
+  let moreTooltip = $derived({
+    title: moreLabel,
+    rows: hiddenAgents.map((agent) => ({
+      label: agent.name,
+      value: agentActivityState(agent.status, agent.unreadCount),
+      tone: agent.status === 'running' ? 'warning' : '',
+    })),
+  });
 
   function fittingChipCount(widths, gap, moreWidth, available) {
     const total =

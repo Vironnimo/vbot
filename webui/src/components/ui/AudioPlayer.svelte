@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import { t } from '$lib/i18n.js';
   import { mountHold } from '$lib/mountHold.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   let {
     src,
@@ -37,6 +38,7 @@
   );
   let playLabel = $derived(paused ? t('audio.play') : t('audio.pause'));
   let muteLabel = $derived(silent ? t('audio.unmute') : t('audio.mute'));
+  let volumePercent = $derived(Math.round((muted ? 0 : volume) * 100));
   // A host that unmounts content scrolled out of view (the Chat timeline)
   // keeps a playing player mounted, so playback survives scrolling away.
   const holdMounted = mountHold();
@@ -291,6 +293,7 @@
         value={rate}
         options={speeds}
         ariaLabel={t('audio.speed')}
+        triggerTooltip={t('audio.speed')}
         triggerClass="audio-player__speed"
         onValueChange={(value) => {
           audio.playbackRate = Number(value);
@@ -330,7 +333,10 @@
           step="0.05"
           value={muted ? 0 : volume}
           aria-label={t('audio.volume')}
-          aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)}%`}
+          aria-valuetext={`${volumePercent}%`}
+          use:tooltip={{
+            rows: [{ label: t('audio.volume'), value: `${volumePercent}%` }],
+          }}
           style={`--range-progress: ${muted ? 0 : volume * 100}%`}
           oninput={changeVolume}
         />

@@ -130,8 +130,9 @@ describe('ChatHeader', () => {
     trigger.dispatchEvent(new Event('pointerenter'));
     await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
     expect(tooltipDetails()).toEqual({
-      title: running('Beta'),
+      title: 'Beta',
       rows: [
+        [t('chat.agentActivity.status'), t('chat.agentActivity.stateRunning')],
         [t('chat.agentActivity.model'), 'anthropic/claude-sonnet-4'],
         [t('chat.agentActivity.thinkingEffort'), 'high'],
       ],
@@ -149,8 +150,9 @@ describe('ChatHeader', () => {
     alpha.dispatchEvent(new Event('pointerenter'));
     await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
     expect(tooltipDetails()).toEqual({
-      title: idle('Alpha'),
+      title: 'Alpha',
       rows: [
+        [t('chat.agentActivity.status'), t('chat.agentActivity.stateIdle')],
         [t('chat.agentActivity.model'), 'openai/gpt-5.2'],
         [
           t('chat.agentActivity.thinkingEffort'),
@@ -250,6 +252,19 @@ describe('ChatHeader', () => {
     ]);
     const more = document.querySelector('.agent-chip--more');
     expect(more.textContent.trim()).toBe('+2');
+    // Its tooltip names each hidden Agent with its activity.
+    vi.useFakeTimers();
+    more.dispatchEvent(new Event('pointerenter'));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    expect(tooltipDetails()).toEqual({
+      title: t('chat.agentChips.more', { count: 2 }),
+      rows: [
+        ['Beta', t('chat.agentActivity.stateRunning')],
+        ['Epsilon', t('chat.agentActivity.stateRunning')],
+      ],
+    });
+    more.dispatchEvent(new Event('pointerleave'));
+    vi.useRealTimers();
 
     more.click();
     await vi.waitFor(() => {

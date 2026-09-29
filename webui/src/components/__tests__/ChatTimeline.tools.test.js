@@ -524,7 +524,7 @@ describe('ChatTimeline Tools', () => {
       );
       expect(value.getAttribute('tabindex')).toBe('0');
       expect(value.hasAttribute('title')).toBe(false);
-      const card = document.querySelector('.tool-primary-hover-card');
+      const card = document.querySelector('.copyable-value-card');
       value.dispatchEvent(new Event('pointerenter'));
       await vi.advanceTimersByTimeAsync(INTENTIONAL_HOVER_SHOW_DELAY_MS - 1);
       expect(card.dataset.floatingOpen).toBe('false');
@@ -539,9 +539,7 @@ describe('ChatTimeline Tools', () => {
       expect(card.dataset.floatingOpen).toBe('true');
       expect(card.textContent).toContain(fullPath);
       const copyButton = card.querySelector('button');
-      expect(copyButton.getAttribute('aria-label')).toBe(
-        t('chat.copyToolValue'),
-      );
+      expect(copyButton.getAttribute('aria-label')).toBe(t('chat.copyPath'));
       copyButton.click();
       await Promise.resolve();
       expect(writeText).toHaveBeenCalledWith(fullPath);

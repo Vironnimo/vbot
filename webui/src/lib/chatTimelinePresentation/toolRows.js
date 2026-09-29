@@ -14,9 +14,14 @@ import {
   streamingPreviewArguments,
   toolNameForRunTool,
   toolDisplay,
+  executionStateTitle,
 } from './toolFacts.js';
 import { t } from '$lib/i18n.js';
-import { formatDurationMs, elapsedSinceTimestamp } from './time.js';
+import {
+  formatDurationMs,
+  elapsedSinceTimestamp,
+  executionDetailRows,
+} from './time.js';
 import { trimmedString } from './values.js';
 import { isPlainObject } from '$lib/values.js';
 import { subAgentToolLabel } from './subagents.js';
@@ -94,6 +99,36 @@ export const toolStatusLabel = (tool, nowMs = Date.now()) => {
   return duration;
 };
 
+/**
+ * Tooltip details behind a Tool row's status dot and time: the state in
+ * words, when the call started and finished, and how long it ran.
+ */
+export const toolStatusDetails = (tool, nowMs = Date.now()) => {
+  if (isToolPreparing(tool)) {
+    return {
+      title: t('chat.toolState.preparing'),
+      text: t('chat.toolState.preparingHint'),
+    };
+  }
+  const status = toolStatus(tool);
+  const running = status === 'running';
+  const startedAt = toolStartedTimestamp(tool);
+  return {
+    title: executionStateTitle(status),
+    text: status === 'partial' ? t('chat.toolState.partialHint') : '',
+    rows: executionDetailRows({
+      startedAt,
+      finishedAt:
+        tool?.timing?.completed_at ?? tool?.resultEvent?.timestamp ?? '',
+      durationMs: running
+        ? elapsedSinceTimestamp(startedAt, nowMs)
+        : toolDurationMs(tool),
+      running,
+      nowMs,
+    }),
+  };
+};
+
 export const toolRowPresentation = (tool) => {
   const display = toolDisplay(tool);
   const structuredPrimary = Array.isArray(display?.primary)
@@ -127,6 +162,27 @@ export const toolRowPresentation = (tool) => {
   return { primary, facts };
 };
 
+// Value kinds shown in the mono face inside tooltips and cards; a quoted
+// query is prose (a web search), an unquoted one a pattern.
+const CODE_LIKE_VALUE_KINDS = new Set(['command', 'identifier', 'path', 'url']);
+
+const COPY_LABELS = {
+  command: () => [t('chat.copyCommand'), t('chat.commandCopied')],
+  path: () => [t('chat.copyPath'), t('chat.pathCopied')],
+  url: () => [t('chat.copyUrl'), t('chat.urlCopied')],
+};
+
+function isCodeLike(kind, quoted = false) {
+  return CODE_LIKE_VALUE_KINDS.has(kind) || (kind === 'query' && !quoted);
+}
+
+/**
+ * One primary argument of a Tool row. `reveal` (null when the value is never
+ * revealed) describes the complete value shown on hover and focus: `value`,
+ * an optional leading `title` (the description a Bash command stands for),
+ * `mono` for code-like values, `whenTruncated` when it shows only while the
+ * row clips the visible text, and `copy` labels when a card offers Copy.
+ */
 function toolPrimaryPart(part) {
   if (!isPlainObject(part)) {
     return null;
@@ -146,19 +202,36 @@ function toolPrimaryPart(part) {
   const sourceValue =
     kind === 'path' ? compactToolPath(trimmedString(part.value)) : fullText;
   const text = truncateSemanticValue(sourceValue, truncate, maxCharacters);
-  const tooltipMode = ['always', 'none', 'truncated'].includes(part.tooltip)
-    ? part.tooltip
-    : 'truncated';
-  const showTooltip =
-    tooltipMode === 'always' ||
-    (tooltipMode === 'truncated' && text !== fullText);
   return {
     kind,
     text,
-    fullText,
     truncate,
-    copyable: part.copyable === true,
-    tooltipText: showTooltip ? fullText : '',
+    reveal: toolPrimaryReveal(part, kind, text, fullText),
+  };
+}
+
+function toolPrimaryReveal(part, kind, text, fullText) {
+  const tooltipMode = ['always', 'none', 'truncated'].includes(part.tooltip)
+    ? part.tooltip
+    : 'truncated';
+  const detail = trimmedString(part.detail);
+  if (tooltipMode === 'none' && !detail) {
+    return null;
+  }
+  const valueKind = detail ? trimmedString(part.detail_kind) || 'text' : kind;
+  const copyLabels = COPY_LABELS[valueKind]?.() ?? [
+    t('chat.copyToolValue'),
+    t('chat.toolValueCopied'),
+  ];
+  return {
+    title: detail ? fullText : '',
+    value: detail || fullText,
+    mono: isCodeLike(valueKind, !detail && part.quote === true),
+    whenTruncated: !detail && tooltipMode === 'truncated' && text === fullText,
+    copy:
+      part.copyable === true
+        ? { label: copyLabels[0], copiedLabel: copyLabels[1] }
+        : null,
   };
 }
 

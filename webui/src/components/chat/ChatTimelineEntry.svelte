@@ -4,12 +4,14 @@
   import { formatMentionToken } from '$lib/fileMentions.js';
   import { isImeComposing } from '$lib/keyboard.js';
   import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
+  import { formatMoment } from '$lib/timeText.js';
   import { linkifiedTextSegments } from '$lib/markdown.js';
   import { mountHold } from '$lib/mountHold.js';
   import {
     attachmentFilename,
     attachmentPreviewLabel,
     attachmentUrlForBlock,
+    fileMentionDetails,
     fileMentionStatusLabel,
     avatarForItem,
     errorMessagePresentation,
@@ -47,6 +49,7 @@
     toolRowFromEvent,
     toolRowPresentation,
     toolStatus,
+    toolStatusDetails,
     userContentBlocks,
   } from '$lib/chatTimelinePresentation.js';
 
@@ -65,7 +68,7 @@
     agentName = '',
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
-    messageEditingDisabled = false,
+    messageEditingDisabledReason = '',
     onEditMessage = async () => false,
   } = $props();
 
@@ -334,17 +337,21 @@
           class="inline-file-link"
           href={fileUrl}
           download={attachmentFilename(block)}
-          use:tooltip={attachmentFilename(block)}
+          use:tooltip={{ text: attachmentFilename(block), whenTruncated: true }}
         >
           {attachmentFilename(block)}
         </a>
       {:else}
-        <span class="inline-file-name">{attachmentFilename(block)}</span>
+        <span
+          class="inline-file-name"
+          use:tooltip={{ text: attachmentFilename(block), whenTruncated: true }}
+          >{attachmentFilename(block)}</span
+        >
       {/if}
     </div>
   {:else if isFileMentionContentBlock(block)}
     {@const statusLabel = fileMentionStatusLabel(block)}
-    <div class="inline-file" use:tooltip={t('chat.fileMention.label')}>
+    <div class="inline-file" use:tooltip={() => fileMentionDetails(block)}>
       <svg
         class="inline-file-icon"
         viewBox="0 0 16 16"
@@ -365,11 +372,7 @@
           stroke-width="1.2"
         />
       </svg>
-      <span
-        class="inline-file-name"
-        use:tooltip={{ text: block.path, mono: true, whenTruncated: true }}
-        >@{block.path}</span
-      >
+      <span class="inline-file-name">@{block.path}</span>
       {#if statusLabel}
         <span class="inline-file-status">({statusLabel})</span>
       {/if}
@@ -394,7 +397,11 @@
           : labelForMessage(item.message)}</span
       >
       {#if formatTime(item.message.timestamp)}
-        <span class="msg-timestamp">{formatTime(item.message.timestamp)}</span>
+        <span
+          class="msg-timestamp"
+          use:tooltip={() => formatMoment(item.message.timestamp)}
+          >{formatTime(item.message.timestamp)}</span
+        >
       {/if}
       {#if ['assistant', 'user'].includes(item.message.role) && copyableMessageText(item.message)}
         <CopyButton
@@ -411,7 +418,8 @@
           class="chat-edit-action message-edit"
           ariaLabel={t('chat.editMessage')}
           tooltip={t('chat.editMessage')}
-          disabled={messageEditingDisabled}
+          disabled={Boolean(messageEditingDisabledReason)}
+          disabledReason={messageEditingDisabledReason}
           onClick={() => beginEditing(item.message)}
         >
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
@@ -536,7 +544,11 @@
         <div class="msg-avatar">{avatarForItem(item)}</div>
         <span class="msg-author">{labelForEvent(item.event)}</span>
         {#if formatTime(item.event.timestamp)}
-          <span class="msg-timestamp">{formatTime(item.event.timestamp)}</span>
+          <span
+            class="msg-timestamp"
+            use:tooltip={() => formatMoment(item.event.timestamp)}
+            >{formatTime(item.event.timestamp)}</span
+          >
         {/if}
         {#if (isAssistantItem(item) || isUserItem(item)) && (copyableMessageText(messageFromEvent(item.event)) || textFromEvent(item.event))}
           <CopyButton
@@ -561,7 +573,8 @@
               class:partial={toolStatus(eventToolRow) === 'partial'}
               class:running={toolStatus(eventToolRow) === 'running'}
               class:done={toolStatus(eventToolRow) === 'success'}
-              class="te-dot">●</span
+              class="te-dot"
+              use:tooltip={() => toolStatusDetails(eventToolRow)}>●</span
             >
             <span class="te-fn">{toolNameForEvent(item.event)}</span>
             {#if eventPresentation.primary.length > 0}
@@ -627,7 +640,11 @@
         <div class="msg-avatar">{avatarForItem(item)}</div>
         <span class="msg-author">{labelForEvent(item.event)}</span>
         {#if formatTime(item.event.timestamp)}
-          <span class="msg-timestamp">{formatTime(item.event.timestamp)}</span>
+          <span
+            class="msg-timestamp"
+            use:tooltip={() => formatMoment(item.event.timestamp)}
+            >{formatTime(item.event.timestamp)}</span
+          >
         {/if}
       </div>
       <div class="msg-content">

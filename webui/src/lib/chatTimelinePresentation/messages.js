@@ -1,5 +1,6 @@
 import { trimmedString, parseJsonValue } from './values.js';
-import { t } from '$lib/i18n.js';
+import { activeLocaleTag, t } from '$lib/i18n.js';
+import { formatMoment } from '$lib/timeText.js';
 import { isPlainObject } from '$lib/values.js';
 import { toolNameForRunTool } from './toolFacts.js';
 import { timestampToMs, formatDurationMs } from './time.js';
@@ -219,6 +220,50 @@ export const fileMentionStatusLabel = (block) => {
     return t('chat.fileMention.missing');
   }
   return '';
+};
+
+// File size in the largest fitting unit: "812 bytes", "12.4 kB", "3.1 MB".
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return '';
+  }
+  const [unit, size] =
+    bytes < 1000
+      ? ['byte', bytes]
+      : bytes < 1_000_000
+        ? ['kilobyte', bytes / 1000]
+        : ['megabyte', bytes / 1_000_000];
+  return new Intl.NumberFormat(activeLocaleTag(), {
+    style: 'unit',
+    unit,
+    unitDisplay: unit === 'byte' ? 'long' : 'short',
+    maximumFractionDigits: 1,
+  }).format(size);
+}
+
+/**
+ * Tooltip details of a mentioned file: its complete path and, when its text
+ * went into the message, that it did and how large it was. A file that was
+ * only referenced shows why beside its name.
+ */
+export const fileMentionDetails = (block) => {
+  const rows = [
+    {
+      label: t('chat.fileMention.path'),
+      value: trimmedString(block?.path),
+      mono: true,
+    },
+  ];
+  if (block?.status === 'inlined') {
+    const size = formatFileSize(block.size_bytes);
+    rows.push({
+      label: t('chat.fileMention.content'),
+      value: size
+        ? t('chat.fileMention.inlinedSize', { size })
+        : t('chat.fileMention.inlined'),
+    });
+  }
+  return { title: t('chat.fileMention.label'), rows };
 };
 
 export const attachmentUrlForBlock = (block) =>
@@ -444,6 +489,45 @@ export const compactionSeparatorLabel = (item) => {
     });
   }
   return t('chat.compacted');
+};
+
+/**
+ * Tooltip details of a completed Compaction: the exact Context sizes before
+ * and after, the share it saved, and when it happened.
+ */
+export const compactionSeparatorDetails = (item, nowMs = Date.now()) => {
+  if (item?.status === 'running' || item?.status === 'failed') {
+    return null;
+  }
+  const usage = item?.message?.usage ?? {};
+  const before =
+    item?.contextTokensBefore ?? usage.context_tokens_before ?? null;
+  const after = item?.contextTokensAfter ?? usage.context_tokens_after ?? null;
+  const rows = [];
+  if (Number.isFinite(before) && Number.isFinite(after) && before > 0) {
+    const numbers = new Intl.NumberFormat(activeLocaleTag());
+    rows.push(
+      {
+        label: t('chat.compaction.before'),
+        value: t('chat.compaction.tokens', { count: numbers.format(before) }),
+      },
+      {
+        label: t('chat.compaction.after'),
+        value: t('chat.compaction.tokens', { count: numbers.format(after) }),
+      },
+      {
+        label: t('chat.compaction.saved'),
+        value: new Intl.NumberFormat(activeLocaleTag(), {
+          style: 'percent',
+        }).format(Math.max(0, before - after) / before),
+      },
+    );
+  }
+  const moment = formatMoment(timestampForItem(item), { nowMs });
+  if (moment) {
+    rows.push({ label: t('chat.compaction.when'), value: moment });
+  }
+  return rows.length > 0 ? { rows } : null;
 };
 
 export const compactionSummaryText = (item) =>

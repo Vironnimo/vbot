@@ -230,6 +230,35 @@ def test_display_builds_computed_semantic_parts() -> None:
     assert payload["primary"][0]["truncate"] == "never"
     assert payload["primary"][1]["kind"] == "identifier"
     assert payload["primary"][1]["truncate"] == "middle"
+    assert "detail" not in payload["primary"][0]
+
+
+def test_display_part_carries_the_complete_value_it_stands_for() -> None:
+    display = ToolDisplay(
+        parts_builder=lambda _arguments: (
+            ToolDisplayPart(
+                "Run the tests",
+                kind="description",
+                copyable=True,
+                detail="  python -m pytest\n  -x  ",
+                detail_kind="command",
+            ),
+        )
+    )
+
+    [part] = _display_for_call(display, {"command": "python -m pytest"})["primary"]
+
+    assert part["value"] == "Run the tests"
+    assert (part["detail"], part["detail_kind"]) == ("python -m pytest\n  -x", "command")
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"detail": 3}, {"detail": "ls", "detail_kind": "shell"}],
+)
+def test_display_part_rejects_an_invalid_detail(arguments: dict[str, Any]) -> None:
+    with pytest.raises(ValueError):
+        ToolDisplayPart("Run the tests", **arguments)
 
 
 def test_display_resolves_a_path_against_the_call_cwd(tmp_path: Path) -> None:

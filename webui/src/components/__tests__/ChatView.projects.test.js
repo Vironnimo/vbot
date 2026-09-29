@@ -229,7 +229,7 @@ describe('ChatView Projects', () => {
           team: [
             {
               agent_id: 'builder',
-              display_name: 'Builder',
+              display_name: 'Builder Bot',
               model: 'anthropic/claude-sonnet-4',
               effective: {
                 model: {
@@ -261,10 +261,11 @@ describe('ChatView Projects', () => {
 
       vi.useFakeTimers();
       expect(await hoveredTooltipText(agentPickerTrigger())).toBe(
-        'Alpha: Idle\nModel: openrouter/anthropic/claude-sonnet-4\nThinking effort: Provider default',
+        'Alpha\nActivity: Idle\nModel: openrouter/anthropic/claude-sonnet-4\nThinking effort: Provider default',
       );
+      // An id the name does not already say follows as its own row.
       expect(await hoveredTooltipText(teamTab('Builder'))).toBe(
-        'Builder: Idle\nModel: openai/gpt-5.2\nThinking effort: medium',
+        'Builder Bot\nActivity: Idle\nModel: openai/gpt-5.2\nThinking effort: medium\nAgent ID: builder',
       );
     });
 

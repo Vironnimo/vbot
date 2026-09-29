@@ -177,7 +177,10 @@
         class="live-voice__mute"
         aria-label={muteLabel}
         aria-pressed={voice.muted}
-        use:tooltip={{ text: muteLabel, placement: 'right' }}
+        use:tooltip={{
+          text: voice.muted ? t('live.unmute') : muteLabel,
+          placement: 'right',
+        }}
         disabled={voice.phase === 'closing'}
         onclick={() => controller.mute()}
       >

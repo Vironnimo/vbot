@@ -2,7 +2,7 @@
 // anchor. See lib/tooltip.js for the content, placement and interaction
 // contract.
 
-import { normalizePlacement } from './geometry.js';
+import { clipsContent, normalizePlacement } from './geometry.js';
 import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
   TOOLTIP_SHOW_DELAY_MS,
@@ -75,28 +75,6 @@ export function normalizeTooltipContent(value) {
 
 function isEmpty(content) {
   return !content.text && !content.title && content.rows.length === 0;
-}
-
-// Overflow tooltips repeat text their anchor already shows, so they only
-// appear while the anchor, or an element inside it (a tab's name label),
-// clips it. An anchor without any measurable box (inline elements, no
-// layout) keeps its tooltip.
-function clipsContent(node) {
-  let measurable = false;
-  for (const element of [node, ...node.querySelectorAll('*')]) {
-    const { clientWidth, clientHeight } = element;
-    if (!clientWidth && !clientHeight) {
-      continue;
-    }
-    measurable = true;
-    if (
-      element.scrollWidth > clientWidth + 1 ||
-      element.scrollHeight > clientHeight + 2
-    ) {
-      return true;
-    }
-  }
-  return !measurable;
 }
 
 function contentKey(content) {

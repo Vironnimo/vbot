@@ -3,15 +3,19 @@
   import { SvelteSet } from 'svelte/reactivity';
 
   import {
+    backgroundBashStatusDetails,
     backgroundTasks,
     sessionChangeStats,
     reflectionElapsedLabel,
+    subAgentStatusDetails,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
+  import { formatMoment } from '$lib/timeText.js';
   import { tooltip } from '$lib/tooltip.js';
 
   import Button from '../ui/Button.svelte';
   import ChangeStats from './ChangeStats.svelte';
+  import CopyableValueCard from './CopyableValueCard.svelte';
 
   let {
     timelineItems = [],
@@ -47,6 +51,9 @@
   );
   let subagentTasks = $derived(
     tasks.filter((task) => task.kind === 'subagent'),
+  );
+  let activeSubagentCount = $derived(
+    subagentTasks.filter((task) => task.dotStatus === 'running').length,
   );
   let bashTasks = $derived(tasks.filter((task) => task.kind === 'bash'));
   let activeBashCount = $derived(
@@ -151,6 +158,33 @@
     return t('chat.activity.reflectionScope.combined');
   };
 
+  // Details behind a status icon: the state in words, since when, how long,
+  // and for a process its exit code.
+  const statusDetails = (task) => {
+    const details =
+      task.kind === 'bash'
+        ? backgroundBashStatusDetails(task.tool, task.rowState, Date.now())
+        : task.kind === 'subagent'
+          ? subAgentStatusDetails(
+              task.tool,
+              task.dotStatus,
+              subAgentStatuses,
+              Date.now(),
+            )
+          : reflectionStatusDetails(task.row);
+    return { ...details, placement: 'left' };
+  };
+
+  const reflectionStatusDetails = (row) => {
+    const started = formatMoment(row?.startedAt, { seconds: true });
+    return {
+      title: statusLabel(row?.status),
+      rows: started
+        ? [{ label: t('chat.details.started'), value: started }]
+        : [],
+    };
+  };
+
   const reflectionRowLabel = (row) =>
     t('chat.activity.reflectionOpenAria', {
       scope: reflectionScopeLabel(row),
@@ -220,7 +254,7 @@
     class:chat-activity__status--failed={task.dotStatus === 'failed'}
     class:chat-activity__status--cancelled={task.dotStatus === 'cancelled'}
     data-status={task.dotStatus}
-    use:tooltip={{ text: statusLabel(task.dotStatus), placement: 'left' }}
+    use:tooltip={() => statusDetails(task)}
     aria-hidden="true"
   >
     {#if task.dotStatus === 'running'}
@@ -271,46 +305,67 @@
       class="chat-activity__task-row chat-activity__task-row--bash"
       aria-label={taskLabel(task)}
     >
+      <!-- The command must receive focus so its complete text and Copy
+           action reach keyboard users. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <span
         class="chat-activity__task-name"
-        use:tooltip={{
-          text: task.command,
-          mono: true,
-          selectable: true,
-          placement: 'left',
-        }}
+        tabindex={task.fullCommand ? 0 : undefined}
       >
         {task.command}
         {#if task.timeLabel}
           <span class="chat-activity__task-time">· {task.timeLabel}</span>
         {/if}
+        <CopyableValueCard
+          value={task.fullCommand}
+          mono
+          copyLabel={t('chat.copyCommand')}
+          copiedLabel={t('chat.commandCopied')}
+          whenTruncated={task.command === task.fullCommand}
+          placement="left"
+        />
       </span>
       {@render statusIcon(task)}
       {@render cancelButton(task)}
     </div>
   {:else}
     <div class="chat-activity__task-row">
-      <Button
-        variant="tertiary"
-        class="chat-activity__task-link"
-        ariaLabel={taskLabel(task)}
-        aria-describedby={task.preview
-          ? `${panelId}-${task.id}-preview`
-          : undefined}
-        tooltip={{ text: task.preview, placement: 'left' }}
-        disabled={!task.target}
-        onClick={() => task.target && onNavigateToSubAgent(task.target)}
-      >
-        <span class="chat-activity__task-copy">
-          <span class="chat-activity__task-name">{task.agentId}</span>
-          {#if task.preview}
-            <span
-              id={`${panelId}-${task.id}-preview`}
-              class="chat-activity__task-preview">{task.preview}</span
-            >
-          {/if}
-        </span>
-      </Button>
+      <!-- The complete task and its Copy action live in a card beside the
+           link; a card cannot sit inside a button. -->
+      <span class="chat-activity__task-anchor">
+        <Button
+          variant="tertiary"
+          class="chat-activity__task-link"
+          ariaLabel={taskLabel(task)}
+          aria-describedby={task.preview
+            ? `${panelId}-${task.id}-preview`
+            : undefined}
+          disabled={!task.target}
+          onClick={() => task.target && onNavigateToSubAgent(task.target)}
+        >
+          <span class="chat-activity__task-copy">
+            <span class="chat-activity__task-name">
+              {task.agentId}
+              {#if task.timeLabel}
+                <span class="chat-activity__task-time">· {task.timeLabel}</span>
+              {/if}
+            </span>
+            {#if task.preview}
+              <span
+                id={`${panelId}-${task.id}-preview`}
+                class="chat-activity__task-preview">{task.preview}</span
+              >
+            {/if}
+          </span>
+        </Button>
+        <CopyableValueCard
+          value={task.taskText}
+          copyLabel={t('chat.subagent.copyTask')}
+          copiedLabel={t('chat.subagent.taskCopied')}
+          whenTruncated={task.preview === task.taskText}
+          placement="left"
+        />
+      </span>
       {@render statusIcon(task)}
       {@render cancelButton(task)}
     </div>
@@ -335,7 +390,11 @@
         {/if}
       </span>
     </Button>
-    {@render statusIcon({ dotStatus: reflectionDotStatus(row.status) })}
+    {@render statusIcon({
+      kind: 'reflection',
+      row,
+      dotStatus: reflectionDotStatus(row.status),
+    })}
   </div>
 {/snippet}
 
@@ -403,7 +462,14 @@
                 <path d="M6.5 4 2.5 8l4 4" />
                 <path d="M3 8h6.25a4.25 4.25 0 0 1 4.25 4.25V13" />
               </svg>
-              <span class="chat-activity__parent-name">
+              <span
+                class="chat-activity__parent-name"
+                use:tooltip={{
+                  text: parentSession.displayName,
+                  whenTruncated: true,
+                  placement: 'left',
+                }}
+              >
                 {parentSession.displayName}
               </span>
             </Button>
@@ -448,6 +514,11 @@
                   <span class="chat-activity__count"
                     >{subagentTasks.length}</span
                   >
+                  {#if activeSubagentCount > 0}
+                    <span class="chat-activity__running-count"
+                      >{runningLabel(activeSubagentCount)}</span
+                    >
+                  {/if}
                 </h3>
                 <ul class="chat-activity__task-list">
                   {#each subagentTasks as task (task.id)}
@@ -732,6 +803,11 @@
   }
   :global(.chat-activity__task-link.btn-tertiary:hover) {
     background: transparent;
+  }
+  .chat-activity__task-anchor {
+    display: flex;
+    min-width: 0;
+    flex: 1;
   }
   .chat-activity__task-copy {
     display: flex;

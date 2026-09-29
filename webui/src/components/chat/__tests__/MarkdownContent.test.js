@@ -135,7 +135,12 @@ describe('MarkdownContent', () => {
       expect(document.querySelector('[data-file-external]')).toBeNull();
       link.dispatchEvent(new Event('pointerenter'));
       vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
-      expect(document.querySelector('[role="tooltip"]').textContent).toBe(path);
+      const hint = document.querySelector('[role="tooltip"]');
+      expect(hint.querySelector('.app-tooltip__text').textContent).toBe(path);
+      // It also says how to reach the file actions menu.
+      expect(hint.querySelector('dd').textContent).toBe(
+        t('chat.fileLink.actionsHint'),
+      );
       link.dispatchEvent(new Event('pointerleave'));
       link.focus();
       vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);

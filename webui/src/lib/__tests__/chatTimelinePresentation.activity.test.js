@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   backgroundBashDisplayResult,
   backgroundBashRowState,
+  backgroundBashStatusDetails,
   backgroundBashToolStatusLabel,
   backgroundTasks,
   changeStatsLabel,
@@ -16,12 +17,14 @@ import {
   reflectionElapsedLabel,
   reflectionTaskRows,
   runChangeStats,
+  runFooterDetails,
   runFooterNotice,
   runFooterParts,
   sessionChangeStats,
   visibleRunChildren,
 } from '../chatTimelinePresentation.js';
 import { t } from '../i18n.js';
+import { formatMoment } from '../timeText.js';
 import { backgroundBashTool } from './chatTimelinePresentation.support.js';
 
 const status = (name) => t(`chat.runStatus.${name}`);
@@ -128,6 +131,33 @@ describe('runFooterParts', () => {
     ],
   ])('shows %s', (_label, run, expected) => {
     expect(runFooterParts(run)).toEqual(expected());
+  });
+
+  it('details the Run state, moments, runtime and Model responses', () => {
+    const start = '2026-08-05T18:19:52Z';
+    const nowMs = Date.parse(end) + 60_000;
+    const moment = (value) => formatMoment(value, { nowMs, seconds: true });
+
+    expect(
+      runFooterDetails(
+        {
+          status: 'completed',
+          durationMs: 8000,
+          iterationCount: 3,
+          startTimestamp: start,
+          endTimestamp: end,
+        },
+        nowMs,
+      ),
+    ).toEqual({
+      title: status('completed'),
+      text: t('chat.details.modelResponseCount', { count: 3 }),
+      rows: [
+        { label: t('chat.details.started'), value: moment(start) },
+        { label: t('chat.details.finished'), value: moment(end) },
+        { label: t('chat.details.duration'), value: seconds('8.0') },
+      ],
+    });
   });
 
   it('ticks a running duration from the start timestamp', () => {
@@ -709,6 +739,62 @@ describe('background Bash rows', () => {
 
     expect(backgroundBashToolStatusLabel(tool, rowState, nowMs)).toBe(
       expected(),
+    );
+  });
+
+  it.each([
+    [
+      'a running process with its hand-off meaning',
+      {},
+      (moment) => ({
+        title: t('chat.toolState.background'),
+        text: t('chat.toolState.backgroundHint'),
+        rows: [
+          {
+            label: t('chat.details.started'),
+            value: moment(timing.started_at),
+          },
+          { label: t('chat.details.runningFor'), value: minutesSeconds(30, 0) },
+          {
+            label: t('chat.details.process'),
+            value: 'process-one',
+            mono: true,
+          },
+        ],
+      }),
+    ],
+    [
+      'a failed process with its exit code',
+      { 'process-one': { ...terminalEntry, status: 'failed', exitCode: 2 } },
+      (moment) => ({
+        title: t('chat.toolState.failed'),
+        text: '',
+        rows: [
+          {
+            label: t('chat.details.started'),
+            value: moment(terminalEntry.startedAt),
+          },
+          {
+            label: t('chat.details.finished'),
+            value: moment(terminalEntry.finishedAt),
+          },
+          { label: t('chat.details.duration'), value: runtime() },
+          { label: t('chat.details.exitCode'), value: '2', tone: 'danger' },
+          {
+            label: t('chat.details.process'),
+            value: 'process-one',
+            mono: true,
+          },
+        ],
+      }),
+    ],
+  ])('details %s', (_label, processes, expected) => {
+    const tool = backgroundBashTool({ timing });
+    const rowState = backgroundBashRowState(tool, {}, processes);
+    const moment = (value) => formatMoment(value, { nowMs, seconds: true });
+
+    expect(backgroundBashStatusDetails(tool, rowState, nowMs)).toEqual(
+      expected(moment),
     );
   });
 

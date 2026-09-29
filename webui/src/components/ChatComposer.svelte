@@ -109,6 +109,22 @@
   let inputOrigin = $state('');
   let submitInFlight = $state(false);
 
+  // Why Send is unavailable right now. A disabled composer (no Agent, History
+  // loading) explains itself, so it gives no reason here.
+  let sendDisabledReason = $derived(
+    disabled
+      ? ''
+      : submitInFlight
+        ? t('chat.sendUnavailableSending')
+        : media.hasUploadingAttachments
+          ? t('chat.sendUnavailableUploading')
+          : media.voiceBusy
+            ? t('chat.sendUnavailableVoice')
+            : !content.trim() && media.pendingAttachments.length === 0
+              ? t('chat.sendUnavailableEmpty')
+              : '',
+  );
+
   // Context-window fill ring: a thin SVG progress arc proportional to
   // tokens / context_window. Its hover card shows the usage breakdown and the
   // Compaction action.
@@ -970,8 +986,9 @@
           icon
           class="composer-stop"
           disabled={cancelling}
+          disabledReason={cancelling ? t('cancel.cancelling') : ''}
           ariaLabel={cancelling ? t('cancel.cancelling') : t('chat.cancelRun')}
-          tooltip={cancelling ? t('cancel.cancelling') : t('chat.cancelRun')}
+          tooltip={t('chat.cancelRun')}
           onClick={onCancelRun}
         >
           <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
@@ -991,13 +1008,12 @@
         type="submit"
         variant="primary"
         icon
-        disabled={disabled ||
-          submitInFlight ||
-          media.hasUploadingAttachments ||
-          media.voiceBusy ||
-          (!content.trim() && media.pendingAttachments.length === 0)}
+        disabled={disabled || Boolean(sendDisabledReason)}
+        disabledReason={sendDisabledReason}
         ariaLabel={isRunning ? t('chat.queueMessage') : t('chat.sendMessage')}
-        tooltip={isRunning ? t('chat.queueMessage') : t('chat.sendMessage')}
+        tooltip={isRunning
+          ? { title: t('chat.queueMessage'), text: t('chat.queueMessageHint') }
+          : { title: t('chat.sendMessage'), text: t('chat.sendMessageHint') }}
       >
         <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
           <path d="M12 7L2 2l2 5-2 5 10-5z" fill="currentColor" stroke="none" />
@@ -1065,7 +1081,9 @@
           <button
             type="button"
             class="attachment-remove"
-            aria-label={t('chat.attachment.remove')}
+            aria-label={t('chat.attachment.removeNamed', {
+              name: attachment.filename,
+            })}
             use:tooltip={t('chat.attachment.remove')}
             onclick={() => media._removeAttachment(index)}
           >
