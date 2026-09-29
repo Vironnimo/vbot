@@ -101,6 +101,30 @@ def _visible_message(message: ChatMessage, *, file_delivery: Any | None = None) 
     )
 
 
+# Session records a History page may carry that no client shows.
+_INTERNAL_HISTORY_ROLES = frozenset({"note", "history_edit"})
+
+
+def history_message(message: ChatMessage, *, file_delivery: Any | None = None) -> JsonObject | None:
+    """Project one History record for clients, or ``None`` for an internal record.
+
+    Notes are internal. A note that records a Model fallback switch appears as
+    its display notice, role ``model_fallback`` with both Models, and never
+    with the note's Model-facing text.
+    """
+    if message.role == "note" and message.model_fallback is not None:
+        return {
+            "id": message.id,
+            "timestamp": message.timestamp,
+            "role": "model_fallback",
+            **({"run_id": message.run_id} if message.run_id is not None else {}),
+            **message.model_fallback.to_dict(),
+        }
+    if message.role in _INTERNAL_HISTORY_ROLES:
+        return None
+    return _visible_message(message, file_delivery=file_delivery)
+
+
 def _resolve_context_window(state: Any, model: str) -> int | None:
     """Resolve a model string (provider/model-id) to the usable context window.
 

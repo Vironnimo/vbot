@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatMessage, ToolCall
+from core.chat.messages import ModelFallback
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.tools import (
     HISTORY_RESULT_MAX_BYTES,
@@ -620,18 +621,26 @@ def test_records_omit_replay_accounting_and_presentation_fields(tmp_path: Path) 
     opaque_only = ChatMessage.assistant(
         model="openai/gpt", content=None, reasoning_meta={"encrypted": "opaque"}
     )
-    for message in (answer, opaque_only, _checkpoint()):
+    fallback = ChatMessage.note(
+        "Model openai/gpt unavailable.",
+        model_fallback=ModelFallback(from_model="openai/gpt", to_model="anthropic/claude"),
+    )
+    for message in (answer, opaque_only, fallback, _checkpoint()):
         session.append(message)
 
-    read = _messages(_data(_call(manager, session, {"action": "read"})))
+    roles = ["assistant", "note"]
+    read = _messages(_data(_call(manager, session, {"action": "read", "roles": roles})))
     around = _messages(
-        _data(_call(manager, session, {"action": "around", "message_id": answer.id}))
+        _data(
+            _call(manager, session, {"action": "around", "message_id": answer.id, "roles": roles})
+        )
     )
 
     for records in (read, around):
-        assert [record["id"] for record in records] == [answer.id, opaque_only.id]
+        assert [record["id"] for record in records] == [answer.id, opaque_only.id, fallback.id]
         assert records[0]["content"] == "The answer."
         assert records[0]["reasoning"] == "Visible reasoning."
+        assert records[2]["content"] == "Model openai/gpt unavailable."
         for record in records:
             assert not {
                 "reasoning_meta",
@@ -640,6 +649,7 @@ def test_records_omit_replay_accounting_and_presentation_fields(tmp_path: Path) 
                 "usage",
                 "timing",
                 "tool_display",
+                "model_fallback",
             } & set(record)
 
 

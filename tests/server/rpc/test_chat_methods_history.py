@@ -14,6 +14,7 @@ import pytest
 
 from core.chat import ChatMessage, ChatSessionManager, ToolCall
 from core.chat.continuation import CONTINUATION_RECORD_VERSION
+from core.chat.messages import ModelFallback
 from core.database import write_bootstrap_marker
 from core.projects import AgentResolutionError
 from core.runs import ChatRunManager, RunAdmission, RunKind
@@ -156,6 +157,10 @@ async def test_history_hides_notes_and_internal_continuation_records(history: _H
     session.append(ChatMessage.user(content="Visible request"))
     session.add_note("Internal reminder")
     session.add_note("Sub-agent batch completed.\n\nResults:\n- worker/sub-session: Done")
+    session.add_note(
+        "Model switch note for the Model",
+        model_fallback=ModelFallback(from_model="openai/gpt-5.2", to_model="anthropic/claude"),
+    )
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Visible response"))
     session.append_continuation_records(
         [
@@ -180,9 +185,22 @@ async def test_history_hides_notes_and_internal_continuation_records(history: _H
 
     result = await history.read(session_id="session-one")
 
-    assert [message["role"] for message in result["messages"]] == ["user", "assistant"]
+    assert [message["role"] for message in result["messages"]] == [
+        "user",
+        "model_fallback",
+        "assistant",
+    ]
+    # A Model fallback note appears only as its display notice, inside its Run.
+    fallback = result["messages"][1]
+    assert {key: fallback[key] for key in ("from_model", "to_model", "history_run_id")} == {
+        "from_model": "openai/gpt-5.2",
+        "to_model": "anthropic/claude",
+        "history_run_id": "run-one",
+    }
+    assert "content" not in fallback
     assert "Internal reminder" not in str(result["messages"])
     assert "Sub-agent batch" not in str(result["messages"])
+    assert "Model switch note" not in str(result["messages"])
     assert "continuation" not in result
 
 

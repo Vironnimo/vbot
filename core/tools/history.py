@@ -80,6 +80,7 @@ _INTERNAL_MESSAGE_FIELDS = (
     "usage",
     "timing",
     "tool_display",
+    "model_fallback",
 )
 
 _HISTORY_CHECKPOINT_PARAMETER: JsonObject = {

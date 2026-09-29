@@ -14,7 +14,7 @@ from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
-from server.rpc.payloads import projected_file_urls, remove_opaque_provider_metadata
+from server.rpc.payloads import history_message, projected_file_urls
 from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
@@ -477,12 +477,12 @@ def _temporary_history_projection(snapshot: Any, delivery: Any) -> JsonObject:
     """Use the ordinary client projection while withholding internal Session records."""
     messages = [
         {
-            **remove_opaque_provider_metadata(message.to_dict(), file_delivery=delivery),
+            **record,
             "history_sequence": snapshot.page.record_sequences[index],
             "history_run_id": snapshot.page.record_run_ids[index],
         }
         for index, message in enumerate(snapshot.page.messages)
-        if message.role not in {"note", "history_edit"}
+        if (record := history_message(message, file_delivery=delivery)) is not None
     ]
     response: JsonObject = {
         "messages": messages,

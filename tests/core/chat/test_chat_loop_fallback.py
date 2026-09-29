@@ -16,6 +16,7 @@ from core.attachments import AttachmentStore
 from core.chat._request_builder import RequestBuilder
 from core.chat._request_history import _restore_in_run_tool_result_content
 from core.chat._tool_epoch import tool_change_from_note
+from core.chat.messages import ModelFallback
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import ProviderAuthError, ProviderRateLimitError
@@ -135,6 +136,9 @@ async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
     assert (
         messages[1].content == f"Model {PRIMARY} unavailable. Switched to {FALLBACK} for this run."
     )
+    # The note records the switch for the Run's display notice; only its text reaches the Model.
+    assert messages[1].model_fallback == ModelFallback(from_model=PRIMARY, to_model=FALLBACK)
+    assert "model_fallback" not in json.dumps(fallback_requests[0]["messages"])
     # Usage and cost belong to the Model that actually answered.
     assert messages[2].model == FALLBACK
     assert await _fallback_events(runtime, run) == [(PRIMARY, FALLBACK)]

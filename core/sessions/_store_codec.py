@@ -227,6 +227,12 @@ def insert_entry(
                 "INSERT INTO history_edit_entries (entry_key, target_entry_id) VALUES (?, ?)",
                 (entry_key, message.target_message_id),
             )
+        case "note" if message.model_fallback is not None:
+            connection.execute(
+                "INSERT INTO note_model_fallbacks (entry_key, from_model, to_model) "
+                "VALUES (?, ?, ?)",
+                (entry_key, message.model_fallback.from_model, message.model_fallback.to_model),
+            )
         case "compaction_checkpoint":
             _insert_checkpoint(connection, entry_key, message)
     return entry_key
@@ -435,6 +441,7 @@ class EntryBatch:
     senders: dict[int, sqlite3.Row] = field(default_factory=dict)
     errors: dict[int, sqlite3.Row] = field(default_factory=dict)
     edits: dict[int, sqlite3.Row] = field(default_factory=dict)
+    model_fallbacks: dict[int, sqlite3.Row] = field(default_factory=dict)
     checkpoints: dict[int, sqlite3.Row] = field(default_factory=dict)
     run_ids: dict[int, str] = field(default_factory=dict)
     run_summaries: dict[int, sqlite3.Row] = field(default_factory=dict)
@@ -487,6 +494,12 @@ class EntryBatch:
                     data["error_kind"] = str(self.errors[key]["error_kind"])
                 case "history_edit":
                     data["target_message_id"] = str(self.edits[key]["target_entry_id"])
+                case "note" if key in self.model_fallbacks:
+                    fallback = self.model_fallbacks[key]
+                    data["model_fallback"] = {
+                        "from_model": str(fallback["from_model"]),
+                        "to_model": str(fallback["to_model"]),
+                    }
                 case "compaction_checkpoint":
                     self._decode_checkpoint(key, data)
                 case "run_summary":
@@ -756,6 +769,11 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
         f"SELECT entry_key, target_entry_id FROM history_edit_entries WHERE entry_key {_KEYS}",
         by_role.get("history_edit", []),
     )
+    batch.model_fallbacks = _rows_by_key(
+        connection,
+        f"SELECT entry_key, from_model, to_model FROM note_model_fallbacks WHERE entry_key {_KEYS}",
+        by_role.get("note", []),
+    )
     batch.checkpoints = _rows_by_key(
         connection,
         f"SELECT {_CHECKPOINT_COLUMNS}, p.projection_json FROM checkpoint_entries AS c "
@@ -821,6 +839,7 @@ _ENTRY_SIDE_TABLES = (
     "user_entry_senders",
     "error_entries",
     "history_edit_entries",
+    "note_model_fallbacks",
     "checkpoint_entries",
     "checkpoint_projections",
 )

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.chat import ChatMessage, ChatSessionError
-from core.chat.messages import MessageSender, ToolCall
+from core.chat.messages import MessageSender, ModelFallback, ToolCall
 from core.chat.output_files import AssistantFileReference
 from core.prompts.pinned_context import PINNED_MEMORY_FILES_SLOT, PINNED_SKILL_CATALOG_SLOT
 from core.runs import Run, RunExecutionOwner, RunKind
@@ -39,7 +39,7 @@ def _summary(run_id: str) -> ChatMessage:
 
 
 def _tool_run(session: ChatSession, run_id: str, text: str) -> None:
-    """Write one completed Run with a failed Tool call and an attached result payload."""
+    """Write one completed Run with a Model fallback, a failed Tool call, and a result payload."""
     run = session.start_run(run_id)
     assistant = ChatMessage.assistant(
         model="model",
@@ -48,7 +48,11 @@ def _tool_run(session: ChatSession, run_id: str, text: str) -> None:
         usage={"input_tokens": 10, "output_tokens": 2},
         tool_calls=[ToolCall(id=f"call-{run_id}", name="read", arguments={"path": "x"})],
     )
-    run.append_many([ChatMessage.user(f"{text} question"), assistant])
+    fallback = ChatMessage.note(
+        "Model primary unavailable.",
+        model_fallback=ModelFallback(from_model="primary", to_model="model"),
+    )
+    run.append_many([ChatMessage.user(f"{text} question"), fallback, assistant])
     run.assistant_message_id = assistant.id
     run.append_many(
         [ChatMessage.tool(tool_call_id=f"call-{run_id}", name="read", content=f"{text} result")],
@@ -89,12 +93,12 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(
     grandchild = await manager.fork(child.address)
     with sqlite3.connect(manager._store.path) as connection:
         shared = _rows(connection, "SELECT COUNT(*) FROM entries")
-    assert shared == [(5,)]
+    assert shared == [(6,)]
     # Later source work and an edit of the forked question change no fork.
     source.append(ChatMessage.user("source only"))
     question = source.load_active()[0]
     source.apply_edit(question.id, [ChatMessage.user("rewritten")])
-    inherited = source.load()[:5]
+    inherited = source.load()[:6]
     assert child.load_active() == grandchild.load_active() == inherited
     revisions = [history_revision(manager, fork.address) for fork in (child, grandchild)]
 
@@ -112,7 +116,7 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(
             key = _rows(
                 connection, "SELECT session_key FROM sessions WHERE session_id = ?", fork.id
             )[0][0]
-            # Each fork holds its own current copy of the five inherited entries.
+            # Each fork holds its own current copy of the six inherited entries.
             assert _rows(
                 connection,
                 "SELECT seq, role FROM entries WHERE session_key = ? "
@@ -120,10 +124,11 @@ async def test_a_fork_shares_history_until_its_ancestor_is_deleted(
                 key,
             ) == [
                 (0, "user"),
-                (1, "assistant"),
-                (2, "tool"),
-                (3, "assistant"),
-                (4, "run_summary"),
+                (1, "note"),
+                (2, "assistant"),
+                (3, "tool"),
+                (4, "assistant"),
+                (5, "run_summary"),
             ]
             # The copied Tool call keeps its outcome and points at the copied result.
             assert _rows(
@@ -349,7 +354,12 @@ def test_deleting_a_session_removes_exactly_what_it_owns(manager: ChatSessionMan
         if count and table not in shared_tables and not table.startswith("kernel_")
     }
     assert owned <= {table for table, count in populated.items() if count > before[table]}
-    assert {"tool_result_payloads", "continuation_step_chunks", "user_entry_senders"} <= owned
+    assert {
+        "tool_result_payloads",
+        "continuation_step_chunks",
+        "user_entry_senders",
+        "note_model_fallbacks",
+    } <= owned
     assert populated["prompt_blobs"] == before["prompt_blobs"] + 1
 
     manager.delete(removed.address)

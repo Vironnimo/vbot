@@ -21,6 +21,7 @@ from core.chat.messages import (
     ERROR_KIND_RATE_LIMIT,
     ERROR_KIND_TIMEOUT,
     ERROR_KIND_TOOL_ITERATIONS,
+    ModelFallback,
     ToolCallRejection,
     error_kind_llm_visible,
 )
@@ -433,6 +434,12 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
             ),
             {"timing": FIXED_TIMING, "tool_display": _DISPLAY},
         ),
+        (
+            ChatMessage.note(
+                "Model a unavailable.", model_fallback=ModelFallback(from_model="a", to_model="b")
+            ),
+            {"model_fallback": {"from_model": "a", "to_model": "b"}},
+        ),
     ],
     ids=[
         "interrupted",
@@ -442,6 +449,7 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
         "output-files",
         "run-id",
         "tool",
+        "model-fallback",
     ],
 )
 def test_optional_internal_fields_persist_and_round_trip(
@@ -567,6 +575,13 @@ _CHECKPOINT = {
         (_payload("history_edit"), "target_message_id"),
         (_payload("history_edit", target_message_id="user-one", content="hidden"), "content"),
         (_payload("assistant", model="openai/gpt-4.1"), "require content, reasoning"),
+        (
+            _payload(
+                "assistant", **_ASSISTANT, model_fallback={"from_model": "a", "to_model": "b"}
+            ),
+            "model_fallback",
+        ),
+        (_payload("note", content="Switched.", model_fallback={"from_model": "a"}), "to_model"),
     ],
     ids=[
         "unknown-role",
@@ -611,6 +626,8 @@ _CHECKPOINT = {
         "edit-without-target",
         "edit-with-content",
         "assistant-without-output",
+        "fallback-on-assistant",
+        "fallback-without-target",
     ],
 )
 def test_invalid_persisted_payloads_are_rejected(data: dict[str, Any], match: str | None) -> None:

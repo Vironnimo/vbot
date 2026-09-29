@@ -38,7 +38,7 @@ from core.sessions.store import SessionStore
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
-    from core.chat.messages import ChatMessage
+    from core.chat.messages import ChatMessage, ModelFallback
 
 
 @dataclass
@@ -258,10 +258,10 @@ class ChatSession:
     async def flush_deferred_notes_async(self) -> None:
         await self.append_many_async(self._take_deferred_notes())
 
-    def add_note(self, content: str) -> None:
+    def add_note(self, content: str, *, model_fallback: ModelFallback | None = None) -> None:
         from core.chat.messages import ChatMessage
 
-        note = ChatMessage.note(content)
+        note = ChatMessage.note(content, model_fallback=model_fallback)
         with self._buffers.lock:
             deferred = self._buffers.defer_notes
             if deferred:
@@ -270,8 +270,10 @@ class ChatSession:
         if not deferred:
             self.append(note)
 
-    async def add_note_async(self, content: str) -> None:
-        await self._store.run_async(self.add_note, content)
+    async def add_note_async(
+        self, content: str, *, model_fallback: ModelFallback | None = None
+    ) -> None:
+        await self._store.run_async(lambda: self.add_note(content, model_fallback=model_fallback))
 
     def drain_pending_notes(self) -> list[ChatMessage]:
         with self._buffers.lock:

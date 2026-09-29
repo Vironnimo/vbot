@@ -43,7 +43,7 @@ from core.chat.events import (
     _emit_message_event,
     _persist_run_error,
 )
-from core.chat.messages import ChatMessage
+from core.chat.messages import ChatMessage, ModelFallback
 from core.chat.model_resolution import (
     _resolve_fallback_chain,
     _split_agent_model,
@@ -682,7 +682,8 @@ class RunExecution:
                     {"from_model": from_binding, "to_model": binding},
                 )
                 await session.add_note_async(
-                    f"Model {from_binding} unavailable. Switched to {binding} for this run."
+                    f"Model {from_binding} unavailable. Switched to {binding} for this run.",
+                    model_fallback=ModelFallback(from_model=from_binding, to_model=binding),
                 )
                 if (
                     isinstance(last_failure, RunInterruptedError)

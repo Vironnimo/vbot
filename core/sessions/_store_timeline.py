@@ -23,11 +23,22 @@ if TYPE_CHECKING:
     from core.sessions._types import SessionAddress
 
 
+# A Note that records a Model fallback switch is also the Run's display notice.
+_MODEL_FALLBACK_NOTE = (
+    "(e.role = 'note' AND EXISTS "
+    "(SELECT 1 FROM note_model_fallbacks AS f WHERE f.entry_key = e.entry_key))"
+)
+
+
 def _role_filter(excluded_roles: Sequence[str]) -> tuple[str, list[Any]]:
+    """Exclude *excluded_roles*; excluded Notes keep their Model fallback notices."""
     excluded = tuple(dict.fromkeys(excluded_roles))
     if not excluded:
         return "", []
-    return f"e.role NOT IN ({', '.join('?' for _ in excluded)})", list(excluded)
+    clause = f"e.role NOT IN ({', '.join('?' for _ in excluded)})"
+    if "note" in excluded:
+        clause = f"({clause} OR {_MODEL_FALLBACK_NOTE})"
+    return clause, list(excluded)
 
 
 def _can_append(state: sqlite3.Row, after: tuple[str, int] | None) -> bool:
@@ -242,7 +253,10 @@ def _page_runs(
                     or _store_history.view_seq(
                         connection,
                         ranges,
-                        where="e.run_key = ? AND e.role NOT IN ('system', 'note', 'history_edit')",
+                        where=(
+                            "e.run_key = ? AND (e.role NOT IN ('system', 'note', 'history_edit') "
+                            f"OR {_MODEL_FALLBACK_NOTE})"
+                        ),
                         params=(run["run_key"],),
                         upper=floor,
                     )
