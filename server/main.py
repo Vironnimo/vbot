@@ -5,10 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import gc
+import logging
 import os
+import signal
 import sys
+import time
 from pathlib import Path
 from time import perf_counter
+from types import FrameType
 from typing import Any, Literal
 
 from core.storage.layout import initialize_data_directory
@@ -21,9 +25,10 @@ from core.utils.config import (
     resolve_port,
     resolve_server_bind,
 )
-from core.utils.logging import build_uvicorn_log_config, get_logger
+from core.utils.logging import LogManager, build_uvicorn_log_config, get_logger
 from core.utils.processes import activate_process_containment
 from core.utils.server_control import (
+    UNKNOWN_STOP_INITIATOR,
     create_server_control,
     remove_server_control,
     server_control_claim,
@@ -42,6 +47,10 @@ __all__ = [
     "resolve_port",
     "resolve_server_bind",
 ]
+
+_LOGGER = get_logger("server")
+# The directory holding this code: `app` inside an installed version of a packaged build.
+_APP_ROOT = Path(__file__).resolve().parents[1]
 
 _UVICORN_IMPORT_ERROR: ModuleNotFoundError | None
 
@@ -85,13 +94,21 @@ def main(argv: list[str] | None = None) -> None:
         initialize_data_directory(config.data_dir, resources_dir=config.get("RESOURCES_PATH"))
     with server_control_claim(config.data_dir, server_bind["listen_port"]):
         control = create_server_control(config.data_dir, server_bind["listen_port"])
+        lifecycle = _ServerLifecycle(
+            config=config,
+            server_bind=server_bind,
+            mode=safe_startup_mode or "normal",
+            process_created=control.process_create_time,
+        )
+        log_manager: LogManager | None = None
+        server_holder: dict[str, Any] = {}
         try:
-            server_holder: dict[str, object] = {}
 
-            def request_shutdown() -> None:
+            def request_shutdown(initiator: str = UNKNOWN_STOP_INITIATOR) -> None:
+                lifecycle.request_stop("control", initiator=initiator)
                 server = server_holder.get("server")
                 if server is not None:
-                    server.should_exit = True  # type: ignore[attr-defined]
+                    server.should_exit = True
 
             restart_scheduled = False
 
@@ -110,8 +127,16 @@ def main(argv: list[str] | None = None) -> None:
                 if not result.ok:
                     raise RuntimeError("restart_unavailable")
                 restart_scheduled = True
+                lifecycle.request_stop("restart")
                 # Let the RPC response reach the client before cooperative teardown.
                 asyncio.get_running_loop().call_later(0.5, request_shutdown)
+
+            def on_ready(runtime: Any) -> None:
+                _prepare_for_serving()
+                lifecycle.started(runtime)
+
+            def on_stopped() -> None:
+                lifecycle.stopped(listening=_server_listening(server_holder))
 
             app_kwargs: dict[str, Any] = {
                 "config": config,
@@ -119,7 +144,8 @@ def main(argv: list[str] | None = None) -> None:
                 "shutdown_token": control.token,
                 "request_shutdown": request_shutdown,
                 "request_restart": request_restart,
-                "on_ready": _prepare_for_serving,
+                "on_ready": on_ready,
+                "on_stopped": on_stopped,
             }
             if safe_startup_mode is not None:
                 app_kwargs["safe_startup_mode"] = safe_startup_mode
@@ -134,11 +160,137 @@ def main(argv: list[str] | None = None) -> None:
                 access_log=False,
                 log_config=build_uvicorn_log_config(),
             )
+            # uvicorn applies its logging configuration while building its config,
+            # which closes every handler that exists at that moment.
+            log_manager = LogManager(
+                level=config.get("LOG_LEVEL", "INFO"), data_dir=config.data_dir
+            )
             server = uvicorn.Server(uvicorn_config)
+            uvicorn_handle_exit = server.handle_exit
+
+            def handle_exit(sig: int, frame: FrameType | None) -> None:
+                lifecycle.request_stop("signal", signal=_signal_name(sig))
+                uvicorn_handle_exit(sig, frame)
+
+            server.handle_exit = handle_exit  # type: ignore[method-assign]
             server_holder["server"] = server
             server.run()
         finally:
+            if log_manager is not None:
+                # Covers a startup failure and an exit that skipped the app shutdown.
+                lifecycle.stopped(listening=_server_listening(server_holder))
+                log_manager.close()
             remove_server_control(control)
+
+
+class _ServerLifecycle:
+    """Write the server process's single start line and single stop line.
+
+    The start line says which version runs in which mode and what it serves;
+    the stop line says why the process stopped and how long it ran.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: Config,
+        server_bind: ServerBind,
+        mode: str,
+        process_created: float,
+    ) -> None:
+        self._config = config
+        self._server_bind = server_bind
+        self._mode = mode
+        self._process_created = process_created
+        self._stop_cause: dict[str, str] | None = None
+        self._ready = False
+        self._stopped = False
+
+    def request_stop(self, reason: str, **details: str) -> None:
+        """Remember why the server stops; the first cause wins."""
+        if self._stop_cause is None:
+            self._stop_cause = {"reason": reason, **details}
+
+    def started(self, runtime: Any) -> None:
+        self._ready = True
+        build = runtime.build
+        fields: dict[str, object] = {"version": self._config.get("VBOT_VERSION") or build.version}
+        if build.revision is not None:
+            fields["revision"] = build.revision[:8]
+        if build.release:
+            fields["release"] = "yes"
+        elif build.branch is not None:
+            fields["branch"] = build.branch
+        version_id = _installed_version_id()
+        if version_id is not None:
+            fields["version_id"] = version_id
+        fields.update(
+            mode=self._mode,
+            pid=os.getpid(),
+            listen=f"{self._server_bind['listen_host']}:{self._server_bind['listen_port']}",
+            data_dir=self._config.data_dir,
+            startup=f"{time.time() - self._process_created:.1f}s",
+        )
+        _LOGGER.info(
+            "Server started (%s %s)", _format_fields(fields), runtime.startup_summary.describe()
+        )
+
+    def stopped(self, *, listening: bool) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
+        cause = self._stop_cause
+        if cause is None:
+            cause = {"reason": "unknown" if self._ready and listening else "startup_failed"}
+        _LOGGER.log(
+            logging.WARNING if cause["reason"] in {"startup_failed", "unknown"} else logging.INFO,
+            "Server stopped (%s)",
+            _format_fields(
+                {**cause, "uptime": _format_duration(time.time() - self._process_created)}
+            ),
+        )
+
+
+def _installed_version_id() -> str | None:
+    """Name the installed version a packaged server runs from, ``None`` elsewhere."""
+    # Payload layout: <install>/versions/<version id>/app is the running code.
+    if _APP_ROOT.name != "app" or _APP_ROOT.parent.parent.name != "versions":
+        return None
+    return _APP_ROOT.parent.name
+
+
+def _server_listening(server_holder: dict[str, Any]) -> bool:
+    return bool(getattr(server_holder.get("server"), "started", False))
+
+
+def _signal_name(number: int) -> str:
+    try:
+        return signal.Signals(number).name
+    except ValueError:
+        return str(number)
+
+
+def _format_fields(fields: dict[str, object]) -> str:
+    """Render ``key=value`` log fields, quoting values that contain whitespace."""
+    rendered = []
+    for key, value in fields.items():
+        text = str(value)
+        rendered.append(f'{key}="{text}"' if any(c.isspace() for c in text) else f"{key}={text}")
+    return " ".join(rendered)
+
+
+def _format_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    days, rest = divmod(total, 86_400)
+    hours, rest = divmod(rest, 3_600)
+    minutes, secs = divmod(rest, 60)
+    if days:
+        return f"{days}d{hours:02d}h{minutes:02d}m"
+    if hours:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
 
 
 # A thread that computes holds the GIL until the waiting Event Loop asks for it,
@@ -162,7 +314,7 @@ def _prepare_for_serving() -> None:
     started = perf_counter()
     gc.collect()
     gc.freeze()
-    get_logger("server").info(
+    _LOGGER.debug(
         "Startup heap frozen (objects=%d collect_ms=%d)",
         gc.get_freeze_count(),
         round((perf_counter() - started) * 1000),

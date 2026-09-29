@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import psutil  # type: ignore[import-untyped]
@@ -19,8 +20,12 @@ from cli.server_management import (
     resolve_instance,
     stop_server,
 )
+from core.utils.logging import CONSOLE_LOGGING_ENV_VAR
 from core.utils.processes import subprocess_creation_flags
 from core.utils.server_control import read_server_control
+
+# The startup log keeps one previous generation once it outgrows this bound.
+STARTUP_LOG_ROTATE_BYTES = 1024 * 1024
 
 
 def target(install: Installation) -> ServerInstance:
@@ -102,11 +107,14 @@ def start(
         args.append("--verification-only")
     startup_log = install.root / "logs" / "server-startup.log"
     startup_log.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_startup_log(startup_log)
     with startup_log.open("ab") as output:
         process = subprocess.Popen(
             args,
             cwd=install.version(version_id) / "app",
-            env=child_environment(install),
+            # The server writes its log lines to its daily log; the startup log keeps
+            # only output that bypasses logging, such as a crash before logging starts.
+            env={**child_environment(install), CONSOLE_LOGGING_ENV_VAR: "0"},
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=subprocess.STDOUT,
@@ -142,5 +150,15 @@ def start(
     )
 
 
-def stop(install: Installation) -> CommandResult:
-    return stop_server(target(install))
+def _rotate_startup_log(path: Path) -> None:
+    """Move an oversized startup log to its single previous generation."""
+    # A missing file needs nothing; a file an earlier server process still holds
+    # open cannot move and keeps growing until the next start.
+    with suppress(OSError):
+        if path.stat().st_size > STARTUP_LOG_ROTATE_BYTES:
+            os.replace(path, path.with_name(f"{path.name}.1"))
+
+
+def stop(install: Installation, *, initiator: str = "cli") -> CommandResult:
+    """Stop the installation's server; *initiator* names the caller in its stop line."""
+    return stop_server(target(install), initiator=initiator)

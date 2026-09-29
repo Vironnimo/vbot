@@ -88,13 +88,9 @@ def _save_binding(install: Installation, binding: dict[str, Any]) -> dict[str, A
     write_json(contained(install.root, "source-update.json"), binding)
     if binding != previous:
         _LOGGER.info(
-            "Application source selection changed",
-            extra={
-                "operation": "source.select",
-                "source_track": "main",
-                "checkout": binding["checkout"],
-                "branch": binding["branch"],
-            },
+            "Application source selection changed (track=main checkout=%s branch=%s)",
+            binding["checkout"],
+            binding["branch"],
         )
     return binding
 
@@ -199,10 +195,7 @@ def select_source(
         except OSError as exc:
             raise ApplicationError("Could not clear the source update binding") from exc
         if changed:
-            _LOGGER.info(
-                "Application source selection changed",
-                extra={"operation": "source.select", "source_track": "release"},
-            )
+            _LOGGER.info("Application source selection changed (track=release)")
         return {"source_track": "release", "checkout": None}
     if mode != "main":
         raise ApplicationError("Source track must be release or main")

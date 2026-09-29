@@ -47,6 +47,9 @@ Use the vBot-owned id of the same object instead (`core/utils/ids.py`).
 
 ## Constraints & Gotchas
 
-- Only loggers under the `vbot` namespace reach the daily files. Third-party libraries log through their own loggers; uvicorn is routed into `vbot.server.uvicorn` by `build_uvicorn_log_config`, with routine websocket lifecycle lines filtered (`logs.md`).
-- `LogManager` attaches its handlers lazily, on the first `get_logger` call. Constructing a manager alone configures nothing.
+- `vbot.*` loggers reach the daily files at the configured level. Other libraries' loggers (asyncio, httpx, Channel libraries) reach them only at WARNING and above, under their own logger name, through the router `LogManager` adds to the root logger - never through `logging.lastResort` on stderr. Windows' Proactor `_call_connection_lost` ConnectionResetError callback noise is written at DEBUG.
+- uvicorn is routed into `vbot.server.uvicorn` by `build_uvicorn_log_config`: its own INFO lifecycle lines drop to DEBUG, routine lifecycle lines of every server websocket route are filtered, handshake rejections stay visible, and a Live path is written without its call id (`logs.md`).
+- Constructing a `LogManager` activates it; `close()` deactivates it. Managers nest: the newest open manager owns the outputs, and closing it hands them back to the manager it replaced. The Runtime opens its manager at startup and closes it at shutdown, so an unstarted Runtime leaves logging alone. The `logs` directory and daily file are created with the first record.
+- The server process (`server/main.py`) owns the one start line and one stop line; the Runtime only contributes its startup summary, so a Runtime embedded without the server (scripts, tests) logs its lifecycle at DEBUG (`server.md`).
+- Server processes launched by the CLI or the Windows application run with console logging off (`VBOT_LOG_STDIO=0`): their log lines go only to the daily file, and the captured stdout/stderr (`server-startup.log`) keeps only crash output. The CLI logs a start outcome and any stop that bypassed the server's shutdown into the target's daily file (`cli.md`).
 - Tests that assert log output own the behavior they assert (for example "no external id is logged"); do not add tests that merely pin a message's wording (`PROJECT.md` -> Testing).

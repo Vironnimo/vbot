@@ -48,7 +48,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - `cursor` is an internal handoff token, not user-visible UI state.
 - The selected file remains user-controlled. A live catalog event may add a newer file, but it must not auto-switch a still-valid active selection; if the selected file disappeared, the WebUI falls back to the catalog default and starts that file's read/stream flow.
 - The Logs toolbar uses the shared simple dropdown style for file, level, and order controls.
-- Routine `/ws` and `/ws/logs` lifecycle noise (connection open/closed, accept) is filtered on two layers: at write time by the logging pipeline (`is_logs_websocket_lifecycle_record`, so it never lands in daily files going forward) and again at read/stream time in `parse_log_entries` (`_should_include_entry`, so pre-existing matching rows don't surface in `log.read` results or `/ws/logs` events). Genuine websocket transport failures must still stay visible.
+- Routine lifecycle noise of the server's websocket routes (`/ws`, `/ws/logs`, `/ws/terminals/{terminal_id}`, `/ws/live/{call_id}`: connection open/closed, accept) is filtered on two layers: at write time by the logging pipeline (`is_logs_websocket_lifecycle_record`, so it never lands in daily files going forward) and again at read/stream time in `parse_log_entries` (`_should_include_entry`, so pre-existing matching rows don't surface in `log.read` results or `/ws/logs` events). Handshake rejections (e.g. 403) and genuine websocket transport failures stay visible; a Live path is written as `/ws/live/{call_id}` because its segment is a Provider call id.
 
 ## External Dependencies
 

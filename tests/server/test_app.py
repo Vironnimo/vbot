@@ -22,7 +22,11 @@ from core.runtime import Runtime
 from core.sessions import ChatSessionManager
 from core.statistics import StatisticsIndex
 from core.utils.config import Config
-from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER
+from core.utils.server_control import (
+    CONTROL_INITIATOR_HEADER,
+    CONTROL_SHUTDOWN_PATH,
+    CONTROL_TOKEN_HEADER,
+)
 from server.app import create_app
 from server.clients import ClientRegistry
 from server.events import ServerEventBus
@@ -128,14 +132,23 @@ def test_stub_runtime_lifespan_wires_state_and_closes_services(
         else ServerStubRuntime(tmp_path, speech=speech)
     )
     bootstrapped_when_ready: list[bool] = []
-    on_ready = Mock(side_effect=lambda: bootstrapped_when_ready.append(runtime.bootstrap_activated))
-    app = create_app(runtime=runtime, on_ready=on_ready)
+    on_ready = Mock(
+        side_effect=lambda _runtime: bootstrapped_when_ready.append(runtime.bootstrap_activated)
+    )
+    closed_when_stopped: list[bool] = []
+    on_stopped = Mock(
+        side_effect=lambda: closed_when_stopped.append(
+            runtime.stopped or getattr(runtime, "aclose_called", False)
+        )
+    )
+    app = create_app(runtime=runtime, on_ready=on_ready, on_stopped=on_stopped)
     engine = _AsyncCloseDeviceFlowEngine()
 
     with TestClient(app):
-        # The ready hook runs once, after startup finished.
-        on_ready.assert_called_once_with()
+        # The ready hook receives the Runtime once, after startup finished.
+        on_ready.assert_called_once_with(runtime)
         assert bootstrapped_when_ready == [True]
+        on_stopped.assert_not_called()
         # A local speech model configured to load at server start begins loading.
         preload.assert_called_once_with()
         assert app.state.chat_runs is runtime.chat_run_manager
@@ -146,6 +159,8 @@ def test_stub_runtime_lifespan_wires_state_and_closes_services(
         app.state.device_flow_engine = engine
 
     assert engine.aclose_called is True
+    # The stopped hook runs once, after the Runtime closed.
+    assert closed_when_stopped == [True]
     # A runtime with async close is closed that way instead of stopped.
     assert runtime.stopped is not async_close
     assert getattr(runtime, "aclose_called", False) is async_close
@@ -190,24 +205,32 @@ def test_server_bind_prefers_explicit_state_then_environment_then_settings(
     assert explicit == {"listen_host": "0.0.0.0", "listen_port": 9100, "port_source": "cli"}
 
 
-def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("initiator", "reported"),
+    [("tray_quit", "tray_quit"), (None, "unknown"), ("anything else", "unknown")],
+)
+def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(
+    tmp_path: Path, initiator: str | None, reported: str
+) -> None:
     requested: list[str] = []
     app = create_app(
         runtime=ServerStubRuntime(tmp_path),
         shutdown_token="local-secret",
-        request_shutdown=lambda: requested.append("shutdown"),
+        request_shutdown=requested.append,
     )
+    headers = {CONTROL_TOKEN_HEADER: "local-secret"}
+    if initiator is not None:
+        headers[CONTROL_INITIATOR_HEADER] = initiator
 
     with TestClient(app) as client:
         rejected = client.post(CONTROL_SHUTDOWN_PATH)
-        accepted = client.post(
-            CONTROL_SHUTDOWN_PATH, headers={CONTROL_TOKEN_HEADER: "local-secret"}
-        )
+        accepted = client.post(CONTROL_SHUTDOWN_PATH, headers=headers)
 
     assert rejected.status_code == 404
     assert accepted.status_code == 202
     assert accepted.json() == {"status": "stopping"}
-    assert requested == ["shutdown"]
+    # The shutdown carries who asked for it, limited to the known initiators.
+    assert requested == [reported]
 
 
 def test_statistics_warmup_reconciles_the_index_at_startup(tmp_path: Path) -> None:

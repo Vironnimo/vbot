@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -129,7 +130,7 @@ def _patch_server_update(monkeypatch: pytest.MonkeyPatch, install: Installation)
         lambda _target: SimpleNamespace(is_vbot=True, reachable=True),
     )
     monkeypatch.setattr(worker, "quiesce", lambda *_args: None)
-    monkeypatch.setattr(worker.processes, "stop", lambda _install: _ok())
+    monkeypatch.setattr(worker.processes, "stop", lambda _install, **_kwargs: _ok())
 
 
 def test_client_only_execution_never_targets_snapshots_or_starts_servers(
@@ -289,7 +290,7 @@ def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
         lambda *_args, **_kwargs: sequence.append("snapshot"),
     )
 
-    def stop(_install):
+    def stop(_install, **_kwargs):
         sequence.append("stop")
         return _ok()
 
@@ -318,7 +319,7 @@ def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
 
 
 def test_candidate_failure_restores_the_update_snapshot_before_the_previous_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
     install = _install(tmp_path)
     data_dir = _server_data(install)
@@ -340,11 +341,36 @@ def test_candidate_failure_restores_the_update_snapshot_before_the_previous_vers
         return _ok()
 
     monkeypatch.setattr(worker.processes, "start", start)
-    worker.execute(install, operation)
+    with caplog.at_level(logging.DEBUG, logger="vbot.application.update"):
+        worker.execute(install, operation)
 
     snapshot_id = find_update_snapshot(data_dir, "upd_rollback")
     assert snapshot_id is not None
     assert operation.phase == "rolled_back"
+    # The operator log names every phase change once, and the rollback with its
+    # restored snapshot as warnings.
+    logged = [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "vbot.application.update" and record.levelno >= logging.INFO
+    ]
+    phases = [
+        (level, message.split(" to=")[1].split()[0])
+        for level, message in logged
+        if " to=" in message
+    ]
+    assert phases == [
+        (logging.INFO, "preparing"),
+        (logging.INFO, "stopping"),
+        (logging.INFO, "activating"),
+        (logging.WARNING, "rolled_back"),
+    ]
+    assert all("operation=upd_rollback" in message for _level, message in logged)
+    assert "candidate_version=rel_new" in logged[-1][1] and "candidate failed" in logged[-1][1]
+    assert any(
+        level == logging.WARNING and snapshot_id in message and " to=" not in message
+        for level, message in logged
+    )
     assert operation.error == "candidate failed"
     assert f"restored from snapshot {snapshot_id}" in operation.message
     assert starts == [("rel_new", True), ("rel_old", True), ("rel_old", False)]

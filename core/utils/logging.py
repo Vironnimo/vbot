@@ -3,28 +3,37 @@
 Provides a ``LogManager`` that centralizes the ``vbot`` logger tree,
 enforces the required ``timestamp [LEVEL] name - message`` format, and
 writes to both the console and a daily log file under ``<data_dir>/logs``.
+WARNING and higher records of other libraries' loggers reach the same
+outputs under their own logger names.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
+from io import TextIOWrapper
 from pathlib import Path
 
 CONSOLE_LOGGING_ENV_VAR = "VBOT_LOG_STDIO"
 LOGGER_NAMESPACE = "vbot"
 DAILY_LOG_FILE_SUFFIX = ".log"
-APP_WEBSOCKET_PATH = "/ws"
-LOGS_WEBSOCKET_PATH = "/ws/logs"
-ROUTINE_WEBSOCKET_PATHS = frozenset({APP_WEBSOCKET_PATH, LOGS_WEBSOCKET_PATH})
+UVICORN_LOGGER_NAME = "vbot.server.uvicorn"
+# Every websocket route the server owns: /ws, /ws/logs, /ws/terminals/{terminal_id}
+# and /ws/live/{call_id}. The Live path carries a Provider call id.
+SERVER_WEBSOCKET_PATH_PATTERN = re.compile(r"/ws(?:/logs|/terminals/[^/]+|/live/[^/]+)?")
+LIVE_WEBSOCKET_PATH_PATTERN = re.compile(r"(/ws/live/)[^\s\"?/]+")
 ROUTINE_WEBSOCKET_LIFECYCLE_MESSAGES = frozenset({"connection open", "connection closed"})
-UVICORN_WEBSOCKET_LOGGER_NAMES = frozenset({"uvicorn.error", "vbot.server.uvicorn"})
+UVICORN_WEBSOCKET_LOGGER_NAMES = frozenset({"uvicorn.error", UVICORN_LOGGER_NAME})
 WEBSOCKET_ACCEPTED_MESSAGE_PATTERN = re.compile(
     r'"WebSocket (?P<path>/[^"\s]*)[^\"]*" \[accepted\]'
 )
+# uvicorn's line for a websocket handshake answered without accepting it (e.g. 403).
+WEBSOCKET_HANDSHAKE_RESPONSE_PATTERN = re.compile(r'"WebSocket /[^"]*" \d{3}$')
 
 
 def _normalize_websocket_path(path: object) -> str | None:
@@ -43,6 +52,18 @@ def extract_websocket_path_from_message(message: object) -> str | None:
     return _normalize_websocket_path(message_match.group("path"))
 
 
+def is_server_websocket_path(path: str | None) -> bool:
+    """Return whether *path* (without query) is one of the server's websocket routes."""
+
+    return path is not None and SERVER_WEBSOCKET_PATH_PATTERN.fullmatch(path) is not None
+
+
+def redact_live_websocket_path(message: str) -> str:
+    """Replace the Provider call id of a Live websocket path in *message*."""
+
+    return LIVE_WEBSOCKET_PATH_PATTERN.sub(r"\1{call_id}", message)
+
+
 def is_routine_websocket_lifecycle_message(
     *,
     level: int | str,
@@ -50,7 +71,7 @@ def is_routine_websocket_lifecycle_message(
     message: str,
     websocket_path: str | None = None,
 ) -> bool:
-    """Return whether a log message is routine `/ws` or `/ws/logs` noise."""
+    """Return whether a log message is routine lifecycle noise of a server websocket."""
 
     normalized_level = (
         level if isinstance(level, int) else logging.getLevelNamesMapping().get(level.upper())
@@ -64,12 +85,12 @@ def is_routine_websocket_lifecycle_message(
 
     if message in ROUTINE_WEBSOCKET_LIFECYCLE_MESSAGES:
         return (
-            normalized_path in ROUTINE_WEBSOCKET_PATHS
+            is_server_websocket_path(normalized_path)
             or logger_name in UVICORN_WEBSOCKET_LOGGER_NAMES
         )
 
     return (
-        normalized_path in ROUTINE_WEBSOCKET_PATHS
+        is_server_websocket_path(normalized_path)
         and '"WebSocket ' in message
         and "[accepted]" in message
     )
@@ -99,7 +120,7 @@ def _extract_websocket_path(record: logging.LogRecord) -> str | None:
 
 
 def is_logs_websocket_lifecycle_record(record: logging.LogRecord) -> bool:
-    """Return whether *record* is routine `/ws` or `/ws/logs` lifecycle noise."""
+    """Return whether *record* is routine lifecycle noise of a server websocket."""
 
     return is_routine_websocket_lifecycle_message(
         level=record.levelno,
@@ -110,7 +131,7 @@ def is_logs_websocket_lifecycle_record(record: logging.LogRecord) -> bool:
 
 
 class QuietLogsWebSocketLifecycleFilter(logging.Filter):
-    """Suppress routine INFO lifecycle records for managed websocket paths."""
+    """Suppress routine INFO lifecycle records of the server's websocket routes."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         return not is_logs_websocket_lifecycle_record(record)
@@ -150,17 +171,28 @@ def get_logger(name: str) -> logging.Logger:
 
 
 class ManagedLoggerProxyHandler(logging.Handler):
-    """Forward third-party log records into a managed vBot logger."""
+    """Forward uvicorn log records into a managed vBot logger.
+
+    uvicorn's own INFO lines describe server mechanics (process start, lifespan
+    steps, shutdown waits) that the server's single start and stop lines
+    replace, so they are forwarded at DEBUG. A websocket handshake answered
+    without accepting it (e.g. 403) keeps its level, and a Live websocket path
+    never carries its Provider call id into the log.
+    """
 
     def __init__(self, target_logger_name: str) -> None:
         super().__init__()
         self._target_logger_name = target_logger_name
 
     def emit(self, record: logging.LogRecord) -> None:
+        message = redact_live_websocket_path(record.getMessage())
+        level = record.levelno
+        if level == logging.INFO and WEBSOCKET_HANDSHAKE_RESPONSE_PATTERN.search(message) is None:
+            level = logging.DEBUG
         target_logger = get_logger(self._target_logger_name)
         target_logger.log(
-            record.levelno,
-            record.getMessage(),
+            level,
+            message,
             exc_info=record.exc_info,
             stack_info=bool(record.stack_info),
         )
@@ -168,9 +200,13 @@ class ManagedLoggerProxyHandler(logging.Handler):
 
 def build_uvicorn_log_config(
     *,
-    server_logger_name: str = "vbot.server.uvicorn",
+    server_logger_name: str = UVICORN_LOGGER_NAME,
 ) -> dict[str, object]:
-    """Route uvicorn lifecycle logs through the managed vBot pipeline."""
+    """Route uvicorn logs through the managed vBot pipeline.
+
+    uvicorn hands its ``uvicorn.error`` logger to the websocket protocol as
+    well, so that logger also carries the websocket lifecycle lines.
+    """
 
     return {
         "version": 1,
@@ -206,11 +242,6 @@ def build_uvicorn_log_config(
                 "level": "INFO",
                 "propagate": False,
             },
-            "websockets.server": {
-                "handlers": ["vbot_proxy"],
-                "level": "INFO",
-                "propagate": False,
-            },
         },
     }
 
@@ -220,7 +251,9 @@ class DailyFileHandler(logging.FileHandler):
 
     The active output path is ``<logs_dir>/<YYYY-MM-DD>.log``. If the date
     changes while the process is running, the handler transparently reopens
-    itself against the new daily file before emitting the next record.
+    itself against the new daily file before emitting the next record. The
+    logs directory and file are created with the first record, so a handler
+    that never writes leaves no trace on disk.
     """
 
     def __init__(
@@ -231,16 +264,19 @@ class DailyFileHandler(logging.FileHandler):
         encoding: str = "utf-8",
     ) -> None:
         self._logs_dir = Path(logs_dir)
-        self._logs_dir.mkdir(parents=True, exist_ok=True)
         self._current_date_provider = current_date_provider or date.today
         self._active_date = self._current_date_provider()
-        super().__init__(self._build_path(self._active_date), encoding=encoding)
+        super().__init__(self._build_path(self._active_date), encoding=encoding, delay=True)
 
     def emit(self, record: logging.LogRecord) -> None:
         """Write *record*, reopening the file if the date rolled over."""
 
         self._rotate_if_needed()
         super().emit(record)
+
+    def _open(self) -> TextIOWrapper:
+        self._logs_dir.mkdir(parents=True, exist_ok=True)
+        return super()._open()
 
     def _rotate_if_needed(self) -> None:
         current_date = self._current_date_provider()
@@ -282,18 +318,74 @@ class _VBotFormatter(logging.Formatter):
                 record.vbot_level = original_label
 
 
-class LogManager:
-    """Creates and manages per-module structured loggers.
+def _is_benign_connection_reset(record: logging.LogRecord) -> bool:
+    """Return whether *record* is Windows' Proactor noise about a peer that went away.
 
-    Each logger returned by :meth:`get_logger` writes through the shared
-    ``vbot`` logger tree with a uniform format and shared console/file
-    handlers.
+    When a client drops a connection, the Proactor Event Loop reports the
+    ``ConnectionResetError`` [WinError 10054] of its ``_call_connection_lost``
+    callback through the ``asyncio`` logger although nothing failed.
+    """
+
+    if record.name != "asyncio" or not record.exc_info:
+        return False
+    return isinstance(record.exc_info[1], ConnectionResetError) and (
+        "_call_connection_lost" in record.getMessage()
+    )
+
+
+class _OtherLoggerRouter(logging.Handler):
+    """Write WARNING and higher records of non-vBot loggers to the managed outputs.
+
+    Installed on the root logger, it receives records of third-party loggers
+    (asyncio, httpx, Channel libraries, ...) that would otherwise fall through
+    to ``logging.lastResort`` on stderr. The records keep their own logger
+    name. ``vbot`` records never reach the root while a manager is active.
+    """
+
+    def __init__(self, targets: list[logging.Handler]) -> None:
+        super().__init__(level=logging.WARNING)
+        self._targets = targets
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.name == LOGGER_NAMESPACE or record.name.startswith(f"{LOGGER_NAMESPACE}."):
+            return
+        if _is_benign_connection_reset(record):
+            record = copy.copy(record)
+            record.levelno, record.levelname = logging.DEBUG, logging.getLevelName(logging.DEBUG)
+        for handler in self._targets:
+            if record.levelno >= handler.level:
+                handler.handle(record)
+
+
+@dataclass(frozen=True)
+class _PipelineState:
+    """The logging pipeline a manager replaced when it became active."""
+
+    owner: LogManager | None
+    level: int
+    propagate: bool
+
+
+class LogManager:
+    """Owns the managed log outputs of one process while it is open.
+
+    Construction activates the pipeline at once: the manager's console and
+    daily-file handlers attach to the ``vbot`` logger (which stops propagating
+    to the root), and a router on the root logger writes WARNING and higher
+    records of other libraries' loggers to the same outputs. Loggers under
+    ``vbot`` - whether from :meth:`get_logger` or ``logging.getLogger`` -
+    inherit the handlers.
+
+    Managers nest: a newer manager replaces the active one's outputs, and
+    closing it restores the manager it replaced, as long as that one is still
+    open. :meth:`close` detaches and closes this manager's handlers.
 
     Usage::
 
-        manager = LogManager(level="DEBUG")
+        manager = LogManager(level="DEBUG", data_dir=data_dir)
         log = manager.get_logger("core")
         log.info("Runtime started")   # -> vbot.core
+        manager.close()
     """
 
     _FORMAT = "%(asctime)s [%(vbot_level)s] %(name)s - %(message)s"
@@ -308,16 +400,19 @@ class LogManager:
         current_date_provider: Callable[[], date] | None = None,
         enable_console: bool | None = None,
     ) -> None:
-        """Initialise the log manager.
+        """Build the manager's outputs and make them the active pipeline.
 
         Args:
             level: Default log level for all loggers created by this
                    manager.  May be an ``int`` (e.g. ``logging.DEBUG``)
                    or a level name string (e.g. ``"INFO"``).
             data_dir: Optional runtime data directory. When provided, the
-                manager writes log files under ``<data_dir>/logs``.
+                manager writes log files under ``<data_dir>/logs``; the
+                directory is created with the first record.
             current_date_provider: Optional current-date hook used to
                 resolve the active daily log filename.
+            enable_console: Whether to write to stderr as well; defaults to
+                the ``VBOT_LOG_STDIO`` environment variable (on unless ``0``).
         """
         self._level: int = self._resolve_level(level)
         self._data_dir = Path(data_dir).expanduser() if data_dir is not None else None
@@ -327,8 +422,12 @@ class LogManager:
         )
         self._formatter = _VBotFormatter(self._FORMAT, datefmt=self._DATE_FORMAT)
         self._loggers: dict[str, logging.Logger] = {}
-        self._handlers: list[logging.Handler] = []
-        self._configured = False
+        self._handlers = self._build_handlers()
+        self._router = _OtherLoggerRouter(self._handlers)
+        for handler in (*self._handlers, self._router):
+            setattr(handler, self._MANAGED_HANDLER_FLAG, self)
+        self._closed = False
+        self._replaced = self._activate()
 
     # ------------------------------------------------------------------
     # Public API
@@ -359,7 +458,6 @@ class LogManager:
         Returns:
             A configured :class:`logging.Logger`.
         """
-        self._ensure_configured()
         logger_name = self._normalize_logger_name(name)
         if logger_name not in self._loggers:
             logger = logging.getLogger(logger_name)
@@ -369,39 +467,64 @@ class LogManager:
         return self._loggers[logger_name]
 
     def close(self) -> None:
-        """Remove and close handlers managed by this instance."""
+        """Detach and close this manager's handlers; safe to call repeatedly.
 
-        logger = logging.getLogger(LOGGER_NAMESPACE)
-        for handler in list(logger.handlers):
-            if getattr(handler, self._MANAGED_HANDLER_FLAG, False):
-                logger.removeHandler(handler)
-                if handler not in self._handlers:
-                    handler.close()
+        When this manager is the active pipeline, the manager it replaced
+        becomes active again if it is still open; otherwise ``vbot`` records
+        propagate normally again.
+        """
+
+        if self._closed:
+            return
+        self._closed = True
+        namespace = logging.getLogger(LOGGER_NAMESPACE)
+        root = logging.getLogger()
+        active = self._router in root.handlers or any(
+            handler in namespace.handlers for handler in self._handlers
+        )
+        root.removeHandler(self._router)
         for handler in self._handlers:
+            namespace.removeHandler(handler)
             handler.close()
-        self._handlers = []
-        self._configured = False
-        logger.propagate = True
+        self._router.close()
+        if active:
+            self._restore_replaced(namespace, root)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _ensure_configured(self) -> None:
-        if self._configured:
-            return
+    def _activate(self) -> _PipelineState:
+        namespace = logging.getLogger(LOGGER_NAMESPACE)
+        root = logging.getLogger()
+        replaced_owner: LogManager | None = None
+        for logger in (namespace, root):
+            for handler in list(logger.handlers):
+                owner = getattr(handler, self._MANAGED_HANDLER_FLAG, None)
+                if isinstance(owner, LogManager):
+                    replaced_owner = owner
+                    logger.removeHandler(handler)
+        replaced = _PipelineState(
+            owner=replaced_owner, level=namespace.level, propagate=namespace.propagate
+        )
+        namespace.setLevel(self._level)
+        namespace.propagate = False
+        for handler in self._handlers:
+            namespace.addHandler(handler)
+        root.addHandler(self._router)
+        return replaced
 
-        logger = logging.getLogger(LOGGER_NAMESPACE)
-        self.close()
-        logger.setLevel(self._level)
-        logger.propagate = False
-
-        for handler in self._build_handlers():
-            setattr(handler, self._MANAGED_HANDLER_FLAG, True)
-            logger.addHandler(handler)
-            self._handlers.append(handler)
-
-        self._configured = True
+    def _restore_replaced(self, namespace: logging.Logger, root: logging.Logger) -> None:
+        state = self._replaced
+        # A replaced manager that was closed meanwhile hands back what it replaced.
+        while state.owner is not None and state.owner._closed:
+            state = state.owner._replaced
+        namespace.setLevel(state.level)
+        namespace.propagate = state.propagate
+        if state.owner is not None:
+            for handler in state.owner._handlers:
+                namespace.addHandler(handler)
+            root.addHandler(state.owner._router)
 
     def _build_handlers(self) -> list[logging.Handler]:
         handlers: list[logging.Handler] = []

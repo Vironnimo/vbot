@@ -200,7 +200,9 @@ def test_tray_initiated_stop_never_counts_as_an_unexpected_server_stop(
         yield
 
     monkeypatch.setattr(host, "exclusive", lock)
-    monkeypatch.setattr(host.processes, "stop", lambda _install: SimpleNamespace(ok=True))
+    monkeypatch.setattr(
+        host.processes, "stop", lambda _install, **_kwargs: SimpleNamespace(ok=True)
+    )
     monkeypatch.setattr(host.processes, "start", lambda _install: SimpleNamespace(ok=True))
     facade.stop_server()
     monitor.listener.connection_lost(1006)
@@ -244,7 +246,9 @@ def test_lifecycle_actions_hold_operation_lock_and_raise_for_failed_result(
     assert calls == ["lock:operation"]
 
     monkeypatch.setattr(
-        host.processes, "stop", lambda _install: SimpleNamespace(ok=True, message="stopped")
+        host.processes,
+        "stop",
+        lambda _install, **_kwargs: SimpleNamespace(ok=True, message="stopped"),
     )
     monkeypatch.setattr(
         host.processes, "start", lambda _install: SimpleNamespace(ok=True, message="started")

@@ -167,13 +167,18 @@ def read_checkout_version(root: Path = VBOT_ROOT) -> str:
     return version if isinstance(version, str) and version else UNKNOWN_VBOT_VERSION
 
 
+def _stop_for_update(instance: ServerInstance) -> CommandResult:
+    """Stop the server so that its stop line names the update as the initiator."""
+    return stop_server(instance, initiator="update")
+
+
 def run_update(
     instance: ServerInstance,
     *,
     discard: bool = False,
     stash: bool = False,
     restart: bool = True,
-    stop: Restart = stop_server,
+    stop: Restart = _stop_for_update,
     start: Restart = start_server,
     runner: Runner | None = None,
     root: Path | None = None,

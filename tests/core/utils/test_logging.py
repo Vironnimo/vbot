@@ -57,34 +57,81 @@ class DateSequence:
         return self._values[-1]
 
 
+def _messages(log_path: Path) -> list[str]:
+    """Return the ``[LEVEL] name - message`` part of every line in *log_path*."""
+    return [line.split(" ", 2)[2] for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+
 def test_log_manager_writes_every_vbot_logger_to_the_daily_file(tmp_path: Path) -> None:
-    """Managed and direct vbot loggers write the structured format to one daily file."""
+    """A constructed manager is active at once; a nested one hands back on close."""
     vbot_logger = logging.getLogger("vbot")
     vbot_logger.handlers = []
-    manager = LogManager(
+    outer = LogManager(
         level="INFO",
-        data_dir=tmp_path,
+        data_dir=tmp_path / "outer",
         current_date_provider=lambda: date(2026, 5, 10),
     )
 
     try:
-        manager.get_logger("core").warning("Structured warning")
         logging.getLogger("vbot.runtime.direct").info("Inherited handler path")
+        inner = LogManager(
+            level="INFO",
+            data_dir=tmp_path / "inner",
+            current_date_provider=lambda: date(2026, 5, 10),
+        )
+        inner.get_logger("core").warning("Structured warning")
+        inner.close()
+        logging.getLogger("vbot.cli").info("Outer pipeline again")
+    finally:
+        outer.close()
+
+    outer_log = tmp_path / "outer" / "logs" / "2026-05-10.log"
+    assert outer.log_file_path == outer_log
+    assert resolve_daily_log_path(
+        tmp_path / "outer", current_date_provider=lambda: date(2026, 5, 10)
+    ) == (outer_log)
+    first_line = outer_log.read_text(encoding="utf-8").splitlines()[0]
+    assert first_line[:19].count(":") == 2
+    assert first_line[4] == "-"
+    assert _messages(outer_log) == [
+        "[INFO] vbot.runtime.direct - Inherited handler path",
+        "[INFO] vbot.cli - Outer pipeline again",
+    ]
+    assert _messages(tmp_path / "inner" / "logs" / "2026-05-10.log") == [
+        "[WARN] vbot.core - Structured warning"
+    ]
+    # Closing the last manager restores the namespace's propagation.
+    assert vbot_logger.propagate is True
+
+
+def test_log_manager_writes_other_loggers_warnings_once_under_their_own_name(
+    tmp_path: Path,
+) -> None:
+    manager = LogManager(
+        level="INFO",
+        data_dir=tmp_path,
+        enable_console=False,
+        current_date_provider=lambda: date(2026, 5, 10),
+    )
+    third_party = logging.getLogger("tests.third_party")
+    try:
+        third_party.info("Routine detail")
+        third_party.warning("Polling failed")
+        # Windows' Proactor reports a peer that went away as a failed callback.
+        try:
+            raise ConnectionResetError(10054, "An existing connection was forcibly closed")
+        except ConnectionResetError as error:
+            logging.getLogger("asyncio").error(
+                "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)",
+                exc_info=error,
+            )
     finally:
         manager.close()
+    third_party.warning("After close")
 
-    log_path = tmp_path / "logs" / "2026-05-10.log"
-    assert manager.log_file_path == log_path
-    assert resolve_daily_log_path(tmp_path, current_date_provider=lambda: date(2026, 5, 10)) == (
-        log_path
-    )
-    warning, direct = log_path.read_text(encoding="utf-8").splitlines()
-    assert warning.endswith("[WARN] vbot.core - Structured warning")
-    assert warning[:19].count(":") == 2
-    assert warning[4] == "-"
-    assert direct.endswith("[INFO] vbot.runtime.direct - Inherited handler path")
-    # Closing the manager restores the namespace's propagation.
-    assert vbot_logger.propagate is True
+    assert _messages(tmp_path / "logs" / "2026-05-10.log") == [
+        "[WARN] tests.third_party - Polling failed"
+    ]
 
 
 def test_daily_file_handler_rotates_when_date_changes(tmp_path: Path) -> None:
@@ -120,6 +167,11 @@ _ACCEPTED = '%s - "WebSocket %s" [accepted]'
         (make_websocket_record(message="connection open", path="/ws/logs?cursor=abc"), True),
         (make_websocket_record(message="connection closed", path="/ws?after_sequence=4"), True),
         (make_websocket_record(message=_ACCEPTED, args=("127.0.0.1", "/ws/logs?cursor=abc")), True),
+        (
+            make_websocket_record(message=_ACCEPTED, args=("127.0.0.1", "/ws/terminals/term_1")),
+            True,
+        ),
+        (make_websocket_record(message=_ACCEPTED, args=("127.0.0.1", "/ws/live/call-9")), True),
         # Runtime records without a path: the uvicorn logger marks them as websocket records.
         (make_websocket_record(name="uvicorn.error", message="connection open"), True),
         (
@@ -147,6 +199,8 @@ _ACCEPTED = '%s - "WebSocket %s" [accepted]'
         "log-stream-open",
         "app-socket-closed",
         "log-stream-accepted",
+        "terminal-accepted",
+        "live-call-accepted",
         "uvicorn-open-without-path",
         "uvicorn-accepted-without-args",
         "debug-diagnostic",
@@ -176,13 +230,20 @@ def test_logger_proxy_forwards_formatted_records_that_pass_its_filters() -> None
 
     capture_handler = CaptureHandler()
     target_logger.addHandler(capture_handler)
-    target_logger.setLevel(logging.INFO)
+    target_logger.setLevel(logging.DEBUG)
     try:
         for record in (
-            make_websocket_record(name="uvicorn.error", message="Server started"),
+            make_websocket_record(
+                name="uvicorn.error", message="Started server process [%d]", args=(42,)
+            ),
             make_websocket_record(message="connection open", path="/ws/logs"),
             make_websocket_record(
-                message='%s - "WebSocket %s" [rejected]', args=("127.0.0.1", "/ws"), path="/ws"
+                name="uvicorn.error",
+                message='%s - "WebSocket %s" 403',
+                args=("127.0.0.1", "/ws/live/call-9"),
+            ),
+            make_websocket_record(
+                name="uvicorn.error", level=logging.ERROR, message="Exception in ASGI application"
             ),
         ):
             handler.handle(record)
@@ -190,11 +251,18 @@ def test_logger_proxy_forwards_formatted_records_that_pass_its_filters() -> None
         target_logger.removeHandler(capture_handler)
         handler.close()
 
-    # Forwarded records keep their level, carry the proxy's logger name and a
-    # formatted message; the routine lifecycle record is filtered out.
+    # Forwarded records carry the proxy's logger name and a formatted message.
+    # uvicorn's own lifecycle lines drop to DEBUG, handshake rejections and
+    # failures keep their level, a Live path never carries its call id, and
+    # the routine lifecycle record is filtered out.
     assert [(record.name, record.levelno, record.getMessage()) for record in captured] == [
-        ("vbot.server.uvicorn", logging.INFO, "Server started"),
-        ("vbot.server.uvicorn", logging.INFO, '127.0.0.1 - "WebSocket /ws" [rejected]'),
+        ("vbot.server.uvicorn", logging.DEBUG, "Started server process [42]"),
+        (
+            "vbot.server.uvicorn",
+            logging.INFO,
+            '127.0.0.1 - "WebSocket /ws/live/{call_id}" 403',
+        ),
+        ("vbot.server.uvicorn", logging.ERROR, "Exception in ASGI application"),
     ]
 
 

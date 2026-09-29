@@ -179,7 +179,10 @@ def test_an_unreadable_record_keeps_every_version(
         assert retention.retire_unneeded(install) == []
 
     assert _versions(install) == {"rel_active", "rel_unused"}
-    assert "Kept all application versions" in caplog.text
+    # Keeping every version is a failed cleanup, not routine progress.
+    assert [
+        record.levelno for record in caplog.records if record.name == "vbot.application.retention"
+    ] == [logging.WARNING]
 
 
 def test_downloads_of_finished_operations_are_retired(

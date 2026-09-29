@@ -118,18 +118,18 @@ class ApplicationFacade:
         self._clear_status_error()
         self._reconnect()
 
-    def stop_server(self) -> None:
+    def stop_server(self, *, initiator: str = "tray_stop") -> None:
         self._require_server()
         self._expect_stop()
         with exclusive(self._install.root, "operation", allow_removal=True):
-            self._require_success(processes.stop(self._install))
+            self._require_success(processes.stop(self._install, initiator=initiator))
         self._clear_status_error()
 
     def restart_server(self) -> None:
         self._require_server()
         self._expect_stop()
         with exclusive(self._install.root, "operation"):
-            self._require_success(processes.stop(self._install))
+            self._require_success(processes.stop(self._install, initiator="tray_restart"))
             self._require_success(processes.start(self._install))
         self._clear_status_error()
         self._reconnect()
@@ -177,7 +177,7 @@ class ApplicationFacade:
 
     def quit(self) -> None:
         if self._install.owns_server:
-            self.stop_server()
+            self.stop_server(initiator="tray_quit")
 
     def report_error(self, message: str) -> None:
         """Expose a recoverable host failure through the next tray state."""

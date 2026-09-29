@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import os
 import sys
 import time
@@ -27,6 +28,13 @@ PHASES = TERMINAL | {
     "activating",
     "verifying",
 }
+#: Terminal phases that end an update without activating its candidate as planned.
+_FAILURE_PHASE_LEVELS = {
+    "failed": logging.WARNING,
+    "rolled_back": logging.WARNING,
+    "needs_attention": logging.ERROR,
+}
+_UPDATE_LOGGER = logging.getLogger("vbot.application.update")
 NATIVE_HOST_NAMES = frozenset(
     {
         "vbot.exe",
@@ -292,8 +300,32 @@ class Operation:
     def transition(self, install: Installation, phase: str, message: str) -> None:
         if phase not in PHASES:
             raise ApplicationError("Unknown update phase")
+        previous_phase = self.phase
         self.phase, self.message = phase, message
         self.save(install)
+        if phase == previous_phase:
+            # Progress within one phase (download, build, snapshot steps).
+            _UPDATE_LOGGER.debug(
+                "Application update progressed (operation=%s phase=%s step=%s)",
+                self.id,
+                phase,
+                json.dumps(message, ensure_ascii=False),
+            )
+            return
+        fields = [
+            f"operation={self.id}",
+            f"kind={'package' if self.package else 'online'}",
+            f"from={previous_phase}",
+            f"to={phase}",
+        ]
+        for name in ("previous_version", "candidate_version"):
+            value = getattr(self, name)
+            if value is not None:
+                fields.append(f"{name}={value}")
+        level = _FAILURE_PHASE_LEVELS.get(phase, logging.INFO)
+        if level > logging.INFO and self.error:
+            fields.append(f"error={json.dumps(self.error, ensure_ascii=False)}")
+        _UPDATE_LOGGER.log(level, "Application update phase changed (%s)", " ".join(fields))
 
 
 def load_operation(install: Installation, operation_id: str) -> Operation:

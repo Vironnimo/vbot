@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import signal
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,8 +12,73 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.database import DataStoreMarker, read_marker
+from core.utils.logging import resolve_daily_log_path
+from core.utils.version import BuildIdentity
 from server import main as server_main
 from server.main import main, parse_args
+
+_READY_RUNTIME = SimpleNamespace(
+    build=BuildIdentity("1.2.3", revision="a" * 40, branch="main"),
+    startup_summary=SimpleNamespace(describe=lambda: "tools=3"),
+)
+
+
+def _fake_create_app(
+    *,
+    config,
+    server_bind,
+    shutdown_token,
+    request_shutdown,
+    request_restart,
+    on_ready,
+    on_stopped,
+    **options,
+) -> dict[str, Any]:
+    return {
+        "config": config,
+        "server_bind": server_bind,
+        "shutdown_token": shutdown_token,
+        "request_shutdown": request_shutdown,
+        "request_restart": request_restart,
+        "on_ready": on_ready,
+        "on_stopped": on_stopped,
+        **options,
+    }
+
+
+def _patch_serving(
+    monkeypatch: pytest.MonkeyPatch, run: Callable[[Any], None]
+) -> list[dict[str, Any]]:
+    """Replace uvicorn with a server whose ``run`` plays *run*; return its configs."""
+    calls: list[dict[str, Any]] = []
+
+    class FakeConfig:
+        def __init__(self, app, **kwargs) -> None:
+            self.app = app
+            calls.append({"app": app, **kwargs})
+
+    class FakeServer:
+        def __init__(self, config: FakeConfig) -> None:
+            self.config = config
+            self.should_exit = False
+            self.started = False
+
+        def handle_exit(self, sig: int, frame: object) -> None:
+            self.should_exit = True
+
+        def run(self) -> None:
+            run(self)
+
+    monkeypatch.setattr(
+        server_main, "uvicorn", SimpleNamespace(Config=FakeConfig, Server=FakeServer)
+    )
+    monkeypatch.setattr(server_main, "activate_process_containment", lambda: None)
+    monkeypatch.setattr(server_main, "create_app", _fake_create_app)
+    # The real hook would freeze the test process heap for the rest of the session.
+    monkeypatch.setattr(server_main.gc, "collect", lambda: None)
+    monkeypatch.setattr(server_main.gc, "freeze", lambda: None)
+    monkeypatch.setattr(server_main.sys, "setswitchinterval", lambda _interval: None)
+    return calls
 
 
 def test_parse_args_accepts_data_dir_port_and_one_safe_startup_mode() -> None:
@@ -28,66 +95,36 @@ def test_parse_args_accepts_data_dir_port_and_one_safe_startup_mode() -> None:
 def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, action: str) -> None:
     from cli import server_management
 
-    calls: list[dict[str, Any]] = []
     schedule = MagicMock(return_value=SimpleNamespace(ok=action != "restart_failure"))
     loop = MagicMock()
     monkeypatch.setattr(server_management, "schedule_server_restart", schedule)
     monkeypatch.setattr(server_main.asyncio, "get_running_loop", lambda: loop)
 
-    class FakeConfig:
-        def __init__(self, app, **kwargs) -> None:
-            self.app = app
-            calls.append({"app": app, **kwargs})
+    def run(server: Any) -> None:
+        app = server.config.app
+        app["on_ready"](_READY_RUNTIME)
+        if action == "restart_failure":
+            with pytest.raises(RuntimeError):
+                app["request_restart"]()
+            assert not server.should_exit
+            loop.call_later.assert_not_called()
+        elif action == "restart":
+            app["request_restart"]()
+            app["request_restart"]()
+            schedule.assert_called_once()
+            instance = schedule.call_args.args[0]
+            assert instance.port == 8765 and instance.host == "127.0.0.1"
+            assert instance.data_dir == tmp_path / "data"
+            assert schedule.call_args.kwargs == {"wait_pid": server_main.os.getpid()}
+            assert not server.should_exit
+            delay, callback = loop.call_later.call_args.args
+            assert delay > 0
+            callback()
+            assert server.should_exit
+        app["request_shutdown"]()
+        assert server.should_exit is True
 
-    class FakeServer:
-        def __init__(self, config: FakeConfig) -> None:
-            self.config = config
-            self.should_exit = False
-
-        def run(self) -> None:
-            self.config.app["on_ready"]()
-            if action == "restart_failure":
-                with pytest.raises(RuntimeError):
-                    self.config.app["request_restart"]()
-                assert not self.should_exit
-                loop.call_later.assert_not_called()
-            elif action == "restart":
-                self.config.app["request_restart"]()
-                self.config.app["request_restart"]()
-                schedule.assert_called_once()
-                instance = schedule.call_args.args[0]
-                assert instance.port == 8765 and instance.host == "127.0.0.1"
-                assert instance.data_dir == tmp_path / "data"
-                assert schedule.call_args.kwargs == {"wait_pid": server_main.os.getpid()}
-                assert not self.should_exit
-                delay, callback = loop.call_later.call_args.args
-                assert delay > 0
-                callback()
-                assert self.should_exit
-            self.config.app["request_shutdown"]()
-            assert self.should_exit is True
-
-    monkeypatch.setattr(
-        server_main,
-        "uvicorn",
-        SimpleNamespace(Config=FakeConfig, Server=FakeServer),
-    )
-    monkeypatch.setattr(server_main, "activate_process_containment", lambda: None)
-
-    def create_app(
-        *, config, server_bind, shutdown_token, request_shutdown, request_restart, on_ready
-    ) -> dict[str, Any]:
-        return {
-            "config": config,
-            "server_bind": server_bind,
-            "shutdown_token": shutdown_token,
-            "request_shutdown": request_shutdown,
-            "request_restart": request_restart,
-            "on_ready": on_ready,
-        }
-
-    monkeypatch.setattr(server_main, "create_app", create_app)
-    # The real hook would freeze the test process heap for the rest of the session.
+    calls = _patch_serving(monkeypatch, run)
     heap: list[str] = []
     monkeypatch.setattr(server_main.gc, "collect", lambda: heap.append("collect"))
     monkeypatch.setattr(server_main.gc, "freeze", lambda: heap.append("freeze"))
@@ -114,11 +151,6 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
         "level": "INFO",
         "propagate": False,
     }
-    assert calls[0]["log_config"]["loggers"]["websockets.server"] == {
-        "handlers": ["vbot_proxy"],
-        "level": "INFO",
-        "propagate": False,
-    }
     assert calls[0]["app"]["server_bind"] == {
         "listen_host": "127.0.0.1",
         "listen_port": 8765,
@@ -130,6 +162,9 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
     assert heap == ["collect", "freeze"]
     assert intervals and intervals[0] < 0.001
     assert not (tmp_path / "data" / "runtime" / "server-8765.json").exists()
+    # A restart the server scheduled for itself is its stop reason.
+    log = resolve_daily_log_path(tmp_path / "data").read_text(encoding="utf-8")
+    assert ("Server stopped (reason=restart " in log) is (action == "restart")
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -140,21 +175,7 @@ def test_main_initializes_only_a_missing_data_directory(
     if existing:
         data_dir.mkdir()
     markers: list[DataStoreMarker | None] = []
-
-    class FakeServer:
-        def __init__(self, config: object) -> None:
-            self.config = config
-
-        def run(self) -> None:
-            markers.append(read_marker(data_dir))
-
-    monkeypatch.setattr(
-        server_main,
-        "uvicorn",
-        SimpleNamespace(Config=lambda app, **_kwargs: app, Server=FakeServer),
-    )
-    monkeypatch.setattr(server_main, "activate_process_containment", lambda: None)
-    monkeypatch.setattr(server_main, "create_app", lambda **kwargs: kwargs)
+    _patch_serving(monkeypatch, lambda _server: markers.append(read_marker(data_dir)))
 
     main(["--data-dir", str(data_dir), "--port", "8765"])
 
@@ -166,3 +187,57 @@ def test_main_initializes_only_a_missing_data_directory(
     else:
         assert markers[0] is not None
         assert markers[0].databases == {}
+
+
+def _serve_until(cause: str) -> Callable[[Any], None]:
+    """Play one way a served process ends, as uvicorn and the app lifespan would."""
+
+    def run(server: Any) -> None:
+        app = server.config.app
+        if cause == "startup_failed":
+            raise SystemExit(3)
+        app["on_ready"](_READY_RUNTIME)
+        server.started = True
+        if cause == "control":
+            app["request_shutdown"]("tray_quit")
+        elif cause == "signal":
+            server.handle_exit(signal.SIGINT, None)
+        assert server.should_exit
+        app["on_stopped"]()
+
+    return run
+
+
+@pytest.mark.parametrize(
+    ("cause", "stop_fields"),
+    [
+        ("control", "[INFO] vbot.server - Server stopped (reason=control initiator=tray_quit "),
+        ("signal", "[INFO] vbot.server - Server stopped (reason=signal signal=SIGINT "),
+        ("startup_failed", "[WARN] vbot.server - Server stopped (reason=startup_failed "),
+    ],
+)
+def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cause: str, stop_fields: str
+) -> None:
+    _patch_serving(monkeypatch, _serve_until(cause))
+    data_dir = tmp_path / "data"
+
+    if cause == "startup_failed":
+        with pytest.raises(SystemExit):
+            main(["--data-dir", str(data_dir), "--port", "8765", "--verification-only"])
+    else:
+        main(["--data-dir", str(data_dir), "--port", "8765", "--verification-only"])
+
+    lines = resolve_daily_log_path(data_dir).read_text(encoding="utf-8").splitlines()
+    started = [line for line in lines if " - Server started (" in line]
+    stopped = [line for line in lines if " - Server stopped (" in line]
+    if cause == "startup_failed":
+        assert started == []
+    else:
+        # The start line names the build, the mode and the Runtime's startup summary.
+        assert len(started) == 1
+        assert "(version=1.2.3 revision=aaaaaaaa branch=main " in started[0]
+        assert " mode=verification " in started[0] and started[0].endswith(" tools=3)")
+    assert len(stopped) == 1
+    assert stop_fields in stopped[0]
+    assert " uptime=" in stopped[0]
