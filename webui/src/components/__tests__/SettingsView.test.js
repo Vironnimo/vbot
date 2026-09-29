@@ -11,7 +11,9 @@ import {
 } from '../../lib/appearancePrefs.svelte.js';
 import {
   agentsPayload,
+  buttonByAriaLabel,
   buttonByText,
+  channelConfig,
   cleanupSettingsViewHarness,
   createSettingsRpcMock,
   flushAsyncUpdates,
@@ -36,6 +38,11 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
+// Provider details open through a SvelteSet, which needs the client build.
+vi.mock('svelte/reactivity', async () => {
+  return import('../../../node_modules/svelte/src/reactivity/index-client.js');
+});
+
 const { default: SettingsView } = await import('../SettingsView.svelte');
 
 function clickButton(label) {
@@ -54,6 +61,27 @@ function search(query) {
 function isSectionHidden(sectionId) {
   return document.querySelector(`[data-settings-section="${sectionId}"]`)
     .hidden;
+}
+
+function searchResultRows() {
+  return Array.from(
+    document.querySelectorAll('.settings-search-result'),
+    (result) => ({
+      title: result.querySelector('.settings-search-result__title').textContent,
+      location: result.querySelector('.settings-search-result__description')
+        .textContent,
+    }),
+  );
+}
+
+function searchLocation(page, section) {
+  return t('settings.search.location', { page, section });
+}
+
+async function openFirstSearchResult() {
+  document.querySelector('.settings-search-result').click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  flushSync();
 }
 
 describe('SettingsView', () => {
@@ -270,7 +298,9 @@ describe('SettingsView', () => {
       flushSync();
       expect(navigate).toHaveBeenLastCalledWith(['general', 'preferences']);
       expect(navigation.place).toEqual(['general', 'preferences']);
-      expect(document.activeElement.id).toBe('settings-section-preferences');
+      // The found setting takes focus; revealing it is no further step.
+      expect(document.activeElement.id).toBe('settings-general-timezone');
+      expect(navigate).toHaveBeenCalledTimes(1);
     });
 
     it.each([
@@ -357,15 +387,20 @@ describe('SettingsView', () => {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       flushSync();
 
+      // One word matches the two-word label; the result names the setting
+      // and where it lives.
       search('timezone');
-      const results = document.querySelectorAll('.settings-search-result');
-      expect(results).toHaveLength(1);
-      results[0].click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      flushSync();
+      expect(searchResultRows()[0]).toEqual({
+        title: t('settings.general.timezone'),
+        location: searchLocation(
+          t('settings.pages.general'),
+          t('settings.preferences.title'),
+        ),
+      });
+      await openFirstSearchResult();
       expect(isSectionHidden('preferences')).toBe(false);
       expect(isSectionHidden('server')).toBe(true);
-      expect(document.activeElement.id).toBe('settings-section-preferences');
+      expect(document.activeElement.id).toBe('settings-general-timezone');
 
       clickButton('Tools');
       expect(document.querySelector('#settings-web-search-default-count')).toBe(
@@ -374,20 +409,109 @@ describe('SettingsView', () => {
       expect(input.value).toBe('9');
     });
 
-    it('matches explanations behind a closed help hint and settings hidden while off', async () => {
-      await mountSettings();
-      const resultTitles = () =>
-        Array.from(
-          document.querySelectorAll('.settings-search-result__title'),
-          (title) => title.textContent,
-        );
+    it('matches explanations behind a closed help hint and opens a setting hidden while off at its switch', async () => {
+      const navigation = createStandaloneNavigation();
+      await mountSettings({}, { navigation });
 
       search('sleep');
-      expect(resultTitles()).toEqual([t('settings.sections.server')]);
+      expect(searchResultRows()).toEqual([
+        {
+          title: t('settings.general.keepAwake'),
+          location: searchLocation(
+            t('settings.pages.system'),
+            t('settings.sections.server'),
+          ),
+        },
+      ]);
 
-      // Debug is off, so its trace limit row is hidden.
-      search('trace limit');
-      expect(resultTitles()).toEqual([t('debug.settings')]);
+      // Debug is off, so its trace limit row is hidden. Enter opens the first
+      // result at the switch that reveals it.
+      const input = search('trace limit');
+      expect(searchResultRows()[0]).toEqual({
+        title: t('debug.traceLimit'),
+        location: searchLocation(
+          t('settings.pages.system'),
+          t('debug.settings'),
+        ),
+      });
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      flushSync();
+      expect(navigation.place).toEqual(['system', 'debug']);
+      expect(input.value).toBe('');
+      const debugSwitch = document.querySelector(
+        `button[role="switch"][aria-label="${t('debug.enabled')}"]`,
+      );
+      expect(document.activeElement).toBe(debugSwitch);
+      expect(
+        debugSwitch.closest('.s-row').classList.contains('settings-search-hit'),
+      ).toBe(true);
+      expect(
+        document.querySelector('#settings-debug-trace-limit').closest('.s-row')
+          .hidden,
+      ).toBe(true);
+    });
+
+    it('ranks label matches above help and content matches', async () => {
+      await mountSettings();
+      search('trace');
+      const titles = searchResultRows().map((row) => row.title);
+      // Document order puts the Debug switch, whose help mentions traces,
+      // before the Trace limit.
+      expect(titles[0]).toBe(t('debug.traceLimit'));
+      expect(titles).toContain(t('debug.enabled'));
+    });
+
+    it('opens an entity row when the match lies in its collapsed details', async () => {
+      await mountSettings();
+      // The endpoint is shown only in the Provider's details.
+      search('openai example');
+      expect(searchResultRows()).toEqual([
+        { title: 'OpenAI', location: t('settings.providers.title') },
+      ]);
+      await openFirstSearchResult();
+      const chevron = buttonByAriaLabel(
+        t('settings.providers.detailsAria', { id: 'openai' }),
+      );
+      expect(chevron.getAttribute('aria-expanded')).toBe('true');
+      expect(
+        document.getElementById(chevron.getAttribute('aria-controls')).hidden,
+      ).toBe(false);
+      expect(document.activeElement).toBe(chevron);
+    });
+
+    it('finds Channel settings that are rendered only while a Channel is edited', async () => {
+      const navigation = createStandaloneNavigation();
+      await mountSettings({ channels: [channelConfig('ops')] }, { navigation });
+      await waitForCondition(() => document.querySelector('.s-channel-list'));
+      const dmScope = {
+        title: t('settings.channels.dm_scope'),
+        location: searchLocation(
+          t('settings.pages.integrations'),
+          t('settings.channels.title'),
+        ),
+      };
+
+      search('DM scope');
+      expect(searchResultRows()).toEqual([dmScope]);
+      await openFirstSearchResult();
+      expect(navigation.place).toEqual(['integrations', 'channels']);
+      const list = document.querySelector('.s-channel-list');
+      expect(list.classList.contains('settings-search-hit')).toBe(true);
+      expect(list.contains(document.activeElement)).toBe(true);
+
+      // An open edit form renders the field, which takes the declaration's
+      // place.
+      buttonByAriaLabel(t('settings.channels.edit', { id: 'ops' })).click();
+      await waitForCondition(() =>
+        document.querySelector('#channel-dm-scope-select'),
+      );
+      search('DM scope');
+      expect(searchResultRows()).toEqual([dmScope]);
+      await openFirstSearchResult();
+      expect(document.activeElement.id).toBe('channel-dm-scope-select');
     });
 
     it('routes shared Agent defaults search to Agents without duplicating its editor', async () => {

@@ -74,7 +74,7 @@ export default Object.freeze({
   'settings.agentShortcut.hint':
     'The chat Model, Thinking, and Compaction are configured in',
   'settings.specializedModels.resetOptions': 'Reset options',
-  'settings.search.resultCount': 'Matching topics: {count}',
+  'settings.search.resultCount': 'Matching settings: {count}',
   'settings.agentShortcut.search':
     'Agents → Shared defaults · Model, Thinking, fallbacks and Compaction',
   'settings.title': 'Settings',
@@ -87,6 +87,7 @@ export default Object.freeze({
   'settings.search.placeholder': 'Search settings…',
   'settings.search.label': 'Search settings',
   'settings.search.noMatches': 'No settings match your search.',
+  'settings.search.location': '{page} › {section}',
   'settings.desktop.connection.title': 'Connection',
   'settings.desktop.connection.count': '{count} saved',
   'settings.desktop.connection.help':
