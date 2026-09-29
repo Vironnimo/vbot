@@ -400,49 +400,97 @@ describe('change statistics', () => {
 
   it.each([
     [
-      'Windows paths below their shared directory',
+      'Windows paths grouped by folder below their shared directory',
       [
         lines('C:\\game\\src\\actors\\player.gd', 4, 1),
         lines('C:\\game\\src\\world\\map.gd', 5, 2),
         lines('C:\\game\\tools\\cast.gd', null, null),
+        lines('C:\\game\\src\\actors\\enemy.gd', 1, 0),
       ],
       ['C:\\', 'game'],
       [
-        ['player.gd', 'src\\actors', 4, 1],
-        ['map.gd', 'src\\world', 5, 2],
-        ['cast.gd', 'tools', null, null],
+        [
+          'src\\actors',
+          5,
+          1,
+          [
+            ['enemy.gd', 1, 0],
+            ['player.gd', 4, 1],
+          ],
+        ],
+        ['src\\world', 5, 2, [['map.gd', 5, 2]]],
+        ['tools', null, null, [['cast.gd', null, null]]],
       ],
     ],
     [
       'a single file below its own directory',
       [lines('/home/me/app.js', 2, 0)],
       ['/', 'home/', 'me'],
-      [['app.js', '', 2, 0]],
+      [['', 2, 0, [['app.js', 2, 0]]]],
     ],
     [
       'relative paths without a shared directory',
       [lines('README.md', 1, 0), lines('src/app.js', 1, 0)],
       [],
       [
-        ['README.md', '', 1, 0],
-        ['app.js', 'src', 1, 0],
+        ['', 1, 0, [['README.md', 1, 0]]],
+        ['src', 1, 0, [['app.js', 1, 0]]],
       ],
     ],
-  ])('lists %s in the changed-files card', (_label, fileStats, root, rows) => {
+  ])(
+    'lists %s in the changed-files card',
+    (_label, fileStats, root, groups) => {
+      const card = changedFilesCard({
+        files: fileStats.length,
+        added: 9,
+        removed: 3,
+        fileStats,
+      });
+
+      expect(card.rootSegments).toEqual(root);
+      expect(
+        card.groups.map((group) => [
+          group.directory,
+          group.added,
+          group.removed,
+          group.rows.map((row) => [row.name, row.added, row.removed]),
+        ]),
+      ).toEqual(groups);
+      expect(
+        card.groups
+          .flatMap((group) => group.rows.map((row) => row.path))
+          .sort(),
+      ).toEqual(fileStats.map((entry) => entry.path).sort());
+    },
+  );
+
+  it("scales each file's bar to the largest change and shows only count columns some file has", () => {
     const card = changedFilesCard({
-      files: fileStats.length,
-      added: 9,
-      removed: 3,
-      fileStats,
+      files: 3,
+      added: 8,
+      removed: 2,
+      fileStats: [
+        lines('a.txt', 6, 2),
+        lines('b.txt', 2, 0),
+        lines('c.txt', null, null),
+      ],
     });
 
-    expect(card.rootSegments).toEqual(root);
+    // The bar length is the square root of the share of the largest change.
+    expect(card.groups[0].rows.map((row) => row.bar)).toEqual([
+      { added: 0.75, removed: 0.25 },
+      { added: 0.5, removed: 0 },
+      null,
+    ]);
+    expect(card.countKinds).toEqual(['added', 'removed']);
     expect(
-      card.rows.map((row) => [row.name, row.directory, row.added, row.removed]),
-    ).toEqual(rows);
-    expect(card.rows.map((row) => row.path)).toEqual(
-      fileStats.map((entry) => entry.path),
-    );
+      changedFilesCard({
+        files: 1,
+        added: 2,
+        removed: 0,
+        fileStats: [lines('b.txt', 2, 0)],
+      }).countKinds,
+    ).toEqual(['added']);
   });
 
   it('heads the changed-files card with the totals and counts unnamed files', () => {

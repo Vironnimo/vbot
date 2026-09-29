@@ -1,13 +1,14 @@
 <script>
   // Inline change summary ("3 files changed, +12 -4") whose hover card lists
-  // every changed file with its own line counts and a Copy action for its
-  // full path. Shared by the Run footer and the Session information panel.
+  // every changed file grouped by folder, with its own line counts, a bar of
+  // its share of the largest change and a Copy action for its full path.
+  // Shared by the Run footer and the Session information panel.
   import {
     changeStatsParts,
     changedFilesCard,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
-  import { floatingHoverCard } from '$lib/tooltip.js';
+  import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
 
   import CopyButton from '../ui/CopyButton.svelte';
 
@@ -32,7 +33,34 @@
     count === 1
       ? t('chat.changedFiles.unlistedOne')
       : t('chat.changedFiles.unlistedMany', { count });
+
+  const folderFilesLabel = (count) =>
+    count === 1
+      ? t('chat.changedFiles.folderFilesOne')
+      : t('chat.changedFiles.folderFilesMany', { count });
+
+  const percent = (fraction) => `${Math.round(fraction * 1000) / 10}%`;
+
+  // Name, one column per shown count kind, the bar and the Copy action.
+  const listColumns = (countKinds) =>
+    ['minmax(0, 1fr)', ...countKinds.map(() => 'auto'), '44px', 'auto'].join(
+      ' ',
+    );
 </script>
+
+{#snippet counts(line, quiet)}
+  {#each card.countKinds as kind (kind)}
+    {#if line[kind] === null}
+      <span class="changed-files-card__count"></span>
+    {:else}
+      <span
+        class="changed-files-card__count changed-files-card__count--{kind}"
+        class:changed-files-card__count--zero={quiet || line[kind] === 0}
+        >{kind === 'added' ? '+' : '-'}{line[kind]}</span
+      >
+    {/if}
+  {/each}
+{/snippet}
 
 {#if parts.length > 0}
   <!-- The summary is focusable so keyboard users reach the file card. -->
@@ -82,41 +110,80 @@
               </div>
             {/if}
           </div>
-          <ul class="changed-files-card__list">
-            {#each card.rows as row (row.path)}
-              <li class="changed-files-card__row">
-                <span class="changed-files-card__file">
-                  <span class="changed-files-card__name">{row.name}</span>
-                  {#if row.directory}
+          <ul
+            class="changed-files-card__list"
+            style:grid-template-columns={listColumns(card.countKinds)}
+          >
+            {#each card.groups as group (group.directory)}
+              {#if group.directory}
+                <li class="changed-files-card__group">
+                  <span class="changed-files-card__folder">
+                    <svg
+                      class="changed-files-card__folder-icon"
+                      viewBox="0 0 16 16"
+                      width="13"
+                      height="13"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75z"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.3"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
                     <!-- Long folders lose their start, keeping the nearest
                          folder names visible. -->
                     <span class="changed-files-card__directory"
-                      ><bdi>{row.directory}</bdi></span
+                      ><bdi>{group.directory}</bdi></span
                     >
-                  {/if}
-                </span>
-                {#if row.added === null || row.removed === null}
-                  <span class="changed-files-card__count"></span>
-                  <span class="changed-files-card__count"></span>
-                {:else}
+                    <span class="changed-files-card__folder-files"
+                      >{folderFilesLabel(group.rows.length)}</span
+                    >
+                  </span>
+                  {@render counts(group, true)}
+                  <span></span>
+                  <span></span>
+                </li>
+              {/if}
+              {#each group.rows as row (row.path)}
+                <li
+                  class="changed-files-card__row"
+                  class:changed-files-card__row--nested={group.directory}
+                >
                   <span
-                    class="changed-files-card__count changed-files-card__count--added"
-                    class:changed-files-card__count--zero={row.added === 0}
-                    >+{row.added}</span
+                    class="changed-files-card__name"
+                    use:tooltip={{
+                      text: row.path,
+                      mono: true,
+                      placement: 'right',
+                      whenTruncated: true,
+                    }}>{row.name}</span
                   >
-                  <span
-                    class="changed-files-card__count changed-files-card__count--removed"
-                    class:changed-files-card__count--zero={row.removed === 0}
-                    >-{row.removed}</span
-                  >
-                {/if}
-                <CopyButton
-                  text={row.path}
-                  class="changed-files-card__copy"
-                  label={t('chat.changedFiles.copyPath', { name: row.name })}
-                  copiedLabel={t('chat.changedFiles.pathCopied')}
-                />
-              </li>
+                  {@render counts(row, false)}
+                  <span class="changed-files-card__bar" aria-hidden="true">
+                    {#if row.bar?.added}
+                      <span
+                        class="changed-files-card__bar-added"
+                        style:width={percent(row.bar.added)}
+                      ></span>
+                    {/if}
+                    {#if row.bar?.removed}
+                      <span
+                        class="changed-files-card__bar-removed"
+                        style:width={percent(row.bar.removed)}
+                      ></span>
+                    {/if}
+                  </span>
+                  <CopyButton
+                    text={row.path}
+                    class="changed-files-card__copy"
+                    label={t('chat.changedFiles.copyPath', { name: row.name })}
+                    copiedLabel={t('chat.changedFiles.pathCopied')}
+                  />
+                </li>
+              {/each}
             {/each}
           </ul>
           {#if card.unlisted > 0}
@@ -169,15 +236,17 @@
     color: inherit;
   }
 
-  /* The card is portaled to <body>; its scoped classes still apply. The
-     header and the unlisted note stay in place while a long list scrolls. */
+  /* The card is portaled to <body>; its scoped classes still apply. It grows
+     with long file names and many files up to a wide, tall cap; the header
+     and the unlisted note stay in place while the list scrolls. */
   .changed-files-card.floating-card {
     display: flex;
     flex-direction: column;
     width: max-content;
-    min-width: min(280px, calc(100vw - 16px));
-    max-width: min(480px, calc(100vw - 16px));
-    padding: 10px 12px 8px;
+    min-width: min(300px, calc(100vw - 16px));
+    max-width: min(680px, calc(100vw - 16px));
+    max-height: min(640px, 75vh);
+    padding: 12px 14px 10px;
     overflow: hidden;
     overflow-wrap: normal;
     white-space: normal;
@@ -186,7 +255,7 @@
 
   .changed-files-card__header {
     flex: 0 0 auto;
-    padding-bottom: 8px;
+    padding-bottom: 9px;
     border-bottom: 1px solid var(--border);
   }
 
@@ -194,7 +263,7 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 16px;
+    gap: 20px;
   }
 
   .changed-files-card__title {
@@ -204,7 +273,9 @@
 
   .changed-files-card__totals {
     display: flex;
-    gap: 6px;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -225,7 +296,7 @@
      the heading instead of widening the card. */
   .changed-files-card__root {
     contain: inline-size;
-    margin-top: 2px;
+    margin-top: 3px;
     color: var(--text-lo);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
@@ -233,10 +304,9 @@
     overflow-wrap: anywhere;
   }
 
-  /* One grid for every row, so the counts line up in columns. */
+  /* One grid for every row, so counts and bars line up in columns. */
   .changed-files-card__list {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
     min-height: 0;
     margin: 6px -6px 0;
     padding: 0;
@@ -248,6 +318,7 @@
     line-height: 1.45;
   }
 
+  .changed-files-card__group,
   .changed-files-card__row {
     display: grid;
     grid-column: 1 / -1;
@@ -255,8 +326,23 @@
     align-items: center;
     column-gap: 10px;
     min-height: 26px;
-    padding: 0 2px 0 6px;
+    padding: 0 2px 0 8px;
     border-radius: var(--r-md);
+  }
+
+  /* A folder heads its files; the space above separates it from the
+     previous folder's files. */
+  .changed-files-card__group {
+    margin-top: 6px;
+    color: var(--text-lo);
+  }
+
+  .changed-files-card__group:first-child {
+    margin-top: 0;
+  }
+
+  .changed-files-card__row--nested {
+    padding-left: 27px;
   }
 
   .changed-files-card__row:hover,
@@ -264,29 +350,40 @@
     background: var(--surface-3);
   }
 
-  .changed-files-card__file {
+  .changed-files-card__folder {
     display: flex;
-    align-items: baseline;
-    gap: 8px;
+    align-items: center;
+    gap: 6px;
     min-width: 0;
     white-space: nowrap;
   }
 
-  .changed-files-card__name {
+  .changed-files-card__folder-icon {
     flex: 0 0 auto;
-    max-width: 100%;
-    overflow: hidden;
-    color: var(--text-hi);
-    text-overflow: ellipsis;
+    color: var(--text-faint);
   }
 
   .changed-files-card__directory {
     flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
-    color: var(--text-lo);
+    color: var(--text-med);
     text-overflow: ellipsis;
     direction: rtl;
+  }
+
+  .changed-files-card__folder-files {
+    flex: 0 0 auto;
+    font-family: var(--font-ui);
+    font-size: var(--fs-label-sm);
+  }
+
+  .changed-files-card__name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-hi);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .changed-files-card__count {
@@ -305,6 +402,29 @@
 
   .changed-files-card__count--zero {
     color: var(--text-lo);
+  }
+
+  /* The share of the largest change in the card: added then removed lines. */
+  .changed-files-card__bar {
+    display: flex;
+    gap: 1px;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--border);
+  }
+
+  .changed-files-card__bar-added,
+  .changed-files-card__bar-removed {
+    min-width: 2px;
+  }
+
+  .changed-files-card__bar-added {
+    background: var(--green);
+  }
+
+  .changed-files-card__bar-removed {
+    background: var(--red);
   }
 
   /* The Copy action appears with its row; touch has no hover, so it stays.

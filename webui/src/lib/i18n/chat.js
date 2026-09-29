@@ -177,6 +177,8 @@ export default Object.freeze({
   'chat.changedFiles.pathCopied': 'Path copied',
   'chat.changedFiles.unlistedOne': '1 more file not listed',
   'chat.changedFiles.unlistedMany': '{count} more files not listed',
+  'chat.changedFiles.folderFilesOne': '1 file',
+  'chat.changedFiles.folderFilesMany': '{count} files',
   'chat.tokenTooltipContextSummary': '{tokens} / {context}',
   'chat.tokenTooltipContextSummaryNoWindow': '{tokens}',
   'chat.tokenTooltipContextInOut': '(in {input}, out {output})',
