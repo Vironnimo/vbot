@@ -46,6 +46,11 @@ class ResponsesStreamState:
     """State needed to normalize one Responses SSE stream."""
 
     lenient_unknown_errors: bool = False
+    # With leniency, an unknown error whose frame carries a client-error
+    # ``status`` other than 408 or 429 still stays fatal: the request itself was
+    # rejected. Routers that can serve the identical request through another
+    # upstream leave this off.
+    rejected_requests_fatal: bool = False
     tool_call_ids_by_output_index: dict[int, str] = field(default_factory=dict)
     item_id_to_call_id: dict[str, str] = field(default_factory=dict)
     tool_call_order: list[str] = field(default_factory=list)
@@ -125,7 +130,9 @@ def normalize_responses_stream_event(
     event_type = _event_type(event_name, event_data)
     if event_type in RESPONSES_ERROR_EVENTS:
         raise _classify_responses_stream_error(
-            event_data, lenient_unknown=state.lenient_unknown_errors
+            event_data,
+            lenient_unknown=state.lenient_unknown_errors,
+            rejected_requests_fatal=state.rejected_requests_fatal,
         )
     if event_type in RESPONSES_INCOMPLETE_EVENTS:
         return _completed_event_deltas(event_data, state, implied_status="incomplete")
@@ -569,15 +576,17 @@ def _responses_error_message(event_data: Mapping[str, Any]) -> str:
 
 
 def _classify_responses_stream_error(
-    event_data: Mapping[str, Any], *, lenient_unknown: bool = False
+    event_data: Mapping[str, Any],
+    *,
+    lenient_unknown: bool = False,
+    rejected_requests_fatal: bool = False,
 ) -> ProviderError:
     """Map exact Responses error facts into vBot's shared recovery taxonomy.
 
     A WebSocket error frame carries the HTTP ``status`` its request would have
-    received. A client-error status other than 408 or 429 means the request
-    itself was rejected, so leniency never retries its unknown code. The raised
-    message embeds the error facts as trailing JSON, so code and status survive
-    into persisted Run failures.
+    received; it classifies like a numeric code. The raised message embeds the
+    error facts as trailing JSON, so code and status survive into persisted Run
+    failures.
     """
 
     payload = _responses_error_payload(event_data)
@@ -597,7 +606,10 @@ def _classify_responses_stream_error(
     numeric_code = code if _is_integer(code) else status
     availability = error_mapping.get("availability", payload.get("availability"))
     rejected_request = (
-        status is not None and 400 <= status < 500 and status not in _WAIT_CLIENT_STATUSES
+        rejected_requests_fatal
+        and status is not None
+        and 400 <= status < 500
+        and status not in _WAIT_CLIENT_STATUSES
     )
     return classify_in_band_error_type(
         in_band_error_text(

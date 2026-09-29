@@ -165,6 +165,13 @@ async def test_responses_http_uses_router_error_policy(
             id="unclassified-retryable",
         ),
         pytest.param(
+            "error",
+            {"status": 400, "error": {"code": "unrecognized", "message": "test unknown"}},
+            True,
+            None,
+            id="unclassified-client-status-still-re-routes",
+        ),
+        pytest.param(
             "response.failed",
             {"error": {"code": "context_length_exceeded"}, "availability": {"retryable": True}},
             False,

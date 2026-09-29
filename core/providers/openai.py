@@ -951,7 +951,7 @@ def _clamp_codex_cache_scope(cache_scope_id: str) -> str:
 def _responses_stream_state() -> ResponsesStreamState:
     """Retry in-band errors whose code is unknown, as OpenAI's Codex client does.
 
-    Only the known deterministic codes stay fatal; Chat's recovery budget
-    bounds the retries.
+    Known deterministic codes and requests rejected with a client-error status
+    stay fatal; Chat's recovery budget bounds the retries.
     """
-    return ResponsesStreamState(lenient_unknown_errors=True)
+    return ResponsesStreamState(lenient_unknown_errors=True, rejected_requests_fatal=True)
