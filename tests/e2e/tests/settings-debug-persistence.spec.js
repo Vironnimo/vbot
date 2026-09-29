@@ -10,11 +10,35 @@ async function openDebugSettings(page) {
   return settings.getByRole("region", { name: "Debug" });
 }
 
+function debugSwitch(debug) {
+  return debug.getByRole("switch", { name: "Enable debug mode" });
+}
+
+// The trace limit row stays mounted but hidden while Debug mode is off.
+function traceLimit(debug) {
+  return debug.getByRole("spinbutton", {
+    includeHidden: true,
+    name: "Trace limit",
+  });
+}
+
+// The section autosaves after a short delay. Wait for the save the switch
+// starts: the section can still read "Saved" from an earlier change.
+async function setDebugMode(page, debug, enabled) {
+  const saved = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/rpc") &&
+      response.request().postDataJSON()?.method === "settings.update",
+  );
+  await debugSwitch(debug).click();
+  expect(await (await saved).json()).toMatchObject({ ok: true });
+  await expect(debugSwitch(debug)).toBeChecked({ checked: enabled });
+}
+
 // Number fields autosave on blur; the section's save status then settles.
 async function setTraceLimit(debug, value) {
-  const traceLimit = debug.getByRole("spinbutton", { name: "Trace limit" });
-  await traceLimit.fill(value);
-  await traceLimit.press("Tab");
+  await traceLimit(debug).fill(value);
+  await traceLimit(debug).press("Tab");
   await expect(
     debug.getByRole("button", { exact: true, name: "Saved" }),
   ).toBeVisible();
@@ -31,30 +55,25 @@ test("Debug settings are searchable, persisted, and restorable", async ({
   await expect(
     settings.getByRole("heading", { name: "Search results" }),
   ).toBeVisible();
-  await settings.getByRole("button", { name: /^Debug\b/ }).click();
+  // Search finds the individual setting; opening it reveals its section.
+  await settings.getByRole("button", { name: /^Trace limit\b/ }).click();
 
   let debug = settings.getByRole("region", { name: "Debug" });
   await expect(debug).toBeVisible();
-  await debug.getByRole("switch", { name: "Enable debug mode" }).click();
+  await setDebugMode(page, debug, true);
   await setTraceLimit(debug, "73");
 
   await page.reload();
   debug = await openDebugSettings(page);
-  await expect(
-    debug.getByRole("switch", { name: "Enable debug mode" }),
-  ).toBeChecked();
-  await expect(
-    debug.getByRole("spinbutton", { name: "Trace limit" }),
-  ).toHaveValue("73");
+  await expect(debugSwitch(debug)).toBeChecked();
+  await expect(traceLimit(debug)).toHaveValue("73");
 
-  await debug.getByRole("switch", { name: "Enable debug mode" }).click();
+  // The trace limit is editable only while Debug mode is on.
   await setTraceLimit(debug, "50");
+  await setDebugMode(page, debug, false);
+  await expect(traceLimit(debug)).toBeHidden();
   await page.reload();
   debug = await openDebugSettings(page);
-  await expect(
-    debug.getByRole("switch", { name: "Enable debug mode" }),
-  ).not.toBeChecked();
-  await expect(
-    debug.getByRole("spinbutton", { name: "Trace limit" }),
-  ).toHaveValue("50");
+  await expect(debugSwitch(debug)).not.toBeChecked();
+  await expect(traceLimit(debug)).toHaveValue("50");
 });
