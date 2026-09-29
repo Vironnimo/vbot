@@ -195,7 +195,7 @@ def _plan(
                 content = content.replace("\n", operation.newline)
             payload = content.encode("utf-8")
             if b"\x00" in payload:
-                raise _PatchError("binary_file", path=path)
+                raise _PatchError("binary_file", template="nul_text", path=path)
             pending[path] = _Snapshot(payload, source.mode)
             continue
         if not source.exists:
@@ -218,7 +218,7 @@ def _plan(
             bom = _BOM if payload.startswith(_BOM) else b""
             payload = bom + content.encode("utf-8")
             if b"\x00" in payload:
-                raise _PatchError("binary_file", path=path)
+                raise _PatchError("binary_file", template="nul_text", path=path)
         if target != path:
             pending[path] = _ABSENT
             warnings.setdefault(target, []).extend(warnings.pop(path, []))

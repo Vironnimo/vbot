@@ -188,7 +188,29 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Addition-only hunks insert after a hint or append without a hint; exact
   adjacent content at a hint makes repeated nonblank insertions no-ops.
   Unanchored appends always append because an existing suffix cannot distinguish
-  a retry from an intentional repeated line.
+  a retry from an intentional repeated line. When the first nonblank `+` line
+  reads like the last hint line rewritten (a hint line of at least 20
+  characters, 80% of them recurring in order; `_rewrites_hint`), the insertion
+  adds `Note: The + lines were inserted below the @@ line '...', which stays in
+  the file, and the first of them resembles it. If that line was meant to be
+  replaced, remove it with a - line.` Evidence: one Session inserted rewritten
+  table rows below the rows it named after `@@` several times, and the stale
+  rows piled up; 7 failed patches followed (Sessions, 2026-09).
+- When the `@@` lines do not place a hunk (`context_not_found`, or
+  `text_not_found` after them), `_without_hints` retries it without them: if
+  its unchanged and removed lines then match exactly one place through a
+  precise strategy (`precise_only`: no `copy_match`, no ordering by an earlier
+  change), it is applied there with a note naming the line: `The @@ line '...'
+  was not found, but the lines to replace occur once in the file; they were
+  changed there, at line N.`, `The lines to replace are not after the @@ line
+  '...', but ...`, or for a context-only block `The lines of the @@ block above
+  the lines to replace were not found together, but ...`. Otherwise the original
+  error stands; addition-only hunks never fall back. Evidence: in one Swarm run,
+  11 failed hunks matched once exactly without their `@@` lines, which were
+  paraphrased, cut from a longer line, a unified-diff range, or below the
+  target. Each replay changed only the lines the hunk names; the Agent's later
+  edits changed the same lines in 10, and it dropped the eleventh change.
+  `copy_match` would have placed one 250 lines off (Sessions, 2026-09).
 - Match errors show bounded candidate excerpts with `read`-style gutters
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
@@ -245,6 +267,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   a line the file lacked (new lines after the last `+` line written without `+`,
   a misremembered or output-copied context line), and 4 were followed by a
   `read` before the retry, 1 by the same mistake again (Sessions, 2026-09).
+  When that line is an unchanged line beside `+` lines, its report replaces the
+  `part_of` report: a new line written without `+` can also occur inside a
+  longer file line, and calling it a fragment hides the missing `+`.
   `old_string` text is compared by its first difference instead.
 - A hunk that is exactly one `-` line and one `+` line, whose `-` text is not a
   whole line but occurs exactly once inside one line of the matched window
@@ -419,20 +444,34 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   `that line`), and asking for `+` on every added line in later patches.
   Evidence: after the note without that sentence, the next call read the same
   file again in 28 of 94 cases, against 5% after other successes (Sessions,
-  2026-09). Runs at a hunk
-  edge are never re-read: a typo in edge context would otherwise duplicate the
-  line. Evidence: one Model family often left the `+` off statement continuation
-  lines; in 16 of its 34 failed calls with such runs, the first difference was
-  one of those lines (Sessions, 2026-09). When no reading applies and the
+  2026-09). Runs before a block's first `+` line are never re-read: a typo in
+  leading context would otherwise duplicate the line. Runs right after a
+  block's last `+` line (`_trailing_runs`) are re-read only after every reading
+  of the runs between `+` lines missed: first up to the run's last line the file
+  lacks, the rest staying context, then the whole run. Such a run ends before a
+  blank line followed by a line indented at least 2 columns less than the
+  block's last line (`_block_end`): that line opens the next section, which the
+  Agent copied as context. Evidence: one Model family often left the `+` off
+  statement continuation lines and new last lines. Replaying two Swarm runs,
+  re-reading those runs applied 26 and 16 failed hunks, each as the hunk
+  describes; the one wrong reading added a section heading comment after a blank
+  line, which `_block_end` now keeps as context (Sessions, 2026-09). A reading
+  that matches several places fails with that `ambiguous_match` instead of the
+  original error, whose report would show no first difference. Success notes
+  name the lines as `next to + lines`. When no reading applies and the
   reported first difference is such a line or an unchanged line right next to a
   `+` line, the report adds `That patch line has no + prefix, so it must already
   be in the file there; if it is new, start it with +.` (difference key
   `unprefixed`), since identical retries followed the bare difference. Session
-  shape for the edge: a new last line after the `+` lines written without `+`.
+  shape for leading runs: a new line before the `+` lines written without `+`.
 - Context-only blocks before another `@@` become ordered precise locator hints
-  for that next hunk, including multiline context. Missing anchors fail without
-  falling back to a different location, and repeated anchors follow the hint
-  rule above; duplicate matches after
+  for that next hunk, including multiline context. A missing anchor falls back
+  only as the `_without_hints` rule above allows, and repeated anchors follow the
+  hint rule above. A multiline block that is not found fails `context_not_found`
+  with the `context_block_not_found` wording (`the lines of the @@ block above
+  the lines to replace were not found together`), the closest text and its first
+  difference. The former report named the block's first line as not found,
+  although the file had it (1 failure, Sessions, 2026-09). Duplicate matches after
   the anchor resolve to the first (see the `@@ context` rule above). Anchors do
   not leak into subsequent edits or files.
   An entirely context-only patch fails with `no_changes`, says that without a
@@ -459,7 +498,11 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   own; existing-target Updates need no prior read. Bytes and mode are checked
   after planning, before mutation, and after completed writes. Later entries
   detect drift from earlier observations and leave affected paths alone.
-- Updates reject NUL bytes and invalid UTF-8. BOM, surviving context bytes,
+- Updates reject NUL bytes and invalid UTF-8. New text holding a NUL character
+  (an Add, or an Update's result) fails `binary_file` with the `nul_text`
+  wording: only binary files hold it, and source code writes its escape
+  sequence, such as `\x00`. The binary-file wording offered Delete File and Move
+  File for a file an Add was creating (Sessions, 2026-09). BOM, surviving context bytes,
   existing EOF newline state, and file permissions are preserved. Lines are
   delimited like `read` (LF, CRLF, lone CR only; U+2028 and similar separators
   are line content). New lines adopt the detected CRLF/LF/CR style, else LF;

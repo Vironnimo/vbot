@@ -258,6 +258,28 @@ def test_binary_and_non_utf8_update_rejected_but_move_delete_supported(tmp_path,
     assert not (tmp_path / "other.bin").exists()
 
 
+# Session shape: Add File text for a Python source file held a NUL character.
+@pytest.mark.parametrize(
+    ("before", "operation"),
+    [
+        (None, "*** Add File: file.txt\n+a\x00b"),
+        (b"a\n", "*** Update File: file.txt\n@@\n-a\n+a\x00b"),
+    ],
+)
+def test_nul_character_in_new_text_is_refused_with_its_escape_sequence(tmp_path, before, operation):
+    path = tmp_path / "file.txt"
+    if before is not None:
+        path.write_bytes(before)
+    result = apply(tmp_path, operation)
+    assert result["error"]["code"] == "binary_file"
+    assert text(result) == (
+        "file.txt: the new text contains a NUL character (U+0000), which only binary files "
+        "hold. To produce that character in source code, write its escape sequence instead, "
+        "such as \\x00.\nNo file was changed."
+    )
+    assert (path.read_bytes() if path.exists() else None) == before
+
+
 def _symlink_or_skip(link: Path, target: Path) -> None:
     try:
         os.symlink(target, link)

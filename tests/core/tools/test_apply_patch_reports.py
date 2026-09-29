@@ -178,10 +178,9 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(tmp_p
             "The patch line 'gamma delta epsilon zeta eta theta iota kappa lambda' is not in the "
             "file. A - line names a line to remove, so it must match a line of the file.",
         ),
-        # Session shape: new lines after the last + line were written without +.
+        # Session shape: new lines before the first + line were written without +.
         (
-            "@@\n beta\n+for name in (\n        'gamma delta epsilon zeta eta theta',\n"
-            "        'iota kappa lambda mu nu xi omicron',\n    ):\n        use(name)",
+            "@@\n        'gamma delta epsilon zeta eta theta',\n+    ):\n beta",
             "The patch line \"'gamma delta epsilon zeta eta theta',\" is not in the file. "
             "That patch line has no + prefix, so it must already be in the file; if it is new, "
             "start it with +.",
@@ -290,21 +289,39 @@ def test_ambiguous_hint_reports_actual_locations_including_offset(tmp_path):
     assert path.read_bytes() == b"intro\nsection\nrepeated\nleft\nrepeated\nleft\n"
 
 
+def test_context_block_that_is_not_found_shows_its_first_difference(tmp_path):
+    path = tmp_path / "file.txt"
+    before = b"first\nmarker\nvalue=1\nsecond\nmarker\nvalue=1\n"
+    path.write_bytes(before)
+    result = apply(tmp_path, update("@@\n second\n markr\n@@\n-value=1\n+value=2"))
+    assert result["error"]["code"] == "context_not_found"
+    assert text(result) == (
+        "file.txt: the lines of the @@ block above the lines to replace were not found "
+        "together. That block has no - or + line, so it only locates the lines to replace. "
+        "Copy its lines exactly from the file, or leave that block out.\n"
+        "The closest text in the file, lines 4-5:\n4| second\n5| marker\n"
+        "First difference, line 5: the file has 'marker' where the patch has 'markr'.\n"
+        "No file was changed."
+    )
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize(
-    ("hint", "code", "third"),
+    ("hint", "removed", "code", "third"),
     [
-        ("value", "context_not_found", "value=1"),
+        # Without the @@ line, the lines to replace place nothing either.
+        ("value", "value=5", "context_not_found", "value=1"),
         # The lines to replace follow both occurrences of "marker".
-        ("marker", "ambiguous_context", "value=2"),
+        ("marker", "value=2", "ambiguous_context", "value=2"),
     ],
 )
 def test_context_failure_returns_candidates_without_substituting_target(
-    tmp_path, hint, code, third
+    tmp_path, hint, removed, code, third
 ):
     path = tmp_path / "file.txt"
     before = f"first\nmarker\n{third}\nsecond\nmarker\nvalue=2\n".encode()
     path.write_bytes(before)
-    result = apply(tmp_path, update(f"@@ {hint}\n-value=2\n+value=3"))
+    result = apply(tmp_path, update(f"@@ {hint}\n-{removed}\n+value=3"))
     assert result["error"]["code"] == code
     # Every place the @@ line could mean is shown with line numbers; none is picked.
     assert f"3| {third}" in text(result) and "6| value=2" in text(result)
@@ -365,10 +382,11 @@ FIRST_DIFFERENCE_CASES = {
         "if it is new, start it with +.\n",
     ),
     # Session shape: the last line, right after the + lines, was written without +.
-    "trailing": (
+    # A line written without + before a block's first + line is read as unchanged.
+    "leading": (
         "def f():\n    return 1\n\n\ndef g():\n    pass\n",
-        "@@\n def f():\n     return 1\n+\n+# first note line\n# second note line",
-        "First difference, line 3: the file has '' where the patch has '# second note line'.\n"
+        "@@\n def f():\n     return 1\n \n# first note line\n+# second note line\n \n def g():",
+        "First difference, line 4: the file has '' where the patch has '# first note line'.\n"
         "That patch line has no + prefix, so it must already be in the file there; "
         "if it is new, start it with +.\n",
     ),
