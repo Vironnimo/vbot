@@ -131,10 +131,12 @@ async def test_activity_lookups_cover_active_and_queued_work_of_one_anchor() -> 
     manager = ChatRunManager()
     address = SessionAddress(project_id="acme", agent_id="coder", session_id="session-one")
     active_execute, active_release = held("active")
+    queued_release = asyncio.Event()
     drained: list[Run] = []
 
     async def queued_execute(run: Run) -> str:
         drained.append(run)
+        await queued_release.wait()
         return "queued"
 
     def agent_activity() -> list[bool]:
@@ -173,6 +175,7 @@ async def test_activity_lookups_cover_active_and_queued_work_of_one_anchor() -> 
     assert await active_run.wait() == "active"
     queued_run = await asyncio.wait_for(item.future, timeout=1)
     assert agent_activity()[0] is True
+    queued_release.set()
     assert await queued_run.wait() == "queued"
 
     assert drained == [queued_run]
