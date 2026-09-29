@@ -171,6 +171,7 @@ class SessionCacheUsage:
     cache_write_tokens: int
     hit_rate: float
     last_activity: str | None
+    session_title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -183,6 +184,7 @@ class CacheBreakIncident:
     model: str
     previous_input_tokens: int
     cache_read_tokens: int
+    session_title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -287,6 +289,7 @@ class SessionRunCount:
     agent_id: str
     session_id: str
     runs: int
+    session_title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -435,6 +438,7 @@ class ToolSessionCount:
     agent_id: str
     session_id: str
     calls: int
+    session_title: str | None = None
 
 
 @dataclass(frozen=True)

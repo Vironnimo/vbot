@@ -23,6 +23,7 @@ Dataclass tree `{generated_at, window, overview, usage, costs, runs, compactions
 - **tools** - per name: calls, Accepted/Rejected rates (`ok:true/false` - rejection is not malfunction), durations, top error codes, busiest sessions. Counts come from persisted Tool Results; invocations without a saved Result, including pending or interrupted calls, are absent. No raw arguments anywhere - name, timing, envelope code only.
 - **extensions** - per owner (sorted by name): `actor_key`, activity totals, and groups (most recently active first, capped at 100 with `total_groups`/`groups_truncated`) with participant rows. See Extension activity.
 - **skills** - one row per current-inventory Skill joined at build time: origins (multiple on cross-scope collisions - usage keys on bare name deliberately), offered (the Session's recorded seen-Skill set, read as the `seen_skills` summary value) vs activated (both carrier parsers) vs their intersection, usage rate (`null` only without offer evidence), first/last timestamps, per-agent activations, evidence-backed delete/improve candidates separated from missing-data Skills. Deleted Skills drop out entirely.
+- Every per-Session row (cost, Run, Tool, cache hit rate and cache-break rows) carries `session_title` (the current listing title, `null` when untitled) next to `agent_id`/`session_id`, so accessors lead with a name and keep the id secondary.
 
 ## Interfaces
 
