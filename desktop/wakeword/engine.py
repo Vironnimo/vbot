@@ -38,7 +38,7 @@ MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024
 # Detector kinds the engine can host over the shared feature stream.
 DETECTOR_KIND_TFLITE_HEAD = "tflite_head"
 
-# pyopen-wakeword emits raw, unsmoothed per-window scores, and the bundled heads
+# openWakeWord heads emit raw, unsmoothed per-window scores, and the bundled heads
 # differ in shape: okay_nabu sustains ~10 windows above threshold while hey_nabu
 # peaks for a single one, so a fixed multi-window rule would drop genuine
 # activations. A score clearly above the threshold confirms immediately; a
@@ -468,7 +468,7 @@ class MultiWakewordEngine:
         features: Any = None
         models: list[tuple[WakewordModelDescriptor, Any]] = []
         try:
-            features = _create_pyopenwakeword_features()
+            features = _create_feature_stream()
             for descriptor in self._descriptors:
                 models.append((descriptor, _create_detector(descriptor)))
         except Exception:
@@ -509,20 +509,13 @@ class MultiWakewordEngine:
         """
         if self._features is None or not self._models:
             return None
-        feature_batches = list(self._features.process_streaming(audio_chunk))
+        embeddings = self._features.process(audio_chunk)
         best_match: WakewordMatch | None = None
         best_ratio = 0.0
         scores: dict[str, float] = {}
         groups_below_threshold = dict.fromkeys(self._armed, True)
         for descriptor, model in self._models:
-            raw_score = max(
-                (
-                    _clamp_score(score)
-                    for features in feature_batches
-                    for score in model.process_streaming(features)
-                ),
-                default=0.0,
-            )
+            raw_score = max(map(_clamp_score, model.scores(embeddings)), default=0.0)
             threshold = self._thresholds[descriptor.id]
             group = self._arm_groups[descriptor.id]
             if raw_score >= threshold:
@@ -588,26 +581,26 @@ def _arm_groups(descriptors: tuple[WakewordModelDescriptor, ...]) -> dict[str, s
 def _create_detector(descriptor: WakewordModelDescriptor) -> Any:
     """Load the detector implementation that serves one descriptor's kind."""
     if descriptor.kind == DETECTOR_KIND_TFLITE_HEAD:
-        return _create_pyopenwakeword_model(descriptor)
+        return _create_phrase_head(descriptor)
     raise WakewordModelError(
         f"Wakeword detector kind is not supported: {descriptor.kind}",
         error_code="wakeword_model_unavailable",
     )
 
 
-def _create_pyopenwakeword_features() -> Any:
-    from pyopen_wakeword import OpenWakeWordFeatures  # type: ignore[import-untyped]
+def _create_feature_stream() -> Any:
+    from desktop.wakeword._openwakeword import FeatureStream
 
-    return OpenWakeWordFeatures.from_builtin()
+    return FeatureStream()
 
 
-def _create_pyopenwakeword_model(descriptor: WakewordModelDescriptor) -> Any:
-    from pyopen_wakeword import Model, OpenWakeWord  # type: ignore[import-untyped]
+def _create_phrase_head(descriptor: WakewordModelDescriptor) -> Any:
+    from desktop.wakeword._openwakeword import PhraseHead, builtin_model_path
 
     try:
         if descriptor.builtin:
-            return OpenWakeWord.from_builtin(Model(descriptor.target))
-        return OpenWakeWord.from_model(descriptor.target)
+            return PhraseHead(builtin_model_path(descriptor.target))
+        return PhraseHead(Path(descriptor.target))
     except (OSError, RuntimeError, ValueError) as exc:
         raise WakewordModelError(
             f"Wakeword model is not loadable: {descriptor.label}",
@@ -625,7 +618,7 @@ def _validate_custom_model(model_path: Path) -> None:
         target=str(model_path),
     )
     try:
-        model = _create_pyopenwakeword_model(descriptor)
+        model = _create_phrase_head(descriptor)
     except Exception as exc:
         raise WakewordModelError(
             "The selected file is not a compatible TFLite wakeword model"

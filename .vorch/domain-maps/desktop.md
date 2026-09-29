@@ -84,7 +84,7 @@ Ownership (all under `desktop/wakeword/`):
 - `detection.py` - `DetectionLoop` over one capture subscription; `_speech_detection.py` - Silero/WebRTC speech decisions and the `SpeechGate`.
 - `commands.py` - `CommandRecorder` (endpointing, WAV) and `CommandPipeline` (transcribe, resolve Session, send).
 - `server_client.py` - `VoiceServerClient`, every HTTP call Voice makes.
-- `engine.py` - model catalog, imports, and `MultiWakewordEngine`; `calibration.py` - `PhraseCalibration`; `_microphones.py` - device identity, capture formats, `AUDIO_BACKEND_LOCK`.
+- `engine.py` - model catalog, imports, and `MultiWakewordEngine`; `_openwakeword.py` - openWakeWord feature stream and phrase heads on the TensorFlow Lite library; `calibration.py` - `PhraseCalibration`; `_microphones.py` - device identity, capture formats, `AUDIO_BACKEND_LOCK`.
 - Outside the package: `desktop/bridge.py` (facade), `desktop/page_events.py` (push), `desktop/main.py` (wiring, stack probe).
 
 Threads and lifecycle:
@@ -112,7 +112,7 @@ Threads and lifecycle:
 All ship in the `[desktop]` optional group (`soxr` also in `[dev]` for tests); the audio and ML packages import lazily, so the backend test gate never needs the GUI/audio stack. The Windows runtime locks (`scripts/windows/requirements-*desktop*.lock`) pin them for packaged installs.
 
 - **pywebview** - native window wrapper hosting the WebUI and Connection screen; no application menu attached.
-- **pyopen-wakeword** (`pyopen_wakeword`) - platform-specific TFLite runtime, shared streaming feature extractor, packaged built-in models; vBot additionally bundles MIT-licensed `hey_nabu_v2.tflite` (pinned source + SHA-256 in `THIRD_PARTY_NOTICES.md`).
+- **pyopen-wakeword** (`pyopen_wakeword`) - platform-specific TensorFlow Lite C library and the packaged openWakeWord models (melspectrogram, embedding, built-in phrase heads). vBot runs the streaming itself (`desktop/wakeword/_openwakeword.py`, `desktop/voice.md` -> Detection) and never uses the package's detector classes. vBot additionally bundles MIT-licensed `hey_nabu_v2.tflite` (pinned source + SHA-256 in `THIRD_PARTY_NOTICES.md`).
 - **sounddevice** - PortAudio access for microphone enumeration and capture, preferring the device's default rate (minimum 16 kHz).
 - **soxr** - stateful anti-aliasing resampling to the 16 kHz detection projection (linear interpolation aliased device noise straight into the detector spectrum). LGPL-2.1+; see `THIRD_PARTY_NOTICES.md`.
 - **webrtcvad-wheels** - WebRTC VAD, the fail-open fallback for speech decisions when the neural detector cannot load.
