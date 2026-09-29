@@ -14,21 +14,13 @@ import pytest
 
 import core.tools._bash_environment as bash_environment
 import core.tools.bash as bash_module
-from core.tools._powershell import (
-    EXIT_STATUS_STATEMENT,
-    POWERSHELL_ERROR_NOTE,
-    SETUP_STATEMENT,
-    powershell_command,
-)
+from core.tools._powershell import POWERSHELL_ERROR_NOTE, SETUP_STATEMENT, powershell_command
 from core.tools.bash import register_bash_tool
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import ToolRegistry
 from tests.core.tools.bash_test_support import AGENT_ID, make_context
 from tests.core.tools.bash_test_support import manager as manager
 from tests.core.tools.bash_test_support import shell_env_cache as shell_env_cache
-
-SETUP = SETUP_STATEMENT
-EXIT = EXIT_STATUS_STATEMENT
 
 real_powershell = pytest.mark.skipif(
     sys.platform != "win32" or shutil.which("pwsh") is None, reason="Real PowerShell 7"
@@ -53,52 +45,12 @@ def test_shell_detection_uses_native_shell(monkeypatch: pytest.MonkeyPatch) -> N
     assert SETUP_STATEMENT.startswith(
         "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
     )
+    # The command travels as a single-quoted literal, parsed after the setup.
+    assert "\n$__vbotCommand = 'it''s ‘‘x’’'\n" in powershell_command("it's ‘x’")
 
     monkeypatch.setattr(bash_module.sys, "platform", "linux")
 
     assert bash_module._shell_argv("echo hello") == ["bash", "-c", "echo hello"]
-
-
-@pytest.mark.parametrize(
-    "command, expected",
-    [
-        ("Write-Output hi", f"{SETUP}\nWrite-Output hi\n{EXIT}"),
-        # Ordinary leading statements, even ones that look like keywords, get setup first.
-        ("using-thing arg", f"{SETUP}\nusing-thing arg\n{EXIT}"),
-        ("endless-loop", f"{SETUP}\nendless-loop\n{EXIT}"),
-        ("param", f"{SETUP}\nparam\n{EXIT}"),
-        ("[string]$value = 'x'", f"{SETUP}\n[string]$value = 'x'\n{EXIT}"),
-        # using statements must stay first, including comments before them.
-        (
-            "using namespace System.Text; [StringBuilder]::new('ok')",
-            f"using namespace System.Text;\n{SETUP}\n [StringBuilder]::new('ok')\n{EXIT}",
-        ),
-        (
-            "# note\n<# block #> USING namespace System.IO\nusing module @{ModuleName='A;B'}\n1",
-            f"# note\n<# block #> USING namespace System.IO\nusing module @{{ModuleName='A;B'}}\n"
-            f"{SETUP}\n1\n{EXIT}",
-        ),
-        ("using namespace System.Text", f"using namespace System.Text\n{SETUP}\n\n{EXIT}"),
-        # A script param block, optionally with attributes, must stay first too.
-        ("param($x = 'a;b') $x", f"param($x = 'a;b')\n{SETUP}\n $x\n{EXIT}"),
-        (
-            '[CmdletBinding()]\nparam([string]$Name = "x)")\n$Name',
-            f'[CmdletBinding()]\nparam([string]$Name = "x)")\n{SETUP}\n\n$Name\n{EXIT}',
-        ),
-        # An unterminated construct keeps setup before it: PowerShell reports the
-        # original syntax error and the setup adds no new one.
-        ("param('unterminated", f"{SETUP}\nparam('unterminated\n{EXIT}"),
-        ("using namespace A\nparam(", f"using namespace A\n{SETUP}\nparam(\n{EXIT}"),
-        # Named blocks must contain every statement, and admit none after them,
-        # so PowerShell keeps its own exit status.
-        ("begin { 'b' } end { 'e' }", f"begin {{{SETUP}\n 'b' }} end {{ 'e' }}"),
-        ("param($x) process { $x }", f"param($x) process {{{SETUP}\n $x }}"),
-    ],
-)
-def test_powershell_command_places_setup_and_exit_status_where_allowed(
-    command: str, expected: str
-) -> None:
-    assert powershell_command(command) == expected
 
 
 # --- Line filters PowerShell lacks -----------------------------------------
@@ -225,22 +177,40 @@ _PRINTED_ERROR_TEXT = "; ".join(
         ("python -c 'raise SystemExit(5)'", 5, False, ()),
         ("cmd /c exit 4", 4, False, ()),
         ("python -c 'raise SystemExit(5)'; Write-Output after", 0, False, ("after",)),
-        ("Get-Item does-not-exist", 1, False, ("does-not-exist",)),
+        # PowerShell's messages are English whatever the display language.
+        ("Get-Item does-not-exist", 1, False, ("Cannot find path", "does-not-exist")),
         ('param($code = 3) python -c "raise SystemExit($code)"', 3, False, ()),
-        # An unknown pipeline command exits instead of waiting for input.
+        # A syntax error names the command's own line, in UTF-8, and runs nothing.
         (
-            "Get-ChildItem . | __vbot_missing_pipeline_command__",
+            "'not-run'\nWrite-Output ('ä' + )",
             1,
             False,
-            ("__vbot_missing_pipeline_command__",),
+            (
+                "ParserError",
+                "2 |  Write-Output ('ä' + )",
+                "You must provide a value expression following the '+' operator.",
+            ),
         ),
-        # Handled or suppressed error records stay visible after a successful end.
-        ("try { throw 'recorded-sentinel' } catch {}; 'finished'", 0, True, ("recorded-sentinel",)),
+        # Quotes reach PowerShell unchanged, including typographic ones.
+        ("$text = @'\nit's ‘typographic’\n'@\n$text", 0, False, ("it's ‘typographic’",)),
+        # An unknown pipeline command exits instead of waiting for input.
         (
-            "Write-Error 'recorded-sentinel' -ErrorAction SilentlyContinue; 'finished'",
+            "Get-ChildItem . | vbot_missing_pipeline_command",
+            1,
+            False,
+            ("vbot_missing_pipeline_command",),
+        ),
+        # Shown or handled error records stay visible after a successful end.
+        ("Get-Item shown-sentinel; 'finished'", 0, True, ("shown-sentinel",)),
+        ("try { throw 'recorded-sentinel' } catch {}; 'finished'", 0, True, ("recorded-sentinel",)),
+        # Errors the command's own text silenced claim none, also under strict mode.
+        (
+            "Set-StrictMode -Version Latest\n"
+            "Remove-Item missing.txt -ErrorAction SilentlyContinue; Get-Item missing 2>$null\n"
+            "rm missing -ea 0; & { Get-Item missing } *>$null; 'finished'",
             0,
-            True,
-            ("recorded-sentinel",),
+            False,
+            ("finished",),
         ),
         # Explicit control flow and failure status keep their meaning.
         ("Write-Error 'recorded-sentinel'; exit 0", 0, False, ()),
@@ -259,13 +229,14 @@ _PRINTED_ERROR_TEXT = "; ".join(
                 "test warning",
             ),
         ),
-        # Named blocks keep their execution semantics.
+        # Named blocks keep their execution semantics, and the last one its exit status.
         (
             "begin { 'begin-sentinel' } end { 'end-sentinel' }",
             0,
             False,
             ("begin-sentinel\nend-sentinel",),
         ),
+        ("begin { 'begin-sentinel' } process { cmd /c exit 3 }", 3, False, ("begin-sentinel",)),
     ],
     ids=[
         "native-exit",
@@ -273,15 +244,19 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "later-statement",
         "cmdlet-error",
         "param-block",
+        "parse-error",
+        "quotes",
         "unknown-pipeline-command",
+        "shown",
         "handled",
-        "suppressed",
+        "silenced",
         "exit-0",
         "cleared",
         "error-exit",
         "exit-7",
         "printed-text",
         "named-blocks",
+        "named-blocks-exit",
     ],
 )
 async def test_exit_status_and_error_records_follow_the_last_statement(
@@ -300,6 +275,8 @@ async def test_exit_status_and_error_records_follow_the_last_statement(
     assert output.count(POWERSHELL_ERROR_NOTE) == (1 if error_record else 0)
     for text in shows:
         assert text in output
+    # The wrapper's own statements never fail visibly.
+    assert "__vbot" not in output
 
 
 @real_powershell
@@ -349,11 +326,7 @@ async def test_full_existing_error_collection_uses_identity_instead_of_count(
         ]
 
     monkeypatch.setattr(bash_module, "_shell_argv", with_profile_errors)
-    command = (
-        "Write-Error 'new-sentinel' -ErrorAction SilentlyContinue; 'finished'"
-        if new_error
-        else "'finished'"
-    )
+    command = "try { throw 'new-sentinel' } catch {}; 'finished'" if new_error else "'finished'"
     result = await _dispatch(manager, tmp_path, command)
     assert result["data"]["exit_code"] == 0
     assert (POWERSHELL_ERROR_NOTE in result["data"]["output"]) is new_error
@@ -368,8 +341,7 @@ async def test_large_error_record_has_bounded_completion_evidence(
     result = await _dispatch(
         manager,
         tmp_path,
-        "Write-Error ('recorded-sentinel:' + ('x' * 10000)) -ErrorAction SilentlyContinue; "
-        "'finished'",
+        "try { throw ('recorded-sentinel:' + ('x' * 10000)) } catch {}; 'finished'",
     )
     assert result["data"]["exit_code"] == 0
     output = result["data"]["output"]
