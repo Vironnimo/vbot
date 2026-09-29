@@ -6,9 +6,11 @@ pauses. Objects frozen at startup sit in the permanent generation and are
 only counted in total.
 
 Listing the objects of one generation is a single interpreter call that holds
-the GIL, roughly as long as a collection's traversal of the same objects. The
-counting that follows runs in slices, so the Event Loop gets the GIL back
-between them. Only type and module names leave this module, never values.
+the GIL, roughly as long as a collection's traversal of the same objects.
+Automatic collection pauses while the generations are listed, so no object is
+counted twice or missed. The counting that follows runs in slices, so the
+Event Loop gets the GIL back between them. Only type and module names leave
+this module, never values.
 """
 
 from __future__ import annotations
@@ -41,11 +43,11 @@ def take_census() -> HeapCensus:
     """Count the tracked objects of every generation; call off the Event Loop."""
     taken_at = datetime.now(UTC)
     started = perf_counter()
+    listed = _list_generations()
+    generations = tuple(map(len, listed))
     by_type: Counter[type] = Counter()
-    generations: list[int] = []
-    for generation in range(_GENERATIONS):
-        objects = gc.get_objects(generation)
-        generations.append(len(objects))
+    while listed:
+        objects = listed.pop(0)
         for start in range(0, len(objects), _COUNT_SLICE):
             by_type.update(map(type, objects[start : start + _COUNT_SLICE]))
         # Drop the references at once so the objects can be freed again.
@@ -56,11 +58,25 @@ def take_census() -> HeapCensus:
     return HeapCensus(
         taken_at=taken_at,
         duration_ms=(perf_counter() - started) * 1000.0,
-        generations=tuple(generations),
+        generations=generations,
         frozen=gc.get_freeze_count(),
         collections=tuple(dict(stats) for stats in gc.get_stats()),
         types=dict(types),
     )
+
+
+def _list_generations() -> list[list[Any]]:
+    # A collection between two listings, started by any thread's allocations,
+    # moves objects to another generation list, which would count them twice
+    # or not at all. Pausing automatic collection for the listings keeps each
+    # object in exactly one list; the counting afterwards needs no pause.
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        return [gc.get_objects(generation) for generation in range(_GENERATIONS)]
+    finally:
+        if enabled:
+            gc.enable()
 
 
 def census_result(census: HeapCensus, previous: HeapCensus | None, *, top: int) -> dict[str, Any]:

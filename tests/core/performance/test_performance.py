@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import logging
 import time
@@ -361,9 +362,22 @@ class CensusProbe:
 
 
 @pytest.mark.asyncio
-async def test_heap_census_counts_types_by_generation_and_reports_growth(tmp_path: Path) -> None:
+async def test_heap_census_counts_types_by_generation_and_reports_growth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     service = _service(tmp_path)
     probe = f"{CensusProbe.__module__}.CensusProbe"
+    list_objects = gc.get_objects
+
+    def list_while_other_threads_allocate(generation: int | None = None) -> list[Any]:
+        objects = list_objects(generation)
+        # Another thread's allocations start a collection whenever automatic
+        # collection is enabled; it moves young objects to an older generation.
+        if gc.isenabled():
+            gc.collect(0)
+        return objects
+
+    monkeypatch.setattr(gc, "get_objects", list_while_other_threads_allocate)
     try:
         kept = [CensusProbe() for _ in range(30_000)]
         first = await service.heap_census(top=100)
@@ -381,7 +395,8 @@ async def test_heap_census_counts_types_by_generation_and_reports_growth(tmp_pat
     assert second["tracked"] == sum(entry["objects"] for entry in second["generations"])
     assert {"objects", "collections", "collected", "uncollectable"} <= set(second["generations"][0])
     grown = {row["name"]: row for row in second["growth"]}
-    assert grown[probe]["count"] >= 60_000 and grown[probe]["change"] >= 30_000
+    # Each tracked object is counted exactly once.
+    assert grown[probe]["count"] == 60_000 and grown[probe]["change"] == 30_000
     # Modules group types by their first two package segments.
     modules = {row["name"]: row for row in second["modules"]}
     assert modules["tests.core"]["change"] >= 30_000

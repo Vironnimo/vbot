@@ -200,10 +200,12 @@ async def test_native_cancellation_kills_in_worker(tmp_path, monkeypatch, when):
 @pytest.mark.parametrize("failure", ["monitor", "second_reader"])
 async def test_native_setup_failure_terminates_and_releases_child(tmp_path, monkeypatch, failure):
     original = subprocess.Popen
+    original_wait = original.wait
     start_thread = threading.Thread.start
     created = []
     finalized = []
     child_ids = []
+    ended = []
     starts = 0
 
     def launch(_command, **kwargs):
@@ -212,6 +214,11 @@ async def test_native_setup_failure_terminates_and_releases_child(tmp_path, monk
         child_ids.append(process.pid)
         weakref.finalize(process, lambda: finalized.append(threading.get_ident()))
         return process
+
+    def wait(process, *args, **kwargs):
+        result = original_wait(process, *args, **kwargs)
+        ended.append(process.pid)
+        return result
 
     def failed_monitor(pid):
         raise RuntimeError("monitor setup failed")
@@ -224,6 +231,7 @@ async def test_native_setup_failure_terminates_and_releases_child(tmp_path, monk
                 raise RuntimeError("reader setup failed")
         start_thread(reader)
 
+    monkeypatch.setattr(original, "wait", wait)
     monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
     if failure == "monitor":
         monkeypatch.setattr("core.tools._search_execution.psutil.Process", failed_monitor)
@@ -239,7 +247,9 @@ async def test_native_setup_failure_terminates_and_releases_child(tmp_path, monk
     assert len(created) == 1
     assert finalized == created
     assert created[0] != threading.get_ident()
-    assert not psutil.pid_exists(child_ids[0])
+    # The worker waited until the killed child ended. Its PID is no evidence:
+    # Windows lists an ended process while another program holds a handle to it.
+    assert ended == child_ids
 
 
 @pytest.mark.asyncio

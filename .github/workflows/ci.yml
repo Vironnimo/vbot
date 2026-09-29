@@ -78,6 +78,15 @@ jobs:
         run: python -m pip install -e ".[dev]"
       - name: Provision the pinned search engine
         run: python -m cli.search_runtime
+      - name: Provision the token estimation encodings
+        # tiktoken downloads an encoding on first use, without a timeout; the
+        # tests then read this job's cache instead of the network.
+        run: python -c "import tiktoken; tiktoken.get_encoding('o200k_base'); tiktoken.get_encoding('cl100k_base')"
+      - name: Warm the native host toolchain
+        # The first clang-cl build on a fresh runner reads cold LLVM and SDK files
+        # for 20-30 s, more than a test may take; later builds take seconds.
+        if: runner.os == 'Windows'
+        run: python -c "import tempfile; from pathlib import Path; from scripts.windows.native_hosts import compile_host; compile_host(Path.cwd(), Path(tempfile.mkdtemp()) / 'vBot.exe', role='host', version='0.0.0')"
       - name: Run backend tests
         # Failed tests run once more, alone. Tests that then pass failed only under
         # the parallel load: they become a warning and the job stays green.

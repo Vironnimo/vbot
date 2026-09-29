@@ -165,13 +165,13 @@ async def test_owner_cancellation_exits_an_active_request(host):
 @pytest.mark.parametrize("outcome", ["close", "slow_close", "failure", "drain"])
 async def test_full_queue_producers_settle_with_their_connection(host, monkeypatch, outcome):
     monkeypatch.setattr(mcp_client, "CONNECTION_QUEUE_LIMIT", 2)
-    monkeypatch.setattr(mcp_client, "CONNECTION_CLOSE_TIMEOUT_SECONDS", 0.01)
     runner = ConnectionRunner(
         validate_connection({"id": "example", "transport": "stdio", "command": "unused"}),
         host,
         InputRequests(),
         lambda *args: None,
     )
+    closing: asyncio.Task[None] | None = None
     entered = asyncio.Event()
     release = asyncio.Event()
     cleanup_entered = asyncio.Event()
@@ -229,15 +229,19 @@ async def test_full_queue_producers_settle_with_their_connection(host, monkeypat
         await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started)), 1)
         assert runner._queue.full()
         assert all(not task.done() for task in calls)
-        if outcome in {"close", "slow_close"}:
+        if outcome == "close":
             await runner.close()
-            if outcome == "slow_close":
-                assert cleanup_entered.is_set()
-                assert not runner._task.done()
+        elif outcome == "slow_close":
+            # Close keeps waiting while SDK teardown is stuck in the Client exit;
+            # the producers it admitted must settle before teardown finishes.
+            closing = asyncio.create_task(runner.close())
+            await asyncio.wait_for(cleanup_entered.wait(), 1)
         else:
             release.set()
         _, pending = await asyncio.wait(calls, timeout=1)
         assert not pending, "Queue producers must not outlive the connection that admitted them"
+        if outcome == "slow_close":
+            assert not runner._task.done()
         results = await asyncio.gather(*calls, return_exceptions=True)
         if outcome == "drain":
             assert results == [{"index": index} for index in range(len(calls))]
@@ -254,4 +258,6 @@ async def test_full_queue_producers_settle_with_their_connection(host, monkeypat
         for task in calls:
             task.cancel()
         await asyncio.gather(*calls, return_exceptions=True)
+        if closing is not None:
+            await closing
         await runner.close()

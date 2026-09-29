@@ -445,6 +445,13 @@ async def test_stop_closes_gracefully_and_forwards_the_final_update(live: Harnes
     reader = live.attach(call)
     assert live.registry.stop(call.id) is True
     assert live.registry.active_call_id is None
+    # Checked at every Event Loop step: the step that ends the call also releases
+    # it, so no owner socket can attach to an ended call and miss its final update.
+    for _ in range(100):
+        if live.registry.stop(call.id) is False:
+            break
+        await asyncio.sleep(0)
+    assert live.registry.attach(call.id) is None
     await settle(lambda: reader.done)
     assert reader.frames == [
         {"type": "closed", "reason": "user_stopped", "usage": {"total_tokens": 3}}
@@ -452,8 +459,6 @@ async def test_stop_closes_gracefully_and_forwards_the_final_update(live: Harnes
     assert reader.owner.close_code == LIVE_SOCKET_CLOSE_ENDED
     assert call.close_calls == 1
     assert call.abort_calls == 0
-    await settle(lambda: live.registry.stop(call.id) is False)
-    assert live.registry.attach(call.id) is None
 
 
 @pytest.mark.asyncio

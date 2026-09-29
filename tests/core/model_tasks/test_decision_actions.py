@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -29,52 +30,52 @@ async def test_real_command_preserves_literal_arguments_and_stdout(tmp_path):
     assert json.loads(result) == ["x; echo nope", "two words", "ä"]
 
 
-def _assert_process_stopped(pid_file: Path) -> None:
-    """The child that recorded its pid in *pid_file* no longer runs."""
+def _assert_no_child_runs(marker: Path) -> None:
+    """No process started with *marker* on its command line runs anymore.
 
-    assert not pid_file.with_suffix(".survived").exists()
-    if not pid_file.exists():
-        return  # Stopped before it reached its first statement.
-    try:
-        child = psutil.Process(int(pid_file.read_text()))
-    except psutil.NoSuchProcess:
-        return
-    _gone, alive = psutil.wait_procs([child], timeout=5)
-    for survivor in alive:
-        survivor.kill()
-    assert not alive
+    The command line names the child even before its first statement, and an
+    ended process has none left to read, so neither a lingering nor a reused
+    PID can mislead the check.
+    """
+    survivors = []
+    for process in psutil.process_iter():
+        with contextlib.suppress(psutil.Error):
+            if str(marker) in process.cmdline():
+                survivors.append(process)
+    for survivor in survivors:
+        with contextlib.suppress(psutil.Error):
+            survivor.kill()
+    assert not survivors
 
 
 @pytest.mark.asyncio
 async def test_timeout_and_cancellation_stop_child_before_return(tmp_path):
-    def command(pid_file: Path) -> dict[str, object]:
+    def command(started: Path) -> dict[str, object]:
+        # The child marks that it runs, then outlasts the test unless it is stopped.
         return {
             "argv": [
                 sys.executable,
                 "-c",
-                "import os,pathlib,sys,time; p = pathlib.Path(sys.argv[1]); "
-                "p.write_text(str(os.getpid())); time.sleep(5); "
-                "p.with_suffix('.survived').touch()",
-                str(pid_file),
+                "import pathlib,sys,time; pathlib.Path(sys.argv[1]).touch(); time.sleep(60)",
+                str(started),
             ],
             "cwd": str(tmp_path),
         }
 
-    timed_out = tmp_path / "timed-out.pid"
+    timed_out = tmp_path / "timed-out.started"
     with pytest.raises(DecisionError) as error:
         await run_command(command(timed_out), 0.1)
     assert error.value.code == "command_timeout"
-    _assert_process_stopped(timed_out)
+    _assert_no_child_runs(timed_out)
 
-    cancelled = tmp_path / "cancelled.pid"
-    task = asyncio.create_task(run_command(command(cancelled), 30))
-    async with asyncio.timeout(10):
-        while not cancelled.exists() or not cancelled.read_text():
-            await asyncio.sleep(0.01)
+    cancelled = tmp_path / "cancelled.started"
+    task = asyncio.create_task(run_command(command(cancelled), 60))
+    while not cancelled.exists() and not task.done():
+        await asyncio.sleep(0.01)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    _assert_process_stopped(cancelled)
+    _assert_no_child_runs(cancelled)
 
 
 @pytest.mark.asyncio
