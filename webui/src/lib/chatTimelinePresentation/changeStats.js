@@ -88,11 +88,8 @@ export const changeStatsParts = (stats) => {
 // all listed files share (`rootSegments`, empty when they share none), and the
 // files grouped by their folder below that shared directory. A group carries
 // its folder ('' for files directly in the shared directory), its line sums
-// and its rows; a row carries the file's name, its own line counts (null when
-// unknown) and a `bar` (null without known changes) whose added and removed
-// parts are fractions of the full bar width. The bar length grows with the
-// square root of the file's changed lines relative to the largest change in
-// the card, so small changes stay visible next to a large one. `countKinds`
+// and its rows; a row carries the file's name and its own line counts (null
+// when unknown). `countKinds`
 // names the count columns worth showing ('added', 'removed'): a kind no file
 // has is left out. `unlisted` counts changed files the statistics do not name.
 // Returns null when no file is named.
@@ -104,9 +101,6 @@ export const changedFilesCard = (stats) => {
   const splitPaths = fileStats.map((entry) => splitPath(entry.path));
   const rootLength = sharedDirectoryLength(splitPaths);
   const rootSegments = splitPaths[0].segments.slice(0, rootLength);
-  const largestChange = Math.max(
-    ...fileStats.map((entry) => (entry.added ?? 0) + (entry.removed ?? 0)),
-  );
   const groups = new Map();
   fileStats.forEach((entry, index) => {
     const { segments, separator } = splitPaths[index];
@@ -123,7 +117,6 @@ export const changedFilesCard = (stats) => {
       name: segments.at(-1),
       added: entry.added,
       removed: entry.removed,
-      bar: changeBar(entry, largestChange),
     });
   });
   return {
@@ -154,18 +147,6 @@ export const changedFilesCard = (stats) => {
 
 function sumOrUnknown(sum, value) {
   return sum === null || value === null ? null : sum + value;
-}
-
-function changeBar(entry, largestChange) {
-  const total = (entry.added ?? 0) + (entry.removed ?? 0);
-  if (entry.added === null || entry.removed === null || total === 0) {
-    return null;
-  }
-  const length = Math.sqrt(total / largestChange);
-  return {
-    added: (length * entry.added) / total,
-    removed: (length * entry.removed) / total,
-  };
 }
 
 function compareText(left, right) {
