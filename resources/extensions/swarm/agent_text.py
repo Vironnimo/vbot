@@ -39,6 +39,8 @@ INBOX_PARAMETERS: dict[str, Any] = {
     "required": [],
 }
 
+STATE_LIMIT = 100
+
 STATE_DESCRIPTION = (
     "See the participants and their Run activity, your pending messages, and how Board "
     "messages reach you."
@@ -54,7 +56,9 @@ STATE_PARAMETERS: dict[str, Any] = {
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "description": "Maximum participants to list, at most 100. Omit for 20.",
+            "description": (
+                f"Maximum participants to list, at most 100. Omit to list up to {STATE_LIMIT}."
+            ),
         },
     },
     "required": [],

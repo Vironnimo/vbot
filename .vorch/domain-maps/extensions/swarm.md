@@ -156,9 +156,15 @@ them: like the Board, the handler derives the key from Session, Run, iteration a
 Tool Call identity, and drops an Agent-sent `request_id`; management keeps its own.
 `expected_revision` is required only for whole-content replacement, so a newer
 peer revision is never silently discarded; when present on other changes it is
-checked strictly. A change the page already holds (same title, content and
-deletion state, an identical live page on create, an `old_text` edit already
-applied) saves no revision and reports `unchanged`, before any stale check.
+checked strictly. A participant's whole-content update without it replaces the
+current revision when that participant saved it, since no peer change can be lost,
+and the Tool notes the replaced revision. The Store decides this inside the write
+(`_store_wiki.py::_mutate`), so the payload stays stable and a replayed Tool Call
+returns its saved outcome; management changes always need `expected_revision`. All 5
+such refusals of one Swarm Run hit the caller's own revision (Sessions, 2026-09).
+A change the page already holds (same title, content and deletion state, an
+identical live page on create, an `old_text` edit already applied) saves no
+revision and reports `unchanged`, before any stale check.
 Targeted edits run `_wiki_edit.py`, aligned with `apply_patch`: precise
 `replace_fuzzy` strategies (typography, newline, whitespace, indentation), then the
 same edit without shared blank boundary lines, then already-applied detection.
@@ -219,7 +225,8 @@ exact references in every action; the Tool names that page `w3` in the call befo
 running it, so results, continuations and errors show the number. Failures name
 the next call: conflicts show the current revision
 (content conflicts add a bounded diff since the base revision), deleted pages the
-restore call, and a content update without `expected_revision` the current one.
+restore call, and a content update without `expected_revision` on a peer's revision
+the current one.
 Failed changes say "Nothing changed." in their first line.
 
 Board posts are immutable and public within one Swarm. A post, including a
@@ -370,12 +377,14 @@ end (`test_swarm_inbox_delivery.py`). The Inbox description says new messages al
 delivery, so checking right after posting is unnecessary: in session evidence ~19%
 of Inbox calls were empty, most of them directly after a post.
 
-`swarm_state` is read-only, with optional cursor and limit (above 100 runs as 100
-with a note). It returns readable fields: `you` (name, state), `pending`
+`swarm_state` is read-only, with optional cursor and limit (default 100, above 100
+runs as 100 with a note), so one page holds a whole roster: all 4 cursor failures of
+one Swarm Run came from 21-23-participant Swarms paging at the former default of 20
+(Sessions, 2026-09). It returns readable fields: `you` (name, state), `pending`
 (count and how to receive it), `delivery` and `wake` (the route policies as
 sentences), `participants` (count by state), `more` with a copyable continuation,
-and a roster listing "- Name: state" that marks the reader "(you)"; cursors bind
-page size (`test_swarm_state_tool.py`). Participant ids stay out of all Agent text,
+and a roster listing "- Name: state" that marks the reader "(you)"; a cursor keeps
+its place under another page size (`test_swarm_state_tool.py`). Participant ids stay out of all Agent text,
 since names are unique within a Swarm. Participants cannot rename themselves. The Store shuffles a pool of 300 modern
 first names (`_participant_names.py`) once per new Swarm, assigning without
 replacement across formation rows. Larger Swarms use numbered suffixes after the
@@ -752,6 +761,7 @@ reasons yet. Evidence comes from eight analyzed Runs (Sessions, 2026-09); counts
 | `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |
 | `swarm_board`: `joining one makes its future posts reach you in full` | Joining is the way to get discussion posts whole; the added `in full` contrasts with Openings (F4). |
 | `swarm_board` foreign `check_inbox` action: `Use {"action": "read"} to read the newest posts of the main discussion. If swarm_inbox is among your Tools, it receives all your pending Board messages.` | Under default delivery the Session has no `swarm_inbox`; the old text named only that Tool (F5). |
+| `swarm_state` `limit`: `Maximum participants to list, at most 100. Omit to list up to 100.` | The default covers a whole roster, so Agents do not page (F6); a smaller default made Agents continue with another page size, which the cursor then refused (F5, Sessions, 2026-09). |
 | `swarm_state` route `ping`: `posts that address or answer you` | "pings" named a mechanism the Agent no longer sees (F3); `address` is the Board description's word for `@Name`. |
 | `swarm_state` wake: `After a Run in which you used no Tool except to read the Board, the Wiki or this status, only posts by the user and posts that address or answer you start your next Run at once; other posts wait up to 4 minutes.` | Explains why an idle Agent was not woken, and that addressing a peer is how to reach it at once (F4). Names the reads that do not count, matching `WakePacing.tools_used`. |
 | Post result: `It reaches {names} in full because it addresses or answers them.` and `{count} participants receive only its opening lines and the call to read the rest.` | Confirms who was addressed, so an unintended or missed mention is visible right after posting (F4). |

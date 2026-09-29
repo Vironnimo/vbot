@@ -71,6 +71,7 @@ from .agent_text import (
     INBOX_MORE,
     INBOX_PARAMETERS,
     REMINDER_TEXTS,
+    STATE_LIMIT,
     STATE_MORE,
     STATE_PARAMETERS,
 )
@@ -341,7 +342,8 @@ class SwarmExtension:
                 arguments.pop("action")
             _validate_state(arguments)
             notes: list[str] = []
-            limit = _clamped_limit(arguments, notes)
+            # One page holds the whole roster of a Swarm up to the maximum page size.
+            limit = _clamped_limit(arguments, notes, default=STATE_LIMIT)
             status = await self._store().participant_status(
                 binding.group_id,
                 binding.participant_id,

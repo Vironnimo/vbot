@@ -126,7 +126,8 @@ def _participant_status(
                 "SELECT COALESCE(MAX(ordinal),0) FROM participants WHERE swarm_id=?", (swarm_id,)
             ).fetchone()[0]
         )
-        scope = f"{swarm_id}:{participant_id}:{limit}"
+        # The roster is fixed, so a continuation keeps its place under another page size.
+        scope = f"{swarm_id}:{participant_id}"
         offset = db._cursor(cursor, "status", scope, high)[0] if cursor else 0
         rows = connection.execute(
             "SELECT id,display_name,state FROM participants WHERE swarm_id=? ORDER BY ordinal LIMIT ? OFFSET ?",

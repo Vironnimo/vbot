@@ -119,8 +119,16 @@ async def test_status_pages_only_report_automatic_activity(board):
     assert set(follow) == {"limit", "cursor"} and follow["limit"] == 1
     second = (await board.tools.dispatch(context, follow, allowed_tools=["swarm_state"]))["data"]
     assert second["content"] == f"Participants:\n- {_name(board, 1)}: idle"
-    changed = await board.service.state(context, {**follow, "limit": 2})
-    assert changed["error"]["code"] == "invalid_cursor"
+    # Another page size continues from the same place.
+    changed = (
+        await board.tools.dispatch(context, {**follow, "limit": 2}, allowed_tools=["swarm_state"])
+    )["data"]
+    assert changed["content"] == (
+        f"Participants:\n- {_name(board, 1)}: idle\n- {_name(board, 2)}: idle"
+    )
+    assert "more" not in changed
+    whole = (await board.tools.dispatch(context, {}, allowed_tools=["swarm_state"]))["data"]
+    assert whole["content"].count("\n- ") == 3 and "more" not in whole
     clamped = (await board.tools.dispatch(context, {"limit": 500}, allowed_tools=["swarm_state"]))[
         "data"
     ]

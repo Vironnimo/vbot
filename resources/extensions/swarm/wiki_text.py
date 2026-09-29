@@ -144,6 +144,9 @@ WIKI_HISTORY_DELETED = ", deleted the page"
 WIKI_LISTED_INSTEAD = "read needs page_id, so this lists the pages instead."
 WIKI_PAGE_CLOSE = 'page_id {value} matched no page; used {page_id} ("{title}").'
 WIKI_PAGE_TITLE = "page_id {value} is a page title; used {page_id}."
+WIKI_OWN_REVISION = (
+    "expected_revision was omitted; your content replaced revision {revision}, which you saved."
+)
 WIKI_CREATE_IGNORED_ID = "create makes a new page, so page_id {value} was ignored."
 WIKI_TITLE_FROM_HEADING = 'create needs a title; used the first heading, "{title}".'
 WIKI_PAGE_FROM_TEXT = (
