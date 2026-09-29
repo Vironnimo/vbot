@@ -25,6 +25,7 @@ const EMPTY_CONTENT = Object.freeze({
   placement: 'top',
   selectable: false,
   whenTruncated: false,
+  alignTo: '',
 });
 
 function normalizeText(value) {
@@ -58,6 +59,7 @@ export function normalizeTooltipContent(value) {
     placement: normalizePlacement(value.placement),
     selectable: value.selectable === true,
     whenTruncated: value.whenTruncated === true,
+    alignTo: typeof value.alignTo === 'string' ? value.alignTo.trim() : '',
   };
 }
 
@@ -156,9 +158,19 @@ const handledFocusEvents = new WeakSet();
 // inside a list row) hands the tooltip back to the enclosing one.
 const anchorEntries = new WeakMap();
 
+// The node the bubble is placed against: the anchor, or the element inside it
+// that `alignTo` selects (a list row's name).
+function positionAnchor() {
+  if (!activeAnchor || !activeContent.alignTo) {
+    return activeAnchor;
+  }
+  return activeAnchor.querySelector(activeContent.alignTo) ?? activeAnchor;
+}
+
 const tooltipLayer = createFloatingLayer({
   kind: 'tooltip',
   anchor: () => activeAnchor,
+  positionAnchor,
   element: () => tooltipElement,
   placement: () => activeContent.placement,
   onDismiss: () => hideTooltip(),
