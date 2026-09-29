@@ -73,12 +73,10 @@
     if (tool.automatic) return { text: t('toolAccess.automatic') };
     return null;
   }
-  // Facts every Tool card states: who provides the Tool and how access to
-  // it works.
-  function toolSource(tool) {
-    return typeof tool.extension === 'string' && tool.extension
-      ? t('toolAccess.source.extension', { name: tool.extension })
-      : t('toolAccess.source.builtIn');
+  // Facts every Tool card states: who provides the Tool (built in, or the
+  // id of its Extension) and how access to it works.
+  function toolExtension(tool) {
+    return typeof tool.extension === 'string' ? tool.extension : '';
   }
   function toolAccessFact(tool) {
     if (tool.automatic) return t('toolAccess.automatic');
@@ -181,7 +179,14 @@
                 <dl class="tool-access-facts">
                   <div>
                     <dt>{t('toolAccess.facts.source')}</dt>
-                    <dd>{toolSource(tool)}</dd>
+                    <dd>
+                      {#if toolExtension(tool)}
+                        {t('toolAccess.source.extension')}
+                        <code>{toolExtension(tool)}</code>
+                      {:else}
+                        {t('toolAccess.source.builtIn')}
+                      {/if}
+                    </dd>
                   </div>
                   <div>
                     <dt>{t('toolAccess.facts.access')}</dt>
@@ -307,6 +312,10 @@
   .tool-access-facts dd {
     margin: 0;
     color: var(--text-hi);
+  }
+  .tool-access-facts code {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
   }
   @media (max-width: 640px) {
     .tool-catalog-search {

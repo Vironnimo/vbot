@@ -123,7 +123,7 @@
     <span>{formatTokens(split.measured, activeLocaleTag())}</span>
     {#if split.hasEstimated}
       <span class="stats-tokens__est"
-        >+~{formatTokens(split.estimated, activeLocaleTag())}</span
+        >+&#8239;~{formatTokens(split.estimated, activeLocaleTag())}</span
       >
     {/if}
   </span>

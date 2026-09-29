@@ -808,7 +808,7 @@ describe('statisticsView tooltip content', () => {
     expect(
       byLabel(usageHistoryPointTooltip(points, 2, 'en', now))['Since previous']
         .value,
-    ).toBe('Window reset or discontinuity (25% → 5%)');
+    ).toBe('Reset: 25% → 5%');
     expect(
       byLabel(usageHistoryPointTooltip(points, 3, 'en', now))['Since previous'],
     ).toMatchObject({ value: 'No snapshot for 10h', tone: 'muted' });

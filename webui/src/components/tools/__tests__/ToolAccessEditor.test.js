@@ -212,9 +212,11 @@ describe('ToolAccessEditor', () => {
     // Every card names the Tool's source and how access works.
     expect(readTip.textContent).toContain(t('toolAccess.source.builtIn'));
     expect(readTip.textContent).toContain(t('toolAccess.access.selected'));
-    expect(toolTipWithText('homeassistant Extension').textContent).toContain(
-      'ha_get_state',
-    );
+    // An Extension Tool names its Extension by id.
+    expect(
+      toolTipWithText('ha_get_state').querySelector('.tool-access-facts code')
+        .textContent,
+    ).toBe('homeassistant');
     expect(readTip.dataset.floatingOpen).toBe('false');
 
     vi.useFakeTimers();

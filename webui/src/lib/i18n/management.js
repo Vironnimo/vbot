@@ -12,7 +12,7 @@ export default Object.freeze({
   'toolAccess.facts.source': 'Source',
   'toolAccess.facts.access': 'Access',
   'toolAccess.source.builtIn': 'Built-in',
-  'toolAccess.source.extension': '{name} Extension',
+  'toolAccess.source.extension': 'Extension',
   'toolAccess.access.explicit': 'Explicit permission; selecting grants it',
   'toolAccess.access.selected': 'Allowed while selected',
   'agents.modelOptions': 'Temperature & fallback models',
