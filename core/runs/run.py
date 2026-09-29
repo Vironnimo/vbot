@@ -370,6 +370,13 @@ class Run:
         self.tool_call_names: set[str] = set()
         self.input_token_total = 0
         self.output_token_total = 0
+        # Executor-supplied facts for the terminal log line: the Model route
+        # serving the Run, retried Model requests, partial answers preserved
+        # after a broken stream, and whether the Run executes internal work.
+        self.model: str | None = None
+        self.retry_count = 0
+        self.stream_recovery_count = 0
+        self.internal = False
         self.compaction_state = "unavailable"
         self._user_compaction_requested = False
         self._tool_background_callbacks: dict[str, Callable[[], bool]] = {}
@@ -715,8 +722,12 @@ class Run:
         )
         self._done.set()
 
+    # Terminal bookkeeping below is the single log owner of a Run's outcome:
+    # every executor (interactive, cron, channel, sub-agent, manual Compaction)
+    # reaches exactly one ``mark_*`` call, which writes exactly one line.
+
     def mark_completed(self, result: Any, payload_extras: JsonObject | None = None) -> None:
-        """Move the run to completed and publish the terminal event."""
+        """Move the run to completed, log its outcome and publish the terminal event."""
         if self.status != RunStatus.RUNNING:
             return
         self.result = result
@@ -724,41 +735,34 @@ class Run:
         payload: JsonObject = {"status": self.status.value}
         if payload_extras:
             payload.update(payload_extras)
+        _LOGGER.info("Run completed (%s)", self._terminal_log_fields(payload))
         self.emit(RUN_COMPLETED_EVENT, payload)
         self._settle()
 
     def mark_failed(self, error: BaseException, payload_extras: JsonObject | None = None) -> None:
-        """Move the run to failed and publish the terminal event.
+        """Move the run to failed, log its outcome and publish the terminal event.
 
-        This is the single authoritative failure-log chokepoint: every run
-        executor (interactive, cron, channel, subagent) reaches it, so logging
-        here guarantees a failed run always leaves a log entry. Expected
-        ``VBotError`` failures log at ``warning`` without a traceback; any other
-        exception logs at ``error`` with the traceback.
+        Expected ``VBotError`` failures log at ``warning`` with their error
+        summary and without a traceback; any other exception, and a failed
+        terminal commit, logs at ``error`` with the traceback.
         """
         if self.status != RunStatus.RUNNING:
             return
         self.error = error
         self.status = RunStatus.FAILED
-        if isinstance(error, VBotError):
-            _LOGGER.warning(
-                "Run %s failed (agent=%s session=%s): %s",
-                self.id,
-                self.agent_id,
-                self.session_id,
-                error,
-            )
-        else:
-            _LOGGER.error(
-                "Run %s failed unexpectedly (agent=%s session=%s)",
-                self.id,
-                self.agent_id,
-                self.session_id,
-                exc_info=error,
-            )
         payload: JsonObject = {"status": self.status.value, "error": str(error)}
         if payload_extras:
             payload.update(payload_extras)
+        fields = self._terminal_log_fields(payload)
+        if isinstance(error, VBotError) and payload.get("history_persisted") is not False:
+            _LOGGER.warning("Run failed (%s): %s", fields, _error_summary(error))
+        else:
+            _LOGGER.error(
+                "Run failed unexpectedly (%s error=%s)",
+                fields,
+                type(error).__name__,
+                exc_info=error,
+            )
         self.emit(RUN_FAILED_EVENT, payload)
         self._settle()
 
@@ -767,27 +771,32 @@ class Run:
         error: RunInterruptedError,
         payload_extras: JsonObject | None = None,
     ) -> None:
-        """Move the run to interrupted and publish the terminal event."""
+        """Move the run to interrupted, log its outcome and publish the terminal event."""
         if self.status != RunStatus.RUNNING:
             return
         self.result = error.result
         self.error = error
         self.status = RunStatus.INTERRUPTED
-        _LOGGER.warning(
-            "Run %s interrupted after recovery was exhausted (agent=%s session=%s cause=%s)",
-            self.id,
-            self.agent_id,
-            self.session_id,
-            error.cause,
-        )
         payload: JsonObject = {"status": self.status.value, "cause": error.cause}
         if payload_extras:
             payload.update(payload_extras)
+        fields = f"{self._terminal_log_fields(payload)} cause={error.cause}"
+        # The last failure behind the interruption; a Model fallback chain may
+        # wrap it in earlier interruptions.
+        underlying = error.__cause__
+        seen = {id(error)}
+        while isinstance(underlying, RunInterruptedError) and id(underlying) not in seen:
+            seen.add(id(underlying))
+            underlying = underlying.__cause__
+        if isinstance(underlying, Exception) and not isinstance(underlying, RunInterruptedError):
+            _LOGGER.warning("Run interrupted (%s): %s", fields, _error_summary(underlying))
+        else:
+            _LOGGER.warning("Run interrupted (%s)", fields)
         self.emit(RUN_INTERRUPTED_EVENT, payload)
         self._settle()
 
     def mark_cancelled(self, payload_extras: JsonObject | None = None) -> None:
-        """Move the run to cancelled and publish the terminal event."""
+        """Move the run to cancelled, log its outcome and publish the terminal event."""
         if self.status != RunStatus.RUNNING:
             return
         self.status = RunStatus.CANCELLED
@@ -796,8 +805,46 @@ class Run:
             payload["reason"] = self.cancel_reason
         if payload_extras:
             payload.update(payload_extras)
+        fields = self._terminal_log_fields(payload)
+        if self.cancel_reason is not None:
+            fields += f" reason={self.cancel_reason}"
+        _LOGGER.info("Run cancelled (%s)", fields)
         self.emit(RUN_CANCELLED_EVENT, payload)
         self._settle()
+
+    def _terminal_log_fields(self, payload: JsonObject) -> str:
+        """Render the outcome facts every terminal log line carries."""
+        fields = [f"run={self.id}", f"agent={self.agent_id}", f"session={self.session_id}"]
+        if self.project_id is not None:
+            fields.append(f"project={self.project_id}")
+        fields.append(f"kind={self.run_kind.value}")
+        if self.internal:
+            fields.append("internal=true")
+        if self.model is not None:
+            fields.append(f"model={self.model}")
+        timing = payload.get("timing")
+        if isinstance(timing, dict) and "duration_ms" in timing:
+            fields.append(f"duration_ms={timing['duration_ms']}")
+        fields.extend(
+            (
+                f"iterations={self.iteration_count}",
+                f"tool_calls={self.tool_call_count}",
+                f"input_tokens={self.input_token_total}",
+                f"output_tokens={self.output_token_total}",
+                f"retries={self.retry_count}",
+            )
+        )
+        if self.stream_recovery_count:
+            fields.append(f"stream_recoveries={self.stream_recovery_count}")
+        if payload.get("history_persisted") is False:
+            fields.append("history_persisted=false")
+        return " ".join(fields)
+
+
+def _error_summary(error: BaseException) -> str:
+    """Name an error's type with its message, as the terminal line's trailing summary."""
+    message = str(error)
+    return f"{type(error).__name__}: {message}" if message else type(error).__name__
 
 
 def _schedule_callback(callback: CancelCallback) -> asyncio.Future[Any] | None:

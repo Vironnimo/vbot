@@ -479,22 +479,18 @@ async def test_remote_provider_chunk_stalls_end_in_a_bounded_interruption(
     # Consecutive visible partials are continued eight times, then recovery ends.
     assert len(adapter.stream_requests) == 9
     assert run.status == RunStatus.INTERRUPTED
+    # Recovery attempts log at DEBUG; one terminal line reports the outcome.
     run_diagnostics = [
         record
         for record in caplog.records
-        if record.name == "vbot.runs"
-        and record.levelno >= logging.WARNING
-        and isinstance(record.args, tuple)
-        and record.args[:1] == (run.id,)
+        if record.levelno >= logging.INFO and f"run={run.id}" in record.getMessage()
     ]
-    assert [record.levelno for record in run_diagnostics] == [logging.WARNING]
-    assert not any(
-        record.name == "vbot.chat"
-        and record.levelno >= logging.INFO
-        and isinstance(record.args, tuple)
-        and record.args[:2] == (run.id, "interrupted")
-        for record in caplog.records
-    )
+    assert [(record.name, record.levelno) for record in run_diagnostics] == [
+        ("vbot.runs", logging.WARNING)
+    ]
+    # Nine broken streams preserved partial output; eight were retried.
+    assert "stream_recoveries=9" in run_diagnostics[0].getMessage()
+    assert "retries=8" in run_diagnostics[0].getMessage()
     assert isinstance(exc_info.value.result, ChatMessage)
     assert exc_info.value.result.content == "partial" * 9
     assert persisted_roles(messages) == ["user", "assistant"] + ["note", "assistant"] * 8

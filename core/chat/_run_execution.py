@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat._boundaries import _finish_visible_boundary
@@ -43,12 +42,12 @@ from core.chat.events import (
     _close_adapter,
     _emit_message_event,
     _persist_run_error,
-    _timing_payload,
 )
 from core.chat.messages import ChatMessage
 from core.chat.model_resolution import (
     _resolve_fallback_chain,
     _split_agent_model,
+    parse_bare_model,
 )
 from core.chat.streaming import should_advance_model_fallback_chain
 from core.chat.usage import (
@@ -129,6 +128,7 @@ class RunExecution:
         run: Run,
         request: _RunRequest,
     ) -> ChatMessage:
+        run.internal = request.internal
         extension_registry = self._dependencies.get_extension_registry()
         binding = request.temporary_binding
         if extension_registry is not None and binding is not None:
@@ -240,19 +240,18 @@ class RunExecution:
             project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
         )
         internal = request.internal
-        run_timing_started_at = datetime.now(UTC)
-        run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
-        _run_interrupted = False
         run_error: BaseException | None = None
         completed_assistant: ChatMessage | None = None
+        # The Runs domain logs the one terminal line; Chat supplies the route.
+        run.model = parse_bare_model(agent.model)
         start_line_extras = ""
         if project_id is not None:
             start_line_extras += f" project={project_id}"
         if internal:
-            start_line_extras += " internal"
+            start_line_extras += " internal=true"
         _LOGGER.debug(
-            "Run %s started (agent=%s session=%s model=%s connection=%s%s)",
+            "Run started (run=%s agent=%s session=%s model=%s connection=%s%s)",
             run.id,
             run.agent_id,
             run.session_id,
@@ -462,7 +461,6 @@ class RunExecution:
                     ) = await self._advance_fallback_chain(context, run, session, primary_exc)
                 except RunInterruptedError as exc:
                     _run_succeeded = False
-                    _run_interrupted = True
                     run_error = exc
                     if isinstance(exc.result, ChatMessage):
                         completed_assistant = exc.result
@@ -472,11 +470,13 @@ class RunExecution:
                 _run_succeeded = False
                 run_error = chain_error
                 if isinstance(chain_error, RunInterruptedError):
-                    _run_interrupted = True
                     if isinstance(chain_error.result, ChatMessage):
                         completed_assistant = chain_error.result
-                    raise chain_error from primary_exc
-                await _persist_run_error(run, session, chain_error)
+                else:
+                    await _persist_run_error(run, session, chain_error)
+                if chain_error is primary_exc:
+                    # Keep the failure behind it for the terminal log line.
+                    raise
                 raise chain_error from primary_exc
             except (ChatError, ConfigError, VBotError) as exc:
                 _run_succeeded = False
@@ -530,25 +530,6 @@ class RunExecution:
                 outcome = "success"
             else:
                 outcome = "error"
-            run_status = (
-                "interrupted"
-                if _run_interrupted and outcome != "cancelled"
-                else {"success": "completed", "error": "failed", "cancelled": "cancelled"}[outcome]
-            )
-            run_timing = _timing_payload(run_timing_started_at, run_timing_started_perf)
-            _LOGGER.debug(
-                "Run %s %s (agent=%s session=%s duration_ms=%s iterations=%d "
-                "tool_calls=%d input_tokens=%d output_tokens=%d)",
-                run.id,
-                run_status,
-                run.agent_id,
-                run.session_id,
-                run_timing["duration_ms"],
-                run.iteration_count,
-                run.tool_call_count,
-                run.input_token_total,
-                run.output_token_total,
-            )
             if context.continuation_tracker is not None:
                 answered = completed_assistant is not None and not completed_assistant.interrupted
                 try:
@@ -689,7 +670,8 @@ class RunExecution:
                     return _close_adapter(_adapter)
 
                 run.add_cancel_callback(_close_candidate_adapter)
-                _LOGGER.info(
+                run.model = parse_bare_model(binding)
+                _LOGGER.warning(
                     "Model fallback activated (run=%s from=%s to=%s)",
                     run.id,
                     from_binding,

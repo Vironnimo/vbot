@@ -938,7 +938,7 @@ class ChatRunManager:
             except Exception as exc:
                 # No terminal acknowledgement may claim a durable completion
                 # when its transaction failed. The running row is recoverable.
-                _LOGGER.error("Run completion persistence failed: %s", run.id, exc_info=True)
+                # The terminal line logs this failure with its traceback.
                 status, error = RunStatus.FAILED, exc
                 payload["history_persisted"] = False
             except BaseException as exc:

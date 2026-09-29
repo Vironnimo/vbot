@@ -64,7 +64,7 @@ async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.DEBUG, logger="vbot.chat")
+    caplog.set_level(logging.DEBUG, logger="vbot.runs")
     adapter = BlockingStreamingStubAdapter()
     runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
@@ -84,14 +84,13 @@ async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the
     messages = history(runtime)
     assert adapter.closed is True
     assert run.status == RunStatus.CANCELLED
-    terminal_logs = [
+    [terminal_log] = [
         record
         for record in caplog.records
-        if record.name == "vbot.chat"
-        and isinstance(record.args, tuple)
-        and record.args[:2] == (run.id, "cancelled")
+        if record.name == "vbot.runs" and f"run={run.id}" in record.getMessage()
     ]
-    assert [record.levelno for record in terminal_logs] == [logging.DEBUG]
+    assert terminal_log.levelno == logging.INFO
+    assert "reason=user" in terminal_log.getMessage()
     # The already-shown partial answer is preserved as an interrupted turn
     # (GLOSSARY -> Cancel); the never-released late delta stays suppressed.
     assert persisted_roles(messages) == ["user", "assistant"]

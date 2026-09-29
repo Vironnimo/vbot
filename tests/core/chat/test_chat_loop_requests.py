@@ -165,49 +165,44 @@ async def test_non_streaming_provider_normalization_runs_off_event_loop(tmp_path
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("log_level", [logging.INFO, logging.DEBUG])
-async def test_send_logs_run_start_and_end_only_at_debug(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, log_level: int
+async def test_send_logs_a_debug_start_and_one_info_terminal_line(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4", allowed_tools=["*"])
+    agent = StubAgent(
+        id="coder", model="openrouter/anthropic/claude-sonnet-4::api-key", allowed_tools=["*"]
+    )
     adapter = StubAdapter([{"content": "Hello", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    with caplog.at_level(log_level, logger="vbot.chat"):
-        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+    caplog.set_level(logging.INFO, logger="vbot.runs")
+    caplog.set_level(logging.DEBUG, logger="vbot.chat")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = last_run(runtime)
-    records = [
-        record
-        for record in caplog.records
-        if record.name == "vbot.chat"
-        and isinstance(record.args, tuple)
-        and record.args[:1] == (run.id,)
+    records = [record for record in caplog.records if f"run={run.id}" in record.getMessage()]
+    [start_line] = [
+        record.getMessage()
+        for record in records
+        if record.name == "vbot.chat" and "connection=" in record.getMessage()
     ]
-    assert all(record.levelno == logging.DEBUG for record in records)
-    if log_level == logging.INFO:
-        assert records == []
-        return
-    log_messages = [record.getMessage() for record in records]
-    start_line = next(line for line in log_messages if line.startswith(f"Run {run.id} started"))
-    for fragment in (
-        "agent=coder",
-        "session=session-one",
-        "model=openrouter/anthropic/claude-sonnet-4",
-        "connection=openrouter:api-key",
-    ):
+    assert all(record.levelno == logging.DEBUG for record in records if record.name == "vbot.chat")
+    for fragment in ("agent=coder", "session=session-one", "connection=openrouter:api-key"):
         assert fragment in start_line
-    end_line = next(line for line in log_messages if line.startswith(f"Run {run.id} completed"))
+    # The Runs domain owns the one terminal line; Chat supplies the answering route.
+    [terminal] = [record for record in records if record.levelno >= logging.INFO]
+    assert (terminal.name, terminal.levelno) == ("vbot.runs", logging.INFO)
     for fragment in (
         "agent=coder",
         "session=session-one",
+        "model=openrouter/anthropic/claude-sonnet-4 ",
         "duration_ms=",
         "iterations=1",
         "tool_calls=0",
         "input_tokens=",
         "output_tokens=",
+        "retries=0",
     ):
-        assert fragment in end_line
+        assert fragment in terminal.getMessage()
 
 
 @pytest.mark.asyncio
