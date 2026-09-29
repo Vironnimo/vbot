@@ -393,11 +393,11 @@ async def test_provider_retry_is_visible_before_answer_without_leaking_error(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("failure", "error_kind", "expected"),
+    ("failure", "error_kind", "expected", "retries"),
     [
-        (RuntimeError("private-internal-detail"), "internal_error", False),
-        (ProviderTimeoutError("timeout sentinel"), "timeout", True),
-        (ProviderError("provider failed", retryable=False), "provider_fatal", True),
+        (RuntimeError("private-internal-detail"), "internal_error", False, 0),
+        (ProviderTimeoutError("timeout sentinel"), "timeout", True, 8),
+        (ProviderError("provider failed", retryable=False), "provider_fatal", True, 0),
     ],
     ids=["unexpected", "exhausted-retries", "fatal-provider-error"],
 )
@@ -408,6 +408,7 @@ async def test_run_failures_remain_visible_in_history_once(
     failure: Exception,
     error_kind: str,
     expected: bool,
+    retries: int,
 ) -> None:
     runtime = _runtime(tmp_path, [failure] * 9)
 
@@ -421,17 +422,17 @@ async def test_run_failures_remain_visible_in_history_once(
     assert errors[0].error_kind == error_kind
     assert "private-internal-detail" not in str(errors[0].content)
     assert run.events[-1].payload["error_message_id"] == errors[0].id
+    # One terminal line reports the failure and its retry count; attempts log at DEBUG.
     diagnostics = [
         record
         for record in caplog.records
-        if record.name == "vbot.runs"
-        and record.levelno >= logging.WARNING
-        and isinstance(record.args, tuple)
-        and record.args[:1] == (run.id,)
+        if record.levelno >= logging.WARNING and f"run={run.id}" in record.getMessage()
     ]
     assert len(diagnostics) == 1
+    assert diagnostics[0].name == "vbot.runs"
     assert diagnostics[0].levelno == (logging.WARNING if expected else logging.ERROR)
     assert bool(diagnostics[0].exc_info) is not expected
+    assert f"retries={retries}" in diagnostics[0].getMessage()
 
 
 @pytest.mark.asyncio

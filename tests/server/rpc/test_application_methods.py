@@ -216,7 +216,9 @@ async def test_private_maintenance_cancels_only_the_exact_acknowledged_origin(
         await dispatch_method(state, "application.maintenance_begin", params, method_handlers())
 
     if cancelled:
-        state.chat_runs.cancel.assert_awaited_once_with("run-one", reason="application_update")
+        state.chat_runs.cancel.assert_awaited_once_with(
+            "run-one", reason="application_update", initiator="update_maintenance"
+        )
         state.chat_runs.maintenance_status.assert_awaited_once_with("operation-one")
     else:
         state.chat_runs.cancel.assert_not_awaited()

@@ -658,12 +658,13 @@ class AgenticProgression:
                         )
                     if recovery == "continue":
                         if not context.recovery.available(target.model_reference):
+                            # The last failure rides along for the terminal log line.
                             raise context.recovery.exhausted(
                                 result=_combined_interrupted_result(
                                     interruption_chain,
                                     output_cwd=output_cwd,
                                 ),
-                            )
+                            ) from context.recovery.last_error
                         await session.add_note_async(recovery_note or STREAM_RECOVERY_NOTE)
                         await context.session_snapshot.refresh(session)
                         continue

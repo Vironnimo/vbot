@@ -757,7 +757,7 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
     run_id = _required_string(params, "run_id")
     reason = _optional_string(params, "reason")
     try:
-        run = await state.chat_runs.cancel(run_id, reason=reason)
+        run = await state.chat_runs.cancel(run_id, reason=reason, initiator="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _run_response(run, file_delivery=state.file_delivery)

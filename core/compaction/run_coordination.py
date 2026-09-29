@@ -366,6 +366,13 @@ class CompactionRunCoordinator:
             messages.append(checkpoint)
             own_messages.append(checkpoint)
             self._emit_compaction_completed(run, messages, checkpoint)
+            _log_compaction_completed(
+                run,
+                checkpoint,
+                trigger="manual",
+                reason="command",
+                input_tokens=context_tokens_before,
+            )
             run.terminal_payload_extras["session_usage"] = aggregate_session_usage(own_messages)
             return checkpoint
         except asyncio.CancelledError:
@@ -428,6 +435,8 @@ class CompactionRunCoordinator:
             project_id=run.project_id,
         )
         forced = run.compaction_state == "pending"
+        # A pending request comes from the user; otherwise a configured threshold fired.
+        trigger, reason = ("manual", "requested") if forced else ("auto", settings.trigger)
         if not settings.auto and not forced:
             return current_state
         if settings.strategy == "continuation" and not allow_continuation:
@@ -491,15 +500,16 @@ class CompactionRunCoordinator:
             if settings.trigger == "input_tokens"
             else settings.max_input_tokens
         )
-        _LOGGER.info(
-            "Auto-compaction triggered (run=%s agent=%s session=%s input_tokens=%d "
-            "context_window=%d trigger=%s ratio_threshold=%s token_limit=%s)",
+        _LOGGER.debug(
+            "Compaction triggered (run=%s agent=%s session=%s trigger=%s reason=%s "
+            "input_tokens=%d context_window=%d ratio_threshold=%s token_limit=%s)",
             run.id,
             run.agent_id,
             run.session_id,
+            trigger,
+            reason,
             input_tokens,
             context_window,
-            settings.trigger,
             settings.threshold,
             token_limit,
         )
@@ -558,11 +568,12 @@ class CompactionRunCoordinator:
                     COMPACTION_ABORTED_EVENT,
                     {"reason": "insufficient_reclaim"},
                 )
-                _LOGGER.info(
-                    "Auto-compaction skipped because projected reclaim was too small "
-                    "(run=%s session=%s reason=%s)",
+                _LOGGER.debug(
+                    "Compaction skipped because projected reclaim was too small "
+                    "(run=%s session=%s trigger=%s detail=%s)",
                     run.id,
                     run.session_id,
+                    trigger,
                     exc,
                 )
                 return current_state
@@ -574,18 +585,20 @@ class CompactionRunCoordinator:
                 cause = _expected_failure_cause(exc)
                 if cause is None:
                     _LOGGER.error(
-                        "Auto-compaction failed unexpectedly; continuing without compaction "
-                        "(run=%s session=%s)",
+                        "Compaction failed unexpectedly; continuing without compaction "
+                        "(run=%s session=%s trigger=%s)",
                         run.id,
                         run.session_id,
+                        trigger,
                         exc_info=True,
                     )
                 else:
                     _LOGGER.warning(
-                        "Auto-compaction failed; continuing without compaction "
-                        "(run=%s session=%s model=%s cause=%s)",
+                        "Compaction failed; continuing without compaction "
+                        "(run=%s session=%s trigger=%s model=%s cause=%s)",
                         run.id,
                         run.session_id,
+                        trigger,
                         cast(CompactionError, exc).model,
                         cause,
                     )
@@ -679,11 +692,12 @@ class CompactionRunCoordinator:
                     break
             if committed_checkpoint is None:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "stale_context"})
-                _LOGGER.info(
-                    "Auto-compaction discarded because the Session changed during its Model call "
-                    "(run=%s session=%s)",
+                _LOGGER.debug(
+                    "Compaction discarded because the Session changed during its Model call "
+                    "(run=%s session=%s trigger=%s)",
                     run.id,
                     run.session_id,
+                    trigger,
                 )
                 if continue_same_run:
                     try:
@@ -703,14 +717,13 @@ class CompactionRunCoordinator:
             self._emit_compaction_completed(
                 run, context.session_snapshot.active_messages, committed_checkpoint
             )
-            checkpoint_usage = committed_checkpoint.usage or {}
-            _LOGGER.info(
-                "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d "
-                "carried_notes=%d)",
-                run.id,
-                run.session_id,
-                checkpoint_usage.get("context_tokens_after", 0),
-                carried_notes,
+            _log_compaction_completed(
+                run,
+                committed_checkpoint,
+                trigger=trigger,
+                reason=reason,
+                input_tokens=input_tokens,
+                carried_notes=carried_notes,
             )
             return rebuilt_state
         finally:
@@ -792,6 +805,37 @@ class CompactionRunCoordinator:
             tail_tokens=int(strategy.get("tail_tokens", 15_000)),
             summary_model=strategy.get("summary_model"),
         )
+
+
+def _log_compaction_completed(
+    run: Run,
+    checkpoint: ChatMessage,
+    *,
+    trigger: str,
+    reason: str,
+    input_tokens: int,
+    carried_notes: int | None = None,
+) -> None:
+    """Write the one INFO line of a committed Compaction.
+
+    ``trigger`` is ``auto`` for a configured threshold and ``manual`` for a
+    user request; ``reason`` names the threshold or the request path.
+    """
+    usage = checkpoint.usage or {}
+    notes = "" if carried_notes is None else f" carried_notes={carried_notes}"
+    _LOGGER.info(
+        "Compaction completed (run=%s agent=%s session=%s trigger=%s reason=%s "
+        "input_tokens=%d tokens_after=%s%s duration_ms=%s)",
+        run.id,
+        run.agent_id,
+        run.session_id,
+        trigger,
+        reason,
+        input_tokens,
+        usage.get("context_tokens_after"),
+        notes,
+        usage.get("compaction_duration_ms"),
+    )
 
 
 def _expected_failure_cause(error: Exception) -> str | None:

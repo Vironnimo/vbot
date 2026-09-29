@@ -284,6 +284,7 @@ async def _cancel_owned_subagent_run(
     cancelled_run = await runtime.chat_run_manager.cancel(
         run_id,
         reason=PARENT_AGENT_CANCEL_REASON,
+        initiator=f"parent_run:{context.run_id}",
     )
     if cancelled_run.status != RunStatus.CANCELLED:
         return tool_failure(

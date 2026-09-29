@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -79,7 +80,7 @@ async def test_compact_session_refuses_while_run_is_active(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     adapter = ClosingStubAdapter([])
     runtime = compaction_runtime(tmp_path, adapter=adapter)
@@ -87,12 +88,19 @@ async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
     affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
+    caplog.set_level(logging.INFO, logger="vbot.compaction.coordination")
 
     reply = await build_chat_loop(runtime, compaction_service=cast(Any, service)).compact_session(
         "coder", "session-one", "keep the API design"
     )
 
     assert reply == "Context compacted."
+    [completed] = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.compaction.coordination" and record.levelno >= logging.INFO
+    ]
+    assert all(field in completed for field in ("trigger=manual", "tokens_after=", "duration_ms="))
     assert persisted_roles(session.load()) == ["user", "assistant", "compaction_checkpoint"]
     assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) != affinity_before
     [call] = service.compact_calls

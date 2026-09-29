@@ -540,7 +540,9 @@ class TemporaryExecutionGroups:
                     # records this owner and input, has committed.
                     await run.wait_admitted()
                 except BaseException:
-                    await self._manager.cancel(run.id, reason="extension")
+                    await self._manager.cancel(
+                        run.id, reason="extension", initiator=f"extension:{self._identity.name}"
+                    )
                     raise
                 result = TemporaryRunAdmission(run.id, run.status.value, False)
                 state.inputs[input_id] = result
@@ -588,7 +590,10 @@ class TemporaryExecutionGroups:
                     project_id=address.project_id,
                 )
         runs = [run for run in self._manager.active_runs() if matches(run.execution_owner)]
-        await asyncio.gather(*(self._manager.cancel(run.id, reason=reason) for run in runs))
+        initiator = f"extension:{self._identity.name}"
+        await asyncio.gather(
+            *(self._manager.cancel(run.id, reason=reason, initiator=initiator) for run in runs)
+        )
         # Owned Runs are terminal here; resources rely on this ordering.
         await asyncio.gather(
             *(resource.close_execution_group(*key) for resource in self._resources)

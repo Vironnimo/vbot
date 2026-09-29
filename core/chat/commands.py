@@ -865,12 +865,19 @@ class CommandDispatcher:
     async def _execute_stop(
         self, context: CommandExecutionContext, argument: str | None
     ) -> CommandOutcome:
+        surface = context.reply_surface
+        initiator = (
+            f"channel_command:{surface.channel_id}"
+            if surface.kind == "channel"
+            else "webui_command"
+        )
         try:
             self._chat_runs.cancel_by_session(
                 context.agent_id,
                 context.session_id,
                 project_id=context.project_id,
                 reason="user",
+                initiator=initiator,
             )
         except RunNotFoundError:
             return _notice("stop", "No active run to cancel.")

@@ -102,17 +102,48 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat import ChatLoop
     from core.runtime.interfaces import RuntimeServices
     from core.sessions.session import ChatSession
 
+_LOGGER = get_logger("subagents")
+
 
 def _joined_note(notes: list[str], state_note: str | None) -> str | None:
     """Put the call's interpretation notes before the note about the work's state."""
     parts = [*notes, state_note] if state_note else notes
     return " ".join(parts) or None
+
+
+def _log_subagent_spawned(
+    context: ToolContext,
+    work_id: str,
+    agent_id: str,
+    project_id: str | None,
+    session_id: str,
+    *,
+    background: bool,
+    run_id: str | None = None,
+    queue_item_id: str | None = None,
+) -> None:
+    """Write the one INFO line of an admitted child Run or queued child work."""
+    admitted = f"run={run_id}" if run_id is not None else f"queue_item={queue_item_id}"
+    project = f" project={project_id}" if project_id is not None else ""
+    _LOGGER.info(
+        "Sub-agent spawned (work=%s parent_run=%s parent_session=%s child_session=%s agent=%s"
+        "%s %s delivery=%s)",
+        work_id,
+        context.run_id,
+        context.session_id,
+        session_id,
+        agent_id,
+        project,
+        admitted,
+        "automatic" if background else "inline",
+    )
 
 
 def _should_register_parent_cascade(background: bool) -> bool:
@@ -478,6 +509,15 @@ async def _handle_subagent(
                 batch_tracker, parent_key, item, activity, activity_file, background=background
             )
             activity_handed_off = activity is not None
+            _log_subagent_spawned(
+                context,
+                work_id,
+                target_agent_id,
+                target_project_id,
+                session.id,
+                background=background,
+                queue_item_id=item.item_id,
+            )
             try:
                 await _emit_subagent_session_started(
                     context,
@@ -537,6 +577,7 @@ async def _handle_subagent(
                         batch_tracker=batch_tracker,
                         parent_key=parent_key,
                         parent_reason=parent_run.cancel_reason if parent_run is not None else None,
+                        initiator=f"parent_run:{context.run_id}",
                     )
                 raise
 
@@ -568,6 +609,15 @@ async def _handle_subagent(
                 )
 
             _track_subagent_completion(batch_tracker, parent_key, sub_run, activity_file)
+            _log_subagent_spawned(
+                context,
+                work_id,
+                target_agent_id,
+                target_project_id,
+                session.id,
+                background=background,
+                run_id=sub_run.id,
+            )
         await _emit_subagent_session_started(
             context,
             work_id,
@@ -601,7 +651,7 @@ async def _handle_subagent(
                 timeout=max(0.0, foreground_deadline - loop.time()),
             )
         except TimeoutError:
-            sub_run.request_cancel()
+            sub_run.request_cancel(initiator="subagent_timeout")
             timeout_message = (
                 f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes"
             )

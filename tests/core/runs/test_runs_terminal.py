@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import logging
 import weakref
@@ -17,6 +18,7 @@ from core.runs import (
     RunInterruptedError,
     RunStatus,
 )
+from core.sessions import SessionAddress
 from core.utils.errors import VBotError
 from tests.core.runs.runs_test_support import SESSION, assert_timing_payload
 
@@ -103,30 +105,76 @@ async def test_manager_marks_interruption_terminal_and_wait_raises_signal() -> N
     assert_timing_payload(event.payload)
 
 
-@pytest.mark.parametrize(
-    ("error", "level", "message", "traceback"),
-    [
-        (RuntimeError("kaboom"), logging.ERROR, "failed unexpectedly", True),
-        (VBotError("expected boom"), logging.WARNING, "expected boom", False),
-    ],
-    ids=["unexpected-error", "vbot-error"],
-)
-async def test_failed_run_logs_once_by_error_kind(
-    caplog: pytest.LogCaptureFixture, error: Exception, level: int, message: str, traceback: bool
-) -> None:
-    async def fail(_run: Run) -> Any:
-        raise error
+_UNEXPECTED = RuntimeError("kaboom")
+_NETWORK_FAILURE = VBotError("connection reset")
 
-    caplog.set_level(logging.WARNING, logger="vbot.runs")
-    run = await ChatRunManager().start(SESSION, fail)
-    with pytest.raises(type(error)):
+
+@pytest.mark.parametrize(
+    ("outcome", "level", "fields", "traceback"),
+    [
+        ("completed", logging.INFO, (), False),
+        ("cancelled", logging.INFO, ("reason=user", "cancelled_by=rpc"), False),
+        ("expected-failure", logging.WARNING, ("expected boom",), False),
+        ("unexpected-failure", logging.ERROR, (), True),
+        ("interrupted", logging.WARNING, ("cause=network", "connection reset"), False),
+    ],
+)
+async def test_every_run_outcome_logs_one_terminal_line_at_its_level(
+    caplog: pytest.LogCaptureFixture,
+    outcome: str,
+    level: int,
+    fields: tuple[str, ...],
+    traceback: bool,
+) -> None:
+    started = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        run.model = "openrouter/test-model"
+        run.internal = True
+        run.iteration_count, run.tool_call_count = 2, 3
+        run.retry_count, run.stream_recovery_count = 4, 1
+        started.set()
+        if outcome == "cancelled":
+            await asyncio.Event().wait()
+        if outcome == "expected-failure":
+            raise VBotError("expected boom")
+        if outcome == "unexpected-failure":
+            raise _UNEXPECTED
+        if outcome == "interrupted":
+            raise RunInterruptedError("network") from _NETWORK_FAILURE
+        return "done"
+
+    caplog.set_level(logging.INFO, logger="vbot.runs")
+    address = SessionAddress(project_id="acme", agent_id="coder", session_id="session-one")
+    run = await ChatRunManager().start(address, execute)
+    await started.wait()
+    if outcome == "cancelled":
+        run.request_cancel(reason="user", initiator="rpc")
+    with contextlib.suppress(Exception):
         await run.wait()
 
     [record] = [record for record in caplog.records if record.name == "vbot.runs"]
     assert record.levelno == level
-    assert run.id in record.getMessage()
-    assert message in record.getMessage()
-    assert (record.exc_info is not None and record.exc_info[1] is error) is traceback
+    message = record.getMessage()
+    for field in (
+        f"run={run.id}",
+        "agent=coder",
+        "session=session-one",
+        "project=acme",
+        "kind=user",
+        "internal=true",
+        "model=openrouter/test-model",
+        "duration_ms=",
+        "iterations=2",
+        "tool_calls=3",
+        "input_tokens=0",
+        "output_tokens=0",
+        "retries=4",
+        "stream_recoveries=1",
+        *fields,
+    ):
+        assert field in message
+    assert (record.exc_info is not None and record.exc_info[1] is _UNEXPECTED) is traceback
 
 
 class _ResultWithUsage:

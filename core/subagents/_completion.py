@@ -473,6 +473,7 @@ def _attach_parent_cancellation(
             batch_tracker=batch_tracker,
             parent_key=parent_key,
             parent_reason=parent_run.cancel_reason,
+            initiator=f"parent_run:{parent_run_id}",
         )
     )
 
@@ -488,9 +489,10 @@ def _cancel_subagent_child(
     batch_tracker: SubAgentBatchTracker | None,
     parent_key: ParentKey | None,
     parent_reason: str | None = None,
+    initiator: str | None = None,
 ) -> None:
     if sub_run is not None:
-        sub_run.request_cancel(reason=parent_reason)
+        sub_run.request_cancel(reason=parent_reason, initiator=initiator)
         return
     if queued_item is None or queued_agent_id is None or queued_session_id is None:
         return
@@ -508,7 +510,7 @@ def _cancel_subagent_child(
         started_run = cast(Run, queued_item.future.result())
     except (asyncio.CancelledError, Exception):
         return
-    started_run.request_cancel(reason=parent_reason)
+    started_run.request_cancel(reason=parent_reason, initiator=initiator)
 
 
 def _with_target_project(data: JsonObject, project_id: str | None) -> JsonObject:

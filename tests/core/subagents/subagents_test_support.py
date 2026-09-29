@@ -347,9 +347,11 @@ class FakeRunManager:
         """Drop a Run from the manager, as the manager does with released Runs."""
         self.forgotten.append(self.runs.pop(run_id))
 
-    async def cancel(self, run_id: str, reason: str | None = None) -> Run:
+    async def cancel(
+        self, run_id: str, reason: str | None = None, *, initiator: str | None = None
+    ) -> Run:
         run = self.get(run_id)
-        run.request_cancel(reason=reason)
+        run.request_cancel(reason=reason, initiator=initiator)
         if run.status is RunStatus.RUNNING:
             run.mark_cancelled()
         with suppress(RunCancelledError):

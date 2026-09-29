@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +47,10 @@ def _recording(events: list[tuple[str, JsonObject]]) -> Any:
 
 
 @pytest.mark.parametrize("admission", ["held", "admitted", "raced"])
-async def test_busy_child_session_queues_the_work(harness: SubAgentHarness, admission: str) -> None:
+async def test_busy_child_session_queues_the_work(
+    harness: SubAgentHarness, caplog: pytest.LogCaptureFixture, admission: str
+) -> None:
+    caplog.set_level(logging.INFO, logger="vbot.subagents")
     if admission == "raced":
         # The Session became busy between the idle check and the start.
         harness.sessions.create("worker", session_id="busy-child")
@@ -59,6 +63,9 @@ async def test_busy_child_session_queues_the_work(harness: SubAgentHarness, admi
     [child] = await harness.enqueued()
     assert harness.manager.started == []
     assert child.display_content == "follow-up"
+    [spawned] = [record for record in caplog.records if record.name == "vbot.subagents"]
+    assert "child_session=busy-child" in spawned.getMessage()
+    assert f"queue_item={child.item.item_id}" in spawned.getMessage()
     assert await child.task() == "follow-up"
     activity_note = result.pop("activity_note")
     assert Path(activity_path_from_note(activity_note)).exists()

@@ -117,7 +117,7 @@ def _normalize_non_streaming_step(
         tool_calls=message.tool_calls,
         ended_in_reasoning=False,
     ):
-        _LOGGER.warning(
+        _LOGGER.debug(
             "Provider ended a non-streaming response without a complete answer; "
             "requesting a continuation (model=%s)",
             model_id,
@@ -319,7 +319,9 @@ class WireRequestRunner:
                 },
             )
             if notice.waiting:
-                _LOGGER.warning(
+                # Each attempt is DEBUG; the Run's terminal line reports the count.
+                run.retry_count += 1
+                _LOGGER.debug(
                     "Provider request retry scheduled (run=%s model=%s attempt=%d/%d cause=%s)",
                     run.id,
                     response_model,
@@ -701,7 +703,8 @@ class WireRequestRunner:
                 interruption_cause = normalize_interruption_cause(exc)
                 if continuation_tracker is not None:
                     continuation_tracker.mark_interruption_cause(interruption_cause)
-                _LOGGER.warning(
+                run.stream_recovery_count += 1
+                _LOGGER.debug(
                     "Provider stream interrupted after visible output; preserving partial "
                     "(run=%s model=%s cause=%s error=%s)",
                     run.id,
@@ -723,7 +726,8 @@ class WireRequestRunner:
                 interruption_cause = normalize_interruption_cause(exc)
                 if continuation_tracker is not None:
                     continuation_tracker.mark_interruption_cause(interruption_cause)
-                _LOGGER.warning(
+                # A Model fallback or the Run's terminal line reports the outcome.
+                _LOGGER.debug(
                     "Provider stream recovery exhausted before answer text "
                     "(run=%s model=%s cause=%s error=%s)",
                     run.id,

@@ -202,12 +202,27 @@ class ChatRunManager:
         async with self._lock:
             if self._maintenance_operation_id not in {None, operation_id}:
                 raise RunAdmissionBlockedError("another maintenance operation is active")
+            began = self._maintenance_operation_id is None
+            if origin is not None and self._maintenance_origin not in {None, origin}:
+                raise RunAdmissionBlockedError("maintenance origin does not match")
             self._maintenance_operation_id = operation_id
             if origin is not None:
-                if self._maintenance_origin not in {None, origin}:
-                    raise RunAdmissionBlockedError("maintenance origin does not match")
                 self._maintenance_origin = origin
-            return self._maintenance_status_locked(operation_id)
+            status = self._maintenance_status_locked(operation_id)
+            if began:
+                origin_address, origin_run_id = origin or (None, None)
+                _LOGGER.info(
+                    "Maintenance began (operation=%s origin_agent=%s origin_session=%s "
+                    "origin_run=%s active=%s queued=%s reservations=%s)",
+                    operation_id,
+                    origin_address.agent_id if origin_address is not None else None,
+                    origin_address.session_id if origin_address is not None else None,
+                    origin_run_id,
+                    status["active_count"],
+                    status["queued_count"],
+                    status["reservation_count"],
+                )
+            return status
 
     async def maintenance_status(self, operation_id: str) -> dict[str, object]:
         """Return drain state for the exact active maintenance operation."""
@@ -221,8 +236,16 @@ class ChatRunManager:
                 return {"operation_id": operation_id, "active": False}
             if self._maintenance_operation_id != operation_id:
                 raise RunAdmissionBlockedError("another maintenance operation is active")
+            status = self._maintenance_status_locked(operation_id)
             self._maintenance_operation_id = None
             self._maintenance_origin = None
+            _LOGGER.info(
+                "Maintenance ended (operation=%s active=%s queued=%s reservations=%s)",
+                operation_id,
+                status["active_count"],
+                status["queued_count"],
+                status["reservation_count"],
+            )
             return {"operation_id": operation_id, "active": False}
 
     def _maintenance_status_locked(self, operation_id: str) -> dict[str, object]:
@@ -513,7 +536,7 @@ class ChatRunManager:
             item.waiting_scope = waiting_scope
             queue = self._queues.setdefault(address, deque())
             queue.append(item)
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Run queued for busy session (agent=%s session=%s queue_depth=%d)",
                 address.agent_id,
                 address.session_id,
@@ -623,7 +646,7 @@ class ChatRunManager:
                 raise ActiveRunError("this queued input cannot steer a Run")
             if not item.steering:
                 item.steering = True
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Queue steering requested (agent=%s session=%s item=%s)",
                     agent_id,
                     session_id,
@@ -681,10 +704,12 @@ class ChatRunManager:
         except KeyError as exc:
             raise RunNotFoundError(f"run not found: {run_id}") from exc
 
-    async def cancel(self, run_id: str, reason: str | None = None) -> Run:
+    async def cancel(
+        self, run_id: str, reason: str | None = None, *, initiator: str | None = None
+    ) -> Run:
         """Request cancellation and wait until the run reaches a terminal state."""
         run = self.get(run_id)
-        run.request_cancel(reason=reason)
+        run.request_cancel(reason=reason, initiator=initiator)
         await run._done.wait()  # noqa: SLF001 - manager owns run lifecycle internals.
         return run
 
@@ -695,13 +720,14 @@ class ChatRunManager:
         *,
         project_id: str | None,
         reason: str | None = None,
+        initiator: str | None = None,
     ) -> Run:
         """Request cancellation for the active run in one session."""
         address = _session_address(project_id, agent_id, session_id)
         run = self._active_by_session.get(address)
         if run is None or run.status != RunStatus.RUNNING:
             raise RunNotFoundError(f"no active run for agent '{agent_id}' session '{session_id}'")
-        run.request_cancel(reason=reason)
+        run.request_cancel(reason=reason, initiator=initiator)
         return run
 
     def active_run(self, *, agent_id: str, session_id: str, project_id: str | None) -> Run | None:
@@ -738,7 +764,7 @@ class ChatRunManager:
                 self._waiting_work_admissions.clear()
                 active_runs = list(self._active_by_session.values())
         for run in active_runs:
-            run.request_cancel(reason="shutdown")
+            run.request_cancel(reason="shutdown", initiator="shutdown")
         active_tasks = [
             run._task  # noqa: SLF001 - manager owns Run execution tasks.
             for run in active_runs
@@ -938,7 +964,7 @@ class ChatRunManager:
             except Exception as exc:
                 # No terminal acknowledgement may claim a durable completion
                 # when its transaction failed. The running row is recoverable.
-                _LOGGER.error("Run completion persistence failed: %s", run.id, exc_info=True)
+                # The terminal line logs this failure with its traceback.
                 status, error = RunStatus.FAILED, exc
                 payload["history_persisted"] = False
             except BaseException as exc:

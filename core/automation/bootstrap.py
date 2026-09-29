@@ -452,7 +452,7 @@ class BootstrapService:
         for run in tuple(self._active_runs.values()):
             request_cancel = getattr(run, "request_cancel", None)
             if callable(request_cancel):
-                request_cancel(reason="shutdown")
+                request_cancel(reason="shutdown", initiator="shutdown")
         if self._activation_task is not None and not self._activation_task.done():
             self._activation_task.cancel()
 

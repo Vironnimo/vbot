@@ -74,7 +74,7 @@ async def _send_streaming_model_request(
             delay, _ = compute_retry_delay(
                 attempt - 1, retry_after=hint if isinstance(hint, (int, float)) else None
             )
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "Compaction Model request failed; retrying once in %.2fs "
                 "(run=%s session=%s model=%s cause=%s: %s)",
                 delay,
