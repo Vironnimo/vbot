@@ -6,6 +6,8 @@
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import ContextMenu from '../ui/ContextMenu.svelte';
+  import { contextMenuAnchor } from '../ui/contextMenu.js';
   import TextField from '../ui/TextField.svelte';
   import AgentSkillsPanel from './AgentSkillsPanel.svelte';
   import SkillAddMenu from './SkillAddMenu.svelte';
@@ -22,6 +24,11 @@
     projectionSkillSections,
     skillAccessOf,
   } from './skillAccess.js';
+  import {
+    agentRowMenu,
+    libraryRowMenu,
+    projectRowMenu,
+  } from './skillMenus.js';
   import {
     filterSkills,
     LIBRARY_SCOPES,
@@ -91,6 +98,8 @@
   let returnScrollTop = null;
   // The package opened last from the library, marked when returning.
   let lastOpenedId = $state(null);
+  // The open row context menu (components/ui/ContextMenu.svelte), or null.
+  let menu = $state(null);
 
   const actions = createSkillActions({
     get agents() {
@@ -398,8 +407,69 @@
     await loadInventory();
   }
 
+  async function editSkill(entry) {
+    await openSkill(entry);
+    if (selectedId === entry.id) actions.startEdit(entry);
+  }
+
+  async function copyName(name) {
+    try {
+      await navigator.clipboard.writeText(name);
+      onToast({
+        title: t('skills.menu.nameCopied', { name }),
+        variant: 'success',
+      });
+    } catch {
+      onToast({ title: t('skills.menu.copyFailed'), variant: 'error' });
+    }
+  }
+
+  const menuActions = {
+    open: (entry) => void openSkill(entry),
+    edit: (entry) => void editSkill(entry),
+    copyName: (name) => void copyName(name),
+    setDisabled: (entry, disabled) => actions.setDisabled(entry, disabled),
+    remove: (entry) => actions.requestDelete(entry),
+  };
+
   function packageOf(item) {
     return inventory.find((entry) => entry.id === item.packageId) ?? null;
+  }
+
+  function openMenu(event, value) {
+    menu = { ...contextMenuAnchor(event), ...value };
+  }
+
+  function openLibraryMenu(entry, event) {
+    openMenu(event, libraryRowMenu(entry, menuActions));
+  }
+
+  function openAgentMenu(item, event, toggle) {
+    openMenu(
+      event,
+      agentRowMenu(
+        item,
+        { agentName: collection?.label ?? '', entry: packageOf(item), toggle },
+        menuActions,
+      ),
+    );
+  }
+
+  function openProjectMenu(groupId, item, event) {
+    const project = scopeProject;
+    openMenu(
+      event,
+      projectRowMenu(
+        item,
+        {
+          projectName: collection?.label ?? '',
+          entry: packageOf(item),
+          toggle: (on) =>
+            actions.updateProjectSkills(project, groupId, [item.name], on),
+        },
+        menuActions,
+      ),
+    );
   }
 
   function setProjectGroup(groupId, on) {
@@ -596,6 +666,7 @@
               page={currentPage}
               {pageCount}
               onOpen={(entry) => openSkill(entry)}
+              onContextMenu={openLibraryMenu}
               onPage={changePage}
               onClearFilters={() => {
                 searchQuery = '';
@@ -613,6 +684,7 @@
                 query={searchQuery}
                 onChange={(next) => actions.updateAgentAccess(scopeAgent, next)}
                 onOpen={openPackage}
+                onContextMenu={openAgentMenu}
               />
             </div>
           {:else if projectView}
@@ -631,6 +703,7 @@
                   )}
                 onSetAll={setProjectGroup}
                 onOpen={openPackage}
+                onContextMenu={openProjectMenu}
                 emptyTitle={collectionText.empty}
                 emptyHelp={collectionText.emptyHelp}
               />
@@ -652,3 +725,4 @@
 {/if}
 
 <SkillDialogs {actions} />
+<ContextMenu {menu} onClose={() => (menu = null)} />

@@ -623,6 +623,130 @@ describe('Skills manager', () => {
     ]);
   });
 
+  it('offers library, Agent and Project row actions in context menus', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    agents[1].root_project_id = 'repo';
+    agents[1].skills[1] = grant('teach', 'bundled', 'project');
+    const rightClick = (el) => {
+      el.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 40,
+        }),
+      );
+      flushSync();
+    };
+    // Items in order, a separator as '|', a disabled item with its hint.
+    const menu = () =>
+      [...document.querySelector('.context-menu').children].map((el) =>
+        el.getAttribute('role') === 'separator'
+          ? '|'
+          : [el.textContent.trim(), el.disabled ? 'disabled' : '']
+              .filter(Boolean)
+              .join(' '),
+      );
+    const pick = (label) =>
+      click(
+        [...document.querySelectorAll('.context-menu [role="menuitem"]')].find(
+          (el) =>
+            el.querySelector('.context-menu__label').textContent === label,
+        ),
+      );
+    await render();
+
+    rightClick(document.querySelector('[data-skill-id="shared"]'));
+    expect(
+      document.querySelector('.context-menu').getAttribute('aria-label'),
+    ).toBe('Actions for notes');
+    expect(menu()).toEqual([
+      'Open',
+      'Edit instructions',
+      'Copy name',
+      '|',
+      'Turn off everywhere',
+      '|',
+      'Delete…',
+    ]);
+    pick('Copy name');
+    await settle();
+    expect(writeText).toHaveBeenCalledWith('notes');
+    expect(onToast).toHaveBeenCalledWith({
+      title: 'Copied notes',
+      variant: 'success',
+    });
+    // The keyboard opens the same menu; read-only packages offer no Edit or
+    // Delete, and a package that is off offers Turn on everywhere.
+    key(document.querySelector('[data-skill-id="bundled"]'), 'ContextMenu');
+    expect(menu()).toEqual(['Open', 'Copy name', '|', 'Turn off everywhere']);
+    key(document.querySelector('.context-menu'), 'Escape');
+    key(document.querySelector('[data-skill-id="disabled"]'), 'ContextMenu');
+    expect(menu()).toContain('Turn on everywhere');
+    pick('Turn on everywhere');
+    await settle();
+    expect(calls('skill.set_disabled')).toEqual([
+      { name: 'broken', disabled: false },
+    ]);
+    // Edit opens the package page, then its editor with the loaded content.
+    rightClick(document.querySelector('[data-skill-id="shared"]'));
+    pick('Edit instructions');
+    await settle();
+    expect(document.querySelector('#skill-page-title').textContent.trim()).toBe(
+      'notes',
+    );
+    expect(document.querySelector('[role="dialog"] textarea').value).toContain(
+      'content-shared',
+    );
+    click(button('Cancel', document.querySelector('[role="dialog"]')));
+    click(button('Back to All skills'));
+    await settle();
+
+    // An Agent row turns the Skill on or off for that Agent; a Project grant
+    // stays fixed and says where it is managed.
+    collection('Main');
+    rightClick(
+      document
+        .querySelector('[data-item-key="deploy"]')
+        .closest('.s-check-item'),
+    );
+    expect(menu()).toEqual([
+      'Turn off for Main',
+      'Open skill',
+      'Copy name',
+      '|',
+      'Turn off everywhere',
+    ]);
+    pick('Turn off for Main');
+    await settle();
+    expect(calls('agent.update')).toEqual([
+      { id: 'main', excluded_skills: ['deploy'] },
+    ]);
+    collection('Reviewer');
+    key(document.querySelector('[data-item-key="teach"]'), 'ContextMenu');
+    expect(menu()[0]).toBe(
+      'Turn off for Reviewer Managed in project Repo disabled',
+    );
+    key(document.querySelector('.context-menu'), 'Escape');
+
+    collection('Repo');
+    rightClick(
+      document
+        .querySelector('[data-item-key="teach"]')
+        .closest('.s-check-item'),
+    );
+    expect(menu()).toEqual(['Activate in Repo', 'Open skill', 'Copy name']);
+    pick('Activate in Repo');
+    await settle();
+    expect(calls('project.set')).toEqual([
+      { project_id: 'repo', skills_bundled_enabled: ['teach'] },
+    ]);
+  });
+
   it('changes Agent and Project access from the Skill detail', async () => {
     await render();
     choose('bundled');

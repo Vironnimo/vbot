@@ -3,7 +3,8 @@
   // and, at the end, a quiet source label with who gets the package. The
   // description is never shown inline, only in the row's tooltip (explicit
   // user requirement, see the Skills section of webui/design.md). A row
-  // opens the package's page.
+  // opens the package's page; a right click or the context menu key asks
+  // `onContextMenu(entry, event)` for its menu (default already prevented).
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import Badge from '../ui/Badge.svelte';
@@ -11,6 +12,7 @@
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
+  import { isContextMenuKey } from '../ui/contextMenu.js';
   import { skillAccessSummary } from './skillAccess.js';
   import {
     skillDiagnosticLines,
@@ -35,11 +37,17 @@
     page = 0,
     pageCount = 1,
     onOpen = noop,
+    onContextMenu = noop,
     onPage = noop,
     onClearFilters = noop,
   } = $props();
 
   let listElement = $state();
+
+  function openMenu(entry, event) {
+    event.preventDefault();
+    onContextMenu(entry, event);
+  }
 
   export function scrollToTop() {
     listElement?.scrollTo?.(0, 0);
@@ -85,6 +93,10 @@
               alignTo: '.skills-row-name',
             }}
             onclick={() => onOpen(entry)}
+            oncontextmenu={(event) => openMenu(entry, event)}
+            onkeydown={(event) => {
+              if (isContextMenuKey(event)) openMenu(entry, event);
+            }}
           >
             <span class="skills-row-name">{entry.name}</span>
             {#if entry.status !== 'available'}<StatusChip

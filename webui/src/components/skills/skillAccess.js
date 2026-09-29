@@ -253,7 +253,8 @@ function agentGroupAllLabel(group, rootProject) {
  * state taken from the (possibly unsaved) allowlist pair. `agent` is the
  * inventory projection entry, or null for an Agent that does not exist yet.
  * Saved names the Agent cannot currently see stay listed so they are never
- * dropped silently. A Project grant is locked; `lockedReason` explains it.
+ * dropped silently. A Project grant is locked: `lockedReason` explains it,
+ * `lockedBy` names the Project.
  */
 export function agentSkillView(
   agent,
@@ -299,6 +300,7 @@ export function agentSkillView(
       lockedReason: locked
         ? t('skills.panel.lockedByProject', { name: rootProject })
         : '',
+      lockedBy: locked ? rootProject : '',
       detail: entry?.description || '',
       state,
     });
@@ -316,6 +318,7 @@ export function agentSkillView(
           allowed: true,
           locked: false,
           lockedReason: '',
+          lockedBy: '',
           detail: t('skills.panel.savedDetail'),
           state: null,
         }));

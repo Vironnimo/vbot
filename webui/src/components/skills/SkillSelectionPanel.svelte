@@ -3,7 +3,8 @@
   // AgentSelectionGroup per group) under a header with the active count, an
   // optional "add new skills automatically" switch and an optional filter.
   // Callers own what toggling means; the Skills manager, the Agent editor and
-  // the Project editor share this one presentation.
+  // the Project editor share this one presentation. `onContextMenu(groupId,
+  // item, event)` offers a row's context menu (see AgentSelectionGroup).
   import { t } from '$lib/i18n.js';
   import AgentSelectionGroup, {
     filterSelectionItems,
@@ -27,6 +28,7 @@
     onToggle = noop,
     onSetAll = noop,
     onOpen = null,
+    onContextMenu = null,
     columns = false,
     emptyTitle = '',
     emptyHelp = '',
@@ -89,6 +91,8 @@
           onToggle={(name, next, item) => onToggle(group.id, name, next, item)}
           onSetAll={(next) => onSetAll(group.id, next)}
           {onOpen}
+          onContextMenu={onContextMenu &&
+            ((item, event) => onContextMenu(group.id, item, event))}
         />
       {/each}
     </div>

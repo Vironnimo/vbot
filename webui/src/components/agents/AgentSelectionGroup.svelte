@@ -27,7 +27,11 @@
   // inline: it appears only in the row's tooltip on hover or keyboard focus,
   // together with `lockedReason` for a locked member (a fixed grant: shown,
   // not changeable). A member may carry one inline action. With `onOpen`, the
-  // member's name opens it elsewhere and only the box toggles.
+  // member's name opens it elsewhere and only the box toggles. With
+  // `onContextMenu(item, event)`, a right click on the row or the context
+  // menu key on its controls asks the caller for the member's menu (the
+  // event's default is already prevented).
+  import { isContextMenuKey } from '../ui/contextMenu.js';
   import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
   import Checkbox from '../ui/Checkbox.svelte';
@@ -55,6 +59,7 @@
     onSetAll = noop,
     onOpen = null,
     onAction = noop,
+    onContextMenu = null,
     class: className = '',
   } = $props();
 
@@ -88,6 +93,23 @@
         item.locked && item.lockedReason ? [{ value: item.lockedReason }] : [],
       placement: 'right',
       alignTo: '.s-check-row__name',
+    };
+  }
+
+  function rowContextMenu(item) {
+    if (!onContextMenu) return undefined;
+    return (event) => {
+      event.preventDefault();
+      onContextMenu(item, event);
+    };
+  }
+
+  function controlKeydown(item) {
+    if (!onContextMenu) return undefined;
+    return (event) => {
+      if (!isContextMenuKey(event)) return;
+      event.preventDefault();
+      onContextMenu(item, event);
     };
   }
 </script>
@@ -157,10 +179,12 @@
       </p>
     {:else}
       {#each visibleItems as item, index (item.key ?? item.name)}
+        <!-- svelte-ignore a11y_no_static_element_interactions (Right click anywhere on the row, including a locked row's disabled box; the context menu key on the row's controls is the keyboard path.) -->
         <div
           class="s-check-item"
           class:s-check-item--inert={item.locked && !onOpen && !item.action}
           use:tooltip={rowTooltip(item)}
+          oncontextmenu={rowContextMenu(item)}
         >
           {#if onOpen}
             <Checkbox
@@ -169,6 +193,7 @@
               disabled={item.locked}
               ariaLabel={toggleLabel(item.name, item)}
               aria-describedby={item.state?.text ? stateId(index) : undefined}
+              onkeydown={controlKeydown(item)}
               onChange={(next) => onToggle(item.name, next, item)}
             />
             <button
@@ -176,6 +201,7 @@
               class="s-check-item__open"
               data-item-key={item.key ?? item.name}
               onclick={() => onOpen(item)}
+              onkeydown={controlKeydown(item)}
             >
               {@render memberName(item)}
             </button>
@@ -187,6 +213,7 @@
               disabled={item.locked}
               ariaLabel={toggleLabel(item.name, item)}
               aria-describedby={item.state?.text ? stateId(index) : undefined}
+              onkeydown={controlKeydown(item)}
               onChange={(next) => onToggle(item.name, next, item)}
             >
               {@render memberName(item)}

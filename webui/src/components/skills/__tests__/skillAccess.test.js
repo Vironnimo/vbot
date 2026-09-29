@@ -242,9 +242,11 @@ describe('agentSkillView', () => {
       total: 5,
       autoAdd: true,
     });
-    expect(view.groups[1].items[0].lockedReason).toBe(
-      'Granted by project Repo. Change it in that project’s skills.',
-    );
+    expect(view.groups[1].items[0]).toMatchObject({
+      lockedReason:
+        'Granted by project Repo. Change it in that project’s skills.',
+      lockedBy: 'Repo',
+    });
   });
 
   it.each([
