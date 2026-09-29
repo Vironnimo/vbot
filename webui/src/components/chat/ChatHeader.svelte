@@ -130,7 +130,11 @@
       latestUnreadAt: Number(activity.latestUnreadAt) || 0,
       index,
       label,
-      tooltip: agentActivityTooltip(label, {
+      tooltip: agentActivityTooltip({
+        name,
+        id: agent.id,
+        status,
+        unreadCount,
         model: agent.model,
         thinkingEffort: agent.thinking_effort,
       }),

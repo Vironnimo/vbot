@@ -699,13 +699,13 @@
                   : t('chat.agentActivity.idle', {
                       name: memberName,
                     })}
-            {@const memberActivityTooltip = agentActivityTooltip(
-              memberActivityLabel,
-              {
-                model: member.effective?.model?.value,
-                thinkingEffort: member.effective?.thinking_effort?.value,
-              },
-            )}
+            {@const memberActivityTooltip = agentActivityTooltip({
+              name: memberName,
+              id: member.agent_id,
+              status: memberStatus,
+              model: member.effective?.model?.value,
+              thinkingEffort: member.effective?.thinking_effort?.value,
+            })}
             <button
               type="button"
               class="agent-tab chat-view__project-tab"
