@@ -76,7 +76,7 @@ _live_connections: dict[str, int] = {}
 _tracked_factory_cache: dict[type, type] = {}
 _wal_fallback_warned: set[str] = set()
 _wal_reset_warned: set[str] = set()
-_wal_reset_info_logged: set[str] = set()
+_wal_reset_policy_logged: set[str] = set()
 _diagnostic_lock = threading.Lock()
 
 
@@ -364,7 +364,7 @@ def _apply_delete_for_wal_reset_bug(conn: sqlite3.Connection, *, db_label: str) 
         _log_once(
             _wal_reset_warned,
             db_label,
-            "%s: SQLite %s is WAL-reset vulnerable; keeping existing WAL without live downgrade",
+            "Kept existing WAL journal despite the SQLite WAL-reset issue (database=%s sqlite=%s)",
             db_label,
             sqlite3.sqlite_version,
         )
@@ -383,11 +383,12 @@ def _apply_delete_for_wal_reset_bug(conn: sqlite3.Connection, *, db_label: str) 
                 f"{db_label}: journal mode is busy while selecting DELETE"
             ) from exc
         raise
+    # One policy for every database of this process: report it once, not per database.
     _log_once(
-        _wal_reset_info_logged,
-        db_label,
-        "%s: using safe journal_mode=DELETE because SQLite %s has the WAL-reset issue",
-        db_label,
+        _wal_reset_policy_logged,
+        "process",
+        "Selected rollback journal for SQLite databases (sqlite=%s journal_mode=delete "
+        "reason=wal-reset-issue)",
         sqlite3.sqlite_version,
         level=logging.INFO,
     )
@@ -425,7 +426,7 @@ def apply_wal_with_fallback(conn: sqlite3.Connection, *, db_label: str) -> str:
         _log_once(
             _wal_fallback_warned,
             db_label,
-            "%s: WAL unsupported on this filesystem; falling back to DELETE",
+            "Fell back to rollback journal because WAL is unsupported (database=%s)",
             db_label,
         )
         return _set_journal_mode_no_wait(conn, "DELETE") or "delete"
@@ -457,7 +458,7 @@ def apply_wal_with_fallback(conn: sqlite3.Connection, *, db_label: str) -> str:
         _log_once(
             _wal_fallback_warned,
             db_label,
-            "%s: WAL refused (%s); falling back to DELETE",
+            "Fell back to rollback journal because WAL was refused (database=%s): %s",
             db_label,
             exc,
         )

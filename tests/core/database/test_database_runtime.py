@@ -30,6 +30,7 @@ from core.database import (
     required_journal_mode,
     write_bootstrap_marker,
 )
+from core.database import _connections as connections_module
 from core.database._connections import copy_database
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
@@ -119,7 +120,6 @@ def test_the_wal_reset_vulnerable_sqlite_ranges() -> None:
 def test_vulnerable_sqlite_uses_a_rollback_journal_and_keeps_an_existing_wal(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # A name of its own: the kernel reports its journal choice once per database.
     spec = notes_spec(data_dir, name="journal_policy")
     pin_journal_mode(monkeypatch, "wal")
     open_database(spec).close()
@@ -128,6 +128,8 @@ def test_vulnerable_sqlite_uses_a_rollback_journal_and_keeps_an_existing_wal(
 
     monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 40, 1))
     monkeypatch.setattr(sqlite3, "sqlite_version", "3.40.1")
+    # The policy is reported once per process; start this test as a fresh process.
+    monkeypatch.setattr(connections_module, "_wal_reset_policy_logged", set())
     caplog.set_level(logging.INFO, logger="vbot.database")
     database = open_database(spec)
     try:
@@ -136,26 +138,27 @@ def test_vulnerable_sqlite_uses_a_rollback_journal_and_keeps_an_existing_wal(
     finally:
         database.close()
 
-    other = data_dir / "other"
-    other.mkdir()
-    write_bootstrap_marker(other)
-    fresh_spec = notes_spec(other, name="journal_policy")
-    fresh = open_database(fresh_spec)
-    try:
-        assert fresh.wal_active() is False
-    finally:
-        fresh.close()
-    with closing(sqlite3.connect(fresh_spec.path)) as probe:
-        assert probe.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
-    label = f"journal_policy ({fresh_spec.path.name})"
+    fresh_specs = []
+    for name in ("first", "second"):
+        other = data_dir / name
+        other.mkdir()
+        write_bootstrap_marker(other)
+        fresh_specs.append(notes_spec(other, name="journal_policy"))
+    for fresh_spec in fresh_specs:
+        fresh = open_database(fresh_spec)
+        try:
+            assert fresh.wal_active() is False
+        finally:
+            fresh.close()
+        with closing(sqlite3.connect(fresh_spec.path)) as probe:
+            assert probe.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    # Every database follows the same policy: one line for the process, not one per database.
     reports = [
         record
         for record in caplog.records
-        if record.levelno == logging.INFO and label in record.getMessage()
+        if record.levelno == logging.INFO and "3.40.1" in record.getMessage()
     ]
-    assert [record.getMessage() for record in reports] == [
-        f"{label}: using safe journal_mode=DELETE because SQLite 3.40.1 has the WAL-reset issue"
-    ]
+    assert len(reports) == 1
 
 
 def test_a_busy_write_retries_as_one_idempotent_unit_until_its_patience(data_dir: Path) -> None:
