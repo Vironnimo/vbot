@@ -117,23 +117,30 @@ async def test_unprofiled_model_takes_the_chat_wire_and_warns_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """An unknown id never guesses a native wire; the misroute risk is logged once per process."""
-    adapter = go_adapter()
     model_id = f"unlisted-{uuid.uuid4().hex}"
+    profiled = False
 
-    with respx.mock, caplog.at_level(logging.WARNING, logger="vbot.providers.opencode_go"):
+    def lookup(requested: str) -> Any:
+        # The Model data gains the protocol later, as a refreshed override would.
+        return profile_lookup("deepseek-v4-flash" if profiled else requested)
+
+    adapter = go_adapter(model_lookup=lookup)
+
+    with respx.mock, caplog.at_level(logging.INFO, logger="vbot.providers.opencode_go"):
         routes = _mock_all_wires(streaming=False)
         for _ in range(3):
             await adapter.send(HELLO, model_id=model_id)
+        profiled = True
+        await adapter.send(HELLO, model_id=model_id)
+        await adapter.send(HELLO, model_id=model_id)
 
-    assert routes["chat"].call_count == 3
+    assert routes["chat"].call_count == 5
     assert not routes["messages"].called
     assert not routes["responses"].called
-    warnings = [
-        record
-        for record in caplog.records
-        if "no metadata protocol" in record.getMessage() and model_id in record.getMessage()
-    ]
-    assert len(warnings) == 1
+    records = [record for record in caplog.records if model_id in record.getMessage()]
+    # One WARNING while the protocol is missing, one INFO once the Model data names it.
+    assert [record.levelno for record in records] == [logging.WARNING, logging.INFO]
+    assert "no metadata protocol" in records[0].getMessage()
 
 
 @pytest.mark.asyncio
