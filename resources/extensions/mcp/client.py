@@ -8,6 +8,7 @@ import logging
 import os
 import random
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from contextlib import AsyncExitStack
@@ -187,6 +188,9 @@ class ConnectionRunner:
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
         self._oauth_url: str | None = None
         self._log_level = "info"
+        # A failing stretch spans lazy reconnects until one connection comes up.
+        self._failures = 0
+        self._failing_since: float | None = None
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -303,6 +307,7 @@ class ConnectionRunner:
                 await self._refresh()
                 self.state = "connected"
                 self.error = None
+                self._log_connected()
                 self._ready.set()
                 self._subscriptions["catalog"] = asyncio.create_task(self._watch_catalog())
                 try:
@@ -318,15 +323,48 @@ class ConnectionRunner:
             self.state = "failed"
             self.error = self._safe_error(error)
             self._record("connection_failed", {"error": self.error})
-            if self._expected(error):
-                _LOGGER.warning("MCP connection failed (connection=%s): %s", self.id, self.error)
-            else:
-                _LOGGER.error("MCP connection crashed (connection=%s): %s", self.id, self.error)
+            expected = self._expected(error)
+            self._log_failed(expected=expected)
+            if not expected:
                 raise
         finally:
             self.client = None
             self._ready.set()
             self._reject_queued()
+
+    def _log_connected(self) -> None:
+        """Log a connection that came up: a start, or the end of a failing stretch."""
+        tools = len(self.catalog.get("tools", []))
+        if self._failing_since is None:
+            _LOGGER.info("MCP connection established (connection=%s tools=%d)", self.id, tools)
+            return
+        _LOGGER.info(
+            "MCP connection recovered (connection=%s tools=%d failures=%d down_for=%.1fs)",
+            self.id,
+            tools,
+            self._failures,
+            time.monotonic() - self._failing_since,
+        )
+        self._failures = 0
+        self._failing_since = None
+
+    def _log_failed(self, *, expected: bool) -> None:
+        """Log an expected failure once per failing stretch; a crash always logs."""
+        self._failures += 1
+        repeated = self._failing_since is not None
+        if not repeated:
+            self._failing_since = time.monotonic()
+        if not expected:
+            _LOGGER.error("MCP connection crashed (connection=%s): %s", self.id, self.error)
+        elif repeated:
+            _LOGGER.debug(
+                "MCP connection failed again (connection=%s failures=%d): %s",
+                self.id,
+                self._failures,
+                self.error,
+            )
+        else:
+            _LOGGER.warning("MCP connection failed (connection=%s): %s", self.id, self.error)
 
     async def _transport(self, stack: AsyncExitStack) -> Any:
         if self.config["transport"] == "stdio":
@@ -734,6 +772,8 @@ class ConnectionRunner:
             self.error = self._safe_error(message)
             self.state = "failed"
             self._record("connection_failed", {"error": self.error})
+            if not self._closing:
+                self._log_failed(expected=self._expected(message))
             if self._task is not None:
                 self._task.cancel()
 
