@@ -14,6 +14,7 @@
     filterModelSelectOptions,
     buildModelSelectOptions,
     modelFilterFooterLabel,
+    modelSelectionParts,
     modelSelectionValue,
     parseModelSelectionValue,
   } from '$lib/modelSelection.js';
@@ -58,12 +59,34 @@
     selectModelValue(formValues.model, modelOptions),
   );
 
-  // The control column is narrow; the full choice (an inherited default with
-  // its source, or a long Model id) stays readable on hover.
-  let modelTriggerTooltip = $derived(
-    modelOptions.find((option) => option.value === modelSelectValue)?.label ||
-      inheritModelLabel('model'),
-  );
+  // The control column is narrow: the trigger's card splits the choice into
+  // the complete Model id and its Connection, and says where an inherited
+  // Model comes from.
+  let modelTriggerTooltip = $derived(modelTriggerDetails(formValues.model));
+
+  function modelTriggerDetails(value) {
+    const inherited =
+      !value && inheritSource('model') === 'global_default'
+        ? inheritDisplayValue('model')
+        : '';
+    if (!value && !inherited) {
+      return { text: t('agents.details.modelNotConfigured'), placement: 'top' };
+    }
+    const parts = modelSelectionParts(value || inherited, availableConnections);
+    return {
+      text: inherited ? t('agents.details.modelInherited') : '',
+      rows: [
+        { label: t('agents.form.model'), value: parts.model, mono: true },
+        {
+          label: t('agents.details.connection'),
+          value:
+            parts.connection ||
+            (inherited ? '' : t('agents.details.anyConnection')),
+        },
+      ],
+      placement: 'top',
+    };
+  }
 
   // The fallback chain binds to the raw ordered list. Every row shares one
   // unfiltered option catalog — a chain is short (max 5) and rows stay

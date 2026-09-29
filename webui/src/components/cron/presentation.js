@@ -16,6 +16,7 @@ import {
   cronScheduleFields,
   describeCronExpression,
 } from '$lib/cronView.js';
+import { formatRelativeTime } from '$lib/timeText.js';
 
 const DAY_MS = 86400000;
 
@@ -337,6 +338,89 @@ export function outcomeLabel(outcome) {
     return t('cron.outcome.unknown');
   }
   return t('cron.notAvailable');
+}
+
+const VARIANT_TONES = {
+  success: 'success',
+  warn: 'warning',
+  error: 'danger',
+  neutral: 'muted',
+};
+
+const OUTCOME_TONES = {
+  success: 'success',
+  failed: 'danger',
+  cancelled: 'warning',
+  missed: 'warning',
+  unknown: 'muted',
+};
+
+// Details card beside a Schedule row: the name, the last error as lead text,
+// then what the status dot means, the readable cadence with its exact
+// expression, the next and last Run as absolute and relative moments in the
+// schedule timezone, and where the Run goes. `agentLabel` names the target.
+export function scheduleRowDetails(
+  job,
+  { agentLabel = (target) => target, nowMs = Date.now() } = {},
+) {
+  const failures = job.consecutive_failures ?? 0;
+  return {
+    title: job.name,
+    text: job.last_error || '',
+    rows: [
+      {
+        label: t('cron.card.status'),
+        value:
+          failures > 1
+            ? t('cron.card.statusFailures', {
+                status: statusLabel(job.status),
+                count: failures,
+              })
+            : statusLabel(job.status),
+        tone: VARIANT_TONES[statusChipVariant(job)],
+      },
+      { label: t('cron.detail.cadence'), value: scheduleSummary(job) },
+      {
+        label: t('cron.card.expression'),
+        value: job.schedule_type === 'cron' ? job.cron_expression : '',
+        mono: true,
+      },
+      {
+        label: t('cron.detail.nextFire'),
+        value: momentText(job.next_fire_at_display, job.next_fire_at, nowMs),
+      },
+      {
+        label: t('cron.detail.lastResult'),
+        value: job.last_outcome
+          ? [
+              outcomeLabel(job.last_outcome),
+              momentText(
+                job.last_completed_at_display,
+                job.last_completed_at,
+                nowMs,
+              ),
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : t('cron.detail.waitingForFirstRun'),
+        tone: OUTCOME_TONES[job.last_outcome],
+      },
+      { label: t('cron.detail.target'), value: agentLabel(job.agent_id) },
+      {
+        label: t('cron.card.session'),
+        value: job.session_id || t('cron.detail.newSessionEachRun'),
+        mono: Boolean(job.session_id),
+      },
+    ],
+    placement: 'right',
+  };
+}
+
+// A moment shown in the schedule timezone, then its distance from now.
+function momentText(display, value, nowMs) {
+  if (!display) return '';
+  const relative = formatRelativeTime(value, nowMs);
+  return relative ? `${display} · ${relative}` : display;
 }
 
 export function isTerminalJob(job) {

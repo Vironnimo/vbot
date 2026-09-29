@@ -5,6 +5,7 @@
   // body text (the one place that shows it as content), who gets it
   // (editable), requirement notes and its instructions.
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import MarkdownContent from '../chat/MarkdownContent.svelte';
   import Badge from '../ui/Badge.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -17,6 +18,7 @@
   import {
     skillDiagnosticLines,
     skillInstructionBody,
+    skillReadOnlyReason,
     skillSourceDetail,
     skillStatusLabel,
     skillStatusVariant,
@@ -110,7 +112,11 @@
           <StatusChip variant={skillStatusVariant(entry)}
             >{skillStatusLabel(entry)}</StatusChip
           >
-          {#if !entry.editable_scope}<Badge>{t('skills.readOnly')}</Badge>{/if}
+          {#if !entry.editable_scope}<span
+              class="tooltip-anchor"
+              use:tooltip={skillReadOnlyReason(entry)}
+              ><Badge>{t('skills.readOnly')}</Badge></span
+            >{/if}
         </p>
       </div>
       <div class="view-header__actions">

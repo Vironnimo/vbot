@@ -132,6 +132,8 @@ export default Object.freeze({
   'status.connected': 'Connected',
   'status.notReachable': 'Not reachable',
   'status.reconnecting': 'Reconnecting…',
+  'status.details.server': 'Server',
+  'status.details.since': 'Since',
   'status.connectionInterrupted': 'Connection interrupted',
   'status.connectionRestored': 'Connection restored',
   'status.serverUnavailableTitle': 'Server is not reachable',
@@ -159,6 +161,7 @@ export default Object.freeze({
   'voice.mic.tooltip.processing': 'Processing voice command',
   'voice.mic.tooltip.microphoneDisconnected': 'Microphone disconnected',
   'voice.mic.tooltip.error': 'Voice error',
+  'voice.mic.openSettingsHint': 'Click to open the Voice settings.',
   'voice.toast.sentTitle': 'Voice command sent',
   'voice.toast.noSpeechTitle': 'No speech heard',
   'voice.toast.noSpeechMessage':

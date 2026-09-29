@@ -5,7 +5,12 @@
     const needle = text.trim().toLocaleLowerCase();
     if (!needle) return list;
     return list.filter((item) =>
-      [item.name, item.detail]
+      [
+        item.name,
+        item.detailTitle,
+        item.detail,
+        ...(item.detailRows ?? []).map((row) => row.value),
+      ]
         .filter(Boolean)
         .join(' ')
         .toLocaleLowerCase()
@@ -25,8 +30,10 @@
   // A row shows the member's name and at most one short state at its end
   // (`{text, tone}`). The member's `detail` (a description) is never rendered
   // inline: it appears only in the row's tooltip on hover or keyboard focus,
-  // together with `lockedReason` for a locked member (a fixed grant: shown,
-  // not changeable). A member may carry one inline action. With `onOpen`, the
+  // headed by an optional `detailTitle` (a display name beside an id) and
+  // followed by optional `detailRows` (`{label, value, mono}`) and
+  // `lockedReason` for a locked member (a fixed grant: shown, not
+  // changeable). The filter matches all of them. A member may carry one inline action. With `onOpen`, the
   // member's name opens it elsewhere and only the box toggles. With
   // `onContextMenu(item, event)`, a right click on the row or the context
   // menu key on its controls asks the caller for the member's menu (the
@@ -85,15 +92,27 @@
     return `${uid}-state-${index}`;
   }
 
-  // The description, then why a locked member cannot change, beside the name.
+  // Beside the name: a card headed by the member's complete name (or its
+  // display name) with the description, detail rows and why a locked member
+  // cannot change; a member without details shows only a clipped name.
   function rowTooltip(item) {
-    return {
-      text: item.detail || '',
-      rows:
-        item.locked && item.lockedReason ? [{ value: item.lockedReason }] : [],
-      placement: 'right',
-      alignTo: '.s-check-row__name',
-    };
+    const text = item.detail || '';
+    const rows = [
+      ...(item.detailRows ?? []),
+      ...(item.locked && item.lockedReason
+        ? [{ value: item.lockedReason }]
+        : []),
+    ];
+    const placement = { placement: 'right', alignTo: '.s-check-row__name' };
+    if (!item.detailTitle && !text && rows.length === 0) {
+      return {
+        text: item.name,
+        mono: !plainNames,
+        whenTruncated: true,
+        ...placement,
+      };
+    }
+    return { title: item.detailTitle || item.name, text, rows, ...placement };
   }
 
   function rowContextMenu(item) {

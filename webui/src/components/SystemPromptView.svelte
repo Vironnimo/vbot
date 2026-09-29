@@ -390,9 +390,14 @@
                         >{t('systemPrompt.blockList.off')}</Badge
                       >{/if}
                     {#if editor.isCustomBlock(block)}
-                      <Badge variant="info">
-                        {t('systemPrompt.blockList.customBadge')}
-                      </Badge>
+                      <span
+                        class="tooltip-anchor"
+                        use:tooltip={t('systemPrompt.blockList.customHint')}
+                      >
+                        <Badge variant="info">
+                          {t('systemPrompt.blockList.customBadge')}
+                        </Badge>
+                      </span>
                     {/if}
                     {#if block.kind === 'data'}
                       <span
@@ -428,9 +433,7 @@
                     {#if block.editable && block.isDirty}
                       <span
                         class="tooltip-anchor"
-                        use:tooltip={t(
-                          'systemPrompt.fragmentEditor.dirtyIndicator',
-                        )}
+                        use:tooltip={t('systemPrompt.fragmentEditor.dirtyHint')}
                       >
                         <Badge variant="warn">
                           {t('systemPrompt.fragmentEditor.dirtyIndicator')}

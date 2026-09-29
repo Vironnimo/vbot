@@ -20,9 +20,43 @@ const { default: CalendarView } = await import('../CalendarView.svelte');
 function calendarWindow({
   events = [],
   occurrences = [],
+  cron = [],
   timezone = 'UTC',
 } = {}) {
-  return { events, occurrences, cron: [], system_timezone: timezone };
+  return { events, occurrences, cron, system_timezone: timezone };
+}
+
+function occurrence(title, startUtc, endUtc) {
+  return {
+    event_id: `evt-${title}`,
+    title,
+    all_day: false,
+    recurring: false,
+    notes: null,
+    start_utc: startUtc,
+    end_utc: endUtc,
+    start_date: null,
+    end_date: null,
+    occurrence_start: startUtc,
+  };
+}
+
+// The open quick tooltip's rows as [label, value] pairs.
+function tooltipRows() {
+  return [...document.querySelectorAll('#app-tooltip dd')].map((value) => [
+    value.previousElementSibling?.tagName === 'DT'
+      ? value.previousElementSibling.textContent
+      : '',
+    value.textContent,
+  ]);
+}
+
+function focusWithKeyboard(element) {
+  document.body.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+  );
+  element.focus();
+  flushSync();
 }
 
 function serveWindow(window) {
@@ -190,7 +224,7 @@ describe('CalendarView', () => {
       });
 
       document
-        .querySelector(`button[aria-label="${t('calendar.prev')}"]`)
+        .querySelector(`button[aria-label="${t('calendar.prevWeek')}"]`)
         .click();
       flushSync();
       expect(navigation.place).toEqual(['week', '2026-08-26']);
@@ -364,6 +398,18 @@ describe('CalendarView', () => {
       );
       mountedComponent = await mountCalendarView();
 
+      // The entry's card gives the complete title and the zone of its time.
+      focusWithKeyboard(
+        document.querySelector('.calendar-cell .calendar-entry'),
+      );
+      expect(
+        document.querySelector('#app-tooltip .app-tooltip__title').textContent,
+      ).toBe('Dentist');
+      expect(tooltipRows()[1]).toEqual([
+        t('calendar.details.timeZone'),
+        'Europe/Berlin',
+      ]);
+
       document.querySelector('.calendar-cell .calendar-entry').click();
       flushSync();
 
@@ -398,6 +444,67 @@ describe('CalendarView', () => {
       ]);
     });
 
+    it('explains Schedule Runs, hidden entries and layers in tooltips', async () => {
+      const hour = (value) => `2026-09-23T${value}:00:00+00:00`;
+      serveWindow(
+        calendarWindow({
+          occurrences: ['07', '08', '09', '10', '11'].map((value, index) =>
+            occurrence(`Event ${index + 1}`, hour(value), hour(value)),
+          ),
+          cron: [
+            {
+              job_id: 'job-1',
+              name: 'Nightly digest',
+              fire_at: hour('06'),
+              schedule_type: 'cron',
+            },
+          ],
+        }),
+      );
+      mountedComponent = await mountCalendarView();
+
+      // A Schedule Run says that clicking opens its Schedule.
+      focusWithKeyboard(document.querySelector('.calendar-entry--cron'));
+      expect(
+        document.querySelector('#app-tooltip .app-tooltip__title').textContent,
+      ).toBe('Nightly digest');
+      expect(
+        document.querySelector('#app-tooltip .app-tooltip__text').textContent,
+      ).toBe(t('calendar.details.cronLead'));
+
+      // The "+N" marker lists the entries the cell has no room for.
+      const more = document.querySelector('.calendar-entry-more');
+      expect(more.textContent).toBe('+2');
+      document.activeElement.blur();
+      more.dispatchEvent(new MouseEvent('pointerenter'));
+      await vi.waitFor(() =>
+        expect(
+          document.querySelector('#app-tooltip .app-tooltip__title')
+            ?.textContent,
+        ).toBe(t('calendar.details.more')),
+      );
+      expect(tooltipRows().map(([, value]) => value)).toEqual([
+        'Event 4',
+        'Event 5',
+      ]);
+      more.dispatchEvent(new MouseEvent('pointerleave'));
+
+      // A layer chip is a pressed toggle that counts its entries in the view.
+      const chip = document.querySelector('.calendar-chip--local');
+      expect(chip.getAttribute('aria-pressed')).toBe('true');
+      focusWithKeyboard(chip);
+      expect(
+        document.querySelector('#app-tooltip .app-tooltip__title').textContent,
+      ).toBe(t('calendar.layer.local'));
+      expect(tooltipRows()).toEqual([
+        [t('calendar.layer.inView'), '5'],
+        ['', t('calendar.layer.shown')],
+      ]);
+      chip.click();
+      flushSync();
+      expect(chip.getAttribute('aria-pressed')).toBe('false');
+    });
+
     it('deletes only the chosen occurrence of a recurring event additively', async () => {
       serveWindow(
         calendarWindow({
@@ -425,6 +532,14 @@ describe('CalendarView', () => {
         }),
       );
       mountedComponent = await mountCalendarView();
+      // The entry's card names how the series repeats.
+      focusWithKeyboard(
+        document.querySelector('.calendar-cell .calendar-entry'),
+      );
+      expect(tooltipRows()).toContainEqual([
+        t('calendar.form.recurrence'),
+        t('calendar.form.freqWeekly'),
+      ]);
       document.querySelector('.calendar-cell .calendar-entry').click();
       flushSync();
 

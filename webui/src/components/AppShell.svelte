@@ -11,6 +11,7 @@
   } from '$lib/connectionState.js';
   import { createDesktopContextMenu } from './shell/menu.svelte.js';
   import { voiceIndicator } from './voice/voiceLabels.js';
+  import { formatMoment } from '$lib/timeText.js';
   import { useNavigation } from '$lib/navigation.svelte.js';
 
   let {
@@ -226,6 +227,49 @@
         ? t('status.notReachable')
         : t('status.reconnecting'),
   );
+
+  // When the shown connection state began: the first state counts from
+  // when the page loaded.
+  let statusSince = $state(Date.now());
+  let statusSinceFor = untrack(() => connectionStatus);
+  $effect(() => {
+    if (connectionStatus !== statusSinceFor) {
+      statusSinceFor = connectionStatus;
+      statusSince = Date.now();
+    }
+  });
+
+  // The footer's connection card: the state, which server the page talks
+  // to, and since when the state holds.
+  function connectionDetails() {
+    return {
+      title: statusLabel,
+      rows: [
+        {
+          label: t('status.details.server'),
+          value: window.location?.host || '',
+          mono: true,
+        },
+        {
+          label: t('status.details.since'),
+          value: formatMoment(statusSince),
+        },
+      ],
+      placement: 'right',
+    };
+  }
+
+  // The microphone's state, and what a click does (a recording's own text
+  // already says it).
+  function micDetails() {
+    return micIndicator.recording
+      ? { text: micIndicator.tooltip, placement: 'right' }
+      : {
+          title: micIndicator.tooltip,
+          text: t('voice.mic.openSettingsHint'),
+          placement: 'right',
+        };
+  }
 
   const statusAriaLabel = $derived(
     connectionStatus === CONNECTION_STATUS_CONNECTED
@@ -509,7 +553,7 @@
           <button
             type="button"
             class="sidebar-footer__mic"
-            use:tooltip={{ text: micIndicator.tooltip, placement: 'right' }}
+            use:tooltip={micDetails}
             aria-label={micIndicator.tooltip}
             onclick={handleMicIndicatorClick}
           >
@@ -526,15 +570,15 @@
           </button>
         </div>
       {/if}
-      <div class="sidebar-footer__row" aria-label={statusAriaLabel}>
+      <div
+        class="sidebar-footer__row sidebar-footer__connection"
+        aria-label={statusAriaLabel}
+        use:tooltip={connectionDetails}
+      >
         <svg
           class="conn-icon {statusIconClass}"
           viewBox="0 0 16 16"
           aria-hidden="true"
-          use:tooltip={{
-            text: railCompact ? statusLabel : '',
-            placement: 'right',
-          }}
         >
           <path d="M5 1.5v3.5M11 1.5v3.5" />
           <rect x="3.5" y="5" width="9" height="5.5" rx="1.2" />

@@ -216,12 +216,12 @@ describe('AppShell sidebar', () => {
     ],
     [
       'connection',
-      '.conn-icon',
+      '.sidebar-footer__connection',
       { connectionStatus: CONNECTION_STATUS_CONNECTED },
       'status.connected',
     ],
   ])(
-    'shows the %s status as a tooltip when collapsed',
+    'shows the %s status as a details card when collapsed',
     async (_label, selector, props, tooltipKey) => {
       mountShell(props);
       sidebarToggle().click();
@@ -236,8 +236,16 @@ describe('AppShell sidebar', () => {
           document.querySelector('#app-tooltip')?.dataset.floatingOpen,
         ).toBe('true'),
       );
-      expect(document.querySelector('#app-tooltip').textContent).toBe(
+      const card = document.querySelector('#app-tooltip');
+      expect(card.querySelector('.app-tooltip__title').textContent).toBe(
         t(tooltipKey),
+      );
+      // The microphone names what a click does; the connection names the
+      // server and since when the state holds.
+      expect(card.textContent).toContain(
+        selector === '.sidebar-footer__mic'
+          ? t('voice.mic.openSettingsHint')
+          : t('status.details.since'),
       );
     },
   );

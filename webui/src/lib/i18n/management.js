@@ -149,6 +149,22 @@ export default Object.freeze({
   'skills.menu.deactivateIn': 'Deactivate in {name}',
   'skills.editInstructions': 'Edit instructions',
   'skills.readOnly': 'Read only',
+  'skills.readOnlyReason.invalid':
+    'This package cannot be loaded, so it cannot be edited here.',
+  'skills.readOnlyReason.bundled':
+    'Bundled skills ship with vBot and change only with vBot updates.',
+  'skills.readOnlyReason.project':
+    'Project skills belong to the Project’s repository; edit them there.',
+  'skills.readOnlyReason.source':
+    'This skill comes from {name}; change it at its source.',
+  'skills.readOnlyReason.other': 'This package cannot be edited here.',
+  'skills.details.source': 'Source',
+  'skills.details.access': 'Access',
+  'skills.details.notes': 'Requirements',
+  'skills.details.missing': 'Missing',
+  'skills.collectionCount.library': 'Skill packages: {count}',
+  'skills.collectionCount.agent': 'Skills active for this Agent: {count}',
+  'skills.collectionCount.project': 'Skills active in this Project: {count}',
   'skills.access.title': 'Access',
   'skills.access.privateHelp':
     'Its owner has this private skill unless it turns it off here. Tick other Agents to share it: they use and can edit this original, if their own skill selection allows it.',
@@ -245,6 +261,9 @@ export default Object.freeze({
   'inherit.hintProviderDefault':
     'Provider default — nothing is set here or in the global defaults.',
   'inherit.resetToInherit': 'Reset to inherited value',
+  'inherit.resetToValue':
+    'Reset to the inherited value: {value} (global default)',
+  'inherit.resetToProviderDefault': 'Reset to the provider default',
   'inherit.editGlobalDefaults': 'Edit global defaults',
   'agents.title': 'Agents',
   'agents.loading': 'Loading agents…',
@@ -295,7 +314,13 @@ export default Object.freeze({
   'agents.access.allProjectAgents': 'All Project Agents',
   'agents.access.filterAgents': 'Filter Agents',
   'agents.access.filterAgentsPlaceholder': 'Filter Agents…',
-  'agents.access.projectAgentDetail': '{agent} · {project}',
+  'agents.access.project': 'Project',
+  'agents.details.id': 'Agent ID',
+  'agents.details.modelInherited': 'Model inherited from the global defaults',
+  'agents.details.modelNotConfigured':
+    'Neither this Agent nor the global defaults set a Model.',
+  'agents.details.connection': 'Connection',
+  'agents.details.anyConnection': 'Chosen when a Run starts',
   'agents.deleteTitle': 'Delete this Agent',
   'agents.deleteDescription':
     'Moves the Agent to the archive. An Agent that is still referenced or has active Runs cannot be deleted.',
@@ -566,6 +591,9 @@ export default Object.freeze({
   'projects.team.overrideModelPlaceholder': 'No override',
   'projects.team.overrideTemperaturePlaceholder': 'e.g. 0.7',
   'projects.team.sourceFile': 'Source: {path} ({format})',
+  'projects.team.address': 'Address',
+  'projects.team.sourceFileLabel': 'Source file',
+  'projects.team.valueWithSource': '{value} · from {source}',
   'projects.team.agentTargetsUnavailable':
     'Sub-Agent tools are not available to this Agent.',
   'projects.team.agentTargetsSelf':
@@ -588,6 +616,9 @@ export default Object.freeze({
   'projects.report.finding.agent': 'Agent {agentId}',
   'projects.report.finding.source': 'Source: {source}',
   'projects.rePoint.title': 'Repository not found',
+  'projects.details.repository': 'Repository',
+  'projects.details.id': 'Project ID',
+  'projects.details.added': 'Added',
   'projects.rePoint.description':
     'The repository folder for this project no longer exists. Point it at the new location to restore the project.',
   'projects.rePoint.cwd': 'New repository path',
@@ -651,6 +682,8 @@ export default Object.freeze({
   'systemPrompt.fragmentEditor.save': 'Save',
   'systemPrompt.fragmentEditor.reset': 'Reset',
   'systemPrompt.fragmentEditor.dirtyIndicator': 'unsaved',
+  'systemPrompt.fragmentEditor.dirtyHint':
+    'Edited since the last save. It saves automatically after a short pause.',
   'systemPrompt.fragmentEditor.modifiedIndicator': 'modified',
   'systemPrompt.fragmentEditor.modifiedHint':
     'Edited — differs from the built-in default.',
@@ -701,6 +734,8 @@ export default Object.freeze({
   'systemPrompt.blockList.resetLayoutConfirm':
     'Reset block order and visibility to the default? This cannot be undone.',
   'systemPrompt.blockList.customBadge': 'custom',
+  'systemPrompt.blockList.customHint':
+    'A block you added, not one of vBot’s built-in blocks. It can be removed.',
   'systemPrompt.blockList.dataBadge': 'auto',
   'systemPrompt.blockList.dataHint':
     'Generated content — rebuilt automatically, not editable.',

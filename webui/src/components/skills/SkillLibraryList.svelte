@@ -13,7 +13,7 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import { isContextMenuKey } from '../ui/contextMenu.js';
-  import { skillAccessSummary } from './skillAccess.js';
+  import { skillAccessSummary, skillRowDetails } from './skillAccess.js';
   import {
     skillDiagnosticLines,
     skillSourceLabel,
@@ -87,11 +87,7 @@
             class:skills-row--current={currentId === entry.id}
             class:skills-row--disabled={entry.disabled}
             data-skill-id={entry.id}
-            use:tooltip={{
-              text: entry.description,
-              placement: 'right',
-              alignTo: '.skills-row-name',
-            }}
+            use:tooltip={() => skillRowDetails(entry, agents, projects)}
             onclick={() => onOpen(entry)}
             oncontextmenu={(event) => openMenu(entry, event)}
             onkeydown={(event) => {

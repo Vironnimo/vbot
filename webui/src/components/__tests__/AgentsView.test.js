@@ -391,6 +391,23 @@ describe('AgentsView', () => {
     expect(agentItem.closest('.agent-list-row').firstElementChild).toBe(
       agentItem,
     );
+
+    // The row's details card gives the complete Model and the id.
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+    agentItem.focus();
+    const card = document.getElementById('app-tooltip');
+    expect(card.querySelector('.app-tooltip__title').textContent).toBe('Alpha');
+    const rows = Object.fromEntries(
+      [...card.querySelectorAll('dt')].map((term) => [
+        term.textContent,
+        term.nextElementSibling.textContent,
+      ]),
+    );
+    expect(rows[t('agents.form.model')]).toBe('openai/gpt-5.2');
+    expect(rows[t('agents.details.id')]).toBe('alpha');
+    expect(card.dataset.floatingSide).toBe('right');
   });
 
   it('opens Add as a compact modal and sends selected create payload', async () => {

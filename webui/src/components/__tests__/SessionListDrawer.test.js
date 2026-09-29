@@ -218,7 +218,7 @@ describe('SessionListDrawer list', () => {
     }
   });
 
-  it('moves secondary Session metadata into the row tooltip', async () => {
+  it('moves secondary Session metadata into the row details card', async () => {
     api.listSessions.mockResolvedValue({
       sessions: [
         session('child-session-with-a-long-identifier', {
@@ -231,42 +231,76 @@ describe('SessionListDrawer list', () => {
             session_id: 'parent-session',
           },
         }),
+        session('fork-copy', {
+          title: 'Fork copy',
+          fork_source: { agent_id: 'alpha', session_id: 'origin-session' },
+        }),
+        session('origin-session', { title: 'Release planning' }),
       ],
     });
-    drawer.mount({ currentSessionId: 'child-session-with-a-long-identifier' });
-    await waitForCondition(() => rowCount() === 1);
+    drawer.mount({
+      currentSessionId: 'child-session-with-a-long-identifier',
+      initialFilters: { subagents: true },
+      agents: [{ address: 'orchestrator', name: 'Orchestrator' }],
+    });
+    await waitForCondition(() => rowCount() === 3);
 
-    const sessionButton = document.querySelector('.session-row__select');
     const lastActive = t('sessions.last_active');
+    const created = t('sessions.details.created');
     const sourceChannel = t('sessions.source_channel');
     const parent = t('sessions.subagent_parent');
-    expect(sessionButton.textContent).toContain('Child session title');
+    const originId = t('sessions.details.originId');
+    const forkedFrom = t('sessions.details.forkedFrom');
+    const [childButton, forkButton] = document.querySelectorAll(
+      '.session-row__select',
+    );
+    expect(childButton.textContent).toContain('Child session title');
     for (const label of [lastActive, sourceChannel, parent]) {
-      expect(sessionButton.textContent).not.toContain(label);
+      expect(childButton.textContent).not.toContain(label);
     }
 
     vi.useFakeTimers();
-    sessionButton.focus();
-    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
-    flushSync();
+    async function detailsOf(button) {
+      button.focus();
+      await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+      flushSync();
+      const tooltipElement = document.getElementById('app-tooltip');
+      return {
+        tooltipElement,
+        title: tooltipElement.querySelector('.app-tooltip__title').textContent,
+        rows: Object.fromEntries(
+          [...tooltipElement.querySelectorAll('dt')].map((term) => [
+            term.textContent,
+            term.nextElementSibling?.textContent,
+          ]),
+        ),
+      };
+    }
 
-    const tooltipElement = document.getElementById('app-tooltip');
-    expect(
-      tooltipElement.querySelector('.app-tooltip__title').textContent,
-    ).toBe('Child session title');
-    const details = Object.fromEntries(
-      [...tooltipElement.querySelectorAll('dt')].map((term) => [
-        term.textContent,
-        term.nextElementSibling?.textContent,
-      ]),
-    );
-    expect(details).toMatchObject({
+    const child = await detailsOf(childButton);
+    expect(child.title).toBe('Child session title');
+    // An unlisted parent leads with its Agent's name, then its id.
+    expect(child.rows).toMatchObject({
       [sourceChannel]: 'telegram-main',
-      [parent]: 'orchestrator/parent-session',
+      [parent]: t('sessions.details.originOfAgent', { agent: 'Orchestrator' }),
+      [originId]: 'parent-session',
     });
-    expect(details[lastActive]).toBeTruthy();
+    // Moments are absolute and relative; creation differs from activity.
+    expect(child.rows[lastActive]).toContain(' · ');
+    expect(child.rows[created]).toContain(' · ');
     // Beside the row, so the card never covers the neighbouring Sessions.
-    expect(tooltipElement.dataset.floatingSide).toBe('right');
+    expect(child.tooltipElement.dataset.floatingSide).toBe('right');
+
+    // A listed fork source is named instead of identified.
+    const fork = await detailsOf(forkButton);
+    expect(fork.rows[forkedFrom]).toBe(
+      t('sessions.details.originValue', {
+        session: 'Release planning',
+        agent: 'alpha',
+      }),
+    );
+    expect(fork.rows).not.toHaveProperty(originId);
+    expect(fork.rows).not.toHaveProperty(created);
   });
 
   it('reveals labelled execution Sessions through the filters and selects them with their sub-agent flag', async () => {

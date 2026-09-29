@@ -5,6 +5,7 @@
   import Button from '../ui/Button.svelte';
   import SortableList from '../ui/SortableList.svelte';
   import TextField from '../ui/TextField.svelte';
+  import { tooltip } from '$lib/tooltip.js';
   let { projectsState = $bindable(), projectsController } = $props();
 
   function addAutoLoadEntry() {
@@ -62,7 +63,14 @@
               projectsController.moveAutoLoadEntry(from, to)}
           >
             {#snippet item(filePath, index)}
-              <span class="projects-file-name">{filePath}</span>
+              <span
+                class="projects-file-name"
+                use:tooltip={{
+                  text: filePath,
+                  mono: true,
+                  whenTruncated: true,
+                }}>{filePath}</span
+              >
               <button
                 type="button"
                 class="projects-file-remove"

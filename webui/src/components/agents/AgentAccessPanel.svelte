@@ -55,7 +55,22 @@
       name: target.name,
       kind: target.kind,
       allowed: target.isAllowed,
-      detail: target.description,
+      detailTitle:
+        target.displayName && target.displayName !== target.name
+          ? target.displayName
+          : '',
+      detail: target.unavailable
+        ? t('agents.access.unavailableAgentTarget')
+        : '',
+      detailRows:
+        target.kind === 'project'
+          ? [
+              {
+                label: t('agents.access.project'),
+                value: target.projectName || target.projectId || '',
+              },
+            ]
+          : [],
       state: target.unavailable
         ? {
             text: t('agents.access.unavailableAgentState'),
@@ -120,23 +135,8 @@
 
     return [...catalog, ...missingTargets].map((target) => ({
       ...target,
-      description: agentTargetDescription(target),
       isAllowed: hasWildcard || currentItems.includes(target.name),
     }));
-  }
-
-  // The row's tooltip; the group already names the target kind.
-  function agentTargetDescription(target) {
-    if (target.unavailable) {
-      return t('agents.access.unavailableAgentTarget');
-    }
-    if (target.kind === 'project') {
-      return t('agents.access.projectAgentDetail', {
-        agent: target.displayName || target.name,
-        project: target.projectName || target.projectId,
-      });
-    }
-    return target.displayName || '';
   }
 
   function agentToggleLabel(name) {

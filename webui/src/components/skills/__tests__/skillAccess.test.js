@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { init } from '../../../lib/i18n.js';
+import { init, t } from '../../../lib/i18n.js';
 import {
   accessPatch,
   agentSkillView,
@@ -247,6 +247,27 @@ describe('agentSkillView', () => {
         'Granted by project Repo. Change it in that project’s skills.',
       lockedBy: 'Repo',
     });
+
+    // Several missing requirements: the state names the first, the row's
+    // tooltip lists them all.
+    const fetchRow = agentSkillView(main, skillAccessOf(main), {
+      ...context,
+      inventory: inventory.map((item) =>
+        item.id === 'g-fetch'
+          ? { ...item, missing: ['env:TOKEN', 'bin:gh'] }
+          : item,
+      ),
+    }).groups[2].items[1];
+    expect(fetchRow.state.text).toBe(
+      t('skills.access.missingMore', { first: 'env:TOKEN', count: 1 }),
+    );
+    expect(fetchRow.detailRows).toEqual([
+      {
+        label: t('skills.details.missing'),
+        value: 'env:TOKEN\nbin:gh',
+        mono: true,
+      },
+    ]);
   });
 
   it.each([

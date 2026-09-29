@@ -10,6 +10,7 @@
     sessionSummary,
     lastResultSupport,
     remainingRunsLabel,
+    scheduleRowDetails,
     statusLabel,
     statusChipVariant,
     outcomeLabel,
@@ -433,6 +434,7 @@
                   class:active={!editor.isCreating &&
                     job.id === editor.selectedJobId}
                   data-testid={`cron-item-${job.id}`}
+                  use:tooltip={() => scheduleRowDetails(job, { agentLabel })}
                   onclick={() => editor.selectJob(job)}
                 >
                   <span class="cron-item-inner">
@@ -444,25 +446,11 @@
                         role="img"
                         aria-label={statusLabel(job.status)}
                       ></span>
-                      <span
-                        class="cron-item-name"
-                        use:tooltip={{
-                          text: job.name,
-                          placement: 'right',
-                          whenTruncated: true,
-                        }}
-                      >
+                      <span class="cron-item-name">
                         {job.name}
                       </span>
                     </span>
-                    <span
-                      class="cron-item-detail"
-                      use:tooltip={{
-                        text: listRowDetail(job, viewState.systemTimezone),
-                        placement: 'right',
-                        whenTruncated: true,
-                      }}
-                    >
+                    <span class="cron-item-detail">
                       {listRowDetail(job, viewState.systemTimezone)}
                     </span>
                   </span>

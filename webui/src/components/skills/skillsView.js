@@ -259,3 +259,27 @@ export function skillDiagnosticLines(entry) {
 export function createSkillDocument(name, description, instructions) {
   return `---\nname: ${JSON.stringify(name.trim())}\ndescription: ${JSON.stringify(description.trim())}\n---\n\n${instructions}`;
 }
+
+/** Why a package's page is read only (`editable_scope` is empty). */
+export function skillReadOnlyReason(entry) {
+  if (entry.status === 'invalid') return t('skills.readOnlyReason.invalid');
+  if (entry.origin === 'bundled') return t('skills.readOnlyReason.bundled');
+  if (entry.origin?.startsWith('project:'))
+    return t('skills.readOnlyReason.project');
+  const label = humanizeSourceLabel(entry.source_label);
+  return label
+    ? t('skills.readOnlyReason.source', { name: label })
+    : t('skills.readOnlyReason.other');
+}
+
+/** What a collection's count counts. */
+export function skillCollectionCountText(collection) {
+  switch (collection?.section) {
+    case 'agents':
+      return t('skills.collectionCount.agent', { count: collection.count });
+    case 'projects':
+      return t('skills.collectionCount.project', { count: collection.count });
+    default:
+      return t('skills.collectionCount.library', { count: collection?.count });
+  }
+}

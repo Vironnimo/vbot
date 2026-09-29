@@ -487,6 +487,22 @@ describe('AgentsView behavior and access', () => {
       document.body.querySelector('button[aria-label="Toggle agent alpha"]'),
     ).toBeNull();
 
+    // A target's card leads with its display name; a Project target adds
+    // its Project.
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+    getButtonByAriaLabel('Toggle agent builder@vbot').focus();
+    const card = document.getElementById('app-tooltip');
+    expect(card.querySelector('.app-tooltip__title').textContent).toBe(
+      'Builder',
+    );
+    expect(card.querySelector('dt').textContent).toBe(
+      t('agents.access.project'),
+    );
+    expect(card.querySelector('dd').textContent).toBe('vBot');
+    getButtonByAriaLabel('Toggle agent builder@vbot').blur();
+
     vi.useFakeTimers();
     getButtonByAriaLabel('Toggle agent worker').click();
     flushSync();
@@ -711,7 +727,12 @@ describe('AgentsView behavior and access', () => {
       new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
     );
     getButtonByAriaLabel('Toggle skill sample-skill').focus();
-    expect(document.getElementById('app-tooltip').textContent).toBe(
+    // The card heads with the complete name and holds the description.
+    const card = document.getElementById('app-tooltip');
+    expect(card.querySelector('.app-tooltip__title').textContent).toBe(
+      'sample-skill',
+    );
+    expect(card.querySelector('.app-tooltip__text').textContent).toBe(
       'A loadable sample skill.',
     );
     const skillToggle = getButtonByAriaLabel('Toggle skill warning-skill');

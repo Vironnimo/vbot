@@ -226,6 +226,30 @@ describe('ProjectsView list and selection', () => {
     view.mount();
     await selectDemo();
 
+    // The row's details card says why the Project needs attention and gives
+    // the complete path and id.
+    buttonByTestId('project-toggle-demo').focus();
+    await vi.waitFor(() =>
+      expect(document.getElementById('app-tooltip')?.dataset.floatingOpen).toBe(
+        'true',
+      ),
+    );
+    const card = document.getElementById('app-tooltip');
+    expect(card.querySelector('.app-tooltip__title').textContent).toBe('Demo');
+    expect(card.querySelector('.app-tooltip__text').textContent).toBe(
+      t('projects.rePoint.description'),
+    );
+    const rows = Object.fromEntries(
+      [...card.querySelectorAll('dt')].map((term) => [
+        term.textContent,
+        term.nextElementSibling.textContent,
+      ]),
+    );
+    expect(rows[t('projects.details.repository')]).toBe('C:/repos/default');
+    expect(rows[t('projects.details.id')]).toBe('demo');
+    expect(rows[t('projects.details.added')]).toContain(' · ');
+    expect(card.dataset.floatingSide).toBe('right');
+
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-repoint-demo"]'),
     );
@@ -428,6 +452,18 @@ describe('ProjectsView Project settings', () => {
     expect(
       document.querySelector('.projects-inherit-hint').textContent,
     ).toContain('0.7');
+
+    // An own value's reset control names the value it returns to.
+    setInputValue('project-edit-temperature', '0.3');
+    await waitForCondition(() =>
+      document.querySelector('[aria-label="Reset to inherited value"]'),
+    );
+    document.querySelector('[aria-label="Reset to inherited value"]').focus();
+    await vi.waitFor(() =>
+      expect(document.getElementById('app-tooltip')?.textContent).toBe(
+        t('inherit.resetToValue', { value: '0.7' }),
+      ),
+    );
   });
 
   it('auto-saves each Project edit after the debounce without a Save click', async () => {
@@ -720,9 +756,9 @@ describe('ProjectsView Tool and Skill whitelists', () => {
       new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
     );
     toggleByAriaLabel('Toggle skill debugging').focus();
-    expect(document.getElementById('app-tooltip').textContent).toBe(
-      'Debug the repo.',
-    );
+    expect(
+      document.querySelector('#app-tooltip .app-tooltip__text').textContent,
+    ).toBe('Debug the repo.');
 
     toggleByAriaLabel('Toggle skill debugging').click();
     toggleByAriaLabel('Toggle skill deploy').click();

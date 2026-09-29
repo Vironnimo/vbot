@@ -89,6 +89,28 @@ describe('ProjectsView Team', () => {
         'Builds things',
       );
     });
+    // The card adds the address, every effective value with its source, and
+    // the defining file.
+    const card = document.getElementById('app-tooltip');
+    expect(card.querySelector('.app-tooltip__title').textContent).toBe(
+      'Builder',
+    );
+    const rows = Object.fromEntries(
+      [...card.querySelectorAll('dt')].map((term) => [
+        term.textContent,
+        term.nextElementSibling.textContent,
+      ]),
+    );
+    expect(rows[t('projects.team.address')]).toBe('builder@demo');
+    expect(rows[t('projects.team.effectiveTemperature')]).toBe(
+      t('projects.team.valueWithSource', {
+        value: '0.2',
+        source: t('projects.team.sourceAgentFile'),
+      }),
+    );
+    expect(rows[t('projects.team.sourceFileLabel')]).toBe(
+      '.opencode/agents/builder.md',
+    );
     header.blur();
 
     await expandMember('builder');
