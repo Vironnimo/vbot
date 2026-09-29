@@ -5,15 +5,13 @@
   import {
     backgroundTasks,
     sessionChangeStats,
-    changeStatsLabel,
-    changeStatsParts,
-    changeStatsTooltip,
     reflectionElapsedLabel,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
 
   import Button from '../ui/Button.svelte';
+  import ChangeStats from './ChangeStats.svelte';
 
   let {
     timelineItems = [],
@@ -64,12 +62,6 @@
     activeTasks.length + activeReflections.length,
   );
   let sessionStats = $derived(sessionChangeStats(timelineItems));
-  let sessionStatsParts = $derived(changeStatsParts(sessionStats));
-  // The panel sits at the right edge, so its tooltips open to the left.
-  let sessionStatsTooltip = $derived(
-    changeStatsTooltip(sessionStats, { placement: 'left' }),
-  );
-  let sessionStatsLabel = $derived(changeStatsLabel(sessionStats));
 
   const panelId = $props.id();
   const runningLabel = (count) => t('chat.activity.runningCount', { count });
@@ -426,25 +418,9 @@
             {t('chat.activity.statsTitle')}
           </h3>
           {#if sessionStats}
-            <!-- The change block is focusable so keyboard users reach the
-               file-list tooltip; the aria-label already carries the full
-               summary for screen readers. -->
-            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-            <p
-              class="chat-activity__stats-value"
-              aria-label={sessionStatsLabel}
-              use:tooltip={sessionStatsTooltip}
-              tabindex="0"
-            >
-              {#each sessionStatsParts as changePart (changePart.kind)}
-                <span
-                  class="chat-activity__stats-part"
-                  class:chat-activity__stats-part--added={changePart.kind ===
-                    'added'}
-                  class:chat-activity__stats-part--removed={changePart.kind ===
-                    'removed'}>{changePart.text}</span
-                >
-              {/each}
+            <!-- The panel sits at the right edge, so its card opens to the left. -->
+            <p class="chat-activity__stats-value">
+              <ChangeStats stats={sessionStats} placement="left" />
             </p>
           {:else}
             <p class="chat-activity__stats-empty">
@@ -675,19 +651,6 @@
     font-variant-numeric: tabular-nums;
     color: var(--text-med);
   }
-  .chat-activity__stats-value {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    border-radius: var(--r-sm);
-    cursor: default;
-  }
-  .chat-activity__stats-part--added {
-    color: var(--green);
-  }
-  .chat-activity__stats-part--removed {
-    color: var(--red);
-  }
   .chat-activity__empty {
     margin: 0;
     padding: 8px;
@@ -864,7 +827,6 @@
   }
   :global(.chat-activity__rail.btn-tertiary:focus-visible),
   summary:focus-visible,
-  .chat-activity__stats-value:focus-visible,
   :global(.chat-activity__task-link.btn-tertiary:focus-visible),
   :global(.chat-activity__parent-link.btn-tertiary:focus-visible) {
     outline: 1px solid var(--accent);

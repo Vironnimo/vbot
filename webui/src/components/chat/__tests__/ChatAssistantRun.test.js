@@ -14,7 +14,6 @@ import {
   toolChild,
 } from './ChatAssistantRun.support.js';
 import { t } from '../../../lib/i18n.js';
-import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 function rowCancel(kind) {
   return document.querySelector(`.row-cancel[data-cancel="${kind}"]`);
@@ -520,50 +519,15 @@ describe('ChatAssistantRun', () => {
         [...footer().querySelectorAll('.run-footer__part')].map(
           (part) => part.textContent,
         ),
-      ).toEqual([
-        t('chat.runStatus.completed'),
-        '8.0s',
-        filesChanged,
-        '+3',
-        '-2',
-      ]);
+      ).toEqual([t('chat.runStatus.completed'), '8.0s']);
       expect(footer().querySelectorAll('.run-footer__sep')).toHaveLength(2);
-      expect(
-        footer().querySelector('.run-footer__part--added').textContent,
-      ).toBe('+3');
-      expect(
-        footer().querySelector('.run-footer__part--removed').textContent,
-      ).toBe('-2');
-      // The change block is one unit, so its label and counts never wrap
-      // apart from each other.
       expect(
         [
           ...footer().querySelectorAll(
-            '.run-footer__changes .run-footer__part',
+            '.run-footer__changes .change-stats__part',
           ),
         ].map((part) => part.textContent),
       ).toEqual([filesChanged, '+3', '-2']);
-    });
-
-    it('shows the changed files in a hover tooltip on the change block', async () => {
-      vi.useFakeTimers();
-      run.mount({
-        item: assistantRun({
-          status: 'completed',
-          durationMs: 8000,
-          items: [editChild('a.txt'), editChild('b.txt')],
-        }),
-      });
-
-      const changeBlock = document.querySelector('.run-footer__changes');
-      changeBlock.dispatchEvent(new Event('pointerenter'));
-      await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
-      flushSync();
-
-      expect(document.getElementById('app-tooltip').textContent).toBe(
-        'a.txt\nb.txt',
-      );
-      changeBlock.dispatchEvent(new Event('pointerleave'));
     });
 
     it.each([

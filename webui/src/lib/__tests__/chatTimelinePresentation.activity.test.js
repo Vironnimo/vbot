@@ -6,7 +6,7 @@ import {
   backgroundTasks,
   changeStatsLabel,
   changeStatsParts,
-  changeStatsTooltip,
+  changedFilesCard,
   formatTime,
   isReflectionRunKind,
   isRowCancellable,
@@ -226,7 +226,9 @@ describe('runFooterNotice', () => {
 });
 
 describe('change statistics', () => {
-  it('sums line changes and counts distinct files, new files included', () => {
+  const lines = (path, added, removed) => ({ path, added, removed });
+
+  it('sums line changes per file and counts distinct files, new files included', () => {
     expect(
       runChangeStats({
         type: 'assistant_run',
@@ -236,7 +238,12 @@ describe('change statistics', () => {
           editTool({ path: 'b.txt', added: 5, removed: 0, name: 'write' }),
         ],
       }),
-    ).toEqual({ files: 2, added: 9, removed: 2, paths: ['a.txt', 'b.txt'] });
+    ).toEqual({
+      files: 2,
+      added: 9,
+      removed: 2,
+      fileStats: [lines('a.txt', 4, 2), lines('b.txt', 5, 0)],
+    });
   });
 
   it('ignores tools without line-change facts and Runs without changes', () => {
@@ -267,17 +274,39 @@ describe('change statistics', () => {
   it.each([
     [
       'prefers valid server-computed git stats over the tool-fact sum',
-      { files: 1, added: 1, removed: 1, paths: ['a.txt'] },
-      { files: 1, added: 1, removed: 1, paths: ['a.txt'] },
+      {
+        files: 1,
+        added: 1,
+        removed: 1,
+        paths: ['a.txt'],
+        file_stats: [{ path: 'a.txt', added: 1, removed: 1 }],
+      },
+      { files: 1, added: 1, removed: 1, fileStats: [lines('a.txt', 1, 1)] },
+    ],
+    [
+      'leaves per-file counts unknown unless they match the server paths',
+      {
+        files: 2,
+        added: 4,
+        removed: 1,
+        paths: ['a.txt', 'b.txt'],
+        file_stats: [{ path: 'b.txt', added: 4, removed: 1 }],
+      },
+      {
+        files: 2,
+        added: 4,
+        removed: 1,
+        fileStats: [lines('a.txt', null, null), lines('b.txt', null, null)],
+      },
     ],
     [
       'falls back to the tool-fact sum for malformed server stats',
       { files: 'x', added: 1, removed: 1, paths: [] },
-      { files: 1, added: 3, removed: 2, paths: ['a.txt'] },
+      { files: 1, added: 3, removed: 2, fileStats: [lines('a.txt', 3, 2)] },
     ],
     [
       'treats a server-reported zero as no changes',
-      { files: 0, added: 0, removed: 0, paths: [] },
+      { files: 0, added: 0, removed: 0, paths: [], file_stats: [] },
       null,
     ],
   ])('%s', (_label, changeStats, expected) => {
@@ -290,7 +319,7 @@ describe('change statistics', () => {
     ).toEqual(expected);
   });
 
-  it('sums Session statistics across Runs and deduplicates files', () => {
+  it('sums Session statistics per file across Runs', () => {
     expect(
       sessionChangeStats([
         {
@@ -305,26 +334,41 @@ describe('change statistics', () => {
           ],
         },
       ]),
-    ).toEqual({ files: 2, added: 9, removed: 2, paths: ['a.txt', 'b.txt'] });
+    ).toEqual({
+      files: 2,
+      added: 9,
+      removed: 2,
+      fileStats: [lines('a.txt', 4, 2), lines('b.txt', 5, 0)],
+    });
+    const serverRun = (fileStats, withCounts = true) => ({
+      type: 'assistant_run',
+      changeStats: {
+        files: fileStats.length,
+        added: fileStats.reduce((sum, entry) => sum + entry.added, 0),
+        removed: fileStats.reduce((sum, entry) => sum + entry.removed, 0),
+        paths: fileStats.map((entry) => entry.path),
+        ...(withCounts ? { file_stats: fileStats } : {}),
+      },
+      items: [],
+    });
+    // A Run without per-file counts makes the sums of its files unknown.
     expect(
       sessionChangeStats([
-        {
-          type: 'assistant_run',
-          changeStats: { files: 1, added: 1, removed: 1, paths: ['a.txt'] },
-          items: [],
-        },
-        {
-          type: 'assistant_run',
-          changeStats: {
-            files: 2,
-            added: 5,
-            removed: 0,
-            paths: ['a.txt', 'b.txt'],
-          },
-          items: [],
-        },
+        serverRun([lines('a.txt', 1, 1)]),
+        serverRun([lines('a.txt', 2, 0), lines('b.txt', 3, 0)]),
+        serverRun([lines('c.txt', 1, 0)]),
+        serverRun([lines('c.txt', 1, 1)], false),
       ]),
-    ).toEqual({ files: 2, added: 6, removed: 1, paths: ['a.txt', 'b.txt'] });
+    ).toEqual({
+      files: 3,
+      added: 8,
+      removed: 2,
+      fileStats: [
+        lines('a.txt', 3, 1),
+        lines('b.txt', 3, 0),
+        lines('c.txt', null, null),
+      ],
+    });
     expect(sessionChangeStats([])).toBeNull();
   });
 
@@ -348,22 +392,73 @@ describe('change statistics', () => {
   it('renders nothing for missing statistics', () => {
     expect(changeStatsLabel(null)).toBe('');
     expect(changeStatsParts(null)).toEqual([]);
-    expect(changeStatsTooltip(null)).toBe('');
-    expect(changeStatsTooltip({ files: 1, added: 2, removed: 0 })).toBe('');
+    expect(changedFilesCard(null)).toBeNull();
+    expect(
+      changedFilesCard({ files: 2, added: 2, removed: 0, fileStats: [] }),
+    ).toBeNull();
   });
 
-  it('lists changed files in a selectable mono tooltip', () => {
-    const stats = { files: 2, added: 9, removed: 3, paths: ['a.txt', 'b.txt'] };
-
-    expect(changeStatsTooltip(stats)).toEqual({
-      text: 'a.txt\nb.txt',
-      mono: true,
-      selectable: true,
-      placement: 'top',
+  it.each([
+    [
+      'Windows paths below their shared directory',
+      [
+        lines('C:\\game\\src\\actors\\player.gd', 4, 1),
+        lines('C:\\game\\src\\world\\map.gd', 5, 2),
+        lines('C:\\game\\tools\\cast.gd', null, null),
+      ],
+      ['C:\\', 'game'],
+      [
+        ['player.gd', 'src\\actors', 4, 1],
+        ['map.gd', 'src\\world', 5, 2],
+        ['cast.gd', 'tools', null, null],
+      ],
+    ],
+    [
+      'a single file below its own directory',
+      [lines('/home/me/app.js', 2, 0)],
+      ['/', 'home/', 'me'],
+      [['app.js', '', 2, 0]],
+    ],
+    [
+      'relative paths without a shared directory',
+      [lines('README.md', 1, 0), lines('src/app.js', 1, 0)],
+      [],
+      [
+        ['README.md', '', 1, 0],
+        ['app.js', 'src', 1, 0],
+      ],
+    ],
+  ])('lists %s in the changed-files card', (_label, fileStats, root, rows) => {
+    const card = changedFilesCard({
+      files: fileStats.length,
+      added: 9,
+      removed: 3,
+      fileStats,
     });
-    expect(changeStatsTooltip(stats, { placement: 'left' }).placement).toBe(
-      'left',
+
+    expect(card.rootSegments).toEqual(root);
+    expect(
+      card.rows.map((row) => [row.name, row.directory, row.added, row.removed]),
+    ).toEqual(rows);
+    expect(card.rows.map((row) => row.path)).toEqual(
+      fileStats.map((entry) => entry.path),
     );
+  });
+
+  it('heads the changed-files card with the totals and counts unnamed files', () => {
+    expect(
+      changedFilesCard({
+        files: 205,
+        added: 9,
+        removed: 3,
+        fileStats: [lines('a.txt', 9, 3)],
+      }),
+    ).toMatchObject({
+      title: t('chat.changeStats.filesMany', { count: 205 }),
+      added: 9,
+      removed: 3,
+      unlisted: 204,
+    });
   });
 });
 
