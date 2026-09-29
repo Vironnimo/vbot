@@ -438,7 +438,7 @@ class EntryBatch:
     checkpoints: dict[int, sqlite3.Row] = field(default_factory=dict)
     run_ids: dict[int, str] = field(default_factory=dict)
     run_summaries: dict[int, sqlite3.Row] = field(default_factory=dict)
-    change_paths: dict[int, list[str]] = field(default_factory=dict)
+    change_paths: dict[int, list[sqlite3.Row]] = field(default_factory=dict)
     _decoded: dict[int, ChatMessage] = field(default_factory=dict)
 
     def messages(self) -> list[ChatMessage]:
@@ -606,14 +606,28 @@ class EntryBatch:
         data["timing"] = {} if timing is None else timing
         if run["changed_files"] is not None:
             changes = _json_extras(run["change_stats_extra_json"])
+            path_rows = self.change_paths.get(int(run["run_key"]), [])
             changes.update(
                 {
                     "files": run["changed_files"],
                     "added": run["lines_added"],
                     "removed": run["lines_removed"],
-                    "paths": self.change_paths.get(int(run["run_key"]), []),
+                    "paths": [str(row["path"]) for row in path_rows],
                 }
             )
+            # Runs recorded before per-file counts existed have none to report.
+            if all(
+                row["lines_added"] is not None and row["lines_removed"] is not None
+                for row in path_rows
+            ):
+                changes["file_stats"] = [
+                    {
+                        "path": str(row["path"]),
+                        "added": row["lines_added"],
+                        "removed": row["lines_removed"],
+                    }
+                    for row in path_rows
+                ]
             data["change_stats"] = changes
 
 
@@ -764,14 +778,12 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
         summaries,
     )
     summary_runs = [int(row["run_key"]) for row in batch.run_summaries.values()]
-    batch.change_paths = {
-        run_key: [str(row["path"]) for row in paths]
-        for run_key, paths in _grouped_rows(
-            connection,
-            f"SELECT run_key, path FROM run_change_paths WHERE run_key {_KEYS} ORDER BY run_key, ordinal",
-            summary_runs,
-        ).items()
-    }
+    batch.change_paths = _grouped_rows(
+        connection,
+        "SELECT run_key, path, lines_added, lines_removed FROM run_change_paths "
+        f"WHERE run_key {_KEYS} ORDER BY run_key, ordinal",
+        summary_runs,
+    )
     return batch
 
 

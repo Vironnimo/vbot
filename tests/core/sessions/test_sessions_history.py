@@ -417,6 +417,7 @@ def test_role_specific_relational_message_storage_round_trips(
             "added": 3,
             "removed": 1,
             "paths": ["core/example.py"],
+            "file_stats": [{"path": "core/example.py", "added": 3, "removed": 1}],
             "source": "git",
         },
     )
@@ -457,6 +458,10 @@ def test_role_specific_relational_message_storage_round_trips(
             "SELECT input_tokens_estimated, output_tokens_estimated, usage_extra_json "
             "FROM assistant_entries WHERE usage_present = 1"
         ).fetchone() == (None, 1, '{"provider_detail":{"tier":"test"}}')
+        # Per-file line counts live on the changed path's own row.
+        assert connection.execute(
+            "SELECT path, lines_added, lines_removed FROM run_change_paths"
+        ).fetchall() == [("core/example.py", 3, 1)]
         entries_before = connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
 
     def fail_message_reconstruction(*_args, **_kwargs):
@@ -476,6 +481,17 @@ def test_role_specific_relational_message_storage_round_trips(
         session_id=forked.address.session_id,
     ).hits
     assert [(hit.message_id, hit.address) for hit in fork_hits] == [(user.id, forked.address)]
+
+    # Runs recorded before per-file counts existed report their paths without them.
+    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        connection.execute("UPDATE run_change_paths SET lines_added = NULL, lines_removed = NULL")
+    assert session.load()[-1].change_stats == {
+        "files": 1,
+        "added": 3,
+        "removed": 1,
+        "paths": ["core/example.py"],
+        "source": "git",
+    }
 
 
 def test_recall_context_is_bounded_and_a_missing_anchor_has_none(manager) -> None:

@@ -201,10 +201,14 @@ CREATE INDEX runs_by_session ON runs (session_key, start_seq);
 -- Run lookups by Work id (Run summaries and results of delegated work).
 CREATE INDEX runs_by_work ON runs (session_key, work_id) WHERE work_id IS NOT NULL;
 
+-- lines_added/lines_removed are the path's own line counts; NULL for Runs
+-- recorded before per-file counts existed.
 CREATE TABLE run_change_paths (
   run_key INTEGER NOT NULL REFERENCES runs (run_key) ON DELETE CASCADE,
   ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
   path TEXT NOT NULL,
+  lines_added INTEGER CHECK (lines_added IS NULL OR lines_added >= 0),
+  lines_removed INTEGER CHECK (lines_removed IS NULL OR lines_removed >= 0),
   PRIMARY KEY (run_key, ordinal)
 ) STRICT, WITHOUT ROWID;
 

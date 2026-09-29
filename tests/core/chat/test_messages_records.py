@@ -29,6 +29,16 @@ from tests.core.chat.messages_test_support import FIXED_TIMESTAMP, FIXED_TIMING
 
 _STAMP = "2026-05-03T14:30:00.000000Z"
 _WEATHER_CALL = ToolCall(id="call_abc", name="get_weather", arguments={"city": "Berlin"})
+_CHANGE_STATS = {
+    "files": 2,
+    "added": 5,
+    "removed": 1,
+    "paths": ["a.txt", "b.txt"],
+    "file_stats": [
+        {"path": "a.txt", "added": 4, "removed": 0},
+        {"path": "b.txt", "added": 1, "removed": 1},
+    ],
+}
 
 
 def test_tool_call_round_trips_rejections_and_argument_sequences() -> None:
@@ -205,7 +215,7 @@ _FACTORY_SHAPES: list[tuple[str, Callable[[], ChatMessage], dict[str, Any]]] = [
             status="completed",
             timing=FIXED_TIMING,
             iteration_count=3,
-            change_stats={"files": 2, "added": 5, "removed": 1, "paths": ["a.txt"]},
+            change_stats=_CHANGE_STATS,
             timestamp=FIXED_TIMESTAMP,
         ),
         {
@@ -215,7 +225,7 @@ _FACTORY_SHAPES: list[tuple[str, Callable[[], ChatMessage], dict[str, Any]]] = [
             "work_id": "sub-work-one",
             "status": "completed",
             "iteration_count": 3,
-            "change_stats": {"files": 2, "added": 5, "removed": 1, "paths": ["a.txt"]},
+            "change_stats": _CHANGE_STATS,
         },
     ),
     (
@@ -514,6 +524,20 @@ _CHECKPOINT = {
             ),
             None,
         ),
+        (
+            _payload(
+                "run_summary",
+                **_SUMMARY,
+                change_stats={
+                    "files": 1,
+                    "added": 1,
+                    "removed": 0,
+                    "paths": ["a.txt"],
+                    "file_stats": [{"path": "b.txt", "added": 1, "removed": 0}],
+                },
+            ),
+            None,
+        ),
         (_payload("run_summary", **_SUMMARY, iteration_count=-1), None),
         (_payload("run_summary", **_SUMMARY, iteration_count=True), None),
         (_payload("run_summary", **_SUMMARY, iteration_count="1"), None),
@@ -569,6 +593,7 @@ _CHECKPOINT = {
         "sender-on-checkpoint",
         "checkpoint-without-projection",
         "negative-change-stats",
+        "file-stats-not-matching-paths",
         "negative-iteration-count",
         "bool-iteration-count",
         "string-iteration-count",

@@ -470,6 +470,7 @@ def test_patch_stats_keep_identical_session_and_run_ids_in_separate_scopes(tmp_p
             "added": added,
             "removed": 0,
             "paths": [str(tmp_path / name)],
+            "file_stats": [{"path": str(tmp_path / name), "added": added, "removed": 0}],
         }
 
 

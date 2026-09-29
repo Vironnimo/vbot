@@ -20,11 +20,17 @@ from core.utils.timestamps import utc_now_timestamp
 _OWNER_MISMATCH_ERROR = (
     "This Session no longer matches this Run. Ask the user to resume it through its Extension."
 )
+_FILE_STAT_KEYS = {"path", "added", "removed"}
 _CHANGE_STATS_VALIDATORS = {
     "files": _store_codec._is_non_negative_int,
     "added": _store_codec._is_non_negative_int,
     "removed": _store_codec._is_non_negative_int,
     "paths": lambda value: isinstance(value, list) and all(isinstance(path, str) for path in value),
+    # Only the exact stored shape is promoted; anything richer stays in the extras.
+    "file_stats": lambda value: (
+        isinstance(value, list)
+        and all(isinstance(entry, dict) and entry.keys() == _FILE_STAT_KEYS for entry in value)
+    ),
 }
 
 
@@ -203,9 +209,18 @@ def finish_run(
             run_key,
         ),
     )
+    paths = changes.get("paths", [])
+    # Validation aligned file_stats with paths entry by entry.
+    line_counts = [
+        (entry["added"], entry["removed"]) for entry in changes.get("file_stats", ())
+    ] or [(None, None)] * len(paths)
     connection.executemany(
-        "INSERT INTO run_change_paths (run_key, ordinal, path) VALUES (?, ?, ?)",
-        [(run_key, ordinal, path) for ordinal, path in enumerate(changes.get("paths", ()))],
+        "INSERT INTO run_change_paths (run_key, ordinal, path, lines_added, lines_removed) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [
+            (run_key, ordinal, path, *counts)
+            for ordinal, (path, counts) in enumerate(zip(paths, line_counts, strict=True))
+        ],
     )
     connection.execute(
         "UPDATE tool_calls SET status = ?, completed_at = ? WHERE result_entry_key IS NULL "

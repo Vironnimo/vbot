@@ -552,6 +552,29 @@ def _validate_change_stats(change_stats: _records.JsonObject) -> None:
     paths = change_stats.get("paths")
     if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
         raise ChatMessageValidationError("change_stats.paths must be an array of strings")
+    file_stats = change_stats.get("file_stats")
+    if file_stats is not None and not _file_stats_match_paths(file_stats, paths):
+        raise ChatMessageValidationError(
+            "change_stats.file_stats must hold one {path, added, removed} object "
+            "per entry of change_stats.paths, in the same order"
+        )
+
+
+def _file_stats_match_paths(file_stats: object, paths: list[str]) -> bool:
+    """Whether per-file line counts describe exactly the reported paths."""
+    if not isinstance(file_stats, list) or len(file_stats) != len(paths):
+        return False
+    return all(
+        isinstance(entry, dict)
+        and entry.get("path") == path
+        and _is_line_count(entry.get("added"))
+        and _is_line_count(entry.get("removed"))
+        for entry, path in zip(file_stats, paths, strict=True)
+    )
+
+
+def _is_line_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _validate_agent_takeover_message(message: _records.ChatMessage) -> None:

@@ -111,7 +111,7 @@ class ChangeTracker:
 
         Computes one real line diff per changed file against the run's first
         pre-mutation state, sums the added/removed lines, and returns
-        ``{files, added, removed, paths}`` — or ``None`` when the run changed
+        ``{files, added, removed, paths, file_stats}`` — or ``None`` when the run changed
         no tracked files. Reverted deltas return explicit zero totals. Entries
         detach under the lock before the expensive diff, even if it fails.
         """
@@ -134,24 +134,29 @@ class ChangeTracker:
 
 
 def _stats_from_changes(run_changes: dict[str, tuple[str, str]]) -> dict[str, object]:
-    """Aggregate one real line diff per changed file into run statistics."""
-    paths: list[str] = []
+    """Aggregate one real line diff per changed file into run statistics.
+
+    ``paths`` lists the reported files in path order; ``file_stats`` carries
+    the same files in the same order with each file's own line counts.
+    """
+    file_stats: list[dict[str, object]] = []
     added = 0
     removed = 0
-    for path, (before, after) in run_changes.items():
+    for path, (before, after) in sorted(run_changes.items()):
         diff_added, diff_removed = _line_diff_counts(before, after)
         if diff_added == 0 and diff_removed == 0:
             continue
-        paths.append(path)
+        file_stats.append({"path": path, "added": diff_added, "removed": diff_removed})
         added += diff_added
         removed += diff_removed
 
-    paths.sort()
+    reported = file_stats[:_MAX_REPORTED_PATHS]
     return {
-        "files": len(paths),
+        "files": len(file_stats),
         "added": added,
         "removed": removed,
-        "paths": paths[:_MAX_REPORTED_PATHS],
+        "paths": [entry["path"] for entry in reported],
+        "file_stats": reported,
     }
 
 
