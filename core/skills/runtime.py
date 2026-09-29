@@ -275,8 +275,9 @@ class SkillRuntime:
         Project are always allowed in that scoped registry: Project Context therefore
         grants what the Project uses without mutating the Agent's configured personal
         allowlist. An Identity Agent's ``excluded_skills`` are removed from what its
-        ``allowed_skills`` grants in that scoped registry, never from those always
-        allowed Skills; an Agent with exclusions always gets a scoped registry.
+        ``allowed_skills`` grants and from its own Skills in that scoped registry,
+        never from the Project grant; an Agent with exclusions always gets a scoped
+        registry.
         This is the single seam every run-time skill consumer (prompt
         assembly, triggers, the ``skill`` tool, autocomplete) resolves through, so
         scoping lives in exactly one place.
@@ -514,11 +515,12 @@ class SkillRuntime:
 
         Uses the registry the Agent's own Runs resolve (its root Project when that
         Project still exists), so every listed name is one the Agent can see or be
-        granted. ``grant`` names why a Skill is (not) granted: ``own`` private
-        package, ``project`` granted by the root Project, ``excluded`` by
-        ``excluded_skills``, ``allowed`` by ``allowed_skills``, else
-        ``not_selected``. ``available`` reports whether its requirements, including
-        Skill dependencies under this Agent's grants, are met.
+        granted. ``own`` marks a package from this Agent's private home. ``grant``
+        names why a Skill is (not) granted, first match wins: ``own`` private package
+        not in ``excluded_skills``, ``project`` granted by the root Project (which
+        outranks an exclusion), ``excluded`` by ``excluded_skills``, ``allowed`` by
+        ``allowed_skills``, else ``not_selected``. ``available`` reports whether its
+        requirements, including Skill dependencies under this Agent's grants, are met.
         """
         root_project_id = agent.root_project_id
         project_id = (
@@ -538,7 +540,8 @@ class SkillRuntime:
         skills: list[dict[str, Any]] = []
         for skill in registry.list_all():
             path = skill.path.resolve()
-            if path.is_relative_to(home):
+            own = path.is_relative_to(home)
+            if own and skill.name not in excluded:
                 grant = "own"
             elif skill.name in registry.always_allowed:
                 grant = "project"
@@ -553,6 +556,7 @@ class SkillRuntime:
                 {
                     "name": skill.name,
                     "package_id": package_ids.get(path),
+                    "own": own,
                     "grant": grant,
                     "available": availability.state == "available",
                 }
@@ -742,18 +746,18 @@ class SkillRuntime:
         origins.extend(_origin_layers(scan_roots))
         # First-found-wins ordering makes agent skills win over project, project over
         # shared, shared over bundled. The agent's own skills are always-allowed for
-        # it, so they bypass the owner's ``allowed_skills`` filter without leaking to
-        # other agents (whose registries never scan this home). Project Context is
-        # itself the authorization to use that Project's effective Skill set: those
-        # exact Project-granted names also bypass the Identity Agent's unrelated
-        # personal allowlist while this project-scoped registry is active. The
-        # Agent's ``excluded_skills`` narrow only its allowlist grant, never these.
+        # it unless its ``excluded_skills`` turn them off, so they bypass the owner's
+        # ``allowed_skills`` filter without leaking to other agents (whose registries
+        # never scan this home). Project Context is itself the authorization to use
+        # that Project's effective Skill set: those exact Project-granted names also
+        # bypass the Identity Agent's unrelated personal allowlist and its exclusions
+        # while this project-scoped registry is active.
         agent_own_names = scan_skill_names(agent_root, environment)
         return SkillRegistry.load(
             roots[0],
             extra_dirs=roots[1:],
             environment=environment,
-            always_allowed=agent_own_names | project_allowed_names,
+            always_allowed=(agent_own_names - exclusions) | project_allowed_names,
             origins=origins,
             excluded_names=self._disabled_skill_names(),
             allowlist_exclusions=exclusions,

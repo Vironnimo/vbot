@@ -591,6 +591,26 @@ describe('tooltip placement', () => {
     expect(element.dataset.floatingSide).toBe('left');
   });
 
+  it('places the bubble against the aligned element inside a wide anchor', () => {
+    tooltipSize = { width: 100, height: 24 };
+    const row = button('');
+    placeAt(row, { left: 0, top: 300, width: 1200, height: 40 });
+    const name = document.createElement('span');
+    name.className = 'row-name';
+    row.append(name);
+    placeAt(name, { left: 20, top: 310, width: 60, height: 20 });
+    actions.push(
+      tooltip(row, { text: 'Hint', placement: 'right', alignTo: '.row-name' }),
+    );
+    hover(row);
+    const element = tooltipElement();
+
+    // beside the name: 20 + 60 + 6 = 86; centered on it: 310 + 10 - 12 = 308.
+    expect(element.style.left).toBe('86px');
+    expect(element.style.top).toBe('308px');
+    expect(element.dataset.floatingSide).toBe('right');
+  });
+
   it('falls back to above when neither side fits or the placement is unknown', () => {
     let element = showFor(
       { left: 500, top: 300, width: 40, height: 20 },

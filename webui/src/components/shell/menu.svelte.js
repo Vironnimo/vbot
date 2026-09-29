@@ -5,10 +5,13 @@ import {
   openDesktopExternalUrl,
   setDesktopClipboardText,
 } from '$lib/desktopBridge.js';
+import { contextMenuAnchor } from '../ui/contextMenu.js';
 
+// Desktop context menu: derives host-aware actions from a `contextmenu`
+// event and runs them through the Desktop bridge. Rendering, positioning,
+// keyboard navigation and dismissal belong to the shared
+// `components/ui/ContextMenu.svelte`; `contextMenu` is its `menu` value.
 export function createDesktopContextMenu(context) {
-  const CONTEXT_MENU_VIEWPORT_MARGIN = 8;
-
   const TEXT_INPUT_TYPES = new SvelteSet([
     'email',
     'password',
@@ -18,9 +21,7 @@ export function createDesktopContextMenu(context) {
     'url',
   ]);
 
-  let contextMenuElement = $state(null);
-
-  let contextMenu = $state(null);
+  let contextMenu = $state.raw(null);
 
   const composedPath = (event) =>
     typeof event.composedPath === 'function'
@@ -125,19 +126,9 @@ export function createDesktopContextMenu(context) {
     return text ? { text, range: range.cloneRange() } : null;
   };
 
-  const contextMenuPosition = (event) => {
-    if (event.clientX || event.clientY) {
-      return { x: event.clientX, y: event.clientY };
-    }
-    const rect = event.target?.getBoundingClientRect?.();
-    return {
-      x: rect?.left ?? CONTEXT_MENU_VIEWPORT_MARGIN,
-      y: rect?.bottom ?? CONTEXT_MENU_VIEWPORT_MARGIN,
-    };
-  };
-
   const handleContextMenu = (event) => {
-    if (!context.desktopContextMenuEnabled) return;
+    // A component that opened its own menu has already handled the event.
+    if (!context.desktopContextMenuEnabled || event.defaultPrevented) return;
 
     const path = composedPath(event);
     const editable = editableFromPath(path);
@@ -195,29 +186,22 @@ export function createDesktopContextMenu(context) {
     if (actions.length === 0) return;
 
     event.preventDefault();
-    const position = contextMenuPosition(event);
+    const snapshot = { selection: selectedText, url };
+    const anchor = contextMenuAnchor(event);
     contextMenu = {
-      ...position,
-      positioned: false,
-      actions,
-      editable,
-      selection: selectedText,
-      url,
-      focusTarget:
-        editable?.element ??
-        (event.target instanceof HTMLElement ? event.target : null),
+      x: anchor.x,
+      y: anchor.y,
+      returnFocus: editable?.element ?? anchor.returnFocus,
+      label: t('desktop.contextMenu.label'),
+      items: actions.map((action) => ({
+        ...action,
+        onSelect: () => runContextMenuAction(action.id, snapshot),
+      })),
     };
   };
 
-  const restoreContextFocus = (target) => {
-    if (!(target instanceof HTMLElement) || !target.isConnected) return;
-    queueMicrotask(() => target.focus({ preventScroll: true }));
-  };
-
-  const closeContextMenu = ({ restoreFocus = false } = {}) => {
-    const focusTarget = contextMenu?.focusTarget;
+  const closeContextMenu = () => {
     contextMenu = null;
-    if (restoreFocus) restoreContextFocus(focusTarget);
   };
 
   const dispatchEditInput = (element, inputType, data = null) => {
@@ -265,10 +249,7 @@ export function createDesktopContextMenu(context) {
     });
   };
 
-  const handleContextMenuAction = async (actionId) => {
-    const snapshot = contextMenu;
-    if (!snapshot) return;
-    contextMenu = null;
+  const runContextMenuAction = async (actionId, snapshot) => {
     try {
       if (actionId === 'copy-link') {
         await setDesktopClipboardText(snapshot.url);
@@ -289,112 +270,18 @@ export function createDesktopContextMenu(context) {
       }
     } catch {
       notifyContextMenuFailure();
-    } finally {
-      restoreContextFocus(snapshot.focusTarget);
     }
   };
-
-  const handleContextMenuKeydown = (event) => {
-    const items = Array.from(
-      contextMenuElement?.querySelectorAll('[role="menuitem"]') ?? [],
-    );
-    const currentIndex = items.indexOf(document.activeElement);
-    let nextIndex = null;
-    if (event.key === 'ArrowDown') {
-      nextIndex = (currentIndex + 1) % items.length;
-    } else if (event.key === 'ArrowUp') {
-      nextIndex = (currentIndex - 1 + items.length) % items.length;
-    } else if (event.key === 'Home') {
-      nextIndex = 0;
-    } else if (event.key === 'End') {
-      nextIndex = items.length - 1;
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      closeContextMenu({ restoreFocus: true });
-      return;
-    }
-    if (nextIndex === null || items.length === 0) return;
-    event.preventDefault();
-    items[nextIndex].focus({ preventScroll: true });
-  };
-
-  const handleWindowPointerDown = (event) => {
-    if (contextMenu && !contextMenuElement?.contains(event.target)) {
-      closeContextMenu();
-    }
-  };
-
-  const handleWindowKeydown = (event) => {
-    if (contextMenu && event.key === 'Escape') {
-      closeContextMenu({ restoreFocus: true });
-    }
-  };
-  $effect(() => {
-    if (!contextMenu || contextMenu.positioned || !contextMenuElement) {
-      return undefined;
-    }
-    const menuSnapshot = contextMenu;
-    const frame = requestAnimationFrame(() => {
-      if (contextMenu !== menuSnapshot || !contextMenuElement) return;
-      const bounds = contextMenuElement.getBoundingClientRect();
-      const maximumX = Math.max(
-        CONTEXT_MENU_VIEWPORT_MARGIN,
-        window.innerWidth - bounds.width - CONTEXT_MENU_VIEWPORT_MARGIN,
-      );
-      const maximumY = Math.max(
-        CONTEXT_MENU_VIEWPORT_MARGIN,
-        window.innerHeight - bounds.height - CONTEXT_MENU_VIEWPORT_MARGIN,
-      );
-      contextMenu = {
-        ...contextMenu,
-        x: Math.min(
-          Math.max(contextMenu.x, CONTEXT_MENU_VIEWPORT_MARGIN),
-          maximumX,
-        ),
-        y: Math.min(
-          Math.max(contextMenu.y, CONTEXT_MENU_VIEWPORT_MARGIN),
-          maximumY,
-        ),
-        positioned: true,
-      };
-      contextMenuElement
-        .querySelector('[role="menuitem"]')
-        ?.focus({ preventScroll: true });
-    });
-    return () => cancelAnimationFrame(frame);
-  });
 
   return {
-    get contextMenuElement() {
-      return contextMenuElement;
-    },
-    set contextMenuElement(value) {
-      contextMenuElement = value;
-    },
     get contextMenu() {
       return contextMenu;
-    },
-    set contextMenu(value) {
-      contextMenu = value;
     },
     get handleContextMenu() {
       return handleContextMenu;
     },
     get closeContextMenu() {
       return closeContextMenu;
-    },
-    get handleContextMenuAction() {
-      return handleContextMenuAction;
-    },
-    get handleContextMenuKeydown() {
-      return handleContextMenuKeydown;
-    },
-    get handleWindowPointerDown() {
-      return handleWindowPointerDown;
-    },
-    get handleWindowKeydown() {
-      return handleWindowKeydown;
     },
   };
 }

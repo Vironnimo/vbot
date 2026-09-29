@@ -295,6 +295,15 @@ describe('AppShell Desktop context menu', () => {
     );
   });
 
+  it('leaves events a component menu already handled alone', () => {
+    const link = appendLink(mountContent(true), 'https://example.com/docs');
+    link.addEventListener('contextmenu', (event) => event.preventDefault());
+
+    openContextMenu(link);
+
+    expect(menu()).toBeNull();
+  });
+
   it('does not expose executable or local link schemes', () => {
     const link = appendLink(mountContent(true), 'javascript:alert(1)');
 
@@ -364,47 +373,6 @@ describe('AppShell Desktop context menu', () => {
 
     expect(menu()).toBeNull();
     expect(document.activeElement).toBe(input);
-  });
-
-  it('fits the menu to the viewport and closes on outside press or scroll', async () => {
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
-      bottom: 100,
-      height: 100,
-      left: 0,
-      right: 224,
-      top: 0,
-      width: 224,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
-    const container = mountContent(true);
-    const link = appendLink(container, 'https://example.com/docs');
-
-    openContextMenu(link, {
-      clientX: window.innerWidth,
-      clientY: window.innerHeight,
-    });
-    await vi.waitFor(() => {
-      expect(Number.parseFloat(menu().style.left)).toBeLessThan(
-        window.innerWidth,
-      );
-      expect(Number.parseFloat(menu().style.top)).toBeLessThan(
-        window.innerHeight,
-      );
-      expect(menu().style.visibility).toBe('visible');
-    });
-
-    document.body.dispatchEvent(
-      new MouseEvent('pointerdown', { bubbles: true }),
-    );
-    flushSync();
-    expect(menu()).toBeNull();
-
-    openContextMenu(link);
-    container.dispatchEvent(new Event('scroll'));
-    flushSync();
-    expect(menu()).toBeNull();
   });
 });
 

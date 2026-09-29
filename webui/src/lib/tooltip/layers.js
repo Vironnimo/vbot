@@ -188,7 +188,9 @@ function anchorInViewport(anchor) {
  * lib/tooltip.js). While open, the layer follows scrolling, viewport resizing
  * (dismissed once its anchor leaves the viewport) and changes of its own size
  * (content that grows while shown), and is dismissed by an outside press or
- * Escape. `anchor`/`element` return the current nodes; `onDismiss()` must
+ * Escape. `anchor`/`element` return the current nodes; `positionAnchor`
+ * (default `anchor`) returns the node the layer is placed against when that
+ * differs from the node that owns it. `onDismiss()` must
  * close the owner's state and call `hide()`. `onEscape(event)` defaults to
  * `onDismiss`; an owner consumes Escape with `event.preventDefault()` when the
  * layer should absorb it (e.g. a pinned popover inside a dialog).
@@ -196,6 +198,7 @@ function anchorInViewport(anchor) {
 export function createFloatingLayer({
   kind,
   anchor,
+  positionAnchor = anchor,
   element,
   placement = () => 'top',
   onDismiss,
@@ -219,7 +222,7 @@ export function createFloatingLayer({
   };
 
   function position() {
-    const anchorNode = anchor();
+    const anchorNode = positionAnchor();
     const elementNode = element();
     if (anchorNode && elementNode) {
       positionFloating(

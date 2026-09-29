@@ -1,7 +1,9 @@
 <script>
-  // One Skill package: where it lives, who gets it (editable), requirement
-  // notes and its instructions. The global off switch and Delete live in the
-  // header; content editing opens the edit dialog.
+  // The page of one Skill package, opened in place of its collection: Back
+  // and a breadcrumb to return, a header with where it lives, its status and
+  // actions (Edit, Turn off everywhere / Turn on, Delete), the description as
+  // body text (the one place that shows it as content), who gets it
+  // (editable), requirement notes and its instructions.
   import { t } from '$lib/i18n.js';
   import MarkdownContent from '../chat/MarkdownContent.svelte';
   import Badge from '../ui/Badge.svelte';
@@ -24,6 +26,7 @@
 
   let {
     entry,
+    collectionLabel = '',
     inspected = null,
     inspectLoading = false,
     inspectError = '',
@@ -59,27 +62,73 @@
 </script>
 
 <section
-  class="skills-detail"
+  class="skills-page"
   tabindex="-1"
   bind:this={element}
-  aria-labelledby="skill-detail-name"
+  aria-labelledby="skill-page-title"
 >
-  <div class="skills-detail-top">
+  <nav class="skills-crumbs" aria-label={t('skills.page.breadcrumb')}>
     <Button
-      variant="secondary"
-      class="skills-detail-back"
-      ariaLabel={t('skills.backToList')}
-      onClick={onBack}>← {t('skills.backToList')}</Button
+      variant="tertiary"
+      icon
+      class="skills-crumbs__back"
+      ariaLabel={t('skills.page.backTo', { name: collectionLabel })}
+      tooltip={t('skills.page.backHint')}
+      onClick={onBack}
     >
-    <StatusChip variant={skillStatusVariant(entry)}
-      >{skillStatusLabel(entry)}</StatusChip
-    >
-  </div>
-  <header class="skills-detail-header">
-    <div class="skills-detail-title">
-      <h3 id="skill-detail-name">{entry.name}</h3>
-      <div class="skills-detail-actions">
-        {#if !entry.disabled}
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"><path d="M13 8H3m4.5-4.5L3 8l4.5 4.5" /></svg
+      >
+    </Button>
+    <ol class="skills-crumbs__trail">
+      <li>
+        <button type="button" class="skills-crumbs__link" onclick={onBack}
+          >{collectionLabel}</button
+        >
+      </li>
+      <li class="skills-crumbs__current" aria-current="page">{entry.name}</li>
+    </ol>
+  </nav>
+  <div class="skills-page-scroll">
+    <header class="view-header skills-page-header">
+      <div class="view-header__intro">
+        <h2 id="skill-page-title" class="view-header__title skills-page-title">
+          {entry.name}
+        </h2>
+        <p class="skills-page-meta">
+          <span class="skills-page-source"
+            >{skillSourceDetail(entry, agents, projects)}</span
+          >
+          <StatusChip variant={skillStatusVariant(entry)}
+            >{skillStatusLabel(entry)}</StatusChip
+          >
+          {#if !entry.editable_scope}<Badge>{t('skills.readOnly')}</Badge>{/if}
+        </p>
+      </div>
+      <div class="view-header__actions">
+        {#if entry.editable_scope}
+          <Button
+            variant="secondary"
+            disabled={busy || inspectLoading || inspected?.id !== entry.id}
+            onClick={() => onEdit(entry)}>{t('skills.editInstructions')}</Button
+          >
+        {/if}
+        {#if entry.disabled}
+          <Button
+            variant="secondary"
+            disabled={busy}
+            onClick={() => onSetDisabled(entry, false)}
+            >{t('skills.detail.turnOn')}</Button
+          >
+        {:else}
           <Button
             variant="secondary"
             disabled={busy}
@@ -109,31 +158,20 @@
           </Button>
         {/if}
       </div>
-    </div>
-    <p class="skills-detail-source">
-      {skillSourceDetail(entry, agents, projects)}
-    </p>
+    </header>
     <p
-      class="skills-detail-description"
-      class:skills-detail-description--empty={!entry.description}
+      class="skills-page-description"
+      class:skills-page-description--empty={!entry.description}
     >
       {entry.description || t('skills.noDescription')}
     </p>
     {#each duplicates as note, index (index)}
-      <p class="skills-detail-note">{note}</p>
+      <p class="skills-page-note">{note}</p>
     {/each}
-  </header>
-  <div class="skills-detail-scroll">
     {#if entry.disabled}
-      <Banner variant="warn" class="skills-detail-off">
-        <span>{t('skills.detail.offBanner')}</span>
-        <Button
-          variant="secondary"
-          disabled={busy}
-          onClick={() => onSetDisabled(entry, false)}
-          >{t('skills.detail.turnOn')}</Button
-        >
-      </Banner>
+      <Banner variant="warn" class="skills-page-off"
+        >{t('skills.detail.offBanner')}</Banner
+      >
     {:else}
       <SkillAccessSection
         {entry}
@@ -170,17 +208,10 @@
         ariaLabel={t('skills.contentView')}
         onChange={onTab}
       />
-      <div class="skills-content-actions">
-        {#if entry.editable_scope}<Button
-            variant="tertiary"
-            disabled={busy || inspectLoading || inspected?.id !== entry.id}
-            onClick={() => onEdit(entry)}>{t('skills.editInstructions')}</Button
-          >{:else}<Badge>{t('skills.readOnly')}</Badge>{/if}
-        {#if inspected}<CopyButton
-            text={inspected.content}
-            label={t('skills.copyContent')}
-          />{/if}
-      </div>
+      {#if inspected}<CopyButton
+          text={inspected.content}
+          label={t('skills.copyContent')}
+        />{/if}
     </div>
     <div
       class="skills-content"

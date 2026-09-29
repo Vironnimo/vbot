@@ -26,12 +26,15 @@ const entry = (id, name, extra = {}) => ({
   missing: [],
   ...extra,
 });
-const row = (name, package_id, grant, available = true) => ({
+const row = (name, package_id, grant, available = true, own = false) => ({
   name,
   package_id,
+  own,
   grant,
   available,
 });
+const ownRow = (name, package_id, grant = 'own') =>
+  row(name, package_id, grant, true, true);
 
 // A global `deploy` shadows the bundled one; Main owns `notes` and shares it
 // with Reviewer, whose selection does not allow it.
@@ -55,7 +58,7 @@ const main = {
   allowed_skills: ['*'],
   excluded_skills: ['teach'],
   skills: [
-    row('notes', 'own-notes', 'own'),
+    ownRow('notes', 'own-notes'),
     row('lint', 'p-lint', 'project'),
     row('deploy', 'g-deploy', 'allowed'),
     row('teach', 'b-teach', 'excluded'),
@@ -90,6 +93,11 @@ const allowingReviewer = {
   ...reviewer,
   skills: [row('notes', 'own-notes', 'allowed')],
 };
+const mainOff = {
+  ...main,
+  excluded_skills: ['teach', 'notes'],
+  skills: [ownRow('notes', 'own-notes', 'excluded')],
+};
 const agents = [main, reviewer];
 const projects = [repo];
 const context = { inventory, agents, projects };
@@ -99,14 +107,24 @@ beforeEach(() => init('en'));
 
 describe('allowlist rules', () => {
   it.each([
-    ['all: untick excludes', ['*'], ['a'], 'b', false, ['*'], ['a', 'b']],
-    ['all: tick releases', ['*'], ['a'], 'a', true, ['*'], []],
+    [
+      'all: untick excludes',
+      ['*'],
+      ['a'],
+      'b',
+      false,
+      false,
+      ['*'],
+      ['a', 'b'],
+    ],
+    ['all: tick releases', ['*'], ['a'], 'a', true, false, ['*'], []],
     [
       'selected: tick adds and releases',
       ['a'],
       ['b'],
       'b',
       true,
+      false,
       ['a', 'b'],
       [],
     ],
@@ -116,25 +134,60 @@ describe('allowlist rules', () => {
       [],
       'a',
       false,
+      false,
       ['ghost'],
       [],
     ],
-  ])('%s', (_label, allowed, excluded, name, on, nextAllowed, nextExcluded) => {
-    expect(toggleSkill({ allowed, excluded }, name, on)).toEqual({
-      allowed: nextAllowed,
-      excluded: nextExcluded,
-    });
-  });
+    [
+      'own, all: untick excludes',
+      ['*'],
+      [],
+      'own',
+      false,
+      true,
+      ['*'],
+      ['own'],
+    ],
+    [
+      'own, selected: untick excludes',
+      ['a'],
+      [],
+      'own',
+      false,
+      true,
+      ['a'],
+      ['own'],
+    ],
+    [
+      'own, selected: tick only releases',
+      ['a'],
+      ['own'],
+      'own',
+      true,
+      true,
+      ['a'],
+      [],
+    ],
+  ])(
+    '%s',
+    (_label, allowed, excluded, name, on, own, nextAllowed, nextExcluded) => {
+      expect(toggleSkill({ allowed, excluded }, name, on, own)).toEqual({
+        allowed: nextAllowed,
+        excluded: nextExcluded,
+      });
+    },
+  );
 
   it('switches auto-add without changing which listed Skills are granted', () => {
-    const selected = { allowed: ['a', 'ghost'], excluded: ['old'] };
-    const all = setAutoAdd(selected, ['a', 'b'], true);
-    expect(all).toEqual({ allowed: ['*'], excluded: ['b', 'old'] });
-    expect(setAutoAdd(all, ['a', 'b'], false)).toEqual({
+    const selected = { allowed: ['a', 'ghost'], excluded: ['old', 'mine'] };
+    const all = setAutoAdd(selected, ['a', 'b'], true, ['mine']);
+    expect(all).toEqual({ allowed: ['*'], excluded: ['b', 'old', 'mine'] });
+    // Own Skills keep their exclusion in either mode.
+    expect(setAutoAdd(all, ['a', 'b'], false, ['mine'])).toEqual({
       allowed: ['a'],
-      excluded: [],
+      excluded: ['mine'],
     });
-    expect(setAutoAdd(all, ['a', 'b'], true)).toBe(all);
+    expect(setAutoAdd(all, ['a', 'b'], true, ['mine'])).toBe(all);
   });
 
   it('patches only the changed Agent fields', () => {
@@ -168,10 +221,10 @@ describe('agentSkillView', () => {
       ]),
     ]);
 
-  it('groups an Agent by why it gets each Skill and locks fixed grants', () => {
+  it('groups an Agent by why it gets each Skill and locks Project grants', () => {
     const view = agentSkillView(main, skillAccessOf(main), context);
     expect(summary(view)).toEqual([
-      ['Own skills', [['notes', true, true, null]]],
+      ['Own skills', [['notes', true, false, null]]],
       ['Via project Repo', [['lint', true, true, null]]],
       [
         'Global and extension skills',
@@ -184,10 +237,45 @@ describe('agentSkillView', () => {
     ]);
     expect(view).toMatchObject({
       governed: ['deploy', 'teach', 'fetch'],
+      own: ['notes'],
       active: 4,
       total: 5,
       autoAdd: true,
     });
+    expect(view.groups[1].items[0]).toMatchObject({
+      lockedReason:
+        'Granted by project Repo. Change it in that project’s skills.',
+      lockedBy: 'Repo',
+    });
+  });
+
+  it.each([
+    [
+      'an own Skill turned off stays in its group, unticked and uncounted',
+      ownRow('notes', 'own-notes', 'excluded'),
+      ['teach', 'notes'],
+      ['notes', false, false, null],
+      3,
+    ],
+    [
+      'an own Skill the Project also grants is locked on',
+      ownRow('lint', 'p-lint', 'project'),
+      ['teach', 'lint'],
+      ['lint', true, true, 'Via project Repo'],
+      3,
+    ],
+  ])('%s', (_label, ownSkill, excluded, expected, active) => {
+    const agent = {
+      ...main,
+      excluded_skills: excluded,
+      skills: [
+        ownSkill,
+        ...main.skills.filter((r) => r.name !== ownSkill.name && !r.own),
+      ],
+    };
+    const view = agentSkillView(agent, skillAccessOf(agent), context);
+    expect(summary(view)[0]).toEqual(['Own skills', [expected]]);
+    expect(view.active).toBe(active);
   });
 
   it('shows shared Skills by owner and keeps saved names it cannot see', () => {
@@ -284,9 +372,17 @@ describe('skillAccessView', () => {
   it('turns other Agents into sharing rows and offers Allow when blocked', () => {
     const view = skillAccessView(byId('own-notes'), context);
     expect(rows(view)).toEqual([
-      ['Main', 'locked', true, 'Owner'],
+      ['Main', 'own', true, 'Owner'],
       ['Reviewer', 'share', true, 'Blocked by this Agent’s skill selection'],
     ]);
+    const ownerOff = {
+      ...main,
+      skills: [ownRow('notes', 'own-notes', 'excluded')],
+    };
+    expect(
+      skillAccessView(byId('own-notes'), { ...context, agents: [ownerOff] })
+        .agents[0],
+    ).toMatchObject({ kind: 'own', allowed: false, locked: false });
     expect(view.agents[1].action.ariaLabel).toBe('Allow notes for Reviewer');
     const unshared = { ...byId('own-notes'), shared_with: [] };
     expect(skillAccessView(unshared, context).agents[1]).toMatchObject({
@@ -315,6 +411,8 @@ describe('library summaries', () => {
     ['own-notes', {}, agents, 'Main + 0 shared (1 blocked)'],
     ['own-notes', {}, [main, allowingReviewer], 'Main + 1 shared'],
     ['own-notes', { shared_with: [] }, agents, 'Main only'],
+    ['own-notes', { shared_with: [] }, [mainOff], 'Off for Main'],
+    ['own-notes', {}, [mainOff, allowingReviewer], 'Off for Main, 1 shared'],
     ['p-lint', {}, agents, 'Active in Repo'],
     ['g-deploy', { disabled: true }, agents, 'Off everywhere'],
     ['g-deploy', { status: 'invalid' }, agents, 'Not loadable'],

@@ -56,7 +56,12 @@
       kind: target.kind,
       allowed: target.isAllowed,
       detail: target.description,
-      unavailable: Boolean(target.unavailable),
+      state: target.unavailable
+        ? {
+            text: t('agents.access.unavailableAgentState'),
+            tone: 'warn',
+          }
+        : null,
     })),
   );
 
@@ -120,7 +125,7 @@
     }));
   }
 
-  // The row's secondary line; the group already names the target kind.
+  // The row's tooltip; the group already names the target kind.
   function agentTargetDescription(target) {
     if (target.unavailable) {
       return t('agents.access.unavailableAgentTarget');

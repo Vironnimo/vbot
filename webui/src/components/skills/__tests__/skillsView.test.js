@@ -58,9 +58,10 @@ const base = () => [
     warnings: ['diagnostic-sentinel'],
   }),
 ];
-const grant = (name, packageId, kind) => ({
+const grant = (name, packageId, kind, own = kind === 'own') => ({
   name,
   package_id: packageId,
+  own,
   grant: kind,
   available: true,
 });
@@ -277,7 +278,7 @@ describe('Skills manager', () => {
       );
     },
   );
-  it('keeps the content beside source navigation with the application styles', async () => {
+  it('opens a package page in place of its collection and returns to the collection as it was left', async () => {
     const styles = document.createElement('style');
     styles.textContent = ['../skills.css', '../../../styles/app.css']
       .map((path) =>
@@ -288,17 +289,58 @@ describe('Skills manager', () => {
     await render();
 
     const view = document.querySelector('.skills-view');
+    const collectionPage = view.querySelector('.skills-collection-page');
     expect(getComputedStyle(view).display).toBe('flex');
     expect(getComputedStyle(view).flexDirection).toBe('row');
-    expect(view.querySelector('.skills-main [data-skill-id]')).not.toBeNull();
+    input(document.querySelector('input[type="search"]'), 'deploy');
+    const returns = [
+      () => key(document.activeElement, 'Escape'),
+      () => click(button('All skills', view.querySelector('.skills-crumbs'))),
+      () => collection('All skills'),
+      () => click(button('Back to All skills')),
+    ];
+    for (const leave of returns) {
+      choose('private');
+      await settle();
+      // Navigation and one content column: the package page replaces the
+      // collection page, whose filters stay as they were.
+      expect(getComputedStyle(collectionPage).display).toBe('none');
+      expect(view.querySelector('.skills-main > .skills-page')).not.toBeNull();
+      expect(document.activeElement).toBe(view.querySelector('.skills-page'));
+      expect(texts('.skills-crumbs__trail li')).toEqual([
+        'All skills',
+        'deploy',
+      ]);
+      expect(view.querySelector('.skills-content').textContent).toContain(
+        'content-private',
+      );
+      leave();
+      await settle();
+      expect(view.querySelector('.skills-page')).toBeNull();
+      expect(getComputedStyle(collectionPage).display).not.toBe('none');
+      expect(document.querySelector('input[type="search"]').value).toBe(
+        'deploy',
+      );
+      expect(document.activeElement.dataset.skillId).toBe('private');
+      expect(document.activeElement.classList).toContain('skills-row--current');
+    }
+
+    // Escape that another layer consumed, or typed in a text field, stays.
     choose('private');
     await settle();
-    expect(view.querySelector('.skills-content').textContent).toContain(
-      'content-private',
+    const page = view.querySelector('.skills-page');
+    page.addEventListener('keydown', (event) => event.preventDefault(), {
+      once: true,
+    });
+    page.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
     );
-    // The list stays visible beside the detail on desktop, so Back is hidden
-    // until the narrow layout replaces the list with the detail.
-    expect(getComputedStyle(button('Back to list', view)).display).toBe('none');
+    flushSync();
+    expect(view.querySelector('.skills-page')).not.toBeNull();
   });
 
   it('groups collections into library, Agents and Projects and filters each library source', async () => {
@@ -356,7 +398,7 @@ describe('Skills manager', () => {
     expect(rows().map((row) => row.dataset.skillId)).toEqual(['disabled']);
   });
 
-  it('lists each package with its description, source and who gets it', async () => {
+  it('lists each package on one line with its source and who gets it, and its description only as a tooltip', async () => {
     await render();
     const list = document.querySelector('.skills-list');
     expect(
@@ -365,23 +407,23 @@ describe('Skills manager', () => {
     expect(
       rows().map((row) => [
         row.dataset.skillId,
-        row.querySelector('.skills-row-description').textContent,
         row.querySelector('.skills-row-source').textContent,
         row.querySelector('.skills-row-summary').textContent,
         row.querySelector('button'),
       ]),
     ).toEqual([
-      ['disabled', 'Purpose of broken', 'Global', 'Off everywhere', null],
-      ['private', 'Purpose of deploy', 'Private', 'Main only', null],
-      [
-        'shared',
-        'Purpose of notes',
-        'Private',
-        'Main + 0 shared (1 blocked)',
-        null,
-      ],
-      ['bundled', 'Purpose of teach', 'Bundled', '2 of 2 Agents', null],
+      ['disabled', 'Global', 'Off everywhere', null],
+      ['private', 'Private', 'Main only', null],
+      ['shared', 'Private', 'Main + 0 shared (1 blocked)', null],
+      ['bundled', 'Bundled', '2 of 2 Agents', null],
     ]);
+    // Explicit user requirement: no skill list renders descriptions inline.
+    expect(list.textContent).not.toContain('Purpose of');
+    key(document.body, 'Tab');
+    rows()[1].focus();
+    expect(document.getElementById('app-tooltip').textContent).toBe(
+      'Purpose of deploy',
+    );
     expect(
       rpcMock.mock.calls.some(([method]) => method === 'skill.inspect'),
     ).toBe(false);
@@ -486,7 +528,7 @@ describe('Skills manager', () => {
     );
     expect(button('Edit instructions')).toBeUndefined();
     expect(rpcMock).toHaveBeenCalledWith('skill.inspect', { id: 'second' });
-    expect(document.querySelector('.skills-detail-note').textContent).toBe(
+    expect(document.querySelector('.skills-page-note').textContent).toBe(
       'Also exists as Main’s private copy.',
     );
   });
@@ -533,10 +575,17 @@ describe('Skills manager', () => {
     collection('Main');
     expect(document.querySelector('.skills-list')).toBeNull();
     expect(texts('.s-check-group__title')).toEqual(['Own skills', 'Bundled']);
-    expect(button('Toggle skill deploy').disabled).toBe(true);
+    // Rows are single-line; descriptions only appear in the tooltip.
+    expect(
+      document.querySelector('.skills-selection').textContent,
+    ).not.toContain('Purpose of');
+    // Own Skills turn off through the exclusions, like any other Skill.
+    click(button('Toggle skill deploy'));
+    await settle();
     click(button('Toggle skill teach'));
     await settle();
     expect(calls('agent.update')).toEqual([
+      { id: 'main', excluded_skills: ['deploy'] },
       { id: 'main', excluded_skills: ['teach'] },
     ]);
 
@@ -558,15 +607,140 @@ describe('Skills manager', () => {
     click(document.querySelector('[data-item-key="teach"]'));
     await settle();
     expect(rpcMock).toHaveBeenCalledWith('skill.inspect', { id: 'bundled' });
-    expect(document.querySelector('#skill-detail-name').textContent).toBe(
+    expect(document.querySelector('#skill-page-title').textContent.trim()).toBe(
       'teach',
     );
+    expect(texts('.skills-crumbs__trail li')).toEqual(['Reviewer', 'teach']);
   });
 
   it('saves Project activation from the Project collection', async () => {
     await render();
     collection('Repo');
     click(button('Toggle skill teach'));
+    await settle();
+    expect(calls('project.set')).toEqual([
+      { project_id: 'repo', skills_bundled_enabled: ['teach'] },
+    ]);
+  });
+
+  it('offers library, Agent and Project row actions in context menus', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    agents[1].root_project_id = 'repo';
+    agents[1].skills[1] = grant('teach', 'bundled', 'project');
+    const rightClick = (el) => {
+      el.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 40,
+        }),
+      );
+      flushSync();
+    };
+    // Items in order, a separator as '|', a disabled item with its hint.
+    const menu = () =>
+      [...document.querySelector('.context-menu').children].map((el) =>
+        el.getAttribute('role') === 'separator'
+          ? '|'
+          : [el.textContent.trim(), el.disabled ? 'disabled' : '']
+              .filter(Boolean)
+              .join(' '),
+      );
+    const pick = (label) =>
+      click(
+        [...document.querySelectorAll('.context-menu [role="menuitem"]')].find(
+          (el) =>
+            el.querySelector('.context-menu__label').textContent === label,
+        ),
+      );
+    await render();
+
+    rightClick(document.querySelector('[data-skill-id="shared"]'));
+    expect(
+      document.querySelector('.context-menu').getAttribute('aria-label'),
+    ).toBe('Actions for notes');
+    expect(menu()).toEqual([
+      'Open',
+      'Edit instructions',
+      'Copy name',
+      '|',
+      'Turn off everywhere',
+      '|',
+      'Delete…',
+    ]);
+    pick('Copy name');
+    await settle();
+    expect(writeText).toHaveBeenCalledWith('notes');
+    expect(onToast).toHaveBeenCalledWith({
+      title: 'Copied notes',
+      variant: 'success',
+    });
+    // The keyboard opens the same menu; read-only packages offer no Edit or
+    // Delete, and a package that is off offers Turn on everywhere.
+    key(document.querySelector('[data-skill-id="bundled"]'), 'ContextMenu');
+    expect(menu()).toEqual(['Open', 'Copy name', '|', 'Turn off everywhere']);
+    key(document.querySelector('.context-menu'), 'Escape');
+    key(document.querySelector('[data-skill-id="disabled"]'), 'ContextMenu');
+    expect(menu()).toContain('Turn on everywhere');
+    pick('Turn on everywhere');
+    await settle();
+    expect(calls('skill.set_disabled')).toEqual([
+      { name: 'broken', disabled: false },
+    ]);
+    // Edit opens the package page, then its editor with the loaded content.
+    rightClick(document.querySelector('[data-skill-id="shared"]'));
+    pick('Edit instructions');
+    await settle();
+    expect(document.querySelector('#skill-page-title').textContent.trim()).toBe(
+      'notes',
+    );
+    expect(document.querySelector('[role="dialog"] textarea').value).toContain(
+      'content-shared',
+    );
+    click(button('Cancel', document.querySelector('[role="dialog"]')));
+    click(button('Back to All skills'));
+    await settle();
+
+    // An Agent row turns the Skill on or off for that Agent; a Project grant
+    // stays fixed and says where it is managed.
+    collection('Main');
+    rightClick(
+      document
+        .querySelector('[data-item-key="deploy"]')
+        .closest('.s-check-item'),
+    );
+    expect(menu()).toEqual([
+      'Turn off for Main',
+      'Open skill',
+      'Copy name',
+      '|',
+      'Turn off everywhere',
+    ]);
+    pick('Turn off for Main');
+    await settle();
+    expect(calls('agent.update')).toEqual([
+      { id: 'main', excluded_skills: ['deploy'] },
+    ]);
+    collection('Reviewer');
+    key(document.querySelector('[data-item-key="teach"]'), 'ContextMenu');
+    expect(menu()[0]).toBe(
+      'Turn off for Reviewer Managed in project Repo disabled',
+    );
+    key(document.querySelector('.context-menu'), 'Escape');
+
+    collection('Repo');
+    rightClick(
+      document
+        .querySelector('[data-item-key="teach"]')
+        .closest('.s-check-item'),
+    );
+    expect(menu()).toEqual(['Activate in Repo', 'Open skill', 'Copy name']);
+    pick('Activate in Repo');
     await settle();
     expect(calls('project.set')).toEqual([
       { project_id: 'repo', skills_bundled_enabled: ['teach'] },
@@ -599,10 +773,11 @@ describe('Skills manager', () => {
     await settle();
     let access = document.querySelector('.skills-access');
     const owner = button('Allow for Main', access);
-    expect(owner.disabled).toBe(true);
     expect(owner.querySelector('.s-check-row__state').textContent).toBe(
       'Owner',
     );
+    click(owner);
+    await settle();
     const share = button('Share with Reviewer', access);
     expect(share.getAttribute('aria-checked')).toBe('true');
     expect(share.textContent).toContain(
@@ -611,6 +786,7 @@ describe('Skills manager', () => {
     click(button('Allow notes for Reviewer', access));
     await settle();
     expect(calls('agent.update')).toEqual([
+      { id: 'main', excluded_skills: ['notes'] },
       { id: 'reviewer', allowed_skills: ['teach', 'notes'] },
     ]);
     click(button('Share with Reviewer', access));
@@ -631,7 +807,7 @@ describe('Skills manager', () => {
     ]);
   });
 
-  it('turns a Skill off everywhere from the detail and back on from its banner', async () => {
+  it('turns a Skill off everywhere and back on from its page header', async () => {
     await render();
     choose('private');
     await settle();
@@ -659,9 +835,11 @@ describe('Skills manager', () => {
       { name: 'deploy', disabled: true },
     ]);
 
+    click(button('Back to All skills'));
+    await settle();
     choose('disabled');
     await settle();
-    const detail = document.querySelector('.skills-detail');
+    const detail = document.querySelector('.skills-page');
     expect(button('Turn off everywhere', detail)).toBeUndefined();
     expect(
       [...detail.querySelectorAll('.skills-access [role="checkbox"]')].every(
@@ -707,11 +885,11 @@ describe('Skills manager', () => {
       'folder-sentinel',
     );
   });
-  it('confirms deletion from the detail header', async () => {
+  it('confirms deletion from the page header', async () => {
     await render();
     choose('shared');
     await settle();
-    click(button('Delete notes', document.querySelector('.skills-detail')));
+    click(button('Delete notes', document.querySelector('.skills-page')));
     const dialog = document.querySelector('[role="dialog"]');
     expect(calls('skill.delete')).toEqual([]);
     click(button('Delete', dialog));
@@ -720,19 +898,20 @@ describe('Skills manager', () => {
       { scope: 'agent:main', name: 'notes' },
     ]);
   });
-  it('opens a Skill detail with its source, keyboard content tabs, and focus return', async () => {
+  it('opens a Skill page with its source, description, keyboard content tabs, and focus return', async () => {
     await render();
     choose('private');
     await settle();
-    const detail = document.querySelector('.skills-detail');
+    const detail = document.querySelector('.skills-page');
     expect(document.activeElement).toBe(detail);
     expect(button('Delete deploy', detail)).toBeTruthy();
     expect(button('Turn off everywhere', detail)).toBeTruthy();
+    expect(detail.querySelector('.skills-page-source').textContent.trim()).toBe(
+      'Private skill of Main',
+    );
+    // The package page is the one place showing the description as content.
     expect(
-      detail.querySelector('.skills-detail-source').textContent.trim(),
-    ).toBe('Private skill of Main');
-    expect(
-      detail.querySelector('.skills-detail-description').textContent.trim(),
+      detail.querySelector('.skills-page-description').textContent.trim(),
     ).toBe('Purpose of deploy');
 
     const tab = document.querySelector('[role="tab"]');
@@ -743,7 +922,7 @@ describe('Skills manager', () => {
         .querySelector('[role="tab"][aria-selected="true"]')
         .textContent.trim(),
     ).toBe(t('skills.original'));
-    click(button('Back to list'));
+    click(button('Back to All skills'));
     await settle();
     expect(document.activeElement.dataset.skillId).toBe('private');
   });

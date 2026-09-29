@@ -131,14 +131,29 @@ export default Object.freeze({
   'skills.previousPage': 'Previous page',
   'skills.nextPage': 'Next page',
   'skills.page': 'Page {page} of {pages}',
-  'skills.backToList': 'Back to list',
+  'skills.page.breadcrumb': 'Location',
+  'skills.page.backTo': 'Back to {name}',
+  'skills.page.backHint': 'Back (Esc)',
+  'skills.menu.label': 'Actions for {name}',
+  'skills.menu.open': 'Open',
+  'skills.menu.openSkill': 'Open skill',
+  'skills.menu.copyName': 'Copy name',
+  'skills.menu.nameCopied': 'Copied {name}',
+  'skills.menu.copyFailed': 'The name could not be copied.',
+  'skills.menu.turnOnEverywhere': 'Turn on everywhere',
+  'skills.menu.delete': 'Delete…',
+  'skills.menu.turnOnFor': 'Turn on for {name}',
+  'skills.menu.turnOffFor': 'Turn off for {name}',
+  'skills.menu.managedIn': 'Managed in project {name}',
+  'skills.menu.activateIn': 'Activate in {name}',
+  'skills.menu.deactivateIn': 'Deactivate in {name}',
   'skills.editInstructions': 'Edit instructions',
   'skills.readOnly': 'Read only',
   'skills.access.title': 'Access',
   'skills.access.privateHelp':
-    'Its owner always has this private skill. Tick other Agents to share it: they use and can edit this original, if their own skill selection allows it.',
+    'Its owner has this private skill unless it turns it off here. Tick other Agents to share it: they use and can edit this original, if their own skill selection allows it.',
   'skills.access.poolHelp':
-    'Tick an Agent to allow this skill in its skill selection. Owner and project grants are fixed here.',
+    'Tick an Agent to allow this skill in its skill selection. Project grants are fixed here; change them on the project.',
   'skills.access.agents': 'Agents',
   'skills.access.projects': 'Projects',
   'skills.access.noAgents': 'No Agents yet.',
@@ -165,6 +180,10 @@ export default Object.freeze({
   'skills.summary.ownerShared': '{name} + {count} shared',
   'skills.summary.ownerSharedBlocked':
     '{name} + {count} shared ({blocked} blocked)',
+  'skills.summary.ownerOff': 'Off for {name}',
+  'skills.summary.ownerOffShared': 'Off for {name}, {count} shared',
+  'skills.summary.ownerOffSharedBlocked':
+    'Off for {name}, {count} shared ({blocked} blocked)',
   'skills.summary.projectActive': 'Active in {name}',
   'skills.summary.projectOff': 'Off in {name}',
   'skills.summary.agents': '{count} of {total} Agents',
@@ -202,6 +221,8 @@ export default Object.freeze({
   'skills.panel.savedDetail':
     'Not installed, turned off everywhere, or not visible to this Agent.',
   'skills.panel.sharedBy': 'From {name}',
+  'skills.panel.lockedByProject':
+    'Granted by project {name}. Change it in that project’s skills.',
   'skills.diagnostics': 'Requirement notes ({count})',
   'skills.instructions': 'Instructions',
   'skills.original': 'Original text',
@@ -213,7 +234,7 @@ export default Object.freeze({
   'skills.createGlobalHelp':
     'Stored in the global collection. Each Agent’s Skill selection decides whether it can use this skill.',
   'skills.createPrivateHelp':
-    'Stored privately for the selected Agent and automatically allowed for its owner when requirements are met. You can share it later.',
+    'Stored privately for the selected Agent and on for it by default. You can turn it off for that Agent or share it later.',
   'skills.editSharedHelp':
     'You are editing the shared original. These changes also apply to its recipients.',
   'skills.policyAttention': 'Sharing & policy need attention ({count})',
@@ -268,7 +289,7 @@ export default Object.freeze({
     'Gives this Agent its own editable copy of the System Prompt. Turning it off keeps the customized blocks but stops using them.',
   'agents.form.skills': 'Skills',
   'agents.form.skillsDescription':
-    'Skills this Agent may load. Its own private Skills and the Skills of its root project are always on.',
+    'Skills this Agent may load. Its own private Skills are on until you turn them off; the Skills of its root project are always on and managed on the project.',
   'agents.form.subagentTargets': 'Sub-Agent targets',
   'agents.access.allIdentityAgents': 'All Identity Agents',
   'agents.access.allProjectAgents': 'All Project Agents',
@@ -395,6 +416,7 @@ export default Object.freeze({
   'agents.access.notLoadable': 'not loadable',
   'agents.access.projectTargetsLoadError':
     'Some Project Agent targets could not be loaded.',
+  'agents.access.unavailableAgentState': 'Not found',
   'agents.access.unavailableAgentTarget':
     'This configured target is not present in the current Identity Agent or Project Team catalogs.',
   'agents.access.toggleAgent': 'Toggle agent {name}',

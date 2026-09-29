@@ -12,13 +12,16 @@
 //   `#app-tooltip` element. `content` is either a string (a label or short
 //   hint) or an object:
 //     { text, title, rows: [{ label, value, mono }], mono,
-//       placement, selectable, whenTruncated }
+//       placement, selectable, whenTruncated, alignTo }
 //   `title` and `rows` render a compact details card (a heading and aligned
 //   label/value pairs, e.g. a Session's Agent and last activity); `mono` sets
 //   code-like values (paths, commands, ids) in the mono face. `placement`
 //   ('top' default, 'right', 'bottom', 'left') is the preferred side; rows of
 //   a vertically swept list use a side placement so the bubble never covers
-//   the neighbouring rows. `whenTruncated` shows the tooltip only while the
+//   the neighbouring rows. `alignTo` (a selector inside the anchor) places
+//   the bubble against that element instead of the whole anchor, so a wide
+//   list row that owns hover and focus can put its bubble beside its name.
+//   `whenTruncated` shows the tooltip only while the
 //   anchor clips its own text, for tooltips that merely repeat it in full.
 //   It opens after TOOLTIP_SHOW_DELAY_MS of hover, instantly while another
 //   tooltip is still visible or was hidden less than TOOLTIP_SKIP_DELAY_MS

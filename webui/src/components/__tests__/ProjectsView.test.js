@@ -691,7 +691,15 @@ describe('ProjectsView Tool and Skill whitelists', () => {
     expect(
       document.querySelectorAll('button[aria-label^="Toggle skill "]'),
     ).toHaveLength(3);
-    expect(document.body.textContent).toContain('Debug the repo.');
+    // Descriptions are never inline; the row tooltip carries them.
+    expect(document.body.textContent).not.toContain('Debug the repo.');
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+    toggleByAriaLabel('Toggle skill debugging').focus();
+    expect(document.getElementById('app-tooltip').textContent).toBe(
+      'Debug the repo.',
+    );
 
     toggleByAriaLabel('Toggle skill debugging').click();
     toggleByAriaLabel('Toggle skill deploy').click();

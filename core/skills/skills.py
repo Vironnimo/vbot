@@ -218,9 +218,10 @@ class SkillRegistry:
             os.environ if environment is None else environment
         )
         # Names that bypass an agent's ``allowed_skills`` filter for *this* registry
-        # only. The runtime sets this to an agent's own private skills, so an
-        # agent-scoped registry always exposes the agent's own skills while a
-        # shared registry (global/project) leaves it empty and filters as before.
+        # only. The runtime sets this to an agent's own private skills it has not
+        # excluded plus the active Project grant, so an agent-scoped registry
+        # exposes them while a shared registry (global/project) leaves it empty and
+        # filters as before.
         self._always_allowed = frozenset(always_allowed or ())
         # An Identity Agent's ``excluded_skills``: names removed from what its
         # ``allowed_skills`` grants (including ``*``). They never remove an
@@ -251,7 +252,7 @@ class SkillRegistry:
         duplicate names are found, the first scanned directory wins and the
         rejected duplicate is preserved as a diagnostic.  ``always_allowed`` names
         bypass the ``allowed_skills`` filter for this registry (the runtime passes
-        an agent's own private skills so they are always visible to their owner).
+        an agent's own private skills it has not excluded and its Project grant).
         ``origins`` is a parallel sequence of origin tags for ``[skills_dir,
         *extra_dirs]``; each loaded skill records the tag of the root it came from
         (missing/short → ``None``), so the catalog can group by scope.
