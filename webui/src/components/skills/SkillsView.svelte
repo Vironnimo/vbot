@@ -2,6 +2,7 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { inspectSkill, skillInventory } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { isImeComposing } from '$lib/keyboard.js';
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
@@ -9,11 +10,11 @@
   import AgentSkillsPanel from './AgentSkillsPanel.svelte';
   import SkillAddMenu from './SkillAddMenu.svelte';
   import SkillCollectionNav from './SkillCollectionNav.svelte';
-  import SkillDetail from './SkillDetail.svelte';
   import SkillDialogs from './SkillDialogs.svelte';
   import SkillDirectoryEditor from './SkillDirectoryEditor.svelte';
   import SkillInstallDialog from './SkillInstallDialog.svelte';
   import SkillLibraryList from './SkillLibraryList.svelte';
+  import SkillPage from './SkillPage.svelte';
   import SkillSelectionPanel from './SkillSelectionPanel.svelte';
   import { createSkillActions } from './actions.svelte.js';
   import {
@@ -30,10 +31,13 @@
   } from './skillsView.js';
   import './skills.css';
 
-  // The Skills manager: collections (library filters, Agents, Projects), the
-  // package list or an Agent's / Project's Skill selection, and the detail of
-  // one package. The server owns precedence and write scopes; skill.inventory
-  // projects the effective access this view presents and edits.
+  // The Skills manager: collection navigation (library filters, Agents,
+  // Projects) beside one content area. The content shows the collection page
+  // (the package list, or an Agent's / Project's Skill selection) or, in its
+  // place, the page of one package; returning restores the collection page's
+  // scroll position, filters and focused row. The server owns precedence and
+  // write scopes; skill.inventory projects the effective access this view
+  // presents and edits.
 
   const noop = () => {};
 
@@ -71,7 +75,9 @@
   let showInstall = $state(false);
   let installScope = $state('global');
 
-  let detail = $state();
+  let viewElement = $state();
+  let collectionTitle = $state();
+  let skillPage = $state();
   let list = $state();
   let addMenu = $state();
   let resultsElement = $state();
@@ -81,6 +87,10 @@
   let inspectVersion = 0;
   let disposed = false;
   let pendingInstallSelection = null;
+  // The collection page's scroll offset when a package page replaced it.
+  let returnScrollTop = null;
+  // The package opened last from the library, marked when returning.
+  let lastOpenedId = $state(null);
 
   const actions = createSkillActions({
     get agents() {
@@ -178,25 +188,83 @@
   function changeScope(next) {
     scope = next;
     page = 0;
+    lastOpenedId = null;
+    returnScrollTop = null;
     clearSelection();
+  }
+
+  // Choosing the collection whose package page is open returns to it.
+  function selectCollection(next) {
+    if (next === scope && selected) void returnToCollection();
+    else changeScope(next);
   }
 
   function changeSearch(next) {
     searchQuery = next;
     page = 0;
-    if (isLibrary) clearSelection();
+    lastOpenedId = null;
   }
 
   function changeStatus(next) {
     statusFilter = next;
     page = 0;
-    clearSelection();
+    lastOpenedId = null;
   }
 
   function changePage(next) {
     page = next;
-    clearSelection();
+    lastOpenedId = null;
     list?.scrollToTop();
+  }
+
+  function collectionScroller() {
+    return resultsElement?.querySelector('.skills-list, .skills-panel-scroll');
+  }
+
+  // The row that opened `entry` on the collection page, if it is still there.
+  function collectionRow(entry) {
+    const attribute = isLibrary ? 'skillId' : 'itemKey';
+    const value = isLibrary ? entry.id : entry.name;
+    return [
+      ...(resultsElement?.querySelectorAll(
+        isLibrary ? '[data-skill-id]' : '[data-item-key]',
+      ) ?? []),
+    ].find((element) => element.dataset[attribute] === value);
+  }
+
+  // Back from a package page: the collection page reappears as it was left.
+  async function returnToCollection(entry = selected) {
+    const scrollTop = returnScrollTop;
+    returnScrollTop = null;
+    clearSelection();
+    await tick();
+    const scroller = collectionScroller();
+    if (scroller && scrollTop !== null) scroller.scrollTop = scrollTop;
+    const row = entry ? collectionRow(entry) : null;
+    (row ?? collectionTitle)?.focus({ preventScroll: true });
+  }
+
+  function isTextEntry(target) {
+    return Boolean(
+      target?.closest?.('input, textarea, select') || target?.isContentEditable,
+    );
+  }
+
+  // Escape leaves a package page unless something else consumed it (a
+  // dialog, menu or picker) or focus is in a text field.
+  function handleWindowKeydown(event) {
+    if (
+      event.key !== 'Escape' ||
+      !selected ||
+      event.defaultPrevented ||
+      isImeComposing(event) ||
+      isTextEntry(event.target)
+    )
+      return;
+    if (event.target !== document.body && !viewElement?.contains(event.target))
+      return;
+    event.preventDefault();
+    void returnToCollection();
   }
 
   async function inspect(entry, quiet) {
@@ -222,13 +290,15 @@
   async function openSkill(entry, focus = true) {
     pendingInstallSelection = null;
     const quiet = inspected?.id === entry.id && !focus;
+    if (!selected) returnScrollTop = collectionScroller()?.scrollTop ?? null;
+    if (isLibrary) lastOpenedId = entry.id;
     selectedId = entry.id;
     if (inspected?.id !== entry.id) inspected = null;
     if (focus) {
       contentTab = 'instructions';
       const request = inspect(entry, false);
       await tick();
-      detail?.focus();
+      skillPage?.focus();
       await request;
       return;
     }
@@ -236,24 +306,8 @@
   }
 
   function openPackage(item) {
-    const entry = inventory.find(
-      (candidate) => candidate.id === item.packageId,
-    );
+    const entry = packageOf(item);
     if (entry) void openSkill(entry);
-  }
-
-  async function closeDetail() {
-    const entry = selected;
-    clearSelection();
-    await tick();
-    if (!entry) return;
-    if (isLibrary) {
-      list?.focusRow(entry.id);
-      return;
-    }
-    [...(resultsElement?.querySelectorAll('[data-item-key]') ?? [])]
-      .find((element) => element.dataset.itemKey === entry.name)
-      ?.focus();
   }
 
   async function loadInventory() {
@@ -286,7 +340,7 @@
         void openSkill(installedEntry);
       } else if (selectedId) {
         const entry = inventory.find((item) => item.id === selectedId);
-        if (!entry) clearSelection();
+        if (!entry) void returnToCollection(null);
         else if (!actions.editing) void openSkill(entry, false);
       }
     } catch (error) {
@@ -344,6 +398,10 @@
     await loadInventory();
   }
 
+  function packageOf(item) {
+    return inventory.find((entry) => entry.id === item.packageId) ?? null;
+  }
+
   function setProjectGroup(groupId, on) {
     const group = projectView?.groups.find((item) => item.id === groupId);
     if (group)
@@ -356,42 +414,26 @@
   }
 </script>
 
-<section class="skills-view view active" aria-labelledby="skills-title">
+<svelte:window onkeydown={handleWindowKeydown} />
+
+<section
+  class="skills-view view active"
+  aria-labelledby={selected ? 'skill-page-title' : 'skills-title'}
+  bind:this={viewElement}
+>
   <aside class="skills-nav secondary-pane" aria-label={t('skills.collections')}>
-    <SkillCollectionNav {collections} {scope} onSelect={changeScope} />
+    <SkillCollectionNav {collections} {scope} onSelect={selectCollection} />
   </aside>
 
   <div class="skills-main">
-    <div class="skills-mobile-nav" class:skills-mobile-hidden={selected}>
+    <div class="skills-mobile-nav">
       <SkillCollectionNav
         variant="dropdown"
         {collections}
         {scope}
-        onSelect={changeScope}
+        onSelect={selectCollection}
       />
     </div>
-    <header
-      class="view-header skills-header"
-      class:skills-mobile-hidden={selected}
-    >
-      <div class="view-header__intro">
-        <h2 id="skills-title" class="view-header__title">
-          {scope === 'directories'
-            ? t('skills.folders.title')
-            : collection?.label || t('skills.title')}
-        </h2>
-        <p class="view-header__subtitle">
-          {scope === 'directories'
-            ? t('skills.locationsSubtitle')
-            : collectionText.subtitle}
-        </p>
-      </div>
-      {#if scope === 'directories'}
-        <Button variant="secondary" onClick={closeDirectories}
-          >← {t('common.back')}</Button
-        >
-      {/if}
-    </header>
 
     {#if loadError}
       <Banner variant="error" role="alert"
@@ -400,88 +442,140 @@
         ></Banner
       >
     {/if}
-    {#if staleShared.length || policyDiagnostics.length}
-      <details class="skills-notice">
-        <summary
-          >{t('skills.policyAttention', {
-            count: staleShared.length + policyDiagnostics.length,
-          })}</summary
-        >
-        {#if staleShared.length}<p>
-            {staleShared.length === 1
-              ? t('skills.staleSharedOne')
-              : t('skills.staleShared', { count: staleShared.length })}
-          </p>{/if}
-        <ul>
-          {#each staleShared as item, index (index)}<li>
-              {item.agent_id} / {item.name}
-            </li>{/each}{#each policyDiagnostics as line, index (index)}<li>
-              {line}
-            </li>{/each}
-        </ul>
-      </details>
+
+    {#if selected}
+      <SkillPage
+        bind:this={skillPage}
+        entry={selected}
+        collectionLabel={collection?.label || t('skills.title')}
+        {inspected}
+        {inspectLoading}
+        {inspectError}
+        {contentTab}
+        {agents}
+        {projects}
+        {inventory}
+        busy={actions.busy}
+        onBack={() => returnToCollection()}
+        onRetry={() => openSkill(selected, false)}
+        onTab={(next) => (contentTab = next)}
+        onEdit={actions.startEdit}
+        onDelete={actions.requestDelete}
+        onSetDisabled={actions.setDisabled}
+        onAgentAccess={actions.updateAgentAccess}
+        onShare={actions.setSharing}
+        onProjectSkills={actions.updateProjectSkills}
+      />
     {/if}
 
-    <div class="skills-directories" hidden={scope !== 'directories'}>
-      {#if showDirectories}
-        {#if directoryError}<Banner variant="error">{directoryError}</Banner
-          >{/if}
-        <SkillDirectoryEditor
-          bind:this={directoryEditor}
-          {settings}
-          onCommit={(nextSettings) => {
-            onSettingsCommit(nextSettings);
-            void loadInventory();
-          }}
-          {onToast}
-          onError={(message) => (directoryError = message)}
-        />
-      {/if}
-    </div>
-    {#if scope !== 'directories'}
-      <div class="skills-toolbar" class:skills-mobile-hidden={selected}>
-        <SkillAddMenu
-          bind:this={addMenu}
-          disabled={actions.busy}
-          onInstall={openInstall}
-          onCreate={() => actions.openCreateModal(ownScope())}
-          onFolders={openDirectories}
-        />
-        <div class="skills-search">
-          <svg
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            aria-hidden="true"
-            ><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg
+    <!-- The collection page stays mounted behind a package page, so its
+         filters and list survive the round trip. -->
+    <div class="skills-collection-page" hidden={Boolean(selected)}>
+      <header class="view-header skills-header">
+        <div class="view-header__intro">
+          <h2
+            id="skills-title"
+            class="view-header__title"
+            tabindex="-1"
+            bind:this={collectionTitle}
           >
-          <TextField
-            type="search"
-            value={searchQuery}
-            onInput={changeSearch}
-            placeholder={isLibrary
-              ? t('skills.searchLibrary')
-              : t('skills.panel.filterPlaceholder')}
-            ariaLabel={isLibrary
-              ? t('skills.searchLibrary')
-              : t('skills.panel.filter')}
-          />
+            {scope === 'directories'
+              ? t('skills.folders.title')
+              : collection?.label || t('skills.title')}
+          </h2>
+          <p class="view-header__subtitle">
+            {scope === 'directories'
+              ? t('skills.locationsSubtitle')
+              : collectionText.subtitle}
+          </p>
         </div>
-        {#if isLibrary}
-          <Dropdown
-            value={statusFilter}
-            options={statusOptions}
-            ariaLabel={t('skills.filter.label')}
-            onValueChange={changeStatus}
+        {#if scope === 'directories'}
+          <Button variant="secondary" onClick={closeDirectories}
+            >← {t('common.back')}</Button
+          >
+        {/if}
+      </header>
+
+      {#if staleShared.length || policyDiagnostics.length}
+        <details class="skills-notice">
+          <summary
+            >{t('skills.policyAttention', {
+              count: staleShared.length + policyDiagnostics.length,
+            })}</summary
+          >
+          {#if staleShared.length}<p>
+              {staleShared.length === 1
+                ? t('skills.staleSharedOne')
+                : t('skills.staleShared', { count: staleShared.length })}
+            </p>{/if}
+          <ul>
+            {#each staleShared as item, index (index)}<li>
+                {item.agent_id} / {item.name}
+              </li>{/each}{#each policyDiagnostics as line, index (index)}<li>
+                {line}
+              </li>{/each}
+          </ul>
+        </details>
+      {/if}
+
+      <div class="skills-directories" hidden={scope !== 'directories'}>
+        {#if showDirectories}
+          {#if directoryError}<Banner variant="error">{directoryError}</Banner
+            >{/if}
+          <SkillDirectoryEditor
+            bind:this={directoryEditor}
+            {settings}
+            onCommit={(nextSettings) => {
+              onSettingsCommit(nextSettings);
+              void loadInventory();
+            }}
+            {onToast}
+            onError={(message) => (directoryError = message)}
           />
         {/if}
       </div>
-      <div class="skills-workspace" class:skills-workspace--selected={selected}>
+      {#if scope !== 'directories'}
+        <div class="skills-toolbar">
+          <SkillAddMenu
+            bind:this={addMenu}
+            disabled={actions.busy}
+            onInstall={openInstall}
+            onCreate={() => actions.openCreateModal(ownScope())}
+            onFolders={openDirectories}
+          />
+          <div class="skills-search">
+            <svg
+              viewBox="0 0 16 16"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              aria-hidden="true"
+              ><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg
+            >
+            <TextField
+              type="search"
+              value={searchQuery}
+              onInput={changeSearch}
+              placeholder={isLibrary
+                ? t('skills.searchLibrary')
+                : t('skills.panel.filterPlaceholder')}
+              ariaLabel={isLibrary
+                ? t('skills.searchLibrary')
+                : t('skills.panel.filter')}
+            />
+          </div>
+          {#if isLibrary}
+            <Dropdown
+              value={statusFilter}
+              options={statusOptions}
+              ariaLabel={t('skills.filter.label')}
+              onValueChange={changeStatus}
+            />
+          {/if}
+        </div>
         <section
           class="skills-results"
-          class:skills-mobile-hidden={selected}
           aria-label={t('skills.results')}
           aria-busy={actions.busy}
           bind:this={resultsElement}
@@ -491,7 +585,7 @@
               bind:this={list}
               entries={visibleSkills}
               total={filtered.length}
-              {selectedId}
+              currentId={lastOpenedId}
               {loading}
               {loaded}
               filtersActive={Boolean(searchQuery) || statusFilter !== 'all'}
@@ -543,31 +637,8 @@
             </div>
           {/if}
         </section>
-        {#if selected}
-          <SkillDetail
-            bind:this={detail}
-            entry={selected}
-            {inspected}
-            {inspectLoading}
-            {inspectError}
-            {contentTab}
-            {agents}
-            {projects}
-            {inventory}
-            busy={actions.busy}
-            onBack={closeDetail}
-            onRetry={() => openSkill(selected, false)}
-            onTab={(next) => (contentTab = next)}
-            onEdit={actions.startEdit}
-            onDelete={actions.requestDelete}
-            onSetDisabled={actions.setDisabled}
-            onAgentAccess={actions.updateAgentAccess}
-            onShare={actions.setSharing}
-            onProjectSkills={actions.updateProjectSkills}
-          />
-        {/if}
-      </div>
-    {/if}
+      {/if}
+    </div>
   </div>
 </section>
 

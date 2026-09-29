@@ -31,10 +31,13 @@
     return agents.find((agent) => agent.id === id);
   }
 
-  function grant(agentId, on) {
+  function grant(agentId, on, own = false) {
     const agent = agentById(agentId);
     if (agent)
-      onAgentAccess(agent, toggleSkill(skillAccessOf(agent), entry.name, on));
+      onAgentAccess(
+        agent,
+        toggleSkill(skillAccessOf(agent), entry.name, on, own),
+      );
   }
 
   function toggleAgent(_name, on, item) {
@@ -46,8 +49,8 @@
           ? [...new Set([...current, item.agentId])]
           : current.filter((id) => id !== item.agentId),
       );
-    } else if (item.kind === 'grant') {
-      grant(item.agentId, on);
+    } else if (item.kind === 'grant' || item.kind === 'own') {
+      grant(item.agentId, on, item.kind === 'own');
     }
   }
 

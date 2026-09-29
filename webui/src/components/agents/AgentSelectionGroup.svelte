@@ -17,14 +17,18 @@
 <script>
   // One selection list (Skills, Identity Agents, Project Agents, Skill access)
   // as a shared Checkbox group (styles/settings/sections.css): a head with the
-  // group checkbox, the title and the selection count, then one labelled
-  // checkbox row per member. The caller owns the selection policy (wildcards
-  // and what selecting a whole group means) and the filter text shared by the
-  // groups of a section.
+  // group checkbox, the title and the selection count, then one single-line
+  // row per member. The caller owns the selection policy (wildcards and what
+  // selecting a whole group means) and the filter text shared by the groups
+  // of a section.
   //
-  // A member may be locked (a fixed grant: shown, not changeable), carry one
-  // short state at the row end (`{text, tone}`) and one inline action. With
-  // `onOpen`, the member's name opens it elsewhere and only the box toggles.
+  // A row shows the member's name and at most one short state at its end
+  // (`{text, tone}`). The member's `detail` (a description) is never rendered
+  // inline: it appears only in the row's tooltip on hover or keyboard focus,
+  // together with `lockedReason` for a locked member (a fixed grant: shown,
+  // not changeable). A member may carry one inline action. With `onOpen`, the
+  // member's name opens it elsewhere and only the box toggles.
+  import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
   import Checkbox from '../ui/Checkbox.svelte';
   import { t } from '$lib/i18n.js';
@@ -75,25 +79,23 @@
   function stateId(index) {
     return `${uid}-state-${index}`;
   }
+
+  // The description, then why a locked member cannot change, beside the name.
+  function rowTooltip(item) {
+    return {
+      text: item.detail || '',
+      rows:
+        item.locked && item.lockedReason ? [{ value: item.lockedReason }] : [],
+      placement: 'right',
+      alignTo: '.s-check-row__name',
+    };
+  }
 </script>
 
-{#snippet memberText(item)}
-  <span class="s-check-row__text">
-    <span class="s-check-row__name" class:s-check-row__name--plain={plainNames}
-      >{item.name}</span
-    >
-    {#if item.detail}
-      <span
-        class="s-check-row__detail"
-        class:s-check-row__detail--warn={item.unavailable}>{item.detail}</span
-      >
-    {/if}
-    {#each item.warnings ?? [] as warning, index (`${item.name}-warning-${index}`)}
-      <span class="s-check-row__detail s-check-row__detail--warn"
-        >{warning}</span
-      >
-    {/each}
-  </span>
+{#snippet memberName(item)}
+  <span class="s-check-row__name" class:s-check-row__name--plain={plainNames}
+    >{item.name}</span
+  >
 {/snippet}
 
 {#snippet memberState(item, index)}
@@ -155,8 +157,12 @@
       </p>
     {:else}
       {#each visibleItems as item, index (item.key ?? item.name)}
-        {#if onOpen}
-          <div class="s-check-item">
+        <div
+          class="s-check-item"
+          class:s-check-item--inert={item.locked && !onOpen && !item.action}
+          use:tooltip={rowTooltip(item)}
+        >
+          {#if onOpen}
             <Checkbox
               class="s-check-item__box"
               checked={item.allowed}
@@ -171,12 +177,10 @@
               data-item-key={item.key ?? item.name}
               onclick={() => onOpen(item)}
             >
-              {@render memberText(item)}
+              {@render memberName(item)}
             </button>
             {@render memberState(item, index)}
-          </div>
-        {:else if item.action}
-          <div class="s-check-item">
+          {:else}
             <Checkbox
               class="s-check-row"
               checked={item.allowed}
@@ -185,29 +189,19 @@
               aria-describedby={item.state?.text ? stateId(index) : undefined}
               onChange={(next) => onToggle(item.name, next, item)}
             >
-              {@render memberText(item)}
+              {@render memberName(item)}
               {@render memberState(item, index)}
             </Checkbox>
-            <Button
-              variant="tertiary"
-              class="s-check-item__action"
-              ariaLabel={item.action.ariaLabel || undefined}
-              onClick={() => onAction(item)}>{item.action.label}</Button
-            >
-          </div>
-        {:else}
-          <Checkbox
-            class="s-check-row"
-            checked={item.allowed}
-            disabled={item.locked}
-            ariaLabel={toggleLabel(item.name, item)}
-            aria-describedby={item.state?.text ? stateId(index) : undefined}
-            onChange={(next) => onToggle(item.name, next, item)}
-          >
-            {@render memberText(item)}
-            {@render memberState(item, index)}
-          </Checkbox>
-        {/if}
+            {#if item.action}
+              <Button
+                variant="tertiary"
+                class="s-check-item__action"
+                ariaLabel={item.action.ariaLabel || undefined}
+                onClick={() => onAction(item)}>{item.action.label}</Button
+              >
+            {/if}
+          {/if}
+        </div>
       {/each}
     {/if}
   </div>

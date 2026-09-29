@@ -64,6 +64,22 @@
   max-width: calc(var(--content-max-wide) + 64px);
   margin: 0 auto;
 }
+/* The collection page and a package page share the content column; the
+   collection page stays mounted (hidden) behind an open package page. */
+.skills-collection-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  min-height: 0;
+}
+.skills-collection-page[hidden] {
+  display: none;
+}
+.skills-header .view-header__title:focus {
+  outline: none;
+}
 .skills-toolbar {
   display: flex;
   align-items: center;
@@ -89,12 +105,6 @@
 }
 .skills-toolbar .dropdown {
   min-width: 160px;
-}
-.skills-workspace {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
 }
 .skills-results {
   display: flex;
@@ -156,17 +166,25 @@
   color: var(--text-hi);
   background: var(--surface-3);
 }
-/* One package per row: name and state, the description as a second line,
-   and the source with who gets it at the end. The whole row opens the
-   detail. */
+/* One package per single-line row: the Mono name with problem badges, then
+   the source label and who gets it, muted, at the end. Descriptions show only
+   in the row tooltip. Rows sit inset in the group; one rounded band marks
+   hover, a tinted band the package opened last. */
+.skills-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 4px 6px;
+}
 .skills-row {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
   width: 100%;
-  min-height: 56px;
-  padding: 8px 14px 8px 18px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 8px;
   border: 0;
+  border-radius: var(--r-md);
   color: inherit;
   background: transparent;
   font: inherit;
@@ -177,67 +195,54 @@
   background: var(--surface-2);
 }
 .skills-row:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -2px;
+  outline: none;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
-.skills-row--selected,
-.skills-row--selected:hover {
-  background: var(--surface-3);
-  box-shadow: inset 2px 0 var(--accent);
+.skills-row--current,
+.skills-row--current:hover {
+  background: var(--accent-08);
 }
-.skills-row-main {
-  display: grid;
-  flex: 1;
-  gap: 2px;
-  min-width: 0;
-}
-.skills-row-title {
+.skills-row-meta {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.skills-row-description {
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 55%;
+  margin-left: auto;
+  padding-left: 16px;
   overflow: hidden;
-  color: var(--text-med);
-  font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
+  color: var(--text-lo);
+  font: 400 var(--fs-label-sm)/1.4 var(--font-ui);
+  white-space: nowrap;
+}
+.skills-row-source {
+  flex-shrink: 0;
+}
+.skills-row-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.skills-row-summary::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--text-faint);
+}
+/* Skill names are identifiers. */
+.skills-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-hi);
+  font: 500 var(--fs-mono-sm)/1.5 var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.skills-row-description--empty,
-.skills-detail-description--empty {
-  color: var(--text-lo);
-}
-.skills-row-meta {
-  display: grid;
+.skills-row .chip,
+.skills-row .badge {
   flex-shrink: 0;
-  justify-items: end;
-  gap: 2px;
-  max-width: 40%;
-  text-align: right;
-}
-.skills-row-summary {
-  color: var(--text-lo);
-  font: 400 var(--fs-label-sm)/1.4 var(--font-ui);
-  overflow-wrap: anywhere;
-}
-.skills-content-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-/* Skill names are identifiers; the source line below stays in the interface
-   face. */
-.skills-row-name {
-  font: 500 var(--fs-mono-sm)/1.5 var(--font-mono);
-  color: var(--text-hi);
-  overflow-wrap: anywhere;
-}
-.skills-row-source {
-  font: 400 var(--fs-label-sm)/1.4 var(--font-ui);
-  color: var(--text-med);
-  overflow-wrap: anywhere;
 }
 /* A Skill turned off everywhere keeps its row; its name recedes. */
 .skills-row--disabled .skills-row-name {
@@ -253,99 +258,126 @@
   color: var(--text-med);
   font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
 }
-.skills-workspace--selected .skills-results {
-  flex: 0 0 44%;
-}
-/* The detail stands beside the list group, separated by whitespace. */
-.skills-detail {
+/* A package page replaces the collection page in the same content column:
+   Back and the breadcrumb stay put, everything below scrolls as one. */
+.skills-page {
   display: flex;
-  flex-direction: column;
   flex: 1;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
-  margin-left: 32px;
+  /* Focus lands here only programmatically, when the page opens. */
   outline: none;
 }
-.skills-detail:focus-visible {
+.skills-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: -8px;
+}
+.skills-crumbs__trail {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-lo);
+  font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
+}
+.skills-crumbs__trail li {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.skills-crumbs__trail li + li::before {
+  content: '›';
+  margin: 0 8px;
+  color: var(--text-faint);
+}
+.skills-crumbs__link {
+  padding: 2px 4px;
+  border: 0;
   border-radius: var(--r-sm);
+  color: var(--text-med);
+  background: transparent;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.skills-crumbs__link:hover {
+  color: var(--text-hi);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.skills-crumbs__link:focus-visible {
+  outline: none;
   box-shadow: var(--focus-ring);
 }
-.skills-detail-top {
-  min-height: 44px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0;
+.skills-crumbs__current {
+  overflow: hidden;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-/* The list stays beside the detail on desktop, so Back only appears in the
-   narrow layout where the detail replaces the list. */
-.skills-detail-top .skills-detail-back {
-  display: none;
-}
-.skills-detail-scroll {
-  overflow-y: auto;
-  min-height: 0;
+.skills-page-scroll {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 14px 12px 20px 0;
+  padding: 14px 12px 24px 0;
 }
-.skills-detail-header {
-  padding: 4px 0 8px;
+.skills-page-title.view-header__title {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
-.skills-detail-title {
+.skills-page-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-}
-.skills-detail-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.skills-detail-header h3 {
-  margin: 8px 0;
-  font: 500 var(--fs-heading-md)/1.4 var(--font-mono);
-  color: var(--text-hi);
-  overflow-wrap: anywhere;
-}
-.skills-detail-source {
-  margin: 0;
-  font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
-  color: var(--text-med);
-  overflow-wrap: anywhere;
-}
-.skills-detail-description {
+  gap: 6px 10px;
   margin: 8px 0 0;
+}
+.skills-page-source {
+  color: var(--text-med);
+  font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
+  overflow-wrap: anywhere;
+}
+.skills-page-description {
+  margin: 20px 0 0;
   max-width: 72ch;
   color: var(--text-hi);
-  font: 400 var(--fs-body-md)/1.55 var(--font-ui);
+  font: 400 var(--fs-body-md)/1.6 var(--font-ui);
   overflow-wrap: anywhere;
 }
-.skills-detail-note {
+.skills-page-description--empty {
+  color: var(--text-lo);
+}
+.skills-page-note {
   margin: 6px 0 0;
   max-width: 72ch;
   color: var(--text-lo);
   font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
   overflow-wrap: anywhere;
 }
-.skills-detail-off {
-  margin-bottom: 20px;
-}
-.skills-detail-off button {
-  flex-shrink: 0;
-  white-space: nowrap;
+.skills-page-off {
+  margin: 24px 0 20px;
 }
 /* Who gets the Skill: a sub-topic heading with its explanation, like the
    sub-headings of configuration pages, then the Agent and Project rows. */
 .skills-access {
-  margin: 0 0 24px;
+  margin: 28px 0 24px;
 }
+/* Agents and Projects side by side when there is room. */
 .skills-access__groups {
   display: grid;
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  align-items: start;
+  gap: 16px;
   margin-top: 12px;
 }
 /* An Agent's or Project's Skill selection in place of the package list. */
@@ -379,12 +411,6 @@
 .skills-selection__groups {
   display: grid;
   gap: 12px;
-}
-/* Descriptions stay on one line; the detail pane shows them in full. */
-.skills-selection .s-check-row__detail {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .skills-access h4 {
   margin: 0 0 4px;
@@ -529,11 +555,6 @@
   font: 500 var(--fs-body-sm)/1.4 var(--font-ui);
   color: var(--text-hi);
 }
-@media (max-width: 1280px) {
-  .skills-detail {
-    margin-left: 20px;
-  }
-}
 @media (max-width: 960px) {
   .skills-view .skills-nav {
     display: none;
@@ -541,33 +562,13 @@
   .skills-mobile-nav {
     display: block;
   }
-  .skills-view .skills-mobile-hidden {
-    display: none;
-  }
-  /* The detail replaces the list and the collection header, and scrolls as
-     one column so its header does not hold half of a small screen. */
-  .skills-detail {
-    margin: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
-  .skills-detail-scroll {
-    flex: none;
-    overflow: visible;
-  }
-  .skills-detail-top .skills-detail-back {
-    display: inline-flex;
-  }
-  .skills-detail-title {
-    margin-bottom: 8px;
-  }
 }
 @media (max-width: 640px) {
   .skills-main {
     padding: 16px;
     gap: 12px;
   }
-  .skills-toolbar:not(.skills-mobile-hidden) {
+  .skills-toolbar {
     display: grid;
     grid-template-columns: 40px minmax(0, 1fr);
   }
@@ -584,17 +585,16 @@
   .skills-view .btn-primary {
     min-height: 40px;
   }
-  .skills-detail-scroll {
+  .skills-page-scroll {
     padding-right: 0;
   }
+  /* Phone rows keep one line: the source label yields to who gets it. */
   .skills-row {
-    flex-wrap: wrap;
-    gap: 4px 12px;
+    min-height: 44px;
   }
-  .skills-row-meta {
-    justify-items: start;
-    max-width: none;
-    text-align: left;
+  .skills-row-source,
+  .skills-row-summary::before {
+    display: none;
   }
   .skills-diagnostics summary {
     min-height: 40px;

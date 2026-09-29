@@ -8,7 +8,6 @@ import { agentDisplayName, skillCopyLabel } from './skillsView.js';
 
 export const ALL_SKILLS = '*';
 
-const LOCKED_GRANTS = new Set(['own', 'project']);
 const GRANTED = new Set(['own', 'project', 'allowed']);
 
 function names(value) {
@@ -43,28 +42,34 @@ export function isAllMode(access) {
   return access.allowed.includes(ALL_SKILLS);
 }
 
-/** Own and Project grants are fixed; every other grant follows the allowlist. */
+/**
+ * Only a Project grant is fixed: the Project decides it. Own Skills and every
+ * other Skill follow the Agent's allowlist pair.
+ */
 export function isAllowlistGoverned(grant) {
-  return !LOCKED_GRANTS.has(grant);
-}
-
-/** Whether the allowlist pair grants a governed Skill name. */
-export function isDraftGranted(access, name) {
-  return (
-    (isAllMode(access) || access.allowed.includes(name)) &&
-    !access.excluded.includes(name)
-  );
+  return grant !== 'project';
 }
 
 /**
- * Turns governed Skill names on or off. In "all" mode a name is excluded or
- * released; with a fixed selection it is added to or removed from the list
- * (and released from the exclusions so the grant takes effect). Unknown names
+ * Whether the allowlist pair grants a Skill name. An own Skill is on unless
+ * excluded, in either mode; any other name also needs the wildcard or a list
+ * entry.
+ */
+export function isDraftGranted(access, name, own = false) {
+  if (access.excluded.includes(name)) return false;
+  return own || isAllMode(access) || access.allowed.includes(name);
+}
+
+/**
+ * Turns Skill names on or off. Own Skills (`own`) and every name in "all"
+ * mode are turned off by excluding and on by releasing the exclusion. With a
+ * fixed selection other names are added to or removed from the list (and
+ * released from the exclusions so the grant takes effect). Unknown names
  * already saved are kept.
  */
-export function toggleSkills(access, skillNames, on) {
+export function toggleSkills(access, skillNames, on, own = false) {
   const targets = new Set(skillNames);
-  if (isAllMode(access)) {
+  if (own || isAllMode(access)) {
     return {
       allowed: [...access.allowed],
       excluded: on
@@ -84,15 +89,17 @@ export function toggleSkills(access, skillNames, on) {
   };
 }
 
-export function toggleSkill(access, name, on) {
-  return toggleSkills(access, [name], on);
+export function toggleSkill(access, name, on, own = false) {
+  return toggleSkills(access, [name], on, own);
 }
 
 /**
  * Switches between "all" (new Skills are added automatically) and a fixed
  * selection without changing which of the governed names are granted now.
+ * `governedNames` are the listed non-own Skills; exclusions of own Skills
+ * (`ownNames`) carry over unchanged.
  */
-export function setAutoAdd(access, governedNames, on) {
+export function setAutoAdd(access, governedNames, on, ownNames = []) {
   if (on === isAllMode(access)) return access;
   const governed = new Set(governedNames);
   if (on) {
@@ -104,6 +111,7 @@ export function setAutoAdd(access, governedNames, on) {
       ]),
     };
   }
+  const own = new Set(ownNames);
   return {
     allowed: unique([
       ...governedNames.filter((name) => isDraftGranted(access, name)),
@@ -111,10 +119,11 @@ export function setAutoAdd(access, governedNames, on) {
         (name) =>
           name !== ALL_SKILLS &&
           !governed.has(name) &&
+          !own.has(name) &&
           !access.excluded.includes(name),
       ),
     ]),
-    excluded: [],
+    excluded: access.excluded.filter((name) => own.has(name)),
   };
 }
 
@@ -209,7 +218,7 @@ function draftAgentRows(inventory) {
 const AGENT_GROUPS = ['own', 'project', 'shared', 'global', 'bundled'];
 
 function agentGroupOf(row, entry, agentId) {
-  if (row.grant === 'own') return 'own';
+  if (row.own) return 'own';
   if (row.grant === 'project') return 'project';
   if (entry?.owner_id && entry.owner_id !== agentId) return 'shared';
   if (entry?.origin === 'bundled') return 'bundled';
@@ -244,7 +253,7 @@ function agentGroupAllLabel(group, rootProject) {
  * state taken from the (possibly unsaved) allowlist pair. `agent` is the
  * inventory projection entry, or null for an Agent that does not exist yet.
  * Saved names the Agent cannot currently see stay listed so they are never
- * dropped silently.
+ * dropped silently. A Project grant is locked; `lockedReason` explains it.
  */
 export function agentSkillView(
   agent,
@@ -261,12 +270,14 @@ export function agentSkillView(
   const rootProject = projectName(agent?.root_project_id, projects);
   const groups = new Map(AGENT_GROUPS.map((group) => [group, []]));
   const governed = [];
+  const own = [];
   for (const row of rows) {
     const entry = byId.get(row.package_id);
     const group = agentGroupOf(row, entry, agentId);
     const locked = !isAllowlistGoverned(row.grant);
-    if (!locked) governed.push(row.name);
-    const allowed = locked || isDraftGranted(access, row.name);
+    if (row.own) own.push(row.name);
+    else if (!locked) governed.push(row.name);
+    const allowed = locked || isDraftGranted(access, row.name, row.own);
     let state = null;
     if (!row.available) state = { text: missingText(entry), tone: 'warn' };
     else if (group === 'shared')
@@ -275,12 +286,19 @@ export function agentSkillView(
           name: agentDisplayName(entry.owner_id, agents),
         }),
       };
+    // An own Skill the Project also grants: say why it cannot be turned off.
+    else if (locked && group === 'own')
+      state = { text: t('skills.access.viaProject', { name: rootProject }) };
     groups.get(group).push({
       key: row.name,
       name: row.name,
       packageId: row.package_id,
+      own: Boolean(row.own),
       allowed,
       locked,
+      lockedReason: locked
+        ? t('skills.panel.lockedByProject', { name: rootProject })
+        : '',
       detail: entry?.description || '',
       state,
     });
@@ -294,8 +312,10 @@ export function agentSkillView(
           key: name,
           name,
           packageId: null,
+          own: false,
           allowed: true,
           locked: false,
+          lockedReason: '',
           detail: t('skills.panel.savedDetail'),
           state: null,
         }));
@@ -321,6 +341,7 @@ export function agentSkillView(
   return {
     groups: result,
     governed,
+    own,
     active: listed.filter((item) => item.allowed).length,
     total: listed.length,
     autoAdd: isAllMode(access),
@@ -354,6 +375,7 @@ export function projectSkillView(sections) {
       packageId: row.packageId ?? null,
       allowed: Boolean(row.active),
       locked: false,
+      lockedReason: '',
       detail: row.description || '',
       state: null,
     })),
@@ -464,24 +486,27 @@ function agentAccessRow(entry, agent, context) {
   if (row.package_id !== entry.id)
     return { ...base, state: shadowState(row, context) };
   const granted = GRANTED.has(row.grant);
+  const rootProject = projectName(agent.root_project_id, projects);
+  const locked = !isAllowlistGoverned(row.grant);
   let state = null;
   if (granted && !row.available)
     state = { text: missingText(entry), tone: 'warn' };
-  else if (row.grant === 'own') state = { text: t('skills.access.owner') };
-  else if (row.grant === 'project')
-    state = {
-      text: t('skills.access.viaProject', {
-        name: projectName(agent.root_project_id, projects),
-      }),
-    };
+  else if (locked)
+    state = { text: t('skills.access.viaProject', { name: rootProject }) };
+  else if (row.own) state = { text: t('skills.access.owner') };
   else if (row.grant === 'excluded')
     state = { text: t('skills.access.excluded') };
-  const locked = !isAllowlistGoverned(row.grant);
+  let kind = 'grant';
+  if (locked) kind = 'locked';
+  else if (row.own) kind = 'own';
   return {
     ...base,
     allowed: granted,
     locked,
-    kind: locked ? 'locked' : 'grant',
+    lockedReason: locked
+      ? t('skills.panel.lockedByProject', { name: rootProject })
+      : '',
+    kind,
     state,
   };
 }
@@ -555,14 +580,31 @@ export function skillAccessSummary(entry, agents = [], projects = []) {
           (row) => row.package_id === entry.id && GRANTED.has(row.grant),
         ),
     ).length;
-    if (!shared) return t('skills.summary.ownerOnly', { name: owner });
-    return count < shared
-      ? t('skills.summary.ownerSharedBlocked', {
+    // The owner has its own Skill unless it turned it off (an exclusion).
+    const ownerRow = agents
+      .find((agent) => agent.id === entry.owner_id)
+      ?.skills?.find((row) => row.package_id === entry.id);
+    const ownerOn = !ownerRow || GRANTED.has(ownerRow.grant);
+    if (!shared)
+      return ownerOn
+        ? t('skills.summary.ownerOnly', { name: owner })
+        : t('skills.summary.ownerOff', { name: owner });
+    const blocked = shared - count;
+    if (ownerOn)
+      return blocked > 0
+        ? t('skills.summary.ownerSharedBlocked', {
+            name: owner,
+            count,
+            blocked,
+          })
+        : t('skills.summary.ownerShared', { name: owner, count });
+    return blocked > 0
+      ? t('skills.summary.ownerOffSharedBlocked', {
           name: owner,
           count,
-          blocked: shared - count,
+          blocked,
         })
-      : t('skills.summary.ownerShared', { name: owner, count });
+      : t('skills.summary.ownerOffShared', { name: owner, count });
   }
   if (entry.project_id) {
     const project = projects.find(

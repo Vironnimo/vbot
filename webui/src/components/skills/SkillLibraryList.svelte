@@ -1,8 +1,11 @@
 <script>
-  // One page of Skill packages: name and state, the description as a visible
-  // second line, and a quiet source label with who gets the package. A row
-  // opens the package's detail; all changes happen there.
+  // One page of Skill packages, one line each: the name with problem badges
+  // and, at the end, a quiet source label with who gets the package. The
+  // description is never shown inline, only in the row's tooltip (explicit
+  // user requirement, see the Skills section of webui/design.md). A row
+  // opens the package's page.
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import Badge from '../ui/Badge.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
@@ -21,7 +24,7 @@
   let {
     entries = [],
     total = 0,
-    selectedId = null,
+    currentId = null,
     loading = false,
     loaded = false,
     filtersActive = false,
@@ -37,10 +40,6 @@
   } = $props();
 
   let listElement = $state();
-
-  export function focusRow(id) {
-    listElement?.querySelector(`[data-skill-id="${id}"]`)?.focus();
-  }
 
   export function scrollToTop() {
     listElement?.scrollTo?.(0, 0);
@@ -72,41 +71,38 @@
     />
   {:else}
     <div class="s-group skills-group">
-      {#each entries as entry (entry.id)}
-        <button
-          type="button"
-          class="skills-row"
-          class:skills-row--selected={selectedId === entry.id}
-          class:skills-row--disabled={entry.disabled}
-          data-skill-id={entry.id}
-          aria-pressed={selectedId === entry.id}
-          onclick={() => onOpen(entry)}
-        >
-          <span class="skills-row-main">
-            <span class="skills-row-title">
-              <span class="skills-row-name">{entry.name}</span>
-              {#if entry.status !== 'available'}<StatusChip
-                  variant={skillStatusVariant(entry)}
-                  >{skillStatusLabel(entry)}</StatusChip
-                >
-              {:else if skillDiagnosticLines(entry).length}<Badge variant="warn"
-                  >{t('skills.requirementNotes')}</Badge
-                >{/if}
+      <div class="skills-rows">
+        {#each entries as entry (entry.id)}
+          <button
+            type="button"
+            class="skills-row"
+            class:skills-row--current={currentId === entry.id}
+            class:skills-row--disabled={entry.disabled}
+            data-skill-id={entry.id}
+            use:tooltip={{
+              text: entry.description,
+              placement: 'right',
+              alignTo: '.skills-row-name',
+            }}
+            onclick={() => onOpen(entry)}
+          >
+            <span class="skills-row-name">{entry.name}</span>
+            {#if entry.status !== 'available'}<StatusChip
+                variant={skillStatusVariant(entry)}
+                >{skillStatusLabel(entry)}</StatusChip
+              >
+            {:else if skillDiagnosticLines(entry).length}<Badge variant="warn"
+                >{t('skills.requirementNotes')}</Badge
+              >{/if}
+            <span class="skills-row-meta">
+              <span class="skills-row-source">{skillSourceLabel(entry)}</span>
+              <span class="skills-row-summary"
+                >{skillAccessSummary(entry, agents, projects)}</span
+              >
             </span>
-            <span
-              class="skills-row-description"
-              class:skills-row-description--empty={!entry.description}
-              >{entry.description || t('skills.noDescription')}</span
-            >
-          </span>
-          <span class="skills-row-meta">
-            <span class="skills-row-source">{skillSourceLabel(entry)}</span>
-            <span class="skills-row-summary"
-              >{skillAccessSummary(entry, agents, projects)}</span
-            >
-          </span>
-        </button>
-      {/each}
+          </button>
+        {/each}
+      </div>
     </div>
   {/if}
 </div>

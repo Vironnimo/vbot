@@ -695,7 +695,7 @@ describe('AgentsView behavior and access', () => {
     },
   );
 
-  it('renders skill descriptions, unmet requirements and invalid packages and excludes unticked Skills', async () => {
+  it('shows skill descriptions only as tooltips, unmet requirements and invalid packages and excludes unticked Skills', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, { target: document.body });
@@ -703,7 +703,17 @@ describe('AgentsView behavior and access', () => {
 
     await waitForText('sample-skill');
 
-    expect(document.body.textContent).toContain('A loadable sample skill.');
+    // Explicit user requirement: skill rows never show descriptions inline.
+    expect(
+      document.querySelector('.skills-selection').textContent,
+    ).not.toContain('A loadable sample skill.');
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+    getButtonByAriaLabel('Toggle skill sample-skill').focus();
+    expect(document.getElementById('app-tooltip').textContent).toBe(
+      'A loadable sample skill.',
+    );
     const skillToggle = getButtonByAriaLabel('Toggle skill warning-skill');
     const stateId = skillToggle.getAttribute('aria-describedby');
     expect(document.getElementById(stateId).textContent).toBe(

@@ -309,12 +309,12 @@
 
 /* Checkbox groups select the members of a list inside one group (Tool
    families, an Agent's Skills and Sub-Agent targets, Project Skill
-   ceilings). The head carries the group Checkbox (mixed when partly
-   selected), the title and a selected/total count on `--surface-2`; every
-   member is a full-width Checkbox row (`.s-check-row`) whose Mono name is an
-   identifier, with optional detail lines below it and an optional state at
-   its end. `.s-check-groups` flows several groups through two balanced
-   columns without splitting one. */
+   ceilings, Skill access). The head carries the group Checkbox (mixed when
+   partly selected), the title and a selected/total count on `--surface-2`;
+   every member is one single-line row: the Checkbox, the Mono name (an
+   identifier) and an optional short state at its end. Descriptions never
+   show inline; rows carry them in their tooltip. `.s-check-groups` flows
+   several groups through two balanced columns without splitting one. */
 .s-check-groups {
   columns: 2;
   column-gap: 16px;
@@ -352,10 +352,12 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Rows sit inset from the group's edges, so a row's rounded hover band never
+   touches the card border; the box lines up with the head's Checkbox. */
 .s-check-group__rows {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  padding: 4px 0;
+  padding: 4px 6px;
 }
 
 .s-check-group__rows[hidden] {
@@ -364,25 +366,32 @@
 
 .s-check-group__note {
   margin: 0;
-  padding: 8px 14px;
+  padding: 8px;
   color: var(--text-lo);
   font-size: var(--fs-body-sm);
 }
 
-/* The whole row is the Checkbox; the box aligns with the name's first line
-   when detail lines follow. */
+/* A member row: either the whole row is the Checkbox (`.s-check-row`), or
+   `.s-check-item` holds the box with an open button or an inline action.
+   One rounded band covers the whole row, box included, on hover and while a
+   control in it has keyboard focus; the focused control adds its ring. */
+.s-check-item {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--r-md);
+}
+
 .s-check-group .s-check-row {
-  align-items: flex-start;
+  align-items: center;
   min-height: 34px;
-  padding: 7px 14px;
-  border-radius: 0;
+  padding: 6px 8px;
+  border-radius: var(--r-md);
 }
 
-.s-check-group .s-check-row .checkbox__box {
-  margin-top: 1px;
-}
-
-.s-check-group .s-check-row:hover:not(:disabled) {
+.s-check-group .s-check-row:hover:not(:disabled),
+.s-check-item:hover:not(.s-check-item--inert),
+.s-check-item:has(:focus-visible) {
   background: var(--surface-2);
 }
 
@@ -390,39 +399,26 @@
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-.s-check-row__text {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 1px;
-}
-
 .s-check-row__name {
+  flex: 0 1 auto;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
   color: var(--text-hi);
   font: var(--fs-mono-sm) / 1.5 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.s-check-row__detail {
-  overflow-wrap: anywhere;
+/* One short state at the row end (Automatic, unavailable, via project ...). */
+.s-check-row__state {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+  margin-left: auto;
+  padding-left: 12px;
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
   line-height: 1.4;
-}
-
-.s-check-row__detail--warn {
-  color: var(--amber);
-}
-
-/* One short state at the row end (Automatic, unavailable, ...). */
-.s-check-row__state {
-  flex-shrink: 0;
-  margin-left: auto;
-  padding-left: 8px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  line-height: 1.5;
   text-align: right;
 }
 
@@ -435,14 +431,6 @@
   font: var(--fs-body-sm) / 1.5 var(--font-ui);
 }
 
-/* A member with more than its checkbox: an inline action after the row, or a
-   name that opens the member elsewhere while only the box toggles it. */
-.s-check-item {
-  display: flex;
-  align-items: flex-start;
-  min-width: 0;
-}
-
 .s-check-item > .s-check-row {
   flex: 1;
   min-width: 0;
@@ -450,29 +438,27 @@
 
 .s-check-item__action {
   flex-shrink: 0;
-  align-self: center;
-  margin-right: 8px;
+  margin-right: 4px;
 }
 
 .s-check-group .s-check-item__box {
-  margin: 9px 0 0 14px;
+  margin-left: 8px;
 }
 
 .s-check-item__open {
   display: flex;
   flex: 1;
+  align-items: center;
   min-width: 0;
-  padding: 7px 10px;
+  min-height: 34px;
+  padding: 6px 8px 6px 10px;
   border: 0;
+  border-radius: var(--r-md);
   color: inherit;
   background: transparent;
   font: inherit;
   text-align: left;
   cursor: pointer;
-}
-
-.s-check-item__open:hover {
-  background: var(--surface-2);
 }
 
 .s-check-item__open:focus-visible {
@@ -481,7 +467,7 @@
 }
 
 .s-check-item > .s-check-row__state {
-  padding: 7px 14px 7px 8px;
+  padding-right: 8px;
 }
 
 /* A named sub-topic inside a section (for example Connected clients under
@@ -544,10 +530,6 @@
   .s-check-item__open {
     min-height: 40px;
     padding-block: 10px;
-  }
-
-  .s-check-group .s-check-item__box {
-    margin-top: 12px;
   }
 
   /* Entity rows use the group's narrow padding; wide heads let their end
