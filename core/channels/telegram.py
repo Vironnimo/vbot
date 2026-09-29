@@ -209,7 +209,9 @@ class TelegramChannelAdapter(ChannelAdapter):
             telegram_ext.Application.builder()
             .token(self._token)
             .rate_limiter(rate_limiter)
-            .get_updates_request(_observed_polling_request(polling_health.answered))
+            .get_updates_request(
+                _observed_polling_request(polling_health.answered, polling_health.timed_out)
+            )
             .build()
         )
 

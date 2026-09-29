@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 import traceback
@@ -291,14 +292,42 @@ async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "failures", "levels"),
+    [
+        # PTB hands a failed poll to the error callback: the first one warns.
+        (
+            "error-callback",
+            3,
+            [logging.WARNING, logging.DEBUG, logging.DEBUG, logging.INFO],
+        ),
+        # PTB retries a timed-out poll without the callback; the request sees it, and
+        # only a run of timeouts is a failing stretch.
+        (
+            "timeout",
+            4,
+            [logging.DEBUG, logging.DEBUG, logging.WARNING, logging.DEBUG, logging.INFO],
+        ),
+        ("timeout", 2, [logging.DEBUG, logging.DEBUG]),
+    ],
+    ids=["failed-polls", "sustained-timeouts", "brief-timeouts"],
+)
 async def test_polling_failures_log_once_until_a_poll_is_answered(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+    failures: int,
+    levels: list[int],
 ) -> None:
     adapter, _sessions, _trigger, bot = make_adapter(tmp_path, monkeypatch, running=False)
     application = _FakeApplication(bot, _IDENTITY)
     builder, _ = _install_ptb(monkeypatch, application)
+    telegram_reachable = True
 
     async def answer(*_args: Any, **_kwargs: Any) -> tuple[int, bytes]:
+        if not telegram_reachable:
+            raise telegram.error.TimedOut()
         return 200, b'{"ok": true, "result": []}'
 
     # Only the HTTP exchange is replaced; the adapter's getUpdates request is PTB's.
@@ -310,11 +339,21 @@ async def test_polling_failures_log_once_until_a_poll_is_answered(
     report_failure = application.error_callback
     assert isinstance(request, telegram.request.HTTPXRequest)
     assert report_failure is not None
-    await request.do_request("https://api.telegram.org/bot/getUpdates", "POST")
-    for _ in range(3):
-        report_failure(telegram.error.NetworkError("down"))
-    await request.do_request("https://api.telegram.org/bot/getUpdates", "POST")
-    await request.do_request("https://api.telegram.org/bot/getUpdates", "POST")
+
+    async def poll() -> None:
+        with contextlib.suppress(telegram.error.TimedOut):
+            await request.do_request("https://api.telegram.org/bot/getUpdates", "POST")
+
+    await poll()
+    for _ in range(failures):
+        if failure == "timeout":
+            telegram_reachable = False
+            await poll()
+        else:
+            report_failure(telegram.error.NetworkError("down"))
+    telegram_reachable = True
+    await poll()
+    await poll()
     await adapter.stop()
     report_failure(telegram.error.NetworkError("down"))
     await asyncio.wait_for(polling, timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
@@ -322,14 +361,12 @@ async def test_polling_failures_log_once_until_a_poll_is_answered(
     # A healthy poll is silent; a failing stretch logs one WARNING with the error
     # type, its retries at DEBUG without tracebacks, and one INFO on recovery.
     records = [record for record in caplog.records if record.name == "vbot.channels.telegram"]
-    assert [record.levelno for record in records] == [
-        logging.WARNING,
-        logging.DEBUG,
-        logging.DEBUG,
-        logging.INFO,
-    ]
-    assert "NetworkError" in records[0].getMessage()
-    assert "failures=3" in records[-1].getMessage()
+    assert [record.levelno for record in records] == levels
+    warnings = [record for record in records if record.levelno == logging.WARNING]
+    expected_type = "TimedOut" if failure == "timeout" else "NetworkError"
+    assert all(expected_type in record.getMessage() for record in warnings)
+    if levels[-1] == logging.INFO:
+        assert f"failures={failures}" in records[-1].getMessage()
     assert all(record.exc_info is None for record in records)
 
 

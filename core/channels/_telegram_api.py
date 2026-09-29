@@ -143,62 +143,94 @@ def _load_telegram_request() -> Any:
         ) from error
 
 
+# Consecutive timed-out polls that make a failing stretch. A single timeout is an
+# ordinary blip PTB retries at once; a run of them means Telegram is unreachable.
+_SUSTAINED_POLL_TIMEOUTS = 3
+
+
 class _PollingHealth:
     """Report long-polling health as transitions: one failing line, one recovered line.
 
     PTB retries a failed ``getUpdates`` forever. Each failure reaches :meth:`failed`
     as the updater's ``error_callback``, which also replaces PTB's own traceback per
-    attempt; each answered poll reaches :meth:`answered` through the request built by
-    :func:`_observed_polling_request`. Signals after :meth:`close` are ignored.
+    attempt. PTB retries a timed-out poll without that callback, so the request built
+    by :func:`_observed_polling_request` reports each timeout to :meth:`timed_out`
+    and each answered poll to :meth:`answered`. A failure, or
+    ``_SUSTAINED_POLL_TIMEOUTS`` consecutive timeouts, starts a failing stretch; the
+    next answered poll ends it. Signals after :meth:`close` are ignored.
     """
 
     def __init__(self, channel_id: str) -> None:
         self._channel_id = channel_id
+        # Unanswered polls since the last answered one, and how many of them timed out.
         self._failures = 0
-        self._failing_since: float | None = None
+        self._timeouts = 0
+        self._unanswered_since: float | None = None
+        self._failing = False
         self._closed = False
 
     def failed(self, error: Exception) -> None:
         if self._closed:
             return
+        self._unanswered(type(error).__name__, starts_failing=True)
+
+    def timed_out(self) -> None:
+        if self._closed:
+            return
+        self._timeouts += 1
+        self._unanswered("TimedOut", starts_failing=self._timeouts >= _SUSTAINED_POLL_TIMEOUTS)
+
+    def _unanswered(self, error_type: str, *, starts_failing: bool) -> None:
         self._failures += 1
-        error_type = type(error).__name__
-        if self._failing_since is not None:
+        if self._unanswered_since is None:
+            self._unanswered_since = time.monotonic()
+        if self._failing or not starts_failing:
             _LOGGER.debug(
-                "Telegram polling failed again (channel=%s error_type=%s failures=%d)",
+                "Telegram poll failed (channel=%s error_type=%s failures=%d)",
                 self._channel_id,
                 error_type,
                 self._failures,
             )
             return
-        self._failing_since = time.monotonic()
+        self._failing = True
         _LOGGER.warning(
-            "Telegram polling failed (channel=%s error_type=%s)", self._channel_id, error_type
+            "Telegram polling failed (channel=%s error_type=%s failures=%d)",
+            self._channel_id,
+            error_type,
+            self._failures,
         )
 
     def answered(self) -> None:
-        if self._closed or self._failing_since is None:
+        if self._closed:
             return
-        _LOGGER.info(
-            "Telegram polling recovered (channel=%s failures=%d down_for=%.1fs)",
-            self._channel_id,
-            self._failures,
-            time.monotonic() - self._failing_since,
-        )
+        if self._failing and self._unanswered_since is not None:
+            _LOGGER.info(
+                "Telegram polling recovered (channel=%s failures=%d down_for=%.1fs)",
+                self._channel_id,
+                self._failures,
+                time.monotonic() - self._unanswered_since,
+            )
         self._failures = 0
-        self._failing_since = None
+        self._timeouts = 0
+        self._unanswered_since = None
+        self._failing = False
 
     def close(self) -> None:
         self._closed = True
 
 
-def _observed_polling_request(on_answer: Callable[[], None]) -> Any:
-    """Build PTB's default ``getUpdates`` request, reporting each answered poll."""
+def _observed_polling_request(on_answer: Callable[[], None], on_timeout: Callable[[], None]) -> Any:
+    """Build PTB's default ``getUpdates`` request, reporting answered and timed-out polls."""
     httpx_request: Any = _load_telegram_request().HTTPXRequest
+    timed_out: Any = _load_telegram_error().TimedOut
 
     class _ObservedPollingRequest(httpx_request):  # type: ignore[misc]
         async def do_request(self, *args: Any, **kwargs: Any) -> tuple[int, bytes]:
-            code, payload = await super().do_request(*args, **kwargs)
+            try:
+                code, payload = await super().do_request(*args, **kwargs)
+            except timed_out:
+                on_timeout()
+                raise
             if 200 <= code < 300:
                 on_answer()
             return code, payload
