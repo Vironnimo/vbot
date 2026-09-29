@@ -39,6 +39,8 @@ from core.utils.workers import BoundedWorkerPool
 from ._telegram_api import (
     _load_telegram_ext,
     _markup_to_buttons,
+    _observed_polling_request,
+    _PollingHealth,
     _TelegramInteractionResponder,
 )
 from ._telegram_inbound import TelegramInboundBuffer
@@ -147,6 +149,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._token = token.strip()
 
         self._application: Any | None = None
+        self._polling_health: _PollingHealth | None = None
         self._stop_event = asyncio.Event()
         self._allowed_chat_ids = frozenset(config.allowed_chat_ids)
         self._denied_chat_log = DeniedChatLog()
@@ -164,7 +167,9 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         telegram_ext = _load_telegram_ext()
-        application = self._build_application(telegram_ext)
+        polling_health = _PollingHealth(self._config.id)
+        self._polling_health = polling_health
+        application = self._build_application(telegram_ext, polling_health)
         for handler in self._build_message_handlers(telegram_ext):
             application.add_handler(handler)
         self._application = application
@@ -184,18 +189,24 @@ class TelegramChannelAdapter(ChannelAdapter):
         if updater is None:
             raise ChannelError("Telegram updater is unavailable")
 
-        await updater.start_polling()
+        # PTB retries failed polls forever; the health reports the failing and
+        # recovered transitions instead of PTB's traceback on every attempt.
+        await updater.start_polling(error_callback=polling_health.failed)
         self._report_connected()
         await self._stop_event.wait()
 
-    def _build_application(self, telegram_ext: Any) -> Any:
+    def _build_application(self, telegram_ext: Any, polling_health: _PollingHealth) -> Any:
         # AIORateLimiter paces outbound calls against Telegram's flood limits (~30 msg/s
         # overall, 20 msg/min per group) so multi-chunk replies and media groups do not
         # trip flood control, and retries a send Telegram answers with RetryAfter. Without
         # it a rate-limit error mid-reply loses the remaining chunks.
         rate_limiter = telegram_ext.AIORateLimiter(max_retries=_SEND_MAX_RETRIES)
         return (
-            telegram_ext.Application.builder().token(self._token).rate_limiter(rate_limiter).build()
+            telegram_ext.Application.builder()
+            .token(self._token)
+            .rate_limiter(rate_limiter)
+            .get_updates_request(_observed_polling_request(polling_health.answered))
+            .build()
         )
 
     def _build_message_handlers(self, telegram_ext: Any) -> list[Any]:
@@ -257,6 +268,8 @@ class TelegramChannelAdapter(ChannelAdapter):
     async def stop(self) -> None:
         """Stop polling, cancel engine workers and album tasks, and release resources."""
         self._stop_event.set()
+        if self._polling_health is not None:
+            self._polling_health.close()
         application = self._application
         if application is not None:
             updater = application.updater
