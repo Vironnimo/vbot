@@ -289,7 +289,7 @@ export default Object.freeze({
     'Gives this Agent its own editable copy of the System Prompt. Turning it off keeps the customized blocks but stops using them.',
   'agents.form.skills': 'Skills',
   'agents.form.skillsDescription':
-    'Skills this Agent may load. Its own private Skills and the Skills of its root project are always on.',
+    'Skills this Agent may load. Its own private Skills are on until you turn them off; the Skills of its root project are always on and managed on the project.',
   'agents.form.subagentTargets': 'Sub-Agent targets',
   'agents.access.allIdentityAgents': 'All Identity Agents',
   'agents.access.allProjectAgents': 'All Project Agents',
