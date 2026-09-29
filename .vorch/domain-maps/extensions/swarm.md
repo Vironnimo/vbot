@@ -29,6 +29,12 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   `_board_view.py` (pure recipient resolution and result text); `_tool_calls.py`
   holds the per-Tool call-syntax normalizers. `_wake_pacing.py` holds the
   in-memory quiet periods that narrow which posts wake a participant.
+  Management operations log once in `extension.py` after the change (`logging.md`):
+  profile created/updated (changed field names)/deleted, delivery settings updated
+  (changed routes), Swarm started/stopped/deleted/resumed (`reason=request|post`;
+  WARNING when a participant's Run could not be admitted). Replays and no-ops are
+  silent; the lines carry ids and counts, never goals, posts or profile text. Page
+  operations and `/swarm` share the operation surface, so the lines name no actor.
 - `store.py` owns the SQLite profile, Board, Wiki, audience, delivery, lifecycle and audit
   transactions. It receives canonical receipt lookups; it must
   not open the Session database directly. Its database handle comes from

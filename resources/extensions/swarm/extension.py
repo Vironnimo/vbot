@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -140,6 +141,18 @@ _NORMALIZERS = {
     "swarm_state": normalize_state,
     "swarm_wiki": normalize_wiki,
 }
+
+
+def _changed_profile_fields(previous: Json | None, saved: Json, expected_revision: int) -> str:
+    """Names of the profile fields an update changed, for its log line."""
+    if previous is None or previous.get("revision") != expected_revision:
+        return "unknown"  # Another save landed between the read and this one.
+    names = sorted(
+        name
+        for name in set(previous) | set(saved)
+        if name != "revision" and previous.get(name) != saved.get(name)
+    )
+    return ",".join(names) or "none"
 
 
 def _normalize_arguments(name: str, arguments: Json) -> Any:
@@ -519,8 +532,23 @@ class SwarmExtension:
         expected = arguments.get("expected_revision")
         if expected is not None and type(expected) is not int:
             raise SwarmStoreError("invalid_arguments", field="expected_revision")
+        previous = None
+        if expected is not None and isinstance(profile.get("id"), str):
+            try:
+                previous = await self._store().get_profile(profile["id"])
+            except SwarmStoreError:
+                previous = None  # The save reports the missing profile.
         saved = await self._store().save_profile(profile, expected_revision=expected)
         self._changed("profiles", saved["id"], saved["revision"])
+        if expected is None:
+            _LOGGER.info("Swarm profile created (profile=%s)", saved["id"])
+        else:
+            _LOGGER.info(
+                "Swarm profile updated (profile=%s revision=%s fields=%s)",
+                saved["id"],
+                saved["revision"],
+                _changed_profile_fields(previous, saved, expected),
+            )
         return {"profile": saved}
 
     async def _profiles_delete(self, arguments: Json) -> Json:
@@ -529,6 +557,7 @@ class SwarmExtension:
         revision = _integer(arguments, "expected_revision", minimum=1)
         await self._store().delete_profile(profile_id, expected_revision=revision)
         self._changed("profiles", profile_id, revision)
+        _LOGGER.info("Swarm profile deleted (profile=%s)", profile_id)
         return {"profile_id": profile_id, "deleted": True}
 
     async def _swarms_list(self, arguments: Json) -> Json:
@@ -594,6 +623,18 @@ class SwarmExtension:
         )
         self._changed("swarms", swarm_id, result["revision"])
         self._enqueue_wakes(swarm_id)
+        routes = sorted(
+            route
+            for route in set(result["old"]) | set(result["new"])
+            if result["old"].get(route) != result["new"].get(route)
+        )
+        if routes and not result.get("replayed"):
+            _LOGGER.info(
+                "Swarm delivery settings updated (swarm=%s revision=%s routes=%s)",
+                swarm_id,
+                result["revision"],
+                ",".join(routes),
+            )
         return result
 
     async def _swarms_delete(self, arguments: Json) -> Json:
@@ -612,6 +653,7 @@ class SwarmExtension:
                 raise SwarmStoreError("swarm_closed")
             await host.temporary_agents.delete_group(swarm_id)
             await self._store().delete_swarm(swarm_id)
+            _LOGGER.info("Swarm deleted (swarm=%s)", swarm_id)
         self._changed("swarms", swarm_id)
         return {"swarm_id": swarm_id, "deleted": True}
 
@@ -644,6 +686,7 @@ class SwarmExtension:
             drain_report=report,
         )
         self._changed("swarms", result["swarm_id"])
+        _LOGGER.info("Swarm stopped (swarm=%s state=%s)", result["swarm_id"], finished["state"])
         return finished
 
     async def _swarms_start(self, arguments: Json) -> Json:
@@ -686,6 +729,7 @@ class SwarmExtension:
             participant_id=_string(arguments, "participant_id")
             if "participant_id" in arguments
             else None,
+            reason="request",
         )
 
     async def _swarms_usage(self, arguments: Json) -> Json:
@@ -775,7 +819,9 @@ class SwarmExtension:
             "failed",
         }:
             try:
-                resumed = await self._resume_swarm(swarm_id, f"post:{result['post_id']}")
+                resumed = await self._resume_swarm(
+                    swarm_id, f"post:{result['post_id']}", reason="post"
+                )
                 result["runs"] = resumed.get("runs", [])
             except Exception:
                 _LOGGER.warning(
@@ -1013,10 +1059,22 @@ class SwarmExtension:
             snapshot["id"], request_id=request_id, kind="start", runs=admissions
         )
         self._enqueue_title(snapshot["id"], prompt, snapshot["settings_revision"])
+        _LOGGER.info(
+            "Swarm started (swarm=%s profile=%s participants=%d runs=%d)",
+            snapshot["id"],
+            profile_id,
+            len(snapshot["participants"]),
+            len(admissions),
+        )
         return result
 
     async def _resume_swarm(
-        self, swarm_id: str, request_id: str, *, participant_id: str | None = None
+        self,
+        swarm_id: str,
+        request_id: str,
+        *,
+        participant_id: str | None = None,
+        reason: str,
     ) -> Json:
         host = self.host
         if host is None or host.temporary_agents is None:
@@ -1106,6 +1164,15 @@ class SwarmExtension:
                 await self._store().set_participant_state(swarm_id, participant_id, "failed")
                 admissions.append({"participant_id": participant_id, "error": type(error).__name__})
         self._changed("swarms", swarm_id, snapshot["settings_revision"])
+        failed = sum("error" in admission for admission in admissions)
+        _LOGGER.log(
+            logging.WARNING if failed else logging.INFO,
+            "Swarm resumed (swarm=%s reason=%s runs=%d failed=%d)",
+            swarm_id,
+            reason,
+            len(admissions) - failed,
+            failed,
+        )
         return await self._store().finish_admission(
             swarm_id, request_id=request_id, kind="resume", runs=admissions
         )
