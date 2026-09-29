@@ -32,6 +32,7 @@ AGENT_UPDATE_FLAGS = (
     "--tool-allow",
     "--tool-deny",
     "--allowed-skills",
+    "--excluded-skills",
     "--subagent-allow",
     "--compaction-policy",
     "--clear-compaction-policy",
@@ -293,6 +294,8 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         index for index, line in enumerate(lines) if line.startswith("allowed_skills:")
     )
     policy_lines: list[str] = []
+    if "excluded_skills" in agent:
+        policy_lines.append(f"excluded_skills: {_format_string_list(agent.get('excluded_skills'))}")
     if "tools" in agent:
         policy_lines.append(
             f"subagent_allowed_agents: {_subagent_allowed_agents(agent.get('tools'))}"

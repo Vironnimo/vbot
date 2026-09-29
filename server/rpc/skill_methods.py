@@ -92,7 +92,11 @@ async def _invalidate_scope(state: Any, scope: str) -> None:
 
 
 async def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResult]) -> JsonObject:
-    """Run one authoring write, map its diagnostics to an RpcError, then invalidate."""
+    """Run one authoring write, map its diagnostics to an RpcError, then invalidate.
+
+    Every authoring operation changes the scope's packages, so each success also
+    publishes one Skills invalidation for open views.
+    """
     try:
         result = await _SKILL_READ_WORKERS.run(write, _scope_root(state, scope))
     except SkillAuthoringError as exc:
@@ -106,6 +110,7 @@ async def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResul
         scope,
         result.operation,
     )
+    publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     return {"name": result.name, "operation": result.operation, "warnings": list(result.warnings)}
 
 

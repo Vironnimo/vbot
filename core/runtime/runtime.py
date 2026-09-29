@@ -67,7 +67,7 @@ from core.runtime._extension_host import ExtensionHostFactory
 from core.runtime._prompt_blocks import refresh_prompt_blocks
 from core.runtime._recall import RecallIntegration
 from core.runtime._service_access import _StartedService
-from core.runtime._settings import apply_settings_change
+from core.runtime._settings import SettingsChangeEffects, apply_settings_change
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     ConfigProtocol,
@@ -701,6 +701,16 @@ class Runtime:
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         return self._skill_operations().project_skill_names(project_id)
 
+    def project_skill_pool(self, project_id: str) -> dict[str, list[SkillMetadata]]:
+        return self._skill_operations().project_skill_pool(project_id)
+
+    def add_skill_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe to Skill changes an Agent makes; return an unsubscribe function."""
+        return self._skill_operations().add_changed_callback(callback)
+
+    def _notify_skills_changed(self) -> None:
+        self._skill_operations().notify_changed()
+
     def invalidate_project_skills(self, project_id: str | None = None) -> None:
         self._skill_operations().invalidate_project_skills(project_id)
 
@@ -770,13 +780,14 @@ class Runtime:
         current: Mapping[str, Any],
         *,
         refresh_sections: Collection[str] = (),
-    ) -> bool:
+    ) -> SettingsChangeEffects:
         """Apply all live effects of a successfully persisted Settings change.
 
         Call after validation and the atomic write, with its before/after raw
         Settings snapshots. Keep the mutation serialized through this await.
         Explicit section saves may request a Skills/Recall refresh even when
-        their values are unchanged. Return whether the Command catalog changed.
+        their values are unchanged. Return whether the Command catalog and the
+        Skill layer may have changed.
         """
         self._ensure_started()
         return await apply_settings_change(
@@ -891,6 +902,7 @@ class Runtime:
                     self._resolve_shared_skills_dir,
                     self._resolve_external_skill_scope,
                     lifecycle_guard=self.agents.lifecycle_guard,
+                    on_changed=self._notify_skills_changed,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))

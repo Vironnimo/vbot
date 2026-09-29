@@ -10,15 +10,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.agents import AgentStore
+from core.agents import Agent, AgentStore
 from core.extensions import ExtensionRegistry
-from core.projects import ProjectStore, effective_project_allowed_skills
+from core.projects import Project, ProjectError, ProjectStore, effective_project_allowed_skills
 from core.skills.policy import SkillPolicyService
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
     SKILL_ORIGIN_GLOBAL,
     SKILL_ORIGIN_PROJECT_PREFIX,
+    WILDCARD_ALLOWLIST,
     SkillMetadata,
     SkillRegistry,
     find_skill_package_dir,
@@ -111,6 +112,16 @@ class _ProjectSkillBundle:
     names: frozenset[str]
 
 
+@dataclass(frozen=True)
+class _ManagerSource:
+    """One inventoried Skill root: its origin tag and owning Agent or Project."""
+
+    root: Path
+    origin: str | None
+    owner_id: str | None
+    project_id: str | None
+
+
 class SkillRuntime:
     """Own the effective Skill layer and every scoped registry cache."""
 
@@ -142,6 +153,39 @@ class SkillRuntime:
         # around cache metadata; mutations must never wait for filesystem scans.
         self._cache_lock = threading.RLock()
         self._cache_generation = 0
+        self._changed_callbacks: list[Callable[[], None]] = []
+
+    def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe to Skill package changes made outside the operator surface.
+
+        Operator mutations publish their own invalidation; this channel reports
+        changes an Agent makes through its Skill authoring Tool. Returns an
+        unsubscribe function.
+        """
+        with self._cache_lock:
+            self._changed_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            with self._cache_lock:
+                if callback in self._changed_callbacks:
+                    self._changed_callbacks.remove(callback)
+
+        return unsubscribe
+
+    def notify_changed(self) -> None:
+        """Tell subscribers that a Skill package was created, changed, or removed."""
+        with self._cache_lock:
+            callbacks = tuple(self._changed_callbacks)
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception as error:
+                if self._logger is not None:
+                    self._logger.error(
+                        "Skill change callback failed: %s",
+                        error,
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
 
     @property
     def registry(self) -> SkillRegistry:
@@ -230,7 +274,10 @@ class SkillRuntime:
         bundled). The agent's own Skills and the effective Skill set of a selected
         Project are always allowed in that scoped registry: Project Context therefore
         grants what the Project uses without mutating the Agent's configured personal
-        allowlist. This is the single seam every run-time skill consumer (prompt
+        allowlist. An Identity Agent's ``excluded_skills`` are removed from what its
+        ``allowed_skills`` grants in that scoped registry, never from those always
+        allowed Skills; an Agent with exclusions always gets a scoped registry.
+        This is the single seam every run-time skill consumer (prompt
         assembly, triggers, the ``skill`` tool, autocomplete) resolves through, so
         scoping lives in exactly one place.
 
@@ -244,16 +291,16 @@ class SkillRuntime:
         The identity-store existence check below is defense in depth against a stray
         ``agents/<id>/skills`` directory that belongs to no stored agent.
         """
-        if (
-            identity_agent_id is not None
-            and self._agents.exists(identity_agent_id)
-            and (
+        agent = self._agents.find(identity_agent_id) if identity_agent_id is not None else None
+        if agent is not None:
+            exclusions = frozenset(agent.excluded_skills)
+            if (
                 project_id is not None
-                or self.agent_skills_dir(identity_agent_id).is_dir()
-                or self._receives_shared_skills(identity_agent_id)
-            )
-        ):
-            return self._agent_skill_registry(project_id, identity_agent_id)
+                or exclusions
+                or self.agent_skills_dir(agent.id).is_dir()
+                or self._receives_shared_skills(agent.id)
+            ):
+                return self._agent_skill_registry(project_id, agent.id, exclusions)
         if project_id is None:
             return self._skills
         return self._project_skill_bundle(project_id).registry
@@ -302,26 +349,32 @@ class SkillRuntime:
         allowed_names = set(effective_project_allowed_skills(project, bundle.names))
         return [skill for skill in bundle.registry.list_all() if skill.name in allowed_names]
 
-    def _manager_sources(self) -> list[tuple[Path, str | None, str | None]]:
+    def _manager_sources(
+        self,
+        projects: list[Project] | None = None,
+        agents: list[Agent] | None = None,
+    ) -> list[_ManagerSource]:
         roots = self._skill_scan_roots(self._storage.load_settings(), self._resources_path)
-        sources: list[tuple[Path, str | None, str | None]] = [
-            (root, origin, None) for root, origin in zip(roots, _origin_layers(roots), strict=True)
+        sources = [
+            _ManagerSource(root, origin, None, None)
+            for root, origin in zip(roots, _origin_layers(roots), strict=True)
         ]
         sources.extend(
-            (
+            _ManagerSource(
                 project_skills_dir(Path(project.cwd), project.source_format),
                 project_skill_origin(project.display_name),
                 None,
+                project.project_id,
             )
-            for project in self._projects.list()
+            for project in (self._projects.list() if projects is None else projects)
         )
         sources.extend(
-            (self.agent_skills_dir(agent.id), SKILL_ORIGIN_AGENT, agent.id)
-            for agent in self._agents.list()
+            _ManagerSource(self.agent_skills_dir(agent.id), SKILL_ORIGIN_AGENT, agent.id, None)
+            for agent in (self._agents.list() if agents is None else agents)
         )
-        unique_sources: dict[tuple[Path, str | None], tuple[Path, str | None, str | None]] = {}
+        unique_sources: dict[tuple[Path, str | None], _ManagerSource] = {}
         for source in sources:
-            unique_sources.setdefault((source[0].resolve(), source[2]), source)
+            unique_sources.setdefault((source.root.resolve(), source.owner_id), source)
         return list(unique_sources.values())
 
     @staticmethod
@@ -332,12 +385,12 @@ class SkillRuntime:
     def inspect_skill(self, entry_id: str) -> dict[str, Any]:
         """Read exactly one currently inventoried package without activating it."""
         environment = self._skill_environment(self._storage.load_environment())
-        for root, _origin, owner_id in self._manager_sources():
-            registry = SkillRegistry.load(root, environment=environment)
+        for source in self._manager_sources():
+            registry = SkillRegistry.load(source.root, environment=environment)
             paths = [skill.path for skill in registry.list_all()]
             paths.extend(diagnostic.path for diagnostic in registry.invalid_diagnostics())
             for path in paths:
-                if self._manager_entry_id(root, path, owner_id) == entry_id:
+                if self._manager_entry_id(source.root, path, source.owner_id) == entry_id:
                     return {"id": entry_id, "content": path.read_text(encoding="utf-8")}
         raise ValueError("Skill is no longer present in the inventory")
 
@@ -347,39 +400,41 @@ class SkillRuntime:
         Unlike ``skills_for`` this never applies the policy disable switch, so a
         disabled Skill stays visible and manageable here. Every scanned package
         is listed per source — a same-name Skill in two sources appears once per
-        origin — annotated with its origin, owner (private homes only), share and
-        disable state, availability, and warnings. Availability evaluates each
-        package's own requirements against one merged dependency registry, even
-        when another package with the same name takes precedence there. Stale
-        policy entries (an unknown owner or a vanished package) are reported for
-        cleanup, not silently dropped.
+        origin — annotated with its origin, owner (private homes only), Project
+        (Project Skill directories only), share and disable state, availability,
+        and warnings. Availability evaluates each package's own requirements
+        against one merged dependency registry, even when another package with the
+        same name takes precedence there. Stale policy entries (an unknown owner or
+        a vanished package) are reported for cleanup, not silently dropped.
+
+        ``agents`` projects each Identity Agent's effective Skill access (roster
+        order) and ``projects`` each Project's Skill pool (by display name). Their
+        ``package_id`` names the inventory entry of the package that wins there.
         """
         environment = self._skill_environment(self._storage.load_environment())
         policy = self._policy.load()
+        projects = self._projects.list()
+        agents = self._agents.list()
 
-        # (metadata, origin, owner_id, warnings, loadable) per scanned package.
-        raw_entries: list[tuple[SkillMetadata, str | None, str | None, list[str], bool, Path]] = []
+        # (metadata, source, warnings, loadable) per scanned package.
+        raw_entries: list[tuple[SkillMetadata, _ManagerSource, list[str], bool]] = []
         merged_roots: list[Path] = []
         merged_origins: list[str | None] = []
 
-        def add_root(root: Path, origin: str | None, owner_id: str | None) -> None:
-            registry = SkillRegistry.load(root, environment=environment)
+        def add_root(source: _ManagerSource) -> None:
+            registry = SkillRegistry.load(source.root, environment=environment)
             for skill in registry.list_all():
-                raw_entries.append(
-                    (skill, origin, owner_id, registry.warnings_for(skill.name), True, root)
-                )
+                raw_entries.append((skill, source, registry.warnings_for(skill.name), True))
             for diagnostic in registry.invalid_diagnostics():
                 placeholder = SkillMetadata(
                     name=diagnostic.name, description="", path=diagnostic.path
                 )
-                raw_entries.append(
-                    (placeholder, origin, owner_id, diagnostic.warnings, False, root)
-                )
-            merged_roots.append(root)
-            merged_origins.append(origin)
+                raw_entries.append((placeholder, source, diagnostic.warnings, False))
+            merged_roots.append(source.root)
+            merged_origins.append(source.origin)
 
-        for root, origin, owner_id in self._manager_sources():
-            add_root(root, origin, owner_id)
+        for source in self._manager_sources(projects, agents):
+            add_root(source)
 
         merged = SkillRegistry.load(
             merged_roots[0],
@@ -387,8 +442,11 @@ class SkillRuntime:
             environment=environment,
             origins=merged_origins,
         )
+        global_root = self.global_skills_dir.resolve()
         skills: list[dict[str, Any]] = []
-        for skill, origin, owner_id, warnings, loadable, root in raw_entries:
+        package_ids: dict[Path, str] = {}
+        for skill, source, warnings, loadable in raw_entries:
+            root, origin, owner_id = source.root, source.origin, source.owner_id
             if loadable:
                 availability = merged.availability_for_package(skill)
                 missing = list(availability.missing)
@@ -404,26 +462,29 @@ class SkillRuntime:
                 status = "disabled"
             owner_shared = policy.shared.get(owner_id, {}) if owner_id else {}
             shared_receivers = owner_shared.get(skill.name, frozenset())
+            entry_id = self._manager_entry_id(root, skill.path, owner_id)
+            if loadable:
+                package_ids.setdefault(skill.path.resolve(), entry_id)
             skills.append(
                 {
-                    "id": self._manager_entry_id(root, skill.path, owner_id),
+                    "id": entry_id,
                     "editable_scope": (
                         f"agent:{owner_id}"
                         if owner_id
                         else "global"
-                        if root.resolve() == self.global_skills_dir.resolve()
+                        if root.resolve() == global_root
                         else None
                     )
                     if loadable
                     else None,
                     "source_label": (root.parent.name if root.name == "skills" else root.name)
-                    if origin == SKILL_ORIGIN_GLOBAL
-                    and root.resolve() != self.global_skills_dir.resolve()
+                    if origin == SKILL_ORIGIN_GLOBAL and root.resolve() != global_root
                     else None,
                     "name": skill.name,
                     "description": skill.description,
                     "origin": origin,
                     "owner_id": owner_id,
+                    "project_id": source.project_id,
                     "shared": bool(shared_receivers),
                     "shared_with": sorted(shared_receivers),
                     "disabled": disabled,
@@ -433,10 +494,107 @@ class SkillRuntime:
                     "warnings": warnings,
                 }
             )
+        project_pools = [
+            self._project_skill_access(project, package_ids)
+            for project in sorted(
+                projects,
+                key=lambda project: (project.display_name.casefold(), project.project_id),
+            )
+        ]
         return {
             "skills": skills,
+            "agents": [self._agent_skill_access(agent, package_ids) for agent in agents],
+            "projects": [pool for pool in project_pools if pool is not None],
             "policy_diagnostics": self._policy.validation_diagnostics(),
             "stale_shared": self._stale_shared_entries(policy),
+        }
+
+    def _agent_skill_access(self, agent: Agent, package_ids: dict[Path, str]) -> dict[str, Any]:
+        """Project one Identity Agent's effective Skill grants for the manager.
+
+        Uses the registry the Agent's own Runs resolve (its root Project when that
+        Project still exists), so every listed name is one the Agent can see or be
+        granted. ``grant`` names why a Skill is (not) granted: ``own`` private
+        package, ``project`` granted by the root Project, ``excluded`` by
+        ``excluded_skills``, ``allowed`` by ``allowed_skills``, else
+        ``not_selected``. ``available`` reports whether its requirements, including
+        Skill dependencies under this Agent's grants, are met.
+        """
+        root_project_id = agent.root_project_id
+        project_id = (
+            root_project_id
+            if root_project_id is not None and self._projects.exists(root_project_id)
+            else None
+        )
+        try:
+            registry = self.skills_for(project_id, agent.id)
+        except ProjectError:
+            # The root Project vanished between the existence probe and the scan.
+            registry = self.skills_for(None, agent.id)
+        home = self.agent_skills_dir(agent.id).resolve()
+        wildcard = WILDCARD_ALLOWLIST in agent.allowed_skills
+        selected = set(agent.allowed_skills)
+        excluded = set(agent.excluded_skills)
+        skills: list[dict[str, Any]] = []
+        for skill in registry.list_all():
+            path = skill.path.resolve()
+            if path.is_relative_to(home):
+                grant = "own"
+            elif skill.name in registry.always_allowed:
+                grant = "project"
+            elif skill.name in excluded:
+                grant = "excluded"
+            elif wildcard or skill.name in selected:
+                grant = "allowed"
+            else:
+                grant = "not_selected"
+            availability = registry.availability_for(skill.name, agent.allowed_skills)
+            skills.append(
+                {
+                    "name": skill.name,
+                    "package_id": package_ids.get(path),
+                    "grant": grant,
+                    "available": availability.state == "available",
+                }
+            )
+        return {
+            "id": agent.id,
+            "name": agent.name,
+            "root_project_id": root_project_id,
+            "allowed_skills": list(agent.allowed_skills),
+            "excluded_skills": list(agent.excluded_skills),
+            "mode": "all" if wildcard else "selected",
+            "skills": skills,
+        }
+
+    def _project_skill_access(
+        self, project: Project, package_ids: dict[Path, str]
+    ) -> dict[str, Any] | None:
+        """Project one Project's Skill pool and which Skills it activates."""
+        try:
+            pool = self.project_skill_pool(project.project_id)
+            names = self.project_skill_names(project.project_id)
+        except ProjectError:
+            # The Project was removed while the inventory was being assembled.
+            return None
+        active = set(effective_project_allowed_skills(project, names))
+        entries = [
+            {
+                "name": skill.name,
+                "package_id": package_ids.get(skill.path.resolve()),
+                "source": source,
+                "active": skill.name in active,
+            }
+            for source, skills in pool.items()
+            for skill in skills
+        ]
+        return {
+            "project_id": project.project_id,
+            "name": project.display_name,
+            "skills_project_disabled": list(project.skills_project_disabled),
+            "skills_global_enabled": list(project.skills_global_enabled),
+            "skills_bundled_enabled": list(project.skills_bundled_enabled),
+            "skills": sorted(entries, key=lambda entry: str(entry["name"])),
         }
 
     def _stale_shared_entries(self, policy: Any) -> list[dict[str, Any]]:
@@ -452,6 +610,28 @@ class SkillRuntime:
                 ):
                     stale.append({"agent_id": owner_id, "name": name})
         return stale
+
+    def project_skill_pool(self, project_id: str) -> dict[str, list[SkillMetadata]]:
+        """Return the Skills a Project can activate, grouped by source.
+
+        ``project`` holds the Project's own Skills, active unless the Project
+        disables them. ``global`` holds the user's global home, configured
+        ``skill_directories`` and loaded Extension Skills; ``bundled`` holds the
+        Skills shipped with vBot. Global and bundled Skills become active only
+        when the Project opts them in. A Project Skill shadows same-named global
+        and bundled ones, and Skills disabled by the Skill Policy are absent. Each
+        group is sorted by name.
+        """
+        bundle = self._project_skill_bundle(project_id)
+        pool: dict[str, list[SkillMetadata]] = {"project": [], "global": [], "bundled": []}
+        for skill in bundle.registry.list_all():
+            if skill.name in bundle.names:
+                pool["project"].append(skill)
+            elif skill.origin == SKILL_ORIGIN_GLOBAL:
+                pool["global"].append(skill)
+            else:
+                pool["bundled"].append(skill)
+        return pool
 
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         """Return the names of a project's own scanned skills (empty for identity).
@@ -503,20 +683,34 @@ class SkillRuntime:
         for key in [key for key in self._agent_skills if predicate(key)]:
             del self._agent_skills[key]
 
-    def _agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
+    def _agent_skill_registry(
+        self, project_id: str | None, agent_id: str, exclusions: frozenset[str]
+    ) -> SkillRegistry:
+        # A cached registry is reused only while it carries the Agent's current
+        # ``excluded_skills``: an Agent update (or a hand edit of agent.json) that
+        # changes them replaces the entry without any explicit invalidation.
         key = (project_id, agent_id)
         while True:
             with self._cache_lock:
                 cached = self._agent_skills.get(key)
-                if cached is not None:
+                if cached is not None and cached.allowlist_exclusions == exclusions:
                     return cached
                 generation = self._cache_generation
-            registry = self._build_agent_skill_registry(project_id, agent_id)
+            registry = self._build_agent_skill_registry(project_id, agent_id, exclusions)
             with self._cache_lock:
                 if generation == self._cache_generation:
-                    return self._agent_skills.setdefault(key, registry)
+                    current = self._agent_skills.get(key)
+                    if current is not None and current.allowlist_exclusions == exclusions:
+                        return current
+                    self._agent_skills[key] = registry
+                    return registry
 
-    def _build_agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
+    def _build_agent_skill_registry(
+        self,
+        project_id: str | None,
+        agent_id: str,
+        exclusions: frozenset[str] = frozenset(),
+    ) -> SkillRegistry:
         settings = self._storage.load_settings()
         environment = self._skill_environment(self._storage.load_environment())
         agent_root = self.agent_skills_dir(agent_id)
@@ -552,7 +746,8 @@ class SkillRuntime:
         # other agents (whose registries never scan this home). Project Context is
         # itself the authorization to use that Project's effective Skill set: those
         # exact Project-granted names also bypass the Identity Agent's unrelated
-        # personal allowlist while this project-scoped registry is active.
+        # personal allowlist while this project-scoped registry is active. The
+        # Agent's ``excluded_skills`` narrow only its allowlist grant, never these.
         agent_own_names = scan_skill_names(agent_root, environment)
         return SkillRegistry.load(
             roots[0],
@@ -561,6 +756,7 @@ class SkillRuntime:
             always_allowed=agent_own_names | project_allowed_names,
             origins=origins,
             excluded_names=self._disabled_skill_names(),
+            allowlist_exclusions=exclusions,
         )
 
     def _receives_shared_skills(self, receiver_agent_id: str) -> bool:

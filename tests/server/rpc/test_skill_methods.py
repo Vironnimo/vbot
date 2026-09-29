@@ -170,6 +170,8 @@ async def test_authoring_writes_the_scope_and_refreshes_it_live(tmp_path: Path, 
     assert not (root / "demo").exists()
     runtime = state.runtime
     assert (runtime.reload_calls, runtime.invalidated) == _expected_refresh(scope, 5)
+    # Each of the five writes publishes one Skills invalidation; reads publish none.
+    assert resource_changes(state) == [{"kind": "skills"}] * 5
 
 
 @pytest.mark.asyncio

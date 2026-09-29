@@ -77,6 +77,7 @@ async def test_agent_crud_round_trip(tmp_path: Path) -> None:
     assert created["custom_system_prompt_enabled"] is False
     assert created["memory_prompt_mode"] == "agent_user"
     assert created["tools"] == {}
+    assert created["excluded_skills"] == []
     assert updated["name"] == "Updated Writer"
     assert deleted["agent_id"] == "writer"
     # The remaining Agents ride on the response; each change is a bare reload signal.
@@ -267,6 +268,16 @@ async def test_agent_list_reports_the_effective_context_window(
             {"bash": {"allowed_env": ["OPENAI_API_KEY"]}},
             id="bash-env-grants-normalized",
         ),
+        pytest.param(
+            {"excluded_skills": ["pdf"]}, "excluded_skills", ["pdf"], id="excluded-skills"
+        ),
+        # "All Skills except ..." is one partial patch of both Skill fields.
+        pytest.param(
+            {"allowed_skills": ["*"], "excluded_skills": ["pdf", "xlsx"]},
+            "excluded_skills",
+            ["pdf", "xlsx"],
+            id="all-skills-except",
+        ),
     ],
 )
 async def test_agent_update_applies_a_mutable_field(
@@ -317,6 +328,9 @@ async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
             "",
         ),
         ("agent.create", {"id": "writer", "allowed_skills": ["debugging", None]}, "allowed_skills"),
+        ("agent.create", {"id": "writer", "excluded_skills": "pdf"}, "excluded_skills"),
+        ("agent.update", {"id": "coder", "excluded_skills": ["pdf", ""]}, "excluded_skills"),
+        ("agent.update", {"id": "coder", "excluded_skills": ["*"]}, "allowed_skills to []"),
         ("agent.update", {"id": "coder", "tools": "worker"}, "tools"),
         (
             "agent.create",

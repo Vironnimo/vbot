@@ -30,6 +30,7 @@ from core.providers.accounts import (
 )
 from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
 from core.runs import ChatRunManager
+from core.runtime import SettingsChangeEffects
 from core.runtime.runtime import Runtime
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
@@ -389,6 +390,7 @@ class StubRuntime:
         self.trigger_service: Any = None
         self.recall_reload_count = 0
         self.extension_reload_count = 0
+        self.skill_changed_callbacks: list[Callable[[], None]] = []
         self.extension_disabled_changes: list[set[str]] = []
         self.chat_loop = build_chat_loop(cast(Any, self))
         self.streaming_chat_loop = build_chat_loop(cast(Any, self), streaming=True)
@@ -417,6 +419,10 @@ class StubRuntime:
 
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
         return frozenset()
+
+    def add_skill_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        self.skill_changed_callbacks.append(callback)
+        return lambda: self.skill_changed_callbacks.remove(callback)
 
     def start(self) -> None:
         return None
@@ -552,7 +558,7 @@ class StubRuntime:
         current: Mapping[str, Any],
         *,
         refresh_sections: Collection[str] = (),
-    ) -> bool:
+    ) -> SettingsChangeEffects:
         return await Runtime.apply_settings_change(
             cast(Runtime, self), previous, current, refresh_sections=refresh_sections
         )

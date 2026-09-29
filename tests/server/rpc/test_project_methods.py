@@ -17,10 +17,10 @@ import pytest
 
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.runtime.runtime import Runtime
-from core.skills import SKILL_ORIGIN_BUNDLED, SKILL_ORIGIN_GLOBAL
 from core.utils.config import Config
+from server.events import ServerEventBus
 from tests.server.rpc.project_methods_test_support import _make_repo, _make_state, _write_agent
-from tests.server.rpc_test_support import JsonObject, rpc_error, rpc_result
+from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_error, rpc_result
 
 
 def _write_claude_agent(repo: Path, filename: str, name: str) -> None:
@@ -320,6 +320,30 @@ async def test_set_changes_project_fields(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("changes", "invalidated"),
+    [
+        pytest.param({"default_model": "openai/gpt-mini"}, ["projects"], id="unrelated-field"),
+        pytest.param(
+            {"skills_global_enabled": ["pdf"]}, ["projects", "skills"], id="skill-whitelist"
+        ),
+        # The display name labels the Project's Skills in the inventory.
+        pytest.param({"display_name": "Renamed"}, ["projects", "skills"], id="skill-origin"),
+        pytest.param({"skills_global_enabled": []}, ["projects"], id="unchanged-skill-field"),
+    ],
+)
+async def test_set_invalidates_the_skill_inventory_only_when_a_skill_field_changes(
+    tmp_path: Path, changes: JsonObject, invalidated: list[str]
+) -> None:
+    state, _repo = await _vbot_state(tmp_path)
+    state.event_bus = ServerEventBus()
+
+    await rpc_result(state, "project.set", project_id="vbot", **changes)
+
+    assert [change["kind"] for change in resource_changes(state)] == invalidated
+
+
+@pytest.mark.asyncio
 async def test_a_stored_unavailable_tool_is_kept_and_reported_but_not_rejected(
     tmp_path: Path,
 ) -> None:
@@ -455,20 +479,16 @@ async def test_show_reloads_skills_and_reports_the_editor_skill_pool(tmp_path: P
         reload_calls.append(True)
 
     state.runtime.reload_skills_async = reload_skills_async
-    state.runtime.project_skill_names = lambda _project_id: frozenset({"refactoring", "glossary"})
-    state.runtime.project_own_skills = lambda _project_id: [
-        SimpleNamespace(name="refactoring", description="Refactor code safely."),
-        SimpleNamespace(name="glossary", description="Maintain the glossary."),
-    ]
-    state.runtime.skills = SimpleNamespace(
-        list_all=lambda: [
-            SimpleNamespace(name="glossary", description="", origin=SKILL_ORIGIN_BUNDLED),
-            SimpleNamespace(name="pdf", description="Work with PDFs.", origin=SKILL_ORIGIN_BUNDLED),
-            SimpleNamespace(
-                name="deploy", description="Deploy the app.", origin=SKILL_ORIGIN_GLOBAL
-            ),
-        ]
-    )
+    # The Skill runtime owns the classification (shadowing, global vs. bundled);
+    # the editor response projects each group to name and description.
+    state.runtime.project_skill_pool = lambda _project_id: {
+        "project": [
+            SimpleNamespace(name="glossary", description="Maintain the glossary."),
+            SimpleNamespace(name="refactoring", description="Refactor code safely."),
+        ],
+        "global": [SimpleNamespace(name="deploy", description="Deploy the app.")],
+        "bundled": [SimpleNamespace(name="pdf", description="Work with PDFs.")],
+    }
 
     result = await rpc_result(state, "project.show", project_id="vbot")
 
@@ -480,9 +500,7 @@ async def test_show_reloads_skills_and_reports_the_editor_skill_pool(tmp_path: P
             {"name": "glossary", "description": "Maintain the glossary."},
             {"name": "refactoring", "description": "Refactor code safely."},
         ],
-        # "glossary" is shadowed by the project skill of the same name.
         "bundled": [{"name": "pdf", "description": "Work with PDFs."}],
-        # Global-home skills are a separate opt-in pool, split out by origin.
         "global": [{"name": "deploy", "description": "Deploy the app."}],
     }
 

@@ -300,3 +300,150 @@ def test_manager_evaluates_each_same_name_package(
         assert_inventory(disabled=True)
     finally:
         runtime.stop()
+
+
+def _write_skill_requiring(root: Path, name: str, dependency: str) -> None:
+    package = root / name
+    package.mkdir(parents=True)
+    frontmatter = yaml.safe_dump(
+        {
+            "name": name,
+            "description": f"Needs {dependency}.",
+            "metadata": {"vbot": {"requirements": {"all": [{"skill": dependency}]}}},
+        }
+    )
+    (package / "SKILL.md").write_text(f"---\n{frontmatter}---\n", encoding="utf-8")
+
+
+def test_manager_projects_each_agents_effective_skill_access(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    for name in ("alpha", "beta", "zeta"):
+        write_skill(runtime.global_skills_dir, name, f"{name} playbook.")
+    _write_skill_requiring(runtime.global_skills_dir, "needs-alpha", "alpha")
+    runtime.reload_skills()
+    repo = tmp_path / "repo"
+    write_skill(project_skills_dir(repo, "opencode"), "project-playbook", "Project playbook.")
+    runtime.projects.create("p", "P", repo)
+    runtime.projects.update("p", skills_global_enabled=["zeta"])
+    write_agent_skill(runtime.storage.data_dir, "main", "main-private", "Main playbook.")
+    runtime.agents.update("main", root_project_id="p", excluded_skills=["alpha"])
+    # A root Project that no longer exists falls back to the Agent's own scope.
+    runtime.agents.create("two", "Two", allowed_skills=["beta"])
+    runtime.agents.update("two", root_project_id="gone")
+
+    inventory = runtime.skill_inventory()
+    main, two = inventory["agents"]
+    watched = {"alpha", "beta", "zeta", "needs-alpha", "project-playbook", "main-private"}
+
+    def grants(agent: dict[str, Any]) -> dict[str, tuple[str, bool]]:
+        return {
+            skill["name"]: (skill["grant"], skill["available"])
+            for skill in agent["skills"]
+            if skill["name"] in watched
+        }
+
+    assert {key: main[key] for key in main if key != "skills"} == {
+        "id": "main",
+        "name": runtime.agents.get("main").name,
+        "root_project_id": "p",
+        "allowed_skills": ["*"],
+        "excluded_skills": ["alpha"],
+        "mode": "all",
+    }
+    assert [skill["name"] for skill in main["skills"]] == sorted(
+        skill["name"] for skill in main["skills"]
+    )
+    assert grants(main) == {
+        "alpha": ("excluded", True),
+        # An excluded dependency makes its dependent unavailable.
+        "needs-alpha": ("allowed", False),
+        "beta": ("allowed", True),
+        # The root Project's grant outranks the allowlist.
+        "zeta": ("project", True),
+        "project-playbook": ("project", True),
+        "main-private": ("own", True),
+    }
+    assert (two["root_project_id"], two["mode"], two["excluded_skills"]) == ("gone", "selected", [])
+    assert grants(two) == {
+        "alpha": ("not_selected", True),
+        "needs-alpha": ("not_selected", False),
+        "beta": ("allowed", True),
+        "zeta": ("not_selected", True),
+    }
+    # ``package_id`` names the inventory entry of the package that wins for the Agent.
+    entries = {
+        (entry["name"], entry["owner_id"], entry["project_id"]): entry["id"]
+        for entry in inventory["skills"]
+    }
+    package_ids = {skill["name"]: skill["package_id"] for skill in main["skills"]}
+    assert package_ids["main-private"] == entries[("main-private", "main", None)]
+    assert package_ids["project-playbook"] == entries[("project-playbook", None, "p")]
+    assert package_ids["alpha"] == entries[("alpha", None, None)]
+
+
+def test_manager_projects_each_projects_skill_pool(runtime: Runtime, tmp_path: Path) -> None:
+    bundled, shadowed = [
+        skill.name for skill in runtime.skills.list_all() if skill.origin == "bundled"
+    ][:2]
+    write_skill(runtime.global_skills_dir, "deploy", "Global deploy.")
+    external = tmp_path / "external"
+    write_skill(external, "external", "Configured directory Skill.")
+    runtime.storage.save_settings(
+        {**runtime.storage.load_settings(), "skill_directories": [str(external)]}
+    )
+    runtime.reload_skills()
+    repo = tmp_path / "repo"
+    project_root = project_skills_dir(repo, "opencode")
+    for name in ("project-playbook", "muted", shadowed):
+        write_skill(project_root, name, f"Project {name}.")
+    runtime.projects.create("b-project", "Beta", repo)
+    runtime.projects.update(
+        "b-project",
+        skills_project_disabled=["muted"],
+        skills_global_enabled=["deploy"],
+        skills_bundled_enabled=[bundled],
+    )
+    runtime.projects.create("a-project", "alpha", tmp_path / "empty")
+
+    inventory = runtime.skill_inventory()
+
+    # Sorted by display name, case-insensitively.
+    assert [project["project_id"] for project in inventory["projects"]] == [
+        "a-project",
+        "b-project",
+    ]
+    project = inventory["projects"][1]
+    assert {key: project[key] for key in project if key != "skills"} == {
+        "project_id": "b-project",
+        "name": "Beta",
+        "skills_project_disabled": ["muted"],
+        "skills_global_enabled": ["deploy"],
+        "skills_bundled_enabled": [bundled],
+    }
+    pool = {skill["name"]: (skill["source"], skill["active"]) for skill in project["skills"]}
+    assert [skill["name"] for skill in project["skills"]] == sorted(pool)
+    assert {
+        name: pool[name]
+        for name in ("project-playbook", "muted", shadowed, "deploy", "external", bundled)
+    } == {
+        "project-playbook": ("project", True),
+        "muted": ("project", False),
+        # A Project Skill shadows the same-named bundled Skill.
+        shadowed: ("project", True),
+        "deploy": ("global", True),
+        "external": ("global", False),
+        bundled: ("bundled", True),
+    }
+    # Every package names the Project whose directory holds it.
+    project_entries = {
+        entry["name"]: entry for entry in inventory["skills"] if entry["project_id"] == "b-project"
+    }
+    assert project_entries.keys() == {"project-playbook", "muted", shadowed}
+    assert all(
+        entry["project_id"] is None
+        for entry in inventory["skills"]
+        if entry["origin"] in {"global", "bundled", "agent"}
+    )
+    package_ids = {skill["name"]: skill["package_id"] for skill in project["skills"]}
+    assert package_ids[shadowed] == project_entries[shadowed]["id"]

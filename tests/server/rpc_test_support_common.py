@@ -102,6 +102,7 @@ class StubAgent:
     allowed_tools: list[str] | None = None
     tool_access: ToolAccess | None = None
     allowed_skills: list[str] | None = None
+    excluded_skills: list[str] = field(default_factory=list)
     tools: JsonObject | None = None
     custom_system_prompt_enabled: bool = False
     compaction_policy: JsonObject | None = None

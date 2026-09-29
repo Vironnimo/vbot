@@ -8,7 +8,7 @@ from core.chat import latest_session_context_usage
 from core.extensions import ExtensionRecord, ExtensionRegistrationIdentity, SettingsFieldDeclaration
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
-from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS
+from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS, RESOURCE_KIND_SKILLS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -58,8 +58,10 @@ async def _reload_extensions(state: Any, params: JsonObject) -> JsonObject:
         payload = _extensions_payload(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    # The rebuild also rescans the Skill layer, including Extension Skill folders.
     publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
     publish_resource_changed(state, RESOURCE_KIND_EXTENSIONS)
+    publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     return payload
 
 

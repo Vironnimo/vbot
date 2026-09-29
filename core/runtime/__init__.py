@@ -1,5 +1,6 @@
 """Runtime bootstrap and dependency-injection protocol exports."""
 
+from core.runtime._settings import SettingsChangeEffects
 from core.runtime.interfaces import (
     ConfigProtocol,
     LoggerProtocol,
@@ -12,4 +13,5 @@ __all__ = [
     "LoggerProtocol",
     "Runtime",
     "RuntimeServices",
+    "SettingsChangeEffects",
 ]

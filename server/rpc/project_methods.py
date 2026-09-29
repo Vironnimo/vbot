@@ -51,11 +51,10 @@ from core.settings import (
     validate_temperature,
     validate_thinking_effort,
 )
-from core.skills import SKILL_ORIGIN_GLOBAL
 from core.tools.availability import normalize_tool_access
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
-from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS
+from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -109,6 +108,18 @@ _SET_MUTABLE_FIELDS = frozenset(
         "source_format",
         "auto_load",
         "allowed_tools",
+        "skills_bundled_enabled",
+        "skills_global_enabled",
+        "skills_project_disabled",
+    }
+)
+# Project fields the Skill inventory shows: the Project's Skill directory and
+# origin label, and which Skills the Project activates.
+_SKILL_INVENTORY_FIELDS = frozenset(
+    {
+        "cwd",
+        "display_name",
+        "source_format",
         "skills_bundled_enabled",
         "skills_global_enabled",
         "skills_project_disabled",
@@ -284,6 +295,8 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
         _invalidate_project_caches(state, project_id)
     scan = _scan_preview(state, project)
     publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+    if _SKILL_INVENTORY_FIELDS.intersection(changed_fields):
+        publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     if changed_fields:
         _LOGGER.info(
             "Project updated (project=%s fields=%s)",
@@ -662,49 +675,27 @@ def _project_skill_pool(state: Any, project_id: str) -> JsonObject:
     """Return the project's skill pool for the whitelist editor.
 
     ``project`` is the project's own scanned skills (auto-on, off-exception list).
-    ``global`` is the user's global-home skills and ``bundled`` is everything else
-    shippable (bundled plus any configured extra dirs) — both opt-in lists, each with
-    names a project skill shadows removed (project wins the collision). All sorted.
+    ``global`` is the user's global home, the configured ``skill_directories`` and
+    loaded Extension skills; ``bundled`` is the skills shipped with vBot — both
+    opt-in lists, each with names a project skill shadows removed (project wins the
+    collision). Policy-disabled skills are absent. All sorted by name. The
+    classification is the Skill runtime's ``project_skill_pool``, shared with the
+    Skill inventory.
 
     Each pool entry is a ``{"name", "description"}`` object so the whitelist editor's
-    chips can show the skill's description on hover, matching the tool pool. Names stay
-    authoritative from ``project_skill_names`` (the set the whitelist math operates on);
-    descriptions are best-effort — the project's own from ``project_own_skills``, the
-    bundled/global ones from the loaded skills registry — defaulting to ``""``.
+    chips can show the skill's description on hover, matching the tool pool.
 
-    Guarded with ``getattr`` so a minimal test runtime without the skill seams degrades
+    Guarded with ``getattr`` so a minimal test runtime without the skill seam degrades
     to empty pools rather than raising.
     """
-    runtime = state.runtime
-    project_skill_names = getattr(runtime, "project_skill_names", None)
-    project_names = sorted(project_skill_names(project_id)) if callable(project_skill_names) else []
-    project_own = getattr(runtime, "project_own_skills", None)
-    own_metadata = list(project_own(project_id)) if callable(project_own) else []
-    project_descriptions = {skill.name: getattr(skill, "description", "") for skill in own_metadata}
-    project_set = set(project_names)
-
-    all_skills = list(runtime.skills.list_all())
-    registry_descriptions = {skill.name: getattr(skill, "description", "") for skill in all_skills}
-
-    global_names = sorted(
-        skill.name
-        for skill in all_skills
-        if getattr(skill, "origin", None) == SKILL_ORIGIN_GLOBAL and skill.name not in project_set
-    )
-    global_set = set(global_names)
-    bundled = sorted(
-        skill.name
-        for skill in all_skills
-        if skill.name not in project_set and skill.name not in global_set
-    )
-
-    def _entries(names: list[str], descriptions: dict[str, str]) -> list[JsonObject]:
-        return [{"name": name, "description": descriptions.get(name, "")} for name in names]
-
+    project_skill_pool = getattr(state.runtime, "project_skill_pool", None)
+    pool = project_skill_pool(project_id) if callable(project_skill_pool) else {}
     return {
-        "project": _entries(project_names, project_descriptions),
-        "bundled": _entries(bundled, registry_descriptions),
-        "global": _entries(global_names, registry_descriptions),
+        source: [
+            {"name": skill.name, "description": getattr(skill, "description", "")}
+            for skill in pool.get(source, [])
+        ]
+        for source in ("project", "bundled", "global")
     }
 
 
