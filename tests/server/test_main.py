@@ -91,6 +91,8 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
     heap: list[str] = []
     monkeypatch.setattr(server_main.gc, "collect", lambda: heap.append("collect"))
     monkeypatch.setattr(server_main.gc, "freeze", lambda: heap.append("freeze"))
+    intervals: list[float] = []
+    monkeypatch.setattr(server_main.sys, "setswitchinterval", intervals.append)
 
     main(["--data-dir", str(tmp_path / "data"), "--port", "8765"])
 
@@ -123,8 +125,10 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
         "port_source": "cli",
     }
     assert calls[0]["app"]["shutdown_token"]
-    # Once ready, the server freezes its collected startup heap.
+    # Once ready, the server freezes its collected startup heap and lets the
+    # Event Loop take the GIL back from computing threads below Windows' 1 ms wait.
     assert heap == ["collect", "freeze"]
+    assert intervals and intervals[0] < 0.001
     assert not (tmp_path / "data" / "runtime" / "server-8765.json").exists()
 
 

@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import gc
 import os
+import sys
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal
@@ -118,7 +119,7 @@ def main(argv: list[str] | None = None) -> None:
                 "shutdown_token": control.token,
                 "request_shutdown": request_shutdown,
                 "request_restart": request_restart,
-                "on_ready": _freeze_startup_heap,
+                "on_ready": _prepare_for_serving,
             }
             if safe_startup_mode is not None:
                 app_kwargs["safe_startup_mode"] = safe_startup_mode
@@ -140,14 +141,24 @@ def main(argv: list[str] | None = None) -> None:
             remove_server_control(control)
 
 
-def _freeze_startup_heap() -> None:
-    """Keep the objects built during startup out of later cyclic collections.
+# A thread that computes holds the GIL until the waiting Event Loop asks for it,
+# and the loop waits this long before asking, on every reacquisition after I/O.
+# Windows rounds a wait of 1 ms or more up to its 15.6 ms timer tick, so with
+# the default 5 ms a busy worker thread cuts the loop from thousands of I/O
+# operations per second to about ten. Below 1 ms the loop asks at once.
+_GIL_SWITCH_INTERVAL_SECONDS = 0.0005
+
+
+def _prepare_for_serving() -> None:
+    """Tune the process for serving once startup is complete.
 
     Modules, classes and Runtime services live as long as the process, yet every
     full collection would traverse them again while holding the GIL and so
     stall the Event Loop. Collecting first keeps startup garbage out of the
-    frozen set.
+    frozen set. The shorter GIL switch interval lets the Event Loop take the GIL
+    back promptly from worker threads that compute.
     """
+    sys.setswitchinterval(_GIL_SWITCH_INTERVAL_SECONDS)
     started = perf_counter()
     gc.collect()
     gc.freeze()
