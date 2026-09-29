@@ -7,6 +7,7 @@ stand-in Session ids and Sessions addressed without their Agent.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -58,6 +59,7 @@ RUNNING_NOTE = TOP_LEVEL_BACKGROUND_NOTE
 )
 async def test_child_session_lives_in_the_callers_scope_and_links_its_parent(
     harness: SubAgentHarness,
+    caplog: pytest.LogCaptureFixture,
     caller_project: str | None,
     target: str | None,
     child_agent: str,
@@ -66,6 +68,7 @@ async def test_child_session_lives_in_the_callers_scope_and_links_its_parent(
     arguments: JsonObject = {"content": "spawn"}
     if target is not None:
         arguments["agent_id"] = target
+    caplog.set_level(logging.INFO, logger="vbot.subagents")
 
     result = await harness.spawn(arguments, project_id=caller_project)
 
@@ -79,6 +82,16 @@ async def test_child_session_lives_in_the_callers_scope_and_links_its_parent(
     assert started.run.project_id == caller_project
     assert started.admission.run_kind is RunKind.SUBAGENT
     assert started.admission.work_id == result["id"]
+    [spawned] = [record for record in caplog.records if record.name == "vbot.subagents"]
+    spawn_fields = (
+        "parent_run=parent-run",
+        "parent_session=parent-session",
+        f"child_session={result['session_id']}",
+        f"agent={child_agent}",
+        f"run={started.run.id}",
+    )
+    assert spawned.levelno == logging.INFO
+    assert all(field in spawned.getMessage() for field in spawn_fields)
     assert (caller_project, child_agent) in harness.resolver_calls
     assert harness.sessions.get_metadata(child)["is_subagent_session"] is True
     assert harness.sessions.get_metadata(child)["subagent_parent"] == {
