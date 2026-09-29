@@ -349,7 +349,8 @@ class OAuthTokenGetter:
         return refreshed.access_token
 
     def _log_refresh_success(self) -> None:
-        _LOGGER.info(
+        # Routine and frequent: only a failed refresh reaches the INFO log.
+        _LOGGER.debug(
             "Refreshed OAuth token (provider=%s connection=%s)",
             self._provider_id,
             self._local_connection_id,
