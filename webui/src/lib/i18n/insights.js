@@ -45,6 +45,12 @@ export default Object.freeze({
   'logs.stream.reconnecting': 'Reconnecting…',
   'logs.stream.error': 'Live update error',
   'logs.stream.idle': 'Idle',
+  'logs.stream.connectingHint': 'Connecting to live updates for this file.',
+  'logs.stream.connectedHint': 'New entries appear as the server writes them.',
+  'logs.stream.reconnectingHint':
+    'The live connection was lost. vBot retries automatically and reloads the file, including entries written meanwhile.',
+  'logs.stream.errorHint': 'Live updates failed. The message below says why.',
+  'logs.stream.idleHint': 'No live updates while no log file is loaded.',
   'logs.streamErrorUnknown': 'Connection closed unexpectedly.',
   'debug.limitInvalid': 'Enter a whole number from 1 to 500.',
   'debug.captureEnabled': 'Capture enabled',
@@ -94,6 +100,24 @@ export default Object.freeze({
   'debug.statusCount': 'Traces: {count} / {limit}',
   'debug.traceList': 'Traces',
   'debug.modelProbe': 'Model Probe',
+  'debug.providerRequest': 'Provider request',
+  'debug.started': 'Started',
+  'debug.duration': 'Duration',
+  'debug.traceType': 'Type',
+  'debug.traceId': 'Trace ID',
+  'debug.captureEnabledHint':
+    'Every request vBot sends to a Provider is recorded with its response. Turn debug mode off in Settings → Debug.',
+  'debug.captureDisabledHint':
+    'No new traces are recorded. Turn on debug mode in Settings → Debug to record Provider requests and responses.',
+  'debug.statusCountHint':
+    'Stored traces and the trace limit. Beyond {limit} traces, the oldest are removed.',
+  'debug.previousMatchShortcut': 'Previous match (Shift+Enter)',
+  'debug.nextMatchShortcut': 'Next match (Enter)',
+  'debug.modelProbe.hint':
+    'Sends the Model list request of a catalog refresh to the chosen Provider Connection and shows its raw response next to the Models vBot reads from it. The Model catalog does not change; the request is saved as a trace.',
+  'debug.modelProbe.needsProvider': 'Select a Provider first.',
+  'debug.modelProbe.needsConnection': 'Select a Connection first.',
+  'debug.modelProbe.running': 'A probe is running.',
   'debug.settings': 'Debug',
   'debug.enabled': 'Enable debug mode',
   'debug.traceLimit': 'Trace limit',
@@ -165,7 +189,6 @@ export default Object.freeze({
   'statistics.usage.showMonths': 'Show by month',
   'statistics.none': 'None',
   'statistics.generatedAt': 'Generated {time}',
-  'statistics.estimatedBadge': '~ estimated',
   'statistics.estimatedHint':
     'Estimated tokens are approximated, not provider-reported, and are tracked separately from measured usage.',
   'statistics.derivedHint':
@@ -192,7 +215,6 @@ export default Object.freeze({
   'statistics.col.runs': 'Runs',
   'statistics.col.errors': 'Errors',
   'statistics.col.agent': 'Agent',
-  'statistics.agent.projectBadgeTitle': 'Project: {project}',
   'statistics.agent.extensionBadge': 'Extension',
   'statistics.agent.extensionBadgeTitle':
     'Sessions this Extension runs on its own, such as Swarm participants',
@@ -502,4 +524,54 @@ export default Object.freeze({
   'statistics.overview.inspectCompactions': 'Inspect Compactions',
   'statistics.overview.leadingModels': 'Models using the most tokens',
   'statistics.usage.unreported': 'Calls missing token usage',
+  'statistics.usage.unreportedHint':
+    'Recorded Model calls without any token counts, neither reported by the Provider nor estimated. Their tokens are missing from all token totals.',
+  'statistics.tokens.columnHint':
+    'Provider-reported (measured) tokens. The amber ~ amount is estimated for calls without reported usage and is kept separate. Hover or focus a value for its breakdown.',
+  'statistics.tokens.total': '{count} tokens',
+  'statistics.tokens.totalLabel': 'Total',
+  'statistics.tokens.measuredInput': 'Measured input',
+  'statistics.tokens.measuredOutput': 'Measured output',
+  'statistics.tokens.estimatedInput': 'Estimated input',
+  'statistics.tokens.estimatedOutput': 'Estimated output',
+  'statistics.tokens.reasoning': 'Reasoning',
+  'statistics.tokens.reasoningValue': '{count}, part of output',
+  'statistics.tokens.cacheValue': '{count} · {rate} hit rate',
+  'statistics.tokens.nonePeriod': 'No token usage in this period.',
+  'statistics.errors.hourRange': '{from}–{to} UTC',
+  'statistics.errors.hourAria': '{hour} · Errors: {count}',
+  'statistics.errors.shareOfTotal': '{share} of {total} errors',
+  'statistics.runs.ofRuns': '{count} of {total} Runs',
+  'statistics.agent.project': 'Project',
+  'statistics.agent.address': 'Agent ID',
+  'statistics.sessionId': 'Session ID',
+  'statistics.cost.callsOf': '{count} of {total} calls',
+  'statistics.cost.exact': 'Exact',
+  'statistics.cost.unpricedDetail':
+    '{calls} have neither a Provider-reported cost nor a catalog price, so they are missing from both amounts.',
+  'statistics.cost.unpricedHint':
+    'Calls with neither a Provider-reported cost nor a matching catalog price. They are missing from both amounts.',
+  'statistics.cost.retrospectiveHint':
+    'Older calls recorded before vBot saved a price snapshot are priced with the current catalog, so their estimate can differ from the price at the time.',
+  'statistics.tools.rejectionsByCode':
+    'Rejection codes of {count} rejected calls',
+  'statistics.skills.conversionDetail':
+    '{activated} of {offered} Sessions that offered this Skill also activated it.',
+  'statistics.skills.activatedWithoutOffer': 'Activated without recorded offer',
+  'statistics.compactions.nonShrinkingHint':
+    'Checkpoints whose context estimate after Compaction was not smaller than before.',
+  'statistics.compactions.rapidHint':
+    'Compactions that followed the previous one in the same Session within two saved Model steps, a sign the first one freed too little context.',
+  'statistics.compactions.strategyId': 'Stored ID',
+  'statistics.limits.used': 'Used',
+  'statistics.limits.sincePrevious': 'Since previous',
+  'statistics.limits.gapDetail': 'No snapshot for {duration}',
+  'statistics.limits.resetDetail': 'Reset: {values}',
+  'statistics.limits.resets': 'Resets',
+  'statistics.limits.from': 'From',
+  'statistics.limits.to': 'To',
+  'statistics.limits.account': 'Account',
+  'statistics.limits.pointsAria': '{provider} {window} snapshots',
+  'statistics.limits.pointAria': '{time}: {percent}% used',
+  'statistics.limits.noHistoryToDelete': 'No stored snapshots to delete.',
 });

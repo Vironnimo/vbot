@@ -82,6 +82,45 @@ export function describeAccountSource(account) {
   return '';
 }
 
+/**
+ * Where an account's credential comes from, with the variable that holds an
+ * API key.
+ */
+export function accountSourceTooltip(account) {
+  const key =
+    typeof account?.credential_key === 'string' ? account.credential_key : '';
+  const variable = [
+    {
+      label: t('settings.providers.accounts.variable'),
+      value: key,
+      mono: true,
+    },
+  ];
+  if (account?.source === ACCOUNT_SOURCE_PROCESS_ENV) {
+    return {
+      text: t('settings.providers.accounts.sourceHint.processEnv'),
+      rows: variable,
+    };
+  }
+  if (account?.source === ACCOUNT_SOURCE_DATA_DIR) {
+    return {
+      text: t('settings.providers.accounts.sourceHint.dataDir'),
+      rows: variable,
+    };
+  }
+  if (account?.source === ACCOUNT_SOURCE_OAUTH) {
+    return t('settings.providers.accounts.sourceHint.oauth');
+  }
+  return '';
+}
+
+/** Why an account cannot send requests. */
+export function accountUnusableReason(account) {
+  return isOAuthAccount(account)
+    ? t('settings.providers.accounts.notUsableOAuth')
+    : t('settings.providers.accounts.notUsableKey');
+}
+
 // Client-side preview of the credential key the server derives for an
 // account (e.g. OPENAI_API_KEY + "work" -> OPENAI_API_KEY__WORK). The
 // authoritative value comes back in the provider.set_key response.

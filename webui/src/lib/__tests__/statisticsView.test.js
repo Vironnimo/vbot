@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { setApplicationTimeZone } from '../dateTimePrefs.svelte.js';
+
 import {
   DAILY_GRANULARITIES,
   STATISTICS_SUB_VIEWS,
@@ -8,8 +10,13 @@ import {
   barFractions,
   buildActivityTimeline,
   buildUsageHistorySeries,
+  agentTooltip,
   cacheHitRate,
   clampUsagePercent,
+  compactionStrategyLabel,
+  compactionStrategyTooltip,
+  costCellTooltip,
+  errorHourTooltip,
   formatActivityDate,
   formatChartTick,
   formatCost,
@@ -27,17 +34,25 @@ import {
   parseOrigin,
   rollupSkillActivationsByAgent,
   runActivityTotals,
+  sessionTooltip,
   shortGroupId,
+  skillConversionTooltip,
   statisticsInsights,
   statisticsWindow,
   timelineTicks,
+  tokenBreakdownTooltip,
+  tokenPeriodTooltip,
   tokenSplit,
   tokenTimeline,
+  toolRejectionTooltip,
   topN,
+  usageHistoryIntervalTooltip,
   usageHistoryIntervals,
   usageHistoryPointCoordinates,
+  usageHistoryPointTooltip,
   usageHistoryPolylineSegments,
   usageHistorySince,
+  usageHistorySlots,
   usageHistorySummary,
   usageSeverity,
 } from '../statisticsView.js';
@@ -599,5 +614,218 @@ describe('statisticsView Skills', () => {
       { key: 'zeta', count: 1 },
     ]);
     expect(rollupSkillActivationsByAgent(null)).toEqual([]);
+  });
+});
+
+describe('statisticsView tooltip content', () => {
+  const byLabel = (content) =>
+    Object.fromEntries(content.rows.map((row) => [row.label, row]));
+
+  it('breaks a token total into measured, estimated, Reasoning and cache facts', () => {
+    const record = {
+      measured_input_tokens: 1000,
+      measured_output_tokens: 200,
+      estimated_input_tokens: 30,
+      estimated_output_tokens: 0,
+      reasoning_tokens: 80,
+      reasoning_turns: 2,
+      cache_read_tokens: 600,
+      cache_input_tokens: 800,
+      cache_turns: 3,
+    };
+
+    const card = tokenBreakdownTooltip(record, 'en');
+
+    expect(card.title).toBe('1,230 tokens');
+    const rows = byLabel(card);
+    expect(rows['Measured input'].value).toBe('1,000');
+    expect(rows['Estimated input']).toMatchObject({
+      value: '30',
+      tone: 'warning',
+    });
+    // Zero estimates add no row; Reasoning stays a part of output.
+    expect(rows['Estimated output']).toBeUndefined();
+    expect(rows.Reasoning.value).toBe('80, part of output');
+    expect(rows['Cache read'].value).toBe('600 · 75.0% hit rate');
+    expect(
+      tokenBreakdownTooltip({ measured_input_tokens: 5 }, 'en').rows,
+    ).toHaveLength(2);
+
+    const idle = tokenPeriodTooltip({ runs: 2, errors: 1 }, 'Mar 1', 'en');
+    expect(idle).toMatchObject({
+      title: 'Mar 1',
+      text: 'No token usage in this period.',
+    });
+    expect(byLabel(idle).Errors.tone).toBe('danger');
+    const busy = tokenPeriodTooltip({ ...record, runs: 4 }, 'Mar 2', 'en');
+    expect(busy.rows[0]).toEqual({ label: 'Total', value: '1,230' });
+    expect(byLabel(busy).Runs.value).toBe('4');
+  });
+
+  it('describes an error hour in UTC with its share of all errors', () => {
+    const card = errorHourTooltip({ hour: 23, count: 3 }, 12, 'en');
+
+    expect(card.title).toBe('23:00–00:00 UTC');
+    expect(byLabel(card).Errors).toMatchObject({ value: '3', tone: 'danger' });
+    expect(byLabel(card).Share.value).toBe('25.0% of 12 errors');
+    expect(
+      byLabel(errorHourTooltip({ hour: 9, count: 0 }, 0)).Share.value,
+    ).toBe('');
+  });
+
+  it('states the calls behind a cost cell and the exact amount only when rounded', () => {
+    const totals = {
+      calls: 10,
+      reported_calls: 4,
+      estimated_calls: 5,
+      retrospective_calls: 2,
+      unpriced_calls: 1,
+      reported_usd: 1.5,
+      estimated_usd: 0.123456,
+    };
+
+    expect(costCellTooltip(totals, 'reported', 'en')).toEqual({
+      rows: [{ label: 'Calls', value: '4 of 10 calls' }],
+    });
+    const estimated = byLabel(costCellTooltip(totals, 'estimated', 'en'));
+    expect(estimated.Exact.value).toBe('$0.123456');
+    expect(estimated['Priced using today’s catalog'].value).toBe('2');
+    expect(costCellTooltip(totals, 'unpriced', 'en')).toMatch(
+      /^1 of 10 calls have neither/,
+    );
+    expect(costCellTooltip({ calls: 3 }, 'reported', 'en')).toBe('');
+  });
+
+  it('names Agents and Sessions first and keeps ids as secondary facts', () => {
+    expect(agentTooltip('main@web')).toMatchObject({
+      title: 'main',
+      rows: [
+        { label: 'Project', value: 'web' },
+        { label: 'Agent ID', value: 'main@web', mono: true },
+      ],
+    });
+    expect(agentTooltip('extension:swarm').title).toBe('swarm');
+    expect(agentTooltip('main')).toEqual({ text: 'main', whenTruncated: true });
+
+    expect(
+      sessionTooltip({ session_id: 'ses_1', session_title: 'Parser rework' }),
+    ).toEqual({
+      title: 'Parser rework',
+      rows: [{ label: 'Session ID', value: 'ses_1', mono: true }],
+    });
+    expect(
+      sessionTooltip({ session_id: 'ses_2', session_title: null }),
+    ).toEqual({
+      text: 'ses_2',
+      mono: true,
+      selectable: true,
+      whenTruncated: true,
+    });
+  });
+
+  it('shows the evidence behind Skill conversion and Tool rejections', () => {
+    expect(
+      skillConversionTooltip(
+        {
+          offered_sessions: 8,
+          activated_sessions: 5,
+          activated_offered_sessions: 3,
+        },
+        'en',
+      ),
+    ).toEqual({
+      text: '3 of 8 Sessions that offered this Skill also activated it.',
+      rows: [{ label: 'Activated without recorded offer', value: '2' }],
+    });
+    expect(skillConversionTooltip({ offered_sessions: 0 })).toMatch(
+      /^No Session has recorded/,
+    );
+
+    expect(
+      toolRejectionTooltip({
+        failures: 4,
+        error_codes: [
+          { key: 'invalid_path', count: 3 },
+          { key: 'denied', count: 1 },
+        ],
+      }),
+    ).toEqual({
+      title: 'Rejection codes of 4 rejected calls',
+      rows: [
+        { label: '3', value: 'invalid_path', mono: true },
+        { label: '1', value: 'denied', mono: true },
+      ],
+    });
+    expect(toolRejectionTooltip({ failures: 0, error_codes: [] })).toBe('');
+  });
+
+  it('names Compaction strategies like Settings and keeps unknown ids raw', () => {
+    expect(compactionStrategyLabel('summary_tail')).toBe('With tail');
+    expect(compactionStrategyTooltip('continuation')).toMatchObject({
+      title: 'Classic',
+      rows: [{ label: 'Stored ID', value: 'continuation', mono: true }],
+    });
+    expect(compactionStrategyLabel('future_mode')).toBe('future_mode');
+    expect(compactionStrategyTooltip('future_mode')).toBe('');
+  });
+
+  it('covers a usage-history plot with point slots and explains each step', () => {
+    setApplicationTimeZone('UTC');
+    const at = (hour) => `2026-07-25T${String(hour).padStart(2, '0')}:00:00Z`;
+    const point = (hour, usedPercent, resetAt = '2026-07-25T15:00:00Z') => ({
+      sampledAt: at(hour),
+      timestamp: Date.parse(at(hour)),
+      usedPercent,
+      resetAt,
+    });
+    const points = [
+      point(0, 10),
+      point(1, 25),
+      point(2, 5, '2026-07-25T20:00:00Z'),
+      point(12, 30, '2026-07-25T20:00:00Z'),
+    ];
+    const now = Date.parse('2026-07-25T13:00:00Z');
+
+    const slots = usageHistorySlots(points);
+    expect(slots.map((slot) => slot.index)).toEqual([0, 1, 2, 3]);
+    expect(slots[0].left).toBe(0);
+    expect(slots.at(-1).left + slots.at(-1).width).toBeCloseTo(100);
+    for (let index = 1; index < slots.length; index += 1) {
+      expect(slots[index].left).toBeCloseTo(
+        slots[index - 1].left + slots[index - 1].width,
+      );
+    }
+    const dense = Array.from({ length: 500 }, (_, index) => ({
+      ...point(0, index % 100),
+      timestamp: index * 1000,
+    }));
+    expect(usageHistorySlots(dense, 96)).toHaveLength(96);
+
+    const change = usageHistoryPointTooltip(points, 1, 'en', now);
+    expect(change.title).toMatch(/1:00 AM · 12 hours ago$/);
+    expect(byLabel(change).Used.value).toBe('25%');
+    expect(byLabel(change)['Since previous'].value).toBe('+15 pp (10% → 25%)');
+    expect(
+      byLabel(usageHistoryPointTooltip(points, 2, 'en', now))['Since previous']
+        .value,
+    ).toBe('Reset: 25% → 5%');
+    expect(
+      byLabel(usageHistoryPointTooltip(points, 3, 'en', now))['Since previous'],
+    ).toMatchObject({ value: 'No snapshot for 10h', tone: 'muted' });
+    expect(usageHistoryPointTooltip(points, 0, 'en', now).rows).toHaveLength(2);
+
+    const interval = usageHistoryIntervalTooltip(
+      {
+        displayName: 'OpenAI',
+        label: '5h',
+        account: 'default',
+        from: points[0],
+        to: points[1],
+      },
+      'en',
+      now,
+    );
+    expect(interval.title).toBe('OpenAI · 5h');
+    expect(byLabel(interval).Account.value).toBe('default');
   });
 });

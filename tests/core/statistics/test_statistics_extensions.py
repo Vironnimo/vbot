@@ -83,6 +83,19 @@ def test_report_counts_owner_managed_sessions_under_their_extension(
     session_titles = [row["session_title"] for row in report["costs"]["top_sessions"]]
     for name in ("Walross", "Xenia"):
         assert any("Parser rework" in title and name in title for title in session_titles)
+    # Every Session row carries the same title next to its id.
+    participant_titles = {
+        row["session_id"]: row["session_title"]
+        for row in report["costs"]["top_sessions"]
+        if row["agent_id"] == "extension:swarm"
+    }
+    for rows in (report["tools"]["top_sessions"], report["runs"]["top_sessions_by_runs"]):
+        titled = {
+            row["session_id"]: row["session_title"]
+            for row in rows
+            if row["agent_id"] == "extension:swarm"
+        }
+        assert titled == participant_titles
 
     [extension] = report["extensions"]["extensions"]
     assert extension["name"] == "swarm"

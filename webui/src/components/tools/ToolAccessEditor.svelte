@@ -95,9 +95,6 @@
 
   function toolNotes(tool) {
     const notes = [];
-    if (tool.requires_opt_in) {
-      notes.push(t('toolAccess.requiresOptIn'));
-    }
     if (tool.activation === 'follows') {
       notes.push(
         t('toolAccess.activation.follows', {

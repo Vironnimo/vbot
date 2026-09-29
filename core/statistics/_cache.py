@@ -160,6 +160,7 @@ def load_cache_facts(scan: UnitScan, *, top_incidents: int) -> CacheFacts:
                 cache_write_tokens=int(write_tokens),
                 hit_rate=read_tokens / input_tokens,
                 last_activity=last_activity.get(int(unit)),
+                session_title=report_unit.title,
             )
         )
     # Largest shortfall first, then Session id and timestamp; equal keys keep
@@ -184,6 +185,7 @@ def load_cache_facts(scan: UnitScan, *, top_incidents: int) -> CacheFacts:
                 model=model_key,
                 previous_input_tokens=int(previous_input),
                 cache_read_tokens=int(read_tokens),
+                session_title=report_unit.title,
             )
         )
     return facts

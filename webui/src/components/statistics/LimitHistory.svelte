@@ -8,12 +8,13 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import { agentName } from './ReportPrimitives.svelte';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     clearProviderUsageHistory,
     getProviderUsageHistory,
     getStatisticsRunActivity,
   } from '$lib/api.js';
-  import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { activeLocaleTag, t, tOr } from '$lib/i18n.js';
   import {
     USAGE_HISTORY_RANGES,
     buildUsageHistorySeries,
@@ -23,10 +24,14 @@
     formatTokens,
     formatUsageDelta,
     runActivityTotals,
+    sessionTooltip,
+    usageHistoryIntervalTooltip,
     usageHistoryIntervals,
     usageHistoryPointCoordinates,
+    usageHistoryPointTooltip,
     usageHistoryPolylineSegments,
     usageHistorySince,
+    usageHistorySlots,
     usageHistorySummary,
   } from '$lib/statisticsView.js';
 
@@ -46,6 +51,9 @@
   let activityLoading = $state(false);
   let activityError = $state('');
   let clearConfirmOpen = $state(false);
+  // Per trace, the snapshot slot that takes the Tab stop (the latest by
+  // default); arrow keys move between the snapshots of one trace.
+  let activeSlots = $state({});
   let clearing = $state(false);
   let pageVisible = $state(true);
   let destroyed = false;
@@ -258,6 +266,31 @@
     return 'success';
   }
 
+  function slotTabIndex(seriesKey, position, count) {
+    const active = Math.min(activeSlots[seriesKey] ?? count - 1, count - 1);
+    return position === active ? 0 : -1;
+  }
+
+  function moveSlotFocus(event, seriesKey, position, count) {
+    const target =
+      event.key === 'ArrowRight' || event.key === 'ArrowUp'
+        ? position + 1
+        : event.key === 'ArrowLeft' || event.key === 'ArrowDown'
+          ? position - 1
+          : event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? count - 1
+              : null;
+    if (target === null) {
+      return;
+    }
+    event.preventDefault();
+    const next = Math.max(0, Math.min(count - 1, target));
+    activeSlots[seriesKey] = next;
+    event.currentTarget.parentElement?.children[next]?.focus();
+  }
+
   function runMeasuredTokens(run) {
     return (
       (run?.measured_input_tokens ?? 0) + (run?.measured_output_tokens ?? 0)
@@ -284,6 +317,9 @@
     <Button
       variant="danger"
       disabled={historySummary.samples === 0}
+      disabledReason={historySummary.samples === 0
+        ? t('statistics.limits.noHistoryToDelete')
+        : ''}
       loading={clearing}
       onClick={() => (clearConfirmOpen = true)}
     >
@@ -382,6 +418,12 @@
             CHART_WIDTH,
             CHART_HEIGHT,
           )}
+          {@const slots = usageHistorySlots(
+            series.points,
+            96,
+            CHART_WIDTH,
+            CHART_HEIGHT,
+          )}
           <article class="limit-trace">
             <header>
               <div>
@@ -425,6 +467,42 @@
                   ></circle>
                 {/each}
               </svg>
+              <div
+                class="limit-trace__slots"
+                role="group"
+                aria-label={t('statistics.limits.pointsAria', {
+                  provider: series.displayName,
+                  window: series.label,
+                })}
+              >
+                {#each slots as slot, position (slot.index)}
+                  {@const point = series.points[slot.index]}
+                  <button
+                    type="button"
+                    class="limit-trace__slot"
+                    style:left={`${slot.left}%`}
+                    style:width={`${slot.width}%`}
+                    style:--at={`${slot.at}%`}
+                    style:--y={`${slot.y}%`}
+                    tabindex={slotTabIndex(series.key, position, slots.length)}
+                    aria-label={t('statistics.limits.pointAria', {
+                      time: formatDateTime(point.sampledAt, locale),
+                      percent: Math.round(point.usedPercent),
+                    })}
+                    onfocus={() => (activeSlots[series.key] = position)}
+                    onkeydown={(event) =>
+                      moveSlotFocus(event, series.key, position, slots.length)}
+                    use:tooltip={() => ({
+                      ...usageHistoryPointTooltip(
+                        series.points,
+                        slot.index,
+                        locale,
+                      ),
+                      alignTo: '.limit-trace__dot',
+                    })}><span class="limit-trace__dot"></span></button
+                  >
+                {/each}
+              </div>
               <span class="limit-trace__axis limit-trace__axis--top">100%</span>
               <span class="limit-trace__axis limit-trace__axis--bottom">0%</span
               >
@@ -465,6 +543,10 @@
                   type="button"
                   class:active={selectedInterval?.id === interval.id}
                   onclick={() => (selectedIntervalId = interval.id)}
+                  use:tooltip={() => ({
+                    ...usageHistoryIntervalTooltip(interval, locale),
+                    placement: 'right',
+                  })}
                 >
                   <span class="limit-intervals__identity">
                     <strong>{interval.displayName}</strong>
@@ -556,10 +638,12 @@
                       <div class="limit-run__head">
                         <div>
                           <strong>{@render agentName(run.agent_id)}</strong>
-                          <span>{run.session_title ?? run.session_id}</span>
+                          <span use:tooltip={sessionTooltip(run)}
+                            >{run.session_title ?? run.session_id}</span
+                          >
                         </div>
                         <Badge variant={runStatusVariant(run.status)}>
-                          {run.status}
+                          {tOr(`statistics.status.${run.status}`, run.status)}
                         </Badge>
                       </div>
                       <div class="limit-run__meta">
@@ -573,7 +657,13 @@
                       </div>
                       <div class="limit-run__models">
                         {#each run.models as model (model)}
-                          <code>{model}</code>
+                          <code
+                            use:tooltip={{
+                              text: model,
+                              mono: true,
+                              whenTruncated: true,
+                            }}>{model}</code
+                          >
                         {/each}
                       </div>
                       <div class="limit-run__tokens">

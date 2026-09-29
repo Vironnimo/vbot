@@ -13,7 +13,13 @@
     groupModelsByProvider,
     modelCallKindLabel,
   } from '$lib/statisticsView.js';
-  import { statCard, agentName, tokenCell } from './ReportPrimitives.svelte';
+  import {
+    statCard,
+    agentName,
+    sessionName,
+    tokenCell,
+    tokensHeader,
+  } from './ReportPrimitives.svelte';
   import TokenTrend from './TokenTrend.svelte';
   import CostsPanel from './CostsPanel.svelte';
 
@@ -118,9 +124,7 @@
   <TokenTrend {report} bind:granularity {reportRange} />
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t('statistics.usage.cacheAndReasoning')}<InfoHint
-        text={t('statistics.usage.reasoningHint')}
-      />
+      {t('statistics.usage.cacheAndReasoning')}
     </h3>
     <div class="stats-grid">
       {@render statCard(
@@ -140,6 +144,7 @@
       )}{@render statCard(
         t('statistics.usage.reasoning'),
         formatReasoningTokens(usage.totals),
+        t('statistics.usage.reasoningHint'),
       )}
     </div>
   </div>
@@ -169,7 +174,7 @@
             <tr>
               <th>{t('statistics.col.provider')}</th>
               <th>{t('statistics.col.runs')}</th>
-              <th>{t('statistics.col.tokens')}</th>
+              <th>{@render tokensHeader(t('statistics.col.tokens'))}</th>
               <th>{t('statistics.col.reasoning')}</th>
               <th>{t('statistics.col.cacheHit')}</th>
               <th>{t('statistics.col.share')}</th>
@@ -212,7 +217,7 @@
             <tr>
               <th>{t('statistics.col.model')}</th>
               <th>{t('statistics.col.runs')}</th>
-              <th>{t('statistics.col.tokens')}</th>
+              <th>{@render tokensHeader(t('statistics.col.tokens'))}</th>
               <th>{t('statistics.col.reasoning')}</th>
               <th>{t('statistics.col.cacheHit')}</th>
               <th>{t('statistics.col.avgDuration')}</th>
@@ -270,7 +275,7 @@
             {#each cacheSessions as record (`${record.agent_id}:${record.session_id}`)}
               <tr>
                 <td>{@render agentName(record.agent_id)}</td>
-                <td class="stats-mono stats-truncate">{record.session_id}</td>
+                <td>{@render sessionName(record)}</td>
                 <td>{formatInteger(record.cache_turns, locale)}</td>
                 <td>{formatTokens(record.input_tokens, locale)}</td>
                 <td>{formatTokens(record.cache_read_tokens, locale)}</td>
@@ -319,12 +324,8 @@
               {#each cacheBreaks.incidents as incident (`${incident.session_id}:${incident.timestamp}`)}
                 <tr>
                   <td>{formatDateTime(incident.timestamp, locale)}</td>
-                  <td class="stats-mono"
-                    >{@render agentName(incident.agent_id)}</td
-                  >
-                  <td class="stats-mono stats-truncate"
-                    >{incident.session_id}</td
-                  >
+                  <td>{@render agentName(incident.agent_id)}</td>
+                  <td>{@render sessionName(incident)}</td>
                   <td class="stats-mono">{incident.model}</td>
                   <td>{formatTokens(incident.previous_input_tokens, locale)}</td
                   >

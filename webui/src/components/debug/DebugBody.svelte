@@ -112,6 +112,7 @@
         variant="tertiary"
         icon
         ariaLabel={t('debug.previousMatch')}
+        tooltip={t('debug.previousMatchShortcut')}
         disabled={!matches.length}
         onClick={() => nextMatch(-1)}>↑</Button
       >
@@ -119,6 +120,7 @@
         variant="tertiary"
         icon
         ariaLabel={t('debug.nextMatch')}
+        tooltip={t('debug.nextMatchShortcut')}
         disabled={!matches.length}
         onClick={() => nextMatch(1)}>↓</Button
       >

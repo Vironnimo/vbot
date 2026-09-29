@@ -16,6 +16,8 @@
     accountDisplayName,
     isAccountUsable,
     describeAccountSource,
+    accountSourceTooltip,
+    accountUnusableReason,
     isOAuthDeviceFlowConnection,
     isOAuthAccount,
     isOAuthConnection,
@@ -154,23 +156,27 @@
       return {
         variant: 'success',
         label: t('settings.providers.connected'),
+        hint: t('settings.providers.connectedHint'),
       };
     }
     if (status === 'unreachable') {
       return {
         variant: 'warn',
         label: t('settings.providers.notReachableChip'),
+        hint: t('settings.providers.notReachableChipHint'),
       };
     }
     if (status === 'not_usable') {
       return {
         variant: 'warn',
         label: t('settings.providers.accounts.notUsable'),
+        hint: t('settings.providers.notUsableChipHint'),
       };
     }
     return {
       variant: 'warn',
       label: t('settings.providers.disabledChip'),
+      hint: t('settings.providers.disabledChipHint'),
     };
   }
 
@@ -627,7 +633,7 @@
               {#if modelCount}
                 <span class="s-provider-fact">{modelCount}</span>
               {/if}
-              <span class="s-provider-status">
+              <span class="s-provider-status" use:tooltip={summaryChip.hint}>
                 <StatusChip variant={summaryChip.variant}>
                   {summaryChip.label}
                 </StatusChip>
@@ -678,9 +684,14 @@
 
                     <div class="s-entity__end">
                       {#if status !== summaryStatus}
-                        <StatusChip variant={statusChip(status).variant}>
-                          {statusChip(status).label}
-                        </StatusChip>
+                        <span
+                          class="tooltip-anchor"
+                          use:tooltip={statusChip(status).hint}
+                        >
+                          <StatusChip variant={statusChip(status).variant}>
+                            {statusChip(status).label}
+                          </StatusChip>
+                        </span>
                       {/if}
                       {#if !isConnectionEnabled(connection)}
                         <Button
@@ -719,11 +730,19 @@
                               {accountDisplayName(account)}
                             </span>
                             {#if !isAccountUsable(account)}
-                              <StatusChip variant="warn">
-                                {t('settings.providers.accounts.notUsable')}
-                              </StatusChip>
+                              <span
+                                class="tooltip-anchor"
+                                use:tooltip={accountUnusableReason(account)}
+                              >
+                                <StatusChip variant="warn">
+                                  {t('settings.providers.accounts.notUsable')}
+                                </StatusChip>
+                              </span>
                             {/if}
-                            <span class="s-connection-account-source">
+                            <span
+                              class="s-connection-account-source"
+                              use:tooltip={accountSourceTooltip(account)}
+                            >
                               {describeAccountSource(account)}
                             </span>
                             <div class="s-connection-account-actions">

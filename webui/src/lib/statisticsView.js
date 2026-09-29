@@ -5,7 +5,8 @@
 // numbers follow the app language, never the implicit browser locale.
 
 import { parseAgentAddress } from './agentAddress.js';
-import { t } from './i18n.js';
+import { t, tOr } from './i18n.js';
+import { formatAbsoluteTime, formatMoment } from './timeText.js';
 
 export const STATISTICS_SUB_VIEWS = Object.freeze([
   'overview',
@@ -293,6 +294,21 @@ export function buildUsageHistorySeries(samples) {
     );
 }
 
+// How one snapshot relates to the one before it in the same series: a gap
+// (no snapshot for too long), a reset (the window restarted or the reported
+// reset time moved, so the values are not comparable), or a comparable change.
+function usageHistoryStepKind(previous, current) {
+  if (current.timestamp - previous.timestamp > USAGE_HISTORY_GAP_MS) {
+    return 'gap';
+  }
+  const resetChanged =
+    previous.resetAt !== current.resetAt &&
+    (previous.resetAt !== null || current.resetAt !== null);
+  return resetChanged || current.usedPercent < previous.usedPercent
+    ? 'reset'
+    : 'change';
+}
+
 export function usageHistoryIntervals(seriesList) {
   const intervals = [];
   for (const series of Array.isArray(seriesList) ? seriesList : []) {
@@ -304,16 +320,7 @@ export function usageHistoryIntervals(seriesList) {
       if (elapsedMs <= 0) {
         continue;
       }
-      const resetChanged =
-        previous.resetAt !== current.resetAt &&
-        (previous.resetAt !== null || current.resetAt !== null);
-      const inferredReset = current.usedPercent < previous.usedPercent;
-      const kind =
-        elapsedMs > USAGE_HISTORY_GAP_MS
-          ? 'gap'
-          : resetChanged || inferredReset
-            ? 'reset'
-            : 'change';
+      const kind = usageHistoryStepKind(previous, current);
       intervals.push({
         id: `${series.key}::${current.sampledAt}`,
         kind,
@@ -354,16 +361,10 @@ export function usageHistoryPolylineSegments(
   const segments = [];
   let current = [coordinates[0]];
   for (let index = 1; index < safePoints.length; index += 1) {
-    const previous = safePoints[index - 1];
-    const point = safePoints[index];
-    const resetChanged =
-      previous.resetAt !== point.resetAt &&
-      (previous.resetAt !== null || point.resetAt !== null);
-    const breakBefore =
-      point.timestamp - previous.timestamp > USAGE_HISTORY_GAP_MS ||
-      resetChanged ||
-      point.usedPercent < previous.usedPercent;
-    if (breakBefore) {
+    if (
+      usageHistoryStepKind(safePoints[index - 1], safePoints[index]) !==
+      'change'
+    ) {
       segments.push(current);
       current = [];
     }
@@ -921,4 +922,469 @@ export function rollupSkillActivationsByAgent(skills) {
             : 0,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Tooltip content. Each builder returns what the shared `use:tooltip` action
+// accepts (lib/tooltip.js): '' for nothing to add, a string, or
+// `{ title, text, rows }`. Definitions live in InfoHints on labels and column
+// headers; these carry the facts about one value (design.md, "Tooltip
+// content").
+
+const USED_PERCENT_FORMAT = { maximumFractionDigits: 1 };
+
+function formatUsedPercent(value, locale) {
+  return `${new Intl.NumberFormat(locale, USED_PERCENT_FORMAT).format(
+    clampUsagePercent(value),
+  )}%`;
+}
+
+function tokenBreakdownRows(record, locale) {
+  const rows = [
+    {
+      label: t('statistics.tokens.measuredInput'),
+      value: formatTokens(record?.measured_input_tokens, locale),
+    },
+    {
+      label: t('statistics.tokens.measuredOutput'),
+      value: formatTokens(record?.measured_output_tokens, locale),
+    },
+  ];
+  if (toFiniteNumber(record?.estimated_input_tokens) > 0) {
+    rows.push({
+      label: t('statistics.tokens.estimatedInput'),
+      value: formatTokens(record.estimated_input_tokens, locale),
+      tone: 'warning',
+    });
+  }
+  if (toFiniteNumber(record?.estimated_output_tokens) > 0) {
+    rows.push({
+      label: t('statistics.tokens.estimatedOutput'),
+      value: formatTokens(record.estimated_output_tokens, locale),
+      tone: 'warning',
+    });
+  }
+  if (toFiniteNumber(record?.reasoning_turns) > 0) {
+    rows.push({
+      label: t('statistics.tokens.reasoning'),
+      value: t('statistics.tokens.reasoningValue', {
+        count: formatTokens(record.reasoning_tokens, locale),
+      }),
+    });
+  }
+  const hitRate = cacheHitRate(record);
+  if (hitRate !== null) {
+    rows.push({
+      label: t('statistics.col.cacheRead'),
+      value: t('statistics.tokens.cacheValue', {
+        count: formatTokens(record.cache_read_tokens, locale),
+        rate: formatPercent(hitRate),
+      }),
+    });
+  }
+  return rows;
+}
+
+/** A token total with its measured/estimated input/output breakdown. */
+export function tokenBreakdownTooltip(record, locale = 'en') {
+  return {
+    title: t('statistics.tokens.total', {
+      count: formatTokens(tokenSplit(record).total, locale),
+    }),
+    rows: tokenBreakdownRows(record, locale),
+  };
+}
+
+/** One token-trend period: total, breakdown, and the period's Runs. */
+export function tokenPeriodTooltip(point, periodLabel, locale = 'en') {
+  const split = tokenSplit(point);
+  const activity = [];
+  if (point?.runs != null) {
+    activity.push({
+      label: t('statistics.col.runs'),
+      value: formatInteger(point.runs, locale),
+    });
+  }
+  if (toFiniteNumber(point?.errors) > 0) {
+    activity.push({
+      label: t('statistics.col.errors'),
+      value: formatInteger(point.errors, locale),
+      tone: 'danger',
+    });
+  }
+  if (split.total === 0) {
+    return {
+      title: periodLabel,
+      text: t('statistics.tokens.nonePeriod'),
+      rows: activity,
+    };
+  }
+  return {
+    title: periodLabel,
+    rows: [
+      {
+        label: t('statistics.tokens.totalLabel'),
+        value: formatTokens(split.total, locale),
+      },
+      ...tokenBreakdownRows(point, locale),
+      ...activity,
+    ],
+  };
+}
+
+/** Hour span in UTC, such as "09:00–10:00 UTC". */
+export function formatHourRange(hour) {
+  const start = Math.max(0, Math.min(23, Math.round(toFiniteNumber(hour))));
+  return t('statistics.errors.hourRange', {
+    from: formatHourLabel(start),
+    to: formatHourLabel((start + 1) % 24),
+  });
+}
+
+/** One errors-by-hour column: its count and share of all errors. */
+export function errorHourTooltip(entry, totalErrors, locale = 'en') {
+  const count = toFiniteNumber(entry?.count);
+  const total = toFiniteNumber(totalErrors);
+  return {
+    title: formatHourRange(entry?.hour),
+    rows: [
+      {
+        label: t('statistics.col.errors'),
+        value: formatInteger(count, locale),
+        tone: count > 0 ? 'danger' : '',
+      },
+      {
+        label: t('statistics.col.share'),
+        value:
+          total > 0
+            ? t('statistics.errors.shareOfTotal', {
+                share: formatShare(count, total),
+                total: formatInteger(total, locale),
+              })
+            : '',
+      },
+    ],
+  };
+}
+
+/** A Run-status share such as "4 of 125 Runs". */
+export function runShareDetail(count, total, locale = 'en') {
+  return t('statistics.runs.ofRuns', {
+    count: formatInteger(count, locale),
+    total: formatInteger(total, locale),
+  });
+}
+
+/** Failed, cancelled and interrupted Runs behind a "not completed" count. */
+export function unfinishedRunsTooltip(runStatus, locale = 'en') {
+  return {
+    rows: ['failed', 'cancelled', 'interrupted'].map((status) => ({
+      label: tOr(`statistics.status.${status}`, status),
+      value: formatInteger(runStatus?.[status], locale),
+      tone:
+        status === 'failed' && toFiniteNumber(runStatus?.[status]) > 0
+          ? 'danger'
+          : '',
+    })),
+  };
+}
+
+/**
+ * An Agent cell: a Project Agent names its Project and full address, an
+ * Extension explains its Sessions, and a plain Agent name shows in full only
+ * while it is truncated.
+ */
+export function agentTooltip(agentId) {
+  const display = agentDisplay(agentId);
+  if (display.extension) {
+    return {
+      title: display.name,
+      text: t('statistics.agent.extensionBadgeTitle'),
+    };
+  }
+  if (display.projectId) {
+    return {
+      title: display.name,
+      rows: [
+        { label: t('statistics.agent.project'), value: display.projectId },
+        {
+          label: t('statistics.agent.address'),
+          value: agentId,
+          mono: true,
+        },
+      ],
+    };
+  }
+  return { text: display.name, whenTruncated: true };
+}
+
+/**
+ * A Session cell names the Session by its title and keeps the id as a
+ * secondary row; an untitled Session shows its id, in full only while
+ * truncated.
+ */
+export function sessionTooltip(row) {
+  const id = typeof row?.session_id === 'string' ? row.session_id : '';
+  if (row?.session_title) {
+    return {
+      title: row.session_title,
+      rows: [{ label: t('statistics.sessionId'), value: id, mono: true }],
+    };
+  }
+  return { text: id, mono: true, selectable: true, whenTruncated: true };
+}
+
+/**
+ * The basis of one cost cell: how many of the row's calls it covers, the
+ * exact amount when the cell rounds it, and how many estimates use today's
+ * catalog. `kind` is 'reported', 'estimated' or 'unpriced'.
+ */
+export function costCellTooltip(totals, kind, locale = 'en') {
+  const calls = toFiniteNumber(totals?.calls);
+  const share = (count) =>
+    t('statistics.cost.callsOf', {
+      count: formatInteger(count, locale),
+      total: formatInteger(calls, locale),
+    });
+  if (kind === 'unpriced') {
+    const count = toFiniteNumber(totals?.unpriced_calls);
+    return count > 0
+      ? t('statistics.cost.unpricedDetail', { calls: share(count) })
+      : '';
+  }
+  const reported = kind === 'reported';
+  const count = toFiniteNumber(
+    reported ? totals?.reported_calls : totals?.estimated_calls,
+  );
+  if (count <= 0) {
+    return '';
+  }
+  const amount = reported ? totals?.reported_usd : totals?.estimated_usd;
+  const exact = formatCost(amount, locale, { exact: true });
+  const rows = [
+    { label: t('statistics.cost.callsShort'), value: share(count) },
+  ];
+  if (exact !== formatCost(amount, locale)) {
+    rows.push({ label: t('statistics.cost.exact'), value: exact });
+  }
+  if (!reported && toFiniteNumber(totals?.retrospective_calls) > 0) {
+    rows.push({
+      label: t('statistics.cost.retrospective'),
+      value: formatInteger(totals.retrospective_calls, locale),
+    });
+  }
+  return { rows };
+}
+
+/** A Tool's rejection codes with their counts, most frequent first. */
+export function toolRejectionTooltip(tool, locale = 'en') {
+  const codes = Array.isArray(tool?.error_codes) ? tool.error_codes : [];
+  if (codes.length === 0) {
+    return '';
+  }
+  return {
+    title: t('statistics.tools.rejectionsByCode', {
+      count: formatInteger(tool.failures, locale),
+    }),
+    rows: codes.map((entry) => ({
+      label: formatInteger(entry.count, locale),
+      value: entry.key,
+      mono: true,
+    })),
+  };
+}
+
+/** The evidence behind a Skill's offer conversion. */
+export function skillConversionTooltip(skill, locale = 'en') {
+  const offered = toFiniteNumber(skill?.offered_sessions);
+  if (offered === 0) {
+    return t('statistics.skills.noOfferDataRowTitle');
+  }
+  const converted = toFiniteNumber(skill?.activated_offered_sessions);
+  const outside = toFiniteNumber(skill?.activated_sessions) - converted;
+  return {
+    text: t('statistics.skills.conversionDetail', {
+      activated: formatInteger(converted, locale),
+      offered: formatInteger(offered, locale),
+    }),
+    rows:
+      outside > 0
+        ? [
+            {
+              label: t('statistics.skills.activatedWithoutOffer'),
+              value: formatInteger(outside, locale),
+            },
+          ]
+        : [],
+  };
+}
+
+// Stored Compaction strategy ids and the Compaction mode names Settings uses.
+const COMPACTION_STRATEGIES = Object.freeze({
+  summary_tail: () => ({
+    label: t('compaction.strategy.summaryTail'),
+    description: t('compaction.strategy.summaryTailDescription'),
+  }),
+  continuation: () => ({
+    label: t('compaction.strategy.continuation'),
+    description: t('compaction.strategy.continuationDescription'),
+  }),
+});
+
+function compactionStrategy(strategy) {
+  return Object.hasOwn(COMPACTION_STRATEGIES, strategy)
+    ? COMPACTION_STRATEGIES[strategy]()
+    : null;
+}
+
+/** The Compaction mode name for a stored strategy id; unknown ids stay raw. */
+export function compactionStrategyLabel(strategy) {
+  return compactionStrategy(strategy)?.label ?? String(strategy ?? '');
+}
+
+/** What a Compaction mode does, with its stored id as a secondary row. */
+export function compactionStrategyTooltip(strategy) {
+  const known = compactionStrategy(strategy);
+  if (!known) {
+    return '';
+  }
+  return {
+    title: known.label,
+    text: known.description,
+    rows: [
+      {
+        label: t('statistics.compactions.strategyId'),
+        value: strategy,
+        mono: true,
+      },
+    ],
+  };
+}
+
+// Evenly spaced point indices, always keeping the first and the last.
+function sampledIndices(length, maxCount) {
+  if (length <= maxCount) {
+    return Array.from({ length }, (_, index) => index);
+  }
+  const indices = new Set();
+  for (let step = 0; step < maxCount; step += 1) {
+    indices.add(Math.round((step * (length - 1)) / (maxCount - 1)));
+  }
+  return [...indices].sort((left, right) => left - right);
+}
+
+/**
+ * Hover and focus slots over a usage-history trace: each covers the span
+ * nearest to one point (at most `maxSlots` evenly chosen points), in percent
+ * of the plot, with the point's own position inside the slot.
+ */
+export function usageHistorySlots(
+  points,
+  maxSlots = 96,
+  width = 720,
+  height = 160,
+) {
+  const safePoints = Array.isArray(points) ? points : [];
+  if (safePoints.length === 0) {
+    return [];
+  }
+  const coordinates = usageHistoryPointCoordinates(safePoints, width, height);
+  const indices = sampledIndices(safePoints.length, Math.max(2, maxSlots));
+  return indices.map((index, position) => {
+    const x = coordinates[index].x;
+    const start =
+      position === 0 ? 0 : (coordinates[indices[position - 1]].x + x) / 2;
+    const end =
+      position === indices.length - 1
+        ? width
+        : (coordinates[indices[position + 1]].x + x) / 2;
+    const span = Math.max(0, end - start);
+    return {
+      index,
+      left: (start / width) * 100,
+      width: (span / width) * 100,
+      at: span > 0 ? ((x - start) / span) * 100 : 50,
+      y: (coordinates[index].y / height) * 100,
+    };
+  });
+}
+
+function usageStepRow(previous, current, locale) {
+  const kind = usageHistoryStepKind(previous, current);
+  const values = `${formatUsedPercent(previous.usedPercent, locale)} → ${formatUsedPercent(current.usedPercent, locale)}`;
+  const label = t('statistics.limits.sincePrevious');
+  if (kind === 'gap') {
+    return {
+      label,
+      value: t('statistics.limits.gapDetail', {
+        duration: formatRelativeDuration(
+          current.timestamp - previous.timestamp,
+        ),
+      }),
+      tone: 'muted',
+    };
+  }
+  if (kind === 'reset') {
+    return { label, value: t('statistics.limits.resetDetail', { values }) };
+  }
+  return {
+    label,
+    value: `${formatUsageDelta(current.usedPercent - previous.usedPercent, locale)} (${values})`,
+  };
+}
+
+/** One snapshot of a usage-history trace. */
+export function usageHistoryPointTooltip(
+  points,
+  index,
+  locale = 'en',
+  nowMs = Date.now(),
+) {
+  const point = points?.[index];
+  if (!point) {
+    return '';
+  }
+  const rows = [
+    {
+      label: t('statistics.limits.used'),
+      value: formatUsedPercent(point.usedPercent, locale),
+    },
+  ];
+  if (index > 0) {
+    rows.push(usageStepRow(points[index - 1], point, locale));
+  }
+  if (point.resetAt) {
+    rows.push({
+      label: t('statistics.limits.resets'),
+      value: formatMoment(point.resetAt, { nowMs }),
+    });
+  }
+  return { title: formatMoment(point.sampledAt, { nowMs }), rows };
+}
+
+/** One entry of the largest-changes list: both snapshots and what changed. */
+export function usageHistoryIntervalTooltip(
+  interval,
+  locale = 'en',
+  nowMs = Date.now(),
+) {
+  if (!interval) {
+    return '';
+  }
+  return {
+    title: `${interval.displayName} · ${interval.label}`,
+    rows: [
+      usageStepRow(interval.from, interval.to, locale),
+      {
+        label: t('statistics.limits.from'),
+        value: formatAbsoluteTime(interval.from.sampledAt),
+      },
+      {
+        label: t('statistics.limits.to'),
+        value: formatMoment(interval.to.sampledAt, { nowMs }),
+      },
+      { label: t('statistics.limits.account'), value: interval.account },
+    ],
+  };
+}
+
 import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';

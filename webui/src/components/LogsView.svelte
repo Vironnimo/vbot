@@ -11,6 +11,7 @@
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
   import { reconnectBackoffDelay } from '$lib/backoff.js';
   import { t, tOr } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     LOGS_STREAM_STATUS_CONNECTED,
     LOGS_STREAM_STATUS_CONNECTING,
@@ -408,6 +409,21 @@
     }
   }
 
+  function streamStatusHint(status) {
+    switch (status) {
+      case LOGS_STREAM_STATUS_CONNECTING:
+        return t('logs.stream.connectingHint');
+      case LOGS_STREAM_STATUS_CONNECTED:
+        return t('logs.stream.connectedHint');
+      case LOGS_STREAM_STATUS_RECONNECTING:
+        return t('logs.stream.reconnectingHint');
+      case LOGS_STREAM_STATUS_ERROR:
+        return t('logs.stream.errorHint');
+      default:
+        return t('logs.stream.idleHint');
+    }
+  }
+
   function streamStatusVariant(status) {
     switch (status) {
       case LOGS_STREAM_STATUS_CONNECTED:
@@ -454,9 +470,16 @@
     </div>
 
     <div class="logs-view__header-actions view-header__actions">
-      <StatusChip variant={streamStatusVariant(viewState.streamStatus)}>
-        {streamStatusLabel(viewState.streamStatus)}
-      </StatusChip>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the live-update explanation here.) -->
+      <span
+        class="tooltip-anchor logs-view__stream-status"
+        tabindex="0"
+        use:tooltip={() => streamStatusHint(viewState.streamStatus)}
+      >
+        <StatusChip variant={streamStatusVariant(viewState.streamStatus)}>
+          {streamStatusLabel(viewState.streamStatus)}
+        </StatusChip>
+      </span>
     </div>
   </header>
 
@@ -667,6 +690,14 @@
     flex-direction: column;
     overflow: hidden;
     background: var(--bg);
+  }
+  .logs-view__stream-status {
+    border-radius: var(--r-md);
+    cursor: default;
+  }
+  .logs-view__stream-status:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
   .logs-view__filters {
     display: grid;

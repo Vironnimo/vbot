@@ -160,7 +160,9 @@ class RunAccumulator:
         for unit, runs in session_runs.items():
             report_unit = ledger.units[unit]
             self.per_session.append(
-                SessionRunCount(report_unit.display_key, report_unit.session_id, runs)
+                SessionRunCount(
+                    report_unit.display_key, report_unit.session_id, runs, report_unit.title
+                )
             )
         # A Run id with conversational in-window records but no in-window
         # terminal summary in its unit is a best-effort open group.

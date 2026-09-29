@@ -81,6 +81,8 @@ export {
   isOAuthAccount,
   accountDisplayName,
   describeAccountSource,
+  accountSourceTooltip,
+  accountUnusableReason,
   deriveAccountCredentialKey,
   connectionSupportsAddAccount,
   isConnectionEnabled,
