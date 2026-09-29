@@ -79,6 +79,8 @@ from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("calendar.service")
+# Who caused a mutation when the caller does not say (direct in-process callers).
+_DEFAULT_ACTOR = "internal"
 
 __all__ = [
     "MAX_CALENDAR_EVENTS",
@@ -149,6 +151,7 @@ class CalendarService:
         rrule: object | None = None,
         exdates: list[str] | None = None,
         notes: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> CalendarEvent:
         """Create and persist a new calendar event."""
         self._ensure_events_loaded()
@@ -175,7 +178,10 @@ class CalendarService:
             raise
         self._notify_changed()
         _LOGGER.info(
-            "Calendar event created (event=%s recurring=%s)", event.id, event.rrule is not None
+            "Calendar event created (event=%s recurring=%s actor=%s)",
+            event.id,
+            event.rrule is not None,
+            actor,
         )
         return _clone_event(event)
 
@@ -193,7 +199,9 @@ class CalendarService:
             raise CalendarEventNotFoundError(f"Calendar event not found: {event_id}")
         return _clone_event(event)
 
-    def update_event(self, event_id: str, **fields: Any) -> CalendarEvent:
+    def update_event(
+        self, event_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
+    ) -> CalendarEvent:
         """Update one event from the same input shapes as create; omitted fields keep."""
         self._ensure_events_loaded()
         event = self._events.get(event_id)
@@ -205,15 +213,17 @@ class CalendarService:
                 f"Unsupported calendar event fields: {', '.join(unknown_fields)}"
             )
 
-        inputs = _event_to_inputs(event)
+        original = _event_to_inputs(event)
+        inputs = dict(original)
         inputs.update(fields)
         # Clearing recurrence leaves any exdates meaningless (a single event can
         # hold no exceptions); drop them so a "no longer repeating" update does
         # not trip the single-event validation.
         if inputs.get("rrule") is None:
             inputs["exdates"] = []
-        if inputs == _event_to_inputs(event):
+        if inputs == original:
             return _clone_event(event)
+        changed = sorted(name for name in inputs if inputs[name] != original.get(name))
 
         candidate = self._build_event(
             created_at=event.created_at,
@@ -230,10 +240,15 @@ class CalendarService:
             self._events[event_id] = event
             raise
         self._notify_changed()
-        _LOGGER.info("Calendar event updated (event=%s)", event_id)
+        _LOGGER.info(
+            "Calendar event updated (event=%s fields=%s actor=%s)",
+            event_id,
+            ",".join(changed),
+            actor,
+        )
         return _clone_event(candidate)
 
-    def delete_event(self, event_id: str) -> None:
+    def delete_event(self, event_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         """Delete one event by id."""
         self._ensure_events_loaded()
         if event_id not in self._events:
@@ -245,9 +260,11 @@ class CalendarService:
             self._events[event_id] = removed
             raise
         self._notify_changed()
-        _LOGGER.info("Calendar event deleted (event=%s)", event_id)
+        _LOGGER.info("Calendar event deleted (event=%s actor=%s)", event_id, actor)
 
-    def add_exdate(self, event_id: str, occurrence_start: str) -> CalendarEvent:
+    def add_exdate(
+        self, event_id: str, occurrence_start: str, *, actor: str = _DEFAULT_ACTOR
+    ) -> CalendarEvent:
         """Exclude one occurrence of a recurring event (RFC 5545 EXDATE)."""
         self._ensure_events_loaded()
         event = self._events.get(event_id)
@@ -271,6 +288,12 @@ class CalendarService:
             self._events[event_id] = event
             raise
         self._notify_changed()
+        _LOGGER.info(
+            "Calendar occurrence excluded (event=%s occurrence=%s actor=%s)",
+            event_id,
+            normalized,
+            actor,
+        )
         return _clone_event(updated)
 
     def occurrences_in_window(

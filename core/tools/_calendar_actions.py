@@ -67,6 +67,7 @@ def handle_add_action(
         prompt=str(arguments["prompt"]),
         target=target,
         session=_session(arguments, context, target),
+        actor="tool",
     )
     notes = [note, _unapplied_note("add_action", arguments, event)]
     return _action_success(calendar_service, action, event, " ".join(filter(None, notes)))
@@ -107,7 +108,7 @@ def handle_update_action(
                 when=STAND_INS["when"],
             )
         )
-    action = calendar_service.actions.update(action_id, **fields)
+    action = calendar_service.actions.update(action_id, actor="tool", **fields)
     notes = [note, _unapplied_note("update_action", arguments, event)]
     return _action_success(calendar_service, action, event, " ".join(filter(None, notes)))
 
@@ -115,7 +116,7 @@ def handle_update_action(
 def handle_delete_action(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
     action_id = str(arguments["id"])
     current = find_action(calendar_service, action_id)
-    calendar_service.actions.delete(action_id)
+    calendar_service.actions.delete(action_id, actor="tool")
     event = calendar_service.get_event(current["event_id"])
     data: JsonObject = {
         "id": action_id,
