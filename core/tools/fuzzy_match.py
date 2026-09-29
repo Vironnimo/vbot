@@ -88,6 +88,14 @@ _TYPOGRAPHIC_NORMALIZATION = {
 _LINE_ENDINGS = ("\r\n", "\n", "\r")
 _LINE_BREAK_RE = TEXT_LINE_BREAK
 _HORIZONTAL_WHITESPACE_RE = re.compile(r"[ \t]+")
+_UNICODE_TRANSLATION = str.maketrans(_UNICODE_NORMALIZATION)
+# What ``_normalize_with_spans`` changes: a CRLF or CR line ending, or a mapped glyph.
+_UNICODE_SPECIAL_RE = re.compile(
+    "\r\n?|[" + "".join(re.escape(char) for char in _UNICODE_NORMALIZATION) + "]"
+)
+_TYPOGRAPHIC_SPECIAL_RE = re.compile(
+    "\r\n?|[" + "".join(re.escape(char) for char in _TYPOGRAPHIC_NORMALIZATION) + "]"
+)
 
 
 @dataclass(frozen=True)
@@ -209,12 +217,24 @@ def replace_fuzzy(
 
 
 def _candidate_normalize_line(line: str) -> str:
-    normalized = _collapse_horizontal_whitespace_with_spans(line)[0].strip()
+    normalized = _HORIZONTAL_WHITESPACE_RE.sub(" ", _normalize_text(line)).strip()
     return normalized[:_CANDIDATE_SCORE_LINE_MAX_CHARS]
 
 
+def _similarity_bound(counts: Counter[str], length: int, text: str) -> float:
+    """Return an upper bound of ``SequenceMatcher.ratio`` against ``text``.
+
+    Matching characters are at most the shared character multiset, so the bound
+    rejects dissimilar text before the quadratic comparison runs.
+    """
+    total = length + len(text)
+    if not total:
+        return 1.0
+    return 2.0 * sum((counts & Counter(text)).values()) / total
+
+
 def _exact_line_starts(
-    content_lines: list[str], pattern_lines: list[str], window_size: int
+    normalized_lines: list[str], line_count: int, pattern_lines: list[str], window_size: int
 ) -> Counter[int]:
     """Count, per block start, the distinctive pattern lines the file holds exactly there.
 
@@ -227,8 +247,7 @@ def _exact_line_starts(
         if line:
             wanted.setdefault(line, []).append(index)
     found: dict[str, list[int]] = {}
-    for content_index, line in enumerate(content_lines[:_CANDIDATE_SCAN_LINE_LIMIT]):
-        normalized = _candidate_normalize_line(line)
+    for content_index, normalized in enumerate(normalized_lines[:_CANDIDATE_SCAN_LINE_LIMIT]):
         if normalized in wanted:
             found.setdefault(normalized, []).append(content_index)
     starts: Counter[int] = Counter()
@@ -238,26 +257,34 @@ def _exact_line_starts(
         for content_index in occurrences:
             for pattern_index in wanted[line]:
                 start = content_index - pattern_index
-                if start >= 0 and start + window_size <= len(content_lines):
+                if start >= 0 and start + window_size <= line_count:
                     starts[start] += 1
     return starts
 
 
 def _top_anchor_starts(
-    content_lines: list[str], anchor_index: int, anchor: str, window_size: int
+    normalized_lines: list[str], line_count: int, anchor_index: int, anchor: str, window_size: int
 ) -> list[int]:
     """Return a bounded pool of block starts whose aligned line resembles an anchor."""
     heap: list[tuple[float, int]] = []
-    scan_limit = min(len(content_lines), _CANDIDATE_SCAN_LINE_LIMIT)
+    matcher = SequenceMatcher(None, anchor)
+    anchor_counts = Counter(anchor)
+    scan_limit = min(line_count, _CANDIDATE_SCAN_LINE_LIMIT)
     for content_index in range(scan_limit):
         start = content_index - anchor_index
-        if start < 0 or start + window_size > len(content_lines):
+        if start < 0 or start + window_size > line_count:
             continue
-        candidate_line = _candidate_normalize_line(content_lines[content_index])
+        candidate_line = normalized_lines[content_index]
         if not candidate_line:
             continue
-        score = SequenceMatcher(None, anchor, candidate_line).ratio()
-        item = (score, -start)
+        # Starts ascend, so a line scoring no better than the pool's weakest
+        # entry can never displace it; skip its full comparison.
+        if len(heap) >= _CANDIDATE_ANCHOR_POOL_SIZE and (
+            _similarity_bound(anchor_counts, len(anchor), candidate_line) <= heap[0][0]
+        ):
+            continue
+        matcher.set_seq2(candidate_line)
+        item = (matcher.ratio(), -start)
         if len(heap) < _CANDIDATE_ANCHOR_POOL_SIZE:
             heappush(heap, item)
         elif item > heap[0]:
@@ -300,20 +327,35 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
     if not anchors:
         return []
 
+    # Every block starts before the scan limit, so no scored line lies beyond
+    # one window past it.
+    line_count = len(content_lines)
+    normalized_lines = [
+        _candidate_normalize_line(line)
+        for line in content_lines[: _CANDIDATE_SCAN_LINE_LIMIT + window_size]
+    ]
     possible_starts: set[int] = set()
     for _, _, anchor_index, anchor in anchors:
-        possible_starts.update(_top_anchor_starts(content_lines, anchor_index, anchor, window_size))
-    placed = _exact_line_starts(content_lines, normalized_pattern_lines, window_size)
+        possible_starts.update(
+            _top_anchor_starts(normalized_lines, line_count, anchor_index, anchor, window_size)
+        )
+    placed = _exact_line_starts(normalized_lines, line_count, normalized_pattern_lines, window_size)
     possible_starts.update(placed)
 
     pattern_score_text = "\n".join(normalized_pattern_lines)[:_CANDIDATE_SCORE_MAX_CHARS]
+    pattern_counts = Counter(pattern_score_text)
     scored: list[tuple[float, int]] = []
     for start in possible_starts:
-        candidate_score_text = "\n".join(
-            _candidate_normalize_line(line) for line in content_lines[start : start + window_size]
-        )[:_CANDIDATE_SCORE_MAX_CHARS]
-        similarity = SequenceMatcher(None, pattern_score_text, candidate_score_text).ratio()
+        candidate_score_text = "\n".join(normalized_lines[start : start + window_size])[
+            :_CANDIDATE_SCORE_MAX_CHARS
+        ]
         # Two exact lines in place show the block even when new text lowers the similarity.
+        if placed[start] < 2 and (
+            _similarity_bound(pattern_counts, len(pattern_score_text), candidate_score_text)
+            < _CANDIDATE_MIN_SIMILARITY
+        ):
+            continue
+        similarity = SequenceMatcher(None, pattern_score_text, candidate_score_text).ratio()
         if similarity >= _CANDIDATE_MIN_SIMILARITY or placed[start] >= 2:
             scored.append((similarity, start))
     scored.sort(key=lambda item: (-item[0], item[1]))
@@ -499,34 +541,31 @@ def _normalize_with_spans(
     the exact original characters. Expanded glyphs share one origin span for
     every normalized character, so the character and span lists stay aligned.
     """
+    # Only line endings and mapped glyphs change; the runs between them are
+    # copied with one-character spans built in C, not per character in Python.
+    mapping = _TYPOGRAPHIC_NORMALIZATION if typographic else _UNICODE_NORMALIZATION
+    special = _TYPOGRAPHIC_SPECIAL_RE if typographic else _UNICODE_SPECIAL_RE
     chars: list[str] = []
     spans: list[tuple[int, int]] = []
-    index = 0
-    length = len(text)
-
-    while index < length:
-        char = text[index]
-        if char == "\r" and index + 1 < length and text[index + 1] == "\n":
-            chars.append("\n")
-            spans.append((index, index + 2))
-            index += 2
-            continue
-        if char == "\r":
-            chars.append("\n")
-            spans.append((index, index + 1))
-            index += 1
-            continue
-        mapping = _TYPOGRAPHIC_NORMALIZATION if typographic else _UNICODE_NORMALIZATION
-        folded = mapping.get(char, char)
-        chars.extend(folded)
-        spans.extend([(index, index + 1)] * len(folded))
-        index += 1
-
+    cursor = 0
+    for found in special.finditer(text):
+        start, end = found.span()
+        if start > cursor:
+            chars.append(text[cursor:start])
+            spans.extend(zip(range(cursor, start), range(cursor + 1, start + 1), strict=True))
+        glyph = found.group()
+        folded = "\n" if glyph[0] == "\r" else mapping[glyph]
+        chars.append(folded)
+        spans.extend([(start, end)] * len(folded))
+        cursor = end
+    if cursor < len(text):
+        chars.append(text[cursor:])
+        spans.extend(zip(range(cursor, len(text)), range(cursor + 1, len(text) + 1), strict=True))
     return "".join(chars), spans
 
 
 def _normalize_text(text: str) -> str:
-    return _normalize_with_spans(text)[0]
+    return _normalize_newlines(text).translate(_UNICODE_TRANSLATION)
 
 
 def _match_exact(content: str, pattern: str) -> list[tuple[int, int]]:
@@ -646,18 +685,16 @@ def _collapse_horizontal_whitespace_with_spans(
     normalized, source_spans = _normalize_with_spans(text)
     chars: list[str] = []
     spans: list[tuple[int, int]] = []
-
-    for char, source_span in zip(normalized, source_spans, strict=True):
-        if char in (" ", "\t"):
-            if chars and chars[-1] == " ":
-                spans[-1] = (spans[-1][0], source_span[1])
-            else:
-                chars.append(" ")
-                spans.append(source_span)
-            continue
-        chars.append(char)
-        spans.append(source_span)
-
+    cursor = 0
+    for run in _HORIZONTAL_WHITESPACE_RE.finditer(normalized):
+        start, end = run.span()
+        chars.append(normalized[cursor:start])
+        spans.extend(source_spans[cursor:start])
+        chars.append(" ")
+        spans.append((source_spans[start][0], source_spans[end - 1][1]))
+        cursor = end
+    chars.append(normalized[cursor:])
+    spans.extend(source_spans[cursor:])
     return "".join(chars), spans
 
 
