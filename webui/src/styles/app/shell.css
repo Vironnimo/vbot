@@ -273,38 +273,6 @@
   background: var(--surface-3);
 }
 
-/* Desktop Back and Forward sit beside the collapse control; the compact rail
-   keeps them side by side between the brand mark and that control. */
-.app-shell__history {
-  display: flex;
-  flex-shrink: 0;
-  gap: 2px;
-  margin-left: auto;
-}
-
-.app-shell[data-sidebar-collapsed='true'] .app-shell__history {
-  margin-left: 0;
-}
-
-.btn-tertiary.btn-icon.app-shell__history-button {
-  width: 26px;
-  height: 26px;
-  min-height: 0;
-  color: var(--text-lo);
-}
-
-.app-shell[data-sidebar-collapsed='true']
-  .btn-tertiary.btn-icon.app-shell__history-button {
-  width: 22px;
-  height: 22px;
-}
-
-.btn-tertiary.btn-icon.app-shell__history-button:hover:not(:disabled) {
-  color: var(--text-hi);
-  background: var(--surface-3);
-}
-
-.app-shell__history-button svg,
 .app-shell__sidebar-toggle svg {
   width: 14px;
   height: 14px;

@@ -220,8 +220,8 @@ export function createNavigator({
   });
   // The browser-history position. It runs ahead of `displayed` only while a
   // Back/Forward waits for pending edits to save.
-  let entryIndex = $state(baseIndex);
-  let topIndex = $state(baseIndex);
+  let entryIndex = baseIndex;
+  let topIndex = baseIndex;
   // Known Locations by entry index; unknown entries (another document, a
   // lost mirror) stay null.
   let entries = [];
@@ -677,12 +677,6 @@ export function createNavigator({
   return {
     get location() {
       return displayed;
-    },
-    get canGoBack() {
-      return entryIndex > baseIndex;
-    },
-    get canGoForward() {
-      return entryIndex < topIndex;
     },
     // Whether the app itself moves on the Back/Forward keys and mouse
     // buttons; embedded documents (Extension pages) then forward theirs.

@@ -645,7 +645,6 @@
   items={visibleNavigationItems}
   {activeViewId}
   onSelectView={openView}
-  navigationControls={desktopAccessor ? navigator : null}
   connectionStatus={connectionState.status}
   {serverUnavailable}
   {serverNoticeState}
