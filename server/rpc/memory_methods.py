@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.memory import MemoryEntry, MemoryScope
-from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MEMORIES
 from server.rpc._mutations import MutationHandler, serialized_mutation
@@ -20,7 +19,6 @@ from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
-_LOGGER = get_logger("server.rpc.memory")
 _MEMORY_SCOPES: tuple[MemoryScope, ...] = ("agent", "user")
 # Memory files are read and rewritten here, never on the Event Loop.
 _MEMORY_RPC_WORKERS = BoundedWorkerPool(name="memory-rpc", max_workers=2)
@@ -55,9 +53,15 @@ async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
         state,
         agent_id,
         workspace,
-        partial(state.runtime.memory.add_entry, workspace, scope, content),
+        partial(
+            state.runtime.memory.add_entry,
+            workspace,
+            scope,
+            content,
+            agent_id=agent_id,
+            actor="rpc",
+        ),
     )
-    _LOGGER.info("Memory entry added (agent=%s scope=%s)", agent_id, scope)
     return response
 
 
@@ -76,9 +80,16 @@ async def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
         state,
         agent_id,
         workspace,
-        partial(state.runtime.memory.replace_entry, workspace, scope, entry_id, content),
+        partial(
+            state.runtime.memory.replace_entry,
+            workspace,
+            scope,
+            entry_id,
+            content,
+            agent_id=agent_id,
+            actor="rpc",
+        ),
     )
-    _LOGGER.info("Memory entry replaced (agent=%s scope=%s)", agent_id, scope)
     return response
 
 
@@ -96,9 +107,15 @@ async def _remove_memory(state: Any, params: JsonObject) -> JsonObject:
         state,
         agent_id,
         workspace,
-        partial(state.runtime.memory.remove_entry, workspace, scope, entry_id),
+        partial(
+            state.runtime.memory.remove_entry,
+            workspace,
+            scope,
+            entry_id,
+            agent_id=agent_id,
+            actor="rpc",
+        ),
     )
-    _LOGGER.info("Memory entry removed (agent=%s scope=%s)", agent_id, scope)
     return response
 
 

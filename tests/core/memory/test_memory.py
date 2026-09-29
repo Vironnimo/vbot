@@ -1,5 +1,6 @@
 """Pinned memory: bullet-entry files per scope, budgets, text edits and prompt rendering."""
 
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -106,18 +107,27 @@ def test_entries_keep_literal_backslash_and_leading_dash(
     ]
 
 
-def test_entries_are_replaced_and_removed_by_id(service: MemoryService, workspace: Path) -> None:
-    service.add_entry(workspace, "agent", "old fact")
-    service.add_entry(workspace, "agent", "second fact")
+def test_entries_are_replaced_and_removed_by_id(
+    service: MemoryService, workspace: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger="vbot.memory"):
+        service.add_entry(workspace, "agent", "old fact", agent_id="agent-one", actor="rpc")
+        service.add_entry(workspace, "agent", "second fact")
+        service.add_entry(workspace, "agent", "second fact")
 
-    replaced = service.replace_entry(workspace, "agent", 1, "new fact")
-    removed = service.remove_entry(workspace, "agent", 2)
+        replaced = service.replace_entry(workspace, "agent", 1, "new fact")
+        removed = service.remove_entry(workspace, "agent", 2)
 
     assert replaced.content == "new fact"
     assert removed.content == "second fact"
     assert _contents(service, workspace, "agent") == ["new fact"]
     with pytest.raises(MemoryError):
         service.remove_entry(workspace, "agent", 2)
+    # One line per changed file (the duplicate add is silent), never entry text.
+    messages = [record.getMessage() for record in caplog.records if record.name == "vbot.memory"]
+    assert len(messages) == 4
+    assert "actor=rpc" in messages[0]
+    assert not any("fact" in message for message in messages)
 
 
 @pytest.mark.parametrize(
