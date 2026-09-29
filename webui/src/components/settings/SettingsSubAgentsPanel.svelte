@@ -1,6 +1,7 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
+  import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import TextField from '../ui/TextField.svelte';
   import {
@@ -134,13 +135,12 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.subagents.maxDepth')}
-      </div>
-      <div class="s-row-desc">
-        {t('settings.subagents.maxDepthDescription')}
+        <InfoHint text={t('settings.subagents.maxDepthHelp')} />
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
       <TextField
+        id="settings-subagents-max-depth"
         type="number"
         min="1"
         step="1"
@@ -156,13 +156,12 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.subagents.maxPerTurn')}
-      </div>
-      <div class="s-row-desc">
-        {t('settings.subagents.maxPerTurnDescription')}
+        <InfoHint text={t('settings.subagents.maxPerTurnHelp')} />
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
       <TextField
+        id="settings-subagents-max-per-run"
         type="number"
         min="1"
         step="1"
@@ -178,6 +177,7 @@
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.subagents.timeoutMinutes')}
+        <InfoHint text={t('settings.subagents.timeoutMinutesHelp')} />
       </div>
       <div class="s-row-desc">
         {t('settings.subagents.timeoutMinutesDescription')}
@@ -185,6 +185,7 @@
     </div>
     <div class="s-row-control s-row-control--number">
       <TextField
+        id="settings-subagents-timeout"
         type="number"
         min="1"
         step="1"

@@ -35,9 +35,6 @@ export {
   buildChannelUpdatePayload,
   getAgentItems,
   mergeChannelStatuses,
-  channelEnabledChipVariant,
-  channelRunningChipVariant,
-  formatAllowedChatIds,
 } from './settingsView/channels.js';
 export {
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
@@ -60,7 +57,7 @@ export {
 } from './settingsView/retrieval.js';
 export {
   applyExtensionsPanelList,
-  extensionStatusChipVariant,
+  extensionStatusChip,
   extensionCapabilityParts,
   describeExtensionWaiting,
   buildExtensionsUpdatePayload,
@@ -97,7 +94,8 @@ export {
   getPublicConnectionId,
   buildProviderConnectPayload,
   buildProviderDisconnectPayload,
-  describeProvider,
+  formatModelCount,
+  describeProviderBilling,
 } from './settingsView/providers.js';
 export { CHANNEL_DM_SCOPES as CHANNEL_DM_SCOPES } from './channelSettings.js';
 export { CHANNEL_PLATFORMS as CHANNEL_PLATFORMS } from './channelSettings.js';

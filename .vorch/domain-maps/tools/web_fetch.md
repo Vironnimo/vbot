@@ -35,7 +35,7 @@ Read public HTTP(S) pages and documents without flooding Context. The same Tool 
 - `_web_fetch_services.py` sends one bounded POST to one vendor. No automatic service retry or cascade occurs after uncertain billable delivery. Cancellation propagates. Responses are limited to 12 MB and a 65-second overall deadline. Missing keys, quota/auth errors, empty/malformed responses and service failures remain actionable and secret-free.
 - Firecrawl uses `/v2/scrape`, Markdown, all page content and `maxAge=0`; Tavily uses advanced extraction without a relevance query; Exa uses full text and `maxAgeHours=0`; Parallel uses `/v1/extract` with full content and a 600-second maximum cache age, without stale-cache fallback. Full service output is saved rather than silently replaced by excerpts or an LLM summary.
 - Service output identifies its source and explains that only the service's extraction is saved. Source sites and services can still omit inaccessible/dynamic sections; no route guarantees access to authentication or interactive challenges.
-- Settings -> Tools & Media -> Web Fetch exposes selection, mode, credential presence/setup and official pricing links. The UI explains URL sharing and possible charges. Prices/allowances are not hard-coded. `settings.get` exposes configuration booleans and variable names, never secret values.
+- Settings -> Tools -> "Web page reading" exposes selection, mode, credential presence/setup and official pricing links; the URL-sharing and possible-charges explanation sits behind the service row's "?". Prices/allowances are not hard-coded. `settings.get` exposes configuration booleans and variable names, never secret values.
 
 ## Transport constraints and recovery
 

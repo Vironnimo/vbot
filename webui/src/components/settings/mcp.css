@@ -8,12 +8,17 @@
 .mcp-subhead {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
 }
+.mcp-subhead__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
 .mcp-heading,
-.mcp-identity,
 .mcp-actions {
   display: flex;
   align-items: center;
@@ -45,29 +50,36 @@
   gap: 14px;
   min-width: 0;
 }
-.mcp-connection__head {
-  align-items: flex-start;
+/* A connection row is its name, its optional one-line description and, when
+   it failed, the error; the head toggles its details like a Provider row. */
+.mcp-connection__desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.mcp-connection__head p {
-  margin: 3px 0 0;
+.mcp-connection__desc--full {
+  white-space: normal;
 }
-.mcp-connection__body {
+.mcp-connection__error {
+  color: var(--red);
+  overflow-wrap: anywhere;
+}
+.mcp-facts {
   display: grid;
-  gap: 10px;
-  padding: 0 18px 14px;
+  gap: 4px;
+  min-width: 0;
+}
+.mcp-facts > p {
+  margin: 0;
 }
 /* The connection id and its command or URL are code values. */
-.mcp-identity strong,
+.mcp-connection__name,
 .mcp-endpoint {
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }
-.mcp-identity strong {
+.mcp-connection__name {
   font-size: var(--fs-mono-body);
-}
-.mcp-identity {
-  flex-wrap: wrap;
-  min-width: 0;
 }
 .mcp-actions {
   flex-wrap: wrap;
@@ -144,9 +156,6 @@
   font-variant-numeric: tabular-nums;
 }
 @media (max-width: 640px) {
-  .mcp-connection__body {
-    padding: 0 14px 14px;
-  }
   .mcp-capability-search {
     grid-template-columns: minmax(0, 1fr) auto;
   }

@@ -1,12 +1,14 @@
 <script>
   import './mcp.css';
   import { onMount, onDestroy } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import FormField from '../ui/FormField.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -18,6 +20,7 @@
     mcpDraft,
     mcpCredentialNames,
   } from '$lib/mcpSettings.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   const componentId = $props.id();
   let state = $state({
@@ -36,6 +39,10 @@
   let secretKey = $state('');
   let secretValue = $state('');
   let capabilityQuery = $state('');
+  // Each connection is one collapsed row; its endpoint, catalog counts and
+  // actions open in its details. The details stay in the DOM so settings
+  // search still matches them.
+  const expanded = new SvelteSet();
   const controller = createMcpSettings({
     onChange: (next) => {
       state = next;
@@ -89,7 +96,26 @@
   }
   async function save(event) {
     event.preventDefault();
-    if (await controller.save(draft, original)) draft = null;
+    const createdId = original ? '' : String(draft.id ?? '').trim();
+    if (await controller.save(draft, original)) {
+      draft = null;
+      // A new connection opens its details, where it can be tested.
+      if (createdId) expanded.add(createdId);
+    }
+  }
+  function toggleDetails(id) {
+    if (expanded.has(id)) expanded.delete(id);
+    else expanded.add(id);
+  }
+  // The row head toggles its details like a Provider row; the chevron button
+  // stays the keyboard and screen-reader control.
+  function handleHeadClick(event, id) {
+    if (
+      event.target.closest('button, a, input, select, textarea') ||
+      window.getSelection()?.toString()
+    )
+      return;
+    toggleDetails(id);
   }
   function openCredentials(connection) {
     secretConnection = connection;
@@ -113,9 +139,10 @@
     removal = null;
     await controller.mutate('remove', id);
   }
+  // The run status of an enabled connection; a disabled one needs no chip
+  // because its switch already says so.
   function status(connection) {
-    if (!connection.configuration.enabled)
-      return { label: t('mcp.disabled'), variant: 'neutral' };
+    if (!connection.configuration.enabled) return null;
     const states = {
       connected: { label: t('mcp.connected'), variant: 'success' },
       connecting: { label: t('mcp.connecting'), variant: 'warn' },
@@ -138,11 +165,9 @@
      under a sub-heading, as one group of connection rows. -->
 <section class="mcp-panel" aria-label={t('mcp.title')}>
   <div class="s-subhead mcp-subhead">
-    <div>
+    <div class="mcp-subhead__title">
       <h4 class="s-subhead__title">{t('mcp.title')}</h4>
-      <p class="s-subhead__desc">
-        {t('mcp.host')}
-      </p>
+      <InfoHint text={t('mcp.help')} ariaLabel={t('mcp.helpAria')} />
     </div>
     <Button
       variant="secondary"
@@ -184,16 +209,76 @@
     />
   {:else}
     <div class="s-group mcp-connections">
-      {#each state.connections as connection (connection.id)}
+      {#each state.connections as connection, index (connection.id)}
         {@const appearance = status(connection)}
+        {@const open = expanded.has(connection.id)}
+        {@const description = connection.configuration.description ?? ''}
         <article class="mcp-connection s-entity" aria-label={connection.id}>
-          <div class="s-entity__head mcp-connection__head">
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (pointer shortcut for the row; the details button is the keyboard control) -->
+          <div
+            class="s-entity__head s-entity__head--toggle"
+            onclick={(event) => handleHeadClick(event, connection.id)}
+          >
             <div class="s-row-info">
-              <div class="mcp-identity">
-                <strong>{connection.id}</strong><StatusChip
-                  variant={appearance.variant}>{appearance.label}</StatusChip
-                >
+              <div class="s-row-label mcp-connection__name">
+                {connection.id}
               </div>
+              {#if description}
+                <div
+                  class="s-row-desc mcp-connection__desc"
+                  class:mcp-connection__desc--full={open}
+                  use:tooltip={{ text: description, whenTruncated: true }}
+                >
+                  {description}
+                </div>
+              {/if}
+              {#if connection.error}
+                <div class="s-row-desc mcp-connection__error">
+                  {connection.error}
+                </div>
+              {/if}
+            </div>
+            <div class="s-entity__end">
+              {#if appearance}
+                <StatusChip variant={appearance.variant}
+                  >{appearance.label}</StatusChip
+                >
+              {/if}
+              <Toggle
+                checked={connection.configuration.enabled}
+                disabled={blocked}
+                ariaLabel={t('mcp.enabledFor', {
+                  name: connection.id,
+                })}
+                onChange={(enabled) =>
+                  controller.mutate(
+                    enabled ? 'enable' : 'disable',
+                    connection.id,
+                  )}
+              />
+              <Button
+                variant="tertiary"
+                icon
+                class="s-disclosure-btn"
+                aria-controls={`${componentId}-details-${index}`}
+                ariaLabel={t('mcp.detailsAria', { name: connection.id })}
+                aria-expanded={open}
+                onClick={() => toggleDetails(connection.id)}
+              >
+                <span
+                  class="disclosure-chevron"
+                  class:disclosure-chevron--open={open}
+                  aria-hidden="true"
+                ></span>
+              </Button>
+            </div>
+          </div>
+          <div
+            id={`${componentId}-details-${index}`}
+            class="s-disclosure-sub mcp-connection__details"
+            hidden={!open}
+          >
+            <div class="mcp-facts">
               <p class="mcp-endpoint">
                 {connection.configuration.transport === 'stdio'
                   ? connection.configuration.command
@@ -211,25 +296,6 @@
                 </p>
               {/if}
             </div>
-            <div class="s-entity__end">
-              <Toggle
-                checked={connection.configuration.enabled}
-                disabled={blocked}
-                ariaLabel={t('mcp.enabledFor', {
-                  name: connection.id,
-                })}
-                onChange={(enabled) =>
-                  controller.mutate(
-                    enabled ? 'enable' : 'disable',
-                    connection.id,
-                  )}
-              />
-            </div>
-          </div>
-          <div class="mcp-connection__body">
-            {#if connection.error}<Banner variant="error"
-                >{connection.error}</Banner
-              >{/if}
             <div class="mcp-actions">
               <Button
                 variant="secondary"
@@ -249,13 +315,14 @@
                 onClick={() => controller.test(connection.id)}
                 >{t('mcp.test')}</Button
               >
-              <Button
-                variant="tertiary"
-                disabled={blocked ||
-                  !mcpCredentialNames(connection.configuration).length}
-                onClick={() => openCredentials(connection)}
-                >{t('mcp.credentials')}</Button
-              >
+              {#if mcpCredentialNames(connection.configuration).length}
+                <Button
+                  variant="tertiary"
+                  disabled={blocked}
+                  onClick={() => openCredentials(connection)}
+                  >{t('mcp.credentials')}</Button
+                >
+              {/if}
               <Button
                 variant="danger"
                 class="mcp-actions__remove"

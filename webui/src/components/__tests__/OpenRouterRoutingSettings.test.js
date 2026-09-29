@@ -80,6 +80,14 @@ describe('OpenRouterRoutingSettings', () => {
     mountEditor();
     await waitForCondition(() => routingCalls().length === 1);
 
+    // The editor opens on demand from its Routing line.
+    const toggle = document.querySelector(
+      '[aria-controls="openrouter-routing-body"]',
+    );
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    clickButton('Routing');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
     clickButton('Automatic (OpenRouter managed)');
     clickOption('Only allowed providers');
 

@@ -1,10 +1,11 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
 
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import FormField from '../ui/FormField.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import {
@@ -24,6 +25,7 @@
   let loadError = $state('');
   let operationError = $state('');
   let adding = $state(false);
+  let addOpen = $state(false);
   let connectingKey = $state('');
   let removingKey = $state('');
   let host = $state('');
@@ -34,6 +36,7 @@
   let hostControlId = $derived(`${idPrefix}-host`);
   let portControlId = $derived(`${idPrefix}-port`);
   let labelControlId = $derived(`${idPrefix}-label`);
+  let addButtonId = $derived(`${idPrefix}-add`);
 
   function serverKey(server) {
     return `${server.host}:${server.port}`;
@@ -70,6 +73,23 @@
     }
   }
 
+  async function openAddForm() {
+    addOpen = true;
+    await tick();
+    document.getElementById(hostControlId)?.focus();
+  }
+
+  // Closing discards the unsaved entry and returns focus to "Add server".
+  async function closeAddForm() {
+    addOpen = false;
+    host = '';
+    port = '8420';
+    label = '';
+    formError = '';
+    await tick();
+    document.getElementById(addButtonId)?.focus();
+  }
+
   async function handleAdd(event) {
     event.preventDefault();
     formError = '';
@@ -93,10 +113,8 @@
     adding = true;
     try {
       await addDesktopServer(normalizedHost, numericPort, label.trim());
-      host = '';
-      port = '8420';
-      label = '';
       await loadServers();
+      void closeAddForm();
       onToast({
         title: t('settings.desktop.connection.addSuccess'),
         variant: 'success',
@@ -164,21 +182,93 @@
   });
 </script>
 
-<!-- Two sub-topics: the saved servers as one group of rows, then the form
-     that adds one. -->
+<!-- An entity list: a toolbar with the count, the "?" and "Add server", the
+     add form as its own group once opened, then one row per saved server. -->
 <div class="desktop-connection-settings">
   {#if operationError}
     <Banner variant="error" role="alert">{operationError}</Banner>
   {/if}
 
-  <div class="s-subhead desktop-connection-subhead">
-    <h4 class="s-subhead__title">
-      {t('settings.desktop.connection.savedTitle')}
-    </h4>
-    <p class="s-subhead__desc">
-      {t('settings.desktop.connection.savedDescription')}
-    </p>
+  <div class="s-group-toolbar s-list-toolbar">
+    {#if !loading && !loadError && servers.length > 0}
+      <span class="s-group-toolbar__meta">
+        {t('settings.desktop.connection.count', { count: servers.length })}
+      </span>
+    {/if}
+    <InfoHint text={t('settings.desktop.connection.help')} />
+    <div class="s-group-toolbar__actions s-list-toolbar__end">
+      <Button id={addButtonId} variant="secondary" onClick={openAddForm}>
+        {t('settings.desktop.connection.addAction')}
+      </Button>
+    </div>
   </div>
+
+  {#if addOpen}
+    <form
+      class="s-group"
+      aria-label={t('settings.desktop.connection.addAction')}
+      onsubmit={handleAdd}
+    >
+      <div class="s-group__block desktop-server-form">
+        <FormField
+          controlId={hostControlId}
+          label={t('settings.desktop.connection.host')}
+          required
+        >
+          <TextField
+            id={hostControlId}
+            value={host}
+            placeholder="pi.lan"
+            disabled={adding}
+            onInput={(next) => (host = next)}
+          />
+        </FormField>
+        <FormField
+          controlId={portControlId}
+          label={t('settings.desktop.connection.port')}
+          required
+        >
+          <TextField
+            id={portControlId}
+            value={port}
+            inputmode="numeric"
+            disabled={adding}
+            onInput={(next) => (port = next)}
+          />
+        </FormField>
+        <FormField
+          controlId={labelControlId}
+          label={t('settings.desktop.connection.label')}
+          full
+        >
+          <TextField
+            id={labelControlId}
+            value={label}
+            placeholder={t('settings.desktop.connection.labelPlaceholder')}
+            disabled={adding}
+            onInput={(next) => (label = next)}
+          />
+        </FormField>
+        {#if formError}
+          <div class="desktop-server-form__error">
+            <Banner variant="error" role="alert">
+              {formError}
+            </Banner>
+          </div>
+        {/if}
+        <div class="desktop-server-form__actions">
+          <Button variant="tertiary" disabled={adding} onClick={closeAddForm}>
+            {t('common.cancel')}
+          </Button>
+          <Button type="submit" variant="primary" loading={adding}>
+            {adding
+              ? t('common.saving')
+              : t('settings.desktop.connection.addAction')}
+          </Button>
+        </div>
+      </div>
+    </form>
+  {/if}
 
   {#if loadError}
     <Banner variant="error">
@@ -192,11 +282,13 @@
       {t('settings.desktop.connection.loading')}
     </Banner>
   {:else if servers.length === 0}
-    <EmptyState
-      density="compact"
-      title={t('settings.desktop.connection.emptyTitle')}
-      description={t('settings.desktop.connection.emptyDescription')}
-    />
+    {#if !addOpen}
+      <EmptyState
+        density="compact"
+        title={t('settings.desktop.connection.emptyTitle')}
+        description={t('settings.desktop.connection.emptyDescription')}
+      />
+    {/if}
   {:else}
     <div class="s-group">
       {#each servers as server (serverKey(server))}
@@ -241,73 +333,6 @@
       {/each}
     </div>
   {/if}
-
-  <div class="s-subhead">
-    <h4 class="s-subhead__title">
-      {t('settings.desktop.connection.addTitle')}
-    </h4>
-    <p class="s-subhead__desc">
-      {t('settings.desktop.connection.addDescription')}
-    </p>
-  </div>
-
-  <form class="s-group" onsubmit={handleAdd}>
-    <div class="s-group__block desktop-server-form">
-      <FormField
-        controlId={hostControlId}
-        label={t('settings.desktop.connection.host')}
-        required
-      >
-        <TextField
-          id={hostControlId}
-          value={host}
-          placeholder="pi.lan"
-          disabled={adding}
-          onInput={(next) => (host = next)}
-        />
-      </FormField>
-      <FormField
-        controlId={portControlId}
-        label={t('settings.desktop.connection.port')}
-        required
-      >
-        <TextField
-          id={portControlId}
-          value={port}
-          inputmode="numeric"
-          disabled={adding}
-          onInput={(next) => (port = next)}
-        />
-      </FormField>
-      <FormField
-        controlId={labelControlId}
-        label={t('settings.desktop.connection.label')}
-        full
-      >
-        <TextField
-          id={labelControlId}
-          value={label}
-          placeholder={t('settings.desktop.connection.labelPlaceholder')}
-          disabled={adding}
-          onInput={(next) => (label = next)}
-        />
-      </FormField>
-      {#if formError}
-        <div class="desktop-server-form__error">
-          <Banner variant="error" role="alert">
-            {formError}
-          </Banner>
-        </div>
-      {/if}
-      <div class="desktop-server-form__actions">
-        <Button type="submit" variant="primary" loading={adding}>
-          {adding
-            ? t('common.saving')
-            : t('settings.desktop.connection.addAction')}
-        </Button>
-      </div>
-    </div>
-  </form>
 </div>
 
 <style>
@@ -315,11 +340,6 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-  }
-
-  /* The first sub-topic starts right under the section heading. */
-  .desktop-connection-subhead {
-    margin-top: 0;
   }
 
   .desktop-server-row__heading {
@@ -355,6 +375,7 @@
   .desktop-server-form__actions {
     display: flex;
     justify-content: flex-end;
+    gap: var(--space-sm);
   }
 
   @media (max-width: 640px) {

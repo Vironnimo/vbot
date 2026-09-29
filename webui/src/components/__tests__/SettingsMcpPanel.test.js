@@ -55,6 +55,11 @@ vi.mock(
   'svelte',
   async () => import('../../../node_modules/svelte/src/index-client.js'),
 );
+vi.mock(
+  'svelte/reactivity',
+  async () =>
+    import('../../../node_modules/svelte/src/reactivity/index-client.js'),
+);
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpc));
 const { default: Panel } = await import('../settings/SettingsMcpPanel.svelte');
 let component;
@@ -228,6 +233,12 @@ describe('MCP management surface', () => {
     expect(
       document.querySelector('article[aria-label="blender"]'),
     ).toBeTruthy();
+    // The new connection opens its details, where it can be tested.
+    expect(
+      document
+        .querySelector('button[aria-label="Details for blender"]')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
   });
   it('preserves exact arguments and credentials when editing', async () => {
     records = [

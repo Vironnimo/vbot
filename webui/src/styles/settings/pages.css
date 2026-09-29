@@ -38,9 +38,6 @@
 .settings-nav .snav-item--active {
   font-weight: 600;
 }
-.settings-defaults-link span {
-  color: var(--text-med);
-}
 .settings-content {
   padding: 36px 40px 48px;
 }
@@ -99,14 +96,34 @@
 .settings-editor-body .s-save-button--inline {
   width: auto;
 }
+/* A pointer to a related destination under the page description: one
+   sentence ending in an inline link, so it wraps like text. */
 .settings-related {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  margin: -12px 0 28px;
+  margin: -16px 0 28px;
   color: var(--text-lo);
   font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+.settings-defaults-link {
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+}
+.settings-defaults-link span {
+  margin-left: 3px;
+}
+.settings-defaults-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.settings-defaults-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .settings-search-results {
   display: flex;
@@ -134,9 +151,6 @@
   font-size: var(--fs-body-sm);
   line-height: 1.5;
   font-weight: 400;
-}
-.s-task-model-advanced {
-  grid-column: 1 / -1;
 }
 .s-task-model-advanced summary {
   display: flex;

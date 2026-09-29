@@ -97,8 +97,6 @@ export default Object.freeze({
   'debug.settings': 'Debug',
   'debug.enabled': 'Enable debug mode',
   'debug.traceLimit': 'Trace limit',
-  'debug.localWarning':
-    'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
   'debug.request': 'Request',
   'debug.requestHeaders': 'Headers',
   'debug.requestBody': 'Body',
@@ -120,9 +118,11 @@ export default Object.freeze({
   'debug.emptyHeader': 'No traces captured yet',
   'debug.statusFilter': 'Status filter',
   'debug.enabledDescription':
-    'Capture provider requests and responses for inspection.',
-  'debug.traceLimitDescription':
-    'Maximum number of traces to keep. Older traces are removed when the limit is reached.',
+    'Records full Provider requests and responses, including prompts.',
+  'debug.enabledHelp':
+    'Debug mode records every request vBot sends to a Provider and its response in full, including the complete prompt content sent to Models. While it is on, the Debug view in the menu shows these traces.\n\nTraces are stored on the computer running the vBot server. API keys, tokens, and other secret values are redacted before storing.',
+  'debug.traceLimitHelp':
+    'How many traces to keep. When a new trace goes over this limit, the oldest traces are removed. Between 1 and 500; 50 by default.',
   'statistics.range.label': 'Time range',
   'statistics.range.short.7d': '7 days',
   'statistics.range.short.30d': '30 days',

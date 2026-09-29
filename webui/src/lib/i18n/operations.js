@@ -49,7 +49,6 @@ export default Object.freeze({
   'mcp.descriptionHelp':
     'One line that tells Agents what this connection is for. Without it, Agents see the name the server reports.',
   'mcp.directory': 'Working directory',
-  'mcp.disabled': 'Disabled',
   'mcp.disconnected': 'Disconnected',
   'mcp.duplicate':
     'This connection already exists. Choose another name or edit the existing connection.',
@@ -62,8 +61,10 @@ export default Object.freeze({
   'mcp.entryName': 'Name',
   'mcp.environment': 'Environment variables',
   'mcp.failed': 'Connection failed',
-  'mcp.host':
-    'Programs and application add-ons run on the machine hosting vBot.',
+  'mcp.help':
+    'MCP connections give Agents Tools from other programs and services through the Model Context Protocol. Local programs run on the machine hosting vBot.\n\nAn Agent uses a connection only after you enable it in the Agent or Swarm Tool settings. It is off by default, including in All Tools mode.',
+  'mcp.helpAria': 'About MCP connections',
+  'mcp.detailsAria': 'Details for {name}',
   'mcp.http': 'Server URL (HTTP)',
   'mcp.local': 'Local program',
   'mcp.mappingInvalid': 'Each entry needs a unique, non-empty name.',

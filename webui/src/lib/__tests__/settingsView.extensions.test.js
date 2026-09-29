@@ -7,7 +7,7 @@ import {
   buildSchemaFormState,
   describeExtensionWaiting,
   extensionCapabilityParts,
-  extensionStatusChipVariant,
+  extensionStatusChip,
   hasSettingsSchema,
 } from '../settingsView.js';
 import { t } from '../i18n.js';
@@ -138,11 +138,32 @@ describe('extension list', () => {
     ]);
   });
 
-  it('maps the status to a status-chip variant', () => {
-    expect(extensionStatusChipVariant('loaded')).toBe('success');
-    expect(extensionStatusChipVariant('failed')).toBe('error');
-    expect(extensionStatusChipVariant('disabled')).toBe('warn');
-    expect(extensionStatusChipVariant('overridden')).toBe('warn');
+  it('shows a status chip only for states that need attention', () => {
+    const [loaded, disabled, failed, overridden, waiting] =
+      applyExtensionsPanelList({
+        extensions: [
+          { name: 'a', status: 'loaded' },
+          { name: 'b', status: 'disabled', disabled: true },
+          { name: 'c', status: 'failed' },
+          { name: 'd', status: 'overridden' },
+          { name: 'e', status: 'loaded', ready_state: 'waiting' },
+        ],
+      });
+
+    expect(extensionStatusChip(loaded)).toBeNull();
+    expect(extensionStatusChip(disabled)).toBeNull();
+    expect(extensionStatusChip(failed)).toEqual({
+      label: t('settings.extensions.statusFailed'),
+      variant: 'error',
+    });
+    expect(extensionStatusChip(overridden)).toEqual({
+      label: t('settings.extensions.statusOverridden'),
+      variant: 'neutral',
+    });
+    expect(extensionStatusChip(waiting)).toEqual({
+      label: t('settings.extensions.waiting'),
+      variant: 'warn',
+    });
   });
 
   it('lists contributed capabilities with translated labels', () => {

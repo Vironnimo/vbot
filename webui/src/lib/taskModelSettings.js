@@ -44,16 +44,21 @@ export function stringifyJsonFieldValue(value) {
   }
 }
 
+// Presentation of each task row. `title` names the task: the accessible name
+// of its target picker and, while task labels are shown, the row label.
+// `label` replaces it as the visible row label where the section heading
+// already names the task. `description` is an optional one-line hint shown
+// under the label; `help` is the full explanation behind the row's "?".
 const SPEECH_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_SPEECH_TO_TEXT,
     title: () => t('settings.specializedModels.speechToText'),
-    description: () => t('settings.specializedModels.speechToTextDescription'),
+    help: () => t('settings.specializedModels.speechToTextHelp'),
   },
   {
     taskType: TASK_TEXT_TO_SPEECH,
     title: () => t('settings.specializedModels.textToSpeech'),
-    description: () => t('settings.specializedModels.textToSpeechDescription'),
+    help: () => t('settings.specializedModels.textToSpeechHelp'),
   },
 ]);
 
@@ -61,7 +66,9 @@ const LIVE_VOICE_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_LIVE_VOICE,
     title: () => t('settings.specializedModels.liveVoice'),
+    label: () => t('settings.specializedModels.liveVoiceModel'),
     description: () => t('settings.specializedModels.liveVoiceDescription'),
+    help: () => t('settings.specializedModels.liveVoiceHelp'),
   },
 ]);
 
@@ -71,12 +78,12 @@ const IMAGE_TASK_ROWS = Object.freeze([
     title: () => t('settings.specializedModels.imageUnderstanding'),
     description: () =>
       t('settings.specializedModels.imageUnderstandingDescription'),
+    help: () => t('settings.specializedModels.imageUnderstandingHelp'),
   },
   {
     taskType: TASK_IMAGE_GENERATION,
     title: () => t('settings.specializedModels.imageGeneration'),
-    description: () =>
-      t('settings.specializedModels.imageGenerationDescription'),
+    help: () => t('settings.specializedModels.imageGenerationHelp'),
   },
 ]);
 
@@ -84,8 +91,10 @@ const TEXT_EMBEDDING_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_TEXT_EMBEDDING,
     title: () => t('settings.specializedModels.embeddingModel'),
+    label: () => t('settings.specializedModels.embeddingModelLabel'),
     description: () =>
       t('settings.specializedModels.embeddingModelDescription'),
+    help: () => t('settings.specializedModels.embeddingModelHelp'),
   },
 ]);
 
@@ -93,14 +102,12 @@ const GENERATED_MEDIA_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_VIDEO_GENERATION,
     title: () => t('settings.specializedModels.videoGeneration'),
-    description: () =>
-      t('settings.specializedModels.videoGenerationDescription'),
+    help: () => t('settings.specializedModels.videoGenerationHelp'),
   },
   {
     taskType: TASK_MUSIC_GENERATION,
     title: () => t('settings.specializedModels.musicGeneration'),
-    description: () =>
-      t('settings.specializedModels.musicGenerationDescription'),
+    help: () => t('settings.specializedModels.musicGenerationHelp'),
   },
 ]);
 
@@ -113,7 +120,7 @@ export const TASK_MODEL_ROWS = Object.freeze([
   {
     taskType: 'decision',
     title: () => t('settings.specializedModels.decision'),
-    description: () => t('settings.specializedModels.decisionDescription'),
+    help: () => t('settings.specializedModels.decisionHelp'),
   },
 ]);
 

@@ -1,6 +1,7 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
+  import InfoHint from '../ui/InfoHint.svelte';
   import SaveButton from '../ui/SaveButton.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import {
@@ -19,28 +20,22 @@
     {
       key: 'run_completed',
       label: () => t('settings.notifications.runCompleted'),
-      description: () => t('settings.notifications.runCompletedDescription'),
     },
     {
       key: 'run_failed',
       label: () => t('settings.notifications.runFailed'),
-      description: () => t('settings.notifications.runFailedDescription'),
     },
     {
       key: 'automation_failed',
       label: () => t('settings.notifications.automationFailed'),
-      description: () =>
-        t('settings.notifications.automationFailedDescription'),
     },
     {
       key: 'update_result',
       label: () => t('settings.notifications.updateResult'),
-      description: () => t('settings.notifications.updateResultDescription'),
     },
     {
       key: 'server_stopped',
       label: () => t('settings.notifications.serverStopped'),
-      description: () => t('settings.notifications.serverStoppedDescription'),
     },
   ]);
 
@@ -153,14 +148,18 @@
   }
 </script>
 
-<p class="s-subhead__desc">{t('settings.notifications.intro')}</p>
+<!-- Which app shows these is the one fact a reader needs up front; what each
+     kind covers is in the "?". -->
+<div class="s-subhead__desc notifications-intro">
+  {t('settings.notifications.intro')}
+  <InfoHint text={t('settings.notifications.help')} />
+</div>
 
 <div class="s-group">
   {#each NOTIFICATION_KINDS as kind (kind.key)}
     <div class="s-row s-row--compact">
       <div class="s-row-info">
         <div class="s-row-label">{kind.label()}</div>
-        <div class="s-row-desc">{kind.description()}</div>
       </div>
       <div class="s-row-control">
         <Toggle
@@ -187,3 +186,13 @@
     onClick={handleManualNotificationSettingsSave}
   />
 </div>
+
+<style>
+  /* The intro line sits directly under the section heading. */
+  .notifications-intro {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: -4px 0 0;
+  }
+</style>

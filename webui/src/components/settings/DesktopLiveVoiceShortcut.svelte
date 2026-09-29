@@ -6,6 +6,7 @@
 
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import {
     getDesktopLiveHotkey,
@@ -153,11 +154,14 @@
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.liveShortcut.combination')}
+          <InfoHint
+            text={t('settings.liveShortcut.combinationHelp')}
+            ariaLabel={t('settings.liveShortcut.combinationHelpAria')}
+          />
         </div>
-        <div class="s-row-desc" aria-live="polite">
-          {capturing
-            ? t('settings.liveShortcut.captureHint')
-            : t('settings.liveShortcut.combinationDescription')}
+        <!-- Speaks up only while a new combination is being recorded. -->
+        <div class="s-row-desc live-shortcut__hint" aria-live="polite">
+          {#if capturing}{t('settings.liveShortcut.captureHint')}{/if}
         </div>
       </div>
       <div class="s-row-control">
@@ -198,5 +202,10 @@
   .live-shortcut :global(.live-shortcut__capture) {
     min-width: 12em;
     font-variant-numeric: tabular-nums;
+  }
+
+  /* The empty live region takes no room until it speaks. */
+  .live-shortcut__hint:empty {
+    margin: 0;
   }
 </style>

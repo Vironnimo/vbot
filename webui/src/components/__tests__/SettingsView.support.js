@@ -88,14 +88,14 @@ export async function openChannelsPanel() {
 export async function openSubAgentsPanel() {
   await openSettingsSection('Tools', 'subagents');
   await waitForCondition(() =>
-    activeSection.textContent.includes('Max sub-agent depth'),
+    activeSection.querySelector('#settings-subagents-max-depth'),
   );
 }
 
 export async function openRecallPanel() {
   await openSettingsSection('Memory', 'recall');
   await waitForCondition(() =>
-    activeSection.textContent.includes('Recall backend'),
+    activeSection.querySelector('#settings-recall-backend'),
   );
 }
 

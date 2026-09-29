@@ -183,13 +183,18 @@ describe('SettingsView Channels', () => {
     });
   });
 
-  it('defers an external channel reload until an open form closes', async () => {
+  it('defers an external channel reload while a new channel form is open, not for an open row', async () => {
     const props = reactiveProps({ channelsRefreshToken: 0 });
     await openChannels({ channels: [channelConfig('tg-assistant')] }, props);
     const initialListCalls = callsTo('channel.list').length;
 
     buttonByText('Add channel').click();
     flushSync();
+    setInputValue('#channel-id-input', 'tg-new');
+    // A stray click on a row keeps the new Channel form.
+    document.querySelector('.s-channel-card .s-entity__head').click();
+    flushSync();
+    expect(document.querySelector('#channel-id-input').value).toBe('tg-new');
     props.channelsRefreshToken += 1;
     flushSync();
     await Promise.resolve();
@@ -200,6 +205,16 @@ describe('SettingsView Channels', () => {
     await waitForCondition(
       () => callsTo('channel.list').length === initialListCalls + 1,
     );
+
+    const disclosure = buttonByAriaLabel('Edit channel tg-assistant');
+    disclosure.click();
+    flushSync();
+    props.channelsRefreshToken += 1;
+    flushSync();
+    await waitForCondition(
+      () => callsTo('channel.list').length === initialListCalls + 2,
+    );
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('lists denied chats and allows one from the channel card', async () => {
@@ -230,12 +245,29 @@ describe('SettingsView Channels', () => {
     expect(rows[0].textContent).toContain('Julian B.');
     expect(rows[0].textContent).toContain('99999');
 
+    // Allowing while the row is open must survive the form's next save.
+    buttonByAriaLabel('Edit channel tg-assistant').click();
+    flushSync();
     buttonByAriaLabel('Allow chat 99999').click();
     await waitForCondition(() => callsTo('channel.update').length > 0);
     expect(callsTo('channel.update')[0][1]).toEqual({
       id: 'tg-assistant',
       allowed_chat_ids: ['12345', '99999'],
     });
+    await waitForCondition(
+      () =>
+        document.querySelector('#channel-allowed-chat-ids-input')?.value ===
+        '12345, 99999',
+    );
+    setInputValue('#channel-token-env-input', 'TELEGRAM_BOT_TOKEN_UPDATED');
+    buttonByText('Save').click();
+    await waitForCall('channel.update', {
+      token_env_var: 'TELEGRAM_BOT_TOKEN_UPDATED',
+    });
+    expect(callsTo('channel.update').at(-1)[1].allowed_chat_ids).toEqual([
+      '12345',
+      '99999',
+    ]);
   });
 
   it('creates a channel from the inline form', async () => {
@@ -271,8 +303,10 @@ describe('SettingsView Channels', () => {
       document.body.textContent.includes('tg-assistant'),
     );
 
-    buttonByAriaLabel('Edit channel tg-assistant').click();
+    const disclosure = buttonByAriaLabel('Edit channel tg-assistant');
+    disclosure.click();
     flushSync();
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
     setInputValue('#channel-token-env-input', 'TELEGRAM_BOT_TOKEN_UPDATED');
     // Real debounce: the channel form autosaves after its idle interval.
     await new Promise((resolve) => setTimeout(resolve, 900));
@@ -284,7 +318,9 @@ describe('SettingsView Channels', () => {
       token_env_var: 'TELEGRAM_BOT_TOKEN_UPDATED',
     });
 
-    buttonByAriaLabel('Disable channel tg-assistant').click();
+    const enabled = buttonByAriaLabel('Enable channel tg-assistant');
+    expect(enabled.getAttribute('aria-checked')).toBe('true');
+    enabled.click();
     await waitForCall('channel.disable', { id: 'tg-assistant' });
 
     buttonByAriaLabel('Delete channel tg-assistant').click();

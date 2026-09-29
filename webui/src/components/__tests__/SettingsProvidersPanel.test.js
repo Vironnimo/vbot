@@ -70,6 +70,14 @@ describe('SettingsProvidersPanel', () => {
     });
     flushSync();
     expect(document.querySelectorAll('.s-provider-card')).toHaveLength(2);
+    // Each OpenCode row keeps its billing note behind a "?" hint.
+    for (const name of ['OpenCode Go', 'OpenCode Zen']) {
+      expect(
+        document.querySelector(
+          `.s-provider-head .info-hint[aria-label="Billing for ${name}"]`,
+        ),
+      ).toBeTruthy();
+    }
     findButton('Replace key…').click();
     flushSync();
     const note = document.querySelector(

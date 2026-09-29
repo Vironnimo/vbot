@@ -180,14 +180,8 @@ describe('SettingsGeneralPanel', () => {
     flushSync();
     await flushAsync();
 
-    expect(document.body.textContent).toContain(
-      t('settings.general.setupGuide'),
-    );
-
-    const setupButton = Array.from(
-      document.body.querySelectorAll('button'),
-    ).find((button) =>
-      button.textContent.includes(t('settings.general.setupGuideAction')),
+    const setupButton = document.body.querySelector(
+      `button[aria-label="${t('settings.general.setupGuideAction')}"]`,
     );
     expect(setupButton).toBeTruthy();
 
@@ -195,6 +189,40 @@ describe('SettingsGeneralPanel', () => {
     flushSync();
 
     expect(onOpenSetupGuide).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the server address and copies the data directory', async () => {
+    listClientsMock.mockResolvedValue({ clients: [] });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    mountedComponent = mount(SettingsGeneralPanel, {
+      target: document.body,
+      props: {
+        settings: {
+          general: {
+            server: { listen_host: '127.0.0.1', listen_port: 8420 },
+            data_directory: 'C:/data',
+          },
+        },
+        clientsRefreshToken: 0,
+      },
+    });
+    flushSync();
+    await flushAsync();
+
+    expect(document.body.textContent).toContain('127.0.0.1:8420');
+    document.body
+      .querySelector(
+        `button[aria-label="${t('settings.general.copyDataDirectory')}"]`,
+      )
+      .click();
+    await flushAsync();
+    expect(writeText).toHaveBeenCalledWith('C:/data');
+    delete navigator.clipboard;
   });
 
   it('renders the keep-awake toggle from settings and saves a change', async () => {

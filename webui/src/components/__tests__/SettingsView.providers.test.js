@@ -3,11 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount } from 'svelte';
 
-import { t } from '../../lib/i18n.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import {
+  buttonByAriaLabel,
   buttonByText,
-  buttonsByText,
   cleanupSettingsViewHarness,
   createSettingsRpcMock,
   flushAsyncUpdates,
@@ -30,8 +29,12 @@ vi.mock('svelte', async () => {
 
 const { default: SettingsView } = await import('../SettingsView.svelte');
 
-const DEPTH = 'input[aria-label="Max sub-agent depth"]';
+const DEPTH = '#settings-subagents-max-depth';
 const REFRESH = 'Update Model DB';
+
+function refreshButtons(root = document) {
+  return root.querySelectorAll(`button[aria-label="${REFRESH}"]`);
+}
 
 function modelListCalls() {
   return rpcMock.mock.calls.filter((call) => call[0] === 'model.list').length;
@@ -107,10 +110,10 @@ describe('SettingsView Providers', () => {
         mountView();
         await openProvidersPanel();
 
-        expect(buttonsByText(REFRESH)).toHaveLength(expectedButtons);
+        expect(refreshButtons()).toHaveLength(expectedButtons);
         if (eligible) {
-          expect(providerRow('OpenRouter').textContent).not.toContain(REFRESH);
-          expect(providerRow('Groq').textContent).not.toContain(REFRESH);
+          expect(refreshButtons(providerRow('OpenRouter'))).toHaveLength(0);
+          expect(refreshButtons(providerRow('Groq'))).toHaveLength(0);
         }
       },
     );
@@ -127,7 +130,7 @@ describe('SettingsView Providers', () => {
       mountView({ onToast: toastMock });
       await openProvidersPanel();
 
-      buttonByText(REFRESH).click();
+      buttonByAriaLabel(REFRESH).click();
       flushSync();
       expect(buttonByText('Updating…')).toBeTruthy();
       // One global refresh, never a per-provider one.
@@ -179,7 +182,7 @@ describe('SettingsView Providers', () => {
       await openProvidersPanel();
       const modelListBefore = modelListCalls();
 
-      buttonByText(REFRESH).click();
+      buttonByAriaLabel(REFRESH).click();
       await waitForCondition(() =>
         toastMock.mock.calls.some(([toast]) => toast?.variant === 'success'),
       );
@@ -197,7 +200,7 @@ describe('SettingsView Providers', () => {
       // the refresh-triggered reload must be absent.
       const modelListBefore = modelListCalls();
 
-      buttonByText(REFRESH).click();
+      buttonByAriaLabel(REFRESH).click();
       // A sticky error toast carries the server detail as its message.
       await waitForCondition(() =>
         toastMock.mock.calls.some(
@@ -234,12 +237,14 @@ describe('SettingsView Providers', () => {
     mountView();
     await openProvidersPanel();
 
-    // Keyless connection: descriptive text, no key management actions.
+    // Keyless connection: listed without key management actions.
     await waitForCondition(() =>
-      providerRow('Ollama').textContent.includes(
-        t('settings.providers.keylessDescription'),
-      ),
+      providerRow('Ollama').querySelector('.s-provider-connection-row'),
     );
+    expect(
+      providerRow('Ollama').querySelector('.s-provider-connection-label')
+        .textContent,
+    ).toContain('Local');
     expect(providerRow('Ollama').textContent).not.toContain('Replace key');
 
     // The local-context editor lists the flagged-local model.
@@ -458,7 +463,7 @@ describe('SettingsView Providers', () => {
       const props = reactiveProps({ modelsRefreshToken: 0, onSettingsCommit });
       mountView(props);
       await openProvidersPanel();
-      buttonByText(REFRESH).click();
+      buttonByAriaLabel(REFRESH).click();
       await flushAsyncUpdates();
       props.modelsRefreshToken += 1;
       await flushAsyncUpdates();

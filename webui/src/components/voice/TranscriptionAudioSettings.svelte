@@ -1,6 +1,11 @@
 <script>
+  // The server-wide recording format for speech-to-text: its own Voice
+  // section with its own save state, shown in every accessor because the
+  // Chat microphone uses it too.
   import { t } from '$lib/i18n.js';
   import Dropdown from '../Dropdown.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import { onDestroy, untrack } from 'svelte';
   import {
     normalizeTranscriptionAudio,
@@ -14,14 +19,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { updateSettings } from '$lib/api.js';
-  let {
-    settings,
-    onCommit,
-    onError,
-    // Receives the latest save outcome for the caller's section save state:
-    // 'idle', 'saving', 'saved' (and nothing pending) or 'error'.
-    onSaveStatusChange = () => {},
-  } = $props();
+  let { settings, onCommit, onError } = $props();
 
   let transcriptionAudio = $state(
     untrack(() => normalizeTranscriptionAudio(settings)),
@@ -136,27 +134,22 @@
     };
     void saveTranscriptionAudio();
   }
-  let saveStatus = $derived(
-    transcriptionSaveState === 'saved' && transcriptionAudioHasChanges()
-      ? 'idle'
-      : transcriptionSaveState,
-  );
-  $effect(() => {
-    onSaveStatusChange(saveStatus);
-  });
   onDestroy(unregisterAudioAutosave);
 </script>
 
-<!-- One group: the profile row and the two values it controls (editable with
-     the Custom profile). -->
+<!-- One group: the profile, then the two values only the Custom profile
+     lets you choose (the presets fix them, so they stay hidden). -->
 <div class="s-group">
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.voice.transcriptionProfile')}
-      </div>
-      <div class="s-row-desc">
-        {t('settings.voice.transcriptionProfileDescription')}
+        {t('settings.voice.transcriptionProfileLabel')}
+        <InfoHint
+          text={t('settings.voice.transcriptionProfileHelp')}
+          ariaLabel={t('settings.voice.aboutAria', {
+            name: t('settings.sections.transcriptionAudio'),
+          })}
+        />
       </div>
     </div>
     <div class="s-row-control">
@@ -170,13 +163,16 @@
     </div>
   </div>
 
-  <div class="s-row">
+  <div class="s-row" hidden={transcriptionAudio.profile !== 'custom'}>
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.voice.transcriptionFormat')}
-      </div>
-      <div class="s-row-desc">
-        {t('settings.voice.transcriptionFormatDescription')}
+        <InfoHint
+          text={t('settings.voice.transcriptionFormatHelp')}
+          ariaLabel={t('settings.voice.aboutAria', {
+            name: t('settings.voice.transcriptionFormat'),
+          })}
+        />
       </div>
     </div>
     <div class="s-row-control">
@@ -185,19 +181,21 @@
         options={transcriptionFormatOptions}
         ariaLabel={t('settings.voice.transcriptionFormat')}
         onValueChange={handleTranscriptionFormatChange}
-        disabled={transcriptionAudio.profile !== 'custom' ||
-          transcriptionSaveState === 'saving'}
+        disabled={transcriptionSaveState === 'saving'}
       />
     </div>
   </div>
 
-  <div class="s-row">
+  <div class="s-row" hidden={transcriptionAudio.profile !== 'custom'}>
     <div class="s-row-info">
       <div class="s-row-label">
         {t('settings.voice.transcriptionSampleRate')}
-      </div>
-      <div class="s-row-desc">
-        {t('settings.voice.transcriptionSampleRateDescription')}
+        <InfoHint
+          text={t('settings.voice.transcriptionSampleRateHelp')}
+          ariaLabel={t('settings.voice.aboutAria', {
+            name: t('settings.voice.transcriptionSampleRate'),
+          })}
+        />
       </div>
     </div>
     <div class="s-row-control">
@@ -206,9 +204,17 @@
         options={transcriptionSampleRateOptions}
         ariaLabel={t('settings.voice.transcriptionSampleRate')}
         onValueChange={handleTranscriptionSampleRateChange}
-        disabled={transcriptionAudio.profile !== 'custom' ||
-          transcriptionSaveState === 'saving'}
+        disabled={transcriptionSaveState === 'saving'}
       />
     </div>
   </div>
+</div>
+
+<div class="s-footer">
+  <SaveButton
+    class="s-save-button s-save-button--inline"
+    saving={transcriptionSaveState === 'saving'}
+    pending={transcriptionAudioHasChanges()}
+    onClick={saveTranscriptionAudio}
+  />
 </div>

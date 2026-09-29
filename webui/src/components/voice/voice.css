@@ -1,12 +1,15 @@
-/* The Voice controls section: one group per topic (Live voice, transcription
-   audio, wakeword listening), spaced like the section body. */
+/* The Wakeword section: its group and the banners around it, spaced like
+   the section body. */
 .voice-settings {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-/* Live state dot */
+/* The listening switch carries the live listening state on its left. */
+.voice-settings .voice-listening-control {
+  gap: 14px;
+}
 .voice-settings .voice-state {
   display: inline-flex;
   align-items: center;
@@ -42,8 +45,8 @@
   background: var(--red);
 }
 .voice-settings .voice-state-label {
-  font-size: var(--fs-body-md);
-  color: var(--text-hi);
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
 }
 
 @keyframes voice-pulse {
@@ -71,13 +74,6 @@
   100% {
     opacity: 1;
   }
-}
-
-.voice-settings .voice-slider-labels {
-  display: flex;
-  justify-content: space-between;
-  font-size: var(--fs-body-sm);
-  color: var(--text-lo);
 }
 
 /* In a stacked row the control owns the full content width and starts at
@@ -160,7 +156,6 @@
   padding-top: 10px;
 }
 .voice-settings .voice-model-card__sensitivity,
-.voice-settings .voice-slider-labels,
 .voice-settings .voice-model-limit {
   color: var(--text-lo);
   font-size: var(--fs-body-sm);
@@ -414,8 +409,8 @@
   white-space: nowrap;
 }
 
-/* The section's save state, placed on its heading line as the body's
-   `.s-footer`. */
+/* The Wakeword section's save state, placed on its heading line as the
+   body's `.s-footer`. */
 .voice-save-state {
   color: var(--text-lo);
   font-size: var(--fs-body-sm);

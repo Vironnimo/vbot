@@ -71,9 +71,14 @@ describe('Web Fetch settings', () => {
     await choose('settings-web-fetch-provider', TAVILY());
     expect(document.body.textContent).toContain(t('settings.webFetch.cost'));
     expect(document.body.textContent).toContain('TAVILY_API_KEY');
-    expect(document.body.textContent).toContain('/vbot-data');
     expect(document.querySelector('a').href).toBe(
       settings.web_fetch.services[0].pricing_url,
+    );
+    // Where the key goes is part of the service help behind the "?".
+    document.querySelector('.info-hint').click();
+    flushSync();
+    expect(document.querySelector('.info-popover').textContent).toContain(
+      '/vbot-data',
     );
     expect(rpcMock).not.toHaveBeenCalled();
   });

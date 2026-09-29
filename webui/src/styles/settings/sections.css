@@ -114,6 +114,12 @@
   align-items: center;
 }
 
+/* A row without effect in the current state stays mounted but hidden, so
+   settings search still finds it. */
+:is(.s-group, .s-group__rows) > .s-row[hidden] {
+  display: none;
+}
+
 /* Rows whose control is a compact switch, button or number keep it at the
    end of the row instead of reserving the full control column. */
 :is(.s-group, .s-group__rows) > .s-row--compact:not(.s-row--stacked) {
@@ -307,6 +313,42 @@
   margin-left: auto;
 }
 
+/* Entity disclosure: a quiet 28px icon button at the end of an entity head
+   carrying the shared `.disclosure-chevron`; the details open inside the
+   same entity. A `.s-entity__head--toggle` head also toggles them from
+   anywhere on the row; the button stays the keyboard and screen-reader
+   control. */
+.s-entity__head--toggle {
+  cursor: pointer;
+}
+
+.s-disclosure-btn.btn-tertiary.btn-icon {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  color: var(--text-lo);
+}
+
+.s-disclosure-btn .disclosure-chevron {
+  margin: 0 0 0 -2px;
+  color: inherit;
+}
+
+.s-disclosure-btn .disclosure-chevron--open {
+  margin: 0 0 3px;
+}
+
+.s-disclosure-btn.btn-tertiary.btn-icon:hover,
+.s-entity__head--toggle:hover .s-disclosure-btn.btn-tertiary.btn-icon {
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+
+.s-disclosure-spacer {
+  width: 28px;
+  flex-shrink: 0;
+}
+
 /* Checkbox groups select the members of a list inside one group (Tool
    families, an Agent's Skills and Sub-Agent targets, Project Skill
    ceilings, Skill access). The head carries the group Checkbox (mixed when
@@ -477,7 +519,7 @@
 }
 
 /* A named sub-topic inside a section (for example Connected clients under
-   Server info): a smaller heading with optional description above its own
+   Server): a smaller heading with optional description above its own
    group. */
 .s-subhead {
   margin-top: 16px;

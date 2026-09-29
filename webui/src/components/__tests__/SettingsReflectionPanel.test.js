@@ -50,7 +50,7 @@ describe('SettingsReflectionPanel', () => {
     document.body.innerHTML = '';
   });
 
-  it('seeds the form from settings and saves the edited section, then commits the response', async () => {
+  it('shows the intervals only while reflection is on, keeps their drafts, and saves the edited section', async () => {
     const commits = [];
     mountedComponent = mount(SettingsReflectionPanel, {
       target: document.body,
@@ -62,19 +62,30 @@ describe('SettingsReflectionPanel', () => {
     flushSync();
 
     const toggle = document.body.querySelector('[role="switch"]');
-    const memoryInput = document.getElementById(
-      'settings-reflection-memory-interval',
-    );
+    const memoryInput = () =>
+      document.getElementById('settings-reflection-memory-interval');
+    const memoryRowHidden = () => memoryInput().closest('.s-row').hidden;
     expect(toggle.getAttribute('aria-checked')).toBe('false');
-    expect(memoryInput.value).toBe('10');
+    expect(memoryRowHidden()).toBe(true);
+
+    toggle.click();
+    flushSync();
+    expect(memoryInput().value).toBe('10');
     expect(
       document.getElementById('settings-reflection-skill-interval').value,
     ).toBe('10');
 
-    toggle.click();
-    memoryInput.value = '5';
-    memoryInput.dispatchEvent(new Event('input', { bubbles: true }));
+    memoryInput().value = '5';
+    memoryInput().dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
+    // Hiding the rows keeps the edited interval.
+    toggle.click();
+    flushSync();
+    expect(memoryRowHidden()).toBe(true);
+    toggle.click();
+    flushSync();
+    expect(memoryRowHidden()).toBe(false);
+    expect(memoryInput().value).toBe('5');
     findSaveButton().click();
     flushSync();
     await waitForCondition(() => commits.length === 1);

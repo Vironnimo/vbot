@@ -14,7 +14,9 @@
   // pointer travels onto it, keyboard focus previews it at once, and
   // click/tap pins it until a second click, an outside press, or Escape.
   // Scrolling repositions it. Callers pass already-translated `text`; blank
-  // lines separate paragraphs.
+  // lines separate paragraphs. The text also stays on the dot as
+  // `data-help-text`, so a page search (Settings) can match it while the
+  // popover is closed.
   import { onDestroy } from 'svelte';
 
   import { portal } from '../../lib/dropdownPanel.js';
@@ -184,6 +186,7 @@
   aria-label={label}
   aria-expanded={open}
   aria-describedby={visible ? popoverId : undefined}
+  data-help-text={text}
   onpointerenter={onDotPointerEnter}
   onpointerleave={onDotPointerLeave}
   onfocus={onDotFocus}
