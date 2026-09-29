@@ -138,6 +138,14 @@ class UpdateHandoffGrant:
                 session_id=self.session_id,
                 acknowledged=self._acknowledged,
             )
+            # Never the token, the ticket id or its path: each is a capability.
+            _LOGGER.info(
+                "Update handoff ticket minted (agent=%s%s session=%s run=%s)",
+                self.agent_id,
+                f" project={self.project_id}" if self.project_id else "",
+                self.session_id,
+                self.run_id,
+            )
         return self._ticket
 
 
@@ -194,15 +202,15 @@ class UpdateHandoffs:
             self._root / CONTINUATION_DIRECTORY, cutoff
         )
         if tickets or receipts:
-            _LOGGER.info(
-                "Removed expired update handoff files: tickets=%d continuation_receipts=%d",
+            _LOGGER.debug(
+                "Expired update handoff files removed (tickets=%d continuation_receipts=%d)",
                 tickets,
                 receipts,
             )
         if ticket_failures or receipt_failures:
             _LOGGER.warning(
-                "Could not remove expired update handoff files: tickets=%d "
-                "continuation_receipts=%d",
+                "Expired update handoff files could not be removed "
+                "(tickets=%d continuation_receipts=%d)",
                 ticket_failures,
                 receipt_failures,
             )

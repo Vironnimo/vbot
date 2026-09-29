@@ -90,20 +90,23 @@ def test_unknown_released_malformed_and_forgotten_tokens_are_unavailable(tmp_pat
         read_update_handoff_ticket(tmp_path, "../outside")
 
 
-def test_failed_acknowledgement_logs_no_capability(
+def test_minting_and_failed_acknowledgement_log_no_capability(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     handoffs = UpdateHandoffs(tmp_path)
     grant = _issue(handoffs)
-    ticket = handoffs.mint(grant.token)
-    ticket.path.unlink()
 
-    with caplog.at_level(logging.WARNING, logger="vbot.tools.bash"):
+    with caplog.at_level(logging.INFO, logger="vbot.tools.bash"):
+        ticket = handoffs.mint(grant.token)
+        handoffs.mint(grant.token)
+        ticket.path.unlink()
         grant.acknowledge()
 
-    assert [record.levelno for record in caplog.records] == [logging.WARNING]
+    # One line for the first claim, one warning for the lost acknowledgement.
+    assert [record.levelno for record in caplog.records] == [logging.INFO, logging.WARNING]
     assert ticket.ticket_id not in caplog.text
     assert grant.token not in caplog.text
+    assert ticket.path.name not in caplog.text
 
 
 def _file(path: Path, *, age_seconds: float, now: float) -> Path:
@@ -132,14 +135,16 @@ def test_startup_sweep_removes_only_expired_files_and_logs_counts(
         tmp_path / CONTINUATION_DIRECTORY / "upd_new.json", age_seconds=recent, now=now
     )
 
-    with caplog.at_level(logging.INFO, logger="vbot.tools.bash"):
+    with caplog.at_level(logging.DEBUG, logger="vbot.tools.bash"):
         UpdateHandoffs(tmp_path).remove_expired_files(now=now)
 
     assert not old_ticket.exists() and not old_receipt.exists()
     assert new_ticket.exists() and new_receipt.exists()
-    assert [record.getMessage() for record in caplog.records] == [
-        "Removed expired update handoff files: tickets=1 continuation_receipts=1"
-    ]
+    # Routine maintenance: one DEBUG count summary that never names a file.
+    [record] = caplog.records
+    assert record.levelno == logging.DEBUG
+    assert "tickets=1" in record.getMessage()
+    assert "continuation_receipts=1" in record.getMessage()
     assert "old-ticket" not in caplog.text
 
 
@@ -149,7 +154,7 @@ def test_startup_sweep_is_silent_when_nothing_expired(
     now = time.time()
     _file(tmp_path / HANDOFF_DIRECTORY / "recent.json", age_seconds=60, now=now)
 
-    with caplog.at_level(logging.INFO, logger="vbot.tools.bash"):
+    with caplog.at_level(logging.DEBUG, logger="vbot.tools.bash"):
         UpdateHandoffs(tmp_path).remove_expired_files(now=now)
         UpdateHandoffs(tmp_path / "missing").remove_expired_files(now=now)
 
