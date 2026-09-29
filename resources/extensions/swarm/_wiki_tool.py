@@ -74,13 +74,8 @@ class WikiCall:
             await self._drop_create_page_id(arguments)
         elif "page_id" in arguments:
             await self._name_by_number(arguments)
-        if action == "update" and "content" in arguments and "expected_revision" not in arguments:
-            current = (await self._read_current(arguments["page_id"], action))["current_revision"]
-            raise AgentCallError(
-                "invalid_arguments",
-                f"{text.WIKI_NEEDS['expected_revision'].format(current=current)} "
-                f"{text.NOTHING_CHANGED}",
-            )
+        # The Store accepts a whole-content update without a base only on the caller's revision.
+        unbased = "content" in arguments and "expected_revision" not in arguments
         if action in MUTATIONS:
             arguments["request_id"] = _call_request_id(self.context)
         data = await self._execute(action, arguments)
@@ -89,6 +84,8 @@ class WikiCall:
         if data.get("replayed"):
             self.notes.append(REPLAYED)
         changed = action in MUTATIONS and not data.get("replayed") and not data.get("unchanged")
+        if action == "update" and unbased and changed:
+            self.notes.append(text.WIKI_OWN_REVISION.format(revision=data["revision"] - 1))
         if action == "read":
             rendered = self._read(data)
             if self.find:
@@ -341,6 +338,13 @@ class WikiCall:
             )
         if error.code == "invalid_cursor":
             return AgentCallError("invalid_cursor", text.WIKI_CURSOR)
+        if error.field == "expected_revision" and "current_revision" in details:
+            return AgentCallError(
+                "invalid_arguments",
+                closing(
+                    text.WIKI_NEEDS["expected_revision"].format(current=details["current_revision"])
+                ),
+            )
         return error
 
     async def _conflict_message(self, details: Json, arguments: Json) -> str:

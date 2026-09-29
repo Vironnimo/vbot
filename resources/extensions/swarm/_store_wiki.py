@@ -60,9 +60,6 @@ def _validate(arguments: Json) -> str:
     required = {"page_id"} if action not in {"list", "create"} else set()
     if action in MUTATIONS:
         required.add("request_id")
-    if action == "update" and "content" in arguments:
-        # Replacing the whole page must not silently discard a peer's newer revision.
-        required.add("expected_revision")
     if action == "create":
         required.update({"title", "content"})
     if action == "restore":
@@ -438,6 +435,14 @@ def _mutate(
             )
         if current["deleted"] and action != "restore":
             raise SwarmStoreError("wiki_deleted", details=state)
+        # Replacing the whole page must not silently discard a peer's revision. A
+        # participant replacing a revision it saved itself discards no one else's change.
+        if (
+            "content" in arguments
+            and expected is None
+            and (actor is None or current["author_id"] != actor["id"])
+        ):
+            raise SwarmStoreError("invalid_arguments", field="expected_revision", details=state)
         if "old_text" in arguments:
             edit = apply_text_edit(content, arguments["old_text"], arguments["new_text"])
             if isinstance(edit, EditMiss):

@@ -156,9 +156,15 @@ them: like the Board, the handler derives the key from Session, Run, iteration a
 Tool Call identity, and drops an Agent-sent `request_id`; management keeps its own.
 `expected_revision` is required only for whole-content replacement, so a newer
 peer revision is never silently discarded; when present on other changes it is
-checked strictly. A change the page already holds (same title, content and
-deletion state, an identical live page on create, an `old_text` edit already
-applied) saves no revision and reports `unchanged`, before any stale check.
+checked strictly. A participant's whole-content update without it replaces the
+current revision when that participant saved it, since no peer change can be lost,
+and the Tool notes the replaced revision. The Store decides this inside the write
+(`_store_wiki.py::_mutate`), so the payload stays stable and a replayed Tool Call
+returns its saved outcome; management changes always need `expected_revision`. All 5
+such refusals of one Swarm Run hit the caller's own revision (Sessions, 2026-09).
+A change the page already holds (same title, content and deletion state, an
+identical live page on create, an `old_text` edit already applied) saves no
+revision and reports `unchanged`, before any stale check.
 Targeted edits run `_wiki_edit.py`, aligned with `apply_patch`: precise
 `replace_fuzzy` strategies (typography, newline, whitespace, indentation), then the
 same edit without shared blank boundary lines, then already-applied detection.
@@ -219,7 +225,8 @@ exact references in every action; the Tool names that page `w3` in the call befo
 running it, so results, continuations and errors show the number. Failures name
 the next call: conflicts show the current revision
 (content conflicts add a bounded diff since the base revision), deleted pages the
-restore call, and a content update without `expected_revision` the current one.
+restore call, and a content update without `expected_revision` on a peer's revision
+the current one.
 Failed changes say "Nothing changed." in their first line.
 
 Board posts are immutable and public within one Swarm. A post, including a

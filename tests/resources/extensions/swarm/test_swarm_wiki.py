@@ -7,6 +7,7 @@ import pytest
 
 from resources.extensions.swarm.agent_text import REPLAYED
 from resources.extensions.swarm.store import SwarmStoreError
+from resources.extensions.swarm.wiki_text import WIKI_OWN_REVISION
 from tests.resources.extensions.swarm.swarm_test_support import (
     _swarm,
     continuation,
@@ -557,7 +558,7 @@ async def test_wiki_repeated_create_and_delete_change_nothing(board):
 
 
 @pytest.mark.asyncio
-async def test_wiki_expected_revision_is_needed_only_to_replace_the_whole_page(board):
+async def test_wiki_expected_revision_is_needed_only_to_replace_a_peers_revision(board):
     page_id = await create(board, "First finding")
     for change in (
         {"old_text": "First", "new_text": "Main"},
@@ -571,16 +572,27 @@ async def test_wiki_expected_revision_is_needed_only_to_replace_the_whole_page(b
         "Renamed",
         "Main finding",
     )
+    # Revision 3 is the caller's own, so replacing it loses no peer's change.
+    rewrite = {"action": "update", "page_id": page_id, "content": "Own rewrite"}
+    own = await invoke(board, rewrite, tool_call_id="rewrite")
+    assert own["data"]["note"] == WIKI_OWN_REVISION.format(revision=3)
+    assert (await stored(board, page_id))["content"] == "Own rewrite"
+    # The same Tool Call replays its result although the caller now saved the current revision.
+    replay = await invoke(board, rewrite, tool_call_id="rewrite")
+    assert replay["data"] == {**own["data"], "note": REPLAYED}
+    peer_edit = {"action": "update", "page_id": page_id, "old_text": "Own", "new_text": "Peer"}
+    assert (await invoke(board, peer_edit, 1))["ok"]
+    current = await stored(board, page_id)
     replace_all = await invoke(board, {"action": "update", "page_id": page_id, "content": "new"})
     assert visible(replace_all) == (
         "Error (invalid_arguments): Replacing the whole content needs expected_revision: the "
-        "revision your content is based on. The current revision is 3; read it first if you "
+        "revision your content is based on. The current revision is 5; read it first if you "
         "have not, so no newer change is lost. Nothing changed."
     )
     assert await stored(board, page_id) == current
     assert (await invoke(board, {"action": "delete", "page_id": page_id}))["ok"]
-    assert (await invoke(board, {"action": "restore", "page_id": page_id, "revision": 3}))["ok"]
-    assert (await stored(board, page_id))["revision"] == 5
+    assert (await invoke(board, {"action": "restore", "page_id": page_id, "revision": 5}))["ok"]
+    assert (await stored(board, page_id))["revision"] == 7
 
 
 @pytest.mark.asyncio
