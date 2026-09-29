@@ -10,6 +10,7 @@ import os
 import re
 import runpy
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -514,6 +515,19 @@ def _stop_worktree_services(worktree_path: Path, data_dir: Path) -> str | None:
     return stderr or "managed worktree services could not be stopped"
 
 
+def _adopt_test_records(worktree_path: Path) -> None:
+    """Give a new worktree a copy of the primary checkout's test-impact records.
+
+    The commit check judges the branch's tests against these test runs of the state
+    it forked from, so its branch check before the merge runs only the tests the
+    branch's changes affect.
+    """
+    from scripts import _test_impact
+
+    with suppress(OSError, sqlite3.Error):
+        _test_impact.copy_data(PROJECT_ROOT, worktree_path)
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     """Create a new worktree with dedicated port and data directory."""
     name: str = args.name
@@ -583,6 +597,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(str(exc))
         return 1
 
+    _adopt_test_records(worktree_path)
     npm_command = shutil.which("npm") or "npm"
     print("installing the verified search engine...", flush=True)
     return_code, stderr = _run_command(
@@ -840,9 +855,36 @@ def _print_merge_check_hints(name: str, *, window_open: bool) -> None:
         print("note: your protected repair window stays open while you fix this")
 
 
+def _check_branch(worktree_path: Path) -> int:
+    """Run the tests the branch affects in its worktree; return the exit code.
+
+    This runs before the merge takes the merge lock, so other merges do not wait
+    for it; the merge commit then runs only the tests neither side covered. The
+    branch's own commit check runs them, as its commits run its own hook; a branch
+    without one has nothing to run.
+    """
+    script = worktree_path / "scripts" / "commit_check.py"
+    if not script.is_file():
+        return 0
+    print("testing the branch: the tests its changes affect (no output until done)...", flush=True)
+    return subprocess.run(
+        [sys.executable, str(script), "--branch"], cwd=worktree_path, check=False
+    ).returncode
+
+
+def _print_branch_check_hints(name: str, *, window_open: bool) -> None:
+    """Print the agent-facing recovery hints after the branch's tests failed."""
+    print("hint: the branch check failed (report above); main is unchanged")
+    print("hint: fix the reported problems in your worktree and commit")
+    print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
+    if window_open:
+        print("note: your protected repair window stays open while you fix this")
+
+
 def cmd_merge(args: argparse.Namespace) -> int:
     """Merge a finished worktree branch into main and remove the worktree.
 
+    The branch's tests run first, in the worktree and outside the merge lock.
     Concurrency contract: only one merge or protected repair window may touch
     the primary checkout at a time. A task with an active repair window merges
     under its own window; every other task waits for the lock.
@@ -887,6 +929,10 @@ def cmd_merge(args: argparse.Namespace) -> int:
             protected = True
         else:
             window_active = False
+
+    if _check_branch(worktree_path) != 0:
+        _print_branch_check_hints(name, window_open=protected)
+        return MERGE_CONFLICT_EXIT_CODE
 
     if not protected:
         try:

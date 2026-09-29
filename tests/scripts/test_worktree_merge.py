@@ -201,6 +201,39 @@ def test_cmd_merge_rejected_by_the_merge_check_keeps_main_intact(capsys, real_re
     assert "python scripts/worktree.py merge task-a" in captured.out
 
 
+FAILING_BRANCH_CHECK = (
+    "import sys\n"
+    "\n"
+    'print("FAIL: tests" if sys.argv[1:] == ["--branch"] else "unexpected arguments")\n'
+    "sys.exit(1)\n"
+)
+
+
+def test_cmd_merge_rejects_a_failing_branch_check_without_waiting_for_the_lock(
+    capfd, real_repo, monkeypatch
+):
+    module = _load_worktree_module()
+    _patch_repo_globals(monkeypatch, module, real_repo)
+    worktree = _create_task_worktree(module, real_repo, "task-a")
+    _commit_file(worktree, "scripts/commit_check.py", FAILING_BRANCH_CHECK, "branch check")
+    main_head = _git_output(real_repo, "rev-parse", "HEAD")
+    lock_path = module._merge_lock_paths()[0]
+
+    # Another merge holds the lock; the branch's tests run before the merge waits for it.
+    with lock_path.open("a+b") as handle:
+        assert worktree_lock._acquire_file_lock(handle)
+        result = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=0.3))
+        worktree_lock._release_file_lock(handle)
+    captured = capfd.readouterr()
+
+    assert result == module.MERGE_CONFLICT_EXIT_CODE
+    assert _git_output(real_repo, "rev-parse", "HEAD") == main_head
+    assert worktree.exists()
+    assert "FAIL: tests" in captured.out
+    assert "merge lock stayed busy" not in captured.out
+    assert "python scripts/worktree.py merge task-a" in captured.out
+
+
 def test_cmd_merge_recovers_unfinished_merge_state(real_repo, monkeypatch):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)

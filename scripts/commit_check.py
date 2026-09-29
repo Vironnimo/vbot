@@ -6,6 +6,12 @@ once a clone has enabled the tracked hooks with ``git config core.hooksPath
 .githooks``. It covers staged Python files (Ruff, mypy), staged frontend sources
 (Prettier, ESLint) and the tests those changes affect.
 
+Tests run when work lands in the primary checkout: its commits and the merge
+commits of ``scripts/worktree.py merge``. A commit in a linked worktree gets the
+static checks only. Before a merge takes the merge lock, ``worktree.py merge`` runs
+``commit_check.py --branch`` in the worktree: the pytest tests the branch's changes
+affect, so the merge commit only has to run the tests neither side covered.
+
 Formatter and linter fixes are applied and re-staged only for files whose whole
 change is staged, so unstaged work in the same checkout (another session's
 edits included) is never rewritten or swept into the commit. A partially staged
@@ -33,6 +39,7 @@ related to staged WebUI sources plus the guard tests, and the WebUI build runs.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import json
 import math
@@ -693,11 +700,56 @@ def check_frontend_tests(root: Path, changed: list[str]) -> list[StepResult]:
     ]
 
 
-def main(root: Path = PROJECT_ROOT) -> int:
+def _print_report(title: str, results: list[StepResult]) -> None:
+    print(title)
+    for result in results:
+        print(f"  {result.label:<12} {result.status}")
+    for result in results:
+        if result.details:
+            print(f"\n--- {result.label}: {result.status} ---\n{result.details}")
+
+
+def check_branch(root: Path) -> int:
+    """Run the pytest tests a worktree branch affects, before ``worktree.py merge``.
+
+    They are the tests the changes since the checkout's tested state affect; a
+    worktree takes the primary checkout's records over when it is created, so these
+    are the branch's changes. They run outside the merge lock, and the merge commit
+    then runs only the tests neither side covered, plus the frontend tests and the
+    WebUI build, which have no records to reuse.
+    """
+    start = time.monotonic()
+    git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir").strip())
+    _adopt_primary_data(root, git_dir / TESTS_LOCK_NAME)
+    changed = _changed_since_tested(root, root, "HEAD") or set()
+    results = check_tests(root, sorted(changed), dirty_files(root))
+    elapsed = time.monotonic() - start
+    if results:
+        _print_report("Branch check", results)
+    if any(result.blocking for result in results):
+        print(
+            f"\nBranch check failed ({elapsed:.1f}s). Fix the reported problems in the "
+            "worktree, commit, and merge again."
+        )
+        return 1
+    print(f"\nBranch check passed ({elapsed:.1f}s).")
+    return 0
+
+
+def main(root: Path = PROJECT_ROOT, argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check a commit, or a worktree branch.")
+    parser.add_argument(
+        "--branch",
+        action="store_true",
+        help="run the tests the worktree branch affects, as worktree.py merge does first",
+    )
+    arguments = parser.parse_args(argv or [])
     # Tool output may hold characters a legacy Windows code page cannot encode.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
+    if arguments.branch:
+        return check_branch(root)
     # A staged file deleted from the working tree has nothing left to check.
     staged = [path for path in staged_files(root) if (root / path).is_file()]
     changed = sorted({*staged, *staged_deletions(root)})
@@ -706,7 +758,11 @@ def main(root: Path = PROJECT_ROOT) -> int:
     dirty = dirty_files(root)
     start = time.monotonic()
     results = [*check_python(root, staged, dirty), *check_frontend(root, staged, dirty)]
-    if any(result.blocking for result in results):
+    if _primary_checkout(root) is not None:
+        if results:
+            notice = "NOT RUN in a worktree; `python scripts/worktree.py merge` runs them"
+            results.append(StepResult("tests", notice, False))
+    elif any(result.blocking for result in results):
         results.append(StepResult("tests", "NOT RUN until the problems above are fixed", False))
     else:
         results += [*check_tests(root, changed, dirty), *check_frontend_tests(root, changed)]
@@ -714,12 +770,7 @@ def main(root: Path = PROJECT_ROOT) -> int:
         return 0
 
     partial = [path for path in staged if path in dirty]
-    print("Commit check")
-    for result in results:
-        print(f"  {result.label:<12} {result.status}")
-    for result in results:
-        if result.details:
-            print(f"\n--- {result.label}: {result.status} ---\n{result.details}")
+    _print_report("Commit check", results)
     if partial:
         print(
             "\nnote: these staged files also have unstaged changes; they were checked as they "
@@ -738,4 +789,4 @@ def main(root: Path = PROJECT_ROOT) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(argv=sys.argv[1:]))

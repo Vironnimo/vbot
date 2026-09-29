@@ -39,7 +39,7 @@ git commit -m "<type>(<scope>): <what this phase accomplished>"
 
 ## Finalize
 
-Commit every change through the commit hook; it runs the tests each commit affects (`AGENTS.md` -> Testing). The merge commit passes the same check against the merged result, so a semantic conflict with newer `main` work blocks the merge instead of landing.
+Commit every change through the commit hook; in a worktree it runs the static checks. The merge runs the tests (`AGENTS.md` -> Testing): first the tests the branch's changes affect, in the worktree, then the commit check of the merge commit against the merged result, so a failing test or a semantic conflict with newer `main` work blocks the merge instead of landing.
 
 Write the Step 7 summary. Then merge yourself — no user confirmation is needed:
 
@@ -47,7 +47,7 @@ Write the Step 7 summary. Then merge yourself — no user confirmation is needed
 python scripts/worktree.py merge <task-name>
 ```
 
-Use a generous shell timeout: the command blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` (`--no-ff`), removes the worktree, its data dir, and the managed branch, and prints the merge commit.
+Use a generous shell timeout: the command runs the branch's tests, blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` (`--no-ff`), removes the worktree, its data dir, and the managed branch, and prints the merge commit.
 
 ## Conflicts: the protected repair window
 
@@ -78,5 +78,6 @@ If the task is cancelled or aborted, use the project-specific `delete` command (
 - **Untracked files in worktree** — plan files (`.vorch/plans/`) and other untracked files exist only in the worktree; they are not visible in the main repo directory.
 - **Commands are project-specific** — use the worktree command names and paths documented in `.vorch/PROJECT.md`; do not assume a fixed script path.
 - **Never hand-merge into `main`** while sessions are running — all merges go through the merge command so the lock serializes them; a hand merge can collide with an automated one.
+- **A failed branch check** stops before the merge; fix the reported problems in the worktree, commit, and retry the merge.
 - **A merge rejected by the commit check** leaves `main` unchanged; its report names the problems. Bring `main` into your branch (`git rebase main`), fix them, commit, and retry the merge.
 - **Cleanup failure after a landed merge** — if the merge succeeded but worktree cleanup failed, the output says so; finish with the project-specific `delete` command manually.
