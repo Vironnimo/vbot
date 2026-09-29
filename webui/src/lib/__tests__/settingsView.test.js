@@ -5,6 +5,8 @@ import { englishCatalog, t } from '../i18n.js';
 import {
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
   accountDisplayName,
+  accountSourceTooltip,
+  accountUnusableReason,
   applyChannelPanelList,
   buildAgentDefaultsPayload,
   buildChannelCreatePayload,
@@ -208,6 +210,32 @@ describe('providers and accounts', () => {
       t('settings.providers.accounts.source.oauth'),
     );
     expect(describeAccountSource({})).toBe('');
+    // The tooltip names the variable that holds an API key; OAuth has none.
+    expect(
+      accountSourceTooltip({
+        source: 'process_env',
+        credential_key: 'OPENAI_API_KEY__WORK',
+      }),
+    ).toEqual({
+      text: t('settings.providers.accounts.sourceHint.processEnv'),
+      rows: [
+        {
+          label: t('settings.providers.accounts.variable'),
+          value: 'OPENAI_API_KEY__WORK',
+          mono: true,
+        },
+      ],
+    });
+    expect(accountSourceTooltip({ source: 'oauth' })).toBe(
+      t('settings.providers.accounts.sourceHint.oauth'),
+    );
+    expect(accountSourceTooltip({ source: 'none' })).toBe('');
+    expect(accountUnusableReason({ source: 'oauth' })).toBe(
+      t('settings.providers.accounts.notUsableOAuth'),
+    );
+    expect(accountUnusableReason({ source: 'data_dir' })).toBe(
+      t('settings.providers.accounts.notUsableKey'),
+    );
 
     expect(connectionSupportsAddAccount({ type: 'api_key' })).toBe(true);
     expect(

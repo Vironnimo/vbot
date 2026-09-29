@@ -154,6 +154,10 @@ export default Object.freeze({
   'settings.defaults.thinkingEffort': 'Thinking effort',
   'settings.defaults.thinkingEffortDescription':
     'Used when an agent thinking effort is unset.',
+  'settings.defaults.thinkingEffortHelp':
+    'How much internal reasoning the Model may spend before answering. Every Agent and Project without its own Thinking effort uses this value. With either — option, vBot sends no effort and the Provider decides.',
+  'settings.defaults.temperatureHelp':
+    'Sampling randomness, typically 0–2. Every Agent and Project without its own temperature uses this value. When empty, a Model’s recommended temperature applies if its catalog entry has one, otherwise the Provider default.',
   'settings.defaults.noThinkingEffort': '— (no default)',
   'settings.defaults.saveSuccess': 'Agent defaults updated.',
   'settings.defaults.providerThinkingEffortDefault': '— (provider default)',
@@ -457,6 +461,13 @@ export default Object.freeze({
   'settings.providers.connected': 'Connected',
   'settings.providers.disabledChip': 'Disabled',
   'settings.providers.notReachableChip': 'Not reachable',
+  'settings.providers.connectedHint': 'Enabled and ready to send requests.',
+  'settings.providers.notReachableChipHint':
+    'vBot could not reach this Connection’s server at its last check.',
+  'settings.providers.notUsableChipHint':
+    'No account has a usable credential: a key is empty or a sign-in is no longer valid.',
+  'settings.providers.disabledChipHint':
+    'Turned off: vBot offers none of its Models and sends it no requests.',
   'settings.providers.enable': 'Enable',
   'settings.providers.enableAria': 'Enable connection {id}',
   'settings.providers.disable': 'Disable',
@@ -563,6 +574,17 @@ export default Object.freeze({
   'settings.providers.accounts.source.processEnv': 'Environment variable',
   'settings.providers.accounts.source.dataDir': 'Data directory .env',
   'settings.providers.accounts.source.oauth': 'OAuth sign-in',
+  'settings.providers.accounts.variable': 'Variable',
+  'settings.providers.accounts.sourceHint.processEnv':
+    'Read from the environment of the vBot server process. Change or remove it where the server is started.',
+  'settings.providers.accounts.sourceHint.dataDir':
+    'Stored in the .env file of vBot’s data directory on the server.',
+  'settings.providers.accounts.sourceHint.oauth':
+    'Signed in with the Provider; vBot stores and refreshes the token.',
+  'settings.providers.accounts.notUsableKey':
+    'Its credential variable is empty.',
+  'settings.providers.accounts.notUsableOAuth':
+    'Its saved sign-in is no longer valid.',
   'settings.providers.accounts.addButton': 'Add account…',
   'settings.providers.accounts.nameLabel': 'Account',
   'settings.providers.accounts.nameHint':
