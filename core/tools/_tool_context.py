@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import os
 import stat
+import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,20 +28,27 @@ def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
     return path
 
 
-def is_link_entry(path: Path) -> bool:
-    """Return whether the final path component is a symbolic link or Windows junction.
+def is_link_status(info: os.stat_result) -> bool:
+    """Return whether unfollowed metadata describes a symbolic link or Windows junction.
 
     Junctions are directory links that ``Path.is_symlink`` does not report; other
     reparse points (for example cloud-file placeholders) remain ordinary entries.
+    Reparse tags exist only on Windows.
     """
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    if sys.platform == "win32":
+        return info.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+    return False
+
+
+def is_link_entry(path: Path) -> bool:
+    """Return whether the final path component is a symbolic link or Windows junction."""
     try:
         info = os.lstat(path)
     except OSError:
         return False
-    return (
-        stat.S_ISLNK(info.st_mode)
-        or getattr(info, "st_reparse_tag", 0) == stat.IO_REPARSE_TAG_MOUNT_POINT
-    )
+    return is_link_status(info)
 
 
 ToolEmitHook = Callable[[str, JsonObject], None | Awaitable[None]]
