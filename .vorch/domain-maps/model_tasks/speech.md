@@ -218,7 +218,8 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
 - `speech.local_setup_status/install/restart` in `server/rpc/task_model_methods.py`
   accept an optional exact local `target`, never client commands, package names or paths. Restart requires verified
   setup and the server startup callback; its detached CLI lifecycle helper
-  targets the exact running bind/data directory. Coverage: task-model RPC and
+  targets the exact running bind/data directory; a scheduled restart logs one INFO
+  line. Coverage: task-model RPC and
   server-main tests.
 - `speech.local_memory_status` reports each engine's loaded/busy state.
   `speech.local_unload` requires one exact `local/...` target and returns whether

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -74,6 +75,8 @@ BOOTSTRAP_JOB_SHAPE = json_object(_JOB_FIELDS)
 BOOTSTRAP_JOBS_SHAPE = json_document({"jobs"}, {"jobs": json_list(BOOTSTRAP_JOB_SHAPE, key="id")})
 
 _LOGGER = get_logger("automation.bootstrap")
+# Who caused a mutation when the caller does not say (direct in-process callers).
+_DEFAULT_ACTOR = "internal"
 
 
 class BootstrapServiceError(VBotError):
@@ -280,6 +283,7 @@ class BootstrapService:
         name: str | None = None,
         session_id: str | None = None,
         project_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> BootstrapJob:
         self._ensure_loaded()
         if len(self._jobs) >= MAX_STORED_BOOTSTRAP_JOBS:
@@ -306,7 +310,13 @@ class BootstrapService:
         except Exception:
             self._jobs.pop(job.id, None)
             raise
-        _LOGGER.info("Bootstrap created (job=%s agent=%s mode=%s)", job.id, job.agent_id, job.mode)
+        _LOGGER.info(
+            "Bootstrap job created (job=%s agent=%s mode=%s actor=%s)",
+            job.id,
+            _agent_fields(job),
+            job.mode,
+            actor,
+        )
         return replace(job)
 
     def list_jobs(self) -> list[BootstrapJob]:
@@ -322,7 +332,9 @@ class BootstrapService:
             raise BootstrapJobNotFoundError(f"Bootstrap job not found: {job_id}")
         return replace(job)
 
-    def update_job(self, job_id: str, **fields: Any) -> BootstrapJob:
+    def update_job(
+        self, job_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
+    ) -> BootstrapJob:
         self._ensure_loaded()
         current = self._jobs.get(job_id)
         if current is None:
@@ -336,7 +348,10 @@ class BootstrapService:
         candidate = replace(current)
         for field, value in fields.items():
             setattr(candidate, field, value)
-        if not any(getattr(current, field) != getattr(candidate, field) for field in fields):
+        changed = sorted(
+            field for field in fields if getattr(current, field) != getattr(candidate, field)
+        )
+        if not changed:
             return replace(current)
         candidate.status = "active"
         candidate.armed_after_startup_id = self._startup_id
@@ -352,6 +367,14 @@ class BootstrapService:
         except Exception:
             self._jobs[job_id] = current
             raise
+        _LOGGER.info(
+            "Bootstrap job updated (job=%s agent=%s fields=%s status=%s actor=%s)",
+            job_id,
+            _agent_fields(candidate),
+            ",".join(changed),
+            candidate.status,
+            actor,
+        )
         return replace(candidate)
 
     def retarget_agent(self, job_id: str, agent_id: str) -> BootstrapJob:
@@ -374,9 +397,16 @@ class BootstrapService:
         candidate = replace(current, agent_id=agent_id)
         self._validate_job(candidate)
         self._replace_and_save(current, candidate)
+        # One step of an Agent rename, which logs its own summary line.
+        _LOGGER.debug(
+            "Bootstrap job retargeted (job=%s agent=%s new_agent=%s)",
+            job_id,
+            current.agent_id,
+            agent_id,
+        )
         return replace(candidate)
 
-    def delete_job(self, job_id: str) -> None:
+    def delete_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         self._ensure_loaded()
         self._require_not_running(job_id)
         removed = self._jobs.pop(job_id, None)
@@ -387,8 +417,14 @@ class BootstrapService:
         except Exception:
             self._jobs[job_id] = removed
             raise
+        _LOGGER.info(
+            "Bootstrap job deleted (job=%s agent=%s actor=%s)",
+            job_id,
+            _agent_fields(removed),
+            actor,
+        )
 
-    def enable_job(self, job_id: str) -> BootstrapJob:
+    def enable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> BootstrapJob:
         self._ensure_loaded()
         current = self._jobs.get(job_id)
         if current is None:
@@ -405,11 +441,19 @@ class BootstrapService:
             last_session_id=None,
             last_error=None,
         )
+        if candidate == current:
+            return replace(current)
         self._validate_capacity(candidate, replacing_id=job_id)
         self._replace_and_save(current, candidate)
+        _LOGGER.info(
+            "Bootstrap job enabled (job=%s agent=%s actor=%s)",
+            job_id,
+            _agent_fields(candidate),
+            actor,
+        )
         return replace(candidate)
 
-    def disable_job(self, job_id: str) -> BootstrapJob:
+    def disable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> BootstrapJob:
         self._ensure_loaded()
         current = self._jobs.get(job_id)
         if current is None:
@@ -417,8 +461,16 @@ class BootstrapService:
         if current.status == "completed":
             raise BootstrapJobValidationError("Completed Bootstrap jobs cannot be paused")
         self._require_not_running(job_id)
+        if current.status == "paused":
+            return replace(current)
         candidate = replace(current, status="paused")
         self._replace_and_save(current, candidate)
+        _LOGGER.info(
+            "Bootstrap job disabled (job=%s agent=%s actor=%s)",
+            job_id,
+            _agent_fields(candidate),
+            actor,
+        )
         return replace(candidate)
 
     def restore_job(self, job: BootstrapJob) -> None:
@@ -435,6 +487,8 @@ class BootstrapService:
             else:
                 self._jobs[job.id] = current
             raise
+        # A rollback step of an Agent rename, which logs its own outcome.
+        _LOGGER.debug("Bootstrap job restored (job=%s agent=%s)", job.id, _agent_fields(job))
 
     def activate(self) -> None:
         """Start eligible jobs in the background; idempotent per Runtime startup."""
@@ -580,8 +634,13 @@ class BootstrapService:
         if job.mode == "once":
             job.status = "completed" if outcome == "success" else "failed"
         self._save()
-        _LOGGER.info(
-            "Bootstrap finished (job=%s outcome=%s status=%s)", job.id, outcome, job.status
+        failed = outcome == "failed" or job.status == "failed"
+        _LOGGER.log(
+            logging.WARNING if failed else logging.INFO,
+            "Bootstrap finished (job=%s outcome=%s status=%s)",
+            job.id,
+            outcome,
+            job.status,
         )
 
     def _reconcile_once_jobs(self) -> None:
@@ -732,6 +791,11 @@ class BootstrapService:
             raise BootstrapJobValidationError(
                 f"Bootstrap supports at most {MAX_ACTIVE_BOOTSTRAP_JOBS} active jobs"
             )
+
+
+def _agent_fields(job: BootstrapJob) -> str:
+    """The job's Agent id for a log line, followed by its Project when it has one."""
+    return f"{job.agent_id} project={job.project_id}" if job.project_id else job.agent_id
 
 
 def _derive_name(prompt: str) -> str:

@@ -13,9 +13,12 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Protocol
 
 from core.utils.atomic import atomic_write_bytes
 from core.utils.errors import VBotError
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.prompts.blocks import BlockDefinition
+
+_LOGGER = get_logger("memory")
 
 MemoryScope = Literal["user", "agent"]
 MemoryPromptMode = Literal["off", "agent", "agent_user"]
@@ -58,6 +61,8 @@ _MAX_ENTRY_LENGTH = 2_000
 # Both exceed _MAX_ENTRY_LENGTH so a single normal add into an empty scope always
 # fits; agent notes accumulate more than the user profile, so its budget is larger.
 _MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000}
+# Who caused a mutation when the caller does not say (direct in-process callers).
+_DEFAULT_ACTOR = "internal"
 # Behavioral guidance rendered at the top of the pinned-memory block. It is the
 # editable default text of the ``memory:guidance`` block (D6): the memory domain
 # declares the block, so the guidance ships with its owner instead of as a
@@ -203,7 +208,15 @@ class FilePinnedMemoryBackend:
         entries = _read_entries(self._path(workspace, validated_scope))
         return _memory_entries(validated_scope, entries)
 
-    def add_entry(self, workspace: Path, scope: MemoryScope, content: str) -> MemoryEntry:
+    def add_entry(
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        content: str,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
+    ) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
@@ -213,10 +226,12 @@ class FilePinnedMemoryBackend:
                 existing_index = entries.index(normalized) + 1
                 return MemoryEntry(id=existing_index, scope=validated_scope, content=normalized)
 
+            before = list(entries)
             previous_total = sum(len(entry) for entry in entries)
             entries.append(normalized)
             _enforce_scope_budget(validated_scope, entries, previous_total)
             _write_entries(path, entries)
+            _log_mutation("added", validated_scope, before, entries, agent_id, actor)
             return MemoryEntry(id=len(entries), scope=validated_scope, content=normalized)
 
     def replace_entry(
@@ -225,6 +240,9 @@ class FilePinnedMemoryBackend:
         scope: MemoryScope,
         entry_id: int,
         content: str,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
@@ -232,20 +250,32 @@ class FilePinnedMemoryBackend:
             entries = _read_entries(path)
             index = _entry_index(entry_id, entries)
             normalized = _normalize_entry_content(content)
+            before = list(entries)
             previous_total = sum(len(entry) for entry in entries)
             entries[index] = normalized
             _enforce_scope_budget(validated_scope, entries, previous_total)
             _write_entries(path, entries)
+            _log_mutation("replaced", validated_scope, before, entries, agent_id, actor)
             return MemoryEntry(id=entry_id, scope=validated_scope, content=normalized)
 
-    def remove_entry(self, workspace: Path, scope: MemoryScope, entry_id: int) -> MemoryEntry:
+    def remove_entry(
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        entry_id: int,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
+    ) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
             entries = _read_entries(path)
+            before = list(entries)
             index = _entry_index(entry_id, entries)
             removed = entries.pop(index)
             _write_entries(path, entries)
+            _log_mutation("removed", validated_scope, before, entries, agent_id, actor)
             return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
 
     def find_matches(self, workspace: Path, scope: MemoryScope, old_text: str) -> list[str]:
@@ -255,7 +285,14 @@ class FilePinnedMemoryBackend:
         return [entries[index] for index in match_memory_entries(entries, old_text)]
 
     def replace_matching(
-        self, workspace: Path, scope: MemoryScope, old_text: str, content: str
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        old_text: str,
+        content: str,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> MemoryTextChange:
         """Replace the single entry ``old_text`` identifies (see :func:`match_memory_entries`).
 
@@ -271,6 +308,7 @@ class FilePinnedMemoryBackend:
             index = _single_match(validated_scope, entries, old_text)
             previous = entries[index]
             if normalized != previous:
+                before = list(entries)
                 previous_total = sum(len(entry) for entry in entries)
                 if normalized in entries:
                     entries.pop(index)
@@ -278,18 +316,27 @@ class FilePinnedMemoryBackend:
                     entries[index] = normalized
                 _enforce_scope_budget(validated_scope, entries, previous_total)
                 _write_entries(path, entries)
+                _log_mutation("replaced", validated_scope, before, entries, agent_id, actor)
             return MemoryTextChange(validated_scope, previous, normalized)
 
     def remove_matching(
-        self, workspace: Path, scope: MemoryScope, old_text: str
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        old_text: str,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> MemoryTextChange:
         """Remove the single entry ``old_text`` identifies."""
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
             entries = _read_entries(path)
+            before = list(entries)
             removed = entries.pop(_single_match(validated_scope, entries, old_text))
             _write_entries(path, entries)
+            _log_mutation("removed", validated_scope, before, entries, agent_id, actor)
             return MemoryTextChange(validated_scope, removed, None)
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
@@ -341,7 +388,12 @@ class FilePinnedMemoryBackend:
 
 
 class MemoryService:
-    """Small facade for pinned memory operations."""
+    """Small facade for pinned memory operations.
+
+    Every mutation that changes a file logs one INFO line naming the Agent, the
+    scope, who caused it (``actor``: ``rpc`` or ``tool``) and the resulting entry
+    count and character change - never entry text.
+    """
 
     def __init__(self, backend: FilePinnedMemoryBackend | None = None) -> None:
         self._backend = backend or FilePinnedMemoryBackend()
@@ -349,8 +401,16 @@ class MemoryService:
     def list_entries(self, workspace: Path, scope: MemoryScope) -> list[MemoryEntry]:
         return self._backend.list_entries(workspace, scope)
 
-    def add_entry(self, workspace: Path, scope: MemoryScope, content: str) -> MemoryEntry:
-        return self._backend.add_entry(workspace, scope, content)
+    def add_entry(
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        content: str,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
+    ) -> MemoryEntry:
+        return self._backend.add_entry(workspace, scope, content, agent_id=agent_id, actor=actor)
 
     def replace_entry(
         self,
@@ -358,24 +418,56 @@ class MemoryService:
         scope: MemoryScope,
         entry_id: int,
         content: str,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> MemoryEntry:
-        return self._backend.replace_entry(workspace, scope, entry_id, content)
+        return self._backend.replace_entry(
+            workspace, scope, entry_id, content, agent_id=agent_id, actor=actor
+        )
 
-    def remove_entry(self, workspace: Path, scope: MemoryScope, entry_id: int) -> MemoryEntry:
-        return self._backend.remove_entry(workspace, scope, entry_id)
+    def remove_entry(
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        entry_id: int,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
+    ) -> MemoryEntry:
+        return self._backend.remove_entry(
+            workspace, scope, entry_id, agent_id=agent_id, actor=actor
+        )
 
     def find_matches(self, workspace: Path, scope: MemoryScope, old_text: str) -> list[str]:
         return self._backend.find_matches(workspace, scope, old_text)
 
     def replace_matching(
-        self, workspace: Path, scope: MemoryScope, old_text: str, content: str
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        old_text: str,
+        content: str,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> MemoryTextChange:
-        return self._backend.replace_matching(workspace, scope, old_text, content)
+        return self._backend.replace_matching(
+            workspace, scope, old_text, content, agent_id=agent_id, actor=actor
+        )
 
     def remove_matching(
-        self, workspace: Path, scope: MemoryScope, old_text: str
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        old_text: str,
+        *,
+        agent_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> MemoryTextChange:
-        return self._backend.remove_matching(workspace, scope, old_text)
+        return self._backend.remove_matching(
+            workspace, scope, old_text, agent_id=agent_id, actor=actor
+        )
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
         return self._backend.scope_usage(workspace, scope)
@@ -550,6 +642,28 @@ def _normalize_entry_content(content: object) -> str:
     if len(normalized) > _MAX_ENTRY_LENGTH:
         raise MemoryError(f"content must be at most {_MAX_ENTRY_LENGTH} characters")
     return normalized
+
+
+def _log_mutation(
+    event: str,
+    scope: MemoryScope,
+    before: list[str],
+    after: list[str],
+    agent_id: str | None,
+    actor: str,
+) -> None:
+    """Log one changed Memory file: counts and sizes only, never entry text."""
+    if before == after:
+        return
+    _LOGGER.info(
+        "Memory entry %s (agent=%s scope=%s actor=%s entries=%d chars_delta=%+d)",
+        event,
+        agent_id or "unknown",
+        scope,
+        actor,
+        len(after),
+        sum(len(entry) for entry in after) - sum(len(entry) for entry in before),
+    )
 
 
 def _enforce_scope_budget(scope: MemoryScope, entries: list[str], previous_total: int) -> None:

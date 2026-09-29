@@ -38,6 +38,7 @@ _CREATE_DEFAULTS: JsonObject = {
     "remaining_runs": None,
     "session_id": None,
     "project_id": None,
+    "actor": "rpc",
 }
 
 
@@ -140,9 +141,10 @@ async def test_bootstrap_create_and_update_pass_the_parsed_target_and_session() 
         prompt="Check status and logs",
         mode="once",
         session_id="session-one",
+        actor="rpc",
     )
     assert updated["session_id"] is None
-    service.update_job.assert_called_once_with("bootstrap-123", session_id=None)
+    service.update_job.assert_called_once_with("bootstrap-123", actor="rpc", session_id=None)
 
 
 @pytest.mark.asyncio
@@ -342,7 +344,7 @@ async def test_cron_update_passes_only_the_given_fields(
 
     assert (result["id"], result["target"]) == ("job-123", "main")
     assert result["status"] == updates.get("status", "active")
-    cron_service.update_job.assert_called_once_with("job-1", **updates)
+    cron_service.update_job.assert_called_once_with("job-1", actor="rpc", **updates)
 
 
 @pytest.mark.asyncio
@@ -363,7 +365,9 @@ async def test_cron_job_actions_address_one_job(
     response = await rpc_result(state, method, id="job-1")
 
     assert response.items() >= result.items()
-    getattr(state.runtime.cron_service, service_method).assert_called_once_with("job-1")
+    getattr(state.runtime.cron_service, service_method).assert_called_once_with(
+        "job-1", actor="rpc"
+    )
 
 
 @pytest.mark.asyncio

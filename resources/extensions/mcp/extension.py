@@ -1008,6 +1008,13 @@ class MCPService:
                 if arguments["key"] not in sources:
                     raise ValueError("Credential must be referenced by this MCP connection")
                 self._host().set_credential(arguments["key"], arguments["value"])
+                # The variable name only: never its value.
+                self.api.logger.info(
+                    "MCP connection credential %s (connection=%s variable=%s)",
+                    "set" if arguments["value"] else "cleared",
+                    identifier,
+                    arguments["key"],
+                )
                 await self._stop(identifier)
                 self._runner(config)
                 return {
@@ -1016,13 +1023,19 @@ class MCPService:
                     "set": bool(arguments["value"]),
                 }
             if operation == "disconnect":
+                previous = self.runners.get(identifier)
                 await self._stop(identifier)
                 self._runner(config)
+                if previous is not None and previous.state != "disconnected":
+                    self.api.logger.info("MCP connection disconnected (connection=%s)", identifier)
                 return self._status(identifier)
             if not config["enabled"]:
                 raise ValueError("MCP connection is disabled")
             runner = self._runner(config)
             if operation == "connect":
+                if runner.state not in {"connecting", "connected"}:
+                    # A connection that then fails logs its own WARNING.
+                    self.api.logger.info("MCP connection started (connection=%s)", identifier)
                 runner.start()
                 return self._status(identifier)
             if operation == "events":

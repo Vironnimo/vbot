@@ -88,6 +88,7 @@ def _calendar_create(state: Any, params: JsonObject) -> JsonObject:
             rrule=rrule,
             exdates=exdates,
             notes=notes,
+            actor="rpc",
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -118,7 +119,7 @@ def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
     if "notes" in params:
         updates["notes"] = _optional_string(params, "notes")
     try:
-        event = service.update_event(event_id, **updates)
+        event = service.update_event(event_id, actor="rpc", **updates)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
@@ -130,7 +131,7 @@ def _calendar_delete(state: Any, params: JsonObject) -> JsonObject:
     service = _calendar_service(state)
     event_id = _required_string(params, "id")
     try:
-        service.delete_event(event_id)
+        service.delete_event(event_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
@@ -143,7 +144,7 @@ def _calendar_add_exdate(state: Any, params: JsonObject) -> JsonObject:
     event_id = _required_string(params, "id")
     occurrence_start = _required_string(params, "occurrence_start")
     try:
-        event = service.add_exdate(event_id, occurrence_start)
+        event = service.add_exdate(event_id, occurrence_start, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
@@ -216,6 +217,7 @@ async def _calendar_add_action(state: Any, params: JsonObject) -> JsonObject:
                 prompt=_required_string(params, "prompt"),
                 target=_required_string(params, "target"),
                 session=_optional_string(params, "session"),
+                actor="rpc",
             )
         except Exception as exc:
             raise _map_expected_error(exc) from exc
@@ -230,6 +232,7 @@ async def _calendar_update_action(state: Any, params: JsonObject) -> JsonObject:
         try:
             result = _calendar_service(state).actions.update(
                 _required_string(params, "id"),
+                actor="rpc",
                 **{key: value for key, value in params.items() if key != "id"},
             )
         except Exception as exc:
@@ -241,7 +244,7 @@ def _calendar_delete_action(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, _DELETE_FIELDS, "calendar.delete_action")
     action_id = _required_string(params, "id")
     try:
-        _calendar_service(state).actions.delete(action_id)
+        _calendar_service(state).actions.delete(action_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"id": action_id, "deleted": True}

@@ -184,6 +184,7 @@ async def _execute_handoff(
         "create",
         target_agent_id,
         project_id=target_project_id,
+        actor="command",
     )
     if target_project_id is None:
         agents = _require_dependency(agents, "AgentStore")
@@ -556,6 +557,7 @@ async def _execute_new(
         context.agent_id,
         session_id=context.preferred_new_session_id,
         project_id=context.project_id,
+        actor="command",
     )
     if context.project_id is None:
         agents = _require_dependency(agents, "AgentStore")

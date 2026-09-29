@@ -79,7 +79,9 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     chat_sessions = state.runtime.chat_sessions
 
     def create_session() -> Any:
-        created = chat_sessions.create(agent_id, session_id=session_id, project_id=project_id)
+        created = chat_sessions.create(
+            agent_id, session_id=session_id, project_id=project_id, actor="rpc"
+        )
         if make_current and project_id is None:
             state.runtime.agents.update(agent_id, current_session_id=created.id)
         return created

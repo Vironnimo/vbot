@@ -839,7 +839,7 @@ async def test_skill_settings_refresh_is_async_serialized_and_survives_cancellat
         pytest.param(
             "settings.update",
             {"session_titles": {"enabled": True, "model": "openai/gpt-4.1-mini::api-key"}},
-            ["sections=session_titles"],
+            ["session_titles.model"],
             id="changed-section",
         ),
         # Appearance is a per-browser preference, not an operational change.
@@ -858,7 +858,7 @@ async def test_skill_settings_refresh_is_async_serialized_and_survives_cancellat
         pytest.param(
             "settings.update",
             _extensions(["two"]),
-            ["sections=extensions extensions_enabled=one extensions_disabled=two"],
+            ["extensions.disabled extensions_enabled=one extensions_disabled=two"],
             id="extension-enablement",
         ),
         pytest.param(
@@ -886,6 +886,8 @@ async def test_settings_changes_log_only_operational_changes(
     assert len(messages) == len(logged)
     for message, fragment in zip(messages, logged, strict=True):
         assert fragment in message
+    # Changed setting paths are named, their values never.
+    assert "gpt-4.1-mini" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

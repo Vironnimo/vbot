@@ -230,25 +230,42 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    changed_sections = sorted(
-        section
-        for section in settings_update
-        if previous_settings.get(section, _MISSING) != saved_settings.get(section, _MISSING)
-    )
-    logged_sections = [section for section in changed_sections if section != "appearance"]
-    if logged_sections:
+    changed_paths = [
+        path
+        for section in sorted(settings_update)
+        if section != "appearance"
+        for path in _changed_setting_paths(
+            section,
+            previous_settings.get(section, _MISSING),
+            saved_settings.get(section, _MISSING),
+        )
+    ]
+    if changed_paths:
         details = ""
         if newly_enabled:
             details += f" extensions_enabled={','.join(sorted(newly_enabled))}"
         if newly_disabled:
             details += f" extensions_disabled={','.join(sorted(newly_disabled))}"
-        _LOGGER.info(
-            "Settings updated (sections=%s%s)",
-            ",".join(logged_sections),
-            details,
-        )
+        _LOGGER.info("Settings updated (paths=%s%s)", ",".join(changed_paths), details)
     _publish_settings_effects(state, effects)
     return response
+
+
+def _changed_setting_paths(path: str, previous: Any, current: Any) -> list[str]:
+    """Dotted paths of the leaves that differ, for a log line: names, never values."""
+    if previous == current:
+        return []
+    if isinstance(previous, Mapping) or isinstance(current, Mapping):
+        before = previous if isinstance(previous, Mapping) else {}
+        after = current if isinstance(current, Mapping) else {}
+        return [
+            changed
+            for key in sorted(set(before) | set(after), key=str)
+            for changed in _changed_setting_paths(
+                f"{path}.{key}", before.get(key, _MISSING), after.get(key, _MISSING)
+            )
+        ] or [path]
+    return [path]
 
 
 def _publish_settings_effects(state: Any, effects: SettingsChangeEffects) -> None:

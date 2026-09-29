@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from functools import partial
@@ -109,6 +110,8 @@ _ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
 
 
 _LOGGER = get_logger("automation.cron")
+# Who caused a mutation when the caller does not say (direct in-process callers).
+_DEFAULT_ACTOR = "internal"
 
 # Every jobs.json and fire-claim write runs here in submission order: job fires
 # await their writes off the Event Loop, and a job edit's blocking save still
@@ -176,6 +179,7 @@ class CronService:
         session_id: str | None = None,
         status: CronJobStatus = "active",
         project_id: str | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> CronJob:
         """Create and persist a new cron job.
 
@@ -221,12 +225,13 @@ class CronService:
             self._start_job_task(job)
 
         _LOGGER.info(
-            "Cron job created (job=%s agent=%s%s schedule_type=%s status=%s)",
+            "Cron job created (job=%s agent=%s%s schedule_type=%s status=%s actor=%s)",
             job.id,
             job.agent_id,
             f" project={job.project_id}" if job.project_id else "",
             job.schedule_type,
             job.status,
+            actor,
         )
         return self._clone_job(job)
 
@@ -307,8 +312,41 @@ class CronService:
         occurrences.sort(key=lambda item: (item.fire_at_utc, item.job_id))
         return occurrences
 
-    def update_job(self, job_id: str, **fields: Any) -> CronJob:
+    def update_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any) -> CronJob:
         """Update mutable cron job fields and persist changes."""
+        updated, changed_fields = self._update_job(job_id, fields)
+        if changed_fields == ["status"] and updated.status in {"active", "paused"}:
+            _LOGGER.info(
+                "Cron job %s (job=%s actor=%s)",
+                "enabled" if updated.status == "active" else "disabled",
+                job_id,
+                actor,
+            )
+        elif changed_fields:
+            _LOGGER.info(
+                "Cron job updated (job=%s fields=%s actor=%s)",
+                job_id,
+                ",".join(changed_fields),
+                actor,
+            )
+        return updated
+
+    def retarget_agent(self, job_id: str, agent_id: str) -> CronJob:
+        """Point a job at another Agent id as one step of a coordinated Agent rename.
+
+        The same change as ``update_job(job_id, agent_id=...)``; the rename logs one
+        summary line, so this step logs at DEBUG only.
+        """
+        previous = self.get_job(job_id).agent_id
+        updated, changed_fields = self._update_job(job_id, {"agent_id": agent_id})
+        if changed_fields:
+            _LOGGER.debug(
+                "Cron job retargeted (job=%s agent=%s new_agent=%s)", job_id, previous, agent_id
+            )
+        return updated
+
+    def _update_job(self, job_id: str, fields: dict[str, Any]) -> tuple[CronJob, list[str]]:
+        """Apply and persist ``fields``; return the job and the names that changed."""
         self._ensure_jobs_loaded()
         job = self._jobs.get(job_id)
         if job is None:
@@ -320,7 +358,7 @@ class CronService:
             raise CronJobValidationError(f"Unsupported cron job fields: {joined}")
 
         if not fields:
-            return self._clone_job(job)
+            return self._clone_job(job), []
 
         candidate = self._clone_job(job)
         restart_task = any(field in _RESTART_FIELDS for field in fields)
@@ -359,7 +397,7 @@ class CronService:
             if getattr(job, field_name) != getattr(candidate, field_name)
         )
         if not changed_fields:
-            return self._clone_job(job)
+            return self._clone_job(job), []
 
         self._validate_job(candidate)
         if {"run_at", "schedule_type"} & set(changed_fields) or (
@@ -378,22 +416,9 @@ class CronService:
 
         if self._started and restart_task:
             self._restart_job_task(candidate)
+        return self._clone_job(candidate), changed_fields
 
-        if changed_fields == ["status"] and candidate.status in {"active", "paused"}:
-            _LOGGER.info(
-                "Cron job %s (job=%s)",
-                "enabled" if candidate.status == "active" else "disabled",
-                job_id,
-            )
-        else:
-            _LOGGER.info(
-                "Cron job updated (job=%s fields=%s)",
-                job_id,
-                ",".join(changed_fields),
-            )
-        return self._clone_job(candidate)
-
-    def delete_job(self, job_id: str) -> None:
+    def delete_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         """Delete one cron job and cancel any active task."""
         self._ensure_jobs_loaded()
         if job_id not in self._jobs:
@@ -408,9 +433,9 @@ class CronService:
         self._notify_changed()
         _CRON_WRITER.call(partial(_claims.remove, self._once_fire_claims_dir, job_id))
         self._cancel_job_task(job_id)
-        _LOGGER.info("Cron job deleted (job=%s)", job_id)
+        _LOGGER.info("Cron job deleted (job=%s actor=%s)", job_id, actor)
 
-    def enable_job(self, job_id: str) -> CronJob:
+    def enable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
         """Set a cron job status to active."""
         self._ensure_jobs_loaded()
         existing = self._jobs.get(job_id)
@@ -418,9 +443,9 @@ class CronService:
             raise CronJobNotFoundError(f"Cron job not found: {job_id}")
         if existing.status in {"completed", "missed"}:
             raise CronJobValidationError("Completed or missed jobs cannot be re-enabled")
-        return self.update_job(job_id, status="active")
+        return self.update_job(job_id, status="active", actor=actor)
 
-    def disable_job(self, job_id: str) -> CronJob:
+    def disable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
         """Set a cron job status to paused."""
         self._ensure_jobs_loaded()
         existing = self._jobs.get(job_id)
@@ -428,7 +453,7 @@ class CronService:
             raise CronJobNotFoundError(f"Cron job not found: {job_id}")
         if existing.status in {"completed", "missed"}:
             raise CronJobValidationError("Completed or missed jobs cannot be paused")
-        return self.update_job(job_id, status="paused")
+        return self.update_job(job_id, status="paused", actor=actor)
 
     def start(self) -> None:
         """Load jobs and start per-job scheduling tasks. Idempotent."""
@@ -874,6 +899,14 @@ class CronService:
                         if latest is not None and latest.schedule_type == "once":
                             latest.status = "failed"
                             await self._save_jobs_after_fire(latest.id)
+                        if latest is not None:
+                            # No Run started, so no Run line reports this firing.
+                            _LOGGER.log(
+                                logging.WARNING if latest.status == "failed" else logging.INFO,
+                                "Cron job Run cancelled before admission (job=%s status=%s)",
+                                job.id,
+                                latest.status,
+                            )
                     return False
                 except Exception as error:
                     if run is None:
@@ -926,10 +959,18 @@ class CronService:
         job.last_outcome = "cancelled" if type(error).__name__ == "RunCancelledError" else "failed"
         job.last_error = _truncate_error(str(error) or type(error).__name__)
         job.consecutive_failures += 1
-        if job.schedule_type != "once" and (
-            job.consecutive_failures >= MAX_CONSECUTIVE_CRON_FAILURES
+        if (
+            job.schedule_type != "once"
+            and job.status != "failed"
+            and job.consecutive_failures >= MAX_CONSECUTIVE_CRON_FAILURES
         ):
             job.status = "failed"
+            _LOGGER.warning(
+                "Cron job stopped after consecutive failures (job=%s failures=%d status=%s)",
+                job_id,
+                job.consecutive_failures,
+                job.status,
+            )
         self._jobs[job_id] = job
         return True
 
@@ -955,6 +996,13 @@ class CronService:
         job.status = "completed" if job.last_outcome == "success" else "failed"
         self._jobs[job_id] = job
         await self._save_jobs_after_fire(job_id)
+        _LOGGER.log(
+            logging.INFO if job.status == "completed" else logging.WARNING,
+            "Cron job finished its last run (job=%s outcome=%s status=%s)",
+            job_id,
+            job.last_outcome,
+            job.status,
+        )
 
     async def _persist_after_fire(self, job_id: str) -> None:
         """Persist job state after a fire, giving up after bounded retries.

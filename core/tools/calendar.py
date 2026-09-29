@@ -541,6 +541,7 @@ def _handle_create(calendar_service: CalendarService, arguments: JsonObject) -> 
         duration_days=duration if all_day else None,
         rrule=arguments.get("rrule"),
         notes=arguments.get("notes"),
+        actor="tool",
     )
     return _event_success(calendar_service, event, note)
 
@@ -569,7 +570,7 @@ def _handle_update(calendar_service: CalendarService, arguments: JsonObject) -> 
                 start=STAND_INS["start"],
             )
         )
-    updated = calendar_service.update_event(event.id, **updates)
+    updated = calendar_service.update_event(event.id, actor="tool", **updates)
     return _event_success(calendar_service, updated, note)
 
 
@@ -578,15 +579,15 @@ def _handle_delete(calendar_service: CalendarService, arguments: JsonObject) -> 
     start = arguments.get("start")
     removed_actions = len(calendar_service.actions.list_actions(event.id))
     if not isinstance(start, str):
-        calendar_service.delete_event(event.id)
+        calendar_service.delete_event(event.id, actor="tool")
         return _deleted(event, removed_actions, None)
     occurrence = _occurrence_start(calendar_service, event, start, arguments)
     if event.rrule is None:
-        calendar_service.delete_event(event.id)
+        calendar_service.delete_event(event.id, actor="tool")
         return _deleted(
             event, removed_actions, "The event does not repeat, so the whole event was deleted."
         )
-    calendar_service.add_exdate(event.id, occurrence)
+    calendar_service.add_exdate(event.id, occurrence, actor="tool")
     return tool_success(
         {
             "id": event.id,

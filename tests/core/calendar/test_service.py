@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -142,17 +143,24 @@ class TestCreateEvent:
 
 
 class TestUpdateEvent:
-    def test_update_changes_only_provided_fields(self, service: CalendarService) -> None:
+    def test_update_changes_only_provided_fields(
+        self, service: CalendarService, caplog: pytest.LogCaptureFixture
+    ) -> None:
         event = service.create_event(
             title="Standup",
             start="2026-08-31T09:00:00",
             rrule={"freq": "weekly", "by_weekday": ["mo"]},
         )
-        updated = service.update_event(event.id, title="Daily", duration_minutes=15)
+        with caplog.at_level(logging.INFO, logger="vbot.calendar.service"):
+            updated = service.update_event(event.id, title="Daily", duration_minutes=15)
         assert updated.title == "Daily"
         assert updated.duration_minutes == 15
         assert updated.start_local == "2026-08-31T09:00:00"
         assert updated.rrule == event.rrule
+        # The log names the changed fields, never the title itself.
+        [message] = [r.getMessage() for r in caplog.records if r.name == "vbot.calendar.service"]
+        assert "title" in message
+        assert "Daily" not in message
 
     def test_update_can_clear_recurrence_dropping_exdates(self, service: CalendarService) -> None:
         event = service.create_event(

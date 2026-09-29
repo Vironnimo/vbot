@@ -91,6 +91,7 @@ def test_cron_service_crud_operations(tmp_path: Path, caplog: pytest.LogCaptureF
             prompt="private cron prompt",
             schedule_type="once",
             run_at=run_at,
+            actor="rpc",
         )
         listed = service.list_jobs()
         loaded = service.get_job(created.id)
@@ -98,10 +99,11 @@ def test_cron_service_crud_operations(tmp_path: Path, caplog: pytest.LogCaptureF
             created.id,
             name="Updated status check",
             prompt="private updated prompt",
+            actor="tool",
         )
-        paused = service.disable_job(created.id)
-        enabled = service.enable_job(created.id)
-        service.delete_job(created.id)
+        paused = service.disable_job(created.id, actor="rpc")
+        enabled = service.enable_job(created.id, actor="rpc")
+        service.delete_job(created.id, actor="rpc")
 
     # Assert
     assert [job.id for job in listed] == [created.id]
@@ -119,6 +121,9 @@ def test_cron_service_crud_operations(tmp_path: Path, caplog: pytest.LogCaptureF
     ]
     assert any(message.startswith("Cron job created") for message in messages)
     assert any("fields=name,prompt" in message for message in messages)
+    # Each mutation says who caused it.
+    assert all("actor=" in message for message in messages)
+    assert any("actor=tool" in message for message in messages)
     assert any(message.startswith("Cron job disabled") for message in messages)
     assert any(message.startswith("Cron job enabled") for message in messages)
     assert any(message.startswith("Cron job deleted") for message in messages)

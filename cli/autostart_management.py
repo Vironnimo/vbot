@@ -32,9 +32,11 @@ from cli.server_management import (
 )
 from core.utils.atomic import atomic_write_text
 from core.utils.config import VBOT_ROOT
+from core.utils.logging import get_logger
 from core.utils.processes import subprocess_creation_flags
 
 DEFAULT_TASK_NAME = "vBot"
+_LOGGER = get_logger("cli.autostart")
 
 _WINDOWS_POWERSHELL = "powershell.exe"
 _WINDOWS_TASK_NOT_FOUND_EXIT_CODE = 3
@@ -247,6 +249,9 @@ def enable_autostart(
             process_id=start_result.process_id,
         )
 
+    _LOGGER.info(
+        "Autostart enabled (mode=%s)", "systemd" if started_by_service else "task_scheduler"
+    )
     if started_by_service:
         return CommandResult(
             ok=True,
@@ -446,6 +451,7 @@ def _windows_disable(instance: ServerInstance, run: Runner, *, task_name: str) -
         return _fail(
             instance, f"autostart: removing the per-user Task Scheduler task failed: {detail}"
         )
+    _LOGGER.info("Autostart disabled (mode=task_scheduler)")
     return CommandResult(
         ok=True,
         message=f"autostart disabled (per-user Task Scheduler task '{task_name}' removed)",
@@ -532,6 +538,7 @@ def _linux_disable(
             "autostart unit was removed, but systemctl daemon-reload failed: "
             f"{reloaded.stderr or reloaded.stdout}",
         )
+    _LOGGER.info("Autostart disabled (mode=systemd)")
     return CommandResult(
         ok=True,
         message=f"autostart disabled (systemd user unit '{service_name}' removed)",

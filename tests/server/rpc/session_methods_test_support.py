@@ -79,7 +79,14 @@ class FakeSessions:
         # Stands in for the Session database's worker pool.
         return function(*args, **kwargs)
 
-    def create(self, agent_id: str, *, session_id: Any = None, project_id: Any = None) -> Any:
+    def create(
+        self,
+        agent_id: str,
+        *,
+        session_id: Any = None,
+        project_id: Any = None,
+        actor: str | None = None,
+    ) -> Any:
         self.created.append(
             {"agent_id": agent_id, "session_id": session_id, "project_id": project_id}
         )

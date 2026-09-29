@@ -209,6 +209,10 @@ def _local_speech_setup_restart(state: Any, params: JsonObject) -> JsonObject:
     except Exception:
         _LOGGER.warning("Local speech setup could not schedule server restart")
         return {"state": "failed", "error": "restart_unavailable"}
+    _LOGGER.info(
+        "Server restart requested (reason=local_speech_setup target=%s actor=rpc)",
+        params.get("target") or "default",
+    )
     return {"state": "restarting"}
 
 

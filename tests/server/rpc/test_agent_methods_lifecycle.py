@@ -102,9 +102,9 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
         channel = next(item for item in channels if item.id == channel_id)
         channel.agent_id = fields["agent_id"]
 
-    def update_job(job_id: str, **fields: Any) -> Any:
+    def retarget_agent(job_id: str, agent_id: str) -> Any:
         job = next(item for item in jobs if item.id == job_id)
-        job.agent_id = fields["agent_id"]
+        job.agent_id = agent_id
         return job
 
     state.runtime.channel_service = SimpleNamespace(
@@ -113,7 +113,7 @@ async def test_agent_rename_retargets_live_references_and_publishes_mapping(
     )
     state.runtime.cron_service = SimpleNamespace(
         list_jobs=lambda: jobs,
-        update_job=update_job,
+        retarget_agent=retarget_agent,
     )
     bootstrap_service = BootstrapService(
         state.runtime.trigger_service, tmp_path, startup_id="rename-startup"

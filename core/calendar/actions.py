@@ -55,6 +55,8 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("calendar.actions")
+# Who caused a mutation when the caller does not say (direct in-process callers).
+_DEFAULT_ACTOR = "internal"
 _WHEN = re.compile(r"^(start|end)(?:\s*([+-])\s*([1-9][0-9]*)\s*([mhd]))?$")
 _TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted", "missed"})
 _MAX_OFFSET = 31 * 24 * 60
@@ -421,6 +423,7 @@ class CalendarActions:
         target: str,
         session: str | None = None,
         now: datetime | None = None,
+        actor: str = _DEFAULT_ACTOR,
     ) -> dict[str, Any]:
         self._load()
         self._calendar.get_event(event_id)
@@ -449,16 +452,21 @@ class CalendarActions:
             self._actions.pop(action["id"])
             raise
         self._calendar._notify_changed()
-        _LOGGER.info("Calendar action added (event=%s action=%s)", event_id, action["id"])
+        _LOGGER.info(
+            "Calendar action added (event=%s action=%s actor=%s)", event_id, action["id"], actor
+        )
         return self._payload(action)
 
-    def update(self, action_id: str, **fields: Any) -> dict[str, Any]:
+    def update(
+        self, action_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
+    ) -> dict[str, Any]:
         self._load()
         previous = self._get(action_id)
         if not fields or set(fields) - {"when", "prompt", "target", "session"}:
             raise CalendarValidationError("update_action requires when, prompt, target, or session")
         action = {**previous, **fields}
         action["when"] = parse_action_when(action["when"])[2]
+        changed = sorted(name for name in fields if action[name] != previous.get(name))
         self._validate(action)
         self._actions[action_id] = action
         try:
@@ -467,10 +475,16 @@ class CalendarActions:
             self._actions[action_id] = previous
             raise
         self._calendar._notify_changed()
-        _LOGGER.info("Calendar action updated (action=%s)", action_id)
+        if changed:
+            _LOGGER.info(
+                "Calendar action updated (action=%s fields=%s actor=%s)",
+                action_id,
+                ",".join(changed),
+                actor,
+            )
         return self._payload(action)
 
-    def delete(self, action_id: str) -> None:
+    def delete(self, action_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         self._load()
         previous = self._get(action_id)
         del self._actions[action_id]
@@ -480,7 +494,7 @@ class CalendarActions:
             self._actions[action_id] = previous
             raise
         self._calendar._notify_changed()
-        _LOGGER.info("Calendar action deleted (action=%s)", action_id)
+        _LOGGER.info("Calendar action deleted (action=%s actor=%s)", action_id, actor)
 
     def _action_id_available(self, candidate: str) -> bool:
         return candidate not in self._actions and not any(
@@ -500,13 +514,18 @@ class CalendarActions:
             if key not in {"created_at", "scanned_until"}
         }
 
-    def retarget_identity(self, source: str, destination: str) -> None:
-        """Retarget under the caller's Agent rename transaction; support compensation."""
+    def retarget_identity(self, source: str, destination: str) -> int:
+        """Retarget under the caller's Agent rename transaction; support compensation.
+
+        Returns the number of retargeted actions for the rename's summary line.
+        """
         self._load()
         previous = copy.deepcopy((self._actions, self._executions))
+        retargeted = 0
         for action in self._actions.values():
             if action["target"] == source:
                 action["target"] = destination
+                retargeted += 1
         for row in self._executions.values():
             if row["target"] == source:
                 row["target"] = destination
@@ -516,6 +535,7 @@ class CalendarActions:
             self._actions, self._executions = previous
             raise
         self._calendar._notify_changed()
+        return retargeted
 
     def list_actions(self, event_id: str | None = None) -> list[dict[str, Any]]:
         try:
@@ -682,6 +702,8 @@ class CalendarActions:
                         continue
                     if expires <= now:
                         row["status"] = "missed"
+                        if previous is None or previous["status"] != "missed":
+                            _log_missed(row, "expired before it was due")
                     if previous != row:
                         self._executions[key] = row
                         changed = True
@@ -787,6 +809,7 @@ class CalendarActions:
             remaining = (_instant(row["expires_at"]) - datetime.now(UTC)).total_seconds()
             if remaining <= 0:
                 mark(status="missed")
+                _log_missed(row, "expired before it started")
                 return
             # The claim is durable before any await that can admit work.
             mark(status="claimed")
@@ -806,6 +829,15 @@ class CalendarActions:
                 )
             self._runs[key] = run
             mark(status="running", run_id=run.id, session=run.session_id)
+            _LOGGER.info(
+                "Calendar action fired (action=%s event=%s agent=%s%s run=%s session=%s)",
+                action["id"],
+                event.id,
+                agent,
+                f" project={project}" if project else "",
+                run.id,
+                run.session_id,
+            )
             try:
                 await self._save_async()
             except CalendarStorageError:
@@ -814,12 +846,13 @@ class CalendarActions:
             await run.wait()
             mark(status="completed")
         except TimeoutError:
-            mark(
-                status="failed"
-                if run is not None
-                else "interrupted"
-                if input_persisted
-                else "missed"
+            status = "failed" if run is not None else "interrupted" if input_persisted else "missed"
+            mark(status=status)
+            _LOGGER.warning(
+                "Calendar action timed out before its Run started (action=%s event=%s status=%s)",
+                action["id"],
+                event.id,
+                status,
             )
         except asyncio.CancelledError:
             mark(status="interrupted" if run is not None or input_persisted else "pending")
@@ -835,6 +868,17 @@ class CalendarActions:
             self._workers.pop(key, None)
             await self._save_async()
             self._calendar._notify_action_changed()
+
+
+def _log_missed(row: dict[str, Any], reason: str) -> None:
+    """One missed firing: it will not run for this occurrence."""
+    _LOGGER.warning(
+        "Calendar action missed (action=%s event=%s scheduled_at=%s reason=%s)",
+        row["action_id"],
+        row["event_id"],
+        row["scheduled_at"],
+        reason,
+    )
 
 
 def _instant(value: str) -> datetime:

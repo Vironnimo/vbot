@@ -216,3 +216,26 @@ async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(h
         await stop(service)
     finally:
         databases.close()
+
+
+@pytest.mark.asyncio
+async def test_setting_a_credential_logs_its_variable_name_but_never_its_value(
+    host, monkeypatch, caplog
+):
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
+    service, _registry = await start_service(host)
+    try:
+        referencing = {**_CONNECTION, "credential_environment": {"TOKEN": "EXAMPLE_TOKEN"}}
+        await service.manage("save", {"connection": referencing})
+
+        with caplog.at_level(logging.INFO):
+            result = await service.manage(
+                "credential",
+                {"id": "example", "key": "EXAMPLE_TOKEN", "value": "secret-sentinel"},
+            )
+
+        assert result["set"] is True
+        assert "EXAMPLE_TOKEN" in caplog.text
+        assert "secret-sentinel" not in caplog.text
+    finally:
+        await service.close()
