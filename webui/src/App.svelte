@@ -423,6 +423,14 @@
     selection.selectAgent(agentId);
   };
 
+  // Open chat on an Agent row: Chat shows that Agent, at its last place when
+  // the Agent was already selected, else at its current Session.
+  const openAgentChat = (agentId) => {
+    if (!agentId) return false;
+    selectAgentFromView(agentId);
+    return openView('chat');
+  };
+
   function remapRenamedAgents(location) {
     const resolve = (agentId) =>
       appController?.resolveIdentityAgentId(agentId) ?? agentId;
@@ -795,6 +803,7 @@
           sharedSelectedAgentId={selection.selectedAgentId}
           onAgentsChanged={selection.refreshAgents}
           onAgentSelected={selectAgentFromView}
+          onOpenChat={openAgentChat}
           onToast={desktop.showToast}
           onNavigateToSettingsPanel={navigateToSettingsPanel}
           onNavigateToAgentPrompt={navigateToAgentPromptScope}

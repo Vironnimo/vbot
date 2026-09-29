@@ -58,6 +58,25 @@ function agentButton(agentId) {
   );
 }
 
+function openRowMenu(row) {
+  const event = new MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 40,
+    clientY: 80,
+  });
+  row.dispatchEvent(event);
+  flushSync();
+  expect(event.defaultPrevented).toBe(true);
+  return [...document.body.querySelectorAll('[role="menuitem"]')];
+}
+
+function menuLabels(items) {
+  return items.map(
+    (item) => item.querySelector('.context-menu__label').textContent,
+  );
+}
+
 function pressMoveUp(target) {
   target.focus();
   target.dispatchEvent(
@@ -659,6 +678,108 @@ describe('AgentsView', () => {
       title: 'Order changed in another window',
       variant: 'error',
     });
+  });
+
+  it('offers Open chat, Copy ID and a confirmed Delete on another Agent row', async () => {
+    const onOpenChat = vi.fn();
+    const onToast = vi.fn();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    const navigation = createStandaloneNavigation(['alpha']);
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
+      }),
+    );
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { navigation, onOpenChat, onToast },
+    });
+    flushSync();
+    await waitForCondition(() => listedAgentIds().length === 2, 100);
+
+    let items = openRowMenu(agentButton('bravo'));
+    expect(menuLabels(items)).toEqual(['Open chat', 'Copy ID', 'Delete…']);
+    items[0].click();
+    expect(onOpenChat).toHaveBeenCalledWith('bravo');
+
+    openRowMenu(agentButton('bravo'))[1].click();
+    await waitForCondition(() => onToast.mock.calls.length === 1);
+    expect(writeText).toHaveBeenCalledWith('bravo');
+    expect(onToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'success' }),
+    );
+
+    // Cancelling the confirmation deletes nothing.
+    openRowMenu(agentButton('bravo'))[2].click();
+    flushSync();
+    getButton(t('common.cancel')).click();
+    flushSync();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+
+    openRowMenu(agentButton('bravo'))[2].click();
+    flushSync();
+    expect(getDialog(t('agents.delete')).textContent).toContain('Bravo');
+    getButton(t('common.delete')).click();
+    await waitForCondition(() => listedAgentIds().join() === 'alpha', 100);
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'agent.delete'),
+    ).toEqual([['agent.delete', { id: 'bravo' }]]);
+    // The shown Agent keeps its editor.
+    expect(navigation.place).toEqual(['alpha']);
+    expect(textInputValue('agent-name')).toBe('Alpha');
+
+    items = openRowMenu(agentButton('alpha'));
+    expect(items[2].disabled).toBe(true);
+    expect(items[2].textContent).toContain(t('agents.menu.lastAgent'));
+  });
+
+  it('confirms deleting the shown Agent from its editor, reports a refusal and then shows another Agent', async () => {
+    const onToast = vi.fn();
+    const navigation = createStandaloneNavigation(['alpha']);
+    const agentDelete = vi.fn().mockRejectedValueOnce(
+      Object.assign(new Error('cannot delete agent referenced by cron:c1'), {
+        code: 'agent_in_use',
+      }),
+    );
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
+        agentDelete,
+      }),
+    );
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { navigation, onToast },
+    });
+    flushSync();
+    await waitForCondition(() => textInputValue('agent-name') === 'Alpha', 100);
+
+    const deleteFromEditor = async () => {
+      getButton(t('agents.delete')).click();
+      flushSync();
+      expect(getDialog(t('agents.delete')).textContent).toContain('Alpha');
+      getButton(t('common.delete')).click();
+      await flushAsyncUpdates();
+    };
+
+    await deleteFromEditor();
+    await waitForCondition(() => onToast.mock.calls.length === 1);
+    expect(onToast).toHaveBeenCalledWith({
+      title: t('agents.deleteError'),
+      message: t('agents.deleteInUse'),
+      variant: 'error',
+    });
+    expect(listedAgentIds()).toEqual(['alpha', 'bravo']);
+
+    await deleteFromEditor();
+    await waitForCondition(() => navigation.place[0] === 'bravo', 100);
+    expect(agentDelete).toHaveBeenLastCalledWith({ id: 'alpha' });
+    expect(listedAgentIds()).toEqual(['bravo']);
+    expect(textInputValue('agent-name')).toBe('Bravo');
   });
 
   it('renames through an explicit confirmation flow and keeps the renamed Agent selected', async () => {

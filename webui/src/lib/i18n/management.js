@@ -328,6 +328,19 @@ export default Object.freeze({
   'agents.deleteTitle': 'Delete this Agent',
   'agents.deleteDescription':
     'Moves the Agent to the archive. An Agent that is still referenced or has active Runs cannot be deleted.',
+  'agents.deleteConfirm':
+    'Delete {name}? The Agent, its Workspace and its Sessions move to the archive and no longer appear in vBot. An Agent that is still referenced or has active Runs cannot be deleted.',
+  'agents.deleteBusy':
+    'This Agent has an active or queued Run and cannot be deleted right now.',
+  'agents.deleteInUse':
+    'A schedule, Calendar action or Channel still uses this Agent, so it cannot be deleted. Remove or retarget it first.',
+  'agents.menu.label': 'Actions for {name}',
+  'agents.menu.openChat': 'Open chat',
+  'agents.menu.copyId': 'Copy ID',
+  'agents.menu.idCopied': 'Copied {id}',
+  'agents.menu.copyFailed': 'The ID could not be copied.',
+  'agents.menu.delete': 'Delete…',
+  'agents.menu.lastAgent': 'Last agent',
   'toolAccess.searchLabel': 'Filter Tools',
   'toolAccess.searchPlaceholder': 'Filter Tools…',
   'toolAccess.resetOverride': 'Reset to repository policy',
@@ -535,6 +548,12 @@ export default Object.freeze({
   'projects.manage.saveError': 'Project changes could not be saved.',
   'projects.manage.saveSuccess': 'Project updated.',
   'projects.remove': 'Remove',
+  'projects.menu.label': 'Actions for {name}',
+  'projects.menu.copyPath': 'Copy path',
+  'projects.menu.pathCopied': 'Repository path copied',
+  'projects.menu.copyFailed': 'The path could not be copied.',
+  'projects.menu.rePoint': 'Re-point…',
+  'projects.menu.remove': 'Remove…',
   'projects.remove.confirmTitle': 'Remove project',
   'projects.remove.rootedAgentsBody':
     'Removing {name} clears it from every affected Rooted Agent and resets those Agents to their Default Workspace. Their Sessions and history stay unchanged. The repository and old Workspace files are never touched.',

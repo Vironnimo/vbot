@@ -2,6 +2,7 @@
   import { onDestroy, onMount, tick, untrack } from 'svelte';
 
   import {
+    deleteAgent,
     getSettings,
     listAgents,
     listConnections,
@@ -14,6 +15,7 @@
   } from '$lib/api.js';
   import { buildAgentTargetCatalog } from '$lib/agentForm.js';
   import { useAutosaveContext } from '$lib/autosave.js';
+  import { writeClipboardText } from '$lib/clipboard.js';
   import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
   import { t } from '$lib/i18n.js';
   import { createModelCatalogLoader } from '$lib/modelSelection.js';
@@ -26,6 +28,7 @@
   import SettingsCompactionPanel from './settings/SettingsCompactionPanel.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import AgentListPane from './agents/AgentListPane.svelte';
 
   const noop = () => {};
@@ -46,6 +49,8 @@
     sharedSelectedAgentId = '',
     onAgentsChanged,
     onAgentSelected,
+    // Shows the Agent's Chat (its list row's Open chat).
+    onOpenChat = noop,
     onToast = noop,
     onNavigateToSettingsPanel = noop,
     onNavigateToAgentPrompt = noop,
@@ -133,6 +138,9 @@
   let isReordering = $state(false);
   let reorderInteractionActive = $state(false);
   let pendingAgentReload = false;
+  // The Agent whose deletion awaits confirmation, and the one being deleted.
+  let deleteCandidate = $state(null);
+  let deletingAgentId = $state('');
   let isCreateModalOpen = $state(false);
   let isLoading = $state(false);
   let loadError = $state('');
@@ -540,9 +548,52 @@
     await loadAgents();
   }
 
-  // The roster read falls back to another Agent and corrects the entry.
-  async function handleAgentDeleted() {
-    await loadAgents();
+  // Every deletion, from a list row or the editor, is confirmed first.
+  function requestAgentDelete(agent) {
+    if (!agent || agents.length < 2 || deletingAgentId) return;
+    deleteCandidate = agent;
+  }
+
+  // A deleted shown Agent: the roster read falls back to another Agent and
+  // corrects the entry.
+  async function confirmAgentDelete() {
+    const agent = deleteCandidate;
+    deleteCandidate = null;
+    if (!agent || deletingAgentId) return;
+    deletingAgentId = agent.id;
+    try {
+      await deleteAgent(agent.id);
+      onToast({ title: t('agents.deleted'), variant: 'success' });
+      await loadAgents({ showLoading: false });
+    } catch (error) {
+      onToast({
+        title: t('agents.deleteError'),
+        message: deleteErrorText(error),
+        variant: 'error',
+      });
+    } finally {
+      deletingAgentId = '';
+    }
+  }
+
+  // The server's refusals name internal references; say what the user can do.
+  function deleteErrorText(error) {
+    if (error?.code === 'agent_in_use') return t('agents.deleteInUse');
+    if (error?.code === 'agent_busy') return t('agents.deleteBusy');
+    if (error?.code === 'last_agent') return t('errors.minimumAgents');
+    return error?.message || '';
+  }
+
+  async function copyAgentId(agentId) {
+    try {
+      await writeClipboardText(agentId);
+      onToast({
+        title: t('agents.menu.idCopied', { id: agentId }),
+        variant: 'success',
+      });
+    } catch {
+      onToast({ title: t('agents.menu.copyFailed'), variant: 'error' });
+    }
   }
 
   function notifyAgentsChanged() {
@@ -567,6 +618,10 @@
       onCreate={openCreateModal}
       onReorder={handleAgentsReordered}
       onReorderInteractionChange={handleReorderInteractionChange}
+      {deletingAgentId}
+      {onOpenChat}
+      onCopyId={(agentId) => void copyAgentId(agentId)}
+      onDelete={requestAgentDelete}
     />
 
     <div class="agent-editor-host" hidden={sharedDefaultsOpen}>
@@ -574,6 +629,8 @@
         <AgentEditor
           agent={selectedAgent}
           agentsCount={agents.length}
+          isDeleting={Boolean(selectedAgent) &&
+            deletingAgentId === selectedAgent.id}
           {availableModels}
           {availableConnections}
           {availableTools}
@@ -586,7 +643,7 @@
           onAgentUpdated={handleAgentUpdated}
           onAgentRenamed={handleAgentRenamed}
           onAgentCreated={handleAgentCreated}
-          onAgentDeleted={handleAgentDeleted}
+          onDeleteRequested={requestAgentDelete}
           {onToast}
           onNavigateToSettingsPanel={navigateFromAgent}
           {onNavigateToAgentPrompt}
@@ -697,6 +754,18 @@
       </div>
     {/if}
   </div>
+
+  {#if deleteCandidate}
+    <ConfirmDialog
+      title={t('agents.delete')}
+      body={t('agents.deleteConfirm', {
+        name: deleteCandidate.name || deleteCandidate.id,
+      })}
+      confirmLabel={t('common.delete')}
+      onConfirm={confirmAgentDelete}
+      onCancel={() => (deleteCandidate = null)}
+    />
+  {/if}
 
   {#if isCreateModalOpen}
     <AgentCreateModal

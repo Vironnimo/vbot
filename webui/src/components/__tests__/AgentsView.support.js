@@ -386,6 +386,15 @@ export function createAgentsRpcMock(options = {}) {
       return { ...params, current_session_id: 'session-saved' };
     }
 
+    if (method === 'agent.delete') {
+      if (typeof options.agentDelete === 'function') {
+        await options.agentDelete(params);
+      }
+      const index = agents.findIndex((agent) => agent.id === params.id);
+      if (index >= 0) agents.splice(index, 1);
+      return { id: params.id };
+    }
+
     if (method === 'agent.rename') {
       if (typeof options.agentRename === 'function') {
         return options.agentRename(params);

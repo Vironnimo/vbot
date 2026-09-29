@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy, tick, untrack } from 'svelte';
   import { inspectSkill, skillInventory } from '$lib/api.js';
+  import { writeClipboardText } from '$lib/clipboard.js';
   import { t } from '$lib/i18n.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { isImeComposing } from '$lib/keyboard.js';
@@ -479,7 +480,7 @@
 
   async function copyName(name) {
     try {
-      await navigator.clipboard.writeText(name);
+      await writeClipboardText(name);
       onToast({
         title: t('skills.menu.nameCopied', { name }),
         variant: 'success',

@@ -22,6 +22,7 @@ The view forwards user intent to the controller; the controller alone sequences 
 - Context auto-load rows are a shared `SortableList` (whole-row drag, Alt+ArrowUp/Down on the focusable row). The controller moves entries through the existing ordered `auto_load` draft and manage-project autosave (`moveAutoLoadEntry`); refusal of canceled and stale-list drags belongs to `SortableList`. Source/tests: `projects/ProjectContextPanel.svelte`, `projectsView.js`, and `ProjectsView.test.js`.
 - Project selection and navigation away from Projects flush the tracked manage-project and Team-override autosaves first. If a request is already in flight, the controller reconciles its returned Project/scan into the persisted baseline without replacing newer form or Team-field values; the coordinator then submits the remaining delta before the transition proceeds.
 - Re-pointing a Project changes its configured root through the dedicated update path, then refreshes Project and scan state. It does not move files on disk.
+- List rows have a context menu built in `ProjectsView.svelte`: Copy path (through `lib/clipboard.js`), Re-point... only while `needsRePoint(project)`, then Remove... It opens the controller's existing re-point and remove dialogs for that row's Project, which need not be the shown one (`ProjectsView.test.js`).
 - Remove uses a confirmation surface and the backend's rooted-Agent handling choice. Removing a Project and deciding what happens to Project-rooted Agents are one explicit operation, not an implicit client-side cascade.
 
 ## Scan and Team projection
