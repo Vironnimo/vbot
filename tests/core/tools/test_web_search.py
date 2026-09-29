@@ -140,9 +140,9 @@ async def test_a_provider_without_its_key_tells_the_user_how_to_set_it_up(
 
     error = assert_failure_envelope(result, "missing_api_key")
     assert error["message"] == (
-        f"Web search is not set up: the selected provider, {label}, needs {key} in the .env "
-        "file of the vBot data directory. Tell the user: they can add the key, or choose "
-        "another provider in Settings under Web search (DuckDuckGo needs no key)."
+        f"Web search is not set up: the selected provider, {label}, needs an API key ({key}). "
+        "Tell the user: they can enter the key in Settings under Web search, or choose "
+        "another provider there (DuckDuckGo needs no key)."
     )
     assert error["retryable"] is False
 

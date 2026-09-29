@@ -1,8 +1,9 @@
-"""Settings write RPCs: ``settings.update`` and ``settings.patch``.
+"""Settings write RPCs: ``settings.update``, ``settings.patch`` and
+``settings.set_service_key``.
 
 Covers persistence and the returned payload, refusals that must leave settings
-untouched, the live effects a saved change applies to the running Runtime, and
-Task Model bindings. Reads live in ``test_settings_methods.py``.
+untouched, the live effects a saved change applies to the running Runtime, web
+service API keys, and Task Model bindings. Reads live in ``test_settings_methods.py``.
 """
 
 from __future__ import annotations
@@ -253,6 +254,107 @@ async def test_settings_update_projects_web_fetch_services_without_credentials(
         "provider": "parallel",
         "mode": "prefer",
     }
+
+
+# ---------------------------------------------------------------------------
+# Web service API keys
+# ---------------------------------------------------------------------------
+
+
+def _key_status(result: JsonObject, section: str, provider: str) -> tuple[bool, str | None]:
+    service = next(item for item in result[section]["services"] if item["id"] == provider)
+    return service["configured"], service["source"]
+
+
+@pytest.mark.asyncio
+async def test_settings_set_service_key_saves_replaces_and_removes_one_shared_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    reloads: list[None] = []
+    monkeypatch.setattr(
+        state.runtime, "reload_environment_credentials", lambda: reloads.append(None)
+    )
+    secrets = ("first-tavily-secret", "second-tavily-secret")
+
+    async def set_key(value: str) -> JsonObject:
+        return await rpc_result(
+            state, "settings.set_service_key", api_key_env="TAVILY_API_KEY", value=value
+        )
+
+    with caplog.at_level(logging.INFO, logger=_SETTINGS_LOGGER):
+        saved = await set_key(f"  {secrets[0]}\n")
+        assert state.runtime.storage.load_environment()["TAVILY_API_KEY"] == secrets[0]
+        replaced = await set_key(secrets[1])
+        assert state.runtime.storage.load_environment()["TAVILY_API_KEY"] == secrets[1]
+        removed = await set_key("  ")
+
+    # Web search and web page reading share one Tavily credential.
+    for section in ("web_search", "web_fetch"):
+        assert _key_status(saved, section, "tavily") == (True, "data_dir")
+        assert _key_status(replaced, section, "tavily") == (True, "data_dir")
+        assert _key_status(removed, section, "tavily") == (False, None)
+    assert "TAVILY_API_KEY" not in state.runtime.storage.load_environment()
+    assert removed == await rpc_result(state, "settings.get")
+    assert len(reloads) == 3
+    messages = [record.getMessage() for record in caplog.records if record.name == _SETTINGS_LOGGER]
+    assert len(messages) == 3
+    assert all("TAVILY_API_KEY" in message for message in messages)
+    assert "saved" in messages[0] and "removed" in messages[2]
+    exposed = json.dumps([saved, replaced, removed]) + caplog.text
+    assert not any(secret in exposed for secret in secrets)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"api_key_env": "OPENAI_API_KEY", "value": "sk-test"},
+        {"api_key_env": "TAVILY_API_KEY", "value": None},
+        {"api_key_env": "TAVILY_API_KEY", "value": "first\nsecond"},
+        {"value": "sk-test"},
+        {"api_key_env": "TAVILY_API_KEY", "value": "sk-test", "source": "data_dir"},
+    ],
+    ids=["unknown-variable", "non-string", "multi-line", "missing-variable", "extra-field"],
+)
+async def test_settings_set_service_key_rejects_invalid_requests(
+    tmp_path: Path, params: JsonObject
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    env_file = tmp_path / ".env"
+    env_file.write_text("TAVILY_API_KEY=kept\n", encoding="utf-8")
+
+    error = await rpc_error(state, "settings.set_service_key", **params)
+
+    assert error["code"] == "invalid_request"
+    assert "sk-test" not in error["message"]
+    assert env_file.read_text(encoding="utf-8") == "TAVILY_API_KEY=kept\n"
+
+
+@pytest.mark.asyncio
+async def test_settings_set_service_key_restores_the_previous_key_when_reload_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.set_data_dir_credential("EXA_API_KEY", "previous-key")
+    reloads: list[None] = []
+
+    def reload() -> None:
+        reloads.append(None)
+        if len(reloads) == 1:
+            raise StorageError("Cannot read .env")
+
+    monkeypatch.setattr(state.runtime, "reload_environment_credentials", reload)
+
+    error = await rpc_error(
+        state, "settings.set_service_key", api_key_env="EXA_API_KEY", value="new"
+    )
+
+    assert error["code"] == "domain_error"
+    assert state.runtime.storage.load_environment()["EXA_API_KEY"] == "previous-key"
+    assert len(reloads) == 2
 
 
 @pytest.mark.asyncio

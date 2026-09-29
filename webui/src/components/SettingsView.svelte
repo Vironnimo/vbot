@@ -27,10 +27,27 @@
   import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
   import { applyAppearanceSettings } from '$lib/appearancePrefs.svelte.js';
   import { t } from '$lib/i18n.js';
+  import { isImeComposing } from '$lib/keyboard.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
+  import {
+    expandSettingsEntry,
+    focusSettingsControl,
+    indexSettings,
+    matchSettings,
+    normalizeSearchText,
+    searchTerms,
+    settingsEntryAnchor,
+  } from '$lib/settingsSearch.js';
   import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
 
   const noop = () => {};
+  // Shared Agent defaults live in Agents; these words lead there.
+  const AGENT_DEFAULTS_TERMS = normalizeSearchText(
+    'Agent defaults global shared Model Thinking effort temperature fallback compaction',
+  );
+  const AGENT_DEFAULTS_RESULT = { key: 'agent_defaults', kind: 'shortcut' };
+  // How long an opened search result stays highlighted.
+  const SEARCH_HIT_MS = 1600;
 
   let {
     // The place is `[page]` or `[page, section]`; an App deep link may name a
@@ -139,7 +156,7 @@
       id: 'extensions',
       label: () => t('settings.extensions.title'),
     },
-    { id: 'server', label: () => t('settings.general.title') },
+    { id: 'server', label: () => t('settings.sections.server') },
     {
       id: 'desktop_connection',
       label: () => t('settings.desktop.connection.title'),
@@ -228,9 +245,6 @@
       ],
     },
   ]);
-  let panels = $derived(
-    pages.flatMap((page) => page.sections.map((id) => panelById.get(id))),
-  );
   let mobileSectionOptions = $derived(
     pages.map((page) => ({
       value: page.id,
@@ -247,15 +261,29 @@
   let documentRoot = $state(null);
   let shownPlace = $derived(resolvePlace(navigation.place));
   let activePageId = $derived(shownPlace.page.id);
+  let editorsElement = $state(null);
   let searchQuery = $state('');
-  let searchResults = $state([]);
+  // Results hold DOM element references, which must not become proxies.
+  let searchResults = $state.raw([]);
   let searchActive = $derived(searchQuery.trim().length > 0);
+  // The search index of the mounted editors; null after they changed.
+  let searchIndex = null;
+  let indexedPages = null;
+  let searchFrame = null;
+  // A row result waiting for its place to be shown: {key, result}.
+  let pendingReveal = null;
+  // The highlighted anchor of the last opened result: {element, timer}.
+  let searchHit = null;
   let restoreTop = 0;
   let restorePending = false;
   let restoreFrame = null;
-  let restoreAnchorId = '';
+  // The element a section or search target keeps in view while content
+  // above it settles.
+  let restoreAnchor = null;
   // The canonical place last shown; null until the loaded content shows one.
   let appliedPlaceKey = null;
+  // Invalidates an earlier target still waiting for the page to update.
+  let showGeneration = 0;
 
   onMount(() => {
     loadSettings();
@@ -263,6 +291,9 @@
       providerRefreshGeneration += 1;
       providerRefreshPending = false;
       if (restoreFrame !== null) cancelAnimationFrame(restoreFrame);
+      if (searchFrame !== null) cancelAnimationFrame(searchFrame);
+      pendingReveal = null;
+      clearSearchHit();
     };
   });
 
@@ -289,20 +320,38 @@
     });
   });
 
+  // Loading and page composition changes re-index the editors.
   $effect(() => {
-    void searchQuery;
+    void pages;
     void loading;
-    void panels;
-    if (documentRoot) untrack(updateSearchResults);
+    void documentRoot;
+    untrack(() => {
+      searchIndex = null;
+      updateSearchResults();
+    });
   });
 
   $effect(() => {
     if (!documentRoot) return;
-    const observer = new MutationObserver(() => {
-      if (searchQuery.trim()) updateSearchResults();
+    const observer = new MutationObserver((records) => {
+      // Editor changes re-index the search, at most once per frame; the
+      // rendered result list does not.
+      if (records.some(changesEditors)) {
+        searchIndex = null;
+        if (searchQuery.trim()) scheduleSearch();
+      }
       queueRestore();
     });
-    observer.observe(documentRoot, { childList: true, subtree: true });
+    observer.observe(documentRoot, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributeFilter: [
+        'data-help-text',
+        'data-search-label',
+        'data-search-terms',
+      ],
+    });
     const resizeObserver =
       typeof ResizeObserver === 'function'
         ? new ResizeObserver(queueRestore)
@@ -315,52 +364,92 @@
     };
   });
 
-  function normalizedSearch(value) {
-    return value
-      .normalize('NFKD')
-      .toLocaleLowerCase()
-      .replace(/[\p{M}\s\p{P}\p{S}]/gu, '');
+  function changesEditors(record) {
+    const node =
+      record.target.nodeType === Node.ELEMENT_NODE
+        ? record.target
+        : record.target.parentElement;
+    return node === documentRoot || Boolean(editorsElement?.contains(node));
+  }
+
+  // The translated page and section labels the search index names.
+  function searchPages() {
+    return pages.map((page) => ({
+      id: page.id,
+      label: page.label(),
+      description: page.description(),
+      sections: page.sections.map((id) => ({
+        id,
+        label: panelById.get(id).label(),
+      })),
+    }));
+  }
+
+  function scheduleSearch() {
+    if (searchFrame !== null) return;
+    searchFrame = requestAnimationFrame(() => {
+      searchFrame = null;
+      updateSearchResults();
+    });
+  }
+
+  function sameResults(left, right) {
+    return (
+      left.length === right.length &&
+      left.every(
+        (result, index) =>
+          result.key === right[index].key &&
+          result.element === right[index].element &&
+          result.openDetails === right[index].openDetails,
+      )
+    );
   }
 
   function updateSearchResults() {
-    const terms = searchQuery
-      .trim()
-      .split(/\s+/)
-      .map(normalizedSearch)
-      .filter(Boolean);
-    const results = [];
-    if (terms.length) {
-      for (const panel of panels) {
-        const section = documentRoot?.querySelector(
-          `[data-settings-section="${panel.id}"]`,
-        );
-        // Explanations behind a closed "?" still count as section text.
-        const helpTexts = Array.from(
-          section?.querySelectorAll('[data-help-text]') ?? [],
-          (element) => element.dataset.helpText,
-        );
-        const text = normalizedSearch(
-          [
-            pageForDestination(panel.id)?.label(),
-            panel.label(),
-            section?.textContent ?? '',
-            ...helpTexts,
-          ].join(' '),
-        );
-        if (terms.every((term) => text.includes(term))) results.push(panel.id);
+    if (searchFrame !== null) {
+      cancelAnimationFrame(searchFrame);
+      searchFrame = null;
+    }
+    const terms = searchTerms(searchQuery);
+    let results = [];
+    if (terms.length && documentRoot) {
+      if (!searchIndex || indexedPages !== pages) {
+        indexedPages = pages;
+        searchIndex = indexSettings(documentRoot, searchPages());
       }
+      results = matchSettings(searchIndex, searchQuery);
     }
     if (
       terms.length &&
-      terms.every((term) =>
-        normalizedSearch(
-          'Agent defaults global shared Model Thinking effort temperature fallback compaction',
-        ).includes(term),
-      )
+      terms.every((term) => AGENT_DEFAULTS_TERMS.includes(term))
     )
-      results.push('agent_defaults');
-    // Avoid observing our own result-list render as another result change.
-    if (results.join('|') !== searchResults.join('|')) searchResults = results;
+      results = [...results, AGENT_DEFAULTS_RESULT];
+    if (!sameResults(results, searchResults)) searchResults = results;
+  }
+
+  function setSearchQuery(value) {
+    searchQuery = value;
+    updateSearchResults();
+  }
+
+  function resultTitle(result) {
+    return result.kind === 'shortcut' ? t('agents.shared.title') : result.label;
+  }
+
+  // Where a result lives: a page result shows what the page holds, a section
+  // its page, a setting its page and section (only the page when the page
+  // has a single section).
+  function resultLocation(result) {
+    if (result.kind === 'shortcut') return t('settings.agentShortcut.search');
+    const page = pageForDestination(result.pageId);
+    if (!page) return '';
+    if (result.kind === 'page') return page.description();
+    if (result.kind === 'section' || page.sections.length === 1)
+      return page.label();
+    return t('settings.search.location', {
+      page: page.label(),
+      section: panelById.get(result.sectionId)?.label() ?? '',
+    });
   }
 
   function headingOffset(heading) {
@@ -375,7 +464,7 @@
 
   function queueRestore() {
     if (
-      (!restorePending && !restoreAnchorId) ||
+      (!restorePending && !restoreAnchor) ||
       loading ||
       !scrollContainer ||
       restoreFrame !== null
@@ -384,16 +473,15 @@
     restoreFrame = requestAnimationFrame(() => {
       restoreFrame = null;
       if (!scrollContainer) return;
-      const anchor =
-        restoreAnchorId && documentRoot?.querySelector('#' + restoreAnchorId);
-      if (anchor) scrollContainer.scrollTop = headingOffset(anchor);
+      if (restoreAnchor?.isConnected)
+        scrollContainer.scrollTop = headingOffset(restoreAnchor);
       else if (restorePending) scrollContainer.scrollTop = restoreTop;
     });
   }
 
   function releaseRestore() {
     restorePending = false;
-    restoreAnchorId = '';
+    restoreAnchor = null;
   }
 
   // The reading position App keeps while another main view is shown. Its
@@ -468,19 +556,25 @@
   }
 
   async function showTarget({ page, sectionId }) {
+    const generation = ++showGeneration;
+    const key = placeFor({ page, sectionId }).join('/');
+    const reveal = pendingReveal?.key === key ? pendingReveal.result : null;
+    pendingReveal = null;
     releaseRestore();
-    searchQuery = '';
+    setSearchQuery('');
     await tick();
+    if (generation !== showGeneration) return;
     const headingId = sectionId
       ? 'settings-section-' + sectionId
       : 'settings-page-' + page.id;
     const heading = documentRoot?.querySelector('#' + headingId);
+    if (reveal && (await revealResult(reveal, heading, generation))) return;
     if (scrollContainer) {
       scrollContainer.scrollTop =
         sectionId && heading ? headingOffset(heading) : 0;
       // Keep a section in view while asynchronous editors above it settle.
       if (sectionId && heading) {
-        restoreAnchorId = headingId;
+        restoreAnchor = heading;
         queueRestore();
       }
     }
@@ -488,11 +582,72 @@
     heading?.focus({ preventScroll: true });
   }
 
+  // Brings a setting result into view once its place is shown: opens what
+  // hides it through the page's own disclosures, keeps its row (or the
+  // switch that reveals it) in view, focuses its first control and
+  // highlights it briefly. Revealing is not a navigation step. Returns false
+  // when only the section heading can stand for it.
+  async function revealResult(result, heading, generation) {
+    const section = documentRoot?.querySelector(
+      `[data-settings-section="${result.sectionId}"]`,
+    );
+    const body = section?.querySelector('.s-section__body');
+    if (!body || !scrollContainer) return false;
+    if (expandSettingsEntry(result, section)) {
+      await tick();
+      if (generation !== showGeneration) return true;
+    }
+    const anchor = settingsEntryAnchor(result.element, body);
+    if (!anchor) return false;
+    // The section heading stays in view while the setting fits below it.
+    const fitsBelowHeading =
+      heading &&
+      anchor.getBoundingClientRect().bottom -
+        heading.getBoundingClientRect().top +
+        48 <=
+        scrollContainer.clientHeight;
+    restoreAnchor = fitsBelowHeading ? heading : anchor;
+    scrollContainer.scrollTop = headingOffset(restoreAnchor);
+    queueRestore();
+    onScrollPositionChange(captureScrollPosition());
+    if (!focusSettingsControl(anchor)) heading?.focus({ preventScroll: true });
+    markSearchHit(anchor);
+    return true;
+  }
+
+  function markSearchHit(element) {
+    clearSearchHit();
+    // Restarts the highlight when the same element is marked again.
+    void element.offsetWidth;
+    element.classList.add('settings-search-hit');
+    searchHit = { element, timer: setTimeout(clearSearchHit, SEARCH_HIT_MS) };
+  }
+
+  function clearSearchHit() {
+    if (!searchHit) return;
+    clearTimeout(searchHit.timer);
+    searchHit.element.classList.remove('settings-search-hit');
+    searchHit = null;
+  }
+
   // Opening a page or a search result is a step. Opening the place already
   // shown returns to its start: the page top or the section heading.
   function openDestination(id) {
-    const target = resolvePlace([id]);
+    return showPlace(resolvePlace([id]), null);
+  }
+
+  // A setting result opens its section's place, then reveals the setting.
+  function openResult(result) {
+    if (result.kind === 'shortcut') return navigateToDefaults();
+    const target = resolvePlace([
+      result.kind === 'page' ? result.pageId : result.sectionId,
+    ]);
+    return showPlace(target, result.kind === 'row' ? result : null);
+  }
+
+  function showPlace(target, reveal) {
     const place = placeFor(target);
+    pendingReveal = reveal ? { key: place.join('/'), result: reveal } : null;
     if (samePlace(place, navigation.place)) return showTarget(target);
     return navigation.navigate(place);
   }
@@ -503,8 +658,19 @@
 
   function handleSearchInput(event) {
     releaseRestore();
-    searchQuery = event.currentTarget.value;
+    pendingReveal = null;
+    setSearchQuery(event.currentTarget.value);
     if (scrollContainer) scrollContainer.scrollTop = 0;
+  }
+
+  // Enter opens the best match; an IME keeps its own Enter.
+  function handleSearchKeydown(event) {
+    if (event.key !== 'Enter' || isImeComposing(event)) return;
+    if (searchFrame !== null) updateSearchResults();
+    const [first] = searchResults;
+    if (!first) return;
+    event.preventDefault();
+    void openResult(first);
   }
 
   // The single settings error seam: a panel's `onError` funnels here. A
@@ -756,6 +922,7 @@
         autocomplete="off"
         value={searchQuery}
         oninput={handleSearchInput}
+        onkeydown={handleSearchKeydown}
         placeholder={t('settings.search.placeholder')}
         aria-label={t('settings.search.label')}
       />
@@ -818,20 +985,16 @@
             </p>
           </header>
           <div class="settings-search-results">
-            {#each searchResults as panelId (panelId)}
-              {@const panel = panelById.get(panelId)}
+            {#each searchResults as result (result.key)}
               <Button
                 class="settings-search-result"
-                onClick={() =>
-                  panel ? openDestination(panelId) : navigateToDefaults()}
+                onClick={() => openResult(result)}
               >
                 <span class="settings-search-result__title"
-                  >{panel ? panel.label() : t('agents.shared.title')}</span
+                  >{resultTitle(result)}</span
                 >
                 <span class="settings-search-result__description"
-                  >{panel
-                    ? pageForDestination(panelId)?.label()
-                    : t('settings.agentShortcut.search')}</span
+                  >{resultLocation(result)}</span
                 >
               </Button>
             {:else}
@@ -842,7 +1005,7 @@
             {/each}
           </div>
         {/if}
-        <div class="settings-editors">
+        <div class="settings-editors" bind:this={editorsElement}>
           {#each pages as page (page.id)}
             <article
               class="settings-page"

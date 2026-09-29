@@ -74,7 +74,7 @@ export default Object.freeze({
   'settings.agentShortcut.hint':
     'The chat Model, Thinking, and Compaction are configured in',
   'settings.specializedModels.resetOptions': 'Reset options',
-  'settings.search.resultCount': 'Matching topics: {count}',
+  'settings.search.resultCount': 'Matching settings: {count}',
   'settings.agentShortcut.search':
     'Agents → Shared defaults · Model, Thinking, fallbacks and Compaction',
   'settings.title': 'Settings',
@@ -87,6 +87,7 @@ export default Object.freeze({
   'settings.search.placeholder': 'Search settings…',
   'settings.search.label': 'Search settings',
   'settings.search.noMatches': 'No settings match your search.',
+  'settings.search.location': '{page} › {section}',
   'settings.desktop.connection.title': 'Connection',
   'settings.desktop.connection.count': '{count} saved',
   'settings.desktop.connection.help':
@@ -114,7 +115,7 @@ export default Object.freeze({
   'settings.desktop.connection.removeSuccess': 'Server removed.',
   'settings.desktop.connection.removeError': 'Server could not be removed.',
   'settings.desktop.switchModalTitle': 'Switch server',
-  'settings.general.title': 'Server',
+  'settings.sections.server': 'Server',
   'settings.general.serverHost': 'Server host',
   'settings.general.dataDirectory': 'Data directory',
   'settings.general.dataDirectoryHelp':
@@ -217,11 +218,11 @@ export default Object.freeze({
   'settings.notifications.title': 'Desktop notifications',
   'settings.notifications.intro': 'Shown by the vBot tray app on Windows.',
   'settings.notifications.help':
-    'The vBot tray app of an installed vBot on Windows shows these notifications.\n\nRun completed and Run failed cover Agent Runs in your Sessions, not Sub-Agent, Channel, or other background work. They are skipped while a vBot window already shows that Session.\n\nAutomation failed covers Schedules and Calendar actions that fail. Update result reports how a vBot update ended. Server stopped appears when the server the tray started stops unexpectedly.',
+    'The vBot tray app of an installed vBot on Windows shows these notifications.\n\nRun completed and Run failed cover Agent Runs in your Sessions, not Sub-Agent, Channel, or other background work. They are skipped while a vBot window already shows that Session.\n\nAutomation failed covers Schedules and Calendar actions that fail. Update finished reports how a vBot update ended, successfully or not. Server stopped appears when the server the tray started stops unexpectedly.',
   'settings.notifications.runCompleted': 'Run completed',
   'settings.notifications.runFailed': 'Run failed',
   'settings.notifications.automationFailed': 'Automation failed',
-  'settings.notifications.updateResult': 'Update result',
+  'settings.notifications.updateResult': 'Update finished',
   'settings.notifications.serverStopped': 'Server stopped',
   'settings.notifications.saveSuccess': 'Notification settings updated.',
   'settings.compaction.title': 'Compaction',
@@ -248,16 +249,11 @@ export default Object.freeze({
     'Optional service for sites that block bots or need JavaScript.',
   'settings.webFetch.providerHelp':
     'By default, vBot reads web pages itself when an Agent opens one (web_fetch Tool). An extraction service can read pages that block automated visitors or only show their content with JavaScript.\n\nThe service receives every URL it reads and may charge per page; free allowances and prices vary. Paging through or searching a page that was already read makes no new service request.',
-  'settings.webFetch.envFileHelp':
-    'API keys go in the .env file in {path}. Restart the vBot server after editing it.',
   'settings.webFetch.mode': 'When to use it',
   'settings.webFetch.modeHelp':
     'Only when direct reading fails: vBot reads the page itself first and uses the service for blocked, failed or unreadable pages.\n\nPrefer this service: the service reads pages first; if it fails, vBot reads the page itself. Images and documents are always read directly first.',
   'settings.webFetch.cost':
     'The service receives the URLs it reads and may charge per page.',
-  'settings.webFetch.keyPresent': 'API key found ({variable}).',
-  'settings.webFetch.keyMissing':
-    'API key missing: add {variable} to the .env file of the data directory.',
   'settings.webFetch.pricing': 'Pricing',
   'settings.webFetch.title': 'Web page reading',
   'settings.webFetch.saveSuccess': 'Web page reading updated.',
@@ -265,8 +261,6 @@ export default Object.freeze({
   'settings.webSearch.provider': 'Search provider',
   'settings.webSearch.providerHelp':
     'The service Agents use when they search the web (web_search Tool). The choice applies to every Agent.\n\nDuckDuckGo needs no API key but may block frequent searches. SearXNG needs an instance you run or can reach. The other services need an API key and may charge per search.',
-  'settings.webSearch.envFileHelp':
-    'API keys go in the .env file in {path}. Restart the vBot server after editing it.',
   'settings.webSearch.providers.brave': 'Brave Search',
   'settings.webSearch.providers.duckduckgo': 'DuckDuckGo',
   'settings.webSearch.providers.tavily': 'Tavily',
@@ -285,9 +279,31 @@ export default Object.freeze({
   'settings.webSearch.searxngBaseUrlHelp':
     'SearXNG is a free, self-hosted metasearch engine; vBot does not include one. Enter the address of your own instance or of one you can reach.\n\nThe instance must allow JSON results (add json to search.formats in its settings.yml); otherwise every search fails with HTTP 403.',
   'settings.webSearch.searxngBaseUrlPlaceholder': 'http://localhost:8888',
-  'settings.webSearch.keyHint':
-    'Needs {variable} in the .env file of the data directory.',
   'settings.webSearch.saveSuccess': 'Web search settings updated.',
+  'settings.serviceKey.label': 'API key',
+  'settings.serviceKey.help':
+    'vBot keeps the key on its server and never shows it again. A key set in the server environment takes precedence over a saved one and can only be changed there.',
+  'settings.serviceKey.helpFile':
+    'Saved keys go in the .env file in {path}. Keys can also be added to that file by hand; restart the vBot server after editing it.',
+  'settings.serviceKey.helpShared':
+    'Web search and Web page reading use the same {variable} key, so a change here applies to both.',
+  'settings.serviceKey.set': 'Set',
+  'settings.serviceKey.optionSet': 'API key set',
+  'settings.serviceKey.optionMissing': 'API key missing',
+  'settings.serviceKey.missing': 'Missing',
+  'settings.serviceKey.stateSaved':
+    'Saved in the data directory as {variable}.',
+  'settings.serviceKey.stateMissing':
+    'This service needs an API key ({variable}).',
+  'settings.serviceKey.stateEnvironment':
+    'Set in the server environment ({variable}); change it there.',
+  'settings.serviceKey.stateEnvironmentEmpty':
+    '{variable} is empty in the server environment, which overrides a saved key. Set it there, or remove it and restart vBot.',
+  'settings.serviceKey.replace': 'Replace',
+  'settings.serviceKey.placeholder': 'Paste the API key…',
+  'settings.serviceKey.inputLabel': 'New API key ({variable})',
+  'settings.serviceKey.saveSuccess': 'API key saved.',
+  'settings.serviceKey.removeSuccess': 'API key removed.',
   'settings.localSpeech.memoryTitle': 'Local speech memory',
   'settings.localSpeech.memoryLoaded': 'Loaded in memory',
   'settings.localSpeech.memoryEmpty': 'Not loaded',
@@ -415,9 +431,7 @@ export default Object.freeze({
   'settings.specializedModels.musicGenerationHelp':
     'Used by the generate_music Tool.',
   'settings.specializedModels.embeddingModel': 'Embedding model',
-  'settings.specializedModels.embeddingModelLabel': 'Model',
-  'settings.specializedModels.embeddingModelDescription':
-    'Needed to search past conversations by meaning.',
+  'settings.specializedModels.embeddingModelLabel': 'Semantic search',
   'settings.specializedModels.embeddingModelHelp':
     'Conversation search uses it to find passages by meaning. Your conversation text is sent to this Model’s Provider to build the search index in the background.\n\nSwitching to another Model rebuilds that index from all stored conversations, which adds Provider usage.',
   'settings.specializedModels.noTarget': 'Not configured',

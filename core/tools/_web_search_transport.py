@@ -136,8 +136,8 @@ def _status_message(
         status in {401, 403} or (status < 500 and _KEY_PROBLEM.search(detail) is not None)
     ):
         return (
-            f"{provider_label} rejected the API key ({answer}). Tell the user to check "
-            f"{credential_key} in the .env file of the vBot data directory."
+            f"{provider_label} rejected the API key ({answer}). Tell the user to check the "
+            f"key ({credential_key}) in Settings under Web search."
         )
     if status == 429:
         return f"{provider_label} is limiting requests ({answer}). Wait before searching again."

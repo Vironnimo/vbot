@@ -1,4 +1,4 @@
-import { tOr } from '../i18n.js';
+import { t, tOr } from '../i18n.js';
 import { textOrFallback, textOrEmpty } from './values.js';
 
 const RECALL_BACKEND_SQLITE_FTS = 'sqlite_fts';
@@ -142,13 +142,65 @@ export function buildWebSearchSettingsPayload(formValues) {
   };
 }
 
-export function buildWebSearchProviderOptions(webSearchSettings) {
+const WEB_SERVICE_SECTIONS = Object.freeze(['web_search', 'web_fetch']);
+
+const WEB_SERVICE_KEY_SOURCES = new Set(['process_environment', 'data_dir']);
+
+function webServiceEntries(settings, section) {
+  const services = settings?.[section]?.services;
+  if (!Array.isArray(services)) {
+    return [];
+  }
+  return services.filter(
+    (service) =>
+      typeof service?.id === 'string' &&
+      typeof service?.api_key_env === 'string',
+  );
+}
+
+// Server facts about the API keys of the keyed services of `section`
+// ('web_search' or 'web_fetch'): {id, api_key_env, configured, source,
+// shared}. `shared` marks a key the other section uses too. The values never
+// reach the WebUI, and these facts are never part of an editable draft.
+export function getWebServiceKeys(settings, section) {
+  const otherVariables = new Set(
+    WEB_SERVICE_SECTIONS.filter((other) => other !== section).flatMap((other) =>
+      webServiceEntries(settings, other).map((service) => service.api_key_env),
+    ),
+  );
+  return webServiceEntries(settings, section).map((service) => ({
+    id: service.id,
+    api_key_env: service.api_key_env,
+    configured: service.configured === true,
+    source: WEB_SERVICE_KEY_SOURCES.has(service.source) ? service.source : null,
+    shared: otherVariables.has(service.api_key_env),
+  }));
+}
+
+// Keyed providers carry whether their API key is set as secondary text.
+export function buildWebSearchProviderOptions(
+  webSearchSettings,
+  services = [],
+) {
   return normalizeWebSearchProviders(
     webSearchSettings?.available_providers,
-  ).map((provider) => ({
-    value: provider,
-    label: tOr(`settings.webSearch.providers.${provider}`, provider),
-  }));
+  ).map((provider) => {
+    const option = {
+      value: provider,
+      label: tOr(`settings.webSearch.providers.${provider}`, provider),
+    };
+    const service = services.find((item) => item.id === provider);
+    return service
+      ? { ...option, secondaryLabel: webServiceKeyHint(service) }
+      : option;
+  });
+}
+
+// The Dropdown hint telling whether a keyed web service's API key is set.
+export function webServiceKeyHint(service) {
+  return service.configured
+    ? t('settings.serviceKey.optionSet')
+    : t('settings.serviceKey.optionMissing');
 }
 
 function normalizeRecallBackends(backends) {

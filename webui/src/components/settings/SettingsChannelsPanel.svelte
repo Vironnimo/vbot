@@ -1079,6 +1079,37 @@
         </div>
       </div>
     {/each}
+
+    <!-- A Channel's settings form mounts only while it is edited. These
+         declarations let Settings search find its fields meanwhile; a field
+         the open form renders takes their place in the results. -->
+    <span
+      hidden
+      data-search-label={t('settings.channels.platform')}
+      data-search-terms={t('settings.channels.platform.help')}
+    ></span>
+    <span hidden data-search-label={t('settings.channels.agent')}></span>
+    <span
+      hidden
+      data-search-label={t('settings.channels.allowed_chat_ids')}
+      data-search-terms={t('settings.channels.allowed_chat_ids.help')}
+    ></span>
+    <span
+      hidden
+      data-search-label={t('settings.channels.dm_scope')}
+      data-search-terms={t('settings.channels.dm_scope.help')}
+    ></span>
+    <span hidden data-search-label={t('settings.channels.server_url')}></span>
+    <span
+      hidden
+      data-search-label={t('settings.channels.token_env_var')}
+      data-search-terms={t('settings.channels.token_env_var.help')}
+    ></span>
+    <span
+      hidden
+      data-search-label={t('settings.channels.app_token_env')}
+      data-search-terms={t('settings.channels.app_token_help')}
+    ></span>
   </div>
 {/if}
 

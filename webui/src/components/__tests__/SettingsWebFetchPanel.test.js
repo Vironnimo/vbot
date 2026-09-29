@@ -56,7 +56,10 @@ describe('Web Fetch settings', () => {
     flushSync();
     await Promise.resolve();
     const option = [...document.querySelectorAll('[role="option"]')].find(
-      (item) => item.textContent.trim() === label,
+      (item) =>
+        item
+          .querySelector('.dropdown-primitive__option-label')
+          ?.textContent.trim() === label,
     );
     expect(option).toBeTruthy();
     option.click();
@@ -68,14 +71,35 @@ describe('Web Fetch settings', () => {
     flushSync();
     expect(document.body.textContent).toContain(t('settings.webFetch.direct'));
     expect(document.getElementById('settings-web-fetch-mode')).toBeNull();
+    // Keyed services say whether their API key is set; Direct needs none.
+    document.getElementById('settings-web-fetch-provider').click();
+    flushSync();
+    await Promise.resolve();
+    const hints = Object.fromEntries(
+      [...document.querySelectorAll('[role="option"]')].map((item) => [
+        item
+          .querySelector('.dropdown-primitive__option-label')
+          ?.textContent.trim(),
+        item
+          .querySelector('.dropdown-primitive__option-meta')
+          ?.textContent.trim(),
+      ]),
+    );
+    expect(hints).toEqual({
+      [t('settings.webFetch.direct')]: undefined,
+      [TAVILY()]: t('settings.serviceKey.optionMissing'),
+      [PARALLEL()]: undefined,
+    });
+    document.getElementById('settings-web-fetch-provider').click();
+    flushSync();
     await choose('settings-web-fetch-provider', TAVILY());
     expect(document.body.textContent).toContain(t('settings.webFetch.cost'));
     expect(document.body.textContent).toContain('TAVILY_API_KEY');
     expect(document.querySelector('a').href).toBe(
       settings.web_fetch.services[0].pricing_url,
     );
-    // Where the key goes is part of the service help behind the "?".
-    document.querySelector('.info-hint').click();
+    // Where the key goes is part of the key help behind its "?".
+    document.querySelector('[data-api-key] .info-hint').click();
     flushSync();
     expect(document.querySelector('.info-popover').textContent).toContain(
       '/vbot-data',

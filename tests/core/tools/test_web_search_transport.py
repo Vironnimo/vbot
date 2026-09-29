@@ -45,8 +45,8 @@ _ENDPOINTS = {
 
 def _key_message(label: str, status: int, answer: str, key: str) -> str:
     return (
-        f"{label} rejected the API key (HTTP {status}: {answer}). Tell the user to check "
-        f"{key} in the .env file of the vBot data directory."
+        f"{label} rejected the API key (HTTP {status}: {answer}). Tell the user to check the "
+        f"key ({key}) in Settings under Web search."
     )
 
 

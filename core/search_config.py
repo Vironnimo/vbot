@@ -24,6 +24,16 @@ FIRST_PARTY_WEB_SEARCH_PROVIDERS = frozenset(
     }
 )
 DEFAULT_SEARXNG_BASE_URL = "http://localhost:8888"
+# Environment variable holding each keyed provider's API key (process
+# environment or the data directory's .env). Providers absent here need no key.
+WEB_SEARCH_CREDENTIALS = {
+    WEB_SEARCH_PROVIDER_BRAVE: "BRAVE_API_KEY",
+    WEB_SEARCH_PROVIDER_TAVILY: "TAVILY_API_KEY",
+    WEB_SEARCH_PROVIDER_EXA: "EXA_API_KEY",
+    WEB_SEARCH_PROVIDER_SERPER: "SERPER_API_KEY",
+    WEB_SEARCH_PROVIDER_FIRECRAWL: "FIRECRAWL_API_KEY",
+    WEB_SEARCH_PROVIDER_PERPLEXITY: "PERPLEXITY_API_KEY",
+}
 
 # Result-count bounds shared by the tool schema and the settings layer. The
 # default is deliberately generous for agent usage: results are cheap snippet
@@ -43,6 +53,7 @@ __all__ = [
     "MAX_WEB_SEARCH_COUNT",
     "MAX_WEB_SEARCH_PAGE",
     "MIN_WEB_SEARCH_COUNT",
+    "WEB_SEARCH_CREDENTIALS",
     "WEB_SEARCH_PROVIDER_BRAVE",
     "WEB_SEARCH_PROVIDER_DUCKDUCKGO",
     "WEB_SEARCH_PROVIDER_EXA",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from contextlib import suppress
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
@@ -12,7 +13,7 @@ from core.extensions import validate_extension_config
 from core.fetch_config import WEB_FETCH_CREDENTIALS, WEB_FETCH_PRICING, WEB_FETCH_PROVIDERS
 from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
-from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
+from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS, WEB_SEARCH_CREDENTIALS
 from core.settings import (
     APPLICATION_RESTART,
     SettingsPatchOperation,
@@ -51,6 +52,11 @@ JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.settings")
 
 _MISSING = object()
+
+# The only variables settings.set_service_key may write: the keys the web Tools read.
+_SERVICE_KEY_VARIABLES = frozenset(
+    (*WEB_SEARCH_CREDENTIALS.values(), *WEB_FETCH_CREDENTIALS.values())
+)
 
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
@@ -650,13 +656,8 @@ async def _settings_response(state: Any) -> JsonObject:
             **runtime.storage.load_web_fetch_settings(),
             "available_providers": list(WEB_FETCH_PROVIDERS),
             "services": [
-                {
-                    "id": provider,
-                    "api_key_env": variable,
-                    "configured": bool(runtime.resolve_environment_credential(variable)),
-                    "pricing_url": WEB_FETCH_PRICING[provider],
-                }
-                for provider, variable in WEB_FETCH_CREDENTIALS.items()
+                {**item, "pricing_url": WEB_FETCH_PRICING[item["id"]]}
+                for item in _service_key_items(runtime, WEB_FETCH_CREDENTIALS)
             ],
         },
         "web_search": {
@@ -664,6 +665,8 @@ async def _settings_response(state: Any) -> JsonObject:
             "available_providers": sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS),
             "default_count": web_search["default_count"],
             "searxng": dict(web_search["searxng"]),
+            # Keyed providers only; SearXNG and DuckDuckGo need no key.
+            "services": _service_key_items(runtime, WEB_SEARCH_CREDENTIALS),
         },
         "debug": {
             "enabled": debug["enabled"],
@@ -682,6 +685,82 @@ async def _settings_response(state: Any) -> JsonObject:
         },
     }
     return response
+
+
+def _service_key_items(runtime: Any, credentials: Mapping[str, str]) -> list[JsonObject]:
+    """Project whether each web service's API key is usable and where it comes from.
+
+    ``configured`` trims the value like the web Tools do, so a blank entry (such
+    as the empty lines of the seeded ``.env``) counts as missing. ``source`` names
+    where the lookup finds the variable (``process_environment``, ``data_dir``,
+    or ``None``), even when its value is blank. Values never leave the server.
+    """
+    return [
+        {
+            "id": provider,
+            "api_key_env": variable,
+            "configured": bool(runtime.resolve_environment_credential(variable).strip()),
+            "source": runtime.environment_credential_source(variable),
+        }
+        for provider, variable in credentials.items()
+    ]
+
+
+async def _set_service_key(state: Any, params: JsonObject) -> JsonObject:
+    """Save (or, with an empty value, remove) one web service API key in the data-dir .env."""
+    _reject_unsupported(params, {"api_key_env", "value"}, "settings.set_service_key")
+    variable = _required_string(params, "api_key_env")
+    if variable not in _SERVICE_KEY_VARIABLES:
+        allowed = ", ".join(sorted(_SERVICE_KEY_VARIABLES))
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.api_key_env must be one of: {allowed}")
+    raw_value = params.get("value")
+    if not isinstance(raw_value, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.value must be a string")
+    value = raw_value.strip()
+    if "\n" in value or "\r" in value:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.value must be a single line")
+
+    runtime = state.runtime
+    previous_value = runtime.storage.load_environment().get(variable)
+    try:
+        if value:
+            runtime.storage.set_data_dir_credential(variable, value)
+            changed = previous_value != value
+        else:
+            changed = runtime.storage.remove_data_dir_credential(variable)
+        runtime.reload_environment_credentials()
+    except Exception as exc:
+        _restore_service_key(runtime, variable, previous_value)
+        raise _map_expected_error(exc) from exc
+
+    if changed:
+        _LOGGER.info(
+            "Web service API key %s (variable=%s effective_source=%s)",
+            "saved" if value else "removed",
+            variable,
+            runtime.environment_credential_source(variable),
+        )
+    try:
+        return await _settings_response(state)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _restore_service_key(runtime: Any, variable: str, previous_value: str | None) -> None:
+    """Put back the .env entry a failed key write replaced; a blank one is left out."""
+    try:
+        if previous_value:
+            runtime.storage.set_data_dir_credential(variable, previous_value)
+        else:
+            runtime.storage.remove_data_dir_credential(variable)
+        runtime.reload_environment_credentials()
+    except Exception as rollback_error:
+        _LOGGER.error(
+            "Web service API key rollback failed (variable=%s): %s",
+            variable,
+            rollback_error,
+            exc_info=(type(rollback_error), rollback_error, rollback_error.__traceback__),
+        )
 
 
 async def _trace_count(runtime: Any) -> int:
@@ -752,5 +831,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         ),
         "settings.update": serialized_mutation(
             _update_settings, lock_attribute="_settings_mutation_lock"
+        ),
+        "settings.set_service_key": serialized_mutation(
+            _set_service_key, lock_attribute="_settings_mutation_lock"
         ),
     }
