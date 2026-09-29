@@ -327,12 +327,6 @@ def _bootstrap_canonical(spec: DatabaseSpec, data_dir: Path) -> Database:
         return _open_canonical(spec)
     database = _open_existing(spec, expected_database_id=None, data_dir=data_dir)
     try:
-        if not created:
-            _LOGGER.warning(
-                "Registering the existing unlisted %s database %s after verification",
-                spec.name,
-                spec.path,
-            )
         register_database(
             data_dir,
             spec.name,
@@ -341,6 +335,12 @@ def _bootstrap_canonical(spec: DatabaseSpec, data_dir: Path) -> Database:
     except BaseException:
         database.close()
         raise
+    if not created:
+        _LOGGER.warning(
+            "Registered existing unlisted database after verification (database=%s path=%s)",
+            spec.name,
+            spec.path,
+        )
     return database
 
 
@@ -358,18 +358,23 @@ def _open_disposable(spec: DatabaseSpec, *, workers: BoundedWorkerPool | None = 
                 if isinstance(exc, DatabaseError):
                     raise
                 raise DatabaseCorruptError(f"{spec.name}: rebuilt projection is unusable") from exc
+            _discard(spec)
             if isinstance(exc, _ProjectionMismatchError):
                 # The designed upgrade path, not damage: the new projection
                 # version is rebuilt from its canonical sources.
                 _LOGGER.info(
-                    "Rebuilding the %s projection: version %s -> %s",
+                    "Discarded projection for a new version (database=%s from=%s to=%s)",
                     spec.name,
                     exc.found,
                     exc.expected,
                 )
             else:
-                _LOGGER.warning("Discarding the %s projection at %s: %s", spec.name, spec.path, exc)
-            _discard(spec)
+                _LOGGER.warning(
+                    "Discarded unusable projection (database=%s path=%s): %s",
+                    spec.name,
+                    spec.path,
+                    exc,
+                )
     raise AssertionError("unreachable")
 
 
@@ -646,10 +651,10 @@ def _evolve(writer: sqlite3.Connection, spec: DatabaseSpec, declared: DeclaredSc
         raise
     if planned or pending:
         _LOGGER.info(
-            "Evolved the %s database at %s: %s",
+            "Evolved database schema (database=%s path=%s changes=%s)",
             spec.name,
             spec.path,
-            "; ".join(
+            ", ".join(
                 [change.description for change in planned]
                 + [f"applied migration {migration.name}" for migration in pending]
             ),

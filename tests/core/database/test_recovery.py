@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -137,14 +138,18 @@ def _corrupt_pages(path: Path) -> None:
     ids=["garbage", "missing", "identity", "page-corruption"],
 )
 def test_a_damaged_database_is_restored_on_open_with_an_incident(
-    data_dir: Path, damage: Callable[[Path], None], cause: str | None
+    data_dir: Path,
+    caplog: pytest.LogCaptureFixture,
+    damage: Callable[[Path], None],
+    cause: str | None,
 ) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
     path = notes_spec(data_dir).path
     damage(path)
     damaged = path.read_bytes() if path.exists() else None
 
-    database = open_database(notes_spec(data_dir))
+    with caplog.at_level(logging.WARNING, logger="vbot.database"):
+        database = open_database(notes_spec(data_dir))
     try:
         assert note_bodies(database) == ["saved"]
         status = data_store_status(data_dir, databases=(database,))
@@ -162,6 +167,10 @@ def test_a_damaged_database_is_restored_on_open_with_an_incident(
     if cause is not None:
         assert incident["cause"] == cause
     assert [item["incident_id"] for item in active_incidents(data_dir)] == [incident["incident_id"]]
+    # Data written after the snapshot may be lost: the operator reads it at ERROR.
+    [report] = [record for record in caplog.records if record.name == "vbot.database"]
+    assert report.levelno == logging.ERROR
+    assert snapshot.name in report.getMessage()
     if damaged is None:
         assert incident["quarantine"] is None
         assert not quarantine_root(data_dir).exists()
@@ -170,6 +179,7 @@ def test_a_damaged_database_is_restored_on_open_with_an_incident(
         assert _quarantine_batches(data_dir) == [quarantine]
         assert re.fullmatch(r"\d{8}T\d{6}-[0-9a-f]{8}", quarantine.name)
         assert (quarantine / "notes.db").read_bytes() == damaged
+        assert str(quarantine) in report.getMessage()
 
 
 @pytest.mark.parametrize("changed", ["live-table", "declaration"])
@@ -306,7 +316,7 @@ def test_incident_publication_failure_does_not_report_recovery(
 
 
 def test_a_final_incident_failure_stops_at_pending_evidence_that_the_next_open_completes(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     snapshot_with_notes(data_dir, "one")
     snapshot_with_notes(data_dir, "two")
@@ -319,10 +329,13 @@ def test_a_final_incident_failure_stops_at_pending_evidence_that_the_next_open_c
             publications.append(target)
         return len(publications) == 2 and target == evidence
 
-    with monkeypatch.context() as patched:
+    with monkeypatch.context() as patched, caplog.at_level(logging.ERROR, logger="vbot.database"):
         patched.setattr(os, "replace", _failing_replace(final_publication))
         with pytest.raises(DatabaseCorruptError):
             open_database(notes_spec(data_dir))
+    # The failed attempt already moved the original: its report says so at ERROR.
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    caplog.clear()
     pending = read_incident(data_dir, "notes")
     assert pending is not None
     assert pending["verification"] == "pending"
@@ -334,7 +347,10 @@ def test_a_final_incident_failure_stops_at_pending_evidence_that_the_next_open_c
     evidence.write_text(json.dumps(pending), encoding="utf-8")
 
     # The installed newest copy is confirmed; an older snapshot is never tried.
-    assert stored_bodies(notes_spec(data_dir)) == ["one", "two"]
+    with caplog.at_level(logging.ERROR, logger="vbot.database"):
+        assert stored_bodies(notes_spec(data_dir)) == ["one", "two"]
+    [completion] = caplog.records
+    assert pending["restored_snapshot_id"] in completion.getMessage()
     assert len(_quarantine_batches(data_dir)) == 1
     completed = read_incident(data_dir, "notes")
     assert completed is not None

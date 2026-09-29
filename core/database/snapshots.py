@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -78,6 +79,8 @@ from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
     from core.database.database import Database
+
+_LOGGER = logging.getLogger("vbot.database")
 
 SNAPSHOT_ROOT_NAME = "snapshots"
 SNAPSHOT_MANIFEST_NAME = "manifest.json"
@@ -218,6 +221,12 @@ def _health_path(data_dir: Path) -> Path:
 def _record_snapshot_health(
     data_dir: Path, state: str, *, reason: str | None = None, snapshot_id: str | None = None
 ) -> None:
+    """Record the latest attempt's outcome and log only a change of health.
+
+    A degradation logs once per reason, not on every failed attempt; the first
+    healthy attempt after it logs the recovery.
+    """
+    previous = read_snapshot_health(data_dir)
     payload = {
         "state": state,
         "reason": reason,
@@ -228,6 +237,15 @@ def _record_snapshot_health(
         atomic_write_text(
             _health_path(data_dir), json.dumps(payload, indent=2, sort_keys=True) + "\n"
         )
+    if state == "degraded":
+        repeated = previous["state"] == "degraded" and previous["reason"] == reason
+        _LOGGER.log(
+            logging.DEBUG if repeated else logging.WARNING,
+            "Data snapshot health degraded: %s",
+            reason,
+        )
+    elif previous["state"] == "degraded":
+        _LOGGER.info("Data snapshot health recovered (snapshot=%s)", snapshot_id)
 
 
 def read_snapshot_health(data_dir: Path) -> dict[str, Any]:
@@ -918,6 +936,13 @@ def create_data_snapshot(
         partial = None
         fsync_dir(root)
         _prune_snapshots(data_dir, protected_snapshot=final)
+        _LOGGER.info(
+            "Created data snapshot (snapshot=%s databases=%d documents=%d reason=%s)",
+            snapshot_id,
+            len(members),
+            len(documents),
+            reason,
+        )
         _record_snapshot_health(data_dir, "healthy", snapshot_id=snapshot_id)
         return final
     except _SnapshotCancelledError:
