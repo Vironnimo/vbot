@@ -11,10 +11,10 @@
   } from '$lib/sessionListView.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { useNavigation } from '$lib/navigation.svelte.js';
+  import { writeClipboardText } from '$lib/clipboard.js';
   import {
     isDesktopAccessor,
     openDesktopExternalUrl,
-    setDesktopClipboardText,
   } from '$lib/desktopBridge.js';
 
   let {
@@ -324,8 +324,7 @@
     const path = menuFile.path;
     closeMenu(true);
     try {
-      if (isDesktopAccessor()) await setDesktopClipboardText(path);
-      else await navigator.clipboard.writeText(path);
+      await writeClipboardText(path);
       onToast({
         title: t('files.pathCopied'),
         variant: 'success',
