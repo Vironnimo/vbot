@@ -201,7 +201,7 @@ class ExtensionDatabases:
         if not current:
             database.close()
             raise ExtensionUnavailableError("Extension registration is no longer current")
-        _LOGGER.info("Extension database opened (name=%s)", spec.name)
+        _LOGGER.debug("Extension database opened (name=%s)", spec.name)
         return database
 
     def _require_admission(self, owner: Any) -> None:
@@ -283,4 +283,4 @@ class ExtensionDatabases:
             except Exception:
                 _LOGGER.exception("Extension database close failed (name=%s)", database.name)
             else:
-                _LOGGER.info("Extension database closed (name=%s)", database.name)
+                _LOGGER.debug("Extension database closed (name=%s)", database.name)

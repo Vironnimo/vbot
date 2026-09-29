@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Protocol, cast
@@ -64,10 +65,6 @@ from core.runtime._prompt_blocks import (
     _StorageManagerBlockStore,
 )
 from core.runtime._recall import RecallIntegration
-from core.runtime.interfaces import (
-    LoggerProtocol,
-    ProviderCredentialResolverProtocol,
-)
 from core.runtime.keep_awake import KeepAwakeController
 from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
@@ -79,7 +76,6 @@ from core.settings.settings import effective_timezone_name
 from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime, load_global_skill_registry
-from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
@@ -146,7 +142,7 @@ def bootstrap(runtime: Runtime) -> None:
             raise RuntimeError("Storage service not available")
         runtime._storage.ensure_directories()
         runtime.logger = runtime._open_log_manager().get_logger("core")
-        runtime.logger.info("Runtime startup initiated")
+        runtime.logger.debug("Runtime startup initiated")
         runtime._storage.temporary_files.start()
         settings = runtime._storage.load_settings()
         timezone_name = effective_timezone_name(settings)
@@ -656,19 +652,13 @@ def bootstrap(runtime: Runtime) -> None:
             timezone_name=runtime.timezone_name,
         )
 
-        _log_startup_inventory(
-            runtime.logger,
-            runtime._providers,
-            runtime._provider_credentials,
-            runtime._tools,
-            runtime._skills,
-        )
+        runtime._startup_summary = _summarize_startup(runtime)
         runtime._started = True
         # Measurement only observes; safe modes are measured like normal serving.
         runtime._start_performance_service()
         if runtime.safe_startup_mode is None:
             runtime._start_provider_usage_service()
-        runtime.logger.info("Runtime started")
+        runtime.logger.debug("Runtime started (%s)", runtime._startup_summary.describe())
     except Exception:
         _log_startup_failure(runtime)
         runtime._cleanup_failed_startup()
@@ -701,49 +691,58 @@ def _log_startup_failure(runtime: Runtime) -> None:
         runtime._open_log_manager().get_logger("core").exception("Runtime startup failed")
 
 
-def _log_startup_inventory(
-    logger: LoggerProtocol | None,
-    providers: ProviderRegistry | None,
-    provider_credentials: ProviderCredentialResolverProtocol | None,
-    tools: ToolRegistry | None,
-    skills: SkillRegistry | None,
-) -> None:
-    if (
-        logger is None
-        or providers is None
-        or provider_credentials is None
-        or tools is None
-        or skills is None
-    ):
-        return
+@dataclass(frozen=True)
+class RuntimeStartupSummary:
+    """What a Runtime served when its startup finished."""
 
-    provider_ids = providers.list_ids()
+    tools: int
+    skills: int
+    usable_providers: int
+    providers: int
+    usable_connections: int
+    connections: int
+    extensions: int
+    keep_awake: bool
+
+    def describe(self) -> str:
+        """Return the summary as ``key=value`` log fields."""
+        return (
+            f"tools={self.tools} skills={self.skills}"
+            f" providers={self.usable_providers}/{self.providers}"
+            f" connections={self.usable_connections}/{self.connections}"
+            f" extensions={self.extensions} keep_awake={'on' if self.keep_awake else 'off'}"
+        )
+
+
+def _summarize_startup(runtime: Runtime) -> RuntimeStartupSummary:
+    providers = runtime._providers
+    provider_credentials = runtime._provider_credentials
+    provider_ids: list[str] = []
     usable_provider_count = 0
     total_connection_count = 0
     usable_connection_count = 0
 
-    for provider_id in provider_ids:
-        provider_config = providers.get(provider_id)
-        provider_is_usable = False
+    if providers is not None and provider_credentials is not None:
+        provider_ids = providers.list_ids()
+        for provider_id in provider_ids:
+            provider_is_usable = False
+            for connection in providers.get(provider_id).connections:
+                total_connection_count += 1
+                if provider_credentials.is_usable(provider_id, f"{provider_id}:{connection.id}"):
+                    usable_connection_count += 1
+                    provider_is_usable = True
+            if provider_is_usable:
+                usable_provider_count += 1
 
-        for connection in provider_config.connections:
-            total_connection_count += 1
-            connection_id = f"{provider_id}:{connection.id}"
-            if provider_credentials.is_usable(provider_id, connection_id):
-                usable_connection_count += 1
-                provider_is_usable = True
-
-        if provider_is_usable:
-            usable_provider_count += 1
-
-    logger.info(
-        "Runtime inventory: %s tools, %s skills, %s/%s usable providers, %s/%s usable connections",
-        len(tools.list_tools()),
-        len(skills.list_all()),
-        usable_provider_count,
-        len(provider_ids),
-        usable_connection_count,
-        total_connection_count,
+    return RuntimeStartupSummary(
+        tools=len(runtime._tools.list_tools()) if runtime._tools is not None else 0,
+        skills=len(runtime._skills.list_all()) if runtime._skills is not None else 0,
+        usable_providers=usable_provider_count,
+        providers=len(provider_ids),
+        usable_connections=usable_connection_count,
+        connections=total_connection_count,
+        extensions=len(_loaded_extension_names(runtime._extensions)),
+        keep_awake=runtime._keep_awake is not None and runtime._keep_awake.active,
     )
 
 

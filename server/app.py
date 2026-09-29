@@ -29,9 +29,11 @@ from core.skills import SKILL_ARCHIVE_MAX_BYTES
 from core.tools.terminal_manager import TerminalNotFoundError
 from core.utils.config import Config
 from core.utils.server_control import (
+    CONTROL_INITIATOR_HEADER,
     CONTROL_SHUTDOWN_PATH,
     CONTROL_TOKEN_HEADER,
     is_authorized_control_token,
+    normalize_stop_initiator,
 )
 from server._app_lifecycle import (
     _app_chat_runs,
@@ -239,15 +241,19 @@ def create_app(
     config: Config | None = None,
     server_bind: ServerBindState | None = None,
     shutdown_token: str | None = None,
-    request_shutdown: Callable[[], None] | None = None,
+    request_shutdown: Callable[[str], None] | None = None,
     request_restart: Callable[[], None] | None = None,
     safe_startup_mode: Literal["verification", "test"] | None = None,
-    on_ready: Callable[[], None] | None = None,
+    on_ready: Callable[[Any], None] | None = None,
+    on_stopped: Callable[[], None] | None = None,
 ) -> FastAPIType:
     """Create the FastAPI app and wire runtime services into app state.
 
-    ``on_ready`` runs once at the end of lifespan startup, before the server
-    accepts connections.
+    ``request_shutdown`` receives who asked for the shutdown (a
+    ``STOP_INITIATORS`` value or ``unknown``). ``on_ready`` receives the
+    started Runtime once at the end of lifespan startup, before the server
+    accepts connections; ``on_stopped`` runs once at the end of lifespan
+    shutdown, after the Runtime stopped.
     """
     if FastAPI is None:
         raise RuntimeError(
@@ -285,7 +291,7 @@ def create_app(
                 maybe_refresh_local_catalogs()
             )
         server_logger = logging.getLogger("vbot.server.app")
-        server_logger.info(
+        server_logger.debug(
             "Server application ready on %s:%s",
             resolved_server_bind["listen_host"],
             resolved_server_bind["listen_port"],
@@ -294,32 +300,38 @@ def create_app(
         if callable(activate_bootstrap):
             activate_bootstrap()
         if on_ready is not None:
-            on_ready()
+            on_ready(app_runtime)
         try:
             yield
         finally:
-            server_logger.info("Server application stopping")
-            await _shutdown_live_calls(app.state, server_logger)
-            await _shutdown_local_catalog_refresh(
-                getattr(app.state, "local_catalog_refresh_task", None),
-                server_logger,
-            )
-            await _shutdown_statistics_warmup(getattr(app.state, "statistics_warmup_task", None))
-            _unregister_run_event_bridge(app.state)
-            _unregister_session_title_bridge(app.state)
-            _unregister_session_completion_read_bridge(app.state)
-            _unregister_cron_change_bridge(app.state)
-            _unregister_calendar_change_bridge(app.state)
-            _unregister_skill_change_bridge(app.state)
-            _unregister_terminal_change_bridge(app.state)
-            _unregister_bash_process_change_bridge(app.state)
-            await _shutdown_log_viewer(app.state.log_viewer, server_logger)
-            await _shutdown_device_flow_engine(
-                getattr(app.state, "device_flow_engine", None),
-                server_logger,
-            )
-            await _shutdown_model_list_refreshes(app_runtime)
-            await _shutdown_runtime(app_runtime)
+            try:
+                server_logger.debug("Server application stopping")
+                await _shutdown_live_calls(app.state, server_logger)
+                await _shutdown_local_catalog_refresh(
+                    getattr(app.state, "local_catalog_refresh_task", None),
+                    server_logger,
+                )
+                await _shutdown_statistics_warmup(
+                    getattr(app.state, "statistics_warmup_task", None)
+                )
+                _unregister_run_event_bridge(app.state)
+                _unregister_session_title_bridge(app.state)
+                _unregister_session_completion_read_bridge(app.state)
+                _unregister_cron_change_bridge(app.state)
+                _unregister_calendar_change_bridge(app.state)
+                _unregister_skill_change_bridge(app.state)
+                _unregister_terminal_change_bridge(app.state)
+                _unregister_bash_process_change_bridge(app.state)
+                await _shutdown_log_viewer(app.state.log_viewer, server_logger)
+                await _shutdown_device_flow_engine(
+                    getattr(app.state, "device_flow_engine", None),
+                    server_logger,
+                )
+                await _shutdown_model_list_refreshes(app_runtime)
+                await _shutdown_runtime(app_runtime)
+            finally:
+                if on_stopped is not None:
+                    on_stopped()
 
     app = FastAPI(lifespan=lifespan)
     if effective_safe_mode == "verification":
@@ -345,7 +357,7 @@ def create_app(
             raise HTTPException(status_code=404)
         if request_shutdown is None:
             raise HTTPException(status_code=503, detail="Server shutdown is unavailable")
-        request_shutdown()
+        request_shutdown(normalize_stop_initiator(request.headers.get(CONTROL_INITIATOR_HEADER)))
         return {"status": "stopping"}
 
     @app.post("/api/rpc")

@@ -61,7 +61,7 @@ from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
 from core.recall import RecallBackend
 from core.runs import ChatRunManager
-from core.runtime._bootstrap import bootstrap, start_event_loop_service
+from core.runtime._bootstrap import RuntimeStartupSummary, bootstrap, start_event_loop_service
 from core.runtime._configuration import _resolve_data_dir, _resolve_resources_path
 from core.runtime._extension_host import ExtensionHostFactory
 from core.runtime._prompt_blocks import refresh_prompt_blocks
@@ -153,6 +153,7 @@ class Runtime:
         self._started_at: datetime | None = None
         self._startup_id: str | None = None
         self._build: BuildIdentity | None = None
+        self._startup_summary: RuntimeStartupSummary | None = None
         self._provider_runtime: ProviderRuntime | None = None
         self._providers: ProviderRegistry | None = None
         self._provider_credentials: ProviderCredentialResolverProtocol | None = None
@@ -553,7 +554,7 @@ class Runtime:
 
     def _log_shutdown(self) -> None:
         if self.logger is not None:
-            self.logger.info("Runtime stopped")
+            self.logger.debug("Runtime stopped")
 
     def _cleanup_failed_startup(self) -> None:
         """Release every started resource after a failed synchronous bootstrap."""
@@ -1020,6 +1021,14 @@ class Runtime:
     attachment_store: _StartedService[AttachmentStore] = _StartedService(
         lambda runtime: runtime._attachment_store, "Attachment store not available"
     )
+
+    @property
+    def startup_summary(self) -> RuntimeStartupSummary:
+        """What this Runtime served when its startup finished."""
+
+        self._ensure_started()
+        assert self._startup_summary is not None
+        return self._startup_summary
 
     @property
     def speech_upload_max_size_bytes(self) -> int:

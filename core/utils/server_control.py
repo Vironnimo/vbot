@@ -20,6 +20,12 @@ from core.utils.atomic import atomic_write_bytes
 CONTROL_DIRECTORY_NAME = "runtime"
 CONTROL_TOKEN_HEADER = "X-VBot-Control-Token"
 CONTROL_SHUTDOWN_PATH = "/_vbot/control/shutdown"
+# Optional: who asked for the shutdown; the server reports it in its stop line.
+CONTROL_INITIATOR_HEADER = "X-VBot-Stop-Initiator"
+STOP_INITIATORS = frozenset(
+    {"cli", "scheduled_restart", "tray_quit", "tray_restart", "tray_stop", "update"}
+)
+UNKNOWN_STOP_INITIATOR = "unknown"
 CONTROL_RECORD_VERSION = 2
 CONTROL_RECORD_MAX_BYTES = 16_384
 CONTROL_TOKEN_BYTES = 32
@@ -257,6 +263,12 @@ def remove_server_control(record: ServerControlRecord) -> None:
         record.path.unlink()
 
 
+def normalize_stop_initiator(value: str | None) -> str:
+    """Return *value* when it names a known shutdown initiator, else ``unknown``."""
+
+    return value if value in STOP_INITIATORS else UNKNOWN_STOP_INITIATOR
+
+
 def is_authorized_control_token(provided: str | None, expected: str | None) -> bool:
     """Compare a supplied control token without exposing timing differences."""
 
@@ -266,13 +278,17 @@ def is_authorized_control_token(provided: str | None, expected: str | None) -> b
 
 
 __all__ = [
+    "CONTROL_INITIATOR_HEADER",
     "CONTROL_SHUTDOWN_PATH",
     "CONTROL_TOKEN_HEADER",
+    "STOP_INITIATORS",
+    "UNKNOWN_STOP_INITIATOR",
     "ServerControlRecord",
     "control_record_path",
     "create_server_control",
     "is_authorized_control_token",
     "live_server_ports",
+    "normalize_stop_initiator",
     "read_server_control",
     "remove_server_control",
     "server_control_claim",

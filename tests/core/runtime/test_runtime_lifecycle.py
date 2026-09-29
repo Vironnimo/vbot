@@ -283,7 +283,7 @@ def _clear_provider_credential_environment(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv(seeded_credential_key, "test-startup-credential")
 
 
-def _expected_startup_inventory_message(runtime: Runtime) -> str:
+def _expected_provider_counts(runtime: Runtime) -> tuple[int, int, int, int]:
     provider_ids = runtime.providers.list_ids()
     usable_provider_count = 0
     total_connection_count = 0
@@ -300,15 +300,14 @@ def _expected_startup_inventory_message(runtime: Runtime) -> str:
         usable_provider_count += provider_is_usable
     assert 0 < usable_connection_count < total_connection_count
     return (
-        "Runtime inventory: "
-        f"{len(runtime.tools.list_tools())} tools, "
-        f"{len(runtime.skills.list_all())} skills, "
-        f"{usable_provider_count}/{len(provider_ids)} usable providers, "
-        f"{usable_connection_count}/{total_connection_count} usable connections"
+        usable_provider_count,
+        len(provider_ids),
+        usable_connection_count,
+        total_connection_count,
     )
 
 
-def test_runtime_lifecycle_logs_use_the_managed_daily_log_file(
+def test_runtime_summarizes_its_startup_and_logs_to_the_managed_daily_file(
     config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _clear_provider_credential_environment(monkeypatch)
@@ -329,17 +328,24 @@ def test_runtime_lifecycle_logs_use_the_managed_daily_log_file(
 
     runtime.start()
     assert isinstance(runtime.logger, logging.Logger)
-    expected_inventory = _expected_startup_inventory_message(runtime)
+    summary = runtime.startup_summary
+    # The server's start line reports these counts.
+    assert (
+        summary.usable_providers,
+        summary.providers,
+        summary.usable_connections,
+        summary.connections,
+    ) == _expected_provider_counts(runtime)
+    assert (summary.tools, summary.skills) == (
+        len(runtime.tools.list_tools()),
+        len(runtime.skills.list_all()),
+    )
     runtime.stop()
 
     log_files = list((config.data_dir / "logs").iterdir())
     assert len(log_files) == 1
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}\.log", log_files[0].name)
     contents = log_files[0].read_text(encoding="utf-8")
-    lines = contents.strip().splitlines()
-    for message in ("Runtime startup initiated", "Runtime started", "Runtime stopped"):
-        assert any(line.endswith(f"[INFO] vbot.core - {message}") for line in lines)
-    assert f"[INFO] vbot.core - {expected_inventory}" in contents
     assert "[WARN] vbot.core - Loaded skills with " in contents
     assert " invalid skill directories; see vbot.skills warnings for details" in contents
 

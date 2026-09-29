@@ -164,7 +164,7 @@ class KeepAwakeController:
             return
         self._handle = handle
         self._active = True
-        self._log("info", "Keep-awake active: automatic system sleep prevented")
+        self._log("debug", "Keep-awake active: automatic system sleep prevented")
 
     def _disable(self) -> None:
         if not self._active:
@@ -177,6 +177,6 @@ class KeepAwakeController:
             self._log("warning", f"Keep-awake release failed: {error}")
             return
         if released:
-            self._log("info", "Keep-awake inactive: system may sleep again")
+            self._log("debug", "Keep-awake inactive: system may sleep again")
         else:
             self._log("warning", "Keep-awake release was rejected by the platform")
