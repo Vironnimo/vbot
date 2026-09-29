@@ -349,10 +349,21 @@ class ConnectionRuntime:
                 return
             try:
                 result = self._writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-                if result and len(result) > 1 and result[1] > 0:
-                    _LOGGER.debug("WAL checkpoint left %s/%s pages pending", result[2], result[1])
+                if result and len(result) > 2 and result[1] > 0:
+                    _LOGGER.debug(
+                        "WAL checkpoint ran (database=%s wal_frames=%s checkpointed=%s)",
+                        self.name,
+                        result[1],
+                        result[2],
+                    )
             except Exception as exc:
-                _LOGGER.warning("WAL checkpoint failed for %s: %s", self.label, exc)
+                _LOGGER.warning(
+                    "WAL checkpoint failed (database=%s file=%s error_type=%s): %s",
+                    self.name,
+                    self.path.name,
+                    type(exc).__name__,
+                    exc,
+                )
 
     def backup(
         self,
