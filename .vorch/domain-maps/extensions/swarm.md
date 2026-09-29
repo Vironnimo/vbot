@@ -370,12 +370,14 @@ end (`test_swarm_inbox_delivery.py`). The Inbox description says new messages al
 delivery, so checking right after posting is unnecessary: in session evidence ~19%
 of Inbox calls were empty, most of them directly after a post.
 
-`swarm_state` is read-only, with optional cursor and limit (above 100 runs as 100
-with a note). It returns readable fields: `you` (name, state), `pending`
+`swarm_state` is read-only, with optional cursor and limit (default 100, above 100
+runs as 100 with a note), so one page holds a whole roster: all 4 cursor failures of
+one Swarm Run came from 21-23-participant Swarms paging at the former default of 20
+(Sessions, 2026-09). It returns readable fields: `you` (name, state), `pending`
 (count and how to receive it), `delivery` and `wake` (the route policies as
 sentences), `participants` (count by state), `more` with a copyable continuation,
-and a roster listing "- Name: state" that marks the reader "(you)"; cursors bind
-page size (`test_swarm_state_tool.py`). Participant ids stay out of all Agent text,
+and a roster listing "- Name: state" that marks the reader "(you)"; a cursor keeps
+its place under another page size (`test_swarm_state_tool.py`). Participant ids stay out of all Agent text,
 since names are unique within a Swarm. Participants cannot rename themselves. The Store shuffles a pool of 300 modern
 first names (`_participant_names.py`) once per new Swarm, assigning without
 replacement across formation rows. Larger Swarms use numbered suffixes after the
@@ -752,6 +754,7 @@ reasons yet. Evidence comes from eight analyzed Runs (Sessions, 2026-09); counts
 | `swarm_board`: `Other participants receive a main-discussion post longer than 1000 characters as its opening lines with the call to read the rest, so state the main point first.` | Tells the author what readers see, so the opening carries the point (F4). Board text was ~48% of input; median post length reached 2,458 characters in one Run (F6). |
 | `swarm_board`: `joining one makes its future posts reach you in full` | Joining is the way to get discussion posts whole; the added `in full` contrasts with Openings (F4). |
 | `swarm_board` foreign `check_inbox` action: `Use {"action": "read"} to read the newest posts of the main discussion. If swarm_inbox is among your Tools, it receives all your pending Board messages.` | Under default delivery the Session has no `swarm_inbox`; the old text named only that Tool (F5). |
+| `swarm_state` `limit`: `Maximum participants to list, at most 100. Omit to list up to 100.` | The default covers a whole roster, so Agents do not page (F6); a smaller default made Agents continue with another page size, which the cursor then refused (F5, Sessions, 2026-09). |
 | `swarm_state` route `ping`: `posts that address or answer you` | "pings" named a mechanism the Agent no longer sees (F3); `address` is the Board description's word for `@Name`. |
 | `swarm_state` wake: `After a Run in which you used no Tool except to read the Board, the Wiki or this status, only posts by the user and posts that address or answer you start your next Run at once; other posts wait up to 4 minutes.` | Explains why an idle Agent was not woken, and that addressing a peer is how to reach it at once (F4). Names the reads that do not count, matching `WakePacing.tools_used`. |
 | Post result: `It reaches {names} in full because it addresses or answers them.` and `{count} participants receive only its opening lines and the call to read the rest.` | Confirms who was addressed, so an unintended or missed mention is visible right after posting (F4). |

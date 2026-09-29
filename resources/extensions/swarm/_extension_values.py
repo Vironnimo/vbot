@@ -180,10 +180,10 @@ def _inbox_available(binding: TemporarySessionBinding) -> bool:
     return "swarm_inbox" not in binding.config["tool_access"].get("denied", [])
 
 
-def _clamped_limit(arguments: Json, notes: list[str], maximum: int = 100) -> int:
+def _clamped_limit(arguments: Json, notes: list[str], maximum: int = 100, default: int = 20) -> int:
     """Return the requested page size, lowered to ``maximum`` with a note."""
 
-    limit = arguments.get("limit", 20)
+    limit = arguments.get("limit", default)
     if type(limit) is not int or limit < 1:
         raise SwarmStoreError("invalid_arguments", field="limit")
     if limit > maximum:
