@@ -578,12 +578,12 @@ async def test_completion_fallback_retries_transient_persistence_failure(
     original_add_note = ChatSession.add_note
     attempts = 0
 
-    def add_note_with_transient_failure(session: ChatSession, content: str) -> None:
+    def add_note_with_transient_failure(session: ChatSession, content: str, **options: Any) -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise ChatSessionError("temporary append failure")
-        original_add_note(session, content)
+        original_add_note(session, content, **options)
 
     monkeypatch.setattr(ChatSession, "add_note", add_note_with_transient_failure)
     monkeypatch.setattr(
