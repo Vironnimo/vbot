@@ -120,6 +120,11 @@ try {
     $definition.Settings.StartWhenAvailable = $true
     $definition.Settings.ExecutionTimeLimit = "PT0S"
     $definition.Settings.MultipleInstances = 2
+    # The default task priority 7 starts the process tree below normal, with
+    # low I/O and memory priority: Windows trims the idle server's working set
+    # and pages it back in at low I/O priority, stalling the Event Loop for
+    # seconds. Priority 4 is the normal class with normal I/O and memory priority.
+    $definition.Settings.Priority = 4
     $definition.Settings.RestartCount = [int]$payload.restart_count
     $definition.Settings.RestartInterval = [string]$payload.restart_interval
 

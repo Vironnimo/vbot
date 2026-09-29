@@ -140,6 +140,8 @@ def test_enable_windows_creates_task_and_starts() -> None:
     assert "$trigger.UserId = $userId" in script
     assert "$definition.Settings.RestartCount = [int]$payload.restart_count" in script
     assert "$definition.Settings.RestartInterval = [string]$payload.restart_interval" in script
+    # Normal CPU, I/O and memory priority instead of the below-normal default 7.
+    assert "$definition.Settings.Priority = 4" in script
     assert "$root.RegisterTaskDefinition(" in script
 
 
