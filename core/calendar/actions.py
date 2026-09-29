@@ -500,13 +500,18 @@ class CalendarActions:
             if key not in {"created_at", "scanned_until"}
         }
 
-    def retarget_identity(self, source: str, destination: str) -> None:
-        """Retarget under the caller's Agent rename transaction; support compensation."""
+    def retarget_identity(self, source: str, destination: str) -> int:
+        """Retarget under the caller's Agent rename transaction; support compensation.
+
+        Returns the number of retargeted actions for the rename's summary line.
+        """
         self._load()
         previous = copy.deepcopy((self._actions, self._executions))
+        retargeted = 0
         for action in self._actions.values():
             if action["target"] == source:
                 action["target"] = destination
+                retargeted += 1
         for row in self._executions.values():
             if row["target"] == source:
                 row["target"] = destination
@@ -516,6 +521,7 @@ class CalendarActions:
             self._actions, self._executions = previous
             raise
         self._calendar._notify_changed()
+        return retargeted
 
     def list_actions(self, event_id: str | None = None) -> list[dict[str, Any]]:
         try:

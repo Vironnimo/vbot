@@ -310,13 +310,15 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
     if result.cron_job_ids:
         publish_resource_changed(state, RESOURCE_KIND_CRON)
     _LOGGER.info(
-        "Agent renamed (agent=%s new_agent=%s channels=%s cron=%s "
-        "bootstrap=%s policies=%s session_links=%s)",
+        "Agent renamed (agent=%s new_agent=%s sessions=%s channels=%s cron=%s "
+        "bootstrap=%s calendar_actions=%s policies=%s session_links=%s)",
         agent_id,
         new_agent_id,
+        len(result.session_ids),
         len(result.channel_ids),
         len(result.cron_job_ids),
         len(result.bootstrap_job_ids),
+        result.calendar_action_count,
         len(result.policy_agent_ids),
         result.session_reference_count,
     )

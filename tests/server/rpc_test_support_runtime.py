@@ -328,8 +328,8 @@ class StubCalendarActions:
     def list_actions(self) -> list[Any]:
         return []
 
-    def retarget_identity(self, _old_agent_id: str, _new_agent_id: str) -> None:
-        return None
+    def retarget_identity(self, _old_agent_id: str, _new_agent_id: str) -> int:
+        return 0
 
 
 class StubCalendarService:

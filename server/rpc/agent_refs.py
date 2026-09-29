@@ -24,6 +24,7 @@ class AgentRenameCoordinationResult:
     bootstrap_job_ids: tuple[str, ...]
     policy_agent_ids: tuple[str, ...]
     session_reference_count: int
+    calendar_action_count: int
 
 
 class _NoopAsyncContext:
@@ -105,6 +106,7 @@ def _rename_agent_and_retarget_references(
     prior_bootstrap_jobs: dict[str, Any] = {}
     calendar = runtime.calendar_service
     calendar_retargeted = False
+    calendar_action_count = 0
 
     channel_service = runtime.channel_service
     channels = [
@@ -145,13 +147,13 @@ def _rename_agent_and_retarget_references(
             _retarget_channel(loop, channel_service, channel.id, new_agent_id)
             updated_channel_ids.append(channel.id)
         for job in cron_jobs:
-            cron_service.update_job(job.id, agent_id=new_agent_id)
+            cron_service.retarget_agent(job.id, new_agent_id)
             updated_cron_job_ids.append(job.id)
         for job in bootstrap_jobs:
             prior_bootstrap_jobs[job.id] = job
             bootstrap_service.retarget_agent(job.id, new_agent_id)
             updated_bootstrap_job_ids.append(job.id)
-        calendar.actions.retarget_identity(agent_id, new_agent_id)
+        calendar_action_count = calendar.actions.retarget_identity(agent_id, new_agent_id)
         calendar_retargeted = True
     except Exception:
         rollback_errors: list[Exception] = []
@@ -174,12 +176,7 @@ def _rename_agent_and_retarget_references(
                 rollback_errors, calendar.actions.retarget_identity, new_agent_id, agent_id
             )
         for job_id in reversed(updated_cron_job_ids):
-            _attempt_rollback(
-                rollback_errors,
-                cron_service.update_job,
-                job_id,
-                agent_id=agent_id,
-            )
+            _attempt_rollback(rollback_errors, cron_service.retarget_agent, job_id, agent_id)
         for job_id in reversed(updated_bootstrap_job_ids):
             _attempt_rollback(
                 rollback_errors,
@@ -212,6 +209,7 @@ def _rename_agent_and_retarget_references(
         bootstrap_job_ids=tuple(updated_bootstrap_job_ids),
         policy_agent_ids=policy_result.agent_ids,
         session_reference_count=len(session_updates),
+        calendar_action_count=calendar_action_count,
     )
 
 
