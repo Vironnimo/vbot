@@ -111,8 +111,9 @@ export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
   return parts;
 };
 
-// Tooltip details behind the Run footer: the Run's state, when it started
-// and finished, how long it ran, and what its "iter" count stands for.
+// Tooltip details behind the Run footer: the Run's state, what its "iter"
+// count stands for (as the lead line, so the moment rows keep a narrow label
+// column), when it started and finished, and how long it ran.
 export const runFooterDetails = (assistantRun, nowMs = Date.now()) => {
   const running = assistantRun.status === 'running';
   const rows = executionDetailRows({
@@ -123,13 +124,13 @@ export const runFooterDetails = (assistantRun, nowMs = Date.now()) => {
     nowMs,
   });
   const iterationCount = assistantRun?.iterationCount;
-  if (Number.isInteger(iterationCount) && iterationCount >= 0) {
-    rows.push({
-      label: t('chat.details.modelResponses'),
-      value: String(iterationCount),
-    });
-  }
-  return { title: runStatusLabel(assistantRun.status), rows };
+  const text =
+    !Number.isInteger(iterationCount) || iterationCount < 0
+      ? ''
+      : iterationCount === 1
+        ? t('chat.details.modelResponseOne')
+        : t('chat.details.modelResponseCount', { count: iterationCount });
+  return { title: runStatusLabel(assistantRun.status), text, rows };
 };
 
 // SSE keepalive comments from gateways like OpenRouter arrive every few

@@ -151,11 +151,11 @@ describe('runFooterParts', () => {
       ),
     ).toEqual({
       title: status('completed'),
+      text: t('chat.details.modelResponseCount', { count: 3 }),
       rows: [
         { label: t('chat.details.started'), value: moment(start) },
         { label: t('chat.details.finished'), value: moment(end) },
         { label: t('chat.details.duration'), value: seconds('8.0') },
-        { label: t('chat.details.modelResponses'), value: '3' },
       ],
     });
   });
