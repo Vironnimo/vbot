@@ -1,7 +1,12 @@
 <script>
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
-  import { formatHeadersForDisplay, traceStatusTone } from '$lib/debugView.js';
+  import {
+    formatHeadersForDisplay,
+    formatTraceStatus,
+    traceLabel,
+    traceStatusTone,
+  } from '$lib/debugView.js';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import CopyButton from '../ui/CopyButton.svelte';
@@ -25,6 +30,7 @@
     detailTab === 'response' ? trace?.response : trace?.request,
   );
   let headers = $derived(formatHeadersForDisplay(exchange?.headers));
+  let label = $derived(traceLabel(trace));
   let traceJson = $derived(JSON.stringify(trace, null, 2));
   let timestamp = $derived(
     trace
@@ -73,8 +79,8 @@
   {:else if trace}
     <header class="detail-header">
       <div class="detail-heading-row">
-        <h3 class:detail-title--id={Boolean(trace.model_id)}>
-          {trace.model_id || t('debug.modelProbe')}
+        <h3 class:detail-title--id={label.mono}>
+          {label.text}
         </h3>
         <CopyButton text={traceJson} label={t('debug.copyTrace')} />
         <Button
@@ -106,7 +112,7 @@
             ? 'error'
             : traceStatusTone(trace.response?.status_code)}
           >{t('debug.responseStatus')}
-          {trace.response?.status_code ?? '—'}</span
+          {formatTraceStatus(trace.response?.status_code) || '—'}</span
         >
         <span>{duration}</span>
       </div>

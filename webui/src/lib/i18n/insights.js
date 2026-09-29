@@ -94,6 +94,24 @@ export default Object.freeze({
   'debug.statusCount': 'Traces: {count} / {limit}',
   'debug.traceList': 'Traces',
   'debug.modelProbe': 'Model Probe',
+  'debug.providerRequest': 'Provider request',
+  'debug.started': 'Started',
+  'debug.duration': 'Duration',
+  'debug.traceType': 'Type',
+  'debug.traceId': 'Trace ID',
+  'debug.captureEnabledHint':
+    'Every request vBot sends to a Provider is recorded with its response. Turn debug mode off in Settings → Debug.',
+  'debug.captureDisabledHint':
+    'No new traces are recorded. Turn on debug mode in Settings → Debug to record Provider requests and responses.',
+  'debug.statusCountHint':
+    'Stored traces and the trace limit. Beyond {limit} traces, the oldest are removed.',
+  'debug.previousMatchShortcut': 'Previous match (Shift+Enter)',
+  'debug.nextMatchShortcut': 'Next match (Enter)',
+  'debug.modelProbe.hint':
+    'Sends the Model list request of a catalog refresh to the chosen Provider Connection and shows its raw response next to the Models vBot reads from it. The Model catalog does not change; the request is saved as a trace.',
+  'debug.modelProbe.needsProvider': 'Select a Provider first.',
+  'debug.modelProbe.needsConnection': 'Select a Connection first.',
+  'debug.modelProbe.running': 'A probe is running.',
   'debug.settings': 'Debug',
   'debug.enabled': 'Enable debug mode',
   'debug.traceLimit': 'Trace limit',

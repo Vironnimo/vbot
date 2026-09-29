@@ -1,4 +1,6 @@
 import { asOptionalText, asText, isPlainObject } from './values.js';
+import { activeLocaleTag, t } from './i18n.js';
+import { formatMoment } from './timeText.js';
 
 export function createDebugViewState() {
   return {
@@ -445,4 +447,150 @@ export function bodyMatchOffsets(text, query) {
     matches.push(at);
   }
   return matches;
+}
+
+// ---------------------------------------------------------------------------
+// Trace names and the trace details card. A list entry carries `url`,
+// `method` and `status_code`; a trace detail carries them under `request` and
+// `response`. Both shapes read the same here.
+
+const TRACE_TYPE_LABELS = Object.freeze({
+  provider_request: () => t('debug.providerRequest'),
+  model_probe: () => t('debug.modelProbe'),
+});
+
+// Standard reason phrases for the status codes Provider APIs commonly return.
+const HTTP_REASON_PHRASES = Object.freeze({
+  101: 'Switching Protocols',
+  200: 'OK',
+  201: 'Created',
+  202: 'Accepted',
+  204: 'No Content',
+  301: 'Moved Permanently',
+  302: 'Found',
+  304: 'Not Modified',
+  400: 'Bad Request',
+  401: 'Unauthorized',
+  402: 'Payment Required',
+  403: 'Forbidden',
+  404: 'Not Found',
+  405: 'Method Not Allowed',
+  408: 'Request Timeout',
+  409: 'Conflict',
+  413: 'Payload Too Large',
+  415: 'Unsupported Media Type',
+  422: 'Unprocessable Entity',
+  429: 'Too Many Requests',
+  500: 'Internal Server Error',
+  502: 'Bad Gateway',
+  503: 'Service Unavailable',
+  504: 'Gateway Timeout',
+  529: 'Overloaded',
+});
+
+const STATUS_ROW_TONES = Object.freeze({ ok: 'success', error: 'danger' });
+
+function traceUrl(trace) {
+  return asText(trace?.url) || asText(trace?.request?.url);
+}
+
+function traceMethod(trace) {
+  return asText(trace?.method) || asText(trace?.request?.method);
+}
+
+function traceStatusCode(trace) {
+  return resolveNullableInteger(
+    trace?.status_code ?? trace?.response?.status_code,
+  );
+}
+
+function urlPath(url) {
+  if (!url) return '';
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return '';
+  }
+}
+
+/** A trace type as a readable label; unknown types stay raw. */
+export function traceTypeLabel(type) {
+  const code = asText(type);
+  return Object.hasOwn(TRACE_TYPE_LABELS, code)
+    ? TRACE_TYPE_LABELS[code]()
+    : code;
+}
+
+/**
+ * The name a trace goes by: its Model id, "Model Probe", or the request path
+ * of a Provider request without a Model. `mono` marks code-like names.
+ */
+export function traceLabel(trace) {
+  const modelId = asText(trace?.model_id);
+  if (modelId) return { text: modelId, mono: true };
+  if (trace?.type === 'model_probe') {
+    return { text: t('debug.modelProbe'), mono: false };
+  }
+  const path = urlPath(traceUrl(trace));
+  return path
+    ? { text: path, mono: true }
+    : {
+        text: traceTypeLabel(trace?.type) || t('debug.providerRequest'),
+        mono: false,
+      };
+}
+
+/** An HTTP status with its reason phrase, such as "429 Too Many Requests". */
+export function formatTraceStatus(status) {
+  const code = resolveNullableInteger(status);
+  if (code === null) return '';
+  const reason = HTTP_REASON_PHRASES[code];
+  return reason ? `${code} ${reason}` : String(code);
+}
+
+/**
+ * The details card of one trace: its name, what kind of request it was, and
+ * the request line, status, start, exact duration and ids as rows.
+ */
+export function traceTooltip(trace, nowMs = Date.now()) {
+  if (!trace) return '';
+  const label = traceLabel(trace);
+  const typeLabel = traceTypeLabel(trace.type);
+  const status = traceStatusCode(trace);
+  const duration = resolveNullableInteger(trace.duration_ms);
+  return {
+    title: label.text,
+    text: typeLabel && typeLabel !== label.text ? typeLabel : '',
+    rows: [
+      {
+        label: t('debug.modelProbe.provider'),
+        value: asText(trace.provider_id),
+        mono: true,
+      },
+      {
+        label: t('debug.request'),
+        value: [traceMethod(trace), traceUrl(trace)].filter(Boolean).join(' '),
+        mono: true,
+      },
+      {
+        label: t('debug.responseStatus'),
+        value: formatTraceStatus(status),
+        tone: STATUS_ROW_TONES[traceStatusTone(status)] ?? '',
+      },
+      {
+        label: t('debug.started'),
+        value: formatMoment(trace.timestamp, { nowMs, seconds: true }),
+      },
+      {
+        label: t('debug.duration'),
+        value:
+          duration === null
+            ? ''
+            : `${new Intl.NumberFormat(activeLocaleTag()).format(duration)} ms`,
+      },
+      { label: t('debug.traceType'), value: asText(trace.type), mono: true },
+      { label: t('debug.traceId'), value: asText(trace.trace_id), mono: true },
+    ],
+    placement: 'right',
+  };
 }
