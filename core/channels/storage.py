@@ -15,7 +15,7 @@ from core.channels.config import (
     load_validated_channel_json,
 )
 from core.json_documents import JsonDocumentWriteError, write_json_document
-from core.utils.logging import get_logger
+from core.utils.logging import get_logger, register_log_channel_ids
 
 _LOGGER = get_logger("channels")
 _CHANNEL_CONFIG_FILENAME = "channel.json"
@@ -104,6 +104,7 @@ class ChannelStorage:
             raise ChannelConfigError(str(error)) from error
         except OSError as error:
             raise ChannelError(f"Cannot write {config_path}: {error}") from error
+        register_log_channel_ids((config.id,))
 
     def delete(self, channel_id: str) -> None:
         """Delete one channel directory from storage."""
@@ -137,4 +138,6 @@ class ChannelStorage:
                 "Channel id mismatch for "
                 f"{config_path}: expected {config_path.parent.name}, got {config.id}"
             )
+        # Log lines name this Channel in its pseudonymized Session ids.
+        register_log_channel_ids((config.id,))
         return config

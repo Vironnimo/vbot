@@ -1,6 +1,7 @@
 """Tests for shared logging infrastructure."""
 
 import logging
+import re
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from core.utils.logging import (
     QuietLogsWebSocketLifecycleFilter,
     is_logs_websocket_lifecycle_record,
     is_routine_websocket_lifecycle_message,
+    register_log_channel_ids,
     resolve_daily_log_path,
 )
 
@@ -132,6 +134,40 @@ def test_log_manager_writes_other_loggers_warnings_once_under_their_own_name(
     assert _messages(tmp_path / "logs" / "2026-05-10.log") == [
         "[WARN] tests.third_party - Polling failed"
     ]
+
+
+def test_log_manager_writes_channel_session_ids_with_pseudonymous_platform_part(
+    tmp_path: Path,
+) -> None:
+    """Platform chat and user ids never reach a line; one conversation keeps one pseudonym."""
+    manager = LogManager(
+        level="INFO",
+        data_dir=tmp_path,
+        enable_console=False,
+        current_date_provider=lambda: date(2026, 5, 10),
+    )
+    logger = manager.get_logger("runs")
+    try:
+        logger.info("Run completed (session=ch-pseudo-tg--1001234567-u424242)")
+        register_log_channel_ids(["pseudo-tg"])
+        logger.info("Run completed (session=ch-pseudo-tg--1001234567-u424242)")
+        logger.info("Run completed (session=ch-pseudo-tg-main)")
+        try:
+            raise KeyError("ch-pseudo-tg-987654")
+        except KeyError:
+            logger.exception("Session lookup failed")
+    finally:
+        manager.close()
+
+    text = (tmp_path / "logs" / "2026-05-10.log").read_text(encoding="utf-8")
+    for platform_id in ("1001234567", "424242", "987654"):
+        assert platform_id not in text
+    unregistered = re.search(r"session=ch-#([0-9a-f]{6})\)", text)
+    registered = re.search(r"session=ch-pseudo-tg-#([0-9a-f]{6})\)", text)
+    assert unregistered is not None and registered is not None
+    assert unregistered.group(1) == registered.group(1)
+    assert "session=ch-pseudo-tg-main)" in text
+    assert re.search(r"KeyError: 'ch-pseudo-tg-#[0-9a-f]{6}'", text)
 
 
 def test_daily_file_handler_rotates_when_date_changes(tmp_path: Path) -> None:

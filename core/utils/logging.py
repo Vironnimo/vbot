@@ -4,16 +4,19 @@ Provides a ``LogManager`` that centralizes the ``vbot`` logger tree,
 enforces the required ``timestamp [LEVEL] name - message`` format, and
 writes to both the console and a daily log file under ``<data_dir>/logs``.
 WARNING and higher records of other libraries' loggers reach the same
-outputs under their own logger names.
+outputs under their own logger names. Every written line shows Channel-derived
+Session ids with a pseudonym in place of their platform chat or user id.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 import os
 import re
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
 from io import TextIOWrapper
@@ -34,6 +37,15 @@ WEBSOCKET_ACCEPTED_MESSAGE_PATTERN = re.compile(
 )
 # uvicorn's line for a websocket handshake answered without accepting it (e.g. 403).
 WEBSOCKET_HANDSHAKE_RESPONSE_PATTERN = re.compile(r'"WebSocket /[^"]*" \d{3}$')
+# A Channel-derived Session id is ``ch-<channel id>-<platform part>`` (``core/channels``);
+# only ``ch-<channel id>-main`` carries no platform chat or user id.
+_CHANNEL_SESSION_ID_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])ch-([A-Za-z0-9_-]+)")
+_CHANNEL_SESSION_PSEUDONYM_SALT = b"vbot-log-channel-session:"
+# 24 bits: collisions within one installation stay negligible, while every
+# pseudonym matches hundreds of possible platform ids and cannot be reversed.
+_CHANNEL_SESSION_PSEUDONYM_LENGTH = 6
+_known_channel_ids: frozenset[str] = frozenset()
+_known_channel_ids_lock = threading.Lock()
 
 
 def _normalize_websocket_path(path: object) -> str | None:
@@ -299,8 +311,50 @@ class DailyFileHandler(logging.FileHandler):
         return self._logs_dir / _daily_log_file_name(target_date)
 
 
+def register_log_channel_ids(channel_ids: Iterable[str]) -> None:
+    """Keep the channel id of these Channels readable in pseudonymized Session ids."""
+
+    global _known_channel_ids
+    new_ids = frozenset(channel_ids) - _known_channel_ids
+    if not new_ids:
+        return
+    with _known_channel_ids_lock:
+        _known_channel_ids = _known_channel_ids | new_ids
+
+
+def redact_channel_session_ids(text: str) -> str:
+    """Replace the platform part of every Channel-derived Session id in *text*.
+
+    ``ch-<channel id>-<platform part>`` becomes ``ch-<channel id>-#<pseudonym>``,
+    or ``ch-#<pseudonym>`` while the channel id is not registered. The pseudonym
+    is derived from everything after ``ch-``, so it is the same in both forms,
+    in every process and on every day.
+    """
+
+    if "ch-" not in text:
+        return text
+    return _CHANNEL_SESSION_ID_PATTERN.sub(_pseudonymize_channel_session_id, text)
+
+
+def _pseudonymize_channel_session_id(match: re.Match[str]) -> str:
+    remainder = match.group(1)
+    channel_id = max(
+        (known for known in _known_channel_ids if remainder.startswith(f"{known}-")),
+        key=len,
+        default=None,
+    )
+    if remainder.endswith("-main") and (channel_id is None or remainder == f"{channel_id}-main"):
+        return match.group(0)
+    digest = hashlib.sha256(_CHANNEL_SESSION_PSEUDONYM_SALT + remainder.encode("utf-8"))
+    pseudonym = digest.hexdigest()[:_CHANNEL_SESSION_PSEUDONYM_LENGTH]
+    return f"ch-{channel_id}-#{pseudonym}" if channel_id else f"ch-#{pseudonym}"
+
+
 class _VBotFormatter(logging.Formatter):
-    """Formatter that enforces the required vBot log-level labels."""
+    """Formatter that enforces the vBot log-level labels and Session id pseudonyms.
+
+    Channel Session ids are pseudonymized in the whole line, tracebacks included.
+    """
 
     LEVEL_LABELS = {
         "WARNING": "WARN",
@@ -310,7 +364,7 @@ class _VBotFormatter(logging.Formatter):
         original_label = getattr(record, "vbot_level", None)
         record.vbot_level = self.LEVEL_LABELS.get(record.levelname, record.levelname)
         try:
-            return super().format(record)
+            return redact_channel_session_ids(super().format(record))
         finally:
             if original_label is None:
                 delattr(record, "vbot_level")
