@@ -682,6 +682,8 @@ export default Object.freeze({
   'systemPrompt.fragmentEditor.save': 'Save',
   'systemPrompt.fragmentEditor.reset': 'Reset',
   'systemPrompt.fragmentEditor.dirtyIndicator': 'unsaved',
+  'systemPrompt.fragmentEditor.dirtyHint':
+    'Edited since the last save. It saves automatically after a short pause.',
   'systemPrompt.fragmentEditor.modifiedIndicator': 'modified',
   'systemPrompt.fragmentEditor.modifiedHint':
     'Edited — differs from the built-in default.',
@@ -732,6 +734,8 @@ export default Object.freeze({
   'systemPrompt.blockList.resetLayoutConfirm':
     'Reset block order and visibility to the default? This cannot be undone.',
   'systemPrompt.blockList.customBadge': 'custom',
+  'systemPrompt.blockList.customHint':
+    'A block you added, not one of vBot’s built-in blocks. It can be removed.',
   'systemPrompt.blockList.dataBadge': 'auto',
   'systemPrompt.blockList.dataHint':
     'Generated content — rebuilt automatically, not editable.',
