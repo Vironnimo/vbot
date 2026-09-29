@@ -249,29 +249,8 @@
   white-space: nowrap;
 }
 
-.run-footer__changes {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: var(--r-sm);
-  cursor: default;
-}
-
-.run-footer__changes:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .run-footer__sep {
   color: var(--text-faint);
-}
-
-.run-footer__part--added {
-  color: var(--green);
-}
-
-.run-footer__part--removed {
-  color: var(--red);
 }
 
 .run-footer__notice {

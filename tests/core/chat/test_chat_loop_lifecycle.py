@@ -506,6 +506,7 @@ async def test_final_change_stats_allow_loop_progress_and_survive_cancel(
             "added": 1,
             "removed": 1,
             "paths": [str(tmp_path / "file.txt")],
+            "file_stats": [{"path": str(tmp_path / "file.txt"), "added": 1, "removed": 1}],
         }
         messages = session.load()
         assert messages[-1].change_stats == run.terminal_payload_extras["change_stats"]

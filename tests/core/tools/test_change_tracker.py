@@ -15,8 +15,18 @@ def _key(session_id: str) -> tuple[SessionAddress, str]:
     return SessionAddress(None, "agent", session_id), "run-one"
 
 
-def _stats(files: int, added: int, removed: int, paths: list[str]) -> dict[str, object]:
-    return {"files": files, "added": added, "removed": removed, "paths": paths}
+def _stats(*file_stats: tuple[str, int, int]) -> dict[str, object]:
+    """Expected Run statistics from ``(path, added, removed)`` per changed file."""
+    return {
+        "files": len(file_stats),
+        "added": sum(added for _path, added, _removed in file_stats),
+        "removed": sum(removed for _path, _added, removed in file_stats),
+        "paths": [path for path, _added, _removed in file_stats],
+        "file_stats": [
+            {"path": path, "added": added, "removed": removed}
+            for path, added, removed in file_stats
+        ],
+    }
 
 
 # Repeated filler lines are real diff units: SequenceMatcher's auto-junk heuristic
@@ -33,17 +43,20 @@ _LONG = "\n".join(f"filler {index % 5}" for index in range(400)) + "\nunique lin
                 ("a.txt", "line1\nline2\nline3\n", "line1\nline2b\nline3\n"),
                 ("a.txt", "line1\nline2b\nline3\n", "line1\nline2c\nline3\n"),
             ],
-            _stats(1, 1, 1, ["a.txt"]),
+            _stats(("a.txt", 1, 1)),
         ),
-        ([("a.txt", "keep\nold\nkeep\n", "keep\nnew\nkeep\n")], _stats(1, 1, 1, ["a.txt"])),
-        ([("new.txt", "", "x\ny\n")], _stats(1, 2, 0, ["new.txt"])),
-        ([("a.txt", "a\n", "b\nc\n")], _stats(1, 2, 1, ["a.txt"])),
-        ([("long.txt", _LONG, _LONG.replace("unique", "changed"))], _stats(1, 1, 1, ["long.txt"])),
-        # Several files aggregate, with paths sorted.
-        ([("b.txt", "a\n", "b\n"), ("a.txt", "a\n", "c\n")], _stats(2, 2, 2, ["a.txt", "b.txt"])),
+        ([("a.txt", "keep\nold\nkeep\n", "keep\nnew\nkeep\n")], _stats(("a.txt", 1, 1))),
+        ([("new.txt", "", "x\ny\n")], _stats(("new.txt", 2, 0))),
+        ([("a.txt", "a\n", "b\nc\n")], _stats(("a.txt", 2, 1))),
+        ([("long.txt", _LONG, _LONG.replace("unique", "changed"))], _stats(("long.txt", 1, 1))),
+        # Several files aggregate, each keeping its own counts, in path order.
+        (
+            [("b.txt", "a\n", "b\nc\n"), ("a.txt", "a\n", "c\n")],
+            _stats(("a.txt", 1, 1), ("b.txt", 2, 1)),
+        ),
         # Unchanged or reverted writes report an explicit zero, not None.
-        ([("a.txt", "same\n", "same\n")], _stats(0, 0, 0, [])),
-        ([("a.txt", "a\n", "b\n"), ("a.txt", "b\n", "a\n")], _stats(0, 0, 0, [])),
+        ([("a.txt", "same\n", "same\n")], _stats()),
+        ([("a.txt", "a\n", "b\n"), ("a.txt", "b\n", "a\n")], _stats()),
     ],
 )
 def test_stats_are_the_net_line_diff_of_each_file(
@@ -67,11 +80,11 @@ def test_external_intermediate_changes_are_not_attributed_to_the_run() -> None:
     target = Path("a.txt")
 
     tracker.record_write(_key("session-1"), target, "a\nb\nc\n", "a\nB\nc\n")
-    assert tracker.take_run_stats(_key("session-1")) == _stats(1, 1, 1, ["a.txt"])
+    assert tracker.take_run_stats(_key("session-1")) == _stats(("a.txt", 1, 1))
 
     # The next Run starts from the formatter's output on disk: only its own delta counts.
     tracker.record_write(_key("session-2"), target, "A\nB\nc\n", "A\nB2\nc\n")
-    assert tracker.take_run_stats(_key("session-2")) == _stats(1, 1, 1, ["a.txt"])
+    assert tracker.take_run_stats(_key("session-2")) == _stats(("a.txt", 1, 1))
 
 
 def test_oversized_content_is_not_tracked() -> None:
@@ -135,8 +148,8 @@ def test_scoped_runs_never_share_or_consume_each_others_changes(
     tracker.record_write(first, Path("first.txt"), "", "one\n")
     tracker.record_write(second, Path("second.txt"), "", "two\nthree\n")
 
-    assert tracker.take_run_stats(first) == _stats(1, 1, 0, ["first.txt"])
-    assert tracker.take_run_stats(second) == _stats(1, 2, 0, ["second.txt"])
+    assert tracker.take_run_stats(first) == _stats(("first.txt", 1, 0))
+    assert tracker.take_run_stats(second) == _stats(("second.txt", 2, 0))
 
 
 def test_final_diff_failure_still_detaches_owned_changes(monkeypatch: pytest.MonkeyPatch) -> None:

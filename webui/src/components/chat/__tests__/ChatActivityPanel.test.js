@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../../lib/i18n.js';
-import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -441,7 +440,7 @@ describe('ChatActivityPanel', () => {
     expect(onNavigateToParentSession).toHaveBeenCalledWith(target);
   });
 
-  it('shows the aggregated Session change stats above the tasks', async () => {
+  it('shows the aggregated Session change stats above the tasks', () => {
     openPanel({
       timelineItems: [
         runItem([lineChangeTool('edit', 'a.txt', 3, 2)]),
@@ -451,31 +450,12 @@ describe('ChatActivityPanel', () => {
 
     const filesChanged = `${t('chat.changeStats.filesMany', { count: 2 })},`;
     const statsValue = document.querySelector('.chat-activity__stats-value');
-    expect(statsValue.getAttribute('aria-label')).toBe(`${filesChanged} +8 -2`);
     expect(
-      [...statsValue.querySelectorAll('.chat-activity__stats-part')].map(
-        (part) => [
-          part.textContent.trim(),
-          ['added', 'removed'].find((variant) =>
-            part.classList.contains(`chat-activity__stats-part--${variant}`),
-          ) ?? null,
-        ],
+      [...statsValue.querySelectorAll('.change-stats__part')].map(
+        (part) => part.textContent,
       ),
-    ).toEqual([
-      [filesChanged, null],
-      ['+8', 'added'],
-      ['-2', 'removed'],
-    ]);
+    ).toEqual([filesChanged, '+8', '-2']);
     expect(document.querySelector('.chat-activity__stats-empty')).toBeNull();
-
-    vi.useFakeTimers();
-    statsValue.dispatchEvent(new Event('pointerenter'));
-    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
-    flushSync();
-    expect(document.getElementById('app-tooltip').textContent).toBe(
-      'a.txt\nb.txt',
-    );
-    statsValue.dispatchEvent(new Event('pointerleave'));
   });
 
   it('lists reflection reviews with navigation and no cancel control', async () => {

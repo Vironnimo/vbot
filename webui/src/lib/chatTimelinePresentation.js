@@ -31,11 +31,6 @@ export {
   reasoningDurationLabel,
   runFooterParts,
   runFooterNotice,
-  runChangeStats,
-  sessionChangeStats,
-  changeStatsLabel,
-  changeStatsParts,
-  changeStatsTooltip,
   liveClockCadenceMs,
   isRowCancellable,
   backgroundTasks,
@@ -46,6 +41,13 @@ export {
   reflectionTaskRows,
   reflectionElapsedLabel,
 } from './chatTimelinePresentation/activity.js';
+export {
+  runChangeStats,
+  sessionChangeStats,
+  changeStatsLabel,
+  changeStatsParts,
+  changedFilesCard,
+} from './chatTimelinePresentation/changeStats.js';
 export {
   isUserItem,
   isAssistantItem,

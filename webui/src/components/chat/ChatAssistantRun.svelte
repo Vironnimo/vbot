@@ -5,17 +5,15 @@
   import Button from '../ui/Button.svelte';
   import CopyButton from '../ui/CopyButton.svelte';
   import { t } from '$lib/i18n.js';
+  import ChangeStats from './ChangeStats.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
-  import { tooltip } from '$lib/tooltip.js';
   import {
     avatarForItem,
     backgroundBashDisplayResult,
     backgroundBashRowState,
     backgroundBashToolStatusLabel,
     changeStatsLabel,
-    changeStatsParts,
-    changeStatsTooltip,
     formatTime,
     isRowCancellable,
     isRunChildWorking,
@@ -679,11 +677,9 @@
     {#if runFooterParts(item, nowMs).length > 0}
       {@const footerParts = runFooterParts(item, nowMs)}
       {@const changeStats = runChangeStats(item)}
-      {@const changeParts = changeStatsParts(changeStats)}
-      {@const changeTooltip = changeStatsTooltip(changeStats)}
       {@const footerLabel = [
         ...footerParts,
-        ...(changeParts.length > 0 ? [changeStatsLabel(changeStats)] : []),
+        ...(changeStats ? [changeStatsLabel(changeStats)] : []),
       ].join(' · ')}
       <div class="run-footer" aria-label={footerLabel}>
         {#each footerParts as footerPart, index (footerPart)}
@@ -692,26 +688,9 @@
           {/if}
           <span class="run-footer__part">{footerPart}</span>
         {/each}
-        {#if changeParts.length > 0}
+        {#if changeStats}
           <span class="run-footer__sep" aria-hidden="true">·</span>
-          <!-- The change block is focusable so keyboard users reach the
-               file-list tooltip; the footer aria-label already carries the
-               full summary for screen readers. -->
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-          <span
-            class="run-footer__changes"
-            use:tooltip={changeTooltip}
-            tabindex="0"
-          >
-            {#each changeParts as changePart (changePart.kind)}
-              <span
-                class="run-footer__part"
-                class:run-footer__part--added={changePart.kind === 'added'}
-                class:run-footer__part--removed={changePart.kind === 'removed'}
-                >{changePart.text}</span
-              >
-            {/each}
-          </span>
+          <ChangeStats stats={changeStats} class="run-footer__changes" />
         {/if}
       </div>
       {#if runFooterNotice(item, nowMs)}

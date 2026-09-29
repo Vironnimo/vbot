@@ -180,13 +180,22 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
             for event in await timelines.events(run)
             if event.type == RUN_CHANGE_STATS_EVENT
         ]
+        a_stats = {"path": str(workspace / "a.txt"), "added": 2, "removed": 0}
+        b_stats = {"path": str(workspace / "b.txt"), "added": 1, "removed": 0}
         assert live_stats == [
-            {"files": 1, "added": 2, "removed": 0, "paths": [str(workspace / "a.txt")]},
+            {
+                "files": 1,
+                "added": 2,
+                "removed": 0,
+                "paths": [a_stats["path"]],
+                "file_stats": [a_stats],
+            },
             {
                 "files": 2,
                 "added": 3,
                 "removed": 0,
-                "paths": [str(workspace / "a.txt"), str(workspace / "b.txt")],
+                "paths": [a_stats["path"], b_stats["path"]],
+                "file_stats": [a_stats, b_stats],
             },
         ]
         assert run.terminal_payload_extras["change_stats"] == live_stats[-1]
