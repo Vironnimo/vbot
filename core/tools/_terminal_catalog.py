@@ -119,7 +119,8 @@ class TerminalCatalog:
         self._operator_store.groups[group.group_id] = group
         self._operator_store.persist_groups()
         self._notify_changed("")
-        _LOGGER.info("Created Terminal group (group=%s name=%s)", group.group_id, group.name)
+        # Group names are user or Agent text: lines name the group by its id only.
+        _LOGGER.info("Created Terminal group (group=%s)", group.group_id)
         return self._group_summary(group)
 
     def rename_group_for_operator(self, group_id: str, name: str) -> dict[str, Any]:
@@ -130,12 +131,11 @@ class TerminalCatalog:
         name = validate_group_name(name)
         if self._operator_store.group_name_taken(name, exclude=group_id):
             raise TerminalManagerError(f"A Terminal group named '{name}' already exists")
-        previous = group.name
         group.name = name
         if group.kind == "user":
             self._operator_store.persist_groups()
         self._notify_changed("")
-        _LOGGER.info("Renamed Terminal group (group=%s from=%s to=%s)", group_id, previous, name)
+        _LOGGER.info("Renamed Terminal group (group=%s kind=%s)", group_id, group.kind)
         return self._group_summary(group)
 
     async def delete_group_for_operator(self, group_id: str) -> dict[str, Any]:
@@ -160,9 +160,9 @@ class TerminalCatalog:
             self._operator_store.persist_groups()
         self._notify_changed("")
         _LOGGER.info(
-            "Deleted Terminal group (group=%s name=%s terminals=%d)",
+            "Deleted Terminal group (group=%s kind=%s terminals=%d)",
             group_id,
-            group.name,
+            group.kind,
             len(terminals),
         )
         return {"group_id": group_id, "name": group.name, "terminals_killed": len(terminals)}
@@ -213,7 +213,7 @@ class TerminalCatalog:
         )
         self._operator_store.groups[group.group_id] = group
         self._notify_changed("")
-        _LOGGER.info("Created Agent Terminal group (group=%s name=%s)", group.group_id, name)
+        _LOGGER.info("Created Agent Terminal group (group=%s)", group.group_id)
         return group
 
     def _session_group(self, session: TerminalSession) -> TerminalGroup:
