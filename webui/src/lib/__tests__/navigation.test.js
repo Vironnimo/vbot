@@ -194,8 +194,6 @@ describe('createNavigator', () => {
     ]);
     expect(skills.place).toEqual(['all', 'pkg']);
     expect(navigator.location.origin).toBe('view');
-    expect(navigator.canGoBack).toBe(true);
-    expect(navigator.canGoForward).toBe(false);
   });
 
   it('restores earlier and later places on Back and Forward', async () => {
@@ -211,7 +209,6 @@ describe('createNavigator', () => {
       extra: null,
     });
     expect(navigator.location.origin).toBe('history');
-    expect(navigator.canGoForward).toBe(true);
 
     navigator.forward();
     await settle();
@@ -246,7 +243,9 @@ describe('createNavigator', () => {
 
     expect(shown(navigator).place).toEqual(['all']);
     expect(browser.stack).toHaveLength(3);
-    expect(navigator.canGoForward).toBe(true);
+    navigator.forward();
+    await settle();
+    expect(shown(navigator).place).toEqual(['all', 'pkg']);
 
     // Without that parent entry, going up is a new step.
     navigator.navigate('skills', ['shared', 'other']);
@@ -271,7 +270,7 @@ describe('createNavigator', () => {
     expect(browser.location.hash).toBe('#agents/alpha');
     expect(browser.index).toBe(1);
 
-    // The app's own Back (keys, mouse buttons, the Desktop button) closes it
+    // The app's own Back (keys, mouse buttons) closes it
     // directly, also where no entry lies behind.
     expect(navigator.forward()).toBe(true);
     expect(top).toHaveBeenCalledTimes(2);
@@ -310,7 +309,7 @@ describe('createNavigator', () => {
 
   it('keeps the Desktop app open when Back reaches its first entry', async () => {
     const { navigator, browser } = setup({ guardExit: true });
-    expect(navigator.canGoBack).toBe(false);
+    expect(navigator.back()).toBe(false);
     navigator.navigate('agents', ['alpha']);
 
     navigator.back();
@@ -323,7 +322,9 @@ describe('createNavigator', () => {
     expect(browser.left).toBe(false);
     expect(shown(navigator).view).toBe('chat');
     expect(browser.location.hash).toBe('#chat');
-    expect(navigator.canGoForward).toBe(true);
+    navigator.forward();
+    await settle();
+    expect(shown(navigator).view).toBe('agents');
   });
 
   it('moves with Alt+Arrow keys and mouse side buttons when handling input', async () => {
@@ -408,7 +409,9 @@ describe('createNavigator', () => {
       place: ['alpha', 's1'],
       extra: { subAgent: true },
     });
-    expect(navigator.canGoForward).toBe(true);
+    navigator.forward();
+    await settle();
+    expect(shown(navigator).view).toBe('agents');
     navigator.open('settings');
     expect(shown(navigator)).toEqual({
       view: 'settings',
@@ -418,8 +421,8 @@ describe('createNavigator', () => {
 
     // Opening the app again in the same tab starts a new stack.
     const opened = setup({ storage });
-    expect(opened.navigator.canGoBack).toBe(false);
-    expect(opened.navigator.canGoForward).toBe(false);
+    expect(opened.navigator.back()).toBe(false);
+    expect(opened.navigator.forward()).toBe(false);
   });
 
   it('maps unavailable and renamed destinations when restoring', async () => {

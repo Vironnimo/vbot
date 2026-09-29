@@ -58,7 +58,7 @@ const agentButton = (agentId) =>
   );
 const agentShown = (agentId) =>
   agentButton(agentId)?.classList.contains('active') === true;
-const historyButton = (key) =>
+const labelledButton = (key) =>
   document.querySelector(`button[aria-label="${t(key)}"]`);
 
 // The Agents view's reads plus the Chat startup reads.
@@ -204,7 +204,7 @@ describe('App navigation', () => {
     await waitForCondition(() => expect(agentShown('alpha')).toBe(true));
     const hash = window.location.hash;
 
-    historyButton('agents.create').click();
+    labelledButton('agents.create').click();
     await waitForCondition(() =>
       expect(document.querySelector('[role="dialog"]')).toBeTruthy(),
     );
@@ -217,19 +217,12 @@ describe('App navigation', () => {
     expect(isCurrent('agents')).toBe(true);
   });
 
-  it('keeps the Desktop app open at its first entry and offers Back and Forward', async () => {
+  it('keeps the Desktop app open at its first entry and moves with Alt+Arrow keys', async () => {
     window.history.replaceState(null, '', '/?accessor=desktop');
     mountApp();
-    await waitForCondition(() =>
-      expect(historyButton('navigation.back')).toBeTruthy(),
-    );
-    expect(historyButton('navigation.back').disabled).toBe(true);
 
     sidebarNavButton('logs').click();
-    await waitForCondition(() => {
-      expect(logsShown()).toBe(true);
-      expect(historyButton('navigation.back').disabled).toBe(false);
-    });
+    await waitForCondition(() => expect(logsShown()).toBe(true));
 
     window.dispatchEvent(
       new KeyboardEvent('keydown', {
@@ -238,10 +231,7 @@ describe('App navigation', () => {
         cancelable: true,
       }),
     );
-    await waitForCondition(() => {
-      expect(isCurrent('chat')).toBe(true);
-      expect(historyButton('navigation.forward').disabled).toBe(false);
-    });
+    await waitForCondition(() => expect(isCurrent('chat')).toBe(true));
 
     // Back from the first app entry reaches the floor below it, which sends
     // the WebView forward again.
@@ -537,6 +527,39 @@ describe('App navigation', () => {
     await waitForCondition(() => {
       expect(isCurrent('chat')).toBe(true);
       expect(window.location.hash).toBe('#chat/alpha/session-alpha');
+    });
+  });
+
+  it('keeps an unsaved new Cron job across other views and guards unloading the page', async () => {
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        agents: [{ id: 'alpha', name: 'Alpha' }],
+        methods: {
+          'cron.list': () => ({ jobs: [] }),
+          'project.list': () => ({ projects: [] }),
+        },
+      }),
+    );
+    mountApp();
+    const prompt = () => document.getElementById('cron-job-prompt');
+    sidebarNavButton('cron').click();
+    await waitForCondition(() =>
+      expect(labelledButton('cron.detail.createTitle')?.disabled).toBe(false),
+    );
+    labelledButton('cron.detail.createTitle').click();
+    await waitForCondition(() => expect(prompt()).toBeTruthy());
+    typeInto(prompt(), 'Unfinished prompt');
+
+    sidebarNavButton('logs').click();
+    await waitForCondition(() => expect(logsShown()).toBe(true));
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+
+    window.history.back();
+    await waitForCondition(() => {
+      expect(window.location.hash).toBe('#cron/new');
+      expect(prompt()?.value).toBe('Unfinished prompt');
     });
   });
 

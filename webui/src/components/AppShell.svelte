@@ -18,10 +18,6 @@
     items = [],
     activeViewId,
     onSelectView,
-    // The Desktop app has no browser toolbar, so it shows Back and Forward
-    // here: an object with `canGoBack`, `canGoForward`, `back()` and
-    // `forward()`, or null in a browser.
-    navigationControls = null,
     connectionStatus = CONNECTION_STATUS_RECONNECTING,
     serverUnavailable = false,
     serverNoticeState = '',
@@ -372,40 +368,6 @@
           <h1>{t('app.title')}</h1>
         </div>
       </div>
-      {#if navigationControls}
-        <div
-          class="app-shell__history"
-          role="group"
-          aria-label={t('navigation.history')}
-        >
-          <Button
-            variant="tertiary"
-            icon={true}
-            class="app-shell__history-button"
-            ariaLabel={t('navigation.back')}
-            tooltip={t('navigation.backTooltip')}
-            disabled={!navigationControls.canGoBack}
-            onClick={() => navigationControls.back()}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M13 8H3.5M7.5 3.5 3 8l4.5 4.5" />
-            </svg>
-          </Button>
-          <Button
-            variant="tertiary"
-            icon={true}
-            class="app-shell__history-button"
-            ariaLabel={t('navigation.forward')}
-            tooltip={t('navigation.forwardTooltip')}
-            disabled={!navigationControls.canGoForward}
-            onClick={() => navigationControls.forward()}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M3 8h9.5M8.5 3.5 13 8l-4.5 4.5" />
-            </svg>
-          </Button>
-        </div>
-      {/if}
       <Button
         variant="tertiary"
         icon={true}

@@ -292,6 +292,57 @@ describe('CronView', () => {
     expect(navigation.place).toEqual(['job-one']);
   });
 
+  it('keeps a changed new job when its form is left and discards it only on Cancel', async () => {
+    listCronJobsMock.mockResolvedValue({ jobs: [cronJob({ id: 'job-one' })] });
+    let keptDraft = null;
+    let navigation = createStandaloneNavigation(['new']);
+    const props = {
+      onToast: toastMock,
+      get navigation() {
+        return navigation;
+      },
+      get newJobDraft() {
+        return keptDraft;
+      },
+      set newJobDraft(value) {
+        keptDraft = value;
+      },
+    };
+    const prompt = () => document.getElementById('cron-job-prompt');
+    // Mounted with the accessors themselves, as `bind:newJobDraft` passes them.
+    const mountWithDraft = () => {
+      mountedComponent = mount(CronView, { target: document.body, props });
+      flushSync();
+    };
+    mountWithDraft();
+    await waitForCondition(() => prompt()?.value === '');
+    prompt().value = 'Unfinished prompt';
+    prompt().dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    // Choosing a job leaves the form without asking.
+    buttonByTestId('cron-item-job-one').click();
+    flushSync();
+    expect(navigation.place).toEqual(['job-one']);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+    // The view closes (another main view) and reopens on the new job's form.
+    await unmount(mountedComponent);
+    expect(keptDraft?.prompt).toBe('Unfinished prompt');
+    navigation = createStandaloneNavigation(['new']);
+    mountWithDraft();
+    await waitForCondition(() => prompt()?.value === 'Unfinished prompt');
+
+    buttonByText(t('common.cancel')).click();
+    flushSync();
+    confirmDialog(t('common.discard'));
+    flushSync();
+    expect(keptDraft).toBeNull();
+    buttonByAriaLabel('Create schedule').click();
+    flushSync();
+    await waitForCondition(() => prompt()?.value === '');
+  });
+
   it('disables the selected job and enables a paused job after selecting it', async () => {
     listCronJobsMock.mockResolvedValue({
       jobs: [

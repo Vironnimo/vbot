@@ -1,4 +1,4 @@
-import { onDestroy } from 'svelte';
+import { onDestroy, untrack } from 'svelte';
 import {
   createCronFormValues,
   cronFormFingerprint,
@@ -91,6 +91,18 @@ export function createCronEditor(context) {
     autosave.cancelPendingTimer();
   });
 
+  // A new job is created only by Save, so its changed form is kept outside
+  // the view (`context.newJobDraft`): leaving it by any navigation keeps the
+  // draft, and opening the new job's form again continues it. Only Cancel,
+  // a reset and a successful Save discard it.
+  $effect(() => {
+    if (!isCreating) return;
+    const draft = isDirty ? $state.snapshot(formValues) : null;
+    untrack(() => {
+      context.newJobDraft = draft;
+    });
+  });
+
   function submitForm(event) {
     event.preventDefault();
     if (isCreating) return persistForm();
@@ -130,7 +142,7 @@ export function createCronEditor(context) {
   );
 
   // Selecting another job is a step; the view shows the job once the place
-  // names it. Leaving a changed new job's form asks first.
+  // names it. A changed new job's form stays kept for its return.
   function selectJob(job) {
     if (!job?.id) {
       return;
@@ -138,7 +150,7 @@ export function createCronEditor(context) {
     if (!isCreating && job.id === selectedJobId) {
       return;
     }
-    requestDraftDiscard(() => context.navigation.navigate([job.id]));
+    context.navigation.navigate([job.id]);
   }
 
   function selectJobNow(job) {
@@ -153,8 +165,8 @@ export function createCronEditor(context) {
     context.loadProjectTeams();
   }
 
-  // Opening the new job's form is a step; a second Create resets the open
-  // form in place.
+  // Opening the new job's form is a step that continues a kept draft; a
+  // second Create resets the open form in place.
   function startCreate() {
     if (isCreating) {
       requestDraftDiscard(startCreateNow);
@@ -165,9 +177,11 @@ export function createCronEditor(context) {
 
   function startCreateNow() {
     isCreating = true;
-    formValues = createCronFormValues(null, context.viewState.systemTimezone);
-    formValues.agent_id = context.viewState.agents[0]?.id ?? '';
-    formBaseline = cronFormFingerprint(formValues);
+    const blank = createCronFormValues(null, context.viewState.systemTimezone);
+    blank.agent_id = context.viewState.agents[0]?.id ?? '';
+    const draft = context.newJobDraft;
+    formValues = draft ? $state.snapshot(draft) : blank;
+    formBaseline = cronFormFingerprint(blank);
     formErrorMessage = '';
     context.loadProjectTeams();
   }
@@ -183,8 +197,8 @@ export function createCronEditor(context) {
     );
   }
 
-  // A changed new job's form is not autosaved, so leaving it asks first. An
-  // existing job's edits are saved by the navigation's autosave gate.
+  // Cancel and a reset discard a changed new job's form, so they ask first.
+  // An existing job's edits are saved by the navigation's autosave gate.
   function requestDraftDiscard(action) {
     if (!isCreating || !isDirty) {
       action();
@@ -203,6 +217,7 @@ export function createCronEditor(context) {
     const action = pendingDiscardAction;
     pendingDiscardAction = null;
     showDiscardConfirm = false;
+    context.newJobDraft = null;
     if (pendingJobsResult) {
       applyCronListResponse(context.viewState, pendingJobsResult);
       pendingJobsResult = null;
@@ -280,6 +295,8 @@ export function createCronEditor(context) {
         if (targetJobId) {
           formValues.id = targetJobId;
         }
+        // Created, also when the view closed meanwhile: nothing to continue.
+        context.newJobDraft = null;
         context.showToast(t('cron.messages.created'));
       } else {
         await updateCronJob(buildUpdateCronPayload(formValues));

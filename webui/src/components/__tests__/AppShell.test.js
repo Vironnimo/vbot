@@ -92,30 +92,6 @@ describe('AppShell sidebar', () => {
     expect(content().querySelector('[data-live]')).toBeNull();
   });
 
-  it('offers Back and Forward only where the app owns them (Desktop)', () => {
-    mountShell();
-    expect(document.querySelector('.app-shell__history')).toBeNull();
-    unmount(mountedComponent);
-
-    const controls = {
-      canGoBack: true,
-      canGoForward: false,
-      back: vi.fn(),
-      forward: vi.fn(),
-    };
-    mountShell({ navigationControls: controls });
-    const back = document.querySelector(
-      `button[aria-label="${t('navigation.back')}"]`,
-    );
-    const forward = document.querySelector(
-      `button[aria-label="${t('navigation.forward')}"]`,
-    );
-    expect(back.closest('.app-shell__sidebar-header')).not.toBeNull();
-    expect(forward.disabled).toBe(true);
-    back.click();
-    expect(controls.back).toHaveBeenCalledOnce();
-  });
-
   it('keeps the sidebar toggle free of the shared button minimum height', () => {
     mountShell();
     const stylesheet = document.createElement('style');
