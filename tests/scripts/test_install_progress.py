@@ -11,6 +11,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+# The delay outlasts the installer's fixed 10 s progress interval, and three PowerShell
+# processes start cold (harness, job, setup): 15-21 s on idle CI, beyond 25 s under load.
+@pytest.mark.timeout(90)
 @pytest.mark.parametrize("exit_code,delay", [(0, 13), (2, 0), (7, 0)])
 def test_windows_setup_progress_preserves_arguments_cwd_logs_and_exit(tmp_path, exit_code, delay):
     shell = shutil.which("pwsh") or shutil.which("powershell")
@@ -72,7 +75,7 @@ exit $code
         cwd=tmp_path,
         capture_output=True,
         text=True,
-        timeout=25,
+        timeout=75,
         env={**os.environ, "NO_COLOR": "1"},
     )
     assert result.returncode == exit_code, result.stdout + result.stderr
