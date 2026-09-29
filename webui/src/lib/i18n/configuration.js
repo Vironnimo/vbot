@@ -734,7 +734,7 @@ export default Object.freeze({
     'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
   'settings.channels.idHelp': 'A name you choose; it cannot be changed later.',
   'settings.channels.dm_scope.help':
-    'How direct messages are grouped into Sessions:\n\nMain — all DMs share one Session. Per peer — one Session per person. Per conversation — one Session per chat. Per account, channel & peer — one Session per chat and person.\n\nGroup chats always share one Session per group, regardless of this setting.',
+    'How direct messages are grouped into Sessions.\n\nPer conversation: one Session per chat.\n\nMain: all DMs share one Session.\n\nPer peer: one Session per person.\n\nPer account + channel + peer: one Session per chat and person.\n\nGroup chats always share one Session per group, regardless of this setting.',
   'settings.channels.allowed_chat_ids.help':
     'The chats that may send messages to this Channel, separated by commas. An empty list allows nobody. WhatsApp accepts only self, your own chat.\n\nMessages from other chats are rejected and listed under Blocked chats in the Channel row, where Allow adds the chat to this list.',
   'settings.channels.allowed_chat_ids': 'Allowed chat IDs',
