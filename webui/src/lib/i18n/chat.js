@@ -503,7 +503,8 @@ export default Object.freeze({
   'split.showPreview': 'Show preview',
   'split.backToChat': 'Back to chat',
   'split.resize': 'Resize chat areas',
-  'split.resizeHint': 'Drag to resize. Arrow keys adjust; Enter resets.',
+  'split.resizeHint':
+    'Drag to resize. Arrow keys adjust; Enter or a double-click resets.',
   'split.firstArea': 'First area',
   'split.secondArea': 'Second area',
   'split.preview': 'Preview',
@@ -516,6 +517,10 @@ export default Object.freeze({
   'preview.live': 'Live',
   'preview.paused': 'Paused',
   'preview.autoRefresh': 'Automatically refresh preview',
+  'preview.liveHint': 'Reloads the preview whenever its files change.',
+  'preview.pausedHint':
+    'Automatic reload is off. Changes appear after Reload preview.',
+  'preview.refreshCount': 'Automatic reloads',
   'preview.reload': 'Reload preview',
   'preview.home': 'Back to entry page',
   'preview.failed': 'Preview could not be updated.',
@@ -525,6 +530,9 @@ export default Object.freeze({
   'preview.emptyDescription':
     'Choose an HTML file shared by the agent in the conversation to preview it here.',
   'preview.openExternal': 'Open {filename} in browser',
+  'chat.fileLink.previewHint':
+    'Click to preview. Right-click or Shift+F10 for file actions.',
+  'chat.fileLink.actionsHint': 'Right-click or Shift+F10 for file actions.',
   'files.pathCopied': 'File path copied',
   'files.pathCopyFailed': 'Could not copy the file path',
   'files.copyPath': 'Copy file path',

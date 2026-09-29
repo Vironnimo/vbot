@@ -4,6 +4,7 @@ import { mount, unmount, flushSync } from 'svelte';
 import { fromStore, writable } from 'svelte/store';
 import HtmlPreview from '../HtmlPreview.svelte';
 import { init, t } from '../../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 const { open, revision } = vi.hoisted(() => ({
   open: vi.fn(),
@@ -100,6 +101,23 @@ function alertBanner() {
   return document.querySelector('[role="alert"]');
 }
 
+// The automatic reload tooltip as its hint and "label: value" rows.
+async function liveTooltip() {
+  const control = document.querySelector('.html-preview__live-control');
+  control.dispatchEvent(new Event('pointerenter'));
+  await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+  const tooltipElement = document.getElementById('app-tooltip');
+  const details = [
+    tooltipElement.querySelector('.app-tooltip__text')?.textContent,
+    ...Array.from(
+      tooltipElement.querySelectorAll('dt'),
+      (term) => `${term.textContent}: ${term.nextElementSibling.textContent}`,
+    ),
+  ];
+  control.dispatchEvent(new Event('pointerleave'));
+  return details;
+}
+
 describe('HtmlPreview', () => {
   it('refreshes only on changes, pauses polling and cleans up on unmount', async () => {
     const { frame: first } = await mountPreview();
@@ -113,9 +131,14 @@ describe('HtmlPreview', () => {
     await settle();
     expect(first.isConnected).toBe(false);
     expect(frame().getAttribute('src')).toBe(result.url);
+    expect(await liveTooltip()).toEqual([
+      t('preview.liveHint'),
+      `${t('preview.refreshCount')}: 1`,
+    ]);
 
     document.querySelector('[role="switch"]').click();
     flushSync();
+    expect((await liveTooltip())[0]).toBe(t('preview.pausedHint'));
     await vi.advanceTimersByTimeAsync(5000);
     expect(revision).toHaveBeenCalledTimes(2);
     await unmount(component);

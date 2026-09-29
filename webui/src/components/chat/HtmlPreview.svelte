@@ -2,6 +2,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
   import { openFilePreview, getFilePreviewRevision } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -26,6 +27,15 @@
   let refreshCount = $state(0);
   let currentUrl = '';
   let pageLabel = $state('');
+  let pagePath = $derived(pageLabel || preview?.filename || '');
+  // What automatic reload does now, and how often it has reloaded.
+  let liveDetails = $derived({
+    title: t('preview.autoRefresh'),
+    text: autoRefresh ? t('preview.liveHint') : t('preview.pausedHint'),
+    rows: refreshCount
+      ? [{ label: t('preview.refreshCount'), value: String(refreshCount) }]
+      : [],
+  });
   let abortController;
   let openGeneration = 0;
   let handledRequest = null;
@@ -149,22 +159,27 @@
 
 <div class="html-preview" hidden={!active}>
   <div class="html-preview__toolbar">
-    <span class="html-preview__filename"
-      >{pageLabel || preview?.filename || t('split.preview')}</span
+    <span
+      class="html-preview__filename"
+      use:tooltip={{ text: pagePath, mono: true, whenTruncated: true }}
+      >{pagePath || t('split.preview')}</span
     >
     {#if preview}
-      <span class="html-preview__live" aria-live="polite">
-        <span class:paused={!autoRefresh} class="html-preview__dot"></span>
-        {autoRefresh ? t('preview.live') : t('preview.paused')}
-        {#if refreshCount}<span class="html-preview__count">{refreshCount}</span
-          >{/if}
+      <span class="html-preview__live-control" use:tooltip={liveDetails}>
+        <span class="html-preview__live" aria-live="polite">
+          <span class:paused={!autoRefresh} class="html-preview__dot"></span>
+          {autoRefresh ? t('preview.live') : t('preview.paused')}
+          {#if refreshCount}<span class="html-preview__count"
+              >{refreshCount}</span
+            >{/if}
+        </span>
+        <Toggle
+          size="sm"
+          checked={autoRefresh}
+          onChange={(value) => (autoRefresh = value)}
+          ariaLabel={t('preview.autoRefresh')}
+        />
       </span>
-      <Toggle
-        size="sm"
-        checked={autoRefresh}
-        onChange={(value) => (autoRefresh = value)}
-        ariaLabel={t('preview.autoRefresh')}
-      />
       <Button
         variant="tertiary"
         icon
@@ -280,6 +295,11 @@
     white-space: nowrap;
     font: var(--fs-mono-xs) var(--font-mono);
     color: var(--text-hi);
+  }
+  .html-preview__live-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
   .html-preview__live {
     display: flex;

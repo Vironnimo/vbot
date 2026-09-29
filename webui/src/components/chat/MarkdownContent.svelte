@@ -88,17 +88,30 @@
         link.dataset.filePath = path;
         link.setAttribute('aria-haspopup', 'menu');
         link.removeAttribute('title');
-        const pathHint = path
-          ? tooltip(link, { text: path, mono: true, selectable: true })
-          : null;
+        const previewable = /\.html?$/i.test(filename);
+        // The path, then what the link does: the file actions menu opens
+        // only on a right-click or the context-menu key.
+        const pathHint = tooltip(link, {
+          text: path,
+          mono: true,
+          selectable: true,
+          rows: [
+            {
+              value: previewable
+                ? t('chat.fileLink.previewHint')
+                : t('chat.fileLink.actionsHint'),
+              tone: 'muted',
+            },
+          ],
+        });
         fileActions.push(() => {
-          pathHint?.destroy();
+          pathHint.destroy();
           delete link.dataset.deliveredFile;
           delete link.dataset.fileName;
           link.removeAttribute('aria-haspopup');
           link.removeAttribute('aria-expanded');
         });
-        if (!/\.html?$/i.test(filename)) continue;
+        if (!previewable) continue;
         link.dataset.previewFile = href;
         const external = document.createElement('a');
         const externalLabel = t('preview.openExternal', { filename });
