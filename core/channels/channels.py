@@ -64,7 +64,12 @@ _ADAPTER_HEALTHY_RUN_RESET_SECONDS = 300.0
 
 @dataclass
 class _AdapterOutage:
-    """A supervised outage: since when the Channel is down and how many restarts ran."""
+    """A supervised outage: since when the Channel is down and how many restarts ran.
+
+    It starts with the first failure of a running Channel and ends with its next
+    connection or its stop. Only that first failure logs a WARNING; the failures
+    and restarts that follow while it lasts log at DEBUG.
+    """
 
     since: float
     restarts: int = 0
@@ -1143,12 +1148,20 @@ class ChannelService:
 
         self._failure_reasons[channel_id] = str(error)
 
-        _LOGGER.warning(
-            "Channel adapter task failed for channel=%s; scheduling restart: %s",
-            channel_id,
-            error,
-            exc_info=(type(error), error, error.__traceback__),
-        )
+        if channel_id in self._adapter_outages:
+            _LOGGER.debug(
+                "Channel adapter failed again; restart scheduled (channel=%s attempts=%d error=%s)",
+                channel_id,
+                self._adapter_restart_attempts.get(channel_id, 0),
+                error,
+            )
+        else:
+            _LOGGER.warning(
+                "Channel adapter failed; restart scheduled (channel=%s error=%s)",
+                channel_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
         self._schedule_restart(channel_id)
 
     def _schedule_restart(self, channel_id: str) -> None:
@@ -1200,21 +1213,13 @@ class ChannelService:
         self._adapter_restart_attempts[channel_id] = next_attempt
 
         delay_seconds = self._restart_delay_seconds(next_attempt)
-        if next_attempt <= _ADAPTER_RESTART_MAX_RETRIES:
-            _LOGGER.warning(
-                "Restarting channel adapter after %.1fs (channel=%s, attempt=%s/%s)",
-                delay_seconds,
-                channel_id,
-                next_attempt,
-                _ADAPTER_RESTART_MAX_RETRIES,
-            )
-        else:
-            _LOGGER.warning(
-                "Retrying failed channel adapter after %.1fs (channel=%s, recovery attempt=%s)",
-                delay_seconds,
-                channel_id,
-                next_attempt,
-            )
+        _LOGGER.debug(
+            "Channel adapter restart scheduled (channel=%s attempt=%d fast_retries=%d delay=%.1fs)",
+            channel_id,
+            next_attempt,
+            _ADAPTER_RESTART_MAX_RETRIES,
+            delay_seconds,
+        )
         await asyncio.sleep(delay_seconds)
 
         if not self._can_restart_channel(channel_id):
@@ -1277,16 +1282,24 @@ class ChannelService:
         if error is None:
             return
 
+        # A restart runs inside an outage whose first failure was logged already.
+        if channel_id in self._adapter_outages:
+            _LOGGER.debug(
+                "Channel adapter restart failed (channel=%s attempts=%d error=%s)",
+                channel_id,
+                self._adapter_restart_attempts.get(channel_id, 0),
+                error,
+            )
+        else:
+            _LOGGER.error(
+                "Channel adapter restart failed (channel=%s error=%s)",
+                channel_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
         if owns_restart:
             self._mark_channel_failed(channel_id, str(error) or type(error).__name__)
             self._schedule_restart(channel_id)
-
-        _LOGGER.error(
-            "Channel adapter restart task failed for channel=%s: %s",
-            channel_id,
-            error,
-            exc_info=(type(error), error, error.__traceback__),
-        )
 
 
 def _with_migrated_chat_id(
