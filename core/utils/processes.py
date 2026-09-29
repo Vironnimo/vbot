@@ -245,6 +245,8 @@ async def _create_windows_subprocess_exec(
     limit: int,
     popen_arguments: dict[str, Any],
 ) -> asyncio.subprocess.Process:
+    if sys.platform != "win32":
+        raise RuntimeError("asyncio's Windows process pipes exist only on Windows")
     from asyncio import windows_utils
     from asyncio.subprocess import Process, SubprocessStreamProtocol
 

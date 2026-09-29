@@ -412,10 +412,10 @@ def run_tray(actions: TrayActions, icon_path: Path) -> None:
 
     if sys.platform != "win32":
         raise RuntimeError("The vBot tray host requires Windows")
-    from cli.application.windows_tray import WindowsTray
+    from cli.application import windows_tray
 
     controller = TrayController(actions)
-    view = WindowsTray(controller, icon_path)
+    view = windows_tray.WindowsTray(controller, icon_path)
     controller.attach_view(view)
     actions.watch(controller)
     controller.start()

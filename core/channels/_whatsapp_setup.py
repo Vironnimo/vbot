@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +50,9 @@ def bridge_ready(state_dir: Path) -> bool:
 
 
 def child_options() -> dict[str, Any]:
-    return {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
 
 
 def reset_pairing(state_dir: Path) -> None:

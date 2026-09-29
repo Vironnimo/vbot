@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from desktop._windows import win32_last_error, win32_library
 from desktop.settings import read_live_hotkey_settings, write_live_hotkey_settings
 
 logger = logging.getLogger("vbot.desktop.hotkey")
@@ -205,7 +206,7 @@ class _Win32HotkeyApi:
 
         self._ctypes = ctypes
         self._message = wintypes.MSG()
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32 = win32_library("user32")
         self._peek_message = user32.PeekMessageW
         self._peek_message.argtypes = [
             ctypes.POINTER(wintypes.MSG),
@@ -255,7 +256,7 @@ class _Win32HotkeyApi:
     def register(self, hotkey_id: int, modifiers: int, virtual_key: int) -> int:
         if self._register_hotkey(None, hotkey_id, modifiers, virtual_key):
             return 0
-        return self._ctypes.get_last_error() or HOTKEY_FAILED_WIN32_ERROR
+        return win32_last_error() or HOTKEY_FAILED_WIN32_ERROR
 
     def unregister(self, hotkey_id: int) -> None:
         if not self._unregister_hotkey(None, hotkey_id):
@@ -268,7 +269,7 @@ class _Win32HotkeyApi:
         if result == -1:
             logger.warning(
                 "Live voice hotkey message loop failed (error=%s)",
-                self._ctypes.get_last_error(),
+                win32_last_error(),
             )
             return None
         return int(self._message.message), int(self._message.wParam)

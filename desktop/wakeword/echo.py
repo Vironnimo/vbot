@@ -45,9 +45,12 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import ctypes
 
 logger = logging.getLogger("vbot.desktop.wakeword.echo")
 
@@ -1071,6 +1074,14 @@ class _DefaultPlaybackEndpoints:
     _IID_ENUMERATOR = "{A95664D2-9614-4F35-A746-DE8DB63617E6}"
     _RENDER = 0
     _ROLES = (0, 1)  # console, multimedia: PortAudio and browsers pick either
+
+    # Bound by __init__ past its Windows check, so declared for every platform.
+    _ole32: ctypes.CDLL
+    _get_default: Any  # WINFUNCTYPE prototypes of the Core Audio methods
+    _get_id: Any
+    _release: Any
+    _uninitialize: bool
+    _enumerator: ctypes.c_void_p
 
     def __init__(self) -> None:
         if sys.platform != "win32":
