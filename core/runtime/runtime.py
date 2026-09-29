@@ -98,6 +98,7 @@ from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.usage import UsageRecorder
 from core.utils.logging import LogManager
+from core.utils.version import BuildIdentity
 
 # Windows environment variable names are case-insensitive. The data-dir `.env`
 # fallback follows the same rule there, matching Skill `env` requirements.
@@ -151,6 +152,7 @@ class Runtime:
         self._started: bool = False
         self._started_at: datetime | None = None
         self._startup_id: str | None = None
+        self._build: BuildIdentity | None = None
         self._provider_runtime: ProviderRuntime | None = None
         self._providers: ProviderRegistry | None = None
         self._provider_credentials: ProviderCredentialResolverProtocol | None = None
@@ -996,6 +998,10 @@ class Runtime:
 
     storage: _StartedService[StorageManager] = _StartedService(
         lambda runtime: runtime._storage, "Storage service not available"
+    )
+
+    build: _StartedService[BuildIdentity] = _StartedService(
+        lambda runtime: runtime._build, "Build identity not available"
     )
 
     attachment_store: _StartedService[AttachmentStore] = _StartedService(

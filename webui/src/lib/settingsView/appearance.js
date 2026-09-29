@@ -108,6 +108,25 @@ export function formatServerHost(server) {
   return t('common.unknown');
 }
 
+// The running server build on one line: its version, whether it is a release
+// or else its branch, and its commit - shortened unless `fullRevision`, which
+// spells the whole commit for bug reports.
+export function formatBuildIdentity(build, { fullRevision = false } = {}) {
+  if (typeof build?.version !== 'string' || build.version.length === 0) {
+    return t('common.unknown');
+  }
+  const parts = [build.version];
+  if (build.release === true) {
+    parts.push(t('settings.general.versionRelease'));
+  } else if (typeof build.branch === 'string' && build.branch.length > 0) {
+    parts.push(build.branch);
+  }
+  if (typeof build.revision === 'string' && build.revision.length > 0) {
+    parts.push(fullRevision ? build.revision : build.revision.slice(0, 8));
+  }
+  return parts.join(' · ');
+}
+
 export function getDataDirectoryValue(settings) {
   return settings?.general?.data_directory ?? t('common.unknown');
 }

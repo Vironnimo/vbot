@@ -8,6 +8,7 @@ export {
   normalizeTranscriptionAudio,
   buildTranscriptionAudioSettingsPayload,
   buildLanguageOptions,
+  formatBuildIdentity,
   formatServerHost,
   getDataDirectoryValue,
   getDefaultSkillDirectoryValue,

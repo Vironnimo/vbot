@@ -116,7 +116,7 @@ from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.usage import UsageRecorder
 from core.utils.tls import prewarm_outbound_http
-from core.utils.version import detect_vbot_version
+from core.utils.version import detect_build_identity
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
@@ -138,6 +138,7 @@ def bootstrap(runtime: Runtime) -> None:
     try:
         runtime._started_at = datetime.now(UTC)
         runtime._startup_id = str(uuid4())
+        runtime._build = build = detect_build_identity()
         resources_path = _resolve_resources_path(runtime.config)
 
         runtime._storage = StorageManager(config=runtime._config, resources_dir=resources_path)
@@ -643,7 +644,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tools,
             cast(SkillPromptRegistry, runtime._skills),
             channel_registry=cast(ChannelService, runtime._channel_service),
-            vbot_version=str(runtime._config.get("VBOT_VERSION") or detect_vbot_version()),
+            vbot_version=str(runtime._config.get("VBOT_VERSION") or build.version),
             vbot_root=_VBOT_ROOT,
             data_root=runtime._storage.data_dir,
             memory_provider=runtime._memory_service,
