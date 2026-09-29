@@ -58,11 +58,6 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     listConnections: () => call('connection.list'),
     setConnectionEnabled: (params) => call('connection.set_enabled', params),
     listTools: () => call('tool.list'),
-    listSkills: (params = {}) =>
-      Object.keys(params).length === 0
-        ? call('skill.list')
-        : call('skill.list', params),
-    readSkills: (scope) => call('skill.read', { scope }),
     createSkill: (params) => call('skill.create', params),
     installSkill: (params) => call('skill.install', params),
     updateSkill: (params) => call('skill.update', params),

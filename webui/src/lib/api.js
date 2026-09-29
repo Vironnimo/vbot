@@ -117,8 +117,6 @@ export {
   listConnections,
   setConnectionEnabled,
   listTools,
-  listSkills,
-  readSkills,
   createSkill,
   installSkill,
   updateSkill,

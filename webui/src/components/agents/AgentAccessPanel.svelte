@@ -3,6 +3,8 @@
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
+  import AgentSkillsPanel from '../skills/AgentSkillsPanel.svelte';
+  import { skillAccessOf } from '../skills/skillAccess.js';
   import AgentSelectionGroup from './AgentSelectionGroup.svelte';
   import {
     withSubagentAllowedAgents,
@@ -11,8 +13,7 @@
   import { toolAccessIncludes } from '$lib/toolAccess.js';
   let {
     availableTools,
-    availableSkills,
-    invalidSkills,
+    skillCatalog = { skills: [], agents: [], projects: [] },
     availableAgentTargets,
     agentTargetCatalogError,
     formValues = $bindable(),
@@ -28,17 +29,25 @@
 
   let agentQuery = $state('');
 
-  let visibleSkillItems = $derived(skillAccessItems());
-
   let visibleAgentTargetItems = $derived(agentTargetAccessItems());
 
-  let skillItems = $derived(
-    visibleSkillItems.map((skill) => ({
-      name: skill.name,
-      allowed: skill.isAllowed,
-      detail: skill.description,
-      warnings: skill.warnings,
-    })),
+  // The saved Skill projection of this Agent (null before it exists); the
+  // checked state of allowlist-governed Skills comes from the draft.
+  let skillAgent = $derived(
+    skillCatalog.agents.find((agent) => agent.id === formValues.id) ?? null,
+  );
+
+  // Packages this Agent could see that fail to load.
+  let invalidSkills = $derived(
+    skillCatalog.skills.filter(
+      (entry) =>
+        entry.status === 'invalid' &&
+        (entry.origin === 'global' ||
+          entry.origin === 'bundled' ||
+          entry.owner_id === formValues.id ||
+          (entry.project_id &&
+            entry.project_id === skillAgent?.root_project_id)),
+    ),
   );
 
   let agentTargetItems = $derived(
@@ -59,8 +68,6 @@
     agentTargetItems.filter((target) => target.kind === 'project'),
   );
 
-  let skillsAreWildcard = $derived(isWildcardAccess(formValues.allowed_skills));
-
   let configuredAgentTargets = $derived(
     subagentAllowedAgents(formValues.tools),
   );
@@ -70,17 +77,6 @@
   let subagentToolEnabled = $derived(
     toolAccessIncludes(formValues.tool_access, 'subagent'),
   );
-
-  function updateAccessItem(fieldName, itemName, isAllowed) {
-    if (fieldName === 'allowed_skills') {
-      updateSkillAccessItem(itemName, isAllowed);
-      return;
-    }
-
-    if (fieldName === 'allowed_agents') {
-      updateAgentTargetAccessItem(itemName, isAllowed);
-    }
-  }
 
   function setAgentGroupAccess(items, isAllowed) {
     if (items.every((item) => item.allowed === isAllowed)) return;
@@ -95,20 +91,6 @@
 
   function isWildcardAccess(items) {
     return Array.isArray(items) && items.includes(WILDCARD_ACCESS);
-  }
-
-  function skillAccessItems() {
-    const currentItems = Array.isArray(formValues.allowed_skills)
-      ? formValues.allowed_skills
-      : [];
-    const hasWildcard = currentItems.includes(WILDCARD_ACCESS);
-    const allowedItems = hasWildcard ? [] : currentItems;
-
-    return availableSkills.map((skill) => ({
-      ...skill,
-      warnings: Array.isArray(skill.warnings) ? skill.warnings : [],
-      isAllowed: hasWildcard || allowedItems.includes(skill.name),
-    }));
   }
 
   function agentTargetAccessItems() {
@@ -188,50 +170,6 @@
     }
     formValues.tools = withSubagentAllowedAgents(formValues.tools, nextItems);
   }
-
-  function updateSkillAccessItem(itemName, isAllowed) {
-    const allSkillNames = availableSkills.map((skill) => skill.name);
-
-    if (allSkillNames.length === 0) {
-      formValues.allowed_skills = [];
-      return;
-    }
-
-    const currentItems = Array.isArray(formValues.allowed_skills)
-      ? [...formValues.allowed_skills]
-      : [];
-
-    if (currentItems.includes(WILDCARD_ACCESS)) {
-      if (isAllowed) {
-        formValues.allowed_skills = [WILDCARD_ACCESS];
-        return;
-      }
-
-      formValues.allowed_skills = allSkillNames.filter(
-        (name) => name !== itemName,
-      );
-      return;
-    }
-
-    const nextItems = currentItems.filter((item) =>
-      allSkillNames.includes(item),
-    );
-    const existingIndex = nextItems.indexOf(itemName);
-
-    if (isAllowed && existingIndex === -1) {
-      nextItems.push(itemName);
-    }
-
-    if (!isAllowed && existingIndex !== -1) {
-      nextItems.splice(existingIndex, 1);
-    }
-
-    formValues.allowed_skills = allSkillNames.every((name) =>
-      nextItems.includes(name),
-    )
-      ? [WILDCARD_ACCESS]
-      : nextItems;
-  }
 </script>
 
 <div class="agents-view__part" id="agent-detail-panel-access">
@@ -262,31 +200,24 @@
       </h3>
     </header>
     <p class="s-section__desc">
-      {skillsAreWildcard && skillItems.length > 0
-        ? t('agents.form.wildcardNote')
-        : t('agents.form.skillsDescription')}
+      {t('agents.form.skillsDescription')}
     </p>
     <div class="s-section__body">
-      {#if skillItems.length > 1}
-        {@render filterToolbar(
-          skillQuery,
-          (next) => (skillQuery = next),
-          t('agents.access.filterSkills'),
-          t('agents.access.filterSkillsPlaceholder'),
-        )}
-      {/if}
-      <AgentSelectionGroup
-        title={t('agents.form.allowedSkills')}
-        titleId="agent-skills-label"
-        items={skillItems}
+      <AgentSkillsPanel
+        agent={skillAgent}
+        agentId={formValues.id}
+        access={skillAccessOf(formValues)}
+        inventory={skillCatalog.skills}
+        agents={skillCatalog.agents}
+        projects={skillCatalog.projects}
         query={skillQuery}
-        allLabel={t('agents.access.allSkills')}
-        toggleLabel={(name) => t('agents.access.toggleSkill', { name })}
-        emptyLabel={t('agents.access.noSkills')}
-        onToggle={(name, next) =>
-          updateAccessItem('allowed_skills', name, next)}
-        onSetAll={(next) =>
-          (formValues.allowed_skills = next ? [WILDCARD_ACCESS] : [])}
+        showFilter
+        onQuery={(next) => (skillQuery = next)}
+        onChange={(next) => {
+          formValues.allowed_skills = next.allowed;
+          formValues.excluded_skills = next.excluded;
+        }}
+        columns
       />
       {#if invalidSkills.length > 0}
         <div class="s-subhead">
@@ -295,20 +226,15 @@
           </h4>
         </div>
         <div class="s-group agents-view__invalid-skills">
-          {#each invalidSkills as item (item.path || item.name)}
+          {#each invalidSkills as item (item.id)}
             <div class="s-row s-row--compact">
               <div class="s-row-info">
                 <div class="agents-view__invalid-skill-name">
                   {item.name || t('agents.access.unknownSkillName')}
                 </div>
-                {#if item.path}
-                  <div class="agents-view__invalid-skill-path">
-                    {item.path}
-                  </div>
-                {/if}
                 {#if Array.isArray(item.warnings) && item.warnings.length > 0}
                   <ul class="agents-view__skill-warnings">
-                    {#each item.warnings as warning, index (`${item.path || item.name}-warning-${index}`)}
+                    {#each item.warnings as warning, index (`${item.id}-warning-${index}`)}
                       <li>{warning}</li>
                     {/each}
                   </ul>
@@ -355,8 +281,7 @@
           allLabel={t('agents.access.allIdentityAgents')}
           toggleLabel={agentToggleLabel}
           emptyLabel={t('agents.access.noIdentityAgentTargets')}
-          onToggle={(name, next) =>
-            updateAccessItem('allowed_agents', name, next)}
+          onToggle={updateAgentTargetAccessItem}
           onSetAll={(next) => setAgentGroupAccess(identityAgentItems, next)}
         />
         {#if projectAgentItems.length > 0}
@@ -373,8 +298,7 @@
             toggleId="agent-project-targets-toggle"
             contentId="agent-project-targets"
             onOpenChange={(next) => (projectAgentsOpen = next)}
-            onToggle={(name, next) =>
-              updateAccessItem('allowed_agents', name, next)}
+            onToggle={updateAgentTargetAccessItem}
             onSetAll={(next) => setAgentGroupAccess(projectAgentItems, next)}
           />
         {/if}

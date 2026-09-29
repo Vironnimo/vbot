@@ -1,14 +1,36 @@
+<script module>
+  // The filter every selection list applies to its rows: all members whose
+  // name or detail contains the text.
+  export function filterSelectionItems(list, text) {
+    const needle = text.trim().toLocaleLowerCase();
+    if (!needle) return list;
+    return list.filter((item) =>
+      [item.name, item.detail]
+        .filter(Boolean)
+        .join(' ')
+        .toLocaleLowerCase()
+        .includes(needle),
+    );
+  }
+</script>
+
 <script>
-  // One allow-list of the Agent editor (Skills, Identity Agents, Project
-  // Agents) as a shared Checkbox group (styles/settings/sections.css): a head
-  // with the group checkbox, the title and the selection count, then one
-  // labelled checkbox row per member. The caller
-  // owns the selection policy (wildcards and what selecting a whole group
-  // means) and the filter text shared by the groups of a section.
+  // One selection list (Skills, Identity Agents, Project Agents, Skill access)
+  // as a shared Checkbox group (styles/settings/sections.css): a head with the
+  // group checkbox, the title and the selection count, then one labelled
+  // checkbox row per member. The caller owns the selection policy (wildcards
+  // and what selecting a whole group means) and the filter text shared by the
+  // groups of a section.
+  //
+  // A member may be locked (a fixed grant: shown, not changeable), carry one
+  // short state at the row end (`{text, tone}`) and one inline action. With
+  // `onOpen`, the member's name opens it elsewhere and only the box toggles.
+  import Button from '../ui/Button.svelte';
   import Checkbox from '../ui/Checkbox.svelte';
   import { t } from '$lib/i18n.js';
 
   const noop = () => {};
+  const uid = $props.id();
 
   let {
     title = '',
@@ -22,41 +44,75 @@
     open = true,
     toggleId = undefined,
     contentId = undefined,
+    groupToggle = true,
+    plainNames = false,
     onOpenChange = noop,
     onToggle = noop,
     onSetAll = noop,
+    onOpen = null,
+    onAction = noop,
     class: className = '',
   } = $props();
 
-  let selectedCount = $derived(items.filter((item) => item.allowed).length);
+  // A row may count differently from its checkbox (a Skill shared with an Agent
+  // whose own selection blocks it is checked but not counted).
+  let selectedCount = $derived(
+    items.filter((item) => item.counted ?? item.allowed).length,
+  );
+  let changeable = $derived(items.filter((item) => !item.locked));
+  let changeableSelected = $derived(
+    changeable.filter((item) => item.allowed).length,
+  );
   let groupState = $derived(
-    items.length > 0 && selectedCount === items.length
+    changeable.length > 0 && changeableSelected === changeable.length
       ? 'on'
-      : selectedCount > 0
+      : changeableSelected > 0
         ? 'mixed'
         : 'off',
   );
-  let visibleItems = $derived(filterItems(items, query));
+  let visibleItems = $derived(filterSelectionItems(items, query));
 
-  function filterItems(list, text) {
-    const needle = text.trim().toLocaleLowerCase();
-    if (!needle) return list;
-    return list.filter((item) =>
-      [item.name, item.detail]
-        .filter(Boolean)
-        .join(' ')
-        .toLocaleLowerCase()
-        .includes(needle),
-    );
+  function stateId(index) {
+    return `${uid}-state-${index}`;
   }
 </script>
+
+{#snippet memberText(item)}
+  <span class="s-check-row__text">
+    <span class="s-check-row__name" class:s-check-row__name--plain={plainNames}
+      >{item.name}</span
+    >
+    {#if item.detail}
+      <span
+        class="s-check-row__detail"
+        class:s-check-row__detail--warn={item.unavailable}>{item.detail}</span
+      >
+    {/if}
+    {#each item.warnings ?? [] as warning, index (`${item.name}-warning-${index}`)}
+      <span class="s-check-row__detail s-check-row__detail--warn"
+        >{warning}</span
+      >
+    {/each}
+  </span>
+{/snippet}
+
+{#snippet memberState(item, index)}
+  {#if item.state?.text}
+    <span
+      id={stateId(index)}
+      class="s-check-row__state"
+      class:s-check-row__state--warn={item.state.tone === 'warn'}
+      >{item.state.text}</span
+    >
+  {/if}
+{/snippet}
 
 <section
   class={['s-group', 's-check-group', className].filter(Boolean).join(' ')}
   aria-labelledby={titleId}
 >
   <div class="s-check-group__head">
-    {#if items.length > 0}
+    {#if groupToggle && changeable.length > 0}
       <Checkbox
         checked={groupState === 'on'}
         indeterminate={groupState === 'mixed'}
@@ -98,29 +154,60 @@
         {t('access.noMatches')}
       </p>
     {:else}
-      {#each visibleItems as item (item.name)}
-        <Checkbox
-          class="s-check-row"
-          checked={item.allowed}
-          ariaLabel={toggleLabel(item.name)}
-          onChange={(next) => onToggle(item.name, next)}
-        >
-          <span class="s-check-row__text">
-            <span class="s-check-row__name">{item.name}</span>
-            {#if item.detail}
-              <span
-                class="s-check-row__detail"
-                class:s-check-row__detail--warn={item.unavailable}
-                >{item.detail}</span
-              >
-            {/if}
-            {#each item.warnings ?? [] as warning, index (`${item.name}-warning-${index}`)}
-              <span class="s-check-row__detail s-check-row__detail--warn"
-                >{warning}</span
-              >
-            {/each}
-          </span>
-        </Checkbox>
+      {#each visibleItems as item, index (item.key ?? item.name)}
+        {#if onOpen}
+          <div class="s-check-item">
+            <Checkbox
+              class="s-check-item__box"
+              checked={item.allowed}
+              disabled={item.locked}
+              ariaLabel={toggleLabel(item.name, item)}
+              aria-describedby={item.state?.text ? stateId(index) : undefined}
+              onChange={(next) => onToggle(item.name, next, item)}
+            />
+            <button
+              type="button"
+              class="s-check-item__open"
+              data-item-key={item.key ?? item.name}
+              onclick={() => onOpen(item)}
+            >
+              {@render memberText(item)}
+            </button>
+            {@render memberState(item, index)}
+          </div>
+        {:else if item.action}
+          <div class="s-check-item">
+            <Checkbox
+              class="s-check-row"
+              checked={item.allowed}
+              disabled={item.locked}
+              ariaLabel={toggleLabel(item.name, item)}
+              aria-describedby={item.state?.text ? stateId(index) : undefined}
+              onChange={(next) => onToggle(item.name, next, item)}
+            >
+              {@render memberText(item)}
+              {@render memberState(item, index)}
+            </Checkbox>
+            <Button
+              variant="tertiary"
+              class="s-check-item__action"
+              ariaLabel={item.action.ariaLabel || undefined}
+              onClick={() => onAction(item)}>{item.action.label}</Button
+            >
+          </div>
+        {:else}
+          <Checkbox
+            class="s-check-row"
+            checked={item.allowed}
+            disabled={item.locked}
+            ariaLabel={toggleLabel(item.name, item)}
+            aria-describedby={item.state?.text ? stateId(index) : undefined}
+            onChange={(next) => onToggle(item.name, next, item)}
+          >
+            {@render memberText(item)}
+            {@render memberState(item, index)}
+          </Checkbox>
+        {/if}
       {/each}
     {/if}
   </div>

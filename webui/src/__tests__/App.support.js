@@ -154,8 +154,14 @@ export function createAppRpcMock({
       case 'chat.commands':
       case 'chat.queue_list':
         return { items: [] };
-      case 'skill.list':
-        return { skills: [], invalid_skills: [] };
+      case 'skill.inventory':
+        return {
+          skills: [],
+          agents: [],
+          projects: [],
+          stale_shared: [],
+          policy_diagnostics: [],
+        };
       case 'chat.history':
         return {
           agent_id: params.agent_id ?? '',

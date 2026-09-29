@@ -7,73 +7,171 @@ export function agentDisplayName(agentId, agents) {
   return agents.find((agent) => agent.id === agentId)?.name || agentId;
 }
 
-export function skillSourceLabel(entry, agents) {
+function projectDisplayName(entry, projects) {
+  return (
+    projects.find((project) => project.project_id === entry.project_id)?.name ||
+    entry.origin?.slice(8) ||
+    entry.project_id
+  );
+}
+
+// A global root's folder name (an Extension or a configured folder) as a
+// label: `computer_use` → `Computer use`.
+export function humanizeSourceLabel(label) {
+  const text = String(label ?? '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text ? text[0].toLocaleUpperCase() + text.slice(1) : '';
+}
+
+/** The quiet source label of a library row. */
+export function skillSourceLabel(entry) {
+  if (entry.owner_id) return t('skills.source.private');
+  if (entry.origin?.startsWith('project:')) return t('skills.source.project');
+  if (entry.origin === 'bundled') return t('skills.library.bundled');
+  return humanizeSourceLabel(entry.source_label) || t('skills.library.global');
+}
+
+/** Where a package lives, spelled out for the detail pane. */
+export function skillSourceDetail(entry, agents = [], projects = []) {
   if (entry.owner_id)
-    return t('skills.ownerLabel', {
+    return t('skills.source.privateOf', {
       name: agentDisplayName(entry.owner_id, agents),
     });
   if (entry.origin?.startsWith('project:'))
-    return t('skills.projectLabel', {
-      name: entry.origin.slice(8),
+    return t('skills.source.projectOf', {
+      name: projectDisplayName(entry, projects),
     });
-  if (entry.origin === 'bundled') return t('skills.library.bundled');
-  return t('skills.sourceLabel', {
-    name: entry.source_label || t('skills.library.global'),
-  });
+  if (entry.origin === 'bundled') return t('skills.source.bundled');
+  const label = humanizeSourceLabel(entry.source_label);
+  return label
+    ? t('skills.source.globalFrom', { name: label })
+    : t('skills.source.global');
 }
+
+/** A package as "the … copy" when several packages share its name. */
+export function skillCopyLabel(entry, agents = [], projects = []) {
+  if (entry.owner_id)
+    return t('skills.copy.private', {
+      name: agentDisplayName(entry.owner_id, agents),
+    });
+  if (entry.origin?.startsWith('project:'))
+    return t('skills.copy.project', {
+      name: projectDisplayName(entry, projects),
+    });
+  if (entry.origin === 'bundled') return t('skills.copy.bundled');
+  const label = humanizeSourceLabel(entry.source_label);
+  return label
+    ? t('skills.copy.source', { name: label })
+    : t('skills.copy.global');
+}
+
+/** The number of Skills an Agent or Project projection currently activates. */
+export function activeSkillCount(projection) {
+  return (projection?.skills ?? []).filter((row) =>
+    'active' in row
+      ? row.active
+      : ['own', 'project', 'allowed'].includes(row.grant),
+  ).length;
+}
+
+export const LIBRARY_SCOPES = ['all', 'global', 'bundled', 'shared'];
 
 export function matchesSkillScope(entry, scope) {
   if (scope === 'all') return true;
   if (scope === 'shared') return Boolean(entry.shared);
-  if (scope.startsWith('agent:')) return entry.owner_id === scope.slice(6);
   return entry.origin === scope;
 }
 
-export function skillCollections(entries, agents) {
-  const items = [
-    {
-      key: 'all',
-      label: t('skills.library.all'),
+function libraryLabel(scope) {
+  switch (scope) {
+    case 'global':
+      return t('skills.library.global');
+    case 'bundled':
+      return t('skills.library.bundled');
+    case 'shared':
+      return t('skills.library.shared');
+    default:
+      return t('skills.library.all');
+  }
+}
+
+/**
+ * Sidebar collections: the library filters of the package list, then one
+ * entry per Identity Agent and Project whose count is the Skills it currently
+ * activates.
+ */
+export function skillCollections(entries, agents = [], projects = []) {
+  return [
+    ...LIBRARY_SCOPES.map((key) => ({
+      key,
+      label: libraryLabel(key),
       section: 'library',
-    },
-    {
-      key: 'global',
-      label: t('skills.library.global'),
-      section: 'library',
-    },
-    {
-      key: 'bundled',
-      label: t('skills.library.bundled'),
-      section: 'library',
-    },
-    {
-      key: 'shared',
-      label: t('skills.library.shared'),
-      section: 'library',
-    },
+      count: entries.filter((entry) => matchesSkillScope(entry, key)).length,
+    })),
     ...agents.map((agent) => ({
       key: `agent:${agent.id}`,
+      id: agent.id,
       label: agent.name || agent.id,
       section: 'agents',
+      count: activeSkillCount(agent),
     })),
-    ...[
-      ...new Set(
-        entries
-          .map((entry) => entry.origin)
-          .filter((origin) => origin?.startsWith('project:')),
-      ),
-    ]
-      .sort()
-      .map((origin) => ({
-        key: origin,
-        label: origin.slice(8),
-        section: 'projects',
-      })),
+    ...projects.map((project) => ({
+      key: `project:${project.project_id}`,
+      id: project.project_id,
+      label: project.name || project.project_id,
+      section: 'projects',
+      count: activeSkillCount(project),
+    })),
   ];
-  return items.map((item) => ({
-    ...item,
-    count: entries.filter((entry) => matchesSkillScope(entry, item.key)).length,
-  }));
+}
+
+/** Title, subtitle and empty state of a collection. */
+export function skillCollectionText(collection) {
+  const key = collection?.section === 'library' ? collection.key : null;
+  switch (collection?.section) {
+    case 'agents':
+      return {
+        subtitle: t('skills.subtitle.agent', { name: collection.label }),
+        empty: t('skills.empty.agent'),
+        emptyHelp: t('skills.empty.agentHelp'),
+      };
+    case 'projects':
+      return {
+        subtitle: t('skills.subtitle.project', { name: collection.label }),
+        empty: t('skills.empty.project'),
+        emptyHelp: t('skills.empty.projectHelp'),
+      };
+    default:
+      break;
+  }
+  switch (key) {
+    case 'global':
+      return {
+        subtitle: t('skills.subtitle.global'),
+        empty: t('skills.empty.global'),
+        emptyHelp: t('skills.empty.globalHelp'),
+      };
+    case 'bundled':
+      return {
+        subtitle: t('skills.subtitle.bundled'),
+        empty: t('skills.empty.bundled'),
+        emptyHelp: t('skills.empty.bundledHelp'),
+      };
+    case 'shared':
+      return {
+        subtitle: t('skills.subtitle.shared'),
+        empty: t('skills.empty.shared'),
+        emptyHelp: t('skills.empty.sharedHelp'),
+      };
+    default:
+      return {
+        subtitle: t('skills.subtitle.all'),
+        empty: t('skills.empty.all'),
+        emptyHelp: t('skills.empty.allHelp'),
+      };
+  }
 }
 
 export function filterSkills(
@@ -98,9 +196,9 @@ export function filterSkills(
         entry.name,
         entry.description,
         entry.origin,
-        entry.source_label,
+        skillSourceLabel(entry),
         entry.owner_id,
-        agentDisplayName(entry.owner_id, agents),
+        entry.owner_id ? agentDisplayName(entry.owner_id, agents) : '',
       ]
         .join(' ')
         .toLocaleLowerCase();

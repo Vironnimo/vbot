@@ -285,6 +285,55 @@ describe('Dropdown', () => {
     expect(delta.querySelector('.count-badge')).toBeNull();
   });
 
+  it('renders consecutive options of a group under its label and keeps one keyboard order', async () => {
+    mountedComponent = mount(Dropdown, {
+      target: document.body,
+      props: {
+        id: 'grouped-dropdown',
+        value: 'a',
+        options: [
+          { value: 'a', label: 'A', group: 'Library' },
+          { value: 'b', label: 'B', group: 'Library' },
+          { value: 'c', label: 'C', group: 'Agents', secondaryLabel: '3' },
+          { value: 'd', label: 'D' },
+        ],
+      },
+    });
+    flushSync();
+
+    document.querySelector('#grouped-dropdown').click();
+    await vi.waitFor(() => {
+      expect(document.activeElement?.getAttribute('role')).toBe('listbox');
+    });
+    const listbox = document.activeElement;
+    const groups = [...listbox.querySelectorAll('[role="group"]')].map(
+      (group) => [
+        document
+          .getElementById(group.getAttribute('aria-labelledby'))
+          .textContent.trim(),
+        [...group.querySelectorAll('[role="option"]')].map((option) =>
+          option.textContent.trim(),
+        ),
+      ],
+    );
+    expect(groups).toEqual([
+      ['Library', ['A', 'B']],
+      ['Agents', ['C 3']],
+    ]);
+    expect(
+      listbox.querySelector(':scope > [role="option"]').textContent.trim(),
+    ).toBe('D');
+
+    for (let step = 0; step < 3; step++)
+      listbox.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+      );
+    flushSync();
+    expect(listbox.getAttribute('aria-activedescendant')).toContain(
+      '-option-3',
+    );
+  });
+
   it('opens programmatically from a related control', async () => {
     mountedComponent = mount(Dropdown, {
       target: document.body,

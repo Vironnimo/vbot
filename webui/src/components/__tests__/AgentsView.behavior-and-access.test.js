@@ -695,7 +695,7 @@ describe('AgentsView behavior and access', () => {
     },
   );
 
-  it('renders skill catalog warnings and unavailable diagnostics', async () => {
+  it('renders skill descriptions, unmet requirements and invalid packages and excludes unticked Skills', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, { target: document.body });
@@ -704,14 +704,16 @@ describe('AgentsView behavior and access', () => {
     await waitForText('sample-skill');
 
     expect(document.body.textContent).toContain('A loadable sample skill.');
-    expect(document.body.textContent).toContain('name differs from folder');
+    const skillToggle = getButtonByAriaLabel('Toggle skill warning-skill');
+    const stateId = skillToggle.getAttribute('aria-describedby');
+    expect(document.getElementById(stateId).textContent).toBe(
+      'env:WARNING_TOKEN',
+    );
     const invalidSkills = document.querySelector(
       '.agents-view__invalid-skills',
     );
     expect(invalidSkills.textContent).toContain('broken-skill');
     expect(invalidSkills.textContent).toContain('missing description');
-
-    const skillToggle = getButtonByAriaLabel('Toggle skill warning-skill');
     expect(skillToggle.getAttribute('aria-checked')).toBe('true');
 
     skillToggle.click();
@@ -719,9 +721,38 @@ describe('AgentsView behavior and access', () => {
 
     submitAgentForm();
     await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
-    expect(getAgentUpdateCalls()[0][1].allowed_skills).toEqual([
-      'sample-skill',
-    ]);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      excluded_skills: ['warning-skill'],
+    });
+  });
+
+  it('keeps saved Skill names the catalog no longer lists', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            allowed_skills: ['sample-skill', 'retired-skill'],
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForText('retired-skill');
+    expect(document.body.textContent).toContain('Saved but not found');
+    getButtonByAriaLabel('Toggle skill sample-skill').click();
+    flushSync();
+
+    submitAgentForm();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      allowed_skills: ['retired-skill'],
+    });
   });
 
   it('renders a not-ready tool with a visible status, verbatim hint, and extensions link', async () => {

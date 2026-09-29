@@ -7,10 +7,10 @@
     listConnections,
     listModels,
     listProjects,
-    listSkills,
     listTools,
     reorderAgents,
     showProject,
+    skillInventory,
   } from '$lib/api.js';
   import { buildAgentTargetCatalog } from '$lib/agentForm.js';
   import { useAutosaveContext } from '$lib/autosave.js';
@@ -46,6 +46,7 @@
     projectsRefreshToken = 0,
     agentsRefreshToken = 0,
     memoriesRefreshToken = 0,
+    skillsRefreshToken = 0,
   } = $props();
   let sharedDefaultsOpen = $state(false);
   let sharedSettings = $state(null);
@@ -127,8 +128,10 @@
   let availableModels = $state([]);
   let availableConnections = $state([]);
   let availableTools = $state([]);
-  let availableSkills = $state([]);
-  let invalidSkills = $state([]);
+  // skill.inventory: packages plus each Agent's and Project's Skill access.
+  let skillCatalog = $state({ skills: [], agents: [], projects: [] });
+  let skillCatalogRequestId = 0;
+  let lastSkillTokens = null;
   let availableProjects = $state([]);
   let projectTargetProjects = $state([]);
   let projectCatalogError = $state('');
@@ -204,6 +207,25 @@
       return;
     }
     void loadAgents({ notify: false, showLoading: false });
+  });
+
+  // Skill access depends on Skills, Agents (allowlists, rooting) and Projects
+  // (their Skill lists), so any of their resource events refreshes it. The
+  // editor draft is never replaced by a refresh.
+  $effect(() => {
+    const tokens = [
+      skillsRefreshToken,
+      agentsRefreshToken,
+      projectsRefreshToken,
+    ];
+    const changed =
+      lastSkillTokens &&
+      tokens.some((token, index) => token !== lastSkillTokens[index]);
+    lastSkillTokens = tokens;
+    if (changed)
+      loadSkillCatalog().catch((error) => {
+        loadError = viewErrorMessage(error, t('agents.loadError'));
+      });
   });
 
   $effect(() => {
@@ -293,10 +315,10 @@
   async function loadCatalogs() {
     pendingModelCatalogs = null;
     try {
-      const [catalogs, toolsResult, skillsResult] = await Promise.all([
+      const [catalogs, toolsResult] = await Promise.all([
         modelCatalogLoader.load(),
         listTools(),
-        listSkills(),
+        loadSkillCatalog(),
       ]);
 
       if (catalogs !== null) {
@@ -305,15 +327,20 @@
       availableTools = Array.isArray(toolsResult?.tools)
         ? toolsResult.tools
         : [];
-      availableSkills = Array.isArray(skillsResult?.skills)
-        ? skillsResult.skills
-        : [];
-      invalidSkills = Array.isArray(skillsResult?.invalid_skills)
-        ? skillsResult.invalid_skills
-        : [];
     } catch (error) {
       loadError = viewErrorMessage(error, t('agents.loadError'));
     }
+  }
+
+  async function loadSkillCatalog() {
+    const requestId = ++skillCatalogRequestId;
+    const result = await skillInventory();
+    if (destroyed || requestId !== skillCatalogRequestId) return;
+    skillCatalog = {
+      skills: Array.isArray(result?.skills) ? result.skills : [],
+      agents: Array.isArray(result?.agents) ? result.agents : [],
+      projects: Array.isArray(result?.projects) ? result.projects : [],
+    };
   }
 
   async function loadAgents(options = {}) {
@@ -521,8 +548,7 @@
           {availableModels}
           {availableConnections}
           {availableTools}
-          {availableSkills}
-          {invalidSkills}
+          {skillCatalog}
           {availableAgentTargets}
           {agentTargetCatalogError}
           projectOptions={availableProjects}

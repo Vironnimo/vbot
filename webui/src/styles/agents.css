@@ -547,14 +547,6 @@
   font: var(--fs-mono-sm) / 1.5 var(--font-mono);
 }
 
-.agents-view .agents-view__invalid-skill-path {
-  overflow-wrap: anywhere;
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  line-height: 1.35;
-}
-
 /* Routine warnings carry a thin amber marker and amber text, not a tinted
    box. */
 .agents-view .agents-view__skill-warnings {

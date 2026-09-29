@@ -121,40 +121,75 @@
 .skills-group {
   overflow: hidden;
 }
+.skills-add {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.skills-add-menu {
+  position: fixed;
+  z-index: var(--z-floating);
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  box-shadow: var(--dropdown-elevation);
+}
+.skills-add-menu__item {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-med);
+  background: transparent;
+  font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.skills-add-menu__item:hover,
+.skills-add-menu__item:focus-visible {
+  outline: none;
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+/* One package per row: name and state, the description as a second line,
+   and the source with who gets it at the end. The whole row opens the
+   detail. */
 .skills-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 16px;
   width: 100%;
-  padding: 6px 14px 6px 18px;
-  text-align: left;
+  min-height: 56px;
+  padding: 8px 14px 8px 18px;
+  border: 0;
+  color: inherit;
   background: transparent;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 .skills-row:hover {
   background: var(--surface-2);
+}
+.skills-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
 }
 .skills-row--selected,
 .skills-row--selected:hover {
   background: var(--surface-3);
   box-shadow: inset 2px 0 var(--accent);
 }
-.skills-row-open:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -2px;
-}
-.skills-row-open {
-  display: flex;
-  align-items: center;
-  flex: 1 1 140px;
+.skills-row-main {
+  display: grid;
+  flex: 1;
+  gap: 2px;
   min-width: 0;
-  min-height: 44px;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
 }
 .skills-row-title {
   display: flex;
@@ -162,42 +197,35 @@
   gap: 8px;
   flex-wrap: wrap;
 }
-.skills-actions,
+.skills-row-description {
+  overflow: hidden;
+  color: var(--text-med);
+  font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-row-description--empty,
+.skills-detail-description--empty {
+  color: var(--text-lo);
+}
+.skills-row-meta {
+  display: grid;
+  flex-shrink: 0;
+  justify-items: end;
+  gap: 2px;
+  max-width: 40%;
+  text-align: right;
+}
+.skills-row-summary {
+  color: var(--text-lo);
+  font: 400 var(--fs-label-sm)/1.4 var(--font-ui);
+  overflow-wrap: anywhere;
+}
 .skills-content-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-}
-.skills-enable {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 44px;
-  min-height: 40px;
-}
-.skills-enable .toggle::before {
-  content: '';
-  position: absolute;
-  inset: -9px -3px;
-}
-.skills-enable--labelled {
-  gap: 8px;
-  color: var(--text-med);
-  font: 500 var(--fs-body-sm)/1.4 var(--font-ui);
-  cursor: pointer;
-}
-.skills-create-secondary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 32px;
-}
-.skills-row-copy {
-  display: grid;
-  gap: 4px;
-  flex: 1;
-  min-width: 0;
 }
 /* Skill names are identifiers; the source line below stays in the interface
    face. */
@@ -207,16 +235,11 @@
   overflow-wrap: anywhere;
 }
 .skills-row-source {
-  font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
+  font: 400 var(--fs-label-sm)/1.4 var(--font-ui);
   color: var(--text-med);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
-.skills-source-divider {
-  margin: 0 4px;
-}
-/* A disabled Skill keeps its row; its name recedes beside the off switch. */
+/* A Skill turned off everywhere keeps its row; its name recedes. */
 .skills-row--disabled .skills-row-name {
   color: var(--text-med);
 }
@@ -232,9 +255,6 @@
 }
 .skills-workspace--selected .skills-results {
   flex: 0 0 44%;
-}
-.skills-row .skills-actions {
-  margin-left: auto;
 }
 /* The detail stands beside the list group, separated by whitespace. */
 .skills-detail {
@@ -273,9 +293,17 @@
 .skills-detail-header {
   padding: 4px 0 8px;
 }
-.skills-detail-header .skills-actions {
-  margin-top: 12px;
+.skills-detail-title {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.skills-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .skills-detail-header h3 {
   margin: 8px 0;
@@ -289,10 +317,74 @@
   color: var(--text-med);
   overflow-wrap: anywhere;
 }
-/* Who can use the Skill: a sub-topic heading with its explanation, like the
-   sub-headings of configuration pages. */
+.skills-detail-description {
+  margin: 8px 0 0;
+  max-width: 72ch;
+  color: var(--text-hi);
+  font: 400 var(--fs-body-md)/1.55 var(--font-ui);
+  overflow-wrap: anywhere;
+}
+.skills-detail-note {
+  margin: 6px 0 0;
+  max-width: 72ch;
+  color: var(--text-lo);
+  font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
+  overflow-wrap: anywhere;
+}
+.skills-detail-off {
+  margin-bottom: 20px;
+}
+.skills-detail-off button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* Who gets the Skill: a sub-topic heading with its explanation, like the
+   sub-headings of configuration pages, then the Agent and Project rows. */
 .skills-access {
   margin: 0 0 24px;
+}
+.skills-access__groups {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+/* An Agent's or Project's Skill selection in place of the package list. */
+.skills-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.skills-selection {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.skills-selection__toolbar {
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.skills-selection__auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-med);
+  font: 500 var(--fs-body-sm)/1.4 var(--font-ui);
+  cursor: pointer;
+}
+.skills-selection__filter {
+  min-width: 180px;
+  margin-left: auto;
+}
+.skills-selection__groups {
+  display: grid;
+  gap: 12px;
+}
+/* Descriptions stay on one line; the detail pane shows them in full. */
+.skills-selection .s-check-row__detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .skills-access h4 {
   margin: 0 0 4px;
@@ -413,11 +505,6 @@
   align-items: flex-start;
   gap: 8px;
 }
-.skills-install-alternatives {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
 .skills-editor-modal.modal {
   width: 760px;
 }
@@ -441,56 +528,6 @@
   gap: 8px;
   font: 500 var(--fs-body-sm)/1.4 var(--font-ui);
   color: var(--text-hi);
-}
-.skills-share-desc {
-  margin: 0;
-  font: 400 var(--fs-body-md)/1.6 var(--font-ui);
-  color: var(--text-hi);
-}
-.skills-share-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-.skills-share-option {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
-  color: var(--text-hi);
-  cursor: pointer;
-  text-align: left;
-}
-/* The check box carries the accent; the selected card only lifts one
-   surface step. */
-.skills-share-option--selected {
-  background: var(--surface-3);
-  border-color: var(--border-2);
-}
-.skills-share-option:focus-visible {
-  outline: 1px solid var(--accent);
-}
-.skills-share-agent-name {
-  flex: 1;
-  font: 400 var(--fs-body-md)/1.4 var(--font-ui);
-}
-.skills-share-agent-id {
-  font: 400 var(--fs-mono-xs)/1.4 var(--font-mono);
-  color: var(--text-med);
-}
-.skills-receiver-check {
-  width: 18px;
-  height: 18px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  color: var(--accent);
-  text-align: center;
-  line-height: 16px;
 }
 @media (max-width: 1280px) {
   .skills-detail {
@@ -538,6 +575,15 @@
   }
   .skills-detail-scroll {
     padding-right: 0;
+  }
+  .skills-row {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+  .skills-row-meta {
+    justify-items: start;
+    max-width: none;
+    text-align: left;
   }
   .skills-diagnostics summary {
     min-height: 40px;

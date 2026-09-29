@@ -615,14 +615,10 @@ export function createSettingsRpcMock(options = {}) {
       return { model_tasks: deepClone(nextModelTasks) };
     }
 
-    // The Extensions and Skills sections are always mounted in the settings
-    // document and self-load on mount; give them empty-but-valid payloads.
+    // The Extensions section is always mounted in the settings document and
+    // self-loads on mount; give it an empty-but-valid payload.
     if (method === 'extensions.list') {
       return { extensions: options.extensions ?? [] };
-    }
-
-    if (method === 'skill.read') {
-      return { skills: options.skillFiles ?? [] };
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);

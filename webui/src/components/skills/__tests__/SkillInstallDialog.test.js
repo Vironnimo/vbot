@@ -69,8 +69,6 @@ function render() {
       ],
       onInstalled,
       onClose,
-      onLocations: vi.fn(),
-      onCreate: vi.fn(),
     },
   });
   flushSync();

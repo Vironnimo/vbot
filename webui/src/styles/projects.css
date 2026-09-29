@@ -551,62 +551,6 @@
   font-size: var(--fs-mono-xs);
 }
 
-/* ── Skill whitelist ──────────────────────────────────────────────────────── */
-
-/* Mirrors the Tool list above it: a count and filter line, then one panel
-   per Skill source with a group checkbox and one checkbox row per Skill. */
-.projects-view .projects-skill-search {
-  flex: 1 1 180px;
-  max-width: 260px;
-  margin-left: auto;
-}
-
-.projects-view .projects-skill-search input {
-  width: 100%;
-  box-sizing: border-box;
-  min-height: 32px;
-  padding: 6px 12px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  background: var(--field-surface);
-  color: var(--text-hi);
-  font: inherit;
-  font-size: var(--fs-body-sm);
-}
-
-.projects-view .projects-skill-search input::placeholder {
-  color: var(--text-lo);
-}
-
-.projects-view .projects-skill-search input:focus-visible {
-  border-color: var(--accent);
-  outline: none;
-  box-shadow: var(--field-focus-ring);
-}
-
-/* Skill ceilings are shared Checkbox groups (styles/settings/sections.css);
-   each row wrapper anchors the Skill's hover card. */
-.projects-view .projects-skill-row {
-  min-width: 0;
-}
-
-.projects-skill-tip {
-  max-width: min(400px, calc(100vw - 16px));
-  color: var(--text-med);
-}
-
-.projects-skill-tip strong {
-  color: var(--text-hi);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
-  font-weight: 600;
-}
-
-.projects-skill-tip p {
-  margin: 6px 0 0;
-  white-space: pre-wrap;
-}
-
 /* ── Modals ───────────────────────────────────────────────────────────────── */
 
 .projects-view__modal {
@@ -734,10 +678,5 @@
 
   .projects-view .projects-member-field__control {
     justify-content: flex-start;
-  }
-
-  .projects-view .projects-skill-search {
-    max-width: none;
-    margin-left: 0;
   }
 }

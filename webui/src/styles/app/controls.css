@@ -1015,6 +1015,19 @@ summary:not([class])::-webkit-details-marker {
   font-size: var(--fs-label-sm);
 }
 
+/* A labelled run of options (for example the sections of a sidebar shown as
+   one Dropdown on narrow screens). */
+.dropdown-primitive__group + .dropdown-primitive__group {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.dropdown-primitive__group-label {
+  padding: 8px 12px 4px;
+  color: var(--text-lo);
+  font: 600 var(--fs-label-sm) / 1.4 var(--font-ui);
+}
+
 /* Optional option decorations: a status dot before the label (also on the
    trigger for the selected option) and a count pill after it. The label then
    takes the free space so the pill and chevron stay at the end. */

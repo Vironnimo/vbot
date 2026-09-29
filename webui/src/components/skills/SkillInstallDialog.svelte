@@ -15,8 +15,6 @@
     scopeOptions = [],
     onClose,
     onInstalled,
-    onLocations,
-    onCreate,
   } = $props();
   let scope = $state(untrack(() => initialScope));
   let mode = $state('link');
@@ -313,18 +311,6 @@
           {/if}
         </section>
       {/if}
-      <div class="skills-install-alternatives">
-        <Button
-          variant="tertiary"
-          disabled={Boolean(busy)}
-          onClick={onLocations}>{t('skills.install.locations')}</Button
-        >
-        <Button
-          variant="tertiary"
-          disabled={Boolean(busy)}
-          onClick={() => onCreate(scope)}>{t('skills.createCustom')}</Button
-        >
-      </div>
     </div>
   {/snippet}
   {#snippet footer()}

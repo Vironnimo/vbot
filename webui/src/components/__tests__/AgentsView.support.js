@@ -272,8 +272,8 @@ export function createAgentsRpcMock(options = {}) {
       return { tools: options.tools ?? [] };
     }
 
-    if (method === 'skill.list') {
-      return options.skills ?? skillCatalog();
+    if (method === 'skill.inventory') {
+      return options.skills ?? skillInventory(agents);
     }
 
     if (method === 'project.list') {
@@ -398,30 +398,71 @@ export function createAgentsRpcMock(options = {}) {
   };
 }
 
-function skillCatalog() {
+// The Skills manager projection: a loadable global Skill, one whose
+// requirements are unmet, and one invalid package; each Agent's grants follow
+// its saved allowlist pair.
+function skillInventory(agents) {
+  const skill = (id, name, extra) => ({
+    id,
+    name,
+    description: '',
+    origin: 'global',
+    owner_id: null,
+    project_id: null,
+    shared: false,
+    shared_with: [],
+    disabled: false,
+    status: 'available',
+    missing: [],
+    optional_missing: [],
+    warnings: [],
+    ...extra,
+  });
+  const skills = [
+    skill('pkg-sample', 'sample-skill', {
+      description: 'A loadable sample skill.',
+    }),
+    skill('pkg-warning', 'warning-skill', {
+      description: 'Needs a token.',
+      status: 'unavailable',
+      missing: ['env:WARNING_TOKEN'],
+    }),
+    skill('pkg-broken', 'broken-skill', {
+      status: 'invalid',
+      warnings: ['missing description'],
+    }),
+  ];
   return {
-    skills: [
-      {
-        name: 'sample-skill',
-        description: 'A loadable sample skill.',
-        valid: true,
-        warnings: [],
-      },
-      {
-        name: 'warning-skill',
-        description: 'Loads with a warning.',
-        valid: false,
-        warnings: ['name differs from folder'],
-      },
-    ],
-    invalid_skills: [
-      {
-        name: 'broken-skill',
-        path: 'C:/skills/broken-skill/SKILL.md',
-        valid: false,
-        warnings: ['missing description'],
-      },
-    ],
+    skills,
+    agents: agents.map((agent) => {
+      const allowed = agent.allowed_skills ?? ['*'];
+      const excluded = agent.excluded_skills ?? [];
+      const grant = (name) =>
+        excluded.includes(name)
+          ? 'excluded'
+          : allowed.includes('*') || allowed.includes(name)
+            ? 'allowed'
+            : 'not_selected';
+      return {
+        id: agent.id,
+        name: agent.name,
+        root_project_id: agent.root_project_id ?? null,
+        allowed_skills: allowed,
+        excluded_skills: excluded,
+        mode: allowed.includes('*') ? 'all' : 'selected',
+        skills: skills
+          .filter((entry) => entry.status !== 'invalid')
+          .map((entry) => ({
+            name: entry.name,
+            package_id: entry.id,
+            grant: grant(entry.name),
+            available: entry.status === 'available',
+          })),
+      };
+    }),
+    projects: [],
+    stale_shared: [],
+    policy_diagnostics: [],
   };
 }
 

@@ -1,46 +1,43 @@
 import { t } from '$lib/i18n.js';
 import { createSkillDocument } from './skillsView.js';
 import {
+  accessPatch,
+  projectSkillPatch,
+  skillAccessOf,
+} from './skillAccess.js';
+import {
   createSkill as createSkillRequest,
   updateSkill,
   setSkillDisabled,
   shareSkill,
+  updateAgent,
+  setProject,
   deleteSkill as deleteSkillRequest,
 } from '$lib/api.js';
 
+// Every write of the Skills manager. Each request is immediate, runs one at a
+// time (`busy`), reloads the inventory afterwards and reports failures as
+// toasts. `context` supplies the projection agents, the inspected package,
+// `onToast` and `loadInventory`.
 export function createSkillActions(context) {
   const GLOBAL_SCOPE = 'global';
 
   let busy = $state(false);
 
-  // Create-modal state: a target scope (global pool or an agent's private home)
-  // plus the name/content draft.
+  // Create dialog: a target scope (global pool or an Agent's private home)
+  // plus the name/description/instructions draft.
   let showCreateModal = $state(false);
-
   let createScope = $state(GLOBAL_SCOPE);
-
   let newName = $state('');
-
   let newDescription = $state('');
-
   let newContent = $state('');
 
-  // Edit-modal state: which entry (scope + name) is open with which content.
+  // Edit dialog: which package (scope + name) is open with which content.
   let editing = $state(null);
-
-  // { scope, name }
   let editContent = $state('');
 
-  // The skill awaiting delete confirmation (null = dialog closed).
+  // The package awaiting delete confirmation (null = dialog closed).
   let deleteTarget = $state(null);
-
-  // { scope, name }
-  // Share-modal state: which entry is being shared and which receivers are
-  // selected.
-  let shareTarget = $state(null);
-
-  // { owner_id, name }
-  let shareReceivers = $state([]);
 
   let createDisabled = $derived(
     busy || !newName.trim() || !newDescription.trim() || !newContent.trim(),
@@ -59,11 +56,27 @@ export function createSkillActions(context) {
     })),
   ]);
 
-  function openCreateModal() {
-    if (context.scope !== 'directories')
-      createScope = context.scope.startsWith('agent:')
-        ? context.scope
-        : GLOBAL_SCOPE;
+  async function run(request, failure, success = null) {
+    if (busy) return false;
+    busy = true;
+    try {
+      await request();
+      if (success) context.onToast({ title: success(), variant: 'success' });
+      await context.loadInventory();
+      return true;
+    } catch (error) {
+      context.onToast({
+        title: `${failure()} ${error.message}`,
+        variant: 'error',
+      });
+      return false;
+    } finally {
+      busy = false;
+    }
+  }
+
+  function openCreateModal(scope = GLOBAL_SCOPE) {
+    createScope = scope;
     newName = '';
     newDescription = '';
     newContent = '';
@@ -78,30 +91,19 @@ export function createSkillActions(context) {
   }
 
   async function createSkill() {
-    if (createDisabled) {
-      return;
-    }
-    busy = true;
-    try {
-      await createSkillRequest({
-        scope: createScope,
-        name: newName.trim(),
-        content: createSkillDocument(newName, newDescription, newContent),
-      });
-      context.onToast({
-        title: t('settings.skills.created'),
-        variant: 'success',
-      });
-      closeCreateModal();
-      await context.loadInventory();
-    } catch (error) {
-      context.onToast({
-        title: `${t('settings.skills.createError')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
-    }
+    if (createDisabled) return;
+    await run(
+      async () => {
+        await createSkillRequest({
+          scope: createScope,
+          name: newName.trim(),
+          content: createSkillDocument(newName, newDescription, newContent),
+        });
+        closeCreateModal();
+      },
+      () => t('settings.skills.createError'),
+      () => t('settings.skills.created'),
+    );
   }
 
   function startEdit(entry) {
@@ -121,117 +123,61 @@ export function createSkillActions(context) {
   }
 
   async function saveEdit() {
-    if (busy || !editing) {
-      return;
-    }
-    busy = true;
-    try {
-      await updateSkill({
-        scope: editing.scope,
-        name: editing.name,
-        content: editContent,
-      });
-      context.onToast({
-        title: t('settings.skills.saved'),
-        variant: 'success',
-      });
-      closeEditModal();
-      await context.loadInventory();
-    } catch (error) {
-      context.onToast({
-        title: `${t('settings.skills.contentSaveError')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
-    }
+    if (!editing) return;
+    const target = editing;
+    await run(
+      async () => {
+        await updateSkill({
+          scope: target.scope,
+          name: target.name,
+          content: editContent,
+        });
+        closeEditModal();
+      },
+      () => t('settings.skills.contentSaveError'),
+      () => t('settings.skills.saved'),
+    );
   }
 
-  async function toggleDisabled(entry) {
-    if (busy) {
-      return;
-    }
-    busy = true;
-    try {
-      await setSkillDisabled(entry.name, !entry.disabled);
-      context.onToast({
-        title: entry.disabled
-          ? t('skills.enabledToast', {
-              name: entry.name,
-            })
-          : t('skills.disabledToast', {
-              name: entry.name,
-            }),
-        variant: 'success',
-      });
-      await context.loadInventory();
-    } catch (error) {
-      context.onToast({
-        title: `${t('skills.toggleError')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
-    }
+  // The global off switch for every package with this name.
+  function setDisabled(entry, disabled) {
+    return run(
+      () => setSkillDisabled(entry.name, disabled),
+      () => t('skills.toggleError'),
+      () =>
+        disabled
+          ? t('skills.disabledToast', { name: entry.name })
+          : t('skills.enabledToast', { name: entry.name }),
+    );
   }
 
-  function openShareModal(entry) {
-    if (busy || !entry.owner_id) {
-      return;
-    }
-    shareTarget = { owner_id: entry.owner_id, name: entry.name };
-    shareReceivers = Array.isArray(entry.shared_with)
-      ? [...entry.shared_with]
-      : [];
+  // Saves an Agent's next allowlist pair; only changed fields are sent.
+  function updateAgentAccess(agent, next) {
+    const patch = accessPatch(skillAccessOf(agent), next);
+    if (!Object.keys(patch).length) return Promise.resolve(true);
+    return run(
+      () => updateAgent({ id: agent.id, ...patch }),
+      () => t('skills.accessError'),
+    );
   }
 
-  function closeShareModal() {
-    shareTarget = null;
-    shareReceivers = [];
+  // Replaces the receivers of a private package; none stops sharing.
+  function setSharing(entry, receivers) {
+    return run(
+      () =>
+        shareSkill(entry.owner_id, entry.name, receivers.length > 0, receivers),
+      () => t('skills.shareError'),
+    );
   }
 
-  function toggleReceiver(agentId) {
-    if (shareReceivers.includes(agentId)) {
-      shareReceivers = shareReceivers.filter((id) => id !== agentId);
-    } else {
-      shareReceivers = [...shareReceivers, agentId];
-    }
-  }
-
-  let shareableAgents = $derived(
-    context.agents.filter((agent) => agent.id !== shareTarget?.owner_id),
-  );
-
-  let shareSaveDisabled = $derived(busy || Boolean(context.agentError));
-
-  async function saveShare() {
-    if (busy || !shareTarget || context.agentError) {
-      return;
-    }
-    busy = true;
-    try {
-      await shareSkill(
-        shareTarget.owner_id,
-        shareTarget.name,
-        shareReceivers.length > 0,
-        shareReceivers,
-      );
-      context.onToast({
-        title: t('skills.sharedToast', {
-          count: shareReceivers.length,
-        }),
-        variant: 'success',
-      });
-      closeShareModal();
-      await context.loadInventory();
-    } catch (error) {
-      context.onToast({
-        title: `${t('skills.shareError')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
-    }
+  // Activates or deactivates Skills of one pool in a Project.
+  function updateProjectSkills(project, source, names, active) {
+    const patch = projectSkillPatch(project, source, names, active);
+    if (!Object.keys(patch).length) return Promise.resolve(true);
+    return run(
+      () => setProject(project.project_id, patch),
+      () => t('skills.projectError'),
+    );
   }
 
   function requestDelete(entry) {
@@ -246,44 +192,25 @@ export function createSkillActions(context) {
   async function confirmDelete() {
     const target = deleteTarget;
     deleteTarget = null;
-    if (!target || busy) {
-      return;
-    }
-    busy = true;
-    try {
-      await deleteSkillRequest(target.scope, target.name);
-      context.onToast({
-        title: t('settings.skills.deleted'),
-        variant: 'success',
-      });
-      if (editing?.name === target.name && editing?.scope === target.scope) {
-        closeEditModal();
-      }
-      await context.loadInventory();
-    } catch (error) {
-      context.onToast({
-        title: `${t('settings.skills.deleteError')} ${error.message}`,
-        variant: 'error',
-      });
-    } finally {
-      busy = false;
-    }
+    if (!target) return;
+    await run(
+      async () => {
+        await deleteSkillRequest(target.scope, target.name);
+        if (editing?.name === target.name && editing?.scope === target.scope)
+          closeEditModal();
+      },
+      () => t('settings.skills.deleteError'),
+      () => t('settings.skills.deleted'),
+    );
   }
+
   return {
-    get GLOBAL_SCOPE() {
-      return GLOBAL_SCOPE;
-    },
+    GLOBAL_SCOPE,
     get busy() {
       return busy;
     },
-    set busy(value) {
-      busy = value;
-    },
     get showCreateModal() {
       return showCreateModal;
-    },
-    set showCreateModal(value) {
-      showCreateModal = value;
     },
     get createScope() {
       return createScope;
@@ -312,9 +239,6 @@ export function createSkillActions(context) {
     get editing() {
       return editing;
     },
-    set editing(value) {
-      editing = value;
-    },
     get editContent() {
       return editContent;
     },
@@ -324,86 +248,24 @@ export function createSkillActions(context) {
     get deleteTarget() {
       return deleteTarget;
     },
-    set deleteTarget(value) {
-      deleteTarget = value;
-    },
-    get shareTarget() {
-      return shareTarget;
-    },
-    set shareTarget(value) {
-      shareTarget = value;
-    },
-    get shareReceivers() {
-      return shareReceivers;
-    },
-    set shareReceivers(value) {
-      shareReceivers = value;
-    },
     get createDisabled() {
       return createDisabled;
-    },
-    set createDisabled(value) {
-      createDisabled = value;
     },
     get scopeOptions() {
       return scopeOptions;
     },
-    set scopeOptions(value) {
-      scopeOptions = value;
-    },
-    get openCreateModal() {
-      return openCreateModal;
-    },
-    get closeCreateModal() {
-      return closeCreateModal;
-    },
-    get createSkill() {
-      return createSkill;
-    },
-    get startEdit() {
-      return startEdit;
-    },
-    get closeEditModal() {
-      return closeEditModal;
-    },
-    get saveEdit() {
-      return saveEdit;
-    },
-    get toggleDisabled() {
-      return toggleDisabled;
-    },
-    get openShareModal() {
-      return openShareModal;
-    },
-    get closeShareModal() {
-      return closeShareModal;
-    },
-    get toggleReceiver() {
-      return toggleReceiver;
-    },
-    get shareableAgents() {
-      return shareableAgents;
-    },
-    set shareableAgents(value) {
-      shareableAgents = value;
-    },
-    get shareSaveDisabled() {
-      return shareSaveDisabled;
-    },
-    set shareSaveDisabled(value) {
-      shareSaveDisabled = value;
-    },
-    get saveShare() {
-      return saveShare;
-    },
-    get requestDelete() {
-      return requestDelete;
-    },
-    get cancelDelete() {
-      return cancelDelete;
-    },
-    get confirmDelete() {
-      return confirmDelete;
-    },
+    openCreateModal,
+    closeCreateModal,
+    createSkill,
+    startEdit,
+    closeEditModal,
+    saveEdit,
+    setDisabled,
+    updateAgentAccess,
+    setSharing,
+    updateProjectSkills,
+    requestDelete,
+    cancelDelete,
+    confirmDelete,
   };
 }
