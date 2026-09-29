@@ -2,7 +2,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
-import { HOVER_CARD_SHOW_DELAY_MS } from '../../lib/tooltip.js';
+import {
+  FLOATING_HOVER_CLOSE_DELAY_MS,
+  HOVER_CARD_SHOW_DELAY_MS,
+  TOOLTIP_SHOW_DELAY_MS,
+} from '../../lib/tooltip.js';
 import {
   buttonLabelled,
   composerInput,
@@ -283,6 +287,33 @@ describe('ChatComposer', () => {
       composer.mount({ isRunning: true, cancelling: true });
       expect(buttonLabelled('chat.cancelRun')).toBeNull();
       expect(buttonLabelled('cancel.cancelling').disabled).toBe(true);
+    });
+
+    it('says why Send is unavailable until there is something to send', async () => {
+      vi.useFakeTimers();
+      composer.mount();
+      const hoverSend = async () => {
+        // A disabled button's tooltip lives on its wrapping anchor.
+        const button = buttonLabelled('chat.sendMessage');
+        const anchor = button.parentElement.matches('.tooltip-anchor')
+          ? button.parentElement
+          : button;
+        anchor.dispatchEvent(new Event('pointerenter'));
+        await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+        const text = document.getElementById('app-tooltip').textContent;
+        anchor.dispatchEvent(new Event('pointerleave'));
+        await vi.advanceTimersByTimeAsync(FLOATING_HOVER_CLOSE_DELAY_MS);
+        return text;
+      };
+
+      expect(buttonLabelled('chat.sendMessage').disabled).toBe(true);
+      expect(await hoverSend()).toBe(t('chat.sendUnavailableEmpty'));
+
+      typeInComposer('Hello');
+      expect(buttonLabelled('chat.sendMessage').disabled).toBe(false);
+      expect(await hoverSend()).toBe(
+        t('chat.sendMessage') + t('chat.sendMessageHint'),
+      );
     });
 
     it('focuses the message field when the composer padding is pressed', () => {

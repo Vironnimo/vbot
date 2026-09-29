@@ -25,6 +25,15 @@ export default Object.freeze({
     'Ask this agent to do something… (/ for commands, $ for skills, @ for files)',
   'chat.sendMessage': 'Send message',
   'chat.queueMessage': 'Queue message',
+  'chat.sendMessageHint': 'Enter sends · Shift+Enter starts a new line',
+  'chat.queueMessageHint':
+    'Runs after the current Run finishes · Enter queues · Shift+Enter starts a new line',
+  'chat.sendUnavailableSending': 'Sending…',
+  'chat.sendUnavailableUploading':
+    'Available once the attachments have finished uploading.',
+  'chat.sendUnavailableVoice':
+    'Available once the recording has been transcribed.',
+  'chat.sendUnavailableEmpty': 'Type a message or add a file to send.',
   'chat.copyAnswer': 'Copy answer',
   'chat.answerCopied': 'Answer copied',
   'chat.copyUserMessage': 'Copy message',
@@ -49,6 +58,7 @@ export default Object.freeze({
   'chat.attachment.uploading': 'Uploading…',
   'chat.attachment.uploadFailed': 'Attachment upload failed.',
   'chat.attachment.remove': 'Remove attachment',
+  'chat.attachment.removeNamed': 'Remove attachment {name}',
   'chat.attachment.preview': 'Preview attachment',
   'chat.attachment.fileLabel': 'Attached file',
   'chat.attachment.imageReference': 'Image {number}',
@@ -405,6 +415,8 @@ export default Object.freeze({
   'queue.steerHint':
     'Send to the active Run at its next iteration. If the Run ends first, the message runs next.',
   'queue.steerError': 'Message could not be steered.',
+  'queue.steerUnavailable':
+    'Steering needs an active Run. Without one, this message runs next.',
   'queue.title': 'Queued messages',
   'queue.removeMessage': 'Remove queued message',
   'queue.editMessage': 'Edit queued message',

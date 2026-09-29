@@ -7,6 +7,7 @@ import { init, t } from '../../lib/i18n.js';
 import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
   HOVER_CARD_SHOW_DELAY_MS,
+  TOOLTIP_SHOW_DELAY_MS,
 } from '../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
@@ -122,6 +123,34 @@ describe('QueuedMessages', () => {
     expect(onSteerQueuedMessage).toHaveBeenCalledWith('q');
     resolveSteer(false);
     await vi.waitFor(() => expect(button('queue.steer').disabled).toBe(false));
+  });
+
+  it.each([
+    ['without an active Run', { canSteer: false }, 'queue.steerUnavailable'],
+    [
+      'while the message is being delivered',
+      { canSteer: true, steering: true },
+      'queue.steeringLocked',
+    ],
+  ])('says why Steer is unavailable %s', async (_label, state, reason) => {
+    vi.useFakeTimers();
+    mountQueue({
+      queuedMessages: [
+        {
+          id: 'q',
+          content: 'Steer me',
+          steerable: true,
+          steering: state.steering === true,
+        },
+      ],
+      canSteer: state.canSteer,
+    });
+
+    const steer = document.querySelector('.queued-messages__actions button');
+    expect(steer.disabled).toBe(true);
+    steer.parentElement.dispatchEvent(new Event('pointerenter'));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    expect(document.getElementById('app-tooltip').textContent).toBe(t(reason));
   });
 
   it('opens the editor only from editable previews; attachment items only offer removal', () => {

@@ -24,6 +24,17 @@
     }
   };
 
+  // Why Steer is unavailable for a message right now; '' when it is not.
+  const steerDisabledReason = (message) => {
+    if (message.steering) {
+      return t('queue.steeringLocked');
+    }
+    if (steeringIds.includes(message.id)) {
+      return t('queue.steering');
+    }
+    return canSteer ? '' : t('queue.steerUnavailable');
+  };
+
   let editingId = $state('');
   let editedContent = $state('');
   let editOriginal = '';
@@ -182,7 +193,7 @@
               >
               <div
                 class="floating-card queued-messages__full"
-                use:floatingHoverCard
+                use:floatingHoverCard={{ whenTruncated: true }}
               >
                 {message.content}
               </div>
@@ -191,9 +202,8 @@
               {#if message.steerable === true}
                 <Button
                   variant="tertiary"
-                  disabled={!canSteer ||
-                    message.steering ||
-                    steeringIds.includes(message.id)}
+                  disabled={Boolean(steerDisabledReason(message))}
+                  disabledReason={steerDisabledReason(message)}
                   ariaLabel={t('queue.steer')}
                   tooltip={t('queue.steerHint')}
                   onClick={() => steer(message.id)}
@@ -206,6 +216,7 @@
                   variant="tertiary"
                   disabled={editSaving}
                   ariaLabel={t('queue.editMessage')}
+                  tooltip={t('queue.editMessage')}
                   onClick={() => beginEdit(message)}
                 >
                   <svg
@@ -225,6 +236,7 @@
               <Button
                 variant="tertiary"
                 ariaLabel={t('queue.removeMessage')}
+                tooltip={t('queue.removeMessage')}
                 onClick={() => onRemoveQueuedMessage?.(message.id)}
               >
                 <svg
