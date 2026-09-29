@@ -541,14 +541,25 @@
   .skills-mobile-nav {
     display: block;
   }
-  .skills-mobile-hidden {
+  .skills-view .skills-mobile-hidden {
     display: none;
   }
+  /* The detail replaces the list and the collection header, and scrolls as
+     one column so its header does not hold half of a small screen. */
   .skills-detail {
     margin: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .skills-detail-scroll {
+    flex: none;
+    overflow: visible;
   }
   .skills-detail-top .skills-detail-back {
     display: inline-flex;
+  }
+  .skills-detail-title {
+    margin-bottom: 8px;
   }
 }
 @media (max-width: 640px) {

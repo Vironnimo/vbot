@@ -362,7 +362,7 @@
   </aside>
 
   <div class="skills-main">
-    <div class="skills-mobile-nav">
+    <div class="skills-mobile-nav" class:skills-mobile-hidden={selected}>
       <SkillCollectionNav
         variant="dropdown"
         {collections}
@@ -370,7 +370,10 @@
         onSelect={changeScope}
       />
     </div>
-    <header class="view-header skills-header">
+    <header
+      class="view-header skills-header"
+      class:skills-mobile-hidden={selected}
+    >
       <div class="view-header__intro">
         <h2 id="skills-title" class="view-header__title">
           {scope === 'directories'
