@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -39,6 +40,7 @@ from core.model_tasks._live_wire import (
     WireToolCall,
     WireUsage,
 )
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -71,7 +73,8 @@ class LiveCallSession:
     """Implements :class:`core.model_tasks.live.LiveCall` for one joined wire.
 
     Without a *brain* (direct Tools mode) the wire emits app Tool calls
-    instead of delegations.
+    instead of delegations. ``id`` is the wire's call id, which a Provider may
+    own; logs and task names use the vBot-owned *log_id* instead.
     """
 
     def __init__(
@@ -81,6 +84,7 @@ class LiveCallSession:
         brain: LiveBrain | None,
         host: LiveCallHost,
         target: str,
+        log_id: str | None = None,
         start_timeout: float = START_TIMEOUT_SECONDS,
         close_timeout: float = CLOSE_TIMEOUT_SECONDS,
         delegation_timeout: float = DELEGATION_TIMEOUT_SECONDS,
@@ -94,6 +98,7 @@ class LiveCallSession:
         self._brain = brain
         self._host = host
         self._target = target
+        self._log_id = log_id or new_id("live")
         self._start_timeout = start_timeout
         self._close_timeout = close_timeout
         self._delegation_timeout = delegation_timeout
@@ -131,6 +136,10 @@ class LiveCallSession:
         return self._wire.call_id
 
     @property
+    def log_id(self) -> str:
+        return self._log_id
+
+    @property
     def media(self) -> JsonObject:
         return self._wire.media
 
@@ -138,9 +147,9 @@ class LiveCallSession:
         """Begin reading wire events; called once by the service."""
 
         self._publish({"type": "state", "phase": self._phase})
-        self._reader = asyncio.create_task(self._read(), name=f"live-call-reader:{self.id}")
+        self._reader = asyncio.create_task(self._read(), name=f"live-call-reader:{self._log_id}")
         self._watchdog = asyncio.create_task(
-            self._watch_start(), name=f"live-call-start-watchdog:{self.id}"
+            self._watch_start(), name=f"live-call-start-watchdog:{self._log_id}"
         )
 
     async def close(self) -> None:
@@ -152,7 +161,7 @@ class LiveCallSession:
                     if await self._send_command(self._wire.request_close):
                         await self._done.wait()
             except TimeoutError:
-                _LOGGER.warning("Live call close was not confirmed in time: call_id=%s", self.id)
+                _LOGGER.warning("Live call close was not confirmed in time (call=%s)", self._log_id)
         if not self._done.is_set():
             await self._teardown()
         await self.wait_closed()
@@ -176,8 +185,8 @@ class LiveCallSession:
             if not self._audio_overflow_logged:
                 self._audio_overflow_logged = True
                 _LOGGER.warning(
-                    "Live call microphone audio fell behind; dropping the oldest audio: call_id=%s",
-                    self.id,
+                    "Live call microphone audio fell behind; dropping the oldest audio (call=%s)",
+                    self._log_id,
                 )
         self._audio_ready.set()
 
@@ -193,7 +202,7 @@ class LiveCallSession:
         text = _render_notice(notice, excerpt=not self._wire.announces_as_user_input)
         self._spawn(
             self._send_command(lambda: self._wire.announce(text)),
-            name=f"live-call-announce:{self.id}",
+            name=f"live-call-announce:{self._log_id}",
         )
 
     async def wait_closed(self) -> None:
@@ -216,8 +225,8 @@ class LiveCallSession:
                 self._handle(event)
         except Exception as exc:
             _LOGGER.warning(
-                "Live call control reader failed: call_id=%s error_type=%s",
-                self.id,
+                "Live call control reader failed (call=%s error_type=%s)",
+                self._log_id,
                 type(exc).__name__,
             )
         finally:
@@ -227,9 +236,9 @@ class LiveCallSession:
         if isinstance(event, WireStarted):
             if self._phase == "connecting":
                 self._set_phase("live")
-                _LOGGER.debug("Live call media connected: call_id=%s", self.id)
+                _LOGGER.debug("Live call media connected (call=%s)", self._log_id)
                 if self._relay:
-                    self._spawn(self._pump_audio(), name=f"live-call-audio:{self.id}")
+                    self._spawn(self._pump_audio(), name=f"live-call-audio:{self._log_id}")
         elif isinstance(event, WireAudio):
             if self._phase == "live" and not self._closing:
                 self._publish_audio(event.pcm)
@@ -239,15 +248,15 @@ class LiveCallSession:
             self._on_caption(event)
         elif isinstance(event, WireDelegation):
             if not self._closing:
-                self._spawn(self._delegate(event), name=f"live-call-delegation:{self.id}")
+                self._spawn(self._delegate(event), name=f"live-call-delegation:{self._log_id}")
         elif isinstance(event, WireToolCall):
             if not self._closing:
-                self._spawn(self._run_tool(event), name=f"live-call-tool:{self.id}")
+                self._spawn(self._run_tool(event), name=f"live-call-tool:{self._log_id}")
         elif isinstance(event, WireUsage):
             self._usage = event.usage
         elif isinstance(event, WireProblem):
             _LOGGER.warning(
-                "Live provider reported an error: call_id=%s code=%s", self.id, event.code
+                "Live provider reported an error (call=%s code=%s)", self._log_id, event.code
             )
 
     def _on_caption(self, event: WireCaption) -> None:
@@ -270,7 +279,7 @@ class LiveCallSession:
 
     async def _delegate(self, event: WireDelegation) -> None:
         if self._brain is None:
-            _LOGGER.warning("Live delegation without a backend model: call_id=%s", self.id)
+            _LOGGER.warning("Live delegation without a backend model (call=%s)", self._log_id)
             answer = "No backend model is configured, so the request was not started."
             await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
             return
@@ -290,7 +299,7 @@ class LiveCallSession:
                     async with asyncio.timeout(self._delegation_timeout):
                         answer = await brain.answer(delegation)
                 except TimeoutError:
-                    _LOGGER.warning("Live delegation timed out: call_id=%s", self.id)
+                    _LOGGER.warning("Live delegation timed out (call=%s)", self._log_id)
                     answer = (
                         "The request took too long and was stopped. Actions it already started "
                         "may have completed; nothing was retried."
@@ -331,7 +340,7 @@ class LiveCallSession:
             async with asyncio.timeout(self._delegation_timeout):
                 return await self._host.execute_tool(call.name, dict(call.arguments))
         except TimeoutError:
-            _LOGGER.warning("Live Tool call timed out: call_id=%s tool=%s", self.id, call.name)
+            _LOGGER.warning("Live Tool call timed out (call=%s tool=%s)", self._log_id, call.name)
             return live_failure(
                 "timeout",
                 "The Tool call took too long and was stopped. It may have completed; do not "
@@ -339,8 +348,8 @@ class LiveCallSession:
             )
         except Exception as exc:
             _LOGGER.warning(
-                "Live Tool call failed: call_id=%s tool=%s error_type=%s",
-                self.id,
+                "Live Tool call failed (call=%s tool=%s error_type=%s)",
+                self._log_id,
                 call.name,
                 type(exc).__name__,
             )
@@ -388,7 +397,8 @@ class LiveCallSession:
     async def _watch_start(self) -> None:
         await asyncio.sleep(self._start_timeout)
         if self._phase == "connecting" and not self._done.is_set():
-            _LOGGER.warning("Live call media did not connect in time: call_id=%s", self.id)
+            # The ended line reports the start timeout; this is detail.
+            _LOGGER.debug("Live call media did not connect in time (call=%s)", self._log_id)
             await self._abort("start_timeout")
 
     async def _abort(self, reason: str) -> None:
@@ -416,7 +426,9 @@ class LiveCallSession:
                 self._reader.cancel()
         except Exception as exc:
             _LOGGER.warning(
-                "Live call teardown failed: call_id=%s error_type=%s", self.id, type(exc).__name__
+                "Live call teardown failed (call=%s error_type=%s)",
+                self._log_id,
+                type(exc).__name__,
             )
         await self._finish(None)
 
@@ -448,7 +460,9 @@ class LiveCallSession:
                     status="failed" if failed else "completed",
                 )
         except Exception:
-            _LOGGER.error("Live call Usage could not be saved: call_id=%s", self.id, exc_info=True)
+            _LOGGER.error(
+                "Live call Usage could not be saved (call=%s)", self._log_id, exc_info=True
+            )
             raise
         finally:
             # A terminal Provider event need not close its transport. Settle
@@ -458,8 +472,8 @@ class LiveCallSession:
                     await self._wire.aclose()
             except Exception as exc:
                 _LOGGER.warning(
-                    "Live call transport cleanup failed: call_id=%s error_type=%s",
-                    self.id,
+                    "Live call transport cleanup failed (call=%s error_type=%s)",
+                    self._log_id,
                     type(exc).__name__,
                 )
             finally:
@@ -468,9 +482,11 @@ class LiveCallSession:
                 failed = reason in {"connection_lost", "start_timeout"}
                 self._set_phase("failed" if failed else "closed")
                 self._publish({"type": "closed", "reason": reason, "usage": usage})
-                _LOGGER.info(
-                    "Live call ended: call_id=%s target=%s reason=%s duration_s=%.1f",
-                    self.id,
+                # A lost connection or a start timeout is a failed call.
+                _LOGGER.log(
+                    logging.WARNING if failed else logging.INFO,
+                    "Live call ended (call=%s target=%s reason=%s duration_s=%.1f)",
+                    self._log_id,
                     self._target,
                     reason,
                     self._clock() - self._started_at,
@@ -488,7 +504,9 @@ class LiveCallSession:
             return False
         except Exception as exc:
             _LOGGER.warning(
-                "Live call command failed: call_id=%s error_type=%s", self.id, type(exc).__name__
+                "Live call command failed (call=%s error_type=%s)",
+                self._log_id,
+                type(exc).__name__,
             )
             return False
 
@@ -502,8 +520,8 @@ class LiveCallSession:
         self._tasks.discard(task)
         if not task.cancelled() and task.exception() is not None:
             _LOGGER.warning(
-                "Live call task failed: call_id=%s error_type=%s",
-                self.id,
+                "Live call task failed (call=%s error_type=%s)",
+                self._log_id,
                 type(task.exception()).__name__,
             )
 
@@ -525,8 +543,8 @@ class LiveCallSession:
             self._host.publish(update)
         except Exception as exc:
             _LOGGER.warning(
-                "Live call update delivery failed: call_id=%s error_type=%s",
-                self.id,
+                "Live call update delivery failed (call=%s error_type=%s)",
+                self._log_id,
                 type(exc).__name__,
             )
 
@@ -535,8 +553,8 @@ class LiveCallSession:
             self._host.publish_audio(pcm)
         except Exception as exc:
             _LOGGER.warning(
-                "Live call audio delivery failed: call_id=%s error_type=%s",
-                self.id,
+                "Live call audio delivery failed (call=%s error_type=%s)",
+                self._log_id,
                 type(exc).__name__,
             )
 

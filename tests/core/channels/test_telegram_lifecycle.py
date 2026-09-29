@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ import pytest
 import telegram
 import telegram.error
 import telegram.ext as telegram_ext
+import telegram.request
 
 import core.channels._telegram_api as telegram_api
 import core.channels.telegram as telegram_module
@@ -52,6 +54,7 @@ class _FakeApplication:
         self.handlers: list[Any] = []
         self.polling = asyncio.Event()
         self.drain_on_stop: Callable[[], Awaitable[None]] | None = None
+        self.error_callback: Callable[[telegram.error.TelegramError], None] | None = None
         self._running = False
         self.updater = (
             SimpleNamespace(start_polling=self._start_polling, stop=self._stop_polling)
@@ -93,8 +96,11 @@ class _FakeApplication:
     async def shutdown(self) -> None:
         self.events.append("shutdown")
 
-    async def _start_polling(self) -> None:
+    async def _start_polling(
+        self, *, error_callback: Callable[[telegram.error.TelegramError], None] | None = None
+    ) -> None:
         self.events.append("updater.start_polling")
+        self.error_callback = error_callback
         self.polling.set()
 
     async def _stop_polling(self) -> None:
@@ -111,6 +117,7 @@ class _RecordingBuilder:
         self._application = application
         self.received_token: str | None = None
         self.received_rate_limiter: Any = None
+        self.received_get_updates_request: Any = None
 
     def token(self, token: str) -> _RecordingBuilder:
         self._real.token(token)
@@ -120,6 +127,11 @@ class _RecordingBuilder:
     def rate_limiter(self, rate_limiter: Any) -> _RecordingBuilder:
         self._real.rate_limiter(rate_limiter)
         self.received_rate_limiter = rate_limiter
+        return self
+
+    def get_updates_request(self, request: Any) -> _RecordingBuilder:
+        self._real.get_updates_request(request)
+        self.received_get_updates_request = request
         return self
 
     def build(self) -> _FakeApplication:
@@ -275,6 +287,49 @@ async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
     assert storage.load_update_offset("tg-assistant", _BOT) == 10
     with pytest.raises(ChannelError, match="not running"):
         await adapter.send("late", "12345")
+
+
+@pytest.mark.asyncio
+async def test_polling_failures_log_once_until_a_poll_is_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    adapter, _sessions, _trigger, bot = make_adapter(tmp_path, monkeypatch, running=False)
+    application = _FakeApplication(bot, _IDENTITY)
+    builder, _ = _install_ptb(monkeypatch, application)
+
+    async def answer(*_args: Any, **_kwargs: Any) -> tuple[int, bytes]:
+        return 200, b'{"ok": true, "result": []}'
+
+    # Only the HTTP exchange is replaced; the adapter's getUpdates request is PTB's.
+    monkeypatch.setattr(telegram.request.HTTPXRequest, "do_request", answer)
+    caplog.set_level(logging.DEBUG, logger="vbot.channels.telegram")
+
+    polling = await _start(adapter, application)
+    request = builder.received_get_updates_request
+    report_failure = application.error_callback
+    assert isinstance(request, telegram.request.HTTPXRequest)
+    assert report_failure is not None
+    await request.do_request("https://api.telegram.org/bot/getUpdates", "POST")
+    for _ in range(3):
+        report_failure(telegram.error.NetworkError("down"))
+    await request.do_request("https://api.telegram.org/bot/getUpdates", "POST")
+    await request.do_request("https://api.telegram.org/bot/getUpdates", "POST")
+    await adapter.stop()
+    report_failure(telegram.error.NetworkError("down"))
+    await asyncio.wait_for(polling, timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
+
+    # A healthy poll is silent; a failing stretch logs one WARNING with the error
+    # type, its retries at DEBUG without tracebacks, and one INFO on recovery.
+    records = [record for record in caplog.records if record.name == "vbot.channels.telegram"]
+    assert [record.levelno for record in records] == [
+        logging.WARNING,
+        logging.DEBUG,
+        logging.DEBUG,
+        logging.INFO,
+    ]
+    assert "NetworkError" in records[0].getMessage()
+    assert "failures=3" in records[-1].getMessage()
+    assert all(record.exc_info is None for record in records)
 
 
 @pytest.mark.asyncio

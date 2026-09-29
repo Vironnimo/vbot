@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import socket
 import sys
 from dataclasses import replace
@@ -14,7 +15,11 @@ import uvicorn
 from mcp.server import Server
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
-from resources.extensions.mcp.client import ConnectionRunner, sampling_messages
+from resources.extensions.mcp.client import (
+    ConnectionRunner,
+    InvocationNotSentError,
+    sampling_messages,
+)
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import InputRequests
 from tests.resources.extensions.mcp.mcp_test_support import context, runner_for, start_service
@@ -123,6 +128,42 @@ async def test_http_transports(host, server, transport):
         http_server.should_exit = True
         await asyncio.wait_for(serving, 5)
         listener.close()
+
+
+@pytest.mark.asyncio
+async def test_a_failing_connection_logs_once_until_it_recovers(host, server, monkeypatch, caplog):
+    runner = runner_for(host, server, monkeypatch)
+    attempts = 0
+
+    async def flaky_transport(stack):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 3:
+            raise OSError("server unreachable")
+        return server
+
+    monkeypatch.setattr(runner, "_transport", flaky_transport)
+    caplog.set_level(logging.DEBUG, logger="vbot.extensions.mcp")
+    try:
+        async with asyncio.timeout(10):
+            # Each call reconnects a failed connection once.
+            for _ in range(3):
+                with pytest.raises(InvocationNotSentError):
+                    await runner.invoke("ping", {})
+            await runner.invoke("ping", {})
+    finally:
+        await runner.close()
+
+    # One WARNING opens the failing stretch, repeats stay at DEBUG, and the first
+    # connection that comes up logs one INFO with the failure count.
+    records = [record for record in caplog.records if record.name == "vbot.extensions.mcp"]
+    assert [record.levelno for record in records] == [
+        logging.WARNING,
+        logging.DEBUG,
+        logging.DEBUG,
+        logging.INFO,
+    ]
+    assert "failures=3" in records[-1].getMessage()
 
 
 @pytest.mark.asyncio

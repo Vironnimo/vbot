@@ -64,6 +64,7 @@ class FakeCall:
 
     def __init__(self, call_id: str, host: LiveCallHost, media: str = "webrtc") -> None:
         self.id = call_id
+        self.log_id = "live_" + call_id.replace("-", "")
         self.host = host
         self.media: JsonObject = (
             {"type": "relay", "audio": {"encoding": "pcm16", "sample_rate": 24000, "channels": 1}}
@@ -456,11 +457,17 @@ async def test_stop_closes_gracefully_and_forwards_the_final_update(live: Harnes
 
 
 @pytest.mark.asyncio
-async def test_stop_aborts_when_the_graceful_close_fails(live: Harness) -> None:
+async def test_stop_aborts_when_the_graceful_close_fails(
+    live: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
     call = await live.start()
     call.close_mode = "fail"
-    live.registry.stop(call.id)
-    await settle(lambda: call.abort_calls == 1)
+    with caplog.at_level(logging.DEBUG, logger="vbot.server.live"):
+        live.registry.stop(call.id)
+        await settle(lambda: call.abort_calls == 1)
+    # The call id may be the Provider's; logs name the call by its vBot-owned id.
+    assert call.log_id in caplog.text
+    assert call.id not in caplog.text
 
 
 @pytest.mark.asyncio

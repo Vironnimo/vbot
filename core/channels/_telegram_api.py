@@ -1,9 +1,10 @@
-"""Telegram SDK loading, error translation and callback responses."""
+"""Telegram SDK loading, error translation, polling health and callback responses."""
 
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from datetime import timedelta
 from importlib import import_module
 from typing import Any
@@ -125,6 +126,79 @@ def _load_telegram() -> Any:
         raise ChannelError(
             "python-telegram-bot is required for Telegram channels; install server dependencies"
         ) from error
+
+
+def _load_telegram_request() -> Any:
+    try:
+        return import_module("telegram.request")
+    except ModuleNotFoundError as error:
+        raise ChannelError(
+            "python-telegram-bot is required for Telegram channels; install server dependencies"
+        ) from error
+
+
+class _PollingHealth:
+    """Report long-polling health as transitions: one failing line, one recovered line.
+
+    PTB retries a failed ``getUpdates`` forever. Each failure reaches :meth:`failed`
+    as the updater's ``error_callback``, which also replaces PTB's own traceback per
+    attempt; each answered poll reaches :meth:`answered` through the request built by
+    :func:`_observed_polling_request`. Signals after :meth:`close` are ignored.
+    """
+
+    def __init__(self, channel_id: str) -> None:
+        self._channel_id = channel_id
+        self._failures = 0
+        self._failing_since: float | None = None
+        self._closed = False
+
+    def failed(self, error: Exception) -> None:
+        if self._closed:
+            return
+        self._failures += 1
+        error_type = type(error).__name__
+        if self._failing_since is not None:
+            _LOGGER.debug(
+                "Telegram polling failed again (channel=%s error_type=%s failures=%d)",
+                self._channel_id,
+                error_type,
+                self._failures,
+            )
+            return
+        self._failing_since = time.monotonic()
+        _LOGGER.warning(
+            "Telegram polling failed (channel=%s error_type=%s)", self._channel_id, error_type
+        )
+
+    def answered(self) -> None:
+        if self._closed or self._failing_since is None:
+            return
+        _LOGGER.info(
+            "Telegram polling recovered (channel=%s failures=%d down_for=%.1fs)",
+            self._channel_id,
+            self._failures,
+            time.monotonic() - self._failing_since,
+        )
+        self._failures = 0
+        self._failing_since = None
+
+    def close(self) -> None:
+        self._closed = True
+
+
+def _observed_polling_request(on_answer: Callable[[], None]) -> Any:
+    """Build PTB's default ``getUpdates`` request, reporting each answered poll."""
+    httpx_request: Any = _load_telegram_request().HTTPXRequest
+
+    class _ObservedPollingRequest(httpx_request):  # type: ignore[misc]
+        async def do_request(self, *args: Any, **kwargs: Any) -> tuple[int, bytes]:
+            code, payload = await super().do_request(*args, **kwargs)
+            if 200 <= code < 300:
+                on_answer()
+            return code, payload
+
+    # PTB's ApplicationBuilder default for getUpdates: one pooled connection.
+    return _ObservedPollingRequest(connection_pool_size=1)
 
 
 def _load_telegram_error() -> Any:

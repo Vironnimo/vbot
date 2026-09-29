@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager, nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -62,6 +62,14 @@ _ADAPTER_HEALTHY_RUN_RESET_SECONDS = 300.0
 # send so an over-long payload fails cleanly rather than at the Bot API.
 
 
+@dataclass
+class _AdapterOutage:
+    """A supervised outage: since when the Channel is down and how many restarts ran."""
+
+    since: float
+    restarts: int = 0
+
+
 class ChannelService:
     """Manage channel config CRUD and adapter task lifecycle."""
 
@@ -109,6 +117,11 @@ class ChannelService:
         self._adapter_stop_tasks: dict[str, asyncio.Task[None]] = {}
         self._adapter_restart_attempts: dict[str, int] = {}
         self._adapter_restart_tasks: dict[str, asyncio.Task[None]] = {}
+        # A failure opens an outage; the next adapter that connects closes it
+        # with one recovery line. Operator stops end it silently.
+        self._adapter_outages: dict[str, _AdapterOutage] = {}
+        # Channels whose current adapter connected at least once.
+        self._connected_channels: set[str] = set()
         self._pending_start_requests: dict[str, tuple[bool, ChannelConfig | None]] = {}
         # Channel ids whose config change (create, update, enable, disable,
         # delete, or the config read of a restart) is in flight off the Event
@@ -166,6 +179,8 @@ class ChannelService:
         for channel_id in list(self._adapter_tasks):
             self.stop_channel(channel_id)
         self._adapter_restart_attempts.clear()
+        self._adapter_outages.clear()
+        self._connected_channels.clear()
         self._adapter_task_created.clear()
         self._failed_channels.clear()
         self._failure_reasons.clear()
@@ -248,10 +263,12 @@ class ChannelService:
             return
 
         adapter = self._create_adapter(config)
+        adapter.observe_connection(partial(self._on_adapter_connected, normalized_id, adapter))
         task = loop.create_task(
             self._run_adapter(normalized_id, adapter), name=f"channel:{normalized_id}"
         )
         self._adapters[normalized_id] = adapter
+        self._connected_channels.discard(normalized_id)
         self._adapter_tasks[normalized_id] = task
         self._adapter_task_created[normalized_id] = time.monotonic()
 
@@ -267,11 +284,13 @@ class ChannelService:
         self._pending_start_requests.pop(normalized_id, None)
         self._cancel_restart_task(normalized_id)
         self._adapter_restart_attempts.pop(normalized_id, None)
+        self._adapter_outages.pop(normalized_id, None)
         self._failed_channels.discard(normalized_id)
         self._failure_reasons.pop(normalized_id, None)
 
         task = self._adapter_tasks.pop(normalized_id, None)
         self._adapters.pop(normalized_id, None)
+        self._connected_channels.discard(normalized_id)
         self._adapter_task_created.pop(normalized_id, None)
 
         if task is not None and not task.done():
@@ -551,12 +570,8 @@ class ChannelService:
             if old_chat_id not in config.allowed_chat_ids:
                 return
             self._storage.save(_with_migrated_chat_id(config, old_chat_id, new_chat_id))
-        _LOGGER.info(
-            "Channel allowlist migrated (channel=%s old=%s new=%s)",
-            normalized_id,
-            old_chat_id,
-            new_chat_id,
-        )
+        # Both chat ids are Telegram-owned; the allowlist itself shows them.
+        _LOGGER.info("Channel allowlist migrated (channel=%s)", normalized_id)
 
     def has_active_channels(self) -> bool:
         """Return whether at least one channel adapter task is currently running."""
@@ -996,7 +1011,7 @@ class ChannelService:
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            _LOGGER.info("Channel adapter stopped (channel=%s)", channel_id)
         except Exception:
             # The task was already popped from _adapter_tasks before this runs, so its own
             # done-callback returns early without logging: log the shutdown failure here or
@@ -1006,6 +1021,8 @@ class ChannelService:
                 channel_id,
                 exc_info=True,
             )
+        else:
+            _LOGGER.info("Channel adapter stopped (channel=%s)", channel_id)
 
         self._adapter_stop_tasks.pop(channel_id, None)
 
@@ -1076,6 +1093,28 @@ class ChannelService:
                     exc_info=(type(error), error, error.__traceback__),
                 )
 
+    def _on_adapter_connected(self, channel_id: str, adapter: ChannelAdapter) -> None:
+        """Log the current adapter's first connection as its start or its recovery."""
+        if self._adapters.get(channel_id) is not adapter:
+            return
+        if channel_id in self._connected_channels:
+            _LOGGER.debug("Channel adapter reconnected (channel=%s)", channel_id)
+            return
+        self._connected_channels.add(channel_id)
+        outage = self._adapter_outages.pop(channel_id, None)
+        if outage is None:
+            _LOGGER.info(
+                "Channel adapter started (channel=%s platform=%s)", channel_id, adapter.platform
+            )
+            return
+        _LOGGER.info(
+            "Channel adapter recovered (channel=%s platform=%s attempts=%d down_for=%.1fs)",
+            channel_id,
+            adapter.platform,
+            outage.restarts,
+            time.monotonic() - outage.since,
+        )
+
     def _on_adapter_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
         if self._adapter_tasks.get(channel_id) is not task:
             return
@@ -1123,6 +1162,7 @@ class ChannelService:
         if existing_task is not None and not existing_task.done():
             return
 
+        self._adapter_outages.setdefault(channel_id, _AdapterOutage(since=time.monotonic()))
         loop = _get_running_loop_or_none()
         if loop is None:
             _LOGGER.error(
@@ -1148,10 +1188,10 @@ class ChannelService:
             reason = self._failure_reasons.get(channel_id, "adapter restart attempts exhausted")
             self._mark_channel_failed(channel_id, reason)
             if attempt == _ADAPTER_RESTART_MAX_RETRIES:
-                _LOGGER.error(
+                _LOGGER.warning(
                     "Channel adapter exceeded max restart attempts and is marked failed; "
                     "recovery attempts continue at the capped backoff interval "
-                    "(channel=%s, retries=%s)",
+                    "(channel=%s retries=%d)",
                     channel_id,
                     _ADAPTER_RESTART_MAX_RETRIES,
                 )
@@ -1180,6 +1220,9 @@ class ChannelService:
         if not self._can_restart_channel(channel_id):
             return
 
+        outage = self._adapter_outages.get(channel_id)
+        if outage is not None:
+            outage.restarts += 1
         self.start_channel(channel_id, reset_backoff=False)
 
     def _restart_delay_seconds(self, attempt: int) -> float:

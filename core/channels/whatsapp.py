@@ -80,6 +80,7 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
                     self._connected = True
                     self._pairing_state = "connected"
                     self._qr = None
+                    self._report_connected()
                 elif event.get("event") in {"closed", "failed"}:
                     self._qr = None
                     self._connected = False

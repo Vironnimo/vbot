@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from pathlib import Path
 
@@ -32,8 +33,12 @@ pytestmark = pytest.mark.usefixtures("current_format_data_directory")
     ids=["allowed-chat", "chat-removed-from-allowlist"],
 )
 async def test_chat_id_migration_swaps_the_allowlist_entry_and_moves_group_access(
-    tmp_path: Path, allowed: list[int | str], migrated: list[str]
+    tmp_path: Path,
+    allowed: list[int | str],
+    migrated: list[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.DEBUG)
     storage = ChannelStorage(tmp_path)
     config = make_config(enabled=False, allowed_chat_ids=allowed)
     storage.save(config)
@@ -52,6 +57,8 @@ async def test_chat_id_migration_swaps_the_allowlist_entry_and_moves_group_acces
         await asyncio.to_thread(service.record_chat_id_migration, config.id, "-500", "-100999")
         assert storage.get(config.id).allowed_chat_ids == migrated
         assert service._state.role_for(config.id, "-100500", "owner") == "admin"
+        # Telegram chat ids stay in the allowlist; the log names only the channel.
+        assert not any("500" in record.getMessage() for record in caplog.records)
     finally:
         service.close()
 

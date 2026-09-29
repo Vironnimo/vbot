@@ -77,6 +77,7 @@ class ControlJoinError(Exception):
     def __init__(self, call_id: str, error_type: str) -> None:
         super().__init__(f"Live control channel join failed ({error_type})")
         self.call_id = call_id
+        self.error_type = error_type
 
 
 def openai_live_dialect(connection_mode: str | None) -> str:

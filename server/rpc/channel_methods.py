@@ -384,7 +384,7 @@ async def _channel_identity_set(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    _LOGGER.info("Channel own identity set (channel=%s user=%s)", channel_id, user_id)
+    _LOGGER.info("Channel own identity set (channel=%s)", channel_id)
     return cast(JsonObject, result)
 
 
@@ -406,12 +406,7 @@ async def _channel_admin_grant(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    _LOGGER.info(
-        "Channel group admin granted (channel=%s scope=%s user=%s)",
-        channel_id,
-        access_scope_id,
-        user_id,
-    )
+    _LOGGER.info("Channel group admin granted (channel=%s)", channel_id)
     return cast(JsonObject, result)
 
 
@@ -433,12 +428,7 @@ async def _channel_admin_revoke(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    _LOGGER.info(
-        "Channel group admin revoked (channel=%s scope=%s user=%s)",
-        channel_id,
-        access_scope_id,
-        user_id,
-    )
+    _LOGGER.info("Channel group admin revoked (channel=%s)", channel_id)
     return cast(JsonObject, result)
 
 

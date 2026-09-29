@@ -464,8 +464,13 @@ async def test_channel_status_reports_health_and_denied_chats(
     ],
 )
 async def test_channel_access_methods_return_saved_state_without_runtime_reload(
-    method: str, params: JsonObject, service_method: str, service_args: tuple[str, ...]
+    method: str,
+    params: JsonObject,
+    service_method: str,
+    service_args: tuple[str, ...],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.DEBUG)
     saved = {
         "channel_id": "tg-assistant",
         "self_user_id": "50",
@@ -480,6 +485,10 @@ async def test_channel_access_methods_return_saved_state_without_runtime_reload(
     assert result == saved
     getattr(service, service_method).assert_awaited_once_with(*service_args)
     state.runtime.reload_channel_tool.assert_not_called()
+    # Platform user and group ids stay in the saved state; logs name only the channel.
+    external_ids = [str(value) for key, value in params.items() if key != "id"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert not [value for value in external_ids for message in messages if value in message]
 
 
 # ---------------------------------------------------------------------------

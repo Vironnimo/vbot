@@ -13,6 +13,7 @@ from core.channels import ChannelService
 from core.runtime._configuration import _resolve_resources_path
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
+from tests.core.channels.channels_test_support import BlockingAdapter
 
 
 def _write_channel(data_dir: Path, channel_id: str, agent_id: str, token_env_var: str) -> None:
@@ -45,22 +46,6 @@ def _seed_assistant_channel(config: Config) -> None:
     _write_channel(config.data_dir, "tg-assistant", "assistant", "TELEGRAM_BOT_TOKEN_TG_ASSISTANT")
 
 
-class _BlockingChannelAdapter:
-    def __init__(self) -> None:
-        self.started = asyncio.Event()
-        self.stopped = asyncio.Event()
-
-    async def start(self) -> None:
-        self.started.set()
-        await asyncio.Future()
-
-    async def stop(self) -> None:
-        self.stopped.set()
-
-    async def send(self, _message: str, _platform_target: str) -> None:
-        return
-
-
 @pytest.mark.asyncio
 async def test_runtime_start_survives_channels_that_cannot_start(
     config: Config, monkeypatch: pytest.MonkeyPatch
@@ -90,7 +75,7 @@ async def test_runtime_start_runs_enabled_channel_adapters_until_stop(
     config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed_assistant_channel(config)
-    adapter = _BlockingChannelAdapter()
+    adapter = BlockingAdapter()
     monkeypatch.setattr(ChannelService, "_create_adapter", lambda _service, _config: adapter)
     runtime = Runtime(config)
 

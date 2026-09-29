@@ -131,7 +131,7 @@ class LiveBrain:
             raise
         except Exception as exc:
             _LOGGER.warning(
-                "Live delegation failed: model=%s/%s error_type=%s",
+                "Live delegation failed (model=%s/%s error_type=%s)",
                 self._target.provider_id,
                 self._target.model_id,
                 type(exc).__name__,
@@ -321,7 +321,7 @@ def record_live_event(record: Recorder | None, event: JsonObject) -> None:
     try:
         record(event)
     except Exception as exc:
-        _LOGGER.warning("Live call record failed: error_type=%s", type(exc).__name__)
+        _LOGGER.warning("Live call record failed (error_type=%s)", type(exc).__name__)
 
 
 def _milliseconds(seconds: float) -> int:
@@ -377,4 +377,6 @@ async def _close_adapter(adapter: Any) -> None:
         if inspect.isawaitable(result):
             await result
     except Exception as exc:
-        _LOGGER.warning("Live delegation adapter cleanup failed: error_type=%s", type(exc).__name__)
+        _LOGGER.warning(
+            "Live delegation adapter cleanup failed (error_type=%s)", type(exc).__name__
+        )

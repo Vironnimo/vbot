@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -426,10 +427,13 @@ async def test_run_end_accounting_follows_the_review_cadence(
     outcome: str,
     expected: tuple[int, int],
     brief: str | None,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     service, sessions, loop = _make_service(
         memory_turn_interval=intervals[0], skill_model_step_interval=intervals[1]
     )
+    caplog.set_level(logging.DEBUG, logger="vbot.automation.reflection")
+    loop.final_content = "Saved: the user's partner is called model-output-sentinel."
     if counters is not None:
         sessions.metadata["s1"] = {
             REFLECTION_COUNTERS_META_KEY: {
@@ -459,6 +463,9 @@ async def test_run_end_accounting_follows_the_review_cadence(
     assert review["internal"] is True
     assert review["session_id"] == "fork-1"
     assert "tool_grants" not in review
+    # The review's closing summary is Model output, which never enters the log.
+    assert "model-output-sentinel" not in caplog.text
+    assert [record.levelno for record in caplog.records].count(logging.INFO) == 1
 
 
 @pytest.mark.asyncio
