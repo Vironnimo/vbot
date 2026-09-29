@@ -474,7 +474,7 @@ describe('TerminalsView launch and close', () => {
     // A finished process has no process id any more.
     expect(rows).not.toHaveProperty(t('terminals.details.pid'));
 
-    // A group tab names what the group is and splits its count.
+    // A group tab names what the group is and counts only the kinds it holds.
     const finishedTab = [
       ...document.querySelectorAll('.terminals-view__group-tab'),
     ].find((element) => element.textContent.includes('Finished'));
@@ -484,11 +484,7 @@ describe('TerminalsView launch and close', () => {
       t('terminals.groupHint.finished'),
     );
     expect(card.querySelector('dd').textContent).toBe(
-      t('terminals.details.terminalCount', {
-        count: 1,
-        running: 0,
-        finished: 1,
-      }),
+      t('terminals.details.terminalCountFinished', { count: 1 }),
     );
   });
 });

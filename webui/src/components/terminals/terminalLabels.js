@@ -205,15 +205,24 @@ export function terminalGroupDetails(group, terminals = []) {
     rows: [
       {
         label: t('terminals.details.terminals'),
-        value: t('terminals.details.terminalCount', {
-          count,
-          running: count - finished,
-          finished,
-        }),
+        value: terminalCountText(count, finished),
       },
     ],
     placement: 'bottom',
   };
+}
+
+/** The split names only the kinds a group actually holds. */
+function terminalCountText(count, finished) {
+  const running = count - finished;
+  if (count === 0) return t('terminals.details.terminalCountNone');
+  if (finished === 0) {
+    return t('terminals.details.terminalCountRunning', { count });
+  }
+  if (running === 0) {
+    return t('terminals.details.terminalCountFinished', { count });
+  }
+  return t('terminals.details.terminalCount', { count, running, finished });
 }
 
 /** Beside a recent setup: its full command line, directory and last use. */
