@@ -49,7 +49,7 @@ from server.rpc.event_bridge import (
 from server.rpc.payloads import (
     _queued_response,
     _run_response,
-    _visible_message,
+    history_message,
 )
 from server.rpc.runtime_access import (
     _build_streaming_queue_update,
@@ -370,12 +370,13 @@ def _project_chat_history(
     page = history.page
     messages = [
         {
-            **_visible_message(message, file_delivery=file_delivery),
+            **record,
             **({"editable": True} if message.id in page.editable_message_ids else {}),
             **({"history_sequence": page.record_sequences[index]} if page.record_sequences else {}),
             **({"history_run_id": page.record_run_ids[index]} if page.record_run_ids else {}),
         }
         for index, message in enumerate(page.messages)
+        if (record := history_message(message, file_delivery=file_delivery)) is not None
     ]
     return _ChatHistoryProjection(
         messages=messages,

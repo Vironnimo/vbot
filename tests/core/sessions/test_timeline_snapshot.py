@@ -8,6 +8,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
+from core.chat.messages import ModelFallback
 from core.chat.usage import aggregate_session_usage
 from tests.core.sessions.history_fixtures import append_tool_fixture, complete_run
 
@@ -101,15 +102,25 @@ def test_completed_run_does_not_claim_unrelated_later_records(manager):
 def test_incremental_reads_are_bounded_and_advance_across_hidden_records(manager):
     session = manager.create("coder")
     baseline = read(session)
+    # A Note that records a Model fallback stays in the History as the Run's display notice.
+    fallback = ChatMessage.note(
+        "switched", model_fallback=ModelFallback(from_model="primary", to_model="fallback")
+    )
     session.append_many(
-        [ChatMessage.note("hidden"), ChatMessage.note("also hidden"), ChatMessage.user("visible")]
+        [
+            ChatMessage.note("hidden"),
+            ChatMessage.note("also hidden"),
+            ChatMessage.user("visible"),
+            fallback,
+        ]
     )
     first = read(session, after=baseline.after_cursor, limit=2)
     assert first.incremental and first.has_newer
     assert first.page.messages == ()
     second = read(session, after=first.after_cursor, limit=2)
     assert second.incremental and not second.has_newer
-    assert second.page.record_sequences == (2,)
+    assert second.page.record_sequences == (2, 3)
+    assert second.page.messages[1] == fallback
     unchanged = read(session, after=second.after_cursor)
     assert unchanged.page.messages == ()
     assert unchanged.after_cursor == second.after_cursor

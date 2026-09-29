@@ -16,6 +16,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.messages import ModelFallback
 from core.extensions.extensions import (
     CommandDeclaration,
     ExtensionDeclarations,
@@ -598,8 +599,8 @@ async def test_extension_page_history_projects_only_bound_visible_history(
         incremental=False,
         has_newer=False,
         page=SimpleNamespace(
-            record_sequences=(0, 1),
-            record_run_ids=("run", "run"),
+            record_sequences=(0, 1, 2),
+            record_run_ids=("run", "run", "run"),
             messages=(
                 _ProjectedMessage(
                     "assistant",
@@ -610,7 +611,14 @@ async def test_extension_page_history_projects_only_bound_visible_history(
                         "reasoning_meta": {"secret": True},
                     },
                 ),
-                _ProjectedMessage("note", {"role": "note", "content": "private"}),
+                ChatMessage.note("private"),
+                ChatMessage(
+                    id="fallback-note",
+                    timestamp="2026-09-08T09:00:00+00:00",
+                    role="note",
+                    content="private switch",
+                    model_fallback=ModelFallback(from_model="primary", to_model="fallback"),
+                ),
             ),
             has_more=before_cursor is not None,
             before_cursor=before_cursor,
@@ -655,7 +663,17 @@ async def test_extension_page_history_projects_only_bound_visible_history(
                 "content": "[report](/api/files/capability.signature)",
                 "history_sequence": 0,
                 "history_run_id": "run",
-            }
+            },
+            # A Model fallback note shows only its display notice.
+            {
+                "id": "fallback-note",
+                "timestamp": "2026-09-08T09:00:00+00:00",
+                "role": "model_fallback",
+                "from_model": "primary",
+                "to_model": "fallback",
+                "history_sequence": 2,
+                "history_run_id": "run",
+            },
         ],
         "runs": [],
         "history_generation": "generation",

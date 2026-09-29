@@ -229,5 +229,6 @@ function isVisibleHistoryMessage(message) {
     'compaction_checkpoint',
     'agent_takeover',
     'run_summary',
+    'model_fallback',
   ].includes(message?.role);
 }

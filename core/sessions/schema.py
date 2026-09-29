@@ -354,6 +354,14 @@ CREATE TABLE history_edit_entries (
   target_entry_id TEXT NOT NULL
 ) STRICT;
 
+-- The Model switch a fallback note records. The WebUI Chat History shows it as
+-- a display notice in place of the hidden note; it never reaches the Model.
+CREATE TABLE note_model_fallbacks (
+  entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
+  from_model TEXT NOT NULL,
+  to_model TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE checkpoint_entries (
   entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
   policy TEXT NOT NULL,

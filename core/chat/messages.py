@@ -217,6 +217,37 @@ class MessageSender:
 
 
 @dataclass(frozen=True)
+class ModelFallback:
+    """The Model switch a fallback note records, for display in the Run's history.
+
+    Presentation only: the note's text is what the Model reads; this record
+    never enters a Provider request.
+    """
+
+    from_model: str
+    to_model: str
+
+    def __post_init__(self) -> None:
+        for key, value in (("from_model", self.from_model), ("to_model", self.to_model)):
+            if not isinstance(value, str) or not value:
+                raise ChatMessageValidationError(f"model fallback {key} must be a non-empty string")
+
+    def to_dict(self) -> JsonObject:
+        """Return a JSON-serializable fallback dictionary."""
+        return {"from_model": self.from_model, "to_model": self.to_model}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> ModelFallback:
+        """Build a fallback record from a JSON object, ignoring unknown fields."""
+        if not isinstance(data, dict):
+            raise ChatMessageValidationError("model_fallback must be an object")
+        # The constructor validates both Models.
+        return cls(
+            from_model=cast(str, data.get("from_model")), to_model=cast(str, data.get("to_model"))
+        )
+
+
+@dataclass(frozen=True)
 class ReplySurface:
     """Immutable identity and rendering facts for one interactive reply destination."""
 
@@ -350,6 +381,7 @@ class ChatMessage:
     interrupted: bool = False
     interruption_cause: str | None = None
     output_files: list[AssistantFileReference] | None = None
+    model_fallback: ModelFallback | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -380,13 +412,24 @@ class ChatMessage:
         )
 
     @classmethod
-    def note(cls, content: str, *, timestamp: datetime | None = None) -> ChatMessage:
-        """Create a kernel-internal note message."""
+    def note(
+        cls,
+        content: str,
+        *,
+        model_fallback: ModelFallback | None = None,
+        timestamp: datetime | None = None,
+    ) -> ChatMessage:
+        """Create a kernel-internal note message.
+
+        A note that records a Model fallback switch also carries that switch,
+        which History shows in the Run in place of the note.
+        """
         return cls(
             id=_new_message_id(),
             timestamp=_format_timestamp(timestamp),
             role="note",
             content=content,
+            model_fallback=model_fallback,
         )
 
     @classmethod
@@ -685,6 +728,8 @@ class ChatMessage:
         _add_if_not_none(message, "interruption_cause", self.interruption_cause)
         if self.output_files is not None:
             message["output_files"] = [reference.to_dict() for reference in self.output_files]
+        if self.model_fallback is not None:
+            message["model_fallback"] = self.model_fallback.to_dict()
         return message
 
     @classmethod
@@ -740,6 +785,12 @@ class ChatMessage:
             if output_files_data is not None
             else None
         )
+        model_fallback_data = data.get("model_fallback")
+        model_fallback = (
+            ModelFallback.from_dict(model_fallback_data)
+            if model_fallback_data is not None
+            else None
+        )
 
         message = cls(
             id=_message_validation._require_string(data, "id"),
@@ -775,6 +826,7 @@ class ChatMessage:
             interrupted=interrupted,
             interruption_cause=interruption_cause,
             output_files=output_files,
+            model_fallback=model_fallback,
         )
         message.validate()
         return message

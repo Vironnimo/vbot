@@ -161,6 +161,25 @@ export function historyTimelineItems(messages, reuse = null) {
       continue;
     }
 
+    if (message?.role === 'model_fallback') {
+      // The switch notice opens its Run when the new Model has not answered yet.
+      if (!activeAssistantRun) {
+        activeRecordRunId = message.history_run_id;
+        activeAssistantRun = createAssistantRunItem({
+          id: `history-run-${historyMessageKey(message)}`,
+          runId: message.history_run_id ?? null,
+          source: 'history',
+          sequence: timelineItems.length,
+          timestamp: message.timestamp,
+        });
+        activeAssistantRun.status = CHAT_STATUS_COMPLETED;
+      }
+      appendHistoryModelFallback(activeAssistantRun, message);
+      activeRunSources.push(message);
+      previousVisibleRole = 'model_fallback';
+      continue;
+    }
+
     if (message?.role === 'tool' && activeAssistantRun) {
       appendHistoryToolResult(activeAssistantRun, message);
       activeRunSources.push(message);
@@ -266,6 +285,23 @@ export function appendHistoryAssistantMessage(assistantRun, message) {
   }
 
   assistantRun.status = CHAT_STATUS_COMPLETED;
+}
+
+// The saved Model fallback notice, in the shape of the live notice.
+export function appendHistoryModelFallback(assistantRun, message) {
+  const sequence = assistantRun.items.length;
+  assistantRun.items.push({
+    id: `model-fallback-${assistantRun.id}-${sequence}`,
+    type: 'model_fallback',
+    content: message.to_model ?? '',
+    from_model: message.from_model ?? '',
+    to_model: message.to_model ?? '',
+    sequence,
+    timestamp: message.timestamp,
+    message,
+    messages: [message],
+  });
+  syncAssistantRunCollections(assistantRun);
 }
 
 export function appendHistoryToolResult(assistantRun, message) {
