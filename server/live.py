@@ -348,14 +348,17 @@ class _LiveCallEntry:
         self.ended = True
         self.active = False
         self._cancel_timer()
-        if self._feed is not None:
-            await self._feed.aclose()
         for future in self._ui_requests.values():
             if not future.done():
                 future.set_exception(LiveUiError(UI_UNAVAILABLE))
         if not self._closed_published:
             self.publish({"type": "closed", "reason": None, "usage": None})
+        # Ending, the final update and the registry's release happen in one step:
+        # an owner socket attaching meanwhile would otherwise find an ended call
+        # whose ``closed`` update was not published yet.
         self._on_finalized(self)
+        if self._feed is not None:
+            await self._feed.aclose()
 
     def _report_notification_failure(self) -> None:
         self.publish({"type": "error", "code": _NOTIFICATION_FAILED, "fatal": False})
