@@ -650,12 +650,12 @@ describe('Tool row presentation', () => {
       },
     });
 
+    // It finished within the second it started, so no Finished row repeats it.
     expect(toolStatusDetails(partial, nowMs)).toEqual({
       title: t('chat.toolState.partial'),
       text: t('chat.toolState.partialHint'),
       rows: [
         { label: t('chat.details.started'), value: moment(startedAt) },
-        { label: t('chat.details.finished'), value: moment(completedAt) },
         {
           label: t('chat.details.duration'),
           value: t('chat.durationSeconds', { seconds: '0.2' }),
