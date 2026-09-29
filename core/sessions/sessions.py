@@ -312,7 +312,9 @@ class ChatSessionManager:
         result = dict(activity)
         result["marked_read"] = marked
         if marked:
-            self._notify_callbacks(self._completion_read_callbacks, address, run_id)
+            self._notify_callbacks(
+                "completion_read", self._completion_read_callbacks, address, run_id
+            )
         return result
 
     async def mark_terminal_run_read_async(
@@ -327,7 +329,7 @@ class ChatSessionManager:
         )
         previous = previous_metadata.get(SESSION_TITLE_KEY)
         if previous != normalized:
-            self._notify_callbacks(self._title_changed_callbacks, address)
+            self._notify_callbacks("title_changed", self._title_changed_callbacks, address)
         return normalized
 
     async def set_title_async(self, address: SessionAddress, title: str) -> str | None:
@@ -349,7 +351,7 @@ class ChatSessionManager:
         previous_metadata, _updated = self._store.mutate_metadata(address, update)
         previous = previous_metadata.get(SESSION_AUTO_TITLE_KEY)
         if previous != normalized:
-            self._notify_callbacks(self._title_changed_callbacks, address)
+            self._notify_callbacks("title_changed", self._title_changed_callbacks, address)
         return normalized
 
     def mark_auto_title_initialized(self, address: SessionAddress) -> None:
@@ -745,7 +747,7 @@ class ChatSessionManager:
                 )
             )
         if title is not None:
-            self._notify_callbacks(self._title_changed_callbacks, target)
+            self._notify_callbacks("title_changed", self._title_changed_callbacks, target)
         return ChatSession(self._store, target)
 
     def delete(self, address: SessionAddress) -> None:
@@ -820,12 +822,23 @@ class ChatSessionManager:
         )
 
     @staticmethod
-    def _notify_callbacks(callbacks: Sequence[Callable[..., None]], *args: Any) -> None:
+    def _notify_callbacks(
+        event: str,
+        callbacks: Sequence[Callable[..., None]],
+        address: SessionAddress,
+        *args: Any,
+    ) -> None:
         for callback in list(callbacks):
             try:
-                callback(*args)
+                callback(address, *args)
             except Exception:
-                logging.getLogger(__name__).exception("Session callback failed")
+                _LOGGER.exception(
+                    "Session callback failed (event=%s agent=%s%s session=%s)",
+                    event,
+                    address.agent_id,
+                    f" project={address.project_id}" if address.project_id else "",
+                    address.session_id,
+                )
 
 
 def _validate_creatable_address(address: SessionAddress) -> None:
