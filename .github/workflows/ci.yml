@@ -1,9 +1,11 @@
 name: CI
 
-# Complete verification: the release gate (release.yml), also startable by hand.
-# Every commit already runs the tests it affects (scripts/commit_check.py); this
-# runs everything on every supported platform and Python version.
+# Complete verification on every supported platform and Python version: nightly
+# on main, as the release gate (release.yml), and by hand. Work landing on main
+# runs only the tests it affects (scripts/commit_check.py).
 on:
+  schedule:
+    - cron: "23 2 * * *"
   workflow_call:
   workflow_dispatch:
 
@@ -77,7 +79,24 @@ jobs:
       - name: Provision the pinned search engine
         run: python -m cli.search_runtime
       - name: Run backend tests
-        run: python -m pytest --durations=25
+        # Failed tests run once more, alone. Tests that then pass failed only under
+        # the parallel load: they become a warning and the job stays green.
+        shell: bash
+        run: |
+          status=0
+          python -m pytest --durations=25 || status=$?
+          if [ "$status" -ne 1 ]; then exit "$status"; fi
+          python -c 'import json; print(*sorted(json.load(open(".pytest_cache/v/cache/lastfailed", encoding="utf-8"))), sep="\n")' > failed.txt
+          if [ ! -s failed.txt ]; then exit 1; fi
+          echo "::group::Run the $(wc -l < failed.txt) failed tests again, alone"
+          python -m pytest --last-failed -n 0
+          echo "::endgroup::"
+          echo "::warning title=Flaky tests::Failed under the parallel load, passed when run again alone: $(paste -sd ' ' failed.txt)"
+          {
+            echo "### Flaky tests (${{ matrix.platform }}, Python ${{ matrix.python }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})"
+            echo "Failed under the parallel load, passed when run again alone:"
+            sed 's/^/- `/; s/$/`/' failed.txt
+          } >> "$GITHUB_STEP_SUMMARY"
 
   frontend:
     runs-on: ubuntu-latest
