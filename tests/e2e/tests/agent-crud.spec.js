@@ -50,6 +50,11 @@ test("an agent can be created, renamed, and deleted", async ({
       .click();
     await agents.getByText("Workspace & advanced", { exact: true }).click();
     await agents.getByRole("button", { name: "Delete agent" }).click();
+    const deleteDialog = page.getByRole("dialog", { name: "Delete agent" });
+    await expect(deleteDialog).toContainText("Delete E2E Agent Updated?");
+    await deleteDialog
+      .getByRole("button", { exact: true, name: "Delete" })
+      .click();
 
     await expect(
       page.getByText("Agent deleted.", { exact: true }),

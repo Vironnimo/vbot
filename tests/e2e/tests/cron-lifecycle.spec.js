@@ -102,7 +102,9 @@ test("a Scheduled Run persists through update, pause, and deletion", async ({
   const deleteDialog = page.getByRole("dialog", {
     name: "Delete Scheduled Run",
   });
-  await expect(deleteDialog).toContainText("Delete this job permanently?");
+  await expect(deleteDialog).toContainText(
+    "Delete E2E Updated Schedule permanently?",
+  );
   await deleteDialog
     .getByRole("button", { exact: true, name: "Delete" })
     .click();
