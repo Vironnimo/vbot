@@ -7,6 +7,9 @@ const activeResponses = new Set();
 let nextToolCallId = 1;
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+// vBot offers its shell Tool as `powershell` on Windows and as `bash`
+// elsewhere, and replays earlier shell calls under the offered name.
+const SHELL_TOOL_NAMES = ["bash", "powershell"];
 
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error("VBOT_E2E_PROVIDER_PORT must be a valid TCP port");
@@ -93,7 +96,7 @@ function toolResults(messages) {
     return [];
   }
 
-  const toolNamesById = new Map();
+  const callsById = new Map();
   for (const message of messages) {
     if (message?.role !== "assistant" || !Array.isArray(message.tool_calls)) {
       continue;
@@ -101,26 +104,59 @@ function toolResults(messages) {
     for (const toolCall of message.tool_calls) {
       const name = toolCall?.function?.name;
       if (typeof toolCall?.id === "string" && typeof name === "string") {
-        toolNamesById.set(toolCall.id, name);
+        callsById.set(toolCall.id, {
+          args: parseJsonValue(toolCall.function.arguments) ?? {},
+          name,
+        });
       }
     }
   }
 
+  // Tool Results reach the Model as plain text, not as JSON envelopes: a
+  // failure starts with `Error (<code>):`, a success lists its data fields as
+  // `name: value` lines before its content.
   return messages.flatMap((message) => {
     if (message?.role !== "tool") {
       return [];
     }
+    const call = callsById.get(message.tool_call_id);
+    const text = contentText(message.content);
     return [
       {
-        envelope: parseJsonValue(contentText(message.content)),
-        name: toolNamesById.get(message.tool_call_id) ?? "",
+        args: call?.args ?? {},
+        failed: text.startsWith("Error ("),
+        name: call?.name ?? "",
+        text,
       },
     ];
   });
 }
 
 function resultsFor(results, name) {
-  return results.filter((result) => result.name === name);
+  const names = SHELL_TOOL_NAMES.includes(name) ? SHELL_TOOL_NAMES : [name];
+  return results.filter((result) => names.includes(result.name));
+}
+
+// A success data field; nested values read as compact JSON.
+function resultField(result, field) {
+  const prefix = `${field}: `;
+  const line = result.text.split("\n").find((text) => text.startsWith(prefix));
+  return line === undefined
+    ? undefined
+    : parseJsonValue(line.slice(prefix.length));
+}
+
+function shellToolName(offeredTools) {
+  return SHELL_TOOL_NAMES.find((name) => offeredTools.includes(name)) ?? "bash";
+}
+
+function addedFiles(patch) {
+  if (typeof patch !== "string") {
+    return [];
+  }
+  return [...patch.matchAll(/^\*\*\* Add File: (.+)$/gm)].map(
+    (match) => match[1],
+  );
 }
 
 function toolCall(name, args) {
@@ -146,14 +182,20 @@ function plannedToolResponse(prompt, results, offeredTools) {
     prompt.includes("E2E_HTML_PREVIEW") ||
     prompt.includes("Create a small website for the preview demo.")
   ) {
-    const written = resultsFor(results, "apply_patch")
-      .flatMap((result) => result.envelope?.data?.files ?? [])
-      .filter((file) => file.path.includes("preview-demo-"));
-    if (written.length > 0) {
-      const entry = written.find((file) => file.path.endsWith("/index.html"));
+    const attempts = resultsFor(results, "apply_patch").filter((result) =>
+      addedFiles(result.args.patch).some((path) =>
+        path.startsWith("preview-demo-"),
+      ),
+    );
+    if (attempts.length > 0) {
+      // A relative `file:` path resolves against the same cwd as apply_patch.
+      const entry = attempts
+        .filter((result) => !result.failed)
+        .flatMap((result) => addedFiles(result.args.patch))
+        .find((path) => path.endsWith("/index.html"));
       return {
         text: entry
-          ? `Your website is ready. Open it here:\n\nfile:${entry.path}`
+          ? `Your website is ready. Open it here:\n\nfile:${entry}`
           : "The website files could not be completed.",
       };
     }
@@ -224,10 +266,12 @@ function plannedToolResponse(prompt, results, offeredTools) {
   if (prompt.includes("E2E_TOOL_CATALOG")) {
     const catalogIsRestricted =
       offeredTools.includes("status") &&
-      !offeredTools.includes("bash") &&
-      !offeredTools.includes("apply_patch") &&
-      !offeredTools.includes("search_files") &&
-      !offeredTools.includes("skill_manage");
+      ![
+        ...SHELL_TOOL_NAMES,
+        "apply_patch",
+        "search_files",
+        "skill_manage",
+      ].some((name) => offeredTools.includes(name));
     if (!catalogIsRestricted) {
       return { text: "Unexpected Tool catalog." };
     }
@@ -241,7 +285,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (resultsFor(results, "bash").length === 0) {
       return {
         calls: [
-          toolCall("bash", {
+          toolCall(shellToolName(offeredTools), {
             mode: "foreground",
             command:
               "node -e \"console.log('e2e-tool-started'); setTimeout(() => console.log('e2e-tool-ended'), 15000)\"",
@@ -259,7 +303,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (resultsFor(results, "bash").length === 0) {
       return {
         calls: [
-          toolCall("bash", {
+          toolCall(shellToolName(offeredTools), {
             mode: "foreground",
             command: "echo e2e-shell-output",
           }),
@@ -313,7 +357,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
         ],
       };
     }
-    const imagePath = imageResults[0]?.envelope?.data?.images?.[0]?.path ?? "";
+    const imagePath = resultField(imageResults[0], "images")?.[0]?.path ?? "";
     return {
       text: `Generated media tools completed.\n\nfile:${imagePath}`,
     };

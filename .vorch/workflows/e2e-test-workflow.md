@@ -14,6 +14,8 @@ A spec earns its place by proving a user journey across the browser, the server,
 
 Drive the journey under test through the browser. Prerequisites that another spec already covers through the UI, such as creating an Agent, go through RPC with `tests/rpc-support.js`, and cleanup runs in `finally` so a failed assertion does not leak state into later specs. Worktree live-testing environments run the same `fake-provider.js`, so a scenario may deliberately serve manual testing, such as the website preview demo; any other scenario is removed together with its last spec.
 
+A fake Provider scenario reads its request as a Model does: Tool Results arrive as their plain-text rendering, not as JSON envelopes (`providers/request-policy.md`), and the shell Tool is offered and replayed as `powershell` on Windows and `bash` elsewhere (`tools.md` -> Model Tool names). Key scenario progress on the scenario's own calls and on result text, never on envelope fields or a single shell name.
+
 ## Prerequisites
 
 For a local agent run, start from the repository root. The current Python environment, `webui/node_modules/`, `tests/e2e/node_modules/`, and the Playwright Chromium browser must already be available. Do not install missing dependencies or browsers as part of a local E2E run; report the missing prerequisite as blocked. The GitHub workflow is the clean-run exception: it deliberately installs the locked npm dependencies, Chromium, and required Linux libraries on its disposable runner before executing the suite.
