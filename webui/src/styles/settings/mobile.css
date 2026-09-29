@@ -107,14 +107,6 @@
     flex-direction: column;
   }
 
-  .s-footer {
-    justify-content: stretch;
-  }
-
-  .s-save-button--inline {
-    width: 100%;
-  }
-
   .s-disclosure-btn.btn-tertiary.btn-icon {
     width: 40px;
     height: 40px;

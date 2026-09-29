@@ -1,7 +1,7 @@
 <script>
   import { t } from '../../../../webui/src/lib/i18n.js';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import SaveButton from '../../../../webui/src/components/ui/SaveButton.svelte';
+  import SaveStatus from '../../../../webui/src/components/ui/SaveStatus.svelte';
   import TabList from '../../../../webui/src/components/ui/TabList.svelte';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
@@ -325,11 +325,7 @@
   }
   async function persist(reason) {
     saveReason = reason;
-    if (profile && !hasChanges()) {
-      if (reason === 'manual')
-        bridgeClient.toast(t('common.alreadySaved'), 'success');
-      return true;
-    }
+    if (profile && !hasChanges()) return true;
     error = '';
     if (!draft.name.trim())
       return invalid(t('swarm.profile.nameRequired'), 'swarm-profile-name');
@@ -945,9 +941,9 @@
     <footer class="editor-footer">
       <div>
         {#if profile}
-          <!-- Saved Swarms autosave; the manual action states whether the
-               draft is persisted, like Settings. -->
-          <SaveButton {saving} pending={hasChanges()} onClick={save} />
+          <!-- Saved Swarms autosave; their save state works like
+               Settings. -->
+          <SaveStatus {saving} pending={hasChanges()} onClick={save} />
         {:else}
           <Button disabled={busy} onClick={onCancel}
             >{t('common.cancel')}</Button

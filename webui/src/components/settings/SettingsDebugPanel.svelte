@@ -2,7 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { updateSettings } from '$lib/api.js';
@@ -38,7 +38,6 @@
   let {
     settings = null,
     onCommit = noop,
-    onToast = noop,
     onError = noop,
     onDebugEnabledChange = noop,
   } = $props();
@@ -89,24 +88,7 @@
     );
   }
 
-  function handleManualDebugSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    debugAutosave.cancelPendingTimer();
-    void debugAutosave.participant.runSave('manual');
-  }
-
-  async function saveDebugSettings(reason) {
+  async function saveDebugSettings() {
     if (debugSettingsMatch(debugSettings, getDebugSettings(settings))) {
       return true;
     }
@@ -124,8 +106,6 @@
       if (JSON.stringify(debugSettings) === submitted)
         debugSettings = getDebugSettings(nextSettings);
       onDebugEnabledChange(nextEnabled);
-      if (reason === 'manual')
-        onToast({ title: t('debug.settings'), variant: 'success' });
       return true;
     } catch (error) {
       onError(`${t('settings.saveError')} ${error.message}`);
@@ -210,10 +190,9 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={debugAutosave.participant.hasChanges()}
-    onClick={handleManualDebugSettingsSave}
+    onClick={() => debugAutosave.participant.runSave('manual')}
   />
 </div>

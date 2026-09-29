@@ -2,7 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import {
@@ -44,12 +44,7 @@
     };
   }
 
-  let {
-    settings = null,
-    onCommit = noop,
-    onToast = noop,
-    onError = noop,
-  } = $props();
+  let { settings = null, onCommit = noop, onError = noop } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
@@ -128,24 +123,7 @@
     }
   }
 
-  function handleManualReflectionSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    reflectionAutosave.cancelPendingTimer();
-    void reflectionAutosave.participant.runSave('manual');
-  }
-
-  async function saveReflectionSettings(reason) {
+  async function saveReflectionSettings() {
     if (
       reflectionSettingsMatch(
         reflectionSettings,
@@ -156,15 +134,12 @@
     }
 
     return runSettingsSave({
-      reason,
       onCommit,
-      onToast,
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => ({
         reflection: getReflectionSettings({ reflection: reflectionSettings }),
       }),
-      successTitle: t('settings.reflection.saveSuccess'),
       getDraftSnapshot: () => reflectionSettings,
       applyResult: (next) => (reflectionSettings = getReflectionSettings(next)),
     });
@@ -254,10 +229,9 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={reflectionAutosave.participant.hasChanges()}
-    onClick={handleManualReflectionSettingsSave}
+    onClick={() => reflectionAutosave.participant.runSave('manual')}
   />
 </div>

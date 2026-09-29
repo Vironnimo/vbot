@@ -5,7 +5,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Button from '../ui/Button.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
   import { updateSettings } from '$lib/api.js';
   import {
@@ -22,12 +22,7 @@
 
   const noop = () => {};
 
-  let {
-    settings = null,
-    onCommit = noop,
-    onToast = noop,
-    onError = noop,
-  } = $props();
+  let { settings = null, onCommit = noop, onError = noop } = $props();
 
   let skillDirectories = $state(untrack(() => getSkillDirectories(settings)));
   let newSkillDirectory = $state('');
@@ -108,23 +103,6 @@
     addSkillDirectory();
   }
 
-  function handleManualSkillDirectoriesSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    directoryAutosave.cancelPendingTimer();
-    void directoryAutosave.participant.runSave('manual');
-  }
-
   async function saveSkillDirectories() {
     if (directoriesMatch(skillDirectories, getSkillDirectories(settings))) {
       return true;
@@ -138,10 +116,6 @@
         createSkillDirectoriesUpdatePayload(skillDirectories),
       );
       onCommit(nextSettings);
-      onToast({
-        title: t('settings.skills.saveSuccess'),
-        variant: 'success',
-      });
       return true;
     } catch (error) {
       onError(`${t('settings.saveError')} ${error.message}`);
@@ -161,10 +135,10 @@
       {t('settings.skills.extraDirectories')}
     </h3>
     <div class="s-section__aside">
-      <SaveButton
+      <SaveStatus
         {saving}
         pending={directoryAutosave.participant.hasChanges()}
-        onClick={handleManualSkillDirectoriesSave}
+        onClick={() => directoryAutosave.participant.runSave('manual')}
       />
     </div>
   </div>

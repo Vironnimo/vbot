@@ -3,6 +3,7 @@
   import Dropdown from './Dropdown.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import Button from './ui/Button.svelte';
+  import SaveStatus from './ui/SaveStatus.svelte';
   import TabList from './ui/TabList.svelte';
   import Banner from './ui/Banner.svelte';
   import Badge from './ui/Badge.svelte';
@@ -547,16 +548,11 @@
 
           <div class="sp-global-footer">
             <span>{t('systemPrompt.editor.autosave')}</span>
-            <Button
-              variant="tertiary"
-              class="sp-btn-sm"
-              disabled={editor.isBusy}
+            <SaveStatus
+              saving={editor.isBusy}
+              pending={editor.hasUnsavedEdits}
               onClick={editor.handleManualSaveAll}
-            >
-              {editor.isBusy
-                ? t('common.saving')
-                : t('systemPrompt.fragmentEditor.save')}
-            </Button>
+            />
           </div>
         {/if}
       </div>

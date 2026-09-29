@@ -2,7 +2,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import {
     createDebouncedAutosave,
@@ -26,7 +26,6 @@
   let {
     settings = null,
     onCommit = noop,
-    onToast = noop,
     onError = noop,
     modelsRefreshToken = 0,
   } = $props();
@@ -121,29 +120,14 @@
     });
   }
 
-  async function save(reason) {
+  async function save() {
     if (compactionPoliciesEqual(policy, settings?.compaction)) return true;
     return runSettingsSave({
-      reason,
       onCommit,
-      onToast,
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => ({ compaction: normalizeCompactionPolicy(policy) }),
-      successTitle: t('settings.compaction.saved'),
     });
-  }
-
-  function saveNow() {
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-    compactionAutosave.cancelPendingTimer();
-    void compactionAutosave.participant.runSave('manual');
   }
 </script>
 
@@ -160,10 +144,9 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={compactionAutosave.participant.hasChanges()}
-    onClick={saveNow}
+    onClick={() => compactionAutosave.participant.runSave('manual')}
   />
 </div>

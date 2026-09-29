@@ -5,7 +5,7 @@
   import { t } from '$lib/i18n.js';
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import { onDestroy, untrack } from 'svelte';
   import {
     normalizeTranscriptionAudio,
@@ -211,8 +211,7 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     saving={transcriptionSaveState === 'saving'}
     pending={transcriptionAudioHasChanges()}
     onClick={saveTranscriptionAudio}

@@ -10,6 +10,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import InfoHint from './ui/InfoHint.svelte';
+  import SaveStatus from './ui/SaveStatus.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import Dropdown from './Dropdown.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
@@ -78,7 +79,7 @@
   let listsLoading = false;
   let listsRetryTimer = null;
   let destroyed = false;
-  let saveState = $state('idle');
+  let saving = $state(false);
   let modelFileInput = $state();
   let modelActionState = $state('idle');
   let enablePending = $state(null);
@@ -253,10 +254,6 @@
       baseline !== null &&
       Object.keys(buildVoiceConfigChanges(draft, baseline)).length > 0,
   );
-  // A confirmation only while nothing new is pending.
-  let voiceSaveStatus = $derived(
-    saveState === 'saved' && dirty ? 'idle' : saveState,
-  );
   // Changes that restart listening wait while a calibration or a model
   // action runs.
   let captureLocked = $derived(
@@ -375,7 +372,7 @@
     const changes = buildVoiceConfigChanges(draft, baseline);
     if (Object.keys(changes).length === 0) return true;
     const submitted = cloneVoiceConfig(draft);
-    saveState = 'saving';
+    saving = true;
     try {
       const snapshot = await updateVoiceConfig(changes);
       if (destroyed) return true;
@@ -389,14 +386,12 @@
       draft = rebaseVoiceConfig(draft, submitted, saved);
       baseline = saved;
       appliedSequence = latest.sequence;
-      saveState = 'saved';
       return true;
     } catch (error) {
-      if (!destroyed) {
-        saveState = 'error';
-        errorToast(error);
-      }
+      if (!destroyed) errorToast(error);
       return false;
+    } finally {
+      saving = false;
     }
   }
 
@@ -899,14 +894,12 @@
 
 <!-- The section's save state: the Desktop Voice configuration saves as it
      changes. -->
-<div class="s-footer voice-save-state" aria-live="polite">
-  {#if voiceSaveStatus === 'saving'}
-    {t('common.saving')}
-  {:else if voiceSaveStatus === 'error'}
-    {t('common.saveFailed')}
-  {:else if voiceSaveStatus === 'saved'}
-    {t('common.saved')}
-  {/if}
+<div class="s-footer">
+  <SaveStatus
+    {saving}
+    pending={voiceAutosave.hasChanges()}
+    onClick={() => voiceAutosave.runSave('manual')}
+  />
 </div>
 
 {#if deleteConfirmModel}

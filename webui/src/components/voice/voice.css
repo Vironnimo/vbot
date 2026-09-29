@@ -409,13 +409,6 @@
   white-space: nowrap;
 }
 
-/* The Wakeword section's save state, placed on its heading line as the
-   body's `.s-footer`. */
-.voice-save-state {
-  color: var(--text-lo);
-  font-size: var(--fs-body-sm);
-}
-
 /* Mock-mode warning, continuing the Wakeword listening row. */
 .voice-settings .voice-mock-warning {
   padding: 10px 14px;

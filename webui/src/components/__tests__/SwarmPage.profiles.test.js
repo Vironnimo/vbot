@@ -7,6 +7,7 @@ import {
   profile,
   button,
   saveButton,
+  saveStateText,
   createBridge,
   overrideOperations,
   callsTo,
@@ -346,7 +347,7 @@ describe('Swarm profile settings', () => {
     // A profile saved without the field inherits and is not dirty on open.
     expect(custom().getAttribute('aria-checked')).toBe('false');
     expect(editor()).toBeNull();
-    expect(saveButton().textContent.trim()).toBe(SAVED);
+    expect(saveButton()).toBeNull();
 
     custom().click();
     await tick();
@@ -360,7 +361,7 @@ describe('Swarm profile settings', () => {
     await tick();
     await choose('swarm-compaction-summary-model', 'demo/plain');
     saveButton().click();
-    await vi.waitFor(() => expect(saveButton().textContent.trim()).toBe(SAVED));
+    await vi.waitFor(() => expect(saveStateText()).toBe(SAVED));
     expect(lastSaved(operation).compaction_policy).toEqual({
       enabled: true,
       trigger: { type: 'context_ratio', threshold: 0.8 },
@@ -376,7 +377,7 @@ describe('Swarm profile settings', () => {
     flushSync();
     expect(editor()).toBeNull();
     saveButton().click();
-    await vi.waitFor(() => expect(saveButton().textContent.trim()).toBe(SAVED));
+    await vi.waitFor(() => expect(saveStateText()).toBe(SAVED));
     expect(lastSaved(operation).compaction_policy).toBeNull();
   });
 });
@@ -426,31 +427,29 @@ describe('Swarm profile saving', () => {
     bridge.invalidate();
     await vi.advanceTimersByTimeAsync(0);
     expect(name()).toBe('Autosaved profile');
-    saveButton().click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callsTo(operation, 'profiles.save')).toHaveLength(1);
-    expect(bridge.toast).toHaveBeenCalled();
+    expect(saveButton()).toBeNull();
+    expect(saveStateText()).toBe(SAVED);
   });
 
-  it('shows the saved state until the draft changes and after the save completes', async () => {
+  it('offers Save while the draft is unsaved and confirms the finished save', async () => {
     const { bridge, operation } = createBridge();
     await openEditor(bridge);
-    const label = () => saveButton().textContent.trim();
-    expect(label()).toBe(SAVED);
-    expect(saveButton().classList).toContain('save-button--saved');
+    expect(saveButton()).toBeNull();
+    expect(saveStateText()).toBe('');
     fill('swarm-profile-name', 'Renamed profile');
     await tick();
     flushSync();
-    expect(label()).toBe(t('common.save'));
-    expect(saveButton().classList).not.toContain('save-button--saved');
+    expect(saveButton().textContent.trim()).toBe(t('common.save'));
     saveButton().click();
-    await vi.waitFor(() => expect(label()).toBe(SAVED));
+    await vi.waitFor(() => expect(saveStateText()).toBe(SAVED));
+    expect(saveButton()).toBeNull();
     expect(callsTo(operation, 'profiles.save')).toHaveLength(1);
     expect(lastSaved(operation).name).toBe('Renamed profile');
     fill('swarm-profile-name', 'Research');
     await tick();
     flushSync();
-    expect(label()).toBe(t('common.save'));
+    expect(saveButton().textContent.trim()).toBe(t('common.save'));
+    expect(saveStateText()).toBe('');
   });
 
   it('flushes newer edits made during an in-flight save with the returned revision', async () => {

@@ -82,10 +82,6 @@
   padding: 0;
 }
 
-.s-section > .s-section__body > .s-footer .s-save-button--inline {
-  width: auto;
-}
-
 /* Group panel: one bordered surface per topic. Every direct child after the
    first is separated by a hairline, so rows, disclosures and nested option
    blocks inside the same group read as one list. */

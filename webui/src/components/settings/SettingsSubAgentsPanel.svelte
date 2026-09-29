@@ -2,7 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
   import {
     createDebouncedAutosave,
@@ -17,12 +17,7 @@
 
   const noop = () => {};
 
-  let {
-    settings = null,
-    onCommit = noop,
-    onToast = noop,
-    onError = noop,
-  } = $props();
+  let { settings = null, onCommit = noop, onError = noop } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
@@ -91,36 +86,16 @@
     onError('');
   }
 
-  function handleManualSubAgentSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    subAgentsAutosave.cancelPendingTimer();
-    void subAgentsAutosave.participant.runSave('manual');
-  }
-
-  async function saveSubAgentSettings(reason) {
+  async function saveSubAgentSettings() {
     if (!subAgentDraftHasChanges()) {
       return true;
     }
 
     return runSettingsSave({
-      reason,
       onCommit,
-      onToast,
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildSubAgentSettingsPayload(subAgentSettings),
-      successTitle: t('settings.subagents.saveSuccess'),
       // Show the saved values (e.g. the default a cleared field saved) unless
       // the user kept editing while the request was in flight.
       getDraftSnapshot: () => subAgentSettings,
@@ -199,10 +174,9 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={subAgentsAutosave.participant.hasChanges()}
-    onClick={handleManualSubAgentSettingsSave}
+    onClick={() => subAgentsAutosave.participant.runSave('manual')}
   />
 </div>

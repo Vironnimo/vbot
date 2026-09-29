@@ -166,12 +166,10 @@
   grid-template-columns: 22px minmax(0, 1fr) auto;
 }
 .jev-submit {
+  justify-content: flex-end;
   margin-top: 22px;
   padding: 14px 0;
   border-top: 1px solid var(--border);
-}
-.jev-submit > span {
-  margin-right: auto;
 }
 .jev-error {
   color: var(--text-hi);

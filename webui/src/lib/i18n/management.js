@@ -276,7 +276,6 @@ export default Object.freeze({
   'agents.delete': 'Delete agent',
   'agents.deleteDisabledMinimum': 'The last remaining agent cannot be deleted.',
   'agents.created': 'Agent created.',
-  'agents.updated': 'Agent updated.',
   'agents.deleted': 'Agent deleted.',
   'agents.loadError': 'Agents could not be loaded.',
   'agents.saveError': 'Agent could not be saved.',
@@ -546,7 +545,6 @@ export default Object.freeze({
   'projects.manage.allowedSkillsHelp':
     'Project skills are active by default; bundled and global skills are opt-in.',
   'projects.manage.saveError': 'Project changes could not be saved.',
-  'projects.manage.saveSuccess': 'Project updated.',
   'projects.remove': 'Remove',
   'projects.menu.label': 'Actions for {name}',
   'projects.menu.copyPath': 'Copy path',
@@ -597,7 +595,6 @@ export default Object.freeze({
   'projects.team.sourceGlobalDefault': 'global default',
   'projects.team.overridesTitle': 'Overrides',
   'projects.team.clearOverride': 'Clear override',
-  'projects.team.overrideSaved': 'Override saved.',
   'projects.team.overrideCleared': 'Override cleared.',
   'projects.team.overrideError': 'The override could not be saved.',
   'projects.team.overrideClearError': 'The override could not be cleared.',
@@ -702,7 +699,6 @@ export default Object.freeze({
     'Read the prompt, inspect available Tools, and adjust instructions.',
   'systemPrompt.scope.label': 'Prompt scope',
   'systemPrompt.scope.default': 'Default',
-  'systemPrompt.fragmentEditor.save': 'Save',
   'systemPrompt.fragmentEditor.reset': 'Reset',
   'systemPrompt.fragmentEditor.dirtyIndicator': 'unsaved',
   'systemPrompt.fragmentEditor.dirtyHint':

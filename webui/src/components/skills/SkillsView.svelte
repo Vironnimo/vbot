@@ -665,7 +665,6 @@
               onSettingsCommit(nextSettings);
               void loadInventory();
             }}
-            {onToast}
             onError={(message) => (directoryError = message)}
           />
         {/if}

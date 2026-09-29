@@ -25,7 +25,7 @@ async function setMemoryMode(page, modeName) {
   await page.getByRole("option", { exact: true, name: modeName }).click();
   await expect(memoryMode).toContainText(modeName);
   await expect(
-    agents.getByRole("button", { exact: true, name: "Saved" }),
+    agents.getByRole("status").getByText("Saved", { exact: true }),
   ).toBeVisible();
 }
 

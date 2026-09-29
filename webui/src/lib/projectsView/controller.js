@@ -553,19 +553,13 @@ export function createProjectsController({
     state.editError = '';
   }
 
-  async function saveSelectedProject({ manual = false } = {}) {
+  async function saveSelectedProject() {
     const project = selectedProject();
     if (!project || state.editSaving) {
       return false;
     }
     const changes = pendingChanges();
     if (!hasManageChanges(changes)) {
-      if (manual) {
-        onToast({
-          title: t('common.alreadySaved'),
-          variant: 'success',
-        });
-      }
       return true;
     }
     clearAutoSave({ flushPending: false });
@@ -599,10 +593,6 @@ export function createProjectsController({
         );
       }
       applyScan(result?.scan);
-      onToast({
-        title: t('projects.manage.saveSuccess'),
-        variant: 'success',
-      });
       return true;
     } catch (error) {
       if (active) {
@@ -758,10 +748,6 @@ export function createProjectsController({
           },
         };
       }
-      onToast({
-        title: t('projects.team.overrideSaved'),
-        variant: 'success',
-      });
       return true;
     } catch (error) {
       if (active) {

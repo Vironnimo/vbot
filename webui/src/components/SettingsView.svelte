@@ -775,7 +775,6 @@
       {settings}
       {onOpenSetupGuide}
       onCommit={commitSettings}
-      {onToast}
       onError={reportSettingsError}
     />
   {:else if panelId === 'providers'}
@@ -811,7 +810,6 @@
       )}
       {settings}
       onCommit={commitSettings}
-      {onToast}
       onError={(message) => reportSettingsError(message)}
       {modelsRefreshToken}
     />
@@ -819,7 +817,6 @@
     <SettingsSessionTitlesPanel
       {settings}
       onCommit={commitSettings}
-      {onToast}
       onError={(message) => reportSettingsError(message)}
       {modelsRefreshToken}
     />
@@ -827,7 +824,6 @@
     <SettingsRecallPanel
       {settings}
       onCommit={commitSettings}
-      {onToast}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'voice_controls'}
@@ -861,35 +857,30 @@
     <SettingsSubAgentsPanel
       {settings}
       onCommit={commitSettings}
-      {onToast}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'reflection'}
     <SettingsReflectionPanel
       {settings}
       onCommit={commitSettings}
-      {onToast}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'notifications'}
     <SettingsNotificationsPanel
       {settings}
       onCommit={commitSettings}
-      {onToast}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'appearance'}
     <SettingsAppearancePanel
       {settings}
       onCommit={commitSettings}
-      {onToast}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'debug'}
     <SettingsDebugPanel
       {settings}
       onCommit={commitSettings}
-      {onToast}
       onError={(message) => reportSettingsError(message)}
       {onDebugEnabledChange}
     />
@@ -899,7 +890,6 @@
       {clientsRefreshToken}
       {onOpenSetupGuide}
       onCommit={commitSettings}
-      {onToast}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'desktop_connection'}

@@ -93,9 +93,6 @@
   justify-content: flex-end;
   padding-top: 0;
 }
-.settings-editor-body .s-save-button--inline {
-  width: auto;
-}
 /* A pointer to a related destination under the page description: one
    sentence ending in an inline link, so it wraps like text. */
 .settings-related {

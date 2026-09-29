@@ -15,6 +15,7 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -346,15 +347,8 @@
     return '';
   }
 
-  async function saveRouting(reason) {
-    if (!dirty) {
-      if (reason === 'manual')
-        onToast({
-          title: t('common.alreadySaved'),
-          variant: 'success',
-        });
-      return true;
-    }
+  async function saveRouting() {
+    if (!dirty) return true;
     if (saveError) return false;
     const submitted = JSON.stringify(routing);
     saving = true;
@@ -365,11 +359,6 @@
       onError('');
       await onRefreshProviderSettings();
       if (JSON.stringify(routing) === submitted) dirty = false;
-      if (reason === 'manual')
-        onToast({
-          title: t('settings.providers.openrouter.saved'),
-          variant: 'success',
-        });
       return true;
     } catch (error) {
       onToast({
@@ -675,17 +664,11 @@
       </div>
 
       <div class="openrouter-routing__save-row">
-        <Button
-          variant="tertiary"
-          disabled={saving}
-          loading={saving}
-          onClick={() =>
-            autosave.participant.runSave('manual', { force: true })}
-        >
-          {saving
-            ? t('common.saving')
-            : t('settings.providers.openrouter.save')}
-        </Button>
+        <SaveStatus
+          {saving}
+          pending={dirty}
+          onClick={() => autosave.participant.runSave('manual')}
+        />
       </div>
     </div>
   </ProviderDetailDisclosure>

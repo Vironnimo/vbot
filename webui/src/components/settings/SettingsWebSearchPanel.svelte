@@ -3,7 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
   import ServiceApiKey from './ServiceApiKey.svelte';
   import {
@@ -123,36 +123,16 @@
     onError('');
   }
 
-  function handleManualWebSearchSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    webSearchAutosave.cancelPendingTimer();
-    void webSearchAutosave.participant.runSave('manual');
-  }
-
-  async function saveWebSearchSettings(reason) {
+  async function saveWebSearchSettings() {
     if (!webSearchDraftHasChanges()) {
       return true;
     }
 
     return runSettingsSave({
-      reason,
       onCommit,
-      onToast,
       onError,
       setSaving: (value) => (saving = value),
       buildPayload: () => buildWebSearchSettingsPayload(webSearchSettings),
-      successTitle: t('settings.webSearch.saveSuccess'),
       getDraftSnapshot: () => webSearchSettings,
       applyResult: (next) => (webSearchSettings = getWebSearchSettings(next)),
     });
@@ -236,10 +216,9 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={webSearchAutosave.participant.hasChanges()}
-    onClick={handleManualWebSearchSettingsSave}
+    onClick={() => webSearchAutosave.participant.runSave('manual')}
   />
 </div>

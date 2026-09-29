@@ -7,7 +7,7 @@
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import CopyButton from '../ui/CopyButton.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
@@ -32,7 +32,6 @@
     clientsRefreshToken = 0,
     onOpenSetupGuide = noop,
     onCommit = noop,
-    onToast = noop,
     onError = noop,
   } = $props();
 
@@ -76,14 +75,6 @@
     });
   });
   let saving = $state(false);
-  async function manualSave() {
-    const pending = autosave.participant.hasPending();
-    if (await autosave.participant.runSave('manual'))
-      onToast({
-        title: pending ? t('common.saved') : t('common.alreadySaved'),
-        variant: 'success',
-      });
-  }
   const autosaveContext = useAutosaveContext();
   const autosave = createDebouncedAutosave({
     getSnapshot: () =>
@@ -365,11 +356,10 @@
      it renders on the section heading line, after those rows in DOM order. -->
 {#snippet saveFooter()}
   <div class="s-footer">
-    <SaveButton
-      class="s-save-button s-save-button--inline"
+    <SaveStatus
       {saving}
       pending={autosave.participant.hasChanges()}
-      onClick={manualSave}
+      onClick={() => autosave.participant.runSave('manual')}
     />
   </div>
 {/snippet}

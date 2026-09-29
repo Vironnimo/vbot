@@ -43,7 +43,7 @@ test("an Agent Tool allowlist constrains the Provider catalog", async ({
       toolAccess.getByRole("checkbox", { exact: true, name: "apply_patch" }),
     ).not.toBeChecked();
     await expect(
-      agents.getByRole("button", { exact: true, name: "Saved" }),
+      agents.getByRole("status").getByText("Saved", { exact: true }),
     ).toBeVisible();
 
     const chat = await startIsolatedChat(page, { agentName: AGENT_NAME });

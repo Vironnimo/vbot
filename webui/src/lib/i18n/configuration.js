@@ -163,7 +163,6 @@ export default Object.freeze({
   'settings.defaults.temperatureHelp':
     'Sampling randomness, typically 0–2. Every Agent and Project without its own temperature uses this value. When empty, a Model’s recommended temperature applies if its catalog entry has one, otherwise the Provider default.',
   'settings.defaults.noThinkingEffort': '— (no default)',
-  'settings.defaults.saveSuccess': 'Agent defaults updated.',
   'settings.defaults.providerThinkingEffortDefault': '— (provider default)',
   'settings.defaults.noModelDefault': '— (no default)',
   'settings.defaults.noFallbackModelDefault': '— (no default)',
@@ -178,7 +177,6 @@ export default Object.freeze({
   'settings.skills.removeDirectory': 'Remove skill directory {path}',
   'settings.skills.emptyDirectories':
     'No additional skill directories configured.',
-  'settings.skills.saveSuccess': 'Skill directories updated.',
   'settings.skills.scopeGlobal': 'Global skills',
   'settings.skills.scopeAgent': '{name} (private)',
   'settings.skills.newSkill': 'New skill',
@@ -204,7 +202,6 @@ export default Object.freeze({
     'Minutes a Sub-Agent waits for its own Sub-Agent.',
   'settings.subagents.timeoutMinutesHelp':
     'When a Sub-Agent starts a Sub-Agent of its own, it waits for the result. After this many minutes the nested Sub-Agent is cancelled and reported as failed. Default: 60.\n\nSub-Agents started directly by the Agent you talk to run in the background and have no time limit.',
-  'settings.subagents.saveSuccess': 'Sub-Agent limits updated.',
   'settings.reflection.title': 'Reflection',
   'settings.reflection.enabled': 'Background reflection',
   'settings.reflection.enabledDescription':
@@ -221,7 +218,6 @@ export default Object.freeze({
     'Agent steps per conversation between Skill reviews.',
   'settings.reflection.skillIntervalHelp':
     'A Skill review becomes due after this many Agent steps in one conversation. Every Model response is one step, including each round of Tool calls, so one message can add several steps. When the Agent edits a Skill on its own, the count starts over. Default: 10.',
-  'settings.reflection.saveSuccess': 'Reflection settings updated.',
   'settings.notifications.title': 'Desktop notifications',
   'settings.notifications.intro': 'Shown by the vBot tray app on Windows.',
   'settings.notifications.help':
@@ -231,10 +227,8 @@ export default Object.freeze({
   'settings.notifications.automationFailed': 'Automation failed',
   'settings.notifications.updateResult': 'Update finished',
   'settings.notifications.serverStopped': 'Server stopped',
-  'settings.notifications.saveSuccess': 'Notification settings updated.',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.summaryModelPlaceholder': 'Active agent model',
-  'settings.compaction.saved': 'Compaction settings saved.',
   'settings.recall.backend': 'Search method',
   'settings.recall.backendDescription':
     'How Agents search your past conversations.',
@@ -247,7 +241,6 @@ export default Object.freeze({
     'Choose an embedding model below to search by meaning.',
   'settings.recall.embeddingInUse':
     'Your conversation text is sent to the embedding model below.',
-  'settings.recall.saveSuccess': 'Conversation search updated.',
   'settings.webFetch.direct': 'Direct (no service)',
   'settings.webFetch.fallback': 'Only when direct reading fails',
   'settings.webFetch.prefer': 'Prefer this service',
@@ -263,7 +256,6 @@ export default Object.freeze({
     'The service receives the URLs it reads and may charge per page.',
   'settings.webFetch.pricing': 'Pricing',
   'settings.webFetch.title': 'Web page reading',
-  'settings.webFetch.saveSuccess': 'Web page reading updated.',
   'settings.webSearch.title': 'Web search',
   'settings.webSearch.provider': 'Search provider',
   'settings.webSearch.providerHelp':
@@ -286,7 +278,6 @@ export default Object.freeze({
   'settings.webSearch.searxngBaseUrlHelp':
     'SearXNG is a free, self-hosted metasearch engine; vBot does not include one. Enter the address of your own instance or of one you can reach.\n\nThe instance must allow JSON results (add json to search.formats in its settings.yml); otherwise every search fails with HTTP 403.',
   'settings.webSearch.searxngBaseUrlPlaceholder': 'http://localhost:8888',
-  'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.serviceKey.label': 'API key',
   'settings.serviceKey.help':
     'vBot keeps the key on its server and never shows it again. A key set in the server environment takes precedence over a saved one and can only be changed there.',
@@ -409,8 +400,6 @@ export default Object.freeze({
     'Specialized model targets could not be loaded.',
   'settings.specializedModels.optionsLoadError':
     'Model options could not be loaded.',
-  'settings.specializedModels.saveSuccess':
-    'Specialized model bindings updated.',
   'settings.specializedModels.speechToText': 'Speech to text',
   'settings.specializedModels.speechToTextHelp':
     'Transcribes what you say into the Chat or Terminal microphone and the commands spoken after a wake phrase. Audio attachments are also transcribed with it when the Agent’s Model cannot take audio.\n\nThe recording format is set under Transcription audio at the end of this page.',
@@ -567,8 +556,6 @@ export default Object.freeze({
     'When off, OpenRouter fails the request instead of using a backup.',
   'settings.providers.openrouter.fallbacksAria':
     'Allow OpenRouter provider fallbacks',
-  'settings.providers.openrouter.save': 'Save routing',
-  'settings.providers.openrouter.saved': 'OpenRouter routing settings saved.',
   'settings.providers.openrouter.saveError':
     'OpenRouter routing settings could not be saved.',
   'settings.providers.device_flow.title': 'Connect {provider}',
@@ -768,7 +755,6 @@ export default Object.freeze({
   'settings.channels.delete_confirm':
     'Delete channel "{id}" permanently? vBot stops listening on it and its configuration is removed.',
   'settings.channels.createSuccess': 'Channel created.',
-  'settings.channels.updateSuccess': 'Channel updated.',
   'settings.channels.enableSuccess': 'Channel enabled.',
   'settings.channels.disableSuccess': 'Channel disabled.',
   'settings.channels.deleteSuccess': 'Channel deleted.',
@@ -841,8 +827,6 @@ export default Object.freeze({
   'settings.extensions.startup': 'startup',
   'settings.extensions.shutdown': 'shutdown',
   'settings.extensions.detailsAria': 'Details for extension {name}',
-  'settings.extensions.saveSettings': 'Save settings',
-  'settings.extensions.settingsSaveSuccess': 'Extension settings saved.',
   'settings.extensions.fieldAria': '{label} for extension {name}',
   'settings.extensions.numberInvalid': 'Enter a valid number.',
   'settings.extensions.secretSet': 'Set',
@@ -871,7 +855,6 @@ export default Object.freeze({
     'Normal shows each Thinking block and Tool call in the Chat as it happens.\n\nCompact groups consecutive Thinking and Tool activity into one collapsible Working block, so the Agent’s replies stand out.',
   'settings.appearance.chatWorkingMode.normal': 'Normal',
   'settings.appearance.chatWorkingMode.compact': 'Compact',
-  'settings.appearance.saveSuccess': 'Appearance updated.',
   'settings.language.en': 'English',
   'settings.voice.title': 'Voice',
   'settings.voice.aboutAria': 'About {name}',
@@ -1065,7 +1048,6 @@ export default Object.freeze({
   'settings.voice.enabledAria': 'Enable wakeword listening',
   'settings.voice.retry': 'Retry listening',
   'settings.sessionTitles.title': 'Session titles',
-  'settings.sessionTitles.saveSuccess': 'Session title settings updated.',
   'settings.sessionTitles.enabled': 'Automatic Session titles',
   'settings.sessionTitles.enabledDescription':
     'Uses one extra Model request for each new Session.',

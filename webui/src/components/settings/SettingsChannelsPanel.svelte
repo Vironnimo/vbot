@@ -8,7 +8,7 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -75,7 +75,7 @@
       channelFormVisible &&
       channelFormMode === CHANNEL_FORM_MODE_EDIT &&
       JSON.stringify(channelFormValues) !== channelBaseline,
-    save: (reason) => persistChannelForm(reason),
+    save: persistChannelForm,
   });
   const unregisterAutosave = autosaveContext.register(autosave.participant);
   $effect(() => {
@@ -90,8 +90,8 @@
   function submitChannelForm(event) {
     event.preventDefault();
     if (channelFormMode === CHANNEL_FORM_MODE_CREATE)
-      return persistChannelForm('manual');
-    return autosave.participant.runSave('manual', { force: true });
+      return persistChannelForm();
+    return autosave.participant.runSave('manual');
   }
 
   let channelPlatformOptions = $derived(
@@ -373,7 +373,7 @@
     }
   }
 
-  async function persistChannelForm(reason) {
+  async function persistChannelForm() {
     if (channelBusy) return false;
 
     if (!channelFormValues.agent_id) {
@@ -384,14 +384,7 @@
 
     const creating = channelFormMode === CHANNEL_FORM_MODE_CREATE;
     const submitted = JSON.stringify(channelFormValues);
-    if (!creating && submitted === channelBaseline) {
-      if (reason === 'manual')
-        onToast({
-          title: t('common.alreadySaved'),
-          variant: 'success',
-        });
-      return true;
-    }
+    if (!creating && submitted === channelBaseline) return true;
     channelBusy = true;
     clearChannelFeedback();
 
@@ -404,11 +397,6 @@
         });
       } else {
         await updateChannel(buildChannelUpdatePayload(channelFormValues));
-        if (reason === 'manual')
-          onToast({
-            title: t('settings.channels.updateSuccess'),
-            variant: 'success',
-          });
       }
 
       if (creating) {
@@ -1068,11 +1056,10 @@
               {t('common.delete')}
             </Button>
             {#if expanded}
-              <SaveButton
+              <SaveStatus
                 saving={channelBusy}
                 pending={autosave.participant.hasChanges()}
-                onClick={() =>
-                  autosave.participant.runSave('manual', { force: true })}
+                onClick={() => autosave.participant.runSave('manual')}
               />
             {/if}
           </div>

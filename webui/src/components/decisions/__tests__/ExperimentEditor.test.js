@@ -109,7 +109,7 @@ it('offers explicit discard and reload after a concurrent revision conflict', as
   render({ onReload });
   await flush();
   input(document.querySelector('input'), 'My local edit');
-  button(t('jev.save')).click();
+  button(t('common.save')).click();
   await flush();
   expect(document.querySelector('[role=alert]').textContent).toBe(
     'Changed elsewhere',
@@ -239,7 +239,7 @@ it('allocates question ids internally and preserves them through edits and remov
   await flush();
   button(`+ ${t('jev.choice')}`).click();
   await flush();
-  button(t('jev.save')).click();
+  button(t('common.save')).click();
   await flush();
   const initialQuestions =
     api.saveDecisionExperiment.mock.calls.at(-1)[0].questions;
@@ -250,7 +250,7 @@ it('allocates question ids internally and preserves them through edits and remov
   await flush();
   button(`+ ${t('jev.score')}`).click();
   await flush();
-  button(t('jev.save')).click();
+  button(t('common.save')).click();
   await flush();
   const finalQuestions =
     api.saveDecisionExperiment.mock.calls.at(-1)[0].questions;

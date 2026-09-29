@@ -22,26 +22,27 @@ function traceLimit(debug) {
   });
 }
 
-// The section autosaves after a short delay. Wait for the save the switch
+// The section autosaves after a short delay. Wait for the save a change
 // starts: the section can still read "Saved" from an earlier change.
-async function setDebugMode(page, debug, enabled) {
+async function saveChange(page, change) {
   const saved = page.waitForResponse(
     (response) =>
       response.url().endsWith("/api/rpc") &&
       response.request().postDataJSON()?.method === "settings.update",
   );
-  await debugSwitch(debug).click();
+  await change();
   expect(await (await saved).json()).toMatchObject({ ok: true });
+}
+
+async function setDebugMode(page, debug, enabled) {
+  await saveChange(page, () => debugSwitch(debug).click());
   await expect(debugSwitch(debug)).toBeChecked({ checked: enabled });
 }
 
-// Number fields autosave on blur; the section's save status then settles.
-async function setTraceLimit(debug, value) {
+// Number fields autosave on blur.
+async function setTraceLimit(page, debug, value) {
   await traceLimit(debug).fill(value);
-  await traceLimit(debug).press("Tab");
-  await expect(
-    debug.getByRole("button", { exact: true, name: "Saved" }),
-  ).toBeVisible();
+  await saveChange(page, () => traceLimit(debug).press("Tab"));
 }
 
 test("Debug settings are searchable, persisted, and restorable", async ({
@@ -61,7 +62,7 @@ test("Debug settings are searchable, persisted, and restorable", async ({
   let debug = settings.getByRole("region", { name: "Debug" });
   await expect(debug).toBeVisible();
   await setDebugMode(page, debug, true);
-  await setTraceLimit(debug, "73");
+  await setTraceLimit(page, debug, "73");
 
   await page.reload();
   debug = await openDebugSettings(page);
@@ -69,7 +70,7 @@ test("Debug settings are searchable, persisted, and restorable", async ({
   await expect(traceLimit(debug)).toHaveValue("73");
 
   // The trace limit is editable only while Debug mode is on.
-  await setTraceLimit(debug, "50");
+  await setTraceLimit(page, debug, "50");
   await setDebugMode(page, debug, false);
   await expect(traceLimit(debug)).toBeHidden();
   await page.reload();

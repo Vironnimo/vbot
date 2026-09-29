@@ -227,6 +227,7 @@ describe('Swarm Wiki pages', () => {
     await tick();
     fill('wiki-title', 'New findings');
     fill('wiki-content', '# Findings\n<script>bad()</script>');
+    await tick();
     button(t('common.save')).click();
     await vi.waitFor(() =>
       expect(fixture.operation).toHaveBeenCalledWith(

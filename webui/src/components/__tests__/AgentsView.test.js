@@ -210,7 +210,7 @@ describe('AgentsView', () => {
     temperature.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
     document
-      .querySelector('[data-settings-section="defaults"] .s-save-button')
+      .querySelector('[data-settings-section="defaults"] .save-status button')
       .click();
     await waitForCondition(() => savedTemperature === 0.73);
     await flushAsyncUpdates();
@@ -944,7 +944,7 @@ describe('AgentsView', () => {
     });
   });
 
-  it('auto-saves 800 ms after the last edit and treats a later Saved click as a no-op', async () => {
+  it('auto-saves 800 ms after the last edit and confirms it in the save state', async () => {
     const toastMock = vi.fn();
     rpcMock.mockImplementation(
       createAgentsRpcMock({
@@ -984,17 +984,10 @@ describe('AgentsView', () => {
       model: 'openai/gpt-5.2::subscription',
     });
     expect(toastMock).not.toHaveBeenCalled();
-
-    const saveButton = getButton(t('common.saved'));
-    expect(saveButton.disabled).toBe(false);
-    saveButton.click();
-    flushSync();
-    await flushAsyncUpdates();
-
-    expect(getAgentUpdateCalls()).toHaveLength(1);
-    expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'success' }),
-    );
+    expect(document.querySelector('.save-status button')).toBeNull();
+    expect(
+      document.querySelector('.save-status [role="status"]').textContent.trim(),
+    ).toBe(t('common.saved'));
   });
 
   it('manual save cancels a pending agent autosave', async () => {

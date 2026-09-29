@@ -3,7 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
-  import SaveButton from '../ui/SaveButton.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
   import { updateSettings } from '$lib/api.js';
   import {
     createDebouncedAutosave,
@@ -23,12 +23,7 @@
 
   const noop = () => {};
 
-  let {
-    settings = null,
-    onCommit = noop,
-    onToast = noop,
-    onError = noop,
-  } = $props();
+  let { settings = null, onCommit = noop, onError = noop } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
@@ -127,23 +122,6 @@
     onError('');
   }
 
-  function handleManualSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved'),
-        variant: 'success',
-      });
-      return;
-    }
-
-    appearanceAutosave.cancelPendingTimer();
-    void appearanceAutosave.participant.runSave('manual');
-  }
-
   function appearanceHasChanges() {
     return !isAppearanceSaveDisabled({
       loading: false,
@@ -157,7 +135,7 @@
     });
   }
 
-  async function saveAppearance(reason) {
+  async function saveAppearance() {
     if (!appearanceHasChanges()) {
       return true;
     }
@@ -174,11 +152,6 @@
         }),
       );
       onCommit(nextSettings);
-      if (reason === 'manual')
-        onToast({
-          title: t('settings.appearance.saveSuccess'),
-          variant: 'success',
-        });
       return true;
     } catch (error) {
       onError(`${t('settings.saveError')} ${error.message}`);
@@ -256,10 +229,9 @@
 </div>
 
 <div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
+  <SaveStatus
     {saving}
     pending={appearanceAutosave.participant.hasChanges()}
-    onClick={handleManualSave}
+    onClick={() => appearanceAutosave.participant.runSave('manual')}
   />
 </div>
