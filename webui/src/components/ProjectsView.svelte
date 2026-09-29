@@ -3,6 +3,8 @@
   import Button from './ui/Button.svelte';
   import SaveButton from './ui/SaveButton.svelte';
   import Banner from './ui/Banner.svelte';
+  import ContextMenu from './ui/ContextMenu.svelte';
+  import { contextMenuAnchor, isContextMenuKey } from './ui/contextMenu.js';
   import EmptyState from './ui/EmptyState.svelte';
   import {
     needsRePoint,
@@ -12,6 +14,7 @@
   } from '$lib/projectsView.js';
   import StatusChip from './ui/StatusChip.svelte';
   import { tooltip } from '$lib/tooltip.js';
+  import { writeClipboardText } from '$lib/clipboard.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { onDestroy, onMount, untrack } from 'svelte';
   import {
@@ -219,6 +222,64 @@
   function openRePoint(project) {
     projectsController.openRePoint(project);
   }
+
+  function removeDisabled(project) {
+    return (
+      projectsState.removingProjectId === project.project_id ||
+      (project.project_id === projectsState.selectedProjectId &&
+        projectsState.editSaving)
+    );
+  }
+
+  // The open row context menu (./ui/ContextMenu.svelte), or null.
+  let menu = $state(null);
+
+  // Copy path, Re-point... (only when the repository is missing) | Remove...
+  function projectMenu(project) {
+    const items = [
+      {
+        id: 'copy-path',
+        label: t('projects.menu.copyPath'),
+        group: 'project',
+        onSelect: () => void copyProjectPath(project.cwd),
+      },
+    ];
+    if (needsRePoint(project))
+      items.push({
+        id: 're-point',
+        label: t('projects.menu.rePoint'),
+        group: 'project',
+        onSelect: () => openRePoint(project),
+      });
+    items.push({
+      id: 'remove',
+      label: t('projects.menu.remove'),
+      danger: true,
+      group: 'remove',
+      disabled: removeDisabled(project),
+      onSelect: () => removeOne(project),
+    });
+    return {
+      label: t('projects.menu.label', {
+        name: project.display_name || project.project_id,
+      }),
+      items,
+    };
+  }
+
+  function openMenu(project, event) {
+    event.preventDefault();
+    menu = { ...contextMenuAnchor(event), ...projectMenu(project) };
+  }
+
+  async function copyProjectPath(path) {
+    try {
+      await writeClipboardText(path);
+      onToast({ title: t('projects.menu.pathCopied'), variant: 'success' });
+    } catch {
+      onToast({ title: t('projects.menu.copyFailed'), variant: 'error' });
+    }
+  }
 </script>
 
 <section
@@ -281,6 +342,10 @@
               data-testid={`project-toggle-${project.project_id}`}
               use:tooltip={() => projectRowDetails(project)}
               onclick={() => navigation.navigate([project.project_id])}
+              oncontextmenu={(event) => openMenu(project, event)}
+              onkeydown={(event) => {
+                if (isContextMenuKey(event)) openMenu(project, event);
+              }}
             >
               <span class="project-item-inner">
                 <span class="project-item-head">
@@ -362,8 +427,7 @@
                   <Button
                     variant="danger"
                     data-testid={`project-remove-${selectedProject.project_id}`}
-                    disabled={projectsState.removingProjectId ===
-                      selectedProject.project_id || projectsState.editSaving}
+                    disabled={removeDisabled(selectedProject)}
                     onClick={() => removeOne(selectedProject)}
                   >
                     {t('projects.remove')}
@@ -413,4 +477,5 @@
   </div>
 
   <ProjectDialogs bind:projectsState {projectsController} />
+  <ContextMenu {menu} onClose={() => (menu = null)} />
 </section>

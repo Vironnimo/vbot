@@ -1,5 +1,7 @@
 <script>
   import Button from '../ui/Button.svelte';
+  import ContextMenu from '../ui/ContextMenu.svelte';
+  import { contextMenuAnchor, isContextMenuKey } from '../ui/contextMenu.js';
   import EmptyState from '../ui/EmptyState.svelte';
   import SortableList from '../ui/SortableList.svelte';
   import { t } from '$lib/i18n.js';
@@ -17,11 +19,59 @@
 
     isLoading = false,
     isReordering = false,
+    // The Agent being deleted; no other deletion starts meanwhile.
+    deletingAgentId = '',
     onSelect = () => {},
     onCreate = () => {},
     onReorder = async () => {},
     onReorderInteractionChange = () => {},
+    // Row context menu actions.
+    onOpenChat = () => {},
+    onCopyId = () => {},
+    onDelete = () => {},
   } = $props();
+
+  // The open row context menu (../ui/ContextMenu.svelte), or null.
+  let menu = $state(null);
+
+  // Open chat, Copy ID | Delete... (the last Agent cannot be deleted).
+  function agentMenu(agent) {
+    const lastAgent = agents.length < 2;
+    return {
+      label: t('agents.menu.label', { name: agent.name || agent.id }),
+      items: [
+        {
+          id: 'open-chat',
+          label: t('agents.menu.openChat'),
+          group: 'agent',
+          onSelect: () => onOpenChat(agent.id),
+        },
+        {
+          id: 'copy-id',
+          label: t('agents.menu.copyId'),
+          group: 'agent',
+          onSelect: () => onCopyId(agent.id),
+        },
+        {
+          id: 'delete',
+          label: t('agents.menu.delete'),
+          danger: true,
+          group: 'delete',
+          disabled: lastAgent || Boolean(deletingAgentId),
+          hint: lastAgent ? t('agents.menu.lastAgent') : undefined,
+          onSelect: () => onDelete(agent),
+        },
+      ],
+    };
+  }
+
+  // A touch hold that already started a reorder drag prevents the
+  // `contextmenu` that follows it, so the drag keeps the gesture.
+  function openMenu(agent, event) {
+    if (event.defaultPrevented) return;
+    event.preventDefault();
+    menu = { ...contextMenuAnchor(event), ...agentMenu(agent) };
+  }
 
   // The row's details card: the full Model (the row shows its short name)
   // and whether it is inherited, then the id when a name leads.
@@ -120,6 +170,10 @@
             type="button"
             use:tooltip={() => agentDetails(agent)}
             onclick={() => onSelect(agent.id)}
+            oncontextmenu={(event) => openMenu(agent, event)}
+            onkeydown={(event) => {
+              if (isContextMenuKey(event)) openMenu(agent, event);
+            }}
           >
             <div class="agent-item-inner">
               <div class="agent-item-name">{agent.name || agent.id}</div>
@@ -133,3 +187,5 @@
     {/if}
   </div>
 </aside>
+
+<ContextMenu {menu} onClose={() => (menu = null)} />

@@ -17,7 +17,6 @@
   import { onDestroy, tick, untrack } from 'svelte';
   import {
     createAgent,
-    deleteAgent,
     listPrompts,
     renameAgent,
     updateAgent,
@@ -34,6 +33,8 @@
   let {
     agent = null,
     agentsCount = 0,
+    // The view deletes this Agent after its confirmation.
+    isDeleting = false,
     availableModels = [],
     availableConnections = [],
     availableTools = [],
@@ -46,7 +47,7 @@
     onAgentUpdated = () => {},
     onAgentRenamed = () => {},
     onAgentCreated = async () => {},
-    onAgentDeleted = async () => {},
+    onDeleteRequested = () => {},
     onToast = () => {},
     onModelDropdownOpenChange = () => {},
     onNavigateToSettingsPanel = () => {},
@@ -66,7 +67,6 @@
   let editBaselineValues = $state(createAgentFormValues(initialAgent ?? {}));
   let formErrors = $state({});
   let isSaving = $state(false);
-  let isDeleting = $state(false);
   let errorMessage = $state('');
   let destroyed = false;
   // Open state for the "disable custom prompt while customizations exist" confirm.
@@ -368,28 +368,8 @@
     return JSON.stringify(left) === JSON.stringify(right);
   }
 
-  async function deleteSelectedAgent() {
-    if (!agent) {
-      return;
-    }
-
-    if (!canDeleteSelectedAgent) {
-      errorMessage = t('errors.minimumAgents');
-      return;
-    }
-
-    isDeleting = true;
-    errorMessage = '';
-
-    try {
-      await deleteAgent(agent.id);
-      showAgentToast(t('agents.deleted'));
-      await onAgentDeleted(agent.id);
-    } catch (error) {
-      errorMessage = viewErrorMessage(error, t('agents.deleteError'));
-    } finally {
-      isDeleting = false;
-    }
+  function deleteSelectedAgent() {
+    if (agent && canDeleteSelectedAgent) onDeleteRequested(agent);
   }
 
   function openRenameDialog() {
@@ -539,10 +519,6 @@
   }
 
   function viewErrorMessage(error, fallback) {
-    if (error?.code === 'last_agent') {
-      return t('errors.minimumAgents');
-    }
-
     return error?.message || fallback || t('errors.generic');
   }
 </script>

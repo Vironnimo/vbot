@@ -266,6 +266,84 @@ describe('ProjectsView list and selection', () => {
     });
   });
 
+  it('offers Copy path, Re-point when needed and Remove in a row context menu', async () => {
+    const onToast = vi.fn();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    const alpha = project({
+      project_id: 'alpha',
+      display_name: 'Alpha',
+      cwd: 'C:/repos/alpha',
+    });
+    const beta = project({
+      project_id: 'beta',
+      display_name: 'Beta',
+      cwd: 'C:/repos/beta',
+      cwd_exists: false,
+    });
+    listProjectsMock.mockResolvedValue({ projects: [alpha, beta] });
+    showProjectMock.mockImplementation((projectId) =>
+      Promise.resolve({
+        project: projectId === 'beta' ? beta : alpha,
+        scan: cleanScan(),
+      }),
+    );
+    const navigation = createStandaloneNavigation(['alpha']);
+    view.mount({ navigation, onToast });
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-panel-alpha"]'),
+    );
+
+    const openRowMenu = (projectId) => {
+      const event = new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 40,
+        clientY: 80,
+      });
+      buttonByTestId(`project-toggle-${projectId}`).dispatchEvent(event);
+      flushSync();
+      expect(event.defaultPrevented).toBe(true);
+      return [...document.querySelectorAll('[role="menuitem"]')];
+    };
+    const labels = (items) => items.map((item) => item.textContent.trim());
+
+    expect(labels(openRowMenu('alpha'))).toEqual(['Copy path', 'Remove…']);
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    flushSync();
+
+    let items = openRowMenu('beta');
+    expect(labels(items)).toEqual(['Copy path', 'Re-point…', 'Remove…']);
+    items[0].click();
+    await waitForCondition(() => onToast.mock.calls.length === 1);
+    expect(writeText).toHaveBeenCalledWith('C:/repos/beta');
+
+    openRowMenu('beta')[1].click();
+    await waitForCondition(() => inputById('projects-repoint-cwd'));
+    setInputValue('projects-repoint-cwd', 'C:/repos/moved');
+    submitButtonInDialog('Re-point').click();
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('beta', {
+      cwd: 'C:/repos/moved',
+    });
+
+    openRowMenu('beta')[2].click();
+    flushSync();
+    expect(document.querySelector('[role="dialog"]').textContent).toContain(
+      'Beta',
+    );
+    confirmDialog('Remove');
+    await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
+    expect(removeProjectMock).toHaveBeenCalledWith('beta', false);
+    // Removing another Project keeps the shown one.
+    expect(navigation.place).toEqual(['alpha']);
+  });
+
   it('surfaces a blocked removal as an alert', async () => {
     serveProject();
     removeProjectMock.mockRejectedValue({

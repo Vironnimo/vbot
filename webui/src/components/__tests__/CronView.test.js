@@ -371,6 +371,60 @@ describe('CronView', () => {
     expect(enableCronJobMock).toHaveBeenCalledWith('job-paused');
   });
 
+  it('enables and deletes jobs from their row context menu without selecting them', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({ id: 'job-active', status: 'active' }),
+        cronJob({ id: 'job-paused', status: 'paused' }),
+        cronJob({
+          id: 'job-completed',
+          name: 'Launch reminder',
+          status: 'completed',
+        }),
+      ],
+    });
+    mountView();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-toggle-job-active"]'),
+    );
+
+    const openRowMenu = (jobId) => {
+      const event = new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 40,
+        clientY: 80,
+      });
+      buttonByTestId(`cron-item-${jobId}`).dispatchEvent(event);
+      flushSync();
+      expect(event.defaultPrevented).toBe(true);
+      return [...document.body.querySelectorAll('[role="menuitem"]')];
+    };
+    const labels = (items) => items.map((item) => item.textContent.trim());
+
+    let items = openRowMenu('job-paused');
+    expect(labels(items)).toEqual(['Enable', 'Delete…']);
+    items[0].click();
+    await waitForCondition(() => enableCronJobMock.mock.calls.length === 1);
+    expect(enableCronJobMock).toHaveBeenCalledWith('job-paused');
+
+    // A completed job can no longer be switched on or off.
+    items = openRowMenu('job-completed');
+    expect(labels(items)).toEqual(['Delete…']);
+    items[0].click();
+    flushSync();
+    expect(
+      document.body.querySelector('[role="dialog"]').textContent,
+    ).toContain('Launch reminder');
+    confirmDialog(t('common.delete'));
+    await waitForCondition(() => deleteCronJobMock.mock.calls.length === 1);
+    expect(deleteCronJobMock).toHaveBeenCalledWith('job-completed');
+    // The shown job stays selected.
+    expect(
+      document.querySelector('[data-testid="cron-toggle-job-active"]'),
+    ).toBeTruthy();
+  });
+
   it('creates a job from the blank form and updates it without selecting its list row again', async () => {
     const createdJob = cronJob({
       id: 'job-created',

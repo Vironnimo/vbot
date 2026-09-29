@@ -21,6 +21,8 @@
   import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
   import Banner from './ui/Banner.svelte';
+  import ContextMenu from './ui/ContextMenu.svelte';
+  import { contextMenuAnchor, isContextMenuKey } from './ui/contextMenu.js';
   import EmptyState from './ui/EmptyState.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import StatusChip from './ui/StatusChip.svelte';
@@ -374,6 +376,42 @@
 
     return fallback;
   }
+
+  // The open row context menu (./ui/ContextMenu.svelte), or null.
+  let menu = $state(null);
+
+  // Enable or Disable (not for a completed or missed job) | Delete...
+  function jobMenu(job) {
+    const busy =
+      editor.mutatingJobId === job.id ||
+      (job.id === editor.selectedJobId && editor.submittingForm);
+    const items = [];
+    if (!isTerminalJob(job))
+      items.push({
+        id: 'toggle',
+        label:
+          job.status === CRON_STATUS_ACTIVE
+            ? t('cron.menu.disable')
+            : t('cron.menu.enable'),
+        group: 'job',
+        disabled: busy,
+        onSelect: () => editor.toggleJob(job),
+      });
+    items.push({
+      id: 'delete',
+      label: t('cron.menu.delete'),
+      danger: true,
+      group: 'delete',
+      disabled: busy,
+      onSelect: () => editor.deleteJob(job),
+    });
+    return { label: t('cron.menu.label', { name: job.name }), items };
+  }
+
+  function openMenu(job, event) {
+    event.preventDefault();
+    menu = { ...contextMenuAnchor(event), ...jobMenu(job) };
+  }
 </script>
 
 <section class="cron-view view active" aria-labelledby="cron-list-title">
@@ -445,6 +483,10 @@
                   data-testid={`cron-item-${job.id}`}
                   use:tooltip={() => scheduleRowDetails(job, { agentLabel })}
                   onclick={() => editor.selectJob(job)}
+                  oncontextmenu={(event) => openMenu(job, event)}
+                  onkeydown={(event) => {
+                    if (isContextMenuKey(event)) openMenu(job, event);
+                  }}
                 >
                   <span class="cron-item-inner">
                     <span class="cron-item-head">
@@ -1115,7 +1157,7 @@
   {#if editor.deleteConfirmJob}
     <ConfirmDialog
       title={t('cron.deleteConfirmTitle')}
-      body={t('cron.deleteConfirm')}
+      body={t('cron.deleteConfirm', { name: editor.deleteConfirmJob.name })}
       confirmLabel={t('common.delete')}
       onConfirm={editor.confirmDeleteJob}
       onCancel={editor.cancelDeleteJob}
@@ -1131,4 +1173,6 @@
       onCancel={editor.cancelDiscard}
     />
   {/if}
+
+  <ContextMenu {menu} onClose={() => (menu = null)} />
 </section>

@@ -417,7 +417,11 @@ export default Object.freeze({
   'cron.form.repeat': 'Repeat limit',
   'cron.form.repeatPlaceholder': 'Unlimited',
   'cron.deleteConfirmTitle': 'Delete Scheduled Run',
-  'cron.deleteConfirm': 'Delete this job permanently? It will no longer run.',
+  'cron.deleteConfirm': 'Delete {name} permanently? It will no longer run.',
+  'cron.menu.label': 'Actions for {name}',
+  'cron.menu.enable': 'Enable',
+  'cron.menu.disable': 'Disable',
+  'cron.menu.delete': 'Delete…',
   'cron.discardConfirmTitle': 'Discard unsaved changes?',
   'cron.discardConfirm':
     'Your edits have not been saved. Discard them and continue?',
