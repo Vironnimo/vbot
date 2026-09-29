@@ -1,6 +1,8 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
+    compactionSeparatorDetails,
     compactionSeparatorLabel,
     compactionSummaryText,
   } from '$lib/chatTimelinePresentation.js';
@@ -26,7 +28,9 @@
     role={item?.status === 'failed' ? 'alert' : running ? 'status' : undefined}
     aria-busy={running || undefined}
   >
-    {compactionSeparatorLabel(item)}
+    <span use:tooltip={() => compactionSeparatorDetails(item)}
+      >{compactionSeparatorLabel(item)}</span
+    >
   </div>
 {:else}
   <details
@@ -37,7 +41,10 @@
       viewState.setOpen(disclosureKey, event.currentTarget.open)}
   >
     <summary class="date-sep compaction-sep" class:run-compaction-sep={inRun}>
-      <span class="compaction-sep__trigger">
+      <span
+        class="compaction-sep__trigger"
+        use:tooltip={() => compactionSeparatorDetails(item)}
+      >
         <span>{compactionSeparatorLabel(item)}</span>
         <svg
           class="compaction-sep__chevron"

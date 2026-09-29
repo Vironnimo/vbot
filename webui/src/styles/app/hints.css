@@ -179,37 +179,6 @@
   font-size: var(--fs-mono-xs);
 }
 
-/* Copyable Tool values: the complete plain-text value stays readable in the
-   compact bubble while the Copy action remains reachable by keyboard and
-   touch. The value scrolls; the action stays in view. */
-.tool-primary-hover-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  max-width: min(460px, calc(100vw - 16px));
-  padding: 5px 5px 5px 9px;
-  overflow: hidden;
-}
-
-.tool-primary-hover-card__value {
-  min-width: 0;
-  max-height: min(300px, 45vh);
-  padding-top: 2px;
-  overflow: auto;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-
-.tool-primary-hover-card .tool-primary-hover-card__copy {
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  min-height: 24px;
-  padding: 0;
-}
-
 /* Hover proxy for tooltips on disabled controls — browsers do not dispatch
    pointer events on a disabled button, so the tooltip listens on this
    wrapper instead. */

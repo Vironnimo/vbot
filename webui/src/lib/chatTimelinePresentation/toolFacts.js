@@ -18,6 +18,19 @@ export const toolStatus = (tool) => {
   return 'running';
 };
 
+const EXECUTION_STATE_TITLES = {
+  running: () => t('chat.toolState.running'),
+  success: () => t('chat.toolState.success'),
+  partial: () => t('chat.toolState.partial'),
+  failed: () => t('chat.toolState.failed'),
+  cancelled: () => t('chat.toolState.cancelled'),
+};
+
+// The state of a Tool call, Sub-Agent Run or background process in words,
+// for the tooltip behind its status dot.
+export const executionStateTitle = (status) =>
+  (EXECUTION_STATE_TITLES[status] ?? EXECUTION_STATE_TITLES.running)();
+
 // A tool row the model is still *streaming* — the call has been previewed from
 // its argument deltas but not dispatched yet (no `tool_call_started`). It shares
 // the `running` bucket in `toolStatus` (both are "not settled"), but the dot must

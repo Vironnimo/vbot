@@ -1,4 +1,5 @@
 import { activeLocaleTag, t } from '$lib/i18n.js';
+import { formatMoment } from '$lib/timeText.js';
 import {
   formatDateTimeInApplicationZone,
   dateKeyInApplicationZone,
@@ -104,4 +105,40 @@ function todayDateKey() {
 
 function isTodayDateKey(dateKey) {
   return dateKey === todayDateKey();
+}
+
+/**
+ * Details rows for something that runs (a Tool call, a Sub-Agent Run, a
+ * background process, a Run): when it started and, once settled, when it
+ * finished, plus how long it ran or has been running. Unknown moments and
+ * durations are left out.
+ */
+export function executionDetailRows({
+  startedAt = '',
+  finishedAt = '',
+  durationMs = null,
+  running = false,
+  nowMs = Date.now(),
+}) {
+  const rows = [];
+  const started = formatMoment(startedAt, { nowMs, seconds: true });
+  if (started) {
+    rows.push({ label: t('chat.details.started'), value: started });
+  }
+  const finished = running
+    ? ''
+    : formatMoment(finishedAt, { nowMs, seconds: true });
+  if (finished) {
+    rows.push({ label: t('chat.details.finished'), value: finished });
+  }
+  const duration = formatDurationMs(durationMs);
+  if (duration) {
+    rows.push({
+      label: running
+        ? t('chat.details.runningFor')
+        : t('chat.details.duration'),
+      value: duration,
+    });
+  }
+  return rows;
 }

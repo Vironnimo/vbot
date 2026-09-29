@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compactionSeparatorDetails,
   compactionSeparatorLabel,
   compactionSummaryText,
+  fileMentionDetails,
   errorMessagePresentation,
   groupTransientCards,
   imageReferenceLabel,
@@ -13,9 +15,11 @@ import {
   toolRowFromEvent,
   toolRowPresentation,
   toolStatus,
+  toolStatusDetails,
   toolStatusLabel,
 } from '../chatTimelinePresentation.js';
 import { t } from '../i18n.js';
+import { formatMoment } from '../timeText.js';
 
 // The one-line summary a Tool row shows next to its name.
 function primaryText(tool) {
@@ -180,6 +184,66 @@ describe('message presentation', () => {
     ['failed', 'chat.compactionFailed'],
   ])('labels a %s Compaction', (status, key) => {
     expect(compactionSeparatorLabel({ status, message: null })).toBe(t(key));
+    expect(compactionSeparatorDetails({ status, message: null })).toBeNull();
+  });
+
+  it('details a completed Compaction with exact sizes, savings and moment', () => {
+    const timestamp = '2026-09-29T10:00:00Z';
+    const nowMs = Date.parse(timestamp) + 120_000;
+
+    expect(
+      compactionSeparatorDetails(
+        {
+          type: 'compaction_separator',
+          status: 'completed',
+          timestamp,
+          contextTokensBefore: 200_000,
+          contextTokensAfter: 50_000,
+        },
+        nowMs,
+      ),
+    ).toEqual({
+      rows: [
+        {
+          label: t('chat.compaction.before'),
+          value: t('chat.compaction.tokens', { count: '200,000' }),
+        },
+        {
+          label: t('chat.compaction.after'),
+          value: t('chat.compaction.tokens', { count: '50,000' }),
+        },
+        { label: t('chat.compaction.saved'), value: '75%' },
+        {
+          label: t('chat.compaction.when'),
+          value: formatMoment(timestamp, { nowMs }),
+        },
+      ],
+    });
+  });
+
+  it.each([
+    [
+      'an included file with its size',
+      { path: 'src/app.js', status: 'inlined', size_bytes: 12_400 },
+      () => t('chat.fileMention.inlinedSize', { size: '12.4 kB' }),
+    ],
+    [
+      'a file referenced only by path',
+      { path: 'src/app.js', status: 'too_large', size_bytes: 9_000_000 },
+      () => null,
+    ],
+  ])('details %s', (_label, block, content) => {
+    const rows = [
+      { label: t('chat.fileMention.path'), value: 'src/app.js', mono: true },
+    ];
+    if (content()) {
+      rows.push({ label: t('chat.fileMention.content'), value: content() });
+    }
+
+    expect(fileMentionDetails({ type: 'file_mention', ...block })).toEqual({
+      title: t('chat.fileMention.label'),
+      rows,
+    });
   });
 
   it('labels an Agent takeover with its raw addresses or a generic fallback', () => {
@@ -389,9 +453,13 @@ describe('Tool row presentation', () => {
 
     expect(presentation.primary[0].text).toHaveLength(64);
     expect(presentation.primary[0].text.endsWith('…')).toBe(true);
-    expect(presentation.primary[0].tooltipText).toContain(
-      'across all runtime packages',
-    );
+    expect(presentation.primary[0].reveal).toMatchObject({
+      value:
+        'Find every version variable and every derived alias across all runtime packages',
+      mono: false,
+      whenTruncated: false,
+      copy: null,
+    });
     expect(presentation.facts[0].text).toBe(
       t('chat.toolFact.matches', { count: '10' }),
     );
@@ -433,11 +501,78 @@ describe('Tool row presentation', () => {
 
     expect(deep).toMatchObject({
       text: '…/chat/components/ToolRow.svelte',
-      fullText: 'C:/workspace/packages/chat/components/ToolRow.svelte',
-      copyable: true,
+      reveal: {
+        value: 'C:/workspace/packages/chat/components/ToolRow.svelte',
+        mono: true,
+        copy: {
+          label: t('chat.copyPath'),
+          copiedLabel: t('chat.pathCopied'),
+        },
+      },
     });
     expect(short.text).toBe('ToolRow.svelte');
-    expect(short.tooltipText).toBe('C:/workspace/ToolRow.svelte');
+    expect(short.reveal).toMatchObject({
+      value: 'C:/workspace/ToolRow.svelte',
+      whenTruncated: false,
+      copy: null,
+    });
+  });
+
+  it('reveals the command a Bash description stands for and fitting values only while clipped', () => {
+    const [described] = toolRowPresentation({
+      name: 'bash',
+      display: {
+        primary: [
+          {
+            kind: 'description',
+            value: 'Run the test suite',
+            truncate: 'end',
+            tooltip: 'always',
+            quote: true,
+            copyable: true,
+            detail: 'python -m pytest\n  -x',
+            detail_kind: 'command',
+          },
+        ],
+      },
+    }).primary;
+    const [command, query] = toolRowPresentation({
+      name: 'bash',
+      display: {
+        primary: [
+          { kind: 'command', value: 'git status', copyable: true },
+          { kind: 'query', value: 'svelte tooltips', quote: true },
+        ],
+      },
+    }).primary;
+    const [silent] = toolRowPresentation({
+      name: 'process',
+      display: {
+        primary: [{ kind: 'identifier', value: 'p1', tooltip: 'none' }],
+      },
+    }).primary;
+
+    expect(described).toMatchObject({
+      text: 'Run the test suite',
+      reveal: {
+        title: 'Run the test suite',
+        value: 'python -m pytest\n  -x',
+        mono: true,
+        whenTruncated: false,
+        copy: {
+          label: t('chat.copyCommand'),
+          copiedLabel: t('chat.commandCopied'),
+        },
+      },
+    });
+    expect(command.reveal).toMatchObject({
+      title: '',
+      value: 'git status',
+      mono: true,
+      whenTruncated: true,
+    });
+    expect(query.reveal).toMatchObject({ mono: false, copy: null });
+    expect(silent.reveal).toBeNull();
   });
 
   it('middle-truncates URLs and localizes singular, lower-bound and failure counts', () => {
@@ -499,6 +634,38 @@ describe('Tool row presentation', () => {
         t('chat.durationSeconds', { seconds: '0.2' }),
       ].join(' · '),
     );
+  });
+
+  it('details the Tool call state, moments and runtime behind its status', () => {
+    const startedAt = '2026-08-28T00:00:00.000Z';
+    const completedAt = '2026-08-28T00:00:00.240Z';
+    const nowMs = Date.parse(completedAt) + 1000;
+    const moment = (value) => formatMoment(value, { nowMs, seconds: true });
+    const partial = toolRowFromEvent({
+      type: 'tool_call_result',
+      payload: {
+        tool_call: { id: 'edit-1', name: 'edit' },
+        result: { ok: true, error: null, data: { status: 'partial' } },
+        timing: { started_at: startedAt, completed_at: completedAt },
+      },
+    });
+
+    expect(toolStatusDetails(partial, nowMs)).toEqual({
+      title: t('chat.toolState.partial'),
+      text: t('chat.toolState.partialHint'),
+      rows: [
+        { label: t('chat.details.started'), value: moment(startedAt) },
+        { label: t('chat.details.finished'), value: moment(completedAt) },
+        {
+          label: t('chat.details.duration'),
+          value: t('chat.durationSeconds', { seconds: '0.2' }),
+        },
+      ],
+    });
+    expect(toolStatusDetails({ status: 'preparing' }, nowMs)).toEqual({
+      title: t('chat.toolState.preparing'),
+      text: t('chat.toolState.preparingHint'),
+    });
   });
 
   it.each([

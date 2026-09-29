@@ -13,7 +13,10 @@ import {
 } from './ChatTimeline.support.js';
 import { loadHistory } from '../../lib/chatState.js';
 import { t } from '../../lib/i18n.js';
-import { HOVER_CARD_SHOW_DELAY_MS } from '../../lib/tooltip.js';
+import {
+  HOVER_CARD_SHOW_DELAY_MS,
+  TOOLTIP_SHOW_DELAY_MS,
+} from '../../lib/tooltip.js';
 
 function sessionWithMessages(messages) {
   const sessionState = timelineSession();
@@ -804,6 +807,24 @@ describe('ChatTimeline messages', () => {
       await flushAsync();
 
       expect(onEditMessage).toHaveBeenCalledWith('user-edit', 'Edited request');
+    });
+
+    it('explains why editable User messages cannot be edited right now', async () => {
+      vi.useFakeTimers();
+      timeline.render(
+        sessionWithMessages([
+          userMessage('Original request', { id: 'user-edit', editable: true }),
+        ]),
+        { messageEditingDisabledReason: t('chat.editUnavailableRunning') },
+      );
+
+      const edit = document.querySelector('.message-edit');
+      expect(edit.disabled).toBe(true);
+      edit.parentElement.dispatchEvent(new Event('pointerenter'));
+      await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+      expect(document.getElementById('app-tooltip').textContent).toBe(
+        t('chat.editUnavailableRunning'),
+      );
     });
   });
 });

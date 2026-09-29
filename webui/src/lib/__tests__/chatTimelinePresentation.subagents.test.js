@@ -15,10 +15,13 @@ import {
   subAgentResultKey,
   subAgentResultTextFromMessages,
   subAgentShouldFetchResult,
+  subAgentStatusDetails,
+  subAgentTask,
   subAgentToolStatusLabel,
   toolDetailPresentation,
 } from '../chatTimelinePresentation.js';
 import { t } from '../i18n.js';
+import { formatMoment } from '../timeText.js';
 import {
   backgroundBashTool,
   queuedSubAgentTool,
@@ -137,6 +140,14 @@ describe('Sub-Agent spawn rows', () => {
     expect(subAgentPreview(runningSubAgentTool({ arguments: args }))).toBe(
       preview,
     );
+  });
+
+  it('keeps the complete task behind a shortened preview', () => {
+    const task = `Review ${'every module '.repeat(12)}`.trim();
+    const tool = runningSubAgentTool({ arguments: { content: task } });
+
+    expect(subAgentPreview(tool)).toHaveLength(96);
+    expect(subAgentTask(tool)).toBe(task);
   });
 
   it('projects automatic Sub-Agent and Bash tasks with active work first', () => {
@@ -660,6 +671,46 @@ describe('Sub-Agent results', () => {
 
 describe('Sub-Agent timing and last Tool', () => {
   const startedAt = '2026-09-04T12:00:00Z';
+
+  it('details the child Run state, moments, runtime and latest Tool', () => {
+    const nowMs = Date.parse(startedAt) + 4200;
+    const moment = (value) => formatMoment(value, { nowMs, seconds: true });
+
+    expect(
+      subAgentStatusDetails(
+        runningSubAgentTool(),
+        'running',
+        { 'runStarted:run-child': startedAt, 'runTool:run-child': 'bash' },
+        nowMs,
+      ),
+    ).toEqual({
+      title: t('chat.toolState.running'),
+      rows: [
+        { label: t('chat.details.started'), value: moment(startedAt) },
+        { label: t('chat.details.runningFor'), value: seconds('4.2') },
+        { label: t('chat.details.latestTool'), value: 'bash', mono: true },
+      ],
+    });
+    expect(
+      subAgentStatusDetails(
+        runningSubAgentTool(),
+        'success',
+        {
+          'runStarted:run-child': startedAt,
+          'runDuration:run-child': 4200,
+          'runTool:run-child': 'bash',
+        },
+        nowMs,
+      ),
+    ).toEqual({
+      title: t('chat.toolState.success'),
+      rows: [
+        { label: t('chat.details.started'), value: moment(startedAt) },
+        { label: t('chat.details.finished'), value: moment(nowMs) },
+        { label: t('chat.details.duration'), value: seconds('4.2') },
+      ],
+    });
+  });
 
   it.each([
     [

@@ -5,13 +5,17 @@
   import Button from '../ui/Button.svelte';
   import CopyButton from '../ui/CopyButton.svelte';
   import { t } from '$lib/i18n.js';
+  import { formatMoment } from '$lib/timeText.js';
+  import { INTENTIONAL_HOVER_SHOW_DELAY_MS, tooltip } from '$lib/tooltip.js';
   import ChangeStats from './ChangeStats.svelte';
+  import CopyableValueCard from './CopyableValueCard.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
   import {
     avatarForItem,
     backgroundBashDisplayResult,
     backgroundBashRowState,
+    backgroundBashStatusDetails,
     backgroundBashToolStatusLabel,
     changeStatsLabel,
     formatTime,
@@ -23,6 +27,7 @@
     isToolPreparing,
     reasoningDurationLabel,
     runChangeStats,
+    runFooterDetails,
     runFooterNotice,
     runFooterParts,
     speechArtifactFromTool,
@@ -33,6 +38,8 @@
     subAgentNavigationTarget,
     subAgentPreview,
     subAgentResultKey,
+    subAgentStatusDetails,
+    subAgentTask,
     subAgentToolStatusLabel,
     timestampForItem,
     toolRowPresentation,
@@ -40,6 +47,7 @@
     toolDetailPresentation,
     toolNameForRunTool,
     toolStatus,
+    toolStatusDetails,
     toolStatusLabel,
     visibleRunChildren,
   } from '$lib/chatTimelinePresentation.js';
@@ -161,6 +169,20 @@
       }
     }
     return '';
+  }
+
+  // What a collapsed working block holds, for the tooltip on its summary.
+  function workingGroupDetails(group) {
+    const toolCalls = group.children.filter(
+      (child) => child.type === 'tool_call',
+    ).length;
+    const reasoning = group.children.length - toolCalls;
+    return {
+      rows: [
+        { label: t('chat.working.toolCalls'), value: String(toolCalls) },
+        { label: t('chat.working.reasoning'), value: String(reasoning) },
+      ].filter((row) => row.value !== '0'),
+    };
   }
 
   function groupRunChildren(children, workingMode) {
@@ -309,7 +331,11 @@
       >{agentName || t('chat.role.assistant').toUpperCase()}</span
     >
     {#if formatTime(timestampForItem(item))}
-      <span class="msg-timestamp">{formatTime(timestampForItem(item))}</span>
+      <span
+        class="msg-timestamp"
+        use:tooltip={() => formatMoment(timestampForItem(item))}
+        >{formatTime(timestampForItem(item))}</span
+      >
     {/if}
     {#if answerCopyText}
       <CopyButton
@@ -347,6 +373,14 @@
             dotStatus === 'running'
               ? subAgentLastToolName(child, subAgentStatuses)
               : ''}
+          {@const statusDetails = () =>
+            subAgentStatusDetails(
+              child,
+              dotStatus,
+              subAgentStatuses,
+              Date.now(),
+            )}
+          {@const task = subAgentTask(child)}
           <details
             class="tool-event run-tool-event subagent-tool-event"
             open={viewState.isOpen(toolDisclosureKey(child))}
@@ -362,7 +396,8 @@
                 class:error={dotStatus === 'failed'}
                 class:cancelled={dotStatus === 'cancelled'}
                 class:running={dotStatus === 'running'}
-                class="te-dot">●</span
+                class="te-dot"
+                use:tooltip={statusDetails}>●</span
               >
               <span class="te-fn">
                 {t('chat.subagent.label')}
@@ -371,12 +406,27 @@
                 {t('agents.form.id')}: {subAgentAgentId(child)}
               </span>
               {#if lastToolName}
-                <span class="te-arg subagent-preview subagent-activity">
+                <span
+                  class="te-arg subagent-preview subagent-activity"
+                  use:tooltip={statusDetails}
+                >
                   {lastToolName}
                 </span>
               {:else if subAgentPreview(child)}
-                <span class="te-arg subagent-preview">
-                  {subAgentPreview(child)}
+                <!-- The preview must receive focus so the complete task and
+                     its Copy action reach keyboard users. -->
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                <span
+                  class="te-arg subagent-preview"
+                  tabindex={task ? 0 : undefined}
+                >
+                  {subAgentPreview(child)}<CopyableValueCard
+                    value={task}
+                    copyLabel={t('chat.subagent.copyTask')}
+                    copiedLabel={t('chat.subagent.taskCopied')}
+                    whenTruncated={subAgentPreview(child) === task}
+                    showDelayMs={INTENTIONAL_HOVER_SHOW_DELAY_MS}
+                  />
                 </span>
               {/if}
               {#if subAgentNavigationTarget(child)}
@@ -412,6 +462,7 @@
                 <span
                   class="te-time"
                   class:cancelled={dotStatus === 'cancelled'}
+                  use:tooltip={statusDetails}
                 >
                   {subAgentTimeLabel}
                 </span>
@@ -487,6 +538,10 @@
           {@const rowTimeLabel = bashRowState
             ? backgroundBashToolStatusLabel(child, bashRowState, nowMs)
             : toolStatusLabel(child, nowMs)}
+          {@const rowStatusDetails = () =>
+            bashRowState
+              ? backgroundBashStatusDetails(child, bashRowState, Date.now())
+              : toolStatusDetails(child, Date.now())}
           <details
             class="tool-event run-tool-event"
             open={viewState.isOpen(toolDisclosureKey(child))}
@@ -504,7 +559,8 @@
                 class:cancelled={rowDotStatus === 'cancelled'}
                 class:preparing
                 class:running={rowDotStatus === 'running' && !preparing}
-                class="te-dot">●</span
+                class="te-dot"
+                use:tooltip={rowStatusDetails}>●</span
               >
               <span class="te-fn">{toolNameForRunTool(child)}</span>
               {#if rowPresentation.primary.length > 0}
@@ -516,6 +572,7 @@
                   class="te-time"
                   class:cancelled={rowDotStatus === 'cancelled'}
                   class:partial={rowDotStatus === 'partial'}
+                  use:tooltip={rowStatusDetails}
                 >
                   {rowTimeLabel}
                 </span>
@@ -625,9 +682,14 @@
         />
       {:else if child.type === 'model_fallback'}
         <Banner variant="info" class="run-inline-banner">
-          {t('chat.modelFallbackActivated', {
-            model: child.to_model,
-          })}
+          {child.from_model
+            ? t('chat.modelFallbackFrom', {
+                from: child.from_model,
+                to: child.to_model,
+              })
+            : t('chat.modelFallbackActivated', {
+                model: child.to_model,
+              })}
         </Banner>
       {:else if child.type === 'compaction_separator'}
         <ChatCompactionSeparator item={child} inRun />
@@ -644,7 +706,10 @@
           ontoggle={(event) =>
             viewState.setOpen(group.id, event.currentTarget.open)}
         >
-          <summary class="working-block__summary">
+          <summary
+            class="working-block__summary"
+            use:tooltip={() => workingGroupDetails(group)}
+          >
             <span class="working-block__label">
               {groupActive ? t('chat.working.active') : t('chat.working.done')}
             </span>
@@ -682,12 +747,17 @@
         ...(changeStats ? [changeStatsLabel(changeStats)] : []),
       ].join(' · ')}
       <div class="run-footer" aria-label={footerLabel}>
-        {#each footerParts as footerPart, index (footerPart)}
-          {#if index > 0}
-            <span class="run-footer__sep" aria-hidden="true">·</span>
-          {/if}
-          <span class="run-footer__part">{footerPart}</span>
-        {/each}
+        <span
+          class="run-footer__summary"
+          use:tooltip={() => runFooterDetails(item, Date.now())}
+        >
+          {#each footerParts as footerPart, index (footerPart)}
+            {#if index > 0}
+              <span class="run-footer__sep" aria-hidden="true">·</span>
+            {/if}
+            <span class="run-footer__part">{footerPart}</span>
+          {/each}
+        </span>
         {#if changeStats}
           <span class="run-footer__sep" aria-hidden="true">·</span>
           <ChangeStats stats={changeStats} class="run-footer__changes" />

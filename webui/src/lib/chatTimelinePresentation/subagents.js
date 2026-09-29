@@ -6,8 +6,15 @@ import {
   toolDurationMs,
   toolStatus,
   toolArguments,
+  toolStartedTimestamp,
+  executionStateTitle,
 } from './toolFacts.js';
-import { formatDurationMs, elapsedSinceTimestamp } from './time.js';
+import {
+  formatDurationMs,
+  elapsedSinceTimestamp,
+  executionDetailRows,
+  timestampToMs,
+} from './time.js';
 import { qualifyAgentAddress } from '$lib/agentAddress.js';
 import { isTextContentBlock } from './messages.js';
 
@@ -132,6 +139,52 @@ export const subAgentToolStatusLabel = (
     return '';
   }
   return formatDurationMs(toolDurationMs(tool));
+};
+
+/**
+ * Tooltip details behind a Sub-Agent row's status: the child Run's state in
+ * words, when it started and finished, how long it ran, and the Tool it is
+ * calling while it runs.
+ */
+export const subAgentStatusDetails = (
+  tool,
+  dotStatus,
+  subAgentStatuses = {},
+  nowMs = Date.now(),
+) => {
+  const running = dotStatus === 'running';
+  // A foreground spawn returns the child's result inline, so its own call
+  // spans the child Run when no child timing was tracked.
+  const inline = Boolean(trimmedString(subAgentResultData(tool).result));
+  const startedAt =
+    subAgentRunStartedAt(tool, subAgentStatuses) ||
+    (inline ? toolStartedTimestamp(tool) : '');
+  const durationMs = running
+    ? elapsedSinceTimestamp(startedAt, nowMs)
+    : (subAgentRunDurationMs(tool, subAgentStatuses) ??
+      (inline ? toolDurationMs(tool) : null));
+  const startedMs = timestampToMs(startedAt);
+  const rows = executionDetailRows({
+    startedAt,
+    finishedAt:
+      !running && startedMs !== null && durationMs !== null
+        ? startedMs + durationMs
+        : '',
+    durationMs,
+    running,
+    nowMs,
+  });
+  const lastToolName = running
+    ? subAgentLastToolName(tool, subAgentStatuses)
+    : '';
+  if (lastToolName) {
+    rows.push({
+      label: t('chat.details.latestTool'),
+      value: lastToolName,
+      mono: true,
+    });
+  }
+  return { title: executionStateTitle(dotStatus), rows };
 };
 
 export const isSubAgentSpawnTool = (tool) => {
@@ -261,6 +314,12 @@ export const resolveSubAgentCancelPlan = (tool, subAgentStatuses = {}) => {
   }
   return null;
 };
+
+// The complete task a spawn row delegates, behind its shortened preview.
+export const subAgentTask = (tool) =>
+  toolNameForRunTool(tool) === 'subagent'
+    ? subAgentTaskText(subAgentArguments(tool))
+    : '';
 
 export const subAgentPreview = (tool) => {
   const args = subAgentArguments(tool);

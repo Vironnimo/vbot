@@ -840,9 +840,13 @@
                 { runId, toolCallId },
               )}
             onCancelSubAgent={actions.handleCancelSubAgent}
-            messageEditingDisabled={chatState.loadingHistory ||
-              isRunActive(target.activeSessionState) ||
-              (target.activeSessionState?.queue?.length ?? 0) > 0}
+            messageEditingDisabledReason={chatState.loadingHistory
+              ? t('chat.editUnavailableLoading')
+              : isRunActive(target.activeSessionState)
+                ? t('chat.editUnavailableRunning')
+                : (target.activeSessionState?.queue?.length ?? 0) > 0
+                  ? t('chat.editUnavailableQueued')
+                  : ''}
             onEditMessage={actions.handleEditMessage}
           />
         </div>

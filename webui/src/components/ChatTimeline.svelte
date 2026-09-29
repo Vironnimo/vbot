@@ -56,7 +56,8 @@
     onCancelToolCall = () => {},
     onBackgroundToolCall = () => {},
     onCancelSubAgent = () => {},
-    messageEditingDisabled = false,
+    // Why User messages cannot be edited right now; '' allows editing.
+    messageEditingDisabledReason = '',
     onEditMessage = async () => false,
     hasOlderHistory = false,
     loadingOlderHistory = false,
@@ -596,7 +597,7 @@
         {agentName}
         {isReasoningOpen}
         onReasoningOpenChange={setReasoningOpen}
-        {messageEditingDisabled}
+        {messageEditingDisabledReason}
         {onEditMessage}
       />
     {/if}
