@@ -45,6 +45,12 @@ export default Object.freeze({
   'logs.stream.reconnecting': 'Reconnecting…',
   'logs.stream.error': 'Live update error',
   'logs.stream.idle': 'Idle',
+  'logs.stream.connectingHint': 'Connecting to live updates for this file.',
+  'logs.stream.connectedHint': 'New entries appear as the server writes them.',
+  'logs.stream.reconnectingHint':
+    'The live connection was lost. vBot retries automatically and reloads the file, including entries written meanwhile.',
+  'logs.stream.errorHint': 'Live updates failed. The message below says why.',
+  'logs.stream.idleHint': 'No live updates while no log file is loaded.',
   'logs.streamErrorUnknown': 'Connection closed unexpectedly.',
   'debug.limitInvalid': 'Enter a whole number from 1 to 500.',
   'debug.captureEnabled': 'Capture enabled',
