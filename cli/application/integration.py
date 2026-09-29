@@ -83,7 +83,9 @@ def refresh_gui_entrypoints(install: Installation) -> None:
                     pythoncom.CoUninitialize()
     if changed:
         logging.getLogger("vbot.application.integration").info(
-            "Refreshed application GUI entrypoints: root=%s fields=%s", install.root, changed
+            "Application GUI entrypoints refreshed (root=%s fields=%s)",
+            install.root,
+            ",".join(changed),
         )
 
 
@@ -158,6 +160,9 @@ def autostart(
             raise ApplicationError(
                 f"Could not disable application Autostart: {result.stdout or result.stderr}"
             )
+        logging.getLogger("vbot.application.integration").info(
+            "Application Autostart disabled (mode=task_scheduler)"
+        )
         return {"ok": True, "enabled": False, "task_name": name, "changed": True}
     result = run(
         _windows_task_command(
@@ -176,6 +181,10 @@ def autostart(
     verified, verified_launcher, verified_arguments = _task_lookup(run, name)
     if not verified or not _same_path(verified_launcher, launcher) or verified_arguments:
         raise ApplicationError("Application Autostart registration could not be verified")
+    if not owned:
+        logging.getLogger("vbot.application.integration").info(
+            "Application Autostart enabled (mode=task_scheduler)"
+        )
     return {"ok": True, "enabled": True, "task_name": name, "changed": not owned}
 
 
