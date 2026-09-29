@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.chat import model_resolution
 from core.chat.errors import ChatError
 from core.chat.model_resolution import (
     _model_input_modalities,
@@ -21,6 +22,7 @@ from core.chat.model_resolution import (
     resolve_request_top_p,
 )
 from core.utils.errors import ConfigError
+from core.utils.log_conditions import LoggedConditions
 from tests.core.chat.chat_loop_support import StubModels
 
 
@@ -143,6 +145,20 @@ def _raising(error: BaseException) -> Callable[[str, str], Any]:
     return get
 
 
+@pytest.fixture
+def fresh_modality_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start from a process that has logged no modality lookup failure yet."""
+    monkeypatch.setattr(model_resolution, "_MODALITY_CONDITIONS", LoggedConditions())
+
+
+def _chat_records(caplog: pytest.LogCaptureFixture) -> list[tuple[int, str]]:
+    return [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "vbot.chat" and record.levelno >= logging.INFO
+    ]
+
+
 @pytest.mark.parametrize(
     ("model", "models_get", "modalities"),
     [
@@ -159,6 +175,7 @@ def _raising(error: BaseException) -> Callable[[str, str], Any]:
     ],
     ids=["known-model", "unknown-model", "registry-error", "malformed-binding"],
 )
+@pytest.mark.usefixtures("fresh_modality_conditions")
 def test_input_modalities_degrade_visibly_to_none(
     caplog: pytest.LogCaptureFixture,
     model: str,
@@ -178,6 +195,44 @@ def test_input_modalities_degrade_visibly_to_none(
     ]
     assert len(warnings) == (0 if modalities else 1)
     assert all(model in warning for warning in warnings)
+
+
+@pytest.mark.usefixtures("fresh_modality_conditions")
+def test_input_modality_lookup_failure_logs_on_transitions(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="vbot.chat")
+    lookup: dict[str, Callable[[str, str], Any]] = {"get": _raising(KeyError("openai/ghost"))}
+    runtime = cast(
+        Any,
+        SimpleNamespace(
+            models=SimpleNamespace(get=lambda provider, model: lookup["get"](provider, model))
+        ),
+    )
+    agent = _agent("openai/ghost")
+
+    # Every Run resolves the modalities; a persisting failure warns once.
+    _model_input_modalities(runtime, agent)
+    _model_input_modalities(runtime, agent)
+    assert [level for level, _ in _chat_records(caplog)] == [logging.WARNING]
+
+    # Another failure kind is a changed condition and warns again.
+    lookup["get"] = _raising(ChatError("registry unavailable"))
+    _model_input_modalities(runtime, agent)
+    _model_input_modalities(runtime, agent)
+    assert [level for level, _ in _chat_records(caplog)] == [logging.WARNING] * 2
+
+    # Resolving again logs the recovery once; a later failure is a new condition.
+    lookup["get"] = lambda _provider, _model: SimpleNamespace(
+        capabilities=SimpleNamespace(input_modalities=("text",))
+    )
+    _model_input_modalities(runtime, agent)
+    _model_input_modalities(runtime, agent)
+    lookup["get"] = _raising(KeyError("openai/ghost"))
+    _model_input_modalities(runtime, agent)
+    levels = [level for level, _ in _chat_records(caplog)]
+    assert levels == [logging.WARNING, logging.WARNING, logging.INFO, logging.WARNING]
+    assert all("openai/ghost" in message for _, message in _chat_records(caplog))
 
 
 @pytest.mark.parametrize(

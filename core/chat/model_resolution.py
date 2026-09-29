@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from core.chat.errors import ChatError
 from core.utils.errors import ConfigError
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -14,6 +15,10 @@ if TYPE_CHECKING:
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
 
 _LOGGER = get_logger("chat")
+
+# Every Run resolves its Model's input modalities, so an unresolvable Model logs
+# once per Model and failure kind, and once more when it resolves again.
+_MODALITY_CONDITIONS = LoggedConditions()
 
 
 class ModelResolutionDependencies(Protocol):
@@ -133,17 +138,12 @@ def _model_input_modalities(
     Degrading to an empty set silently drops image/audio attachments, so the
     expected lookup failures (malformed agent model -> ``ChatError``; unknown
     model -> ``KeyError``) are logged at ``warning`` with the model id to make
-    the degrade visible.
+    the degrade visible - once per model and failure kind, not on every Run.
     """
     try:
         provider_id, model_id = _split_agent_model(agent.model)
     except ChatError as error:
-        _LOGGER.warning(
-            "Could not resolve input modalities for model %r; "
-            "treating model as having no input modalities: %s",
-            getattr(agent, "model", None),
-            error,
-        )
+        _log_unresolved_modalities(str(getattr(agent, "model", None)), error)
         return frozenset()
     return _model_input_modalities_for_target(dependencies, provider_id, model_id)
 
@@ -155,19 +155,28 @@ def _model_input_modalities_for_target(
 ) -> frozenset[str]:
     """Return input modalities for one resolved Provider/Model target."""
 
+    model_ref = f"{provider_id}/{model_id}"
     try:
         model = dependencies.models.get(provider_id, model_id)
     except (AttributeError, ChatError, KeyError) as error:
-        _LOGGER.warning(
-            "Could not resolve input modalities for model %r; "
-            "treating model as having no input modalities: %s",
-            f"{provider_id}/{model_id}",
-            error,
-        )
+        _log_unresolved_modalities(model_ref, error)
         return frozenset()
+    if _MODALITY_CONDITIONS.ended(model_ref):
+        _LOGGER.info("Input modality lookup recovered (model=%s)", model_ref)
     capabilities = getattr(model, "capabilities", None)
     modalities = getattr(capabilities, "input_modalities", ()) or ()
     return frozenset(str(modality) for modality in modalities)
+
+
+def _log_unresolved_modalities(model_ref: str, error: Exception) -> None:
+    if _MODALITY_CONDITIONS.started(model_ref, type(error).__name__):
+        _LOGGER.warning(
+            "Input modality lookup failed; treating the model as accepting no media "
+            "(model=%s error_type=%s error=%s)",
+            model_ref,
+            type(error).__name__,
+            error,
+        )
 
 
 def _model_accepts_unlisted_tool_calls(
