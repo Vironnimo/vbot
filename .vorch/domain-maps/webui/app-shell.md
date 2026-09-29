@@ -6,7 +6,7 @@ Before changing editor-replacing navigation or pending-save handling, read `webu
 
 ## Ownership
 
-`App.svelte` composes the major views and creates the long-lived application controller. `appController.js` owns global loading, active-view availability, navigation, server-event dispatch, and refresh coordination. `AppShell.svelte` owns global viewport/focus presentation, including the capability-gated Desktop context menu. Its private `components/shell/menu.svelte.js` owns menu selection snapshots, editing/native actions, positioning and keyboard/focus handling; the shell keeps navigation and mounting. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigationHistory.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.
+`App.svelte` composes the major views and creates the long-lived application controller. `appController.js` owns global loading, active-view availability, navigation, server-event dispatch, and refresh coordination. `AppShell.svelte` owns global viewport/focus presentation, including the capability-gated Desktop context menu. Its private `components/shell/menu.svelte.js` owns action derivation, selection snapshots and editing/native actions; rendering, positioning, keyboard and dismissal come from the shared `components/ui/ContextMenu.svelte` (`design.md` -> Shared controls). The shell keeps navigation and mounting. `api.js` owns the actual HTTP, WebSocket, and SSE transport adapters; `connectionState.js`, `navigationHistory.js`, and `resourceInvalidation.js` keep their respective state machines out of the root component.
 
 Domain controllers still own their data. The app shell may request a refresh or route a lifecycle event, but it must not duplicate Chat, Provider, Extension, Project, or Settings rules.
 
@@ -21,9 +21,10 @@ AppShell's optional `sidebarFooter` snippet precedes the existing microphone and
 
 ## Desktop context menu
 
-- `App.svelte` enables the custom menu only after the live Desktop bridge advertises `contextMenu`; an ordinary browser never has its native `contextmenu` event cancelled.
+- `App.svelte` enables the custom menu only after the live Desktop bridge advertises `contextMenu`; an ordinary browser never has its native `contextmenu` event cancelled by AppShell. Only a component that opens its own menu cancels it there.
+- The handler ignores `contextmenu` events that are already `defaultPrevented`: a component menu (for example on a skill row) handles the event first and calls `preventDefault()`, so the component menu and the Desktop menu never both open.
 - `AppShell.svelte` derives actions from the event's composed DOM path: safe absolute HTTP(S) links expose Copy link address and Open in browser, selected non-sensitive text exposes Copy, and writable text controls additionally expose Cut and Paste. Password controls expose Paste without copying/cutting their selected value. It snapshots the selection before moving focus into the menu so editing actions still target the original control.
-- The menu measures after render, clamps to the viewport, focuses its first action, supports Arrow Up/Down, Home/End, and Escape, and closes on outside press, captured ancestor scroll, resize, or window blur. Action completion restores the original focus target.
+- The menu renders through the shared `ContextMenu.svelte`, with the action icons passed as its `icon` snippet; measuring, clamping, keyboard handling, dismissal and focus return are the primitive's contract. Focus returns to the original text control (or the previously focused element) before the action runs.
 - Native operations go through `lib/desktopBridge.js`; AppShell never depends on `navigator.clipboard`, and the Desktop Python boundary repeats URL validation. Failures produce one warning Toast through App's existing `onToast` callback.
 
 ## Startup and availability

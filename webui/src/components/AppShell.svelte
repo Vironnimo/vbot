@@ -1,6 +1,7 @@
 <script>
   import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
+  import ContextMenu from './ui/ContextMenu.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import { onMount, tick, untrack } from 'svelte';
   import {
@@ -152,13 +153,9 @@
   };
 
   const handleWindowKeydown = (event) => {
-    // A Desktop context menu sits above everything, and a floating layer that
-    // consumed Escape (a pinned hint, a picker) dismisses only itself.
-    if (
-      event.key === 'Escape' &&
-      !menu.contextMenu &&
-      !event.defaultPrevented
-    ) {
+    // A floating layer that consumed Escape (a context menu, a pinned hint,
+    // a picker) dismisses only itself.
+    if (event.key === 'Escape' && !event.defaultPrevented) {
       if (mobileNavOpen) {
         mobileNavOpen = false;
         moreButton?.focus();
@@ -169,7 +166,6 @@
         return;
       }
     }
-    menu.handleWindowKeydown(event);
   };
 
   // Any navigation - including history and deep links - dismisses the sheet
@@ -245,11 +241,6 @@
       // Privacy settings can disable storage; use the expanded default then.
     }
 
-    const closeOnCapturedScroll = () => {
-      if (menu.contextMenu) menu.closeContextMenu();
-    };
-    window.addEventListener('scroll', closeOnCapturedScroll, true);
-
     // Leaving the phone or tablet layout while its navigation overlay is open
     // must not leave hidden state behind (an inert content area or a
     // swallowed Escape).
@@ -267,7 +258,6 @@
       },
     );
     return () => {
-      window.removeEventListener('scroll', closeOnCapturedScroll, true);
       stopWatchingMobile();
       stopWatchingTablet();
     };
@@ -285,10 +275,7 @@
 
 <svelte:window
   oncontextmenu={menu.handleContextMenu}
-  onpointerdown={menu.handleWindowPointerDown}
   onkeydown={handleWindowKeydown}
-  onresize={() => menu.contextMenu && menu.closeContextMenu()}
-  onblur={() => menu.contextMenu && menu.closeContextMenu()}
 />
 
 <div
@@ -569,66 +556,48 @@
     </aside>
   {/if}
 
-  {#if menu.contextMenu}
-    <div
-      bind:this={menu.contextMenuElement}
-      class="desktop-context-menu"
-      role="menu"
-      tabindex="-1"
-      aria-label={t('desktop.contextMenu.label')}
-      style={`left: ${menu.contextMenu.x}px; top: ${menu.contextMenu.y}px; visibility: ${menu.contextMenu.positioned ? 'visible' : 'hidden'};`}
-      onkeydown={menu.handleContextMenuKeydown}
-    >
-      {#each menu.contextMenu.actions as action, index (action.id)}
-        {#if index > 0 && menu.contextMenu.actions[index - 1].group !== action.group}
-          <div class="desktop-context-menu__separator" role="separator"></div>
-        {/if}
-        <Button
-          variant="tertiary"
-          class="desktop-context-menu__item"
-          role="menuitem"
-          tabindex="-1"
-          onClick={() => menu.handleContextMenuAction(action.id)}
-        >
-          {#if action.id === 'copy-link'}
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-              <path
-                d="M6.5 9.5 9.5 6.5M5.2 11.8l-1 .9a2.3 2.3 0 0 1-3.2-3.2l2.6-2.6a2.3 2.3 0 0 1 3.2 0M10.8 4.2l1-.9A2.3 2.3 0 0 1 15 6.5l-2.6 2.6a2.3 2.3 0 0 1-3.2 0"
-              />
-            </svg>
-          {:else if action.id === 'open-link'}
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-              <path d="M9 2h5v5M14 2 7.5 8.5" />
-              <path
-                d="M12.5 9.5v3a1.5 1.5 0 0 1-1.5 1.5H3.5A1.5 1.5 0 0 1 2 12.5V5a1.5 1.5 0 0 1 1.5-1.5h3"
-              />
-            </svg>
-          {:else if action.id === 'cut'}
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-              <circle cx="4" cy="12" r="2.2" />
-              <circle cx="12" cy="12" r="2.2" />
-              <path d="m5.8 10.7 6.4-8.2M10.2 10.7 3.8 2.5M7.1 7.8 8 9" />
-            </svg>
-          {:else if action.id === 'paste'}
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-              <path d="M5.5 4H3.8A1.3 1.3 0 0 0 2.5 5.3v8.2h9v-2" />
-              <rect x="5.5" y="2" width="5" height="3" rx="1" />
-              <path d="M8 8h5.5M11 5.5 13.5 8 11 10.5" />
-            </svg>
-          {:else}
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-              <rect x="5" y="5" width="8" height="9" rx="1.5" />
-              <path
-                d="M3 11H2.5A1.5 1.5 0 0 1 1 9.5v-7A1.5 1.5 0 0 1 2.5 1h7A1.5 1.5 0 0 1 11 2.5V3"
-              />
-            </svg>
-          {/if}
-          <span>{action.label}</span>
-        </Button>
-      {/each}
-    </div>
-  {/if}
+  <ContextMenu
+    menu={menu.contextMenu}
+    onClose={menu.closeContextMenu}
+    icon={desktopMenuIcon}
+  />
 </div>
+
+{#snippet desktopMenuIcon(item)}
+  {#if item.id === 'copy-link'}
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path
+        d="M6.5 9.5 9.5 6.5M5.2 11.8l-1 .9a2.3 2.3 0 0 1-3.2-3.2l2.6-2.6a2.3 2.3 0 0 1 3.2 0M10.8 4.2l1-.9A2.3 2.3 0 0 1 15 6.5l-2.6 2.6a2.3 2.3 0 0 1-3.2 0"
+      />
+    </svg>
+  {:else if item.id === 'open-link'}
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path d="M9 2h5v5M14 2 7.5 8.5" />
+      <path
+        d="M12.5 9.5v3a1.5 1.5 0 0 1-1.5 1.5H3.5A1.5 1.5 0 0 1 2 12.5V5a1.5 1.5 0 0 1 1.5-1.5h3"
+      />
+    </svg>
+  {:else if item.id === 'cut'}
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <circle cx="4" cy="12" r="2.2" />
+      <circle cx="12" cy="12" r="2.2" />
+      <path d="m5.8 10.7 6.4-8.2M10.2 10.7 3.8 2.5M7.1 7.8 8 9" />
+    </svg>
+  {:else if item.id === 'paste'}
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path d="M5.5 4H3.8A1.3 1.3 0 0 0 2.5 5.3v8.2h9v-2" />
+      <rect x="5.5" y="2" width="5" height="3" rx="1" />
+      <path d="M8 8h5.5M11 5.5 13.5 8 11 10.5" />
+    </svg>
+  {:else}
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <rect x="5" y="5" width="8" height="9" rx="1.5" />
+      <path
+        d="M3 11H2.5A1.5 1.5 0 0 1 1 9.5v-7A1.5 1.5 0 0 1 2.5 1h7A1.5 1.5 0 0 1 11 2.5V3"
+      />
+    </svg>
+  {/if}
+{/snippet}
 
 <style>
   .sidebar-footer__mic {
