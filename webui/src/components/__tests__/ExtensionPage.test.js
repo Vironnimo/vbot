@@ -93,9 +93,11 @@ function loadFrame() {
   return page;
 }
 
-// Mounts the host and completes the frame handshake.
+// Mounts the host and completes the frame handshake. Ready arrives after the
+// host has rendered the loaded frame, as a real frame's does.
 function openPage(props) {
   const page = mountPage(props);
+  flushSync();
   page.ready();
   return page;
 }

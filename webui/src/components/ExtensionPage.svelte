@@ -536,9 +536,14 @@
     observedDescriptor = identity;
   });
 
+  // Sends route and display changes to the ready frame. The payload is read
+  // before the readiness check: `ready` is a plain field, so an effect that
+  // first ran before the frame's Ready would otherwise never rerun.
   $effect(() => {
     const context = frameContext;
-    if (context?.ready) post(context, contextPayload(context));
+    if (!context) return;
+    const payload = contextPayload(context);
+    if (context.ready) post(context, payload);
   });
 
   function validChange(change) {
