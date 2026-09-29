@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -340,7 +341,10 @@ async def _spawn_manual(
 
 
 @pytest.mark.asyncio
-async def test_user_groups_are_unique_persistent_and_renamable(tmp_path: Path) -> None:
+async def test_user_groups_are_unique_persistent_and_renamable(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="vbot")
     groups_path = tmp_path / "terminals" / "groups.json"
     manager = TerminalManager(
         groups_path=groups_path, data_dir=tmp_path, sweep_interval_seconds=3600
@@ -356,6 +360,10 @@ async def test_user_groups_are_unique_persistent_and_renamable(tmp_path: Path) -
         assert groups_path.is_file()
     finally:
         await manager.aclose()
+    # Group names are user text; the log names groups by their ids only.
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(created["group_id"] in message for message in messages)
+    assert not any("Work" in message or "Dev" in message for message in messages)
 
     reloaded = TerminalManager(
         groups_path=groups_path, data_dir=tmp_path, sweep_interval_seconds=3600

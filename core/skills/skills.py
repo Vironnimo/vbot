@@ -34,6 +34,7 @@ from core.skills.skill_validator import (
     parse_skill_front_matter,
     split_skill_document,
 )
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 WILDCARD_ALLOWLIST = "*"
@@ -823,19 +824,21 @@ def scan_project_skill_names(
 
 # Skill registries are reloaded often — once per project, per run, and on every
 # explicit reload — so re-logging a skill's metadata diagnostic on each scan floods
-# debug logs. Track the (path, warning) pairs already logged in this process and
-# emit each one once: "once per server runtime". A server restart starts a fresh
-# process and logs the current diagnostics again. This is a process-scoped logging
-# concern (it lives beside the module logger it guards), not an injectable
-# service — the diagnostics returned to callers are never deduplicated, so the UI
-# still sees every warning on every load.
-_logged_skill_warnings: set[tuple[str, str]] = set()
+# debug logs. Remember the (path, warning) pairs already logged in this process and
+# emit each one once; the memory is bounded, so a forgotten pair logs again. A
+# server restart starts a fresh process and logs the current diagnostics again.
+# This is a process-scoped logging concern (it lives beside the module logger it
+# guards), not an injectable service — the diagnostics returned to callers are
+# never deduplicated, so the UI still sees every warning on every load.
+_LOGGED_SKILL_WARNINGS = LoggedConditions()
 
 
 def _log_validation_warnings(skill_name: str, skill_path: Path, warnings: list[str]) -> None:
     for warning in warnings:
-        dedup_key = (str(skill_path), warning)
-        if dedup_key in _logged_skill_warnings:
-            continue
-        _logged_skill_warnings.add(dedup_key)
-        _LOGGER.debug("Skill '%s' metadata diagnostic: %s (at %s)", skill_name, warning, skill_path)
+        if _LOGGED_SKILL_WARNINGS.started((str(skill_path), warning)):
+            _LOGGER.debug(
+                "Skill metadata diagnostic found (skill=%s path=%s): %s",
+                skill_name,
+                skill_path,
+                warning,
+            )

@@ -673,9 +673,12 @@ class WireRequestRunner:
                 has_fallback_chain=has_fallback_chain,
             )
             if action is StreamRecoveryAction.ACCEPT_COMPLETE:
-                _LOGGER.warning(
-                    "Provider stream transport failed after a finish delta; "
-                    "accepting the completed response (%s: %s)",
+                # The Run keeps the completed response; its terminal line reports the outcome.
+                _LOGGER.debug(
+                    "Provider stream transport failed after a finish delta; accepted the "
+                    "completed response (run=%s model=%s error_type=%s error=%s)",
+                    run.id,
+                    model_id,
                     type(exc).__name__,
                     exc,
                 )

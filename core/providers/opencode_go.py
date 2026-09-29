@@ -49,6 +49,7 @@ from core.providers.reasoning import (
 )
 from core.providers.token_getter import TokenGetter
 from core.utils.http_status import parse_retry_after
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
@@ -104,10 +105,9 @@ _PERMANENT_RATE_LIMIT_MARKERS = (
 )
 
 # ``_model_protocol`` runs on every send/stream, so an unmarked model would re-log
-# its routing warning on each request and flood the log. Track which model ids have
-# already warned in this process and emit each once — "once per server runtime"
-# (a restart re-warns). Mirrors the skill-validation dedup in core/skills/skills.py.
-_warned_unmarked_models: set[str] = set()
+# its routing warning on each request and flood the log. The warning is logged when
+# a model id starts lacking its protocol and the end once the Model data names one.
+_UNMARKED_MODELS = LoggedConditions()
 
 # The Responses wire documents a minimal..max effort ladder and rejects an
 # explicit ``"none"`` rung with HTTP 400 (live-verified 2026-08-25); omitting
@@ -832,15 +832,19 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     def _model_protocol(self, model_id: str) -> str:
         protocol = self._lookup_protocol(model_id)
         if protocol in (PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI, PROTOCOL_RESPONSES):
+            if _UNMARKED_MODELS.ended(model_id):
+                _LOGGER.info(
+                    "OpenCode Go model routed by its metadata protocol (model=%s protocol=%s)",
+                    model_id,
+                    protocol,
+                )
             return protocol
         # Unknown model (or a malformed/absent protocol fact): default safe and
         # warn so a misroute surfaces in logs instead of silently picking a wire.
-        # Warn once per model id per process so a hot request path does not flood.
-        if model_id not in _warned_unmarked_models:
-            _warned_unmarked_models.add(model_id)
+        if _UNMARKED_MODELS.started(model_id):
             _LOGGER.warning(
-                "OpenCode Go model '%s' has no metadata protocol; defaulting to '%s' "
-                "(chat/completions). Add metadata.opencode_go.protocol to its override "
+                "OpenCode Go model has no metadata protocol; defaulted to the chat wire "
+                "(model=%s protocol=%s). Add metadata.opencode_go.protocol to its override "
                 "entry to route it explicitly.",
                 model_id,
                 _DEFAULT_PROTOCOL,

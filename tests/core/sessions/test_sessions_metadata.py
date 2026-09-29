@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 
 import pytest
@@ -229,7 +230,9 @@ def test_ensure_metadata_writes_only_a_real_change(manager, monkeypatch) -> None
     assert manager.get_metadata(address)["title"] == "Concurrent title"
 
 
-def test_callback_failure_does_not_turn_a_committed_title_into_an_error(manager) -> None:
+def test_callback_failure_does_not_turn_a_committed_title_into_an_error(
+    manager, caplog: pytest.LogCaptureFixture
+) -> None:
     address = _address("coder", "session-one")
     manager.create("coder", session_id=address.session_id)
 
@@ -237,9 +240,15 @@ def test_callback_failure_does_not_turn_a_committed_title_into_an_error(manager)
         raise RuntimeError("observer failed")
 
     manager.add_title_changed_callback(fail)
+    caplog.set_level(logging.ERROR)
 
     assert manager.set_title(address, "Persisted") == "Persisted"
     assert manager.get_metadata(address)["title"] == "Persisted"
+    # The failure reaches the daily log: a vbot logger, with traceback and Session.
+    [record] = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert record.name.startswith("vbot.")
+    assert record.exc_info is not None
+    assert "session-one" in record.getMessage()
 
 
 @pytest.mark.parametrize("restoring", [False, True])

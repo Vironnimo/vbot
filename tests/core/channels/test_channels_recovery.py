@@ -81,14 +81,15 @@ def _record_restart_delays(service: object, monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("failures", "expected_delays", "failed_while_retrying"),
+    ("failures", "expected_delays", "failed_while_retrying", "warnings"),
     [
-        (0, [], []),
-        (1, [1.0], [False]),
+        (0, [], [], 0),
+        (1, [1.0], [False], 1),
         (
             7,
             [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0],
             [False, False, False, True, True, True, True],
+            2,
         ),
     ],
     ids=["no-crash", "one-crash", "exhausted-fast-retries"],
@@ -100,6 +101,7 @@ async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers
     failures: int,
     expected_delays: list[float],
     failed_while_retrying: list[bool],
+    warnings: int,
 ) -> None:
     caplog.set_level(logging.INFO, logger="vbot.channels")
     ChannelStorage(tmp_path).save(make_config(enabled=True))
@@ -151,6 +153,15 @@ async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers
         ]
         assert len(info) == 2
         assert (f"attempts={failures}" in info[0]) is (failures > 0)
+        # An outage warns at its first crash, with traceback, and once more when
+        # the fast retries are exhausted; the crashes and restarts between are DEBUG.
+        warning_records = [
+            record
+            for record in caplog.records
+            if record.name == "vbot.channels" and record.levelno >= logging.WARNING
+        ]
+        assert [record.levelno for record in warning_records] == [logging.WARNING] * warnings
+        assert all(record.exc_info is not None for record in warning_records[:1])
     finally:
         await service.aclose()
         service.close()
@@ -391,8 +402,8 @@ async def test_construction_failure_does_not_end_automatic_recovery(
 
     monkeypatch.setattr(service, "_create_adapter", create_adapter)
     delays = _record_restart_delays(service, monkeypatch)
-    with caplog.at_level(logging.ERROR, logger="vbot.channels"):
-        service.start()
+    caplog.set_level(logging.WARNING, logger="vbot.channels")
+    service.start()
     try:
         if fail_initial_construction:
             # A constructor failure at startup marks only that Channel failed.
@@ -404,6 +415,8 @@ async def test_construction_failure_does_not_end_automatic_recovery(
         assert delays == [1.0, 2.0, 4.0]
         assert service.is_running(config.id)
         assert not service.is_failed(config.id)
+        # Only the outage's first failure is logged above DEBUG, not each failed restart.
+        assert len([r for r in caplog.records if r.name == "vbot.channels"]) == 1
     finally:
         await service.aclose()
         service.close()
