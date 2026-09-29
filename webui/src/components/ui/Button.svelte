@@ -8,8 +8,9 @@
   // `tooltip` renders through the shared quick tooltip (lib/tooltip.js), not
   // the native `title`: a string label or the action's content object (e.g.
   // with a `placement`). Browsers do not fire pointer events on a disabled
-  // button, so a tooltip that must show while disabled belongs on a wrapping
-  // <span class="tooltip-anchor" use:tooltip> at the call site.
+  // button, so `disabledReason` (why the action is unavailable right now)
+  // moves the tooltip onto a wrapping <span class="tooltip-anchor">, which
+  // shows the reason while disabled and `tooltip` otherwise.
   import { tooltip as tooltipAction } from '../../lib/tooltip.js';
 
   const noop = () => {};
@@ -22,6 +23,7 @@
     loading = false,
     ariaLabel = '',
     tooltip = '',
+    disabledReason = '',
     class: className = '',
     onClick = noop,
     children,
@@ -44,15 +46,27 @@
   );
 </script>
 
-<button
-  {...rest}
-  {type}
-  class={buttonClass}
-  disabled={isDisabled}
-  aria-label={ariaLabel || undefined}
-  aria-busy={loading || undefined}
-  use:tooltipAction={tooltip}
-  onclick={onClick}
->
-  {@render children?.()}
-</button>
+{#snippet control(buttonTooltip)}
+  <button
+    {...rest}
+    {type}
+    class={buttonClass}
+    disabled={isDisabled}
+    aria-label={ariaLabel || undefined}
+    aria-busy={loading || undefined}
+    use:tooltipAction={buttonTooltip}
+    onclick={onClick}
+  >
+    {@render children?.()}
+  </button>
+{/snippet}
+
+{#if disabledReason}
+  <span
+    class="tooltip-anchor"
+    use:tooltipAction={isDisabled ? disabledReason : tooltip}
+    >{@render control('')}</span
+  >
+{:else}
+  {@render control(tooltip)}
+{/if}

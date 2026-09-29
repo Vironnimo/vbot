@@ -165,6 +165,7 @@ describe('tooltip action', () => {
       rows: [
         { label: 'Agent', value: 'Alpha' },
         { label: 'Parent', value: 'alpha/session-1', mono: true },
+        { label: 'Exit code', value: '1', tone: 'danger' },
         { label: 'Source channel', value: '' },
       ],
     });
@@ -179,9 +180,14 @@ describe('tooltip action', () => {
     ]);
     expect(
       [...element.querySelectorAll('dt')].map((term) => term.textContent),
-    ).toEqual(['Agent', 'Parent']);
+    ).toEqual(['Agent', 'Parent', 'Exit code']);
     expect(
       element.querySelectorAll('dd')[1].classList.contains('app-tooltip__mono'),
+    ).toBe(true);
+    expect(
+      element
+        .querySelectorAll('dd')[2]
+        .classList.contains('app-tooltip__value--danger'),
     ).toBe(true);
 
     node.dispatchEvent(new Event('pointerleave'));
@@ -424,6 +430,24 @@ describe('tooltip action', () => {
 
     action.update('');
     expect(isVisible()).toBe(false);
+  });
+
+  it('resolves function content each time it shows', () => {
+    let calls = 0;
+    action = tooltip(node, () => {
+      calls += 1;
+      return calls > 1 ? { title: `Shown ${calls}` } : '';
+    });
+
+    hover(node);
+    expect(isVisible()).toBe(false);
+    node.dispatchEvent(new Event('pointerleave'));
+    hover(node);
+    expect(tooltipElement().textContent).toBe('Shown 2');
+    node.dispatchEvent(new Event('pointerleave'));
+    vi.runAllTimers();
+    hover(node);
+    expect(tooltipElement().textContent).toBe('Shown 3');
   });
 
   it('cleans up on destroy', () => {

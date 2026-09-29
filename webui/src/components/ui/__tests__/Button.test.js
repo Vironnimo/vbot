@@ -8,6 +8,7 @@ vi.mock('svelte', async () => {
 });
 
 const { default: Button } = await import('../Button.svelte');
+const { TOOLTIP_SHOW_DELAY_MS } = await import('../../../lib/tooltip.js');
 
 function labelSnippet(text) {
   return createRawSnippet(() => ({
@@ -93,6 +94,39 @@ describe('Button', () => {
     const disabledButton = render({ onClick: disabledClick, disabled: true });
     disabledButton.click();
     expect(disabledClick).not.toHaveBeenCalled();
+  });
+
+  it('explains a disabled action through a wrapper that receives the pointer', () => {
+    vi.useFakeTimers();
+    try {
+      const button = render({
+        disabled: true,
+        tooltip: 'Edit message',
+        disabledReason: 'Available once the Run finishes',
+      });
+      const anchor = button.parentElement;
+      expect(anchor.classList.contains('tooltip-anchor')).toBe(true);
+
+      anchor.dispatchEvent(new Event('pointerenter'));
+      vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
+      expect(document.getElementById('app-tooltip').textContent).toBe(
+        'Available once the Run finishes',
+      );
+      anchor.dispatchEvent(new Event('pointerleave'));
+      vi.runAllTimers();
+
+      const enabled = render({
+        tooltip: 'Edit message',
+        disabledReason: 'Available once the Run finishes',
+      });
+      enabled.parentElement.dispatchEvent(new Event('pointerenter'));
+      vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
+      expect(document.getElementById('app-tooltip').textContent).toBe(
+        'Edit message',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('exposes aria-label and renders label content', () => {
