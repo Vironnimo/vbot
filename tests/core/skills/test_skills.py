@@ -455,7 +455,7 @@ def test_metadata_diagnostic_is_logged_once_per_process_with_its_path(
         # Exclusions narrow the wildcard and exact grants alike ...
         (["*"], {"research"}, set(), ["agent-cli"]),
         (["research"], {"research"}, set(), []),
-        # ... but never an always-allowed (own or Project-granted) Skill.
+        # ... but never an always-allowed Skill (a Project grant or a non-excluded own one).
         (["*"], {"research"}, {"research"}, ["agent-cli", "research"]),
         ([], {"research"}, {"research"}, ["research"]),
     ],

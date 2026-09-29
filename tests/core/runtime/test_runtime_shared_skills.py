@@ -326,19 +326,30 @@ def test_manager_projects_each_agents_effective_skill_access(
     write_skill(project_skills_dir(repo, "opencode"), "project-playbook", "Project playbook.")
     runtime.projects.create("p", "P", repo)
     runtime.projects.update("p", skills_global_enabled=["zeta"])
-    write_agent_skill(runtime.storage.data_dir, "main", "main-private", "Main playbook.")
-    runtime.agents.update("main", root_project_id="p", excluded_skills=["alpha"])
+    for name in ("main-private", "main-off", "zeta"):
+        write_agent_skill(runtime.storage.data_dir, "main", name, "Main playbook.")
+    runtime.agents.update(
+        "main", root_project_id="p", excluded_skills=["alpha", "main-off", "zeta"]
+    )
     # A root Project that no longer exists falls back to the Agent's own scope.
     runtime.agents.create("two", "Two", allowed_skills=["beta"])
     runtime.agents.update("two", root_project_id="gone")
 
     inventory = runtime.skill_inventory()
     main, two = inventory["agents"]
-    watched = {"alpha", "beta", "zeta", "needs-alpha", "project-playbook", "main-private"}
+    watched = {
+        "alpha",
+        "beta",
+        "zeta",
+        "needs-alpha",
+        "project-playbook",
+        "main-private",
+        "main-off",
+    }
 
-    def grants(agent: dict[str, Any]) -> dict[str, tuple[str, bool]]:
+    def grants(agent: dict[str, Any]) -> dict[str, tuple[bool, str, bool]]:
         return {
-            skill["name"]: (skill["grant"], skill["available"])
+            skill["name"]: (skill["own"], skill["grant"], skill["available"])
             for skill in agent["skills"]
             if skill["name"] in watched
         }
@@ -348,28 +359,31 @@ def test_manager_projects_each_agents_effective_skill_access(
         "name": runtime.agents.get("main").name,
         "root_project_id": "p",
         "allowed_skills": ["*"],
-        "excluded_skills": ["alpha"],
+        "excluded_skills": ["alpha", "main-off", "zeta"],
         "mode": "all",
     }
     assert [skill["name"] for skill in main["skills"]] == sorted(
         skill["name"] for skill in main["skills"]
     )
     assert grants(main) == {
-        "alpha": ("excluded", True),
+        "alpha": (False, "excluded", True),
         # An excluded dependency makes its dependent unavailable.
-        "needs-alpha": ("allowed", False),
-        "beta": ("allowed", True),
-        # The root Project's grant outranks the allowlist.
-        "zeta": ("project", True),
-        "project-playbook": ("project", True),
-        "main-private": ("own", True),
+        "needs-alpha": (False, "allowed", False),
+        "beta": (False, "allowed", True),
+        # The root Project's grant outranks the allowlist and an exclusion, even of
+        # a same-named own package.
+        "zeta": (True, "project", True),
+        "project-playbook": (False, "project", True),
+        "main-private": (True, "own", True),
+        # Exclusions turn off own Skills too.
+        "main-off": (True, "excluded", True),
     }
     assert (two["root_project_id"], two["mode"], two["excluded_skills"]) == ("gone", "selected", [])
     assert grants(two) == {
-        "alpha": ("not_selected", True),
-        "needs-alpha": ("not_selected", False),
-        "beta": ("allowed", True),
-        "zeta": ("not_selected", True),
+        "alpha": (False, "not_selected", True),
+        "needs-alpha": (False, "not_selected", False),
+        "beta": (False, "allowed", True),
+        "zeta": (False, "not_selected", True),
     }
     # ``package_id`` names the inventory entry of the package that wins for the Agent.
     entries = {

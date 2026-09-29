@@ -173,8 +173,9 @@ def _add_agent_change_arguments(
         "--excluded-skills",
         nargs="*",
         help=(
-            "Replace Skills withheld from --allowed-skills (also from *); private and "
-            "active Project Skills stay allowed; empty clears the exclusions"
+            "Replace Skills turned off for this Agent: withheld from --allowed-skills "
+            "(also from *) and from its private Skills; active Project Skills stay "
+            "allowed; empty clears the exclusions"
         ),
     )
     parser.add_argument(

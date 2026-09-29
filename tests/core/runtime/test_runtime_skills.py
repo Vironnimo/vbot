@@ -141,7 +141,7 @@ def test_project_context_grants_its_enabled_project_and_bundled_skills(
     ]
 
 
-def test_agent_exclusions_narrow_its_allowlist_but_never_its_own_or_project_skills(
+def test_agent_exclusions_narrow_its_allowlist_and_own_skills_but_never_project_grants(
     runtime: Runtime, tmp_path: Path
 ) -> None:
     data_dir = runtime.storage.data_dir
@@ -150,6 +150,8 @@ def test_agent_exclusions_narrow_its_allowlist_but_never_its_own_or_project_skil
     runtime.reload_skills()
     runtime.agents.create("two", "Two")
     write_agent_skill(data_dir, "two", "two-private", "Two's playbook.")
+    # An own package that shadows a same-named Project Skill.
+    write_agent_skill(data_dir, "two", "project-playbook", "Two's copy.")
     repo = tmp_path / "repo"
     write_project_skill(repo, "project-playbook", "Project playbook.")
     runtime.projects.create("p", "P", repo)
@@ -170,11 +172,13 @@ def test_agent_exclusions_narrow_its_allowlist_but_never_its_own_or_project_skil
     assert excluding is not before
     assert runtime.skills_for(None, "two") is excluding
     assert excluding.get("alpha").name == "alpha"
-    assert {"beta", "two-private"} <= granted(None, "two")
-    assert "alpha" not in granted(None, "two")
-    # Neither the Agent's own Skills nor the active Project's Skills can be excluded.
-    assert {"beta", "two-private", "project-playbook"} <= granted("p", "two")
-    assert "alpha" not in granted("p", "two")
+    # Exclusions also turn off the Agent's own Skills, which stay loaded.
+    assert excluding.get("two-private").name == "two-private"
+    assert "beta" in granted(None, "two")
+    assert {"alpha", "two-private", "project-playbook"}.isdisjoint(granted(None, "two"))
+    # The active Project's grant outranks an exclusion, even for a same-named own Skill.
+    assert {"beta", "project-playbook"} <= granted("p", "two")
+    assert {"alpha", "two-private"}.isdisjoint(granted("p", "two"))
 
     # An Agent without private Skills still gets its exclusions applied.
     assert runtime.skills_for(None, "three") is runtime.skills
@@ -185,8 +189,8 @@ def test_agent_exclusions_narrow_its_allowlist_but_never_its_own_or_project_skil
     runtime.agents.update("three", excluded_skills=[])
     assert runtime.skills_for(None, "three") is runtime.skills
     runtime.agents.update("two", excluded_skills=[])
-    assert "alpha" in granted(None, "two")
-    assert "alpha" in granted("p", "two")
+    assert {"alpha", "two-private", "project-playbook"} <= granted(None, "two")
+    assert {"alpha", "two-private"} <= granted("p", "two")
 
 
 def test_scoped_skill_registries_stay_cached_until_their_sources_are_invalidated(

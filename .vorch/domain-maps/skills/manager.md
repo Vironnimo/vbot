@@ -17,7 +17,7 @@ Task-gated reference for the human Skill manager's read model: `skill.inventory`
 ```
 
 - `entry`: `{id, editable_scope, source_label, name, description, origin, owner_id, project_id, shared, shared_with, disabled, status, missing, optional_missing, warnings}`. `id` hashes (source root, package path, owner id), so it identifies one exact source package independently of names and is what `skill.inspect` takes. `owner_id` is set only for private homes, `project_id` only for Project Skill directories. `status` is `available`/`unavailable`/`invalid`, overridden by `disabled`.
-- `agent_access`: `{id, name, root_project_id, allowed_skills, excluded_skills, mode, skills: [{name, package_id, grant, available}]}`. `mode` is `all` when `allowed_skills` contains `*`, else `selected`. `skills` lists every Skill in the registry the Agent's own Runs resolve (`skills_for(root_project_id, id)` when the root Project exists, else `skills_for(None, id)`), sorted by name; policy-disabled Skills are absent there.
+- `agent_access`: `{id, name, root_project_id, allowed_skills, excluded_skills, mode, skills: [{name, package_id, own, grant, available}]}`. `mode` is `all` when `allowed_skills` contains `*`, else `selected`. `skills` lists every Skill in the registry the Agent's own Runs resolve (`skills_for(root_project_id, id)` when the root Project exists, else `skills_for(None, id)`), sorted by name; policy-disabled Skills are absent there. `own` is true when the winning package lives in this Agent's private home, independent of `grant`.
 - `project_access`: `{project_id, name, skills_project_disabled, skills_global_enabled, skills_bundled_enabled, skills: [{name, package_id, source, active}]}`, `skills` sorted by name. `source` is `project`/`global`/`bundled` from `project_skill_pool` (below); `active` means the name is in the Project's effective set (`effective_project_allowed_skills`). A Project removed while the inventory is assembled is omitted.
 - `package_id` is the `id` of the inventory entry for the package that wins in that registry (first loadable entry with the same resolved package path), or `null` when none matches.
 
@@ -25,9 +25,9 @@ Task-gated reference for the human Skill manager's read model: `skill.inventory`
 
 `grant` answers why an Agent may (not) use a Skill, first match wins:
 
-1. `own` - the package lives in the Agent's private home.
-2. `project` - the name is in the registry's `always_allowed` beyond the Agent's own names, i.e. the root Project's effective set.
-3. `excluded` - the name is in the Agent's `excluded_skills`.
+1. `own` - the package lives in the Agent's private home and its name is not in `excluded_skills`.
+2. `project` - the name is in the registry's `always_allowed` beyond the Agent's non-excluded own names, i.e. the root Project's effective set. It outranks an exclusion, also for a same-named own package (`own: true, grant: project`).
+3. `excluded` - the name is in the Agent's `excluded_skills`; an excluded own package reports `own: true, grant: excluded`. A client toggles an own Skill the same way in `all` and `selected` mode: off adds the name to `excluded_skills`, on removes it.
 4. `allowed` - `allowed_skills` is `*` or lists the name. Shared Skills land here or in the next case; they never get `own`.
 5. `not_selected` - otherwise.
 
