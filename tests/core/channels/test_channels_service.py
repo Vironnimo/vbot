@@ -256,8 +256,11 @@ async def test_channel_create_and_delete_write_channels_db_off_the_event_loop(
 ) -> None:
     service = make_service(tmp_path)
     storage = ChannelStorage(tmp_path)
+    loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
+    # The worker thread waits until the test releases it; ``finally`` always does.
     release = threading.Event()
+    entered = {"reset": asyncio.Event(), "unregister": asyncio.Event()}
     calls: list[tuple[str, bool]] = []
     real_reset = service._state.reset
     real_unregister = service._state.unregister
@@ -265,7 +268,8 @@ async def test_channel_create_and_delete_write_channels_db_off_the_event_loop(
     def held(name: str, write: Any) -> Any:
         def call(channel_id: str, *args: Any) -> None:
             calls.append((name, threading.get_ident() != loop_thread))
-            assert release.wait(timeout=5)
+            loop.call_soon_threadsafe(entered[name].set)
+            release.wait()
             write(channel_id, *args)
 
         return call
@@ -274,7 +278,8 @@ async def test_channel_create_and_delete_write_channels_db_off_the_event_loop(
     monkeypatch.setattr(service._state, "unregister", held("unregister", real_unregister))
     try:
         creating = asyncio.create_task(service.create_channel(make_config(enabled=False)))
-        await wait_until(lambda: calls == [("reset", True)])
+        await entered["reset"].wait()
+        assert calls == [("reset", True)]
         # channel.json is written before the registration; the Event Loop keeps
         # serving meanwhile and refuses other changes of this Channel.
         assert storage.get("tg-assistant").id == "tg-assistant"
@@ -283,19 +288,20 @@ async def test_channel_create_and_delete_write_channels_db_off_the_event_loop(
         with pytest.raises(ChannelError, match="current change of this Channel"):
             await service.delete_channel("tg-assistant")
         release.set()
-        await asyncio.wait_for(creating, timeout=5)
+        await creating
         assert _registered_channels(service) == ["tg-assistant"]
 
         release.clear()
         deleting = asyncio.create_task(service.delete_channel("tg-assistant"))
-        await wait_until(lambda: calls[-1] == ("unregister", True))
+        await entered["unregister"].wait()
+        assert calls[-1] == ("unregister", True)
         # channel.json goes first; the registration follows.
         with pytest.raises(ChannelNotFoundError):
             storage.get("tg-assistant")
         with pytest.raises(ChannelError, match="current change of this Channel"):
             await service.create_channel(make_config(enabled=False))
         release.set()
-        await asyncio.wait_for(deleting, timeout=5)
+        await deleting
         assert _registered_channels(service) == []
         assert service._pending_config_changes == set()
     finally:
