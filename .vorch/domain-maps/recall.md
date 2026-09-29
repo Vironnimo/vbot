@@ -8,7 +8,7 @@ One Agent-facing Tool: `session_search` requires a query and returns backend-ran
 
 `core/tools/session_search.py` owns Tool definitions, validation, execution and the final visibility recheck of hit Sessions; `_session_recall_results.py` holds internal bounded result projection, conversation context and descriptors under the same owner.
 
-The selected backend fixes at Tool registration. The selectable first-party backends are `sqlite_fts`, `vector`, and `hybrid`; `sqlite_fts` is the Built-in default. `Runtime.reload_recall_backend()` rebuilds the registry from `settings.recall.backend` and re-registers the Search Tool with the resolved name; an unknown name or non-default backend construction failure falls back to `sqlite_fts` (recording the resolved name so description and behavior align). Failing to construct `sqlite_fts` itself is fatal; search inside a constructed SQLite backend may still degrade to the Session store's substring scan when the derived index is unavailable.
+The selected backend fixes at Tool registration. The selectable first-party backends are `sqlite_fts`, `vector`, and `hybrid`; `sqlite_fts` is the Built-in default. `Runtime.reload_recall_backend()` rebuilds the registry from `settings.recall.backend` and re-registers the Search Tool with the resolved name; an unknown name or non-default backend construction failure falls back to `sqlite_fts` (recording the resolved name so description and behavior align); an unknown name warns once per configured value, not on every reload. Failing to construct `sqlite_fts` itself is fatal; search inside a constructed SQLite backend may still degrade to the Session store's substring scan when the derived index is unavailable.
 
 ## Terms
 

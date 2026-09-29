@@ -26,12 +26,15 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.utils.errors import VBotError
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.prompts.prompts import ProjectPromptContext, PromptAgent
 
 _LOGGER = get_logger("prompts")
+# Missing or unreadable includes and unknown markers the process has already logged.
+_TEMPLATE_CONDITIONS = LoggedConditions()
 
 # Exactly one blank line separates two rendered blocks. The old format padded
 # missing pieces with blank lines so an identity agent stayed byte-identical;
@@ -334,11 +337,14 @@ def _render_generated_marker(
     """Return one ``{generated:NAME}`` producer's output, fail-soft.
 
     Unknown markers and failing producers render to ``""`` and log a warning —
-    mirroring a missing ``{include:…}``; neither is a :class:`PromptError`.
+    mirroring a missing ``{include:…}``; neither is a :class:`PromptError`. An
+    unknown marker warns once per process, not on every build.
     """
     producer = producers.get(name)
     if producer is None:
-        _LOGGER.warning("Skipping unknown generated marker: {generated:%s}", name)
+        # Every build meets the same template: warn once per marker, not per build.
+        if _TEMPLATE_CONDITIONS.started(("generated", name)):
+            _LOGGER.warning("Skipped unknown generated marker (marker=%s)", name)
         return ""
     try:
         return producer(context)
@@ -363,24 +369,32 @@ def _render_workspace_include(
     would read SOUL.md/USER.md from the server's process CWD. A safe flat filename
     resolves under the workspace and is ``<file>``-wrapped; a missing **or**
     unreadable file is dropped with a warning (a prompt file never aborts a run —
-    user decision). An **unsafe** include path raises :class:`PromptError` — that is
-    a malformed directive, not a readability issue.
+    user decision), logged once per state rather than on every build, and a later
+    successful read logs the recovery. An **unsafe** include path raises
+    :class:`PromptError` — that is a malformed directive, not a readability issue.
     """
     if not workspace:
         return ""
     validate_workspace_include(filename)
     include_path = Path(workspace) / filename
+    # Every build reads the include again: log when it goes missing or
+    # unreadable, when that changes, and when it is readable again.
+    condition = ("include", str(include_path))
     try:
         content = include_path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        _LOGGER.warning("Skipping missing workspace include: %s", include_path)
+        if _TEMPLATE_CONDITIONS.started(condition, "missing"):
+            _LOGGER.warning("Skipped missing workspace include (path=%s)", include_path)
         return ""
     except (OSError, ValueError) as exc:
         # Present but unreadable for ANY reason (locked, no permission, a
         # directory, binary/non-UTF-8, …): log and drop the block, like a
         # missing include. A prompt file must never abort the run.
-        _LOGGER.warning("Skipping unreadable workspace include %s: %s", include_path, exc)
+        if _TEMPLATE_CONDITIONS.started(condition, type(exc).__name__):
+            _LOGGER.warning("Skipped unreadable workspace include (path=%s): %s", include_path, exc)
         return ""
+    if _TEMPLATE_CONDITIONS.ended(condition):
+        _LOGGER.info("Workspace include became readable again (path=%s)", include_path)
     if on_read is not None:
         on_read(include_path.resolve())
     return wrap_include_file(filename, content)

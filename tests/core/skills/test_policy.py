@@ -1,6 +1,7 @@
 """Tests for the validated Skill Policy service."""
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,26 @@ class TestLoad:
         assert policy == SkillPolicy()
         assert any(message in item for item in service.validation_diagnostics())
         assert any(str(path) in logged for logged in caplog.messages)
+
+    def test_an_invalid_file_is_logged_once_per_version_and_when_it_is_usable_again(
+        self, storage: StorageManager, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Every registry rebuild re-reads the policy; the log reports changes only.
+        path = write_policy(storage, {"format_version": 2, "disabled": []})
+        service = SkillPolicyService(storage)
+
+        def levels_of_loads() -> list[int]:
+            caplog.clear()
+            with caplog.at_level("INFO", logger="vbot.skills"):
+                service.load()
+                service.load()
+            return [record.levelno for record in caplog.records]
+
+        assert levels_of_loads() == [logging.WARNING]
+        path.write_text(json.dumps({"format_version": 2, "disabled": ["x"]}), encoding="utf-8")
+        assert levels_of_loads() == [logging.WARNING]
+        path.write_text(json.dumps({"format_version": POLICY_FORMAT_VERSION}), encoding="utf-8")
+        assert levels_of_loads() == [logging.INFO]
 
     def test_unknown_keys_warn_but_still_load(self, storage: StorageManager) -> None:
         write_policy(storage, {"format_version": POLICY_FORMAT_VERSION, "legacy_flag": True})

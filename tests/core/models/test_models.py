@@ -539,6 +539,11 @@ def test_invalid_model_db_files_are_skipped_with_a_warning(
     for warning in warnings:
         assert warning in caplog.text
     assert issues == [record.getMessage() for record in caplog.records]
+    # Every reload assembles the same data again; each issue is logged only once.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="vbot.models"):
+        registry.reload(tmp_path)
+    assert caplog.records == []
 
 
 def test_model_directory_scan_failure_does_not_raise(

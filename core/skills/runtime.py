@@ -30,6 +30,7 @@ from core.skills.skills import (
     scan_skill_names,
 )
 from core.storage import StorageManager
+from core.utils.log_conditions import LoggedConditions
 
 _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
@@ -147,6 +148,9 @@ class SkillRuntime:
         self._resources_path = resources_path
         self._logger = logger
         self._reload = reload_skills
+        # Every receiver's registry build meets the same stale policy entries:
+        # warn once per entry until it is resolved, not once per build.
+        self._stale_shared = LoggedConditions()
         self._project_skills: dict[str, _ProjectSkillBundle] = {}
         self._agent_skills: dict[tuple[str | None, str], SkillRegistry] = {}
         # Scans run in workers as well as on the Event Loop. Hold this lock only
@@ -834,8 +838,9 @@ class SkillRuntime:
         Deterministic order — sorted by owner id, then skill name — so first-found
         collision handling matches activation exactly. Only existing Identity
         Agents contribute; stale entries (an unknown owner id or a vanished package
-        directory) are ignored at load with a warning and stay in the policy file
-        for the human manager to clean up. Only skills whose receiver list
+        directory) are ignored at load with a warning, once per entry until it
+        resolves, and stay in the policy file for the human manager to clean up.
+        Only skills whose receiver list
         includes this receiver are inserted.
         """
         shared = self._policy.load().shared
@@ -848,26 +853,27 @@ class SkillRuntime:
                 # The owner keeps its own copy via its private-home layer.
                 continue
             if not self._agents.exists(owner_id):
-                if self._logger is not None:
+                if self._stale_shared.started(("owner", owner_id)) and self._logger is not None:
                     self._logger.warning(
-                        "Ignoring stale shared skills for unknown agent '%s'",
-                        owner_id,
+                        "Ignored shared skills of an unknown agent (owner=%s)", owner_id
                     )
                 continue
+            self._stale_shared.ended(("owner", owner_id))
             owner_root = self.agent_skills_dir(owner_id)
             for name, receivers in sorted(skills.items()):
                 if receiver_agent_id not in receivers:
                     continue
                 package_dir = find_skill_package_dir(owner_root, name, environment)
+                entry = ("skill", owner_id, name)
                 if package_dir is None:
-                    if self._logger is not None:
+                    if self._stale_shared.started(entry) and self._logger is not None:
                         self._logger.warning(
-                            "Ignoring stale shared skill '%s' of agent '%s' "
-                            "(no such private skill)",
-                            name,
+                            "Ignored shared skill without a private package (owner=%s skill=%s)",
                             owner_id,
+                            name,
                         )
                     continue
+                self._stale_shared.ended(entry)
                 directories.append(package_dir)
         return directories
 

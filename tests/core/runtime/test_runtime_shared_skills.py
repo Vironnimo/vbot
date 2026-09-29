@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -113,6 +115,34 @@ def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
     own_group = catalog.catalog_text.split("Your own skills:\n", 1)[1]
     own_group = own_group.split("</available_skills>", 1)[0]
     assert "- deploy: Shared playbook." in own_group
+
+
+def test_a_stale_shared_entry_warns_once_until_it_resolves_not_per_registry_build(
+    runtime: Runtime, caplog: pytest.LogCaptureFixture
+) -> None:
+    runtime.agents.create("two", "Two")
+    runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
+    runtime.skill_policy.set_shared("gone", "notes", shared=True, receivers=["two"])
+
+    def warnings_of_builds(count: int) -> list[str]:
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            for _build in range(count):
+                runtime.invalidate_agent_skills(None)
+                runtime.skills_for(None, "two")
+        return [record.getMessage() for record in caplog.records]
+
+    # One warning per stale entry, however many receiver registries are built.
+    first = warnings_of_builds(3)
+    assert len(first) == 2
+    assert any("gone" in message for message in first)
+    assert any("deploy" in message for message in first)
+    # The package appears, so the entry resolves; losing it again warns again.
+    package = write_agent_skill(runtime.storage.data_dir, "main", "deploy", "Shared.")
+    assert warnings_of_builds(2) == []
+    shutil.rmtree(package)
+    [again] = warnings_of_builds(2)
+    assert "deploy" in again
 
 
 def test_unsharing_or_disabling_removes_a_shared_skill_from_receivers_live(

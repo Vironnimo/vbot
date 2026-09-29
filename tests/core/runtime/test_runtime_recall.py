@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -29,6 +30,7 @@ from tests.core.runtime.runtime_test_support import write_settings
 def test_runtime_selects_the_configured_recall_backend_at_start(
     config: Config,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     configured: str | None,
     expected: type,
 ) -> None:
@@ -46,15 +48,22 @@ def test_runtime_selects_the_configured_recall_backend_at_start(
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-fake-key-12345")
     runtime = Runtime(config, safe_startup_mode="test")
 
-    runtime.start()
-    try:
-        backend = runtime.recall_backend
-        assert type(backend) is expected
-        if isinstance(backend, VectorRecallBackend):
-            assert backend.embeddings is runtime.embeddings
-            assert backend.model_registry is runtime.models
-    finally:
-        runtime.stop()
+    # Runtime logging stops propagation at the ``vbot`` logger: capture there.
+    monkeypatch.setattr(logging.getLogger("vbot"), "handlers", [caplog.handler])
+    with caplog.at_level(logging.WARNING):
+        runtime.start()
+        try:
+            backend = runtime.recall_backend
+            assert type(backend) is expected
+            if isinstance(backend, VectorRecallBackend):
+                assert backend.embeddings is runtime.embeddings
+                assert backend.model_registry is runtime.models
+            # A reload with the unchanged setting does not report it again.
+            runtime.reload_recall_backend()
+        finally:
+            runtime.stop()
+    reports = [record for record in caplog.records if "team_backend" in record.getMessage()]
+    assert len(reports) == (configured == "team_backend")
 
 
 def test_reload_recall_backend_swaps_backend_and_tools_and_releases_replaced_indexes(
