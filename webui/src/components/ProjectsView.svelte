@@ -23,6 +23,7 @@
   import ProjectContextPanel from './projects/ProjectContextPanel.svelte';
   import ProjectAccessPanel from './projects/ProjectAccessPanel.svelte';
   import ProjectDialogs from './projects/ProjectDialogs.svelte';
+  import { projectRowDetails } from './projects/projectLabels.js';
 
   const noop = () => {};
 
@@ -278,6 +279,7 @@
               class:active={project.project_id ===
                 projectsState.selectedProjectId}
               data-testid={`project-toggle-${project.project_id}`}
+              use:tooltip={() => projectRowDetails(project)}
               onclick={() => navigation.navigate([project.project_id])}
             >
               <span class="project-item-inner">
@@ -291,18 +293,7 @@
                     </StatusChip>
                   {/if}
                 </span>
-                <span
-                  class="project-item-cwd"
-                  use:tooltip={{
-                    text: project.cwd,
-                    mono: true,
-                    selectable: true,
-                    placement: 'right',
-                    whenTruncated: true,
-                  }}
-                >
-                  {project.cwd}
-                </span>
+                <span class="project-item-cwd">{project.cwd}</span>
               </span>
             </button>
           {/each}

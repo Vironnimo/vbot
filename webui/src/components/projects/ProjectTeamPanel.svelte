@@ -68,6 +68,45 @@
     },
   });
 
+  // The collapsed row's details card: the description leads; the rows give
+  // the Agent's address, its effective run values with where each comes
+  // from, and the repository file that defines it.
+  function memberDetails(member) {
+    const effectiveRow = (field) => {
+      const display = effectiveDisplay(member, field);
+      return {
+        label: display.label,
+        value: display.sourceLabel
+          ? t('projects.team.valueWithSource', {
+              value: display.value,
+              source: display.sourceLabel,
+            })
+          : display.value,
+        tone: display.isEmpty ? 'muted' : undefined,
+      };
+    };
+    const projectId = projectsState.selectedProjectId;
+    return {
+      title: member.display_name,
+      text: member.description,
+      rows: [
+        {
+          label: t('projects.team.address'),
+          value: projectId ? `${member.agent_id}@${projectId}` : '',
+          mono: true,
+        },
+        effectiveRow('model'),
+        effectiveRow('temperature'),
+        effectiveRow('thinking_effort'),
+        {
+          label: t('projects.team.sourceFileLabel'),
+          value: member.source_path,
+          mono: true,
+        },
+      ],
+    };
+  }
+
   function toggleMember(agentId) {
     projectsState.expandedMembers = {
       ...projectsState.expandedMembers,
@@ -269,16 +308,7 @@
                 class="projects-team-header"
                 data-testid={`project-team-toggle-${member.agent_id}`}
                 aria-expanded={expanded}
-                use:tooltip={{
-                  text: member.description,
-                  rows: [
-                    {
-                      label: t('projects.team.effectiveModel'),
-                      value: summary.value,
-                      mono: true,
-                    },
-                  ],
-                }}
+                use:tooltip={() => memberDetails(member)}
                 onclick={() => toggleMember(member.agent_id)}
               >
                 <span

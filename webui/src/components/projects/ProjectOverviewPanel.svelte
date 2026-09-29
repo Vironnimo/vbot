@@ -313,7 +313,11 @@
               {#if !temperatureIsInherit}
                 <Button
                   variant="tertiary"
-                  tooltip={t('inherit.resetToInherit')}
+                  tooltip={globalDefaultText('temperature')
+                    ? t('inherit.resetToValue', {
+                        value: globalDefaultText('temperature'),
+                      })
+                    : t('inherit.resetToProviderDefault')}
                   ariaLabel={t('inherit.resetToInherit')}
                   onClick={clearDefaultTemperature}
                 >

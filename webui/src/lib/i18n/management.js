@@ -245,6 +245,9 @@ export default Object.freeze({
   'inherit.hintProviderDefault':
     'Provider default — nothing is set here or in the global defaults.',
   'inherit.resetToInherit': 'Reset to inherited value',
+  'inherit.resetToValue':
+    'Reset to the inherited value: {value} (global default)',
+  'inherit.resetToProviderDefault': 'Reset to the provider default',
   'inherit.editGlobalDefaults': 'Edit global defaults',
   'agents.title': 'Agents',
   'agents.loading': 'Loading agents…',
@@ -566,6 +569,9 @@ export default Object.freeze({
   'projects.team.overrideModelPlaceholder': 'No override',
   'projects.team.overrideTemperaturePlaceholder': 'e.g. 0.7',
   'projects.team.sourceFile': 'Source: {path} ({format})',
+  'projects.team.address': 'Address',
+  'projects.team.sourceFileLabel': 'Source file',
+  'projects.team.valueWithSource': '{value} · from {source}',
   'projects.team.agentTargetsUnavailable':
     'Sub-Agent tools are not available to this Agent.',
   'projects.team.agentTargetsSelf':
@@ -588,6 +594,9 @@ export default Object.freeze({
   'projects.report.finding.agent': 'Agent {agentId}',
   'projects.report.finding.source': 'Source: {source}',
   'projects.rePoint.title': 'Repository not found',
+  'projects.details.repository': 'Repository',
+  'projects.details.id': 'Project ID',
+  'projects.details.added': 'Added',
   'projects.rePoint.description':
     'The repository folder for this project no longer exists. Point it at the new location to restore the project.',
   'projects.rePoint.cwd': 'New repository path',
