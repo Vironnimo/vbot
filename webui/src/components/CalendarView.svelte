@@ -234,6 +234,19 @@
     return occurrenceHeading(entry.occurrence);
   }
 
+  const FREQUENCY_LABELS = {
+    daily: () => t('calendar.form.freqDaily'),
+    weekly: () => t('calendar.form.freqWeekly'),
+    monthly: () => t('calendar.form.freqMonthly'),
+    yearly: () => t('calendar.form.freqYearly'),
+  };
+
+  // How the event's series repeats, as the form names its frequency.
+  function recurrenceText(occurrence) {
+    const freq = eventById(viewState.events, occurrence.event_id)?.rrule?.freq;
+    return FREQUENCY_LABELS[freq]?.() ?? t('calendar.detail.recurring');
+  }
+
   // An entry's details card: its complete title, time with the zone it is
   // shown in, and what the chip leaves out (notes, repetition, Agent actions;
   // for a Schedule Run, that clicking opens the Schedule).
@@ -264,7 +277,7 @@
         },
         {
           label: t('calendar.form.recurrence'),
-          value: occurrence.recurring ? t('calendar.detail.recurring') : '',
+          value: occurrence.recurring ? recurrenceText(occurrence) : '',
         },
         {
           label: t('calendar.actions.heading'),

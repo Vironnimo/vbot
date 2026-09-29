@@ -529,6 +529,14 @@ describe('CalendarView', () => {
         }),
       );
       mountedComponent = await mountCalendarView();
+      // The entry's card names how the series repeats.
+      focusWithKeyboard(
+        document.querySelector('.calendar-cell .calendar-entry'),
+      );
+      expect(tooltipRows()).toContainEqual([
+        t('calendar.form.recurrence'),
+        t('calendar.form.freqWeekly'),
+      ]);
       document.querySelector('.calendar-cell .calendar-entry').click();
       flushSync();
 
