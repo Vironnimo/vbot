@@ -114,11 +114,6 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
         "level": "INFO",
         "propagate": False,
     }
-    assert calls[0]["log_config"]["loggers"]["websockets.server"] == {
-        "handlers": ["vbot_proxy"],
-        "level": "INFO",
-        "propagate": False,
-    }
     assert calls[0]["app"]["server_bind"] == {
         "listen_host": "127.0.0.1",
         "listen_port": 8765,

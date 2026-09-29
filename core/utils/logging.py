@@ -17,14 +17,18 @@ from pathlib import Path
 CONSOLE_LOGGING_ENV_VAR = "VBOT_LOG_STDIO"
 LOGGER_NAMESPACE = "vbot"
 DAILY_LOG_FILE_SUFFIX = ".log"
-APP_WEBSOCKET_PATH = "/ws"
-LOGS_WEBSOCKET_PATH = "/ws/logs"
-ROUTINE_WEBSOCKET_PATHS = frozenset({APP_WEBSOCKET_PATH, LOGS_WEBSOCKET_PATH})
+UVICORN_LOGGER_NAME = "vbot.server.uvicorn"
+# Every websocket route the server owns: /ws, /ws/logs, /ws/terminals/{terminal_id}
+# and /ws/live/{call_id}. The Live path carries a Provider call id.
+SERVER_WEBSOCKET_PATH_PATTERN = re.compile(r"/ws(?:/logs|/terminals/[^/]+|/live/[^/]+)?")
+LIVE_WEBSOCKET_PATH_PATTERN = re.compile(r"(/ws/live/)[^\s\"?/]+")
 ROUTINE_WEBSOCKET_LIFECYCLE_MESSAGES = frozenset({"connection open", "connection closed"})
-UVICORN_WEBSOCKET_LOGGER_NAMES = frozenset({"uvicorn.error", "vbot.server.uvicorn"})
+UVICORN_WEBSOCKET_LOGGER_NAMES = frozenset({"uvicorn.error", UVICORN_LOGGER_NAME})
 WEBSOCKET_ACCEPTED_MESSAGE_PATTERN = re.compile(
     r'"WebSocket (?P<path>/[^"\s]*)[^\"]*" \[accepted\]'
 )
+# uvicorn's line for a websocket handshake answered without accepting it (e.g. 403).
+WEBSOCKET_HANDSHAKE_RESPONSE_PATTERN = re.compile(r'"WebSocket /[^"]*" \d{3}$')
 
 
 def _normalize_websocket_path(path: object) -> str | None:
@@ -43,6 +47,18 @@ def extract_websocket_path_from_message(message: object) -> str | None:
     return _normalize_websocket_path(message_match.group("path"))
 
 
+def is_server_websocket_path(path: str | None) -> bool:
+    """Return whether *path* (without query) is one of the server's websocket routes."""
+
+    return path is not None and SERVER_WEBSOCKET_PATH_PATTERN.fullmatch(path) is not None
+
+
+def redact_live_websocket_path(message: str) -> str:
+    """Replace the Provider call id of a Live websocket path in *message*."""
+
+    return LIVE_WEBSOCKET_PATH_PATTERN.sub(r"\1{call_id}", message)
+
+
 def is_routine_websocket_lifecycle_message(
     *,
     level: int | str,
@@ -50,7 +66,7 @@ def is_routine_websocket_lifecycle_message(
     message: str,
     websocket_path: str | None = None,
 ) -> bool:
-    """Return whether a log message is routine `/ws` or `/ws/logs` noise."""
+    """Return whether a log message is routine lifecycle noise of a server websocket."""
 
     normalized_level = (
         level if isinstance(level, int) else logging.getLevelNamesMapping().get(level.upper())
@@ -64,12 +80,12 @@ def is_routine_websocket_lifecycle_message(
 
     if message in ROUTINE_WEBSOCKET_LIFECYCLE_MESSAGES:
         return (
-            normalized_path in ROUTINE_WEBSOCKET_PATHS
+            is_server_websocket_path(normalized_path)
             or logger_name in UVICORN_WEBSOCKET_LOGGER_NAMES
         )
 
     return (
-        normalized_path in ROUTINE_WEBSOCKET_PATHS
+        is_server_websocket_path(normalized_path)
         and '"WebSocket ' in message
         and "[accepted]" in message
     )
@@ -99,7 +115,7 @@ def _extract_websocket_path(record: logging.LogRecord) -> str | None:
 
 
 def is_logs_websocket_lifecycle_record(record: logging.LogRecord) -> bool:
-    """Return whether *record* is routine `/ws` or `/ws/logs` lifecycle noise."""
+    """Return whether *record* is routine lifecycle noise of a server websocket."""
 
     return is_routine_websocket_lifecycle_message(
         level=record.levelno,
@@ -110,7 +126,7 @@ def is_logs_websocket_lifecycle_record(record: logging.LogRecord) -> bool:
 
 
 class QuietLogsWebSocketLifecycleFilter(logging.Filter):
-    """Suppress routine INFO lifecycle records for managed websocket paths."""
+    """Suppress routine INFO lifecycle records of the server's websocket routes."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         return not is_logs_websocket_lifecycle_record(record)
@@ -150,17 +166,28 @@ def get_logger(name: str) -> logging.Logger:
 
 
 class ManagedLoggerProxyHandler(logging.Handler):
-    """Forward third-party log records into a managed vBot logger."""
+    """Forward uvicorn log records into a managed vBot logger.
+
+    uvicorn's own INFO lines describe server mechanics (process start, lifespan
+    steps, shutdown waits) that the server's single start and stop lines
+    replace, so they are forwarded at DEBUG. A websocket handshake answered
+    without accepting it (e.g. 403) keeps its level, and a Live websocket path
+    never carries its Provider call id into the log.
+    """
 
     def __init__(self, target_logger_name: str) -> None:
         super().__init__()
         self._target_logger_name = target_logger_name
 
     def emit(self, record: logging.LogRecord) -> None:
+        message = redact_live_websocket_path(record.getMessage())
+        level = record.levelno
+        if level == logging.INFO and WEBSOCKET_HANDSHAKE_RESPONSE_PATTERN.search(message) is None:
+            level = logging.DEBUG
         target_logger = get_logger(self._target_logger_name)
         target_logger.log(
-            record.levelno,
-            record.getMessage(),
+            level,
+            message,
             exc_info=record.exc_info,
             stack_info=bool(record.stack_info),
         )
@@ -168,9 +195,13 @@ class ManagedLoggerProxyHandler(logging.Handler):
 
 def build_uvicorn_log_config(
     *,
-    server_logger_name: str = "vbot.server.uvicorn",
+    server_logger_name: str = UVICORN_LOGGER_NAME,
 ) -> dict[str, object]:
-    """Route uvicorn lifecycle logs through the managed vBot pipeline."""
+    """Route uvicorn logs through the managed vBot pipeline.
+
+    uvicorn hands its ``uvicorn.error`` logger to the websocket protocol as
+    well, so that logger also carries the websocket lifecycle lines.
+    """
 
     return {
         "version": 1,
@@ -203,11 +234,6 @@ def build_uvicorn_log_config(
             },
             "uvicorn.access": {
                 "handlers": ["null"],
-                "level": "INFO",
-                "propagate": False,
-            },
-            "websockets.server": {
-                "handlers": ["vbot_proxy"],
                 "level": "INFO",
                 "propagate": False,
             },

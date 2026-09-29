@@ -120,6 +120,11 @@ _ACCEPTED = '%s - "WebSocket %s" [accepted]'
         (make_websocket_record(message="connection open", path="/ws/logs?cursor=abc"), True),
         (make_websocket_record(message="connection closed", path="/ws?after_sequence=4"), True),
         (make_websocket_record(message=_ACCEPTED, args=("127.0.0.1", "/ws/logs?cursor=abc")), True),
+        (
+            make_websocket_record(message=_ACCEPTED, args=("127.0.0.1", "/ws/terminals/term_1")),
+            True,
+        ),
+        (make_websocket_record(message=_ACCEPTED, args=("127.0.0.1", "/ws/live/call-9")), True),
         # Runtime records without a path: the uvicorn logger marks them as websocket records.
         (make_websocket_record(name="uvicorn.error", message="connection open"), True),
         (
@@ -147,6 +152,8 @@ _ACCEPTED = '%s - "WebSocket %s" [accepted]'
         "log-stream-open",
         "app-socket-closed",
         "log-stream-accepted",
+        "terminal-accepted",
+        "live-call-accepted",
         "uvicorn-open-without-path",
         "uvicorn-accepted-without-args",
         "debug-diagnostic",
@@ -176,13 +183,20 @@ def test_logger_proxy_forwards_formatted_records_that_pass_its_filters() -> None
 
     capture_handler = CaptureHandler()
     target_logger.addHandler(capture_handler)
-    target_logger.setLevel(logging.INFO)
+    target_logger.setLevel(logging.DEBUG)
     try:
         for record in (
-            make_websocket_record(name="uvicorn.error", message="Server started"),
+            make_websocket_record(
+                name="uvicorn.error", message="Started server process [%d]", args=(42,)
+            ),
             make_websocket_record(message="connection open", path="/ws/logs"),
             make_websocket_record(
-                message='%s - "WebSocket %s" [rejected]', args=("127.0.0.1", "/ws"), path="/ws"
+                name="uvicorn.error",
+                message='%s - "WebSocket %s" 403',
+                args=("127.0.0.1", "/ws/live/call-9"),
+            ),
+            make_websocket_record(
+                name="uvicorn.error", level=logging.ERROR, message="Exception in ASGI application"
             ),
         ):
             handler.handle(record)
@@ -190,11 +204,18 @@ def test_logger_proxy_forwards_formatted_records_that_pass_its_filters() -> None
         target_logger.removeHandler(capture_handler)
         handler.close()
 
-    # Forwarded records keep their level, carry the proxy's logger name and a
-    # formatted message; the routine lifecycle record is filtered out.
+    # Forwarded records carry the proxy's logger name and a formatted message.
+    # uvicorn's own lifecycle lines drop to DEBUG, handshake rejections and
+    # failures keep their level, a Live path never carries its call id, and
+    # the routine lifecycle record is filtered out.
     assert [(record.name, record.levelno, record.getMessage()) for record in captured] == [
-        ("vbot.server.uvicorn", logging.INFO, "Server started"),
-        ("vbot.server.uvicorn", logging.INFO, '127.0.0.1 - "WebSocket /ws" [rejected]'),
+        ("vbot.server.uvicorn", logging.DEBUG, "Started server process [42]"),
+        (
+            "vbot.server.uvicorn",
+            logging.INFO,
+            '127.0.0.1 - "WebSocket /ws/live/{call_id}" 403',
+        ),
+        ("vbot.server.uvicorn", logging.ERROR, "Exception in ASGI application"),
     ]
 
 
