@@ -634,6 +634,9 @@ if ($useNativeInstaller) {
         Remove-Item -LiteralPath $InstallLogPath -Force -ErrorAction SilentlyContinue
     }
     # return, unlike exit, keeps an `irm | iex` window open to show the result.
+    # A caller running this script sees the last native probe's exit code
+    # unless the success resets it.
+    $global:LASTEXITCODE = 0
     return
 }
 
@@ -908,3 +911,5 @@ else {
 if (-not $PreserveInstallLog) {
     Remove-Item -LiteralPath $InstallLogPath -Force -ErrorAction SilentlyContinue
 }
+# The installation finished; a caller must not see a native probe's exit code.
+$global:LASTEXITCODE = 0
