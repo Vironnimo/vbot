@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from core.settings import PROJECT_SOURCE_FORMATS
+from core.skills import skills as skills_module
 from core.skills.requirements import environment_requirement_names
 from core.skills.skill_validator import MAX_SKILL_NAME_LENGTH
 from core.skills.skills import (
@@ -14,7 +15,6 @@ from core.skills.skills import (
     SKILL_ORIGIN_BUNDLED,
     SKILL_ORIGIN_GLOBAL,
     SkillRegistry,
-    _logged_skill_warnings,
     find_skill_package_dir,
     format_skill_catalog_entries,
     load_project_skill_registry,
@@ -23,6 +23,7 @@ from core.skills.skills import (
     scan_project_skill_names,
     skill_origin_sort_key,
 )
+from core.utils.log_conditions import LoggedConditions
 
 
 def write_skill(
@@ -425,10 +426,10 @@ def test_roots_load_in_order_with_origins_and_first_found_name_wins(tmp_path: Pa
 
 
 def test_metadata_diagnostic_is_logged_once_per_process_with_its_path(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Registries reload on every run; the DEBUG record names the file once.
-    _logged_skill_warnings.clear()
+    monkeypatch.setattr(skills_module, "_LOGGED_SKILL_WARNINGS", LoggedConditions())
     skill_file = write_skill(
         tmp_path, "careful", "---\nname: careful\ndescription: Use mode: careful\n---\n"
     )
