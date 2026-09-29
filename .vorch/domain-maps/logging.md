@@ -4,7 +4,7 @@ Cross-cutting policy for what vBot writes to its application logs and at which l
 
 ## Overview
 
-Every domain logs through per-module `vbot.<domain>` loggers into one pipeline: `LogManager` writes daily files `<data_dir>/logs/YYYY-MM-DD.log` in the canonical line format `timestamp [LEVEL] name - message` (parse contract: `logs.md`). The default level is INFO; the `LOG_LEVEL` configuration value selects DEBUG. The standalone Desktop writes the same format to its own config directory (`desktop.md`); the Windows application host and update worker log under `<install root>/logs/` (`cli/windows-application.md`).
+Every domain logs through per-module `vbot.<domain>` loggers into one pipeline: `LogManager` writes daily files `<data_dir>/logs/YYYY-MM-DD.log` in the canonical line format `timestamp [LEVEL] name - message` (parse contract: `logs.md`). The default level is INFO; the `LOG_LEVEL` configuration value selects DEBUG. The standalone Desktop writes the same format to its own config directory (`desktop.md`); the Windows application host, its update worker and every CLI command run on a packaged installation log under `<install root>/logs/` (`cli/windows-application.md`); a source-mode `vbot autostart enable|disable` logs into the target's existing data directory.
 
 This map is a policy. Code that logs differently is a finding, not a precedent: before changing a level or removing a line, check it against the purpose below, not only against the "silent" list.
 
@@ -31,8 +31,8 @@ Everything that happens per step, per call, per attempt or per poll belongs at D
 
 - **Line format:** `<Event in past tense> (key=value key=value)` - stable vBot ids, changed field names (not values), counts, durations. Multi-value fields are comma-separated inside one value. `extra=` is not rendered by the formatter; everything an operator needs goes into the message.
 - **One event, one line.** A "started" plus "completed" pair for one short operation is merged into the outcome line; the start moves to DEBUG.
-- **Log at the owner.** A mutation logs in the core owner that performs it, so RPC, Tool, command and CLI paths are all covered; an `actor=` field (for example `rpc`, `tool`, `command`, `agent=<id>`) says who caused it. The RPC layer does not add a second line.
-- **Transitions, not repetitions.** A persistent condition (unreachable server, invalid configuration file, missing include, unsupported SQLite build) logs once when it starts and once when it ends - not on every read, build, poll or attempt. Retry loops log attempts at DEBUG and the final outcome once.
+- **Log at the owner.** A mutation logs in the core owner that performs it, so RPC, Tool, command and CLI paths are all covered; when more than one path can cause the change, an `actor=` field (for example `rpc`, `tool`, `command`, `agent=<id>`) says which one did; a single-path owner omits it. The RPC layer does not add a second line.
+- **Transitions, not repetitions.** A persistent condition (unreachable server, invalid configuration file, missing include, unsupported SQLite build) logs once when it starts and once when it ends - not on every read, build, poll or attempt. Retry loops log attempts at DEBUG and the final outcome once. Track such conditions with `core/utils/log_conditions.py` (`LoggedConditions`, bounded) rather than a private warn-once set.
 - **Failures are never INFO.** An outcome field such as `outcome=failed` on an INFO line is a WARNING.
 
 ## Never log
@@ -41,7 +41,7 @@ At any level, including DEBUG and exception messages built by vBot:
 
 - credentials, token values, OAuth codes, Provider Account ids;
 - Prompt, Skill, Cron, Memory and Workspace file content; Model output; user message text; titles generated from them;
-- external conversation, chat, user, thread or call ids and platform display names (Channel platforms, Provider-assigned call or conversation ids), including ids derived from them.
+- external conversation, chat, user, thread or Live call ids and platform display names (Channel platforms, Provider-assigned Live call or conversation ids), including ids derived from them. Provider-assigned Tool call ids are correlation ids within a stored Session and may be logged.
 
 Use the vBot-owned id of the same object instead (`core/utils/ids.py`).
 
