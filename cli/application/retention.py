@@ -71,13 +71,13 @@ def retire_unneeded(install: Installation) -> list[Path]:
             ):
                 _retire(version, staging, retired)
         if len(retired) > earlier:
-            _LOGGER.info("Retired %d unneeded application versions", len(retired) - earlier)
+            _LOGGER.info("Retired unneeded application versions (count=%d)", len(retired) - earlier)
         unfinished = {operation.id for operation in operations(install) if not operation.terminal}
         for download in _plain_directories(contained(install.root, "downloads")):
             if download.name not in unfinished:
                 _retire(download, staging, retired)
     except _UndecidableError as exc:
-        _LOGGER.info("Kept all application versions: %s", exc)
+        _LOGGER.warning("Application version cleanup kept every version (reason=%s)", exc)
     except Exception:
         _LOGGER.warning("Application version cleanup stopped early", exc_info=True)
     return retired
@@ -102,7 +102,7 @@ def _retire(path: Path, staging: Path, retired: list[Path]) -> None:
         path.rename(target)
     except OSError as exc:
         # Windows refuses to rename a tree that is still open, e.g. a working directory.
-        _LOGGER.info("Kept %s for a later cleanup: %s", path, exc)
+        _LOGGER.warning("Application version cleanup deferred a tree (path=%s error=%s)", path, exc)
         return
     retired.append(target)
 

@@ -15,6 +15,7 @@ an interrupted operation.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import time
@@ -220,16 +221,24 @@ def roll_back_data(
     data_dir = _data_dir(install)
     running = _live_servers(data_dir)
     if running is not None:
+        _log_data_kept(operation, snapshot_id, running)
         return not_restored.format(reason=running)
     try:
         change = data_changed_since(data_dir, snapshot)
     except DatabaseError:
         change = "the data could not be compared"
     if change is None:
+        _LOGGER.info(
+            "Update data snapshot not needed; the candidate left the data unchanged"
+            " (operation=%s snapshot=%s)",
+            operation.id,
+            snapshot_id,
+        )
         return f"The new version left the data unchanged; snapshot {snapshot_id} was not needed."
     try:
         restore_update_snapshot(data_dir, snapshot, specs=_database_specs(data_dir))
     except UpdateRollbackRefusedError as exc:
+        _log_data_kept(operation, snapshot_id, str(exc))
         return not_restored.format(reason=str(exc))
     except (DatabaseError, OSError, ValueError) as exc:
         raise ApplicationError(
@@ -237,7 +246,22 @@ def roll_back_data(
             f"the data snapshot {snapshot_id} did not complete: {exc}. Run "
             f"`vbot data-store snapshot restore {snapshot_id} --all --yes` before starting vBot"
         ) from exc
+    _LOGGER.warning(
+        "Update data restored from its pre-update snapshot (operation=%s snapshot=%s)",
+        operation.id,
+        snapshot_id,
+    )
     return f"The data was restored from snapshot {snapshot_id}, taken before the update."
+
+
+def _log_data_kept(operation: Operation, snapshot_id: str, reason: str) -> None:
+    _LOGGER.warning(
+        "Update data snapshot not restored; the data may hold candidate changes"
+        " (operation=%s snapshot=%s reason=%s)",
+        operation.id,
+        snapshot_id,
+        json.dumps(reason, ensure_ascii=False),
+    )
 
 
 def _interrupted_restore(install: Installation, operation: Operation) -> str | None:
@@ -507,7 +531,7 @@ def run(install: Installation, operation_id: str) -> None:
             if operation.phase == "completed":
                 retired = retire_unneeded(install)
     except Exception as exc:
-        _LOGGER.exception("Application update failed for %s", operation.id)
+        _LOGGER.exception("Application update failed (operation=%s)", operation.id)
         operation.error = str(exc)
         attention = operation.phase in {"stopping", "activating", "verifying"}
         operation.transition(
@@ -519,7 +543,7 @@ def run(install: Installation, operation_id: str) -> None:
             try:
                 control(install, "maintenance_end", operation)
             except Exception:
-                _LOGGER.warning("Could not release server maintenance for %s", operation.id)
+                _LOGGER.warning("Server maintenance release failed (operation=%s)", operation.id)
     # Deleting takes a while and needs no lock: nothing can use a retired tree.
     remove_retired(retired)
 
