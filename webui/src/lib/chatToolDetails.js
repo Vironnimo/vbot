@@ -75,6 +75,42 @@ export function toolDetailImages(
   });
 }
 
+const TOOL_MEDIA_KINDS = ['image', 'video', 'audio'];
+
+// The images, videos and audio a Tool produced, from the server's signed file
+// addresses in its display; each item's kind follows its media type.
+export function toolDetailMedia(tool) {
+  const media = toolDisplay(tool)?.media;
+  if (!Array.isArray(media)) return [];
+  const seen = new Set();
+  return media.flatMap((item) => {
+    const kind =
+      typeof item?.media_type === 'string'
+        ? TOOL_MEDIA_KINDS.find((prefix) =>
+            item.media_type.startsWith(`${prefix}/`),
+          )
+        : undefined;
+    if (
+      !kind ||
+      typeof item.url !== 'string' ||
+      !/^\/api\/files\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(item.url) ||
+      seen.has(item.url)
+    )
+      return [];
+    seen.add(item.url);
+    return [
+      {
+        kind,
+        src: item.url,
+        filename:
+          typeof item.filename === 'string' && item.filename
+            ? item.filename
+            : t('chat.attachment.preview'),
+      },
+    ];
+  });
+}
+
 // `raw` shows arguments with the keys the Tool's display hides, as sent;
 // `literal` shows a text as it is, even one that reads as JSON.
 export const toolDetailPresentation = (

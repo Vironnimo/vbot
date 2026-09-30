@@ -436,6 +436,62 @@ describe('ChatTimeline Tools', () => {
       expect(items[3]).toBe('Not a link');
     });
 
+    it('previews produced images and plays produced videos and audio', () => {
+      const display = structuredDisplay({
+        details: [],
+        media: [
+          {
+            url: '/api/files/clip.token',
+            filename: 'clip.mp4',
+            media_type: 'video/mp4',
+          },
+          {
+            url: '/api/files/song.token',
+            filename: 'song.mp3',
+            media_type: 'audio/mpeg',
+          },
+          {
+            url: '/api/files/cat.token',
+            filename: 'cat.png',
+            media_type: 'image/png',
+          },
+          {
+            url: 'https://example.com/x.png',
+            filename: 'remote.png',
+            media_type: 'image/png',
+          },
+          {
+            url: '/api/files/doc.token',
+            filename: 'doc.pdf',
+            media_type: 'application/pdf',
+          },
+        ],
+      });
+      timeline.render(
+        sessionWithTool([
+          toolStarted('call', 'generate_video', { prompt: 'a cat' }),
+          toolResult('call', 'generate_video', '{"ok": true}', { display }),
+        ]),
+      );
+
+      const media = document.querySelector('.tool-media');
+      expect(media.textContent).toContain(t('chat.toolMedia'));
+      expect(media.querySelector('video')?.getAttribute('src')).toBe(
+        '/api/files/clip.token',
+      );
+      expect(media.querySelector('audio')?.getAttribute('src')).toBe(
+        '/api/files/song.token',
+      );
+      expect(media.querySelector('img')?.getAttribute('src')).toBe(
+        '/api/files/cat.token',
+      );
+      // Only signed vBot file addresses of a playable kind reach the page.
+      expect(media.querySelectorAll('.tool-media__item')).toHaveLength(3);
+      expect(media.textContent).not.toContain('remote.png');
+      expect(media.textContent).not.toContain('doc.pdf');
+      expect(document.querySelector('.tool-raw-call').open).toBe(false);
+    });
+
     it('shows changed Memory entries with their scope and revision', () => {
       const display = structuredDisplay({
         details: [
