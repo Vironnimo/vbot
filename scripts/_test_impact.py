@@ -7,11 +7,15 @@ module reads those records and testmon's own database outside pytest, for
 The records describe a tested state: the git tree a commit check last tested, plus
 the paths that differed from it in the working tree then. ``DATA_FILE`` stores it
 beside the file reads, so a copy of the records carries the state they describe.
+Records that are missing, unreadable or without a tested state say nothing about
+any test: the selection is then the complete suite, whose run records afresh.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -25,12 +29,17 @@ FULL_SUITE_TRIGGERS = frozenset({"pyproject.toml"})
 _CODE_SUFFIXES = (".py", ".pyi")
 # Stay below SQLite's limit on the parameters of one statement.
 _CHUNK = 500
+# SQLite's primary result codes for a file that is no intact database.
+_CORRUPT_CODES = frozenset({sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB})
 
 
 def _query(data_file: Path, sql: str, values: Iterable[str] = ()) -> list[tuple[Any, ...]]:
-    """Run *sql* read-only; ``{placeholders}`` takes *values*, in chunks when there are many."""
+    """Run *sql* read-only; ``{placeholders}`` takes *values*, in chunks when there are many.
+
+    Raises sqlite3.Error when *data_file* is missing, unreadable or lacks the table.
+    """
     values = sorted(values)
-    if not data_file.is_file() or ("{placeholders}" in sql and not values):
+    if "{placeholders}" in sql and not values:
         return []
     connection = sqlite3.connect(f"file:{data_file.as_posix()}?mode=ro", uri=True, timeout=60)
     try:
@@ -42,28 +51,60 @@ def _query(data_file: Path, sql: str, values: Iterable[str] = ()) -> list[tuple[
             statement = sql.format(placeholders=", ".join("?" for _ in chunk))
             rows += connection.execute(statement, chunk).fetchall()
         return rows
-    except sqlite3.Error:
-        return []
     finally:
         connection.close()
 
 
-def readers(root: Path, paths: set[str]) -> set[str]:
-    """Return the tests that read one of *paths* or listed a directory containing one.
+def _query_or_nothing(
+    data_file: Path, sql: str, values: Iterable[str] = ()
+) -> list[tuple[Any, ...]]:
+    """Run *sql* like ``_query``; no rows when *data_file* is missing or unreadable."""
+    try:
+        return _query(data_file, sql, values)
+    except sqlite3.Error:
+        return []
 
-    The result contains ``COLLECTION`` when a path was read outside any test.
+
+def _directories(path: str) -> list[str]:
+    """Return the directories that contain *path*, nearest first."""
+    parts = path.split("/")
+    return ["/".join(parts[:end]) for end in range(len(parts) - 1, 0, -1)]
+
+
+def readers(root: Path, paths: set[str], records: Path | None = None) -> set[str]:
+    """Return the tests that read one of *paths* or listed a directory they change.
+
+    *paths* are paths of *root*'s working tree; *records* is the checkout whose
+    records answer (default *root*). A changed path may be added or removed, which
+    changes the entries of its directory. A directory no test listed may be new
+    itself, and one that no longer exists was removed; either changes the entries
+    of its own directory in turn. So the tests that listed any directory up to the
+    nearest existing one a test listed are readers too. The result contains
+    ``COLLECTION`` when a path was read outside any test.
+
+    Raises sqlite3.Error when the records are missing or unreadable.
     """
-    candidates = set(paths)
-    for path in paths:
-        parent = path.rpartition("/")[0]
-        if parent:
-            candidates.add(parent)
+    records = records or root
+    directories = {path: _directories(path) for path in paths}
+    candidates = set(paths).union(*directories.values())
     rows = _query(
-        root / DATA_FILE,
+        records / DATA_FILE,
         "SELECT DISTINCT test, path FROM reads WHERE path IN ({placeholders})",
         candidates,
     )
-    return {test for test, _path in rows}
+    tests_of: dict[str, set[str]] = {}
+    for test, path in rows:
+        tests_of.setdefault(path, set()).add(test)
+    tests: set[str] = set()
+    for path, containing in directories.items():
+        tests |= tests_of.get(path, set())
+        for directory in containing:
+            listers = tests_of.get(directory)
+            if listers:
+                tests |= listers
+                if (root / directory).is_dir():
+                    break
+    return tests
 
 
 def dependencies(root: Path, tests: set[str]) -> dict[str, set[str]]:
@@ -77,7 +118,7 @@ def dependencies(root: Path, tests: set[str]) -> dict[str, set[str]]:
     result = {test: {test.partition("::")[0]} for test in tests}
     modules = {test.partition("::")[0] for test in tests}
     module_of = "substr({column}, 1, instr({column} || '::', '::') - 1) IN ({{placeholders}})"
-    executed = _query(
+    executed = _query_or_nothing(
         root / TESTMON_DATA,
         "SELECT execution.test_name, fingerprint.filename FROM test_execution execution "
         "JOIN test_execution_file_fp link ON link.test_execution_id = execution.id "
@@ -85,7 +126,7 @@ def dependencies(root: Path, tests: set[str]) -> dict[str, set[str]]:
         "WHERE " + module_of.format(column="execution.test_name"),
         modules,
     )
-    read = _query(
+    read = _query_or_nothing(
         root / DATA_FILE,
         "SELECT test, path FROM reads WHERE " + module_of.format(column="test"),
         modules,
@@ -164,17 +205,26 @@ def select(root: Path, changed: Iterable[str] | None, records: Path | None = Non
     *root*); *changed* are the paths that differ from that state, None when that
     state is unknown. Changed Python code selects through pytest-testmon's record
     of the code each test executed; any other changed file selects the tests that
-    read it. testmon also selects the tests that failed in their last run.
+    read it. testmon also selects the tests that failed in their last run. Records
+    that are missing, unreadable or without a tested state select every test.
     """
     records = records or root
+    try:
+        return _select(root, changed, records)
+    except sqlite3.Error:
+        return Selection(frozenset(), frozenset(), {}, complete=True)
+
+
+def _select(root: Path, changed: Iterable[str] | None, records: Path) -> Selection:
     rows = _query(records / TESTMON_DATA, "SELECT test_name, duration, failed FROM test_execution")
     durations = {test: duration or 0.0 for test, duration, _failed in rows}
     failed = frozenset(test for test, _duration, test_failed in rows if test_failed)
-    if changed is None:
+    # Records without a tested state may describe any state of the working tree.
+    if changed is None or tested_state(records) is None:
         return Selection(frozenset(), failed, durations, complete=True)
     changed = set(changed)
     data_files = {path for path in changed if not path.endswith(_CODE_SUFFIXES)}
-    tests = readers(records, data_files)
+    tests = readers(root, data_files, records)
     if FULL_SUITE_TRIGGERS & data_files or COLLECTION in tests:
         return Selection(frozenset(), failed, durations, complete=True)
     if len(data_files) < len(changed):
@@ -210,7 +260,7 @@ def adopt(source: Path, target: Path, tests: Iterable[str]) -> None:
     Adopt only the record of a test whose code and files are as they were when
     *source* recorded it: *target* then selects the test when they change again.
     """
-    rows = _query(
+    rows = _query_or_nothing(
         source / TESTMON_DATA,
         "SELECT execution.test_name, execution.duration, execution.failed, execution.forced, "
         "fingerprint.filename, fingerprint.fsha, fingerprint.method_checksums "
@@ -244,7 +294,7 @@ def adopt(source: Path, target: Path, tests: Iterable[str]) -> None:
     finally:
         data.db.con.close()
 
-    reads = _query(
+    reads = _query_or_nothing(
         source / DATA_FILE,
         "SELECT test, path FROM reads WHERE test IN ({placeholders})",
         executions,
@@ -268,7 +318,7 @@ def tested_state(checkout: Path) -> tuple[str, frozenset[str]] | None:
 
     None when no commit check recorded one.
     """
-    rows = _query(checkout / DATA_FILE, "SELECT tree, dirty FROM tested_state")
+    rows = _query_or_nothing(checkout / DATA_FILE, "SELECT tree, dirty FROM tested_state")
     if not rows:
         return None
     tree, dirty = rows[0]
@@ -290,6 +340,33 @@ def record_tested_state(checkout: Path, tree: str, dirty: Iterable[str]) -> None
             )
     finally:
         connection.close()
+
+
+def discard_corrupt(checkout: Path) -> list[str]:
+    """Delete *checkout*'s records that are no intact SQLite database; return their names.
+
+    testmon cannot open a corrupt ``TESTMON_DATA``, so the test run that records
+    afresh has to start without it. A record that is merely busy stays.
+    """
+    discarded: list[str] = []
+    for name in (TESTMON_DATA, DATA_FILE):
+        data_file = checkout / name
+        if not data_file.is_file():
+            continue
+        try:
+            _query(data_file, "PRAGMA user_version")
+            _query(data_file, "SELECT count(*) FROM sqlite_master")
+        except sqlite3.DatabaseError as error:
+            if error.sqlite_errorcode & 0xFF not in _CORRUPT_CODES:
+                continue
+            try:
+                for suffix in ("", "-wal", "-shm"):
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(f"{data_file}{suffix}")
+            except OSError:
+                continue
+            discarded.append(name)
+    return discarded
 
 
 def copy_data(source_root: Path, target_root: Path) -> bool:

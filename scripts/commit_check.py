@@ -29,7 +29,8 @@ pytest runs the tests affected by the working tree through pytest-testmon, which
 compares the code each test executed last time with the current code, plus the
 tests that read a data file changed since the tree the checkout's records describe
 (``tests/file_dependencies.py``, ``scripts/_test_impact.py``). A change to
-``pyproject.toml`` or to a file read during collection runs the complete suite. A
+``pyproject.toml`` or to a file read during collection runs the complete suite, as
+do records that are missing, unreadable or without a tested state. A
 merge commit runs only the tests that neither this checkout's nor the merged
 worktree's test runs cover as merged.
 A failing test blocks the commit when it depends on a staged file or only on
@@ -641,6 +642,10 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
         if command is None:
             _record_tested_state(root, dirty)
             return unaffected
+        for name in _test_impact.discard_corrupt(root):
+            print(
+                f"Commit check: discarded the corrupt {name}; this run records afresh.", flush=True
+            )
         result = _run(command, root, env)
         if result.returncode not in (0, 1, 5):  # 5: no test selected
             return [

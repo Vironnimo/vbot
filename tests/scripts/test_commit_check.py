@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -221,8 +222,23 @@ def _check_tests(root: Path) -> dict[str, tuple[bool, str]]:
     return {result.status: (result.blocking, result.details) for result in results}
 
 
-def test_a_checkout_without_test_impact_data_runs_the_complete_suite(
-    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    ("records", "path", "content"),
+    [
+        ("missing", "calc.py", HARMLESS_CALC),
+        ("missing", "factor.txt", "9"),
+        ("without tested state", "factor.txt", "9"),
+        ("corrupt", "calc.py", HARMLESS_CALC),
+    ],
+    ids=["no records, code", "no records, data", "no tested state", "corrupt"],
+)
+def test_a_checkout_without_usable_test_impact_data_runs_the_complete_suite(
+    impact_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    records: str,
+    path: str,
+    content: str,
 ) -> None:
     # The pytest command is recorded instead of started.
     commands: list[list[str]] = []
@@ -232,14 +248,30 @@ def test_a_checkout_without_test_impact_data_runs_the_complete_suite(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(commit_check, "_run", run)
-    _write(repo, "module.py", FORMATTED)
-    _git(repo, "add", "module.py")
+    testmon_data = impact_project / _test_impact.TESTMON_DATA
+    file_reads = impact_project / _test_impact.DATA_FILE
+    if records == "missing":
+        testmon_data.unlink()
+        file_reads.unlink()
+    elif records == "without tested state":
+        # As a plain `pytest --testmon` run leaves them: they describe no known tree.
+        connection = sqlite3.connect(file_reads)
+        with connection:
+            connection.execute("DELETE FROM tested_state")
+        connection.close()
+    else:
+        testmon_data.write_bytes(b"not a database, " * 64)
+    _write(impact_project, path, content)
+    _git(impact_project, "add", path)
 
-    assert _check_tests(repo) == {"PASS": (False, "")}
+    assert _check_tests(impact_project) == {"PASS": (False, "")}
 
     [command] = commands
     assert command[-2:] == ["-n", "auto"]
     assert "no usable test-impact data" in capsys.readouterr().out
+    if records == "corrupt":
+        # testmon cannot open it: the complete run starts without it and records afresh.
+        assert not testmon_data.exists()
 
 
 def test_failure_caused_by_the_staged_change_blocks(impact_project: Path) -> None:
