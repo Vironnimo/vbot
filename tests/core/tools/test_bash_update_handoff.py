@@ -194,6 +194,14 @@ async def test_bash_exports_update_handoff_token_without_writing_a_ticket(
         make_context(tmp_path), {"command": _PRINT_HANDOFF}, manager, update_handoffs=handoffs
     )
     assert unpersisted["data"]["output"].strip() == "missing"
+    # Neither does a call whose Run ids cannot scope one; its command still runs.
+    unscoped = await bash_handler(
+        replace(context, session_id=""),
+        {"command": _PRINT_HANDOFF},
+        manager,
+        update_handoffs=handoffs,
+    )
+    assert unscoped["data"]["output"].strip() == "missing"
 
 
 @pytest.mark.asyncio
