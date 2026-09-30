@@ -13,11 +13,13 @@ import pytest
 from core.database import (
     CANONICAL,
     DISPOSABLE,
+    HELD_CAPTURE,
     MARKER_FILE_NAME,
     Database,
     DatabaseHealth,
     DatabaseSpec,
     Migration,
+    SnapshotCapture,
     SnapshotFacts,
     canonical_database_path,
     create_data_snapshot,
@@ -52,6 +54,7 @@ def notes_spec(
     after_open: Callable[[sqlite3.Connection], None] | None = None,
     health: Callable[[sqlite3.Connection], DatabaseHealth] | None = None,
     snapshot_facts: SnapshotFacts | None = NOTES_FACTS,
+    snapshot_capture: SnapshotCapture = HELD_CAPTURE,
 ) -> DatabaseSpec:
     """A canonical database at its fixed path in ``data_dir``."""
     return DatabaseSpec(
@@ -66,6 +69,7 @@ def notes_spec(
         after_open=after_open,
         snapshot_facts=snapshot_facts,
         health=health,
+        snapshot_capture=snapshot_capture,
     )
 
 

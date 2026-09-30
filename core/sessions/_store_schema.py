@@ -5,7 +5,13 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from core.database import CANONICAL, DatabaseHealth, DatabaseSpec, SnapshotFacts
+from core.database import (
+    ANCHOR_CAPTURE,
+    CANONICAL,
+    DatabaseHealth,
+    DatabaseSpec,
+    SnapshotFacts,
+)
 from core.sessions import _store_fts
 from core.sessions.schema import APPLICATION_ID, DATABASE_NAME, FORMAT_GENERATION, SCHEMA_SQL
 
@@ -33,6 +39,9 @@ def session_database_spec(path: Path) -> DatabaseSpec:
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,
         health=_session_health,
+        # Session writes, and so Runs, go on while a data snapshot is taken; the
+        # snapshot stands for the instant this database is copied.
+        snapshot_capture=ANCHOR_CAPTURE,
     )
 
 

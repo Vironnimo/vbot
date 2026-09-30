@@ -29,7 +29,7 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 from core.database import SnapshotBarrier
-from core.json_documents import JsonDocumentWriteError, write_json_document
+from core.json_documents import JsonDocumentWriteError, document_change, write_json_document
 from core.projects.paths import cwd_identity_key
 from core.projects.projects import (
     Project,
@@ -161,7 +161,8 @@ class ProjectStore:
             try:
                 self._write_project(project)
             except Exception:
-                shutil.rmtree(project_dir)
+                with document_change(project_dir):
+                    shutil.rmtree(project_dir)
                 raise
             return project
 

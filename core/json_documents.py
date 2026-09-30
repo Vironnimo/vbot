@@ -14,6 +14,10 @@ mechanics every owner shares:
 - :func:`write_json_document` refuses to overwrite a file that fails to load, then
   writes the owner's payload with every unknown field of the file on disk merged
   back unchanged at each modeled level.
+- :func:`document_change` admits every change of a snapshot document through the
+  data snapshot freeze (``core.database.snapshot_barrier``);
+  :func:`write_json_document` enters it itself, and owners wrap their removals
+  and moves of documents or of directories holding them in it.
 
 Removing, renaming, or changing the meaning of a field is not an additive change:
 it needs a ``format_version`` bump and a converter.
@@ -27,6 +31,7 @@ import json
 import os
 import stat
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -43,6 +48,7 @@ from core.config_validation import (
     read_json_file,
     warn_unknown_keys,
 )
+from core.database.snapshot_barrier import member_change
 from core.utils.atomic import atomic_write_text
 
 FORMAT_VERSION_FIELD = "format_version"
@@ -90,6 +96,9 @@ SNAPSHOT_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         for kind, pattern in DURABLE_DOCUMENTS.items()
         if kind not in DOCUMENTS_OUTSIDE_SNAPSHOTS
     }
+)
+_SNAPSHOT_PATTERNS: tuple[tuple[str, ...], ...] = tuple(
+    tuple(pattern.split("/")) for pattern in SNAPSHOT_DOCUMENTS.values()
 )
 
 ShapeKind = Literal["object", "map", "list", "opaque"]
@@ -376,21 +385,41 @@ def write_json_document(
     ``body`` holds the owner's modeled fields; ``format_version`` is set here.
     Entries of ``drop_empty`` maps that are still empty objects after the merge
     are left out. ``reset=True`` replaces the file without the load guard or preservation, for
-    an explicit user reset. Raises :class:`JsonDocumentWriteError` when the file
-    on disk failed to load, ``TypeError``/``ValueError`` for an unserializable
-    body, and ``OSError`` for write failures.
+    an explicit user reset. The write is one :func:`document_change`. Raises
+    :class:`JsonDocumentWriteError` when the file on disk failed to load,
+    ``TypeError``/``ValueError`` for an unserializable body, and ``OSError`` for
+    write failures.
     """
 
-    payload = {key: value for key, value in body.items() if key != FORMAT_VERSION_FIELD}
-    if not reset:
-        previous = check_json_document_writable(path, fmt)
-        if previous is not None:
-            payload = preserve_unknown_fields(previous, payload, fmt.shape)
-            payload.pop(FORMAT_VERSION_FIELD, None)
-    payload = _drop_empty_entries(payload, fmt.shape)
-    text = render_json_document(payload, version=fmt.version, sort_keys=fmt.sort_keys)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(path, text, data_dir=data_dir, mode=mode)
+    with document_change(path):
+        payload = {key: value for key, value in body.items() if key != FORMAT_VERSION_FIELD}
+        if not reset:
+            previous = check_json_document_writable(path, fmt)
+            if previous is not None:
+                payload = preserve_unknown_fields(previous, payload, fmt.shape)
+                payload.pop(FORMAT_VERSION_FIELD, None)
+        payload = _drop_empty_entries(payload, fmt.shape)
+        text = render_json_document(payload, version=fmt.version, sort_keys=fmt.sort_keys)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, text, data_dir=data_dir, mode=mode)
+
+
+@contextmanager
+def document_change(path: Path) -> Iterator[None]:
+    """Admit one change of the snapshot documents at or below ``path``.
+
+    Wrap every write, removal or move of a snapshot document, or of a directory
+    that holds them, so that no data snapshot captures it half done: while a
+    snapshot copies the data directory the change waits, off the Event Loop,
+    until the copies are taken (``core.database.snapshot_barrier``). Entries
+    nest freely; a change inside another change of the same data directory never
+    waits.
+    """
+
+    with ExitStack() as stack:
+        for data_dir in _document_data_dirs(Path(path)):
+            stack.enter_context(member_change(data_dir))
+        yield
 
 
 def render_json_document(
@@ -435,6 +464,24 @@ def is_snapshot_document_path(path: str) -> bool:
         len(parts) == len(pattern) and all(map(_segment_matches, parts, pattern))
         for pattern in (tuple(value.split("/")) for value in SNAPSHOT_DOCUMENTS.values())
     )
+
+
+def _document_data_dirs(path: Path) -> tuple[Path, ...]:
+    """Each data directory that holds ``path`` as a snapshot document or a directory of them.
+
+    A path can match from more than one directory, such as an Agent whose id names
+    a document root; every match is admitted, and a directory no snapshot is
+    taken of never waits.
+    """
+
+    parts = path.resolve().parts
+    found: set[Path] = set()
+    for pattern in _SNAPSHOT_PATTERNS:
+        for depth in range(1, min(len(pattern), len(parts) - 1) + 1):
+            tail = parts[len(parts) - depth :]
+            if all(map(_segment_matches, tail, pattern[:depth])):
+                found.add(Path(*parts[: len(parts) - depth]))
+    return tuple(sorted(found))
 
 
 def _is_link(status: os.stat_result) -> bool:

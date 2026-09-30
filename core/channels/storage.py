@@ -14,7 +14,7 @@ from core.channels.config import (
     _normalize_channel_id,
     load_validated_channel_json,
 )
-from core.json_documents import JsonDocumentWriteError, write_json_document
+from core.json_documents import JsonDocumentWriteError, document_change, write_json_document
 from core.utils.logging import get_logger, register_log_channel_ids
 
 _LOGGER = get_logger("channels")
@@ -115,7 +115,8 @@ class ChannelStorage:
         if not channel_dir.is_dir():
             raise ChannelError(f"Channel path is not a directory: {channel_dir}")
         try:
-            shutil.rmtree(channel_dir)
+            with document_change(channel_dir):
+                shutil.rmtree(channel_dir)
         except OSError as error:
             raise ChannelError(f"Cannot delete channel directory {channel_dir}: {error}") from error
 

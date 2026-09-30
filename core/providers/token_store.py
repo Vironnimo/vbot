@@ -24,6 +24,7 @@ from core.config_validation import (
 from core.json_documents import (
     JsonDocumentFormat,
     JsonDocumentWriteError,
+    document_change,
     json_document,
     validate_format_version,
     write_json_document,
@@ -200,7 +201,7 @@ class TokenStore:
         """Delete the token for a provider connection account, if it exists."""
 
         token_path = self._token_path(provider_id, local_connection_id, account_id)
-        with self._mutation_lock:
+        with self._mutation_lock, document_change(token_path):
             try:
                 token_path.unlink()
             except FileNotFoundError:

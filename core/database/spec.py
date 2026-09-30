@@ -16,6 +16,13 @@ DatabaseProfile = Literal["canonical", "disposable"]
 CANONICAL: DatabaseProfile = "canonical"
 DISPOSABLE: DatabaseProfile = "disposable"
 
+#: How an online data snapshot captures a canonical database; see
+#: ``core.database.snapshot_barrier``.
+SnapshotCapture = Literal["held", "anchor", "trailing"]
+HELD_CAPTURE: SnapshotCapture = "held"
+ANCHOR_CAPTURE: SnapshotCapture = "anchor"
+TRAILING_CAPTURE: SnapshotCapture = "trailing"
+
 #: The SQLite ``application_id`` of every vBot database family: "VB" plus two
 #: letters. Every Extension database shares one id; ``kernel_meta`` names it.
 APPLICATION_IDS: Mapping[str, int] = MappingProxyType(
@@ -92,6 +99,14 @@ class DatabaseSpec:
     Canonical databases live at :func:`canonical_database_path` for their name
     and are registered in the data directory's marker. Disposable databases
     declare ``projection_version`` and are discarded and rebuilt on mismatch.
+
+    ``snapshot_capture`` places a canonical database in an online data snapshot
+    (``core.database.snapshot_barrier``). A ``held`` database stops taking writes
+    while a capture copies the data. The one ``anchor``, the Session database,
+    keeps taking writes and fixes the instant the snapshot stands for. A
+    ``trailing`` database keeps taking writes too and is copied after the anchor,
+    so its copy may be newer than that instant; only data that stays correct
+    ahead of the anchor may trail.
     """
 
     name: str
@@ -107,12 +122,15 @@ class DatabaseSpec:
     health: Callable[[sqlite3.Connection], DatabaseHealth] | None = None
     projection_version: int | None = None
     connection_setup: Callable[[sqlite3.Connection], None] | None = None
+    snapshot_capture: SnapshotCapture = HELD_CAPTURE
 
     def __post_init__(self) -> None:
         validate_database_name(self.name)
         object.__setattr__(self, "path", Path(self.path))
         if self.profile not in (CANONICAL, DISPOSABLE):
             raise ValueError(f"unknown database profile: {self.profile!r}")
+        if self.snapshot_capture not in (HELD_CAPTURE, ANCHOR_CAPTURE, TRAILING_CAPTURE):
+            raise ValueError(f"{self.name}: unknown snapshot capture {self.snapshot_capture!r}")
         if not 0 < self.application_id <= _SQLITE_APPLICATION_ID_MAX:
             raise ValueError(f"{self.name}: application_id must be a positive 32-bit value")
         if self.format_generation < 1:

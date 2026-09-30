@@ -17,6 +17,8 @@ from typing import Any
 import pytest
 
 from core.database import (
+    ANCHOR_CAPTURE,
+    TRAILING_CAPTURE,
     Database,
     DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
@@ -36,7 +38,9 @@ from core.database import (
     snapshot_summaries,
 )
 from core.database import snapshots as snapshots_module
+from core.database.snapshot_barrier import capture_members
 from core.database.snapshots import SNAPSHOT_HEALTH_FILE_NAME, SNAPSHOT_MANIFEST_NAME
+from core.json_documents import document_change
 from tests.core.database.database_test_support import (
     NOTES_FACTS,
     NOTES_SCHEMA_SQL,
@@ -152,7 +156,8 @@ def test_an_online_snapshot_is_one_consistent_copy_while_another_thread_keeps_wr
     pin_journal_mode(monkeypatch, journal_mode)
     # SQLite lock waits fail at once, so only a write that never meets one can succeed.
     monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
-    database = open_database(notes_spec(data_dir))
+    # The anchor, like the Session database, keeps taking writes while it is copied.
+    database = open_database(notes_spec(data_dir, snapshot_capture=ANCHOR_CAPTURE))
     writer = ThreadPoolExecutor(max_workers=1)
     overlapping: list[Future[None]] = []
     committed_during_copy: list[bool] = []
@@ -237,6 +242,95 @@ async def test_a_capture_waits_for_compound_mutations_in_flight_and_holds_off_ne
         in_flight.result(timeout=10.0)
         capturing.result(timeout=10.0)
     assert order == ["mutation", "capture", "new mutation"]
+
+
+def test_a_capture_freezes_held_members_until_the_anchor_is_copied(data_dir: Path) -> None:
+    notes = open_database(notes_spec(data_dir))
+    journal = open_database(notes_spec(data_dir, name="journal", snapshot_capture=ANCHOR_CAPTURE))
+    tally = open_database(notes_spec(data_dir, name="tally", snapshot_capture=TRAILING_CAPTURE))
+    document = data_dir / "settings.json"
+    inside, draining, late_ran = Event(), Event(), Event()
+    order: list[str] = []
+    late: list[Future[None]] = []
+
+    def in_flight(connection: sqlite3.Connection) -> None:
+        connection.execute("INSERT INTO notes (body) VALUES ('in flight')")
+        inside.set()
+        assert draining.wait(10.0)
+        # A document change inside this held write is admitted at once, although
+        # the capture already holds off new held changes and waits for this one.
+        with document_change(document):
+            document.write_text("{}", encoding="utf-8")
+
+    def still_draining() -> bool:
+        draining.set()  # consulted only while the capture waits for held changes
+        return False
+
+    def late_note(connection: sqlite3.Connection) -> None:
+        late_ran.set()
+        connection.execute("INSERT INTO notes (body) VALUES ('late')")
+
+    def copy_database(name: str) -> None:
+        order.append(name)
+        if name == "journal":
+            late.append(threads.submit(notes.write, late_note))
+            # The anchor keeps taking writes; the held member does not.
+            threads.submit(add_note, journal, "live").result(timeout=10.0)
+            assert not late_ran.is_set()
+            assert note_bodies(notes) == ["in flight"]
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as threads:
+            writing = threads.submit(notes.write, in_flight)
+            assert inside.wait(10.0)
+            capture = threads.submit(
+                capture_members,
+                data_dir,
+                {"tally": tally.spec, "journal": journal.spec, "notes": notes.spec},
+                copy_database=copy_database,
+                copy_documents=lambda: order.append("documents"),
+                cancelled=still_draining,
+            ).result(timeout=20.0)
+            writing.result(timeout=10.0)
+            late[0].result(timeout=10.0)
+        assert capture is not None
+        assert order == ["notes", "documents", "journal", "tally"]
+        assert note_bodies(notes) == ["in flight", "late"]
+        assert note_bodies(journal) == ["live"]
+    finally:
+        for database in (notes, journal, tally):
+            database.close()
+
+
+@pytest.mark.asyncio
+async def test_an_event_loop_write_never_waits_for_a_capture_and_fails_it_instead(
+    data_dir: Path,
+) -> None:
+    notes = open_database(notes_spec(data_dir))
+    frozen, written = Event(), Event()
+
+    def copy_database(name: str) -> None:
+        frozen.set()
+        assert written.wait(10.0)
+
+    try:
+        capture = asyncio.ensure_future(
+            asyncio.to_thread(
+                capture_members,
+                data_dir,
+                {"notes": notes.spec},
+                copy_database=copy_database,
+                copy_documents=lambda: None,
+            )
+        )
+        assert await asyncio.to_thread(frozen.wait, 10.0)
+        add_note(notes, "from the Event Loop")  # a held write that would otherwise wait
+        written.set()
+        with pytest.raises(DatabaseUnavailableError, match="retry the snapshot"):
+            await capture
+        assert note_bodies(notes) == ["from the Event Loop"]
+    finally:
+        notes.close()
 
 
 def test_an_online_snapshot_never_copies_inside_a_compound_mutation(data_dir: Path) -> None:
