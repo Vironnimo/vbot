@@ -61,9 +61,8 @@ def _emit_assistant_events(run: Run, message: ChatMessage) -> None:
 def _emit_streaming_assistant_events(
     run: Run, message: ChatMessage, *, allow_after_cancel: bool = False
 ) -> None:
-    # ``allow_after_cancel`` is set only for the preserve-partial-on-cancel
-    # finalization: the payload then re-publishes text the user already saw
-    # streaming, so the cancel suppression must not drop it.
+    # ``allow_after_cancel`` finalizes readable text the user already saw
+    # streaming, whether it was interrupted or logically complete before Stop.
     if message.reasoning:
         run.emit(
             REASONING_EVENT,

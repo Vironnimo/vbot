@@ -613,6 +613,7 @@ class WireRequestRunner:
         )
 
         last_model_delta_at = time.monotonic()
+        preserve_complete_after_cancel = False
         try:
             async for delta in iter_with_chunk_timeout(
                 stream,
@@ -768,16 +769,21 @@ class WireRequestRunner:
                 raise
         except asyncio.CancelledError:
             delta_emitter.close()
-            # User cancel mid-stream. Output the user already saw must not
-            # vanish (GLOSSARY → Cancel), so accumulated visible content is
-            # finalized like a stream break after visible output; the caller
-            # persists it and the Run still ends as cancelled. This includes
-            # readable reasoning even when answer text has not started yet;
-            # the private Continuation Checkpoint separately preserves the
-            # same working state for the next visible Run.
-            if run.cancel_requested and (
+            if (
+                run.cancel_requested
+                and accumulator.finish_reason == TERMINAL_OUTCOME_STOP
+                and not accumulator.has_partial_tool_call
+                and bool((accumulator.partial_content or "").strip())
+            ):
+                # Logical completion precedes iterator/transport cleanup. Keep
+                # that answer through the ordinary integrity checks below;
+                # cancellation still prevents any subsequent Model/Tool work.
+                assistant_fields = accumulator.finalize_assistant_fields()
+                preserve_complete_after_cancel = True
+            elif run.cancel_requested and (
                 accumulator.partial_content is not None or accumulator.partial_reasoning is not None
             ):
+                # Preserve readable evidence of a genuinely unfinished step.
                 return self._finalize_interrupted_partial(
                     public_model,
                     response_model,
@@ -786,7 +792,8 @@ class WireRequestRunner:
                     interruption_cause=("user" if run.cancel_reason == "user" else "internal"),
                     output_cwd=output_cwd,
                 )
-            raise
+            else:
+                raise
         except BaseException:
             delta_emitter.close()
             raise
@@ -810,13 +817,19 @@ class WireRequestRunner:
                 response_model,
                 accumulator,
                 run,
-                interruption_cause="provider",
-                recovery="continue",
+                interruption_cause=(
+                    ("user" if run.cancel_reason == "user" else "internal")
+                    if run.cancel_requested
+                    else "provider"
+                ),
+                recovery="none" if run.cancel_requested else "continue",
                 recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
                 output_cwd=output_cwd,
             )
         assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
-        _emit_streaming_assistant_events(run, assistant_message)
+        _emit_streaming_assistant_events(
+            run, assistant_message, allow_after_cancel=preserve_complete_after_cancel
+        )
         return _AssistantStep(
             message=assistant_message,
             terminal_outcome=assistant_fields.finish_reason,

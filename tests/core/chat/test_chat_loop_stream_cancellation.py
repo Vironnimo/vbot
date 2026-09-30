@@ -38,12 +38,17 @@ from tests.core.chat.chat_loop_support import (
 
 
 class CompletedStreamingStubAdapter(StubAdapter):
-    """Finish a visible stream, then let the test arrange the persist-lock race."""
+    """Finish a visible stream, then let the test choose its cancellation boundary."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *, deltas: list[JsonObject] | None = None, finish_reason: str = "stop"
+    ) -> None:
         super().__init__([])
         self.finish_emitted = asyncio.Event()
         self.release_stream = asyncio.Event()
+        self.closed = False
+        self.deltas = deltas or [{"type": "content_delta", "text": "Complete answer"}]
+        self.finish_reason = finish_reason
 
     async def stream(
         self,
@@ -53,26 +58,55 @@ class CompletedStreamingStubAdapter(StubAdapter):
         **kwargs: Any,
     ) -> Any:
         del messages, model_id, kwargs
-        yield {"type": "content_delta", "text": "Complete answer"}
-        yield {"type": "finish", "reason": "stop"}
+        for delta in self.deltas:
+            yield delta
+        yield {"type": "finish", "reason": self.finish_reason}
         self.finish_emitted.set()
         await self.release_stream.wait()
 
+    async def aclose(self) -> None:
+        self.closed = True
+
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "finish_case", ["unfinished", "truncated", "tool_calls", "reasoning_phase"]
+)
 async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the_partial(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    finish_case: str,
 ) -> None:
     caplog.set_level(logging.DEBUG, logger="vbot.runs")
-    adapter = BlockingStreamingStubAdapter()
+    if finish_case == "unfinished":
+        adapter: Any = BlockingStreamingStubAdapter()
+        cancellation_boundary = adapter.stream_started
+    else:
+        deltas: list[JsonObject] = [{"type": "content_delta", "text": "before"}]
+        if finish_case == "tool_calls":
+            deltas.append(
+                {
+                    "type": "tool_call_delta",
+                    "index": 0,
+                    "id": "call-unexecuted",
+                    "name": "write",
+                    "arguments_delta": '{"path":"unused"}',
+                }
+            )
+        elif finish_case == "reasoning_phase":
+            deltas.append({"type": "reasoning_delta", "text": "Unfinished thinking"})
+        adapter = CompletedStreamingStubAdapter(
+            deltas=deltas,
+            finish_reason="output_truncated" if finish_case == "truncated" else "stop",
+        )
+        cancellation_boundary = adapter.finish_emitted
     runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     run = await build_chat_loop(runtime, streaming=True).start_run(
         "coder", "Hi", session_id="session-one"
     )
-    await adapter.stream_started.wait()
+    await cancellation_boundary.wait()
     run.request_cancel(reason="user")
     await asyncio.sleep(0)
 
@@ -95,22 +129,34 @@ async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the
     # (GLOSSARY -> Cancel); the never-released late delta stays suppressed.
     assert persisted_roles(messages) == ["user", "assistant"]
     assert (messages[1].content, messages[1].interrupted) == ("before", True)
+    assert messages[1].interruption_cause == "user"
+    assert messages[1].tool_calls is None
+    assert run.tool_call_count == 0
+    assert runtime.chat_sessions.get(session_address("coder", "session-one")).load_continuation()
     assert messages[-1].role == "run_summary"
     assert messages[-1].status == "cancelled"
-    assert await event_types(runtime, run) == [
+    expected_events = [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
+        *(["reasoning"] if finish_case == "reasoning_phase" else []),
         "assistant_output",
         MODEL_STEP_USAGE_EVENT,
         "run_cancelled",
     ]
+    assert [
+        event
+        for event in await event_types(runtime, run)
+        if event not in {"tool_call_delta", "reasoning_delta"}
+    ] == expected_events
 
 
 @pytest.mark.asyncio
-async def test_user_cancel_while_complete_stream_waits_to_persist_preserves_answer(
+@pytest.mark.parametrize("cancel_boundary", ["stream_close", "persistence"])
+async def test_user_cancel_after_complete_stream_preserves_answer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cancel_boundary: str,
 ) -> None:
     adapter = CompletedStreamingStubAdapter()
     runtime = stream_runtime(tmp_path, adapter)
@@ -121,38 +167,41 @@ async def test_user_cancel_while_complete_stream_waits_to_persist_preserves_answ
     )
     await adapter.finish_emitted.wait()
 
-    target_lock = runtime.chat_sessions.write_lock(session_address("coder", "session-one"))
-    holder_acquired = asyncio.Event()
-    release_holder = asyncio.Event()
-    persist_wait_started = asyncio.Event()
+    if cancel_boundary == "persistence":
+        target_lock = runtime.chat_sessions.write_lock(session_address("coder", "session-one"))
+        holder_acquired = asyncio.Event()
+        release_holder = asyncio.Event()
+        persist_wait_started = asyncio.Event()
 
-    async def hold_write_lock() -> None:
-        async with target_lock:
-            holder_acquired.set()
-            await release_holder.wait()
+        async def hold_write_lock() -> None:
+            async with target_lock:
+                holder_acquired.set()
+                await release_holder.wait()
 
-    class SignallingWriteLock:
-        async def __aenter__(self) -> Any:
-            persist_wait_started.set()
-            return await target_lock.__aenter__()
+        class SignallingWriteLock:
+            async def __aenter__(self) -> Any:
+                persist_wait_started.set()
+                return await target_lock.__aenter__()
 
-        async def __aexit__(self, *exc_info: object) -> None:
-            await target_lock.__aexit__(*exc_info)
+            async def __aexit__(self, *exc_info: object) -> None:
+                await target_lock.__aexit__(*exc_info)
 
-    holder_task = asyncio.create_task(hold_write_lock())
-    await holder_acquired.wait()
-    monkeypatch.setattr(
-        runtime.chat_sessions,
-        "write_lock",
-        lambda *_args, **_kwargs: SignallingWriteLock(),
-    )
-    adapter.release_stream.set()
-    await persist_wait_started.wait()
+        holder_task = asyncio.create_task(hold_write_lock())
+        await holder_acquired.wait()
+        monkeypatch.setattr(
+            runtime.chat_sessions,
+            "write_lock",
+            lambda *_args, **_kwargs: SignallingWriteLock(),
+        )
+        adapter.release_stream.set()
+        await persist_wait_started.wait()
 
     run.request_cancel(reason="user")
     await asyncio.sleep(0)
-    release_holder.set()
-    await holder_task
+    if cancel_boundary == "persistence":
+        release_holder.set()
+        await holder_task
+        monkeypatch.undo()
 
     with pytest.raises(RunCancelledError):
         await run.wait()
@@ -163,8 +212,17 @@ async def test_user_cancel_while_complete_stream_waits_to_persist_preserves_answ
     assert [message.role for message in messages] == ["user", "assistant", "run_summary"]
     assert messages[1].content == "Complete answer"
     assert messages[1].interrupted is False
+    assert adapter.closed is True
+    assert run.iteration_count == 1
     # A complete answer resolves the Continuation checkpoint even though Stop won.
     assert session.load_continuation() is None
+    followup_adapter = StubAdapter([{"content": "New answer", "tool_calls": None}])
+    runtime.adapter = followup_adapter
+    await build_chat_loop(runtime).send("coder", "New independent task", session_id="session-one")
+    assert not any(
+        "<continuation-checkpoint" in str(message.get("content") or "")
+        for message in followup_adapter.requests[0]["messages"]
+    )
 
 
 @pytest.mark.asyncio
