@@ -321,12 +321,10 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
         chat_sessions = state.runtime.chat_sessions
-        remaining_agents = [
-            agent
+        if not any(
+            agent.id != agent_id
             for agent in await chat_sessions.run_async(state.runtime.agents.list)
-            if agent.id != agent_id
-        ]
-        if not remaining_agents:
+        ):
             raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent")
         try:
             # Identity scope only: a same-named Project Team agent remains
@@ -340,13 +338,15 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
                         (f"cannot delete agent referenced by {', '.join(references)}: {agent_id}"),
                     )
                 await state.runtime.terminal_manager.close_agent_scope(agent_id, None)
-                await chat_sessions.run_async(state.runtime.agents.delete, agent_id)
+                deleted = await chat_sessions.run_async(state.runtime.agents.delete, agent_id)
                 state.runtime.invalidate_agent_skills(agent_id)
         except RunAdmissionBlockedError as exc:
             raise RpcError(
                 RPC_ERROR_AGENT_BUSY,
                 f"cannot delete agent with active or queued runs: {agent_id}",
             ) from exc
+        # Read after the delete: it removed the Agent from their delegation lists.
+        remaining_agents = await chat_sessions.run_async(state.runtime.agents.list)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     result = {
@@ -354,7 +354,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
         "remaining_agents": [_agent_response(state, agent) for agent in remaining_agents],
     }
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
-    _LOGGER.info("Agent archived (agent=%s)", agent_id)
+    _LOGGER.info("Agent archived (agent=%s policies=%s)", agent_id, len(deleted.policy_agent_ids))
     return result
 
 

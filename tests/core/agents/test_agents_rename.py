@@ -210,9 +210,9 @@ def test_rename_preserves_agent_order_position(store: AgentStore) -> None:
             AgentAlreadyExistsError,
             id="agent",
         ),
-        # A delegation grant left by a deleted ``researcher`` would pass to the
-        # renamed Agent, and a revert would take it along; so would a reference
-        # another owner holds.
+        # A reference another owner holds would pass to the renamed Agent, and a
+        # revert would take it along. The refusal changes nothing, so it keeps
+        # even the delegation grant a rename would otherwise remove.
         pytest.param(
             {"agent_id": "manager", "tools": {"subagent": {"allowed_agents": ["researcher"]}}},
             AgentReferencedError,
@@ -232,9 +232,27 @@ def test_rename_rejects_an_occupied_destination(
 
     if isinstance(raised.value, AgentReferencedError):
         assert raised.value.agent_id == "researcher"
-        assert raised.value.references == ("allowed_agents:manager", "channel:tg-old")
+        assert raised.value.references == ("channel:tg-old",)
     assert {agent.id: agent for agent in store.list()} == before
     assert not _record(store).exists()
+
+
+def test_rename_removes_delegation_grants_left_for_the_new_id(store: AgentStore) -> None:
+    # Left by a deleted ``researcher``, or given before any Agent had the id: it
+    # grants nothing, so the renamed Agent does not inherit it and a revert does
+    # not move it to ``coder``. A qualified address names a Team Agent and stays.
+    store.create("coder", "Coder Agent")
+    store.create(
+        "writer", "Writer", tools={"subagent": {"allowed_agents": ["researcher", "researcher@p"]}}
+    )
+
+    result = store.rename("coder", "researcher")
+
+    assert result.policy_agent_ids == ("writer",)
+    assert store.get("writer").tools["subagent"]["allowed_agents"] == ["researcher@p"]
+    store.finish_rename(store.revert_rename(result.rename))
+    assert store.get("writer").tools["subagent"]["allowed_agents"] == ["researcher@p"]
+    assert [agent.id for agent in store.list()] == ["coder", "writer"]
 
 
 def test_a_pending_rename_blocks_other_renames_and_its_ids(store: AgentStore) -> None:

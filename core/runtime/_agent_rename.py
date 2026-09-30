@@ -14,8 +14,9 @@ Every step selects only what still names the id it replaces, so repeating a
 direction converges and reversing the ids reverts it. A failure reverts the whole
 rename; a process that dies mid-rename leaves the record, and the next start
 completes its direction (:func:`complete_pending_rename`). Because a revert moves
-everything that names the new id back, a rename is refused while any reference
-still names the new id (:func:`identity_agent_references`, ``AgentStore.rename``).
+everything that names the new id back, a rename is refused while a reference of
+another owner still names the new id (:func:`identity_agent_references`);
+``AgentStore.rename`` removes delegation allow-list entries naming it instead.
 """
 
 from __future__ import annotations

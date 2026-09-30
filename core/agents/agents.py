@@ -61,6 +61,7 @@ from core.agents._types import (
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
     Agent,
     AgentAlreadyExistsError,
+    AgentDeleteResult,
     AgentError,
     AgentListResult,
     AgentNotFoundError,
@@ -115,6 +116,7 @@ from core.utils.tree_move import move_tree
 __all__ = [
     "Agent",
     "AgentAlreadyExistsError",
+    "AgentDeleteResult",
     "AgentError",
     "AgentListResult",
     "AgentNotFoundError",
@@ -698,12 +700,16 @@ class AgentStore:
         Live Session addresses, the Sub-Agent parent links to them, the roster
         order and delegation allow-lists move to the new id with it.
 
-        The new id must be unused. No Agent, live Session, delegation allow-list
-        entry or ``external_references`` entry (the references other owners hold
-        to ``new_agent_id``) may name it; references raise
+        The new id must be unused. No Agent, live Session or
+        ``external_references`` entry (the references other owners hold to
+        ``new_agent_id``) may name it; references raise
         :class:`AgentReferencedError` naming each of them. Reverting a rename
         moves what names the new id back to the old one, so it would take along a
-        reference that named the new id before the rename.
+        reference that named the new id before the rename. A delegation allow-list
+        entry that names the unused id grants nothing - a leftover of a deleted
+        Agent, or a grant made before any Agent had the id - so instead of
+        refusing, the rename removes it before it starts: the renamed Agent does
+        not inherit it, and a revert cannot move it to the old id.
 
         ``agents/rename-pending.json`` records the rename before its first change
         and every step converges when repeated, so a rename interrupted at any
@@ -734,15 +740,12 @@ class AgentStore:
             # Rolling back renames the new id's Sessions back, so it must own none yet.
             if sessions.list_addresses(None, agent_id=new_agent_id):
                 raise AgentAlreadyExistsError(f"Sessions already exist for Agent: {new_agent_id}")
-            references = [
-                *(
-                    f"allowed_agents:{agent.id}"
-                    for agent, _ in self._allow_lists_naming(new_agent_id)
-                ),
-                *external_references,
-            ]
+            references = tuple(external_references)
             if references:
                 raise AgentReferencedError(new_agent_id, references)
+            # Before the record, outside every rename direction: an interruption
+            # leaves only fewer leftovers, and no revert brings them back.
+            leftover_policy_agent_ids = self._remove_from_allow_lists(new_agent_id)
             # Repairs a dangling current-Session pointer before the Sessions move.
             self._load_verified_agent(agent_path)
             session_ids = tuple(
@@ -764,7 +767,9 @@ class AgentStore:
                 rename=rename,
                 agent=_apply_defaults(renamed, self._agent_defaults()),
                 session_ids=session_ids,
-                policy_agent_ids=applied.policy_agent_ids,
+                policy_agent_ids=tuple(
+                    sorted({*leftover_policy_agent_ids, *applied.policy_agent_ids})
+                ),
                 session_link_count=applied.session_link_count,
             )
 
@@ -929,6 +934,49 @@ class AgentStore:
             changed.append(agent.id)
         return tuple(changed)
 
+    def _remove_from_allow_lists(
+        self, agent_id: str, *, best_effort: bool = False
+    ) -> tuple[str, ...]:
+        """Remove a bare Identity Agent id from every delegation allow-list.
+
+        Returns the ids of the Agents whose configs changed. An allow-list that
+        named only ``agent_id`` becomes empty, which means self-delegation only,
+        so no grant widens. With ``best_effort``, a config that cannot be
+        written keeps its entry and the failure is logged instead of raised.
+        """
+        try:
+            naming = builtins.list(self._allow_lists_naming(agent_id))
+        except OSError as error:
+            if not best_effort:
+                raise
+            _LOGGER.warning(
+                "Could not read delegation lists to remove an Agent (agent=%s): %s",
+                agent_id,
+                error,
+            )
+            return ()
+        changed: builtins.list[str] = []
+        for agent, allowed_agents in naming:
+            tools = deepcopy(agent.tools)
+            tools["subagent"]["allowed_agents"] = [
+                item for item in allowed_agents if item != agent_id
+            ]
+            try:
+                self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
+            except (AgentError, OSError) as error:
+                if not best_effort:
+                    raise
+                _LOGGER.warning(
+                    "Could not remove an Agent from a delegation list; the entry stays "
+                    "(agent=%s policy_agent=%s): %s",
+                    agent_id,
+                    agent.id,
+                    error,
+                )
+                continue
+            changed.append(agent.id)
+        return tuple(changed)
+
     def _allow_lists_naming(self, agent_id: str) -> Iterator[tuple[Agent, builtins.list[str]]]:
         """Yield each Agent whose delegation allow-list names bare ``agent_id``, with that list.
 
@@ -954,12 +1002,15 @@ class AgentStore:
             self.get_raw(agent.id) for agent in self.list() if agent.root_project_id == project_id
         ]
 
-    def delete(self, agent_id: str) -> Path:
+    def delete(self, agent_id: str) -> AgentDeleteResult:
         """Archive the Agent's files and live Sessions as one compensated operation.
 
         Files move first; if Session archiving fails, restore them and any prior
         archive. Product-level reference and Run admission guards belong to the
-        caller.
+        caller. Delegation allow-lists are no such reference: once the archive is
+        committed, the bare id leaves every other Agent's allow-list (a qualified
+        ``agent@project`` entry names a Project's Team Agent and stays), so the
+        grant does not pass to a later Agent with the same id.
 
         Every tree moves through :func:`move_tree`, whose failure always means "not
         moved", so compensation never has to guess which copy is whole. It only moves
@@ -1034,11 +1085,14 @@ class AgentStore:
                 if committed or not previous_archive.exists():
                     shutil.rmtree(backup_root, ignore_errors=True)
 
-            # Reconcile the collection document after the archive is committed. A
-            # stale id is filtered even if persistence fails, so delete never reports
-            # failure after the irreversible archive already succeeded.
+            # Grants and the collection document follow only once the archive is
+            # committed, so a failed delete never narrows a grant to a still existing
+            # Agent. Neither may report failure after the irreversible archive: an
+            # allow-list entry left behind names no Agent (a later rename to the id
+            # removes it), and a stale order id is filtered even if persistence fails.
+            policy_agent_ids = self._remove_from_allow_lists(agent_id, best_effort=True)
             self.list_with_order()
-            return archive_dir
+            return AgentDeleteResult(archive_dir=archive_dir, policy_agent_ids=policy_agent_ids)
 
     def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> Agent:
         """Re-point an identity agent's current session after one is gone.
