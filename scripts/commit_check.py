@@ -680,7 +680,7 @@ def _workers(seconds: float) -> list[str]:
     workers = math.ceil(seconds / SECONDS_PER_WORKER)
     if workers <= 1:
         return ["-n", "0"]
-    return ["-n", str(min(workers, cpu_pool.pool_size()))]
+    return ["-n", str(min(workers, cpu_pool.check_cores()))]
 
 
 def _pytest() -> list[str]:
@@ -702,7 +702,7 @@ def _pytest_command(
             f"Commit check: running the complete suite (about 5-10 minutes): {selection.reason}.",
             flush=True,
         )
-        return [*pytest, "-n", str(cpu_pool.pool_size())]
+        return [*pytest, "-n", str(cpu_pool.check_cores())]
     arguments = selection.pytest_arguments(root, staged_tests)
     if not arguments:
         return None
