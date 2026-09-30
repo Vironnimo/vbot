@@ -18,6 +18,12 @@ from tests import cpu_pool
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Like the hook, most tests start git, pytest with testmon, or ruff as subprocesses:
+# seconds each on a loaded machine, beyond the default 30 s per test. The budget
+# also covers the module fixture that seeds the test-impact data, since its setup
+# counts against the first test that uses it.
+pytestmark = pytest.mark.timeout(120)
+
 UNFORMATTED = "value  =  {'a':1}\n"
 FORMATTED = 'value = {"a": 1}\n'
 
@@ -42,10 +48,12 @@ def _staged_content(root: Path, path: str) -> str:
 
 
 def test_fixes_are_restaged_only_for_fully_staged_files(
-    impact_project: Path, capsys: pytest.CaptureFixture[str]
+    impact_project: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A project with test-impact data: the test step finds no affected test.
     # Another session's unstaged edit of a committed file must stay as it is.
+    # mypy, not under test here, starts without a cache: tens of seconds under load.
+    monkeypatch.setattr(commit_check, "check_types", lambda *_arguments: [])
     _write(impact_project, "other.py", FORMATTED)
     _git(impact_project, "add", "other.py")
     _git(impact_project, "commit", "-q", "-m", "other", "--no-verify")
@@ -66,7 +74,10 @@ def test_fixes_are_restaged_only_for_fully_staged_files(
     assert "FIXED" not in capsys.readouterr().out
 
 
-def test_partially_staged_file_is_left_alone_and_blocks(repo: Path) -> None:
+def test_partially_staged_file_is_left_alone_and_blocks(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(commit_check, "check_types", lambda *_arguments: [])
     (repo / "module.py").write_text(UNFORMATTED)
     _git(repo, "add", "module.py")
     work_in_progress = UNFORMATTED + "other  =  2\n"
@@ -387,9 +398,13 @@ def seeded_impact_project(tmp_path_factory: pytest.TempPathFactory) -> Path:
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "COVERAGE_CORE": "ctrace"},
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=90,  # Within the test budget: a hang fails here, not the worker.
     )
     assert seed.returncode == 0, seed.stdout + seed.stderr
+    # Durations as an idle machine records them: a seed slowed by load would make
+    # the checks start xdist workers, slower still and a different run.
+    with closing(sqlite3.connect(root / _test_impact.TESTMON_DATA)) as records, records:
+        records.execute("UPDATE test_execution SET duration = 0.01")
     # As the primary checkout's last commit check would have recorded it.
     _test_impact.record_tested_state(root, _git(root, "write-tree").strip(), ())
     return root
@@ -616,9 +631,6 @@ def _merge_after_checked_commits(
     return f"exit code {merge.returncode}\n{merge.stdout}{merge.stderr}"
 
 
-# Two commit checks and the merge hook each start pytest in the project; under a
-# loaded commit check that exceeds the default 30 s.
-@pytest.mark.timeout(120)
 def test_merge_commit_reuses_the_test_runs_of_both_sides(
     impact_project: Path, tmp_path: Path
 ) -> None:
@@ -635,7 +647,6 @@ def test_merge_commit_reuses_the_test_runs_of_both_sides(
     assert _check_tests(impact_project) == {"PASS (no test affected)": (False, "")}
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize("rebase", [False, True], ids=["merged", "rebased"])
 def test_merge_commit_runs_a_test_both_sides_changed(
     impact_project: Path, tmp_path: Path, rebase: bool

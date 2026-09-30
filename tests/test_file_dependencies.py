@@ -18,6 +18,11 @@ from tests import file_dependencies
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# The module fixture's recording run starts pytest with testmon and two xdist
+# workers: over 30 s on a loaded machine, and its setup counts against the first
+# test that uses it.
+pytestmark = pytest.mark.timeout(120)
+
 PROJECT_FILES = {
     "pytest.ini": "[pytest]\n",
     "conftest.py": 'pytest_plugins = ["tests.file_dependencies"]\n',
@@ -65,7 +70,7 @@ def recorded_project(tmp_path_factory: pytest.TempPathFactory) -> Path:
         env=env,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=90,  # Within the test budget: a hang fails here, not the worker.
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return root
