@@ -28,7 +28,9 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
 )
+from core.settings._json_settings import normalize_json_object
 from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS, parse_agent_default_value
+from core.utils.errors import StorageError
 
 JsonObject = dict[str, Any]
 
@@ -562,12 +564,11 @@ def _parse_reflection_update(reflection: Any) -> JsonObject:
 
 
 def _parse_extensions_update(extensions: Any) -> JsonObject:
-    """Parse the restart-applied ``extensions`` section (disabled list + config).
+    """Parse a complete ``extensions`` section (disabled list + JSON config).
 
     Full-section write: ``disabled`` and ``config`` default to empty when
-    omitted, so callers send the complete section. Shape only — the runtime
-    reads this at the next ``Runtime.start()`` (decision #9, restart-applied);
-    deep JSON normalization of ``config`` happens in storage.
+    omitted, so callers send the complete section. Loaded Extension schemas
+    are validated separately by the Runtime-aware RPC boundary.
     """
     if not isinstance(extensions, dict):
         raise SettingsValidationError("params.extensions must be an object")
@@ -592,9 +593,13 @@ def _parse_extensions_update(extensions: Any) -> JsonObject:
     ):
         raise SettingsValidationError("params.extensions.config must be an object of objects")
 
+    try:
+        parsed_config = normalize_json_object(config, "params.extensions.config")
+    except StorageError as error:
+        raise SettingsValidationError(str(error)) from error
     return {
         "disabled": [name.strip() for name in disabled],
-        "config": {name: dict(value) for name, value in config.items()},
+        "config": parsed_config,
     }
 
 
@@ -688,7 +693,12 @@ def _parse_model_tasks_update(model_tasks: Any) -> JsonObject:
                     validate_text_embedding_options(options)
                 except TaskModelOptionValidationError as error:
                     raise SettingsValidationError(f"params.model_tasks.{error}") from error
-            parsed_binding["options"] = dict(options)
+            try:
+                parsed_binding["options"] = normalize_json_object(
+                    options, f"params.model_tasks.{task_type}.options"
+                )
+            except StorageError as error:
+                raise SettingsValidationError(str(error)) from error
 
         if not parsed_binding:
             raise SettingsValidationError(

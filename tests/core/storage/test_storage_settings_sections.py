@@ -406,6 +406,21 @@ def test_section_update_merges_into_stored_settings_and_returns_what_is_read_bac
             {"extensions": {"config": {"guard_bash": {"bad": {1, 2}}}}},
             id="extensions-non-json-config",
         ),
+        pytest.param(
+            {"extensions": {"config": {"audit": {"nested": [{"amount": float("nan")}]}}}},
+            id="extensions-nonfinite-config",
+        ),
+        pytest.param(
+            {
+                "model_tasks": {
+                    "speech_to_text": {
+                        "target": "openai/a::key",
+                        "options": {"nested": [{"amount": float("inf")}]},
+                    }
+                }
+            },
+            id="model-tasks-nonfinite-options",
+        ),
         pytest.param({"web_search": []}, id="web-search-not-a-mapping"),
         pytest.param({"web_search": {"provider": "unknown"}}, id="web-search-unknown-provider"),
         pytest.param(

@@ -306,28 +306,58 @@ def test_settings_written_by_a_newer_vbot_are_not_used_or_overwritten(tmp_path: 
 @pytest.mark.parametrize(
     ("content", "usable"),
     [
-        ("[]", {}),
-        ("{", {}),
-        (b'{"appearance":{"language":"\xff"}}', {}),
-        (
+        pytest.param("[]", {}, id="non-object"),
+        pytest.param("{", {}, id="invalid-json"),
+        pytest.param(b'{"appearance":{"language":"\xff"}}', {}, id="non-utf8"),
+        pytest.param(
             '{"format_version": 1, "server_port": 8500, "compaction": {"enabled": "yes"}}',
             {"server_port": 8500},
+            id="invalid-field",
         ),
-        ('{"format_version": 1, "keep_awake": true, "appearance": {"chat_width": []}}', None),
-        (
+        pytest.param(
+            '{"format_version": 1, "keep_awake": true, "appearance": {"chat_width": []}}',
+            None,
+            id="container-value",
+        ),
+        pytest.param(
             '{"format_version": 1, "keep_awake": true, "compaction": {"trigger": {"threshold": '
             + "9" * 400
             + "}}}",
             None,
+            id="float-overflow",
         ),
-    ],
-    ids=[
-        "non-object",
-        "invalid-json",
-        "non-utf8",
-        "invalid-field",
-        "container-value",
-        "float-overflow",
+        *[
+            pytest.param(
+                '{"format_version": 1, "keep_awake": true, ' + (section % number) + "}",
+                None,
+                id=f"{owner}-{number}",
+            )
+            for owner, section in [
+                (
+                    "extensions",
+                    '"extensions": {"config": {"audit": {"nested": [{"amount": %s}]}}}',
+                ),
+                (
+                    "model-tasks",
+                    '"model_tasks": {"speech_to_text": {"target": "openai/a::key", '
+                    '"options": {"nested": [{"amount": %s}]}}}',
+                ),
+                (
+                    "custom-defaults",
+                    '"providers": {"custom": {"audit": {"name": "Audit", '
+                    '"adapter": "openai_compatible", "base_url": "http://localhost/v1", '
+                    '"auth": "none", "defaults": {"nested": [{"amount": %s}]}}}}',
+                ),
+                (
+                    "custom-task-options",
+                    '"providers": {"custom": {"audit": {"name": "Audit", '
+                    '"adapter": "openai_compatible", "base_url": "http://localhost/v1", '
+                    '"auth": "none", "models": {"chat": {"capabilities": '
+                    '{"task_options": {"nested": [{"amount": %s}]}}}}}}}',
+                ),
+            ]
+            for number in ["1e999", "NaN", "Infinity", "-Infinity"]
+        ],
     ],
 )
 def test_invalid_settings_file_degrades_reads_and_refuses_updates(
@@ -347,6 +377,7 @@ def test_invalid_settings_file_degrades_reads_and_refuses_updates(
 
     assert loaded == ({"keep_awake": True} if usable is None else usable)
     assert len(caplog.records) == 1
+    assert not validate_settings_file(storage.settings_path).ok
     with pytest.raises(StorageError):
         storage.update_settings(lambda settings: settings.update({"keep_awake": False}))
     assert storage.settings_path.read_bytes() == original

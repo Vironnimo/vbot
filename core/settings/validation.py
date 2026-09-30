@@ -56,6 +56,7 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
 )
+from core.settings._json_settings import normalize_json_object
 from core.settings._provider_settings import (
     CUSTOM_MODEL_CAPABILITY_FIELDS,
     CUSTOM_PROVIDER_FIELDS,
@@ -828,12 +829,14 @@ def _validate_extensions(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         _error(diagnostics, "$.extensions.config", "must be an object")
         return
     for key, item in config.items():
+        item_path = _child_path("$.extensions.config", str(key))
         if not isinstance(item, Mapping):
-            _error(
-                diagnostics,
-                _child_path("$.extensions.config", str(key)),
-                "must be an object",
-            )
+            _error(diagnostics, item_path, "must be an object")
+            continue
+        try:
+            normalize_json_object(item, item_path)
+        except StorageError as error:
+            _error(diagnostics, item_path, str(error))
 
 
 def _validate_web_search(diagnostics: list[JsonDiagnostic], value: Any) -> None:
@@ -911,6 +914,12 @@ def _validate_model_tasks(diagnostics: list[JsonDiagnostic], value: Any) -> None
         options = binding.get("options")
         if "options" in binding and not isinstance(options, Mapping):
             _error(diagnostics, _child_path(task_path, "options"), "must be an object")
+        elif isinstance(options, Mapping):
+            options_path = _child_path(task_path, "options")
+            try:
+                normalize_json_object(options, options_path)
+            except StorageError as error:
+                _error(diagnostics, options_path, str(error))
 
 
 def _validate_debug(diagnostics: list[JsonDiagnostic], value: Any) -> None:
