@@ -24,7 +24,7 @@ For each created worktree it does all of the following:
 - creates a dedicated data directory at `~/.vbot-<name>`
 - initializes the canonical empty data-directory structure through `core/storage/layout.py`
 - writes `settings.json` in that data directory with a dedicated `server_port`, a paired local fake-Provider endpoint, and chat/fallback/image/speech fake Models
-- writes a `.vbot-worktree` marker into the worktree root
+- writes a `.vbot-worktree` marker into the worktree root, which also records the assigned `server_port`
 - copies the primary checkout's test-impact records (`.testmondata`, `.testfiledeps`), which the branch check before the merge reuses
 - installs frontend dependencies in `webui/`
 - builds the frontend once during creation
@@ -409,6 +409,10 @@ Important behavior:
   when the worktree no longer has that script, the copy in the checkout running
   `worktree.py` is used, which still refuses to kill a fake Provider it cannot
   verify as its own
+- the port comes from the data dir's `settings.json`, else from the marker; with
+  neither it stops nothing, because `stop` without a port targets vBot's default
+  port `8420`, where the installed application may run. `vbot server stop` also
+  refuses to stop a vBot server whose control record belongs to another data dir
 - a directory without `.git` is a leftover whose checkout is already gone (see
   "Merge succeeded but cleanup failed"); it holds no uncommitted work, so both
   modes remove it and prune Git's registration. Its branch is read from

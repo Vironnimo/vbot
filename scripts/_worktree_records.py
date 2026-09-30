@@ -67,6 +67,21 @@ def _read_settings_port(data_dir: Path | None) -> int | None:
     return None
 
 
+def _worktree_server_port(
+    marker_data: dict[str, object] | None, data_dir: Path | None
+) -> int | None:
+    """Return the worktree server's port: its settings, else the one recorded at creation.
+
+    Tools that stop a worktree server must never fall back to vBot's default port,
+    where another installation may be running.
+    """
+    port = _read_settings_port(data_dir)
+    if port is not None:
+        return port
+    recorded = marker_data.get(SERVER_PORT_KEY) if marker_data is not None else None
+    return recorded if isinstance(recorded, int) and not isinstance(recorded, bool) else None
+
+
 def _marker_data_dir(marker_data: dict[str, object] | None) -> tuple[str, Path | None]:
     """Return display and resolved data-dir values from marker data."""
     if marker_data is None:

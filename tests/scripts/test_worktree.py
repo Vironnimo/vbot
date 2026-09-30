@@ -82,9 +82,16 @@ def test_scan_used_ports_tolerates_non_object_marker_and_settings_json(tmp_path)
         encoding="utf-8",
     )
 
+    recorded_worktree = worktrees_dir / "recorded"
+    recorded_worktree.mkdir()
+    (recorded_worktree / module.WORKTREE_FILE_NAME).write_text(
+        json.dumps({"data_dir": str(tmp_path / "missing-data"), "server_port": 8456}),
+        encoding="utf-8",
+    )
+
     ports = module.scan_used_ports(worktrees_dir)
 
-    assert ports == {8455}
+    assert ports == {8455, 8456}
 
 
 def test_find_free_port_starts_after_main_dev_port(tmp_path, monkeypatch):
@@ -264,6 +271,9 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
     assert not (data_dir / "agents" / "main").exists()
     marker = json.loads((worktree_path / module.WORKTREE_FILE_NAME).read_text(encoding="utf-8"))
     assert module._owns_data_dir(worktree_path, data_dir, marker)
+    # The marker keeps the port, so a later delete stops the right server even
+    # when the settings lose it.
+    assert marker["server_port"] == 8422
 
     # Successful creation claims precisely this root, so ordinary cleanup removes it.
     monkeypatch.setattr(module, "_stop_worktree_services", lambda *_args: None)
@@ -503,6 +513,15 @@ def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypat
         encoding="utf-8",
     )
 
+    recorded_worktree = worktrees_dir / "gamma"
+    recorded_worktree.mkdir()
+    (recorded_worktree / module.WORKTREE_FILE_NAME).write_text(
+        json.dumps(
+            {"data_dir": str(tmp_path / "gone-data"), "managed_branch": True, "server_port": 8424}
+        ),
+        encoding="utf-8",
+    )
+
     ignored_worktree = worktrees_dir / "no-marker"
     ignored_worktree.mkdir()
 
@@ -531,6 +550,14 @@ def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypat
             "data-dir": str(tmp_path / "missing"),
             "port": "unknown",
             "managed-branch": "false",
+        },
+        {
+            "name": "gamma",
+            "path": recorded_worktree,
+            "branch": "gamma-branch",
+            "data-dir": str(tmp_path / "gone-data"),
+            "port": 8424,
+            "managed-branch": "true",
         },
     ]
 

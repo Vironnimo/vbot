@@ -55,10 +55,10 @@ from scripts._worktree_records import (  # noqa: E402
     _marker_data_dir,
     _marker_managed_branch,
     _read_registered_branch_name,
-    _read_settings_port,
     _read_worktree_branch_name,
     _read_worktree_marker,
     _read_worktree_registrations,
+    _worktree_server_port,
 )
 
 
@@ -317,7 +317,7 @@ def _port_allocation_lock() -> Iterator[None]:
             lock_file.write(b"0")
             lock_file.flush()
         lock_file.seek(0)
-        if os.name == "nt":
+        if sys.platform == "win32":
             import msvcrt
 
             msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
@@ -436,7 +436,7 @@ def iter_worktree_entries(worktrees_dir: Path) -> list[dict[str, str | int | Pat
 
         marker_data = _read_worktree_marker(marker_path)
         data_dir_display, data_dir = _marker_data_dir(marker_data)
-        port = _read_settings_port(data_dir)
+        port = _worktree_server_port(marker_data, data_dir)
         branch = _read_worktree_branch_name(worktree_path) or UNKNOWN_VALUE
 
         entries.append(
@@ -478,17 +478,21 @@ def cleanup_failed_create(
         _run_command(["git", "branch", "-D", name])
 
 
-def _stop_worktree_services(worktree_path: Path, data_dir: Path) -> str | None:
+def _stop_worktree_services(
+    worktree_path: Path, data_dir: Path, marker_data: dict[str, object] | None
+) -> str | None:
     """Stop the exact managed server and fake Provider before deletion.
 
     The worktree's own ``test-env.py`` runs when present. A leftover whose
     checkout is gone (for example after a merge whose directory removal
     failed) falls back to this checkout's copy: ``stop`` targets the recorded
     data dir and port, and still refuses to kill a fake Provider it cannot
-    verify as its own.
+    verify as its own. Without a known port nothing is stopped: ``stop``
+    would otherwise target vBot's default port.
     """
     settings_path = data_dir / "settings.json"
-    if not settings_path.exists():
+    port = _worktree_server_port(marker_data, data_dir)
+    if not settings_path.exists() or port is None:
         return None
     script_cwd = worktree_path
     test_env_script = worktree_path / "scripts" / "test-env.py"
@@ -497,7 +501,6 @@ def _stop_worktree_services(worktree_path: Path, data_dir: Path) -> str | None:
         test_env_script = script_cwd / "scripts" / "test-env.py"
         if not test_env_script.is_file():
             return f"test environment stop script is missing: {test_env_script}"
-    port = _read_settings_port(data_dir)
     command = [
         sys.executable,
         str(test_env_script),
@@ -506,9 +509,9 @@ def _stop_worktree_services(worktree_path: Path, data_dir: Path) -> str | None:
         "127.0.0.1",
         "--data-dir",
         str(data_dir),
+        "--port",
+        str(port),
     ]
-    if port is not None:
-        command.extend(["--port", str(port)])
     return_code, stderr = _run_command(command, cwd=script_cwd)
     if return_code == 0:
         return None
@@ -577,6 +580,7 @@ def cmd_create(args: argparse.Namespace) -> int:
                 DATA_DIR_KEY: data_dir_tilde,
                 MANAGED_BRANCH_KEY: managed_branch,
                 DATA_OWNER_KEY: token,
+                SERVER_PORT_KEY: port,
             }
             with (data_dir / DATA_OWNER_FILE_NAME).open("x", encoding="utf-8") as owner:
                 owner.write(json.dumps(_data_owner_record(worktree_path, token), indent=2) + "\n")
@@ -687,7 +691,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
     data_owned = _owns_data_dir(worktree_path, data_dir, marker_data)
     if data_owned:
-        stop_error = _stop_worktree_services(worktree_path, data_dir)
+        stop_error = _stop_worktree_services(worktree_path, data_dir, marker_data)
         if stop_error is not None:
             print_error(f"worktree services could not be stopped: {stop_error}")
             return 1

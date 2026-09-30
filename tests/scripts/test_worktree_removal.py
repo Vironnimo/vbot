@@ -97,7 +97,17 @@ def test_cmd_delete_preserves_both_data_dirs_when_marker_is_tampered(tmp_path, m
     ]
 
 
-def test_cmd_delete_stops_managed_services_before_removing_worktree(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("settings", "marker", "port"),
+    [
+        pytest.param({"server_port": 8422}, {"server_port": 8423}, "8422", id="settings-port"),
+        pytest.param({}, {"server_port": 8422}, "8422", id="port-recorded-at-creation"),
+        pytest.param({}, {}, None, id="unknown-port-stops-nothing"),
+    ],
+)
+def test_cmd_delete_stops_managed_services_before_removing_worktree(
+    tmp_path, monkeypatch, settings, marker, port
+):
     module = _load_worktree_module()
     name = "running-worktree"
     worktree_path = tmp_path / ".worktrees" / name
@@ -106,11 +116,11 @@ def test_cmd_delete_stops_managed_services_before_removing_worktree(tmp_path, mo
     (worktree_path / "scripts").mkdir()
     (worktree_path / "scripts" / "test-env.py").write_text("", encoding="utf-8")
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False}),
+        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False, **marker}),
         encoding="utf-8",
     )
     data_dir.mkdir(parents=True)
-    (data_dir / "settings.json").write_text(json.dumps({"server_port": 8422}), encoding="utf-8")
+    (data_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
     calls = []
 
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
@@ -126,6 +136,12 @@ def test_cmd_delete_stops_managed_services_before_removing_worktree(tmp_path, mo
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
     assert module.cmd_delete(argparse.Namespace(name=name, force=False)) == 0
+    assert not data_dir.exists()
+    if port is None:
+        # Without a known port, stop would target vBot's default port, where
+        # another installation may run.
+        assert all("stop" not in command for command, _cwd in calls)
+        return
     assert calls[0] == (
         [
             module.sys.executable,
@@ -136,12 +152,11 @@ def test_cmd_delete_stops_managed_services_before_removing_worktree(tmp_path, mo
             "--data-dir",
             str(data_dir),
             "--port",
-            "8422",
+            port,
         ],
         worktree_path,
     )
     assert calls[1][0][:3] == ["git", "-C", str(worktree_path)]
-    assert not data_dir.exists()
 
 
 def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, monkeypatch):
@@ -153,7 +168,7 @@ def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, mon
     (worktree_path / "scripts").mkdir()
     (worktree_path / "scripts" / "test-env.py").write_text("", encoding="utf-8")
     data_dir.mkdir(parents=True)
-    (data_dir / "settings.json").write_text("{}", encoding="utf-8")
+    (data_dir / "settings.json").write_text(json.dumps({"server_port": 8422}), encoding="utf-8")
     calls = []
 
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")

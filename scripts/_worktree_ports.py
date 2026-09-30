@@ -24,7 +24,11 @@ FAKE_PROVIDER_PORT_OFFSET = 10_000
 
 
 def scan_used_ports(worktrees_dir: Path) -> set[int]:
-    """Collect server and seeded fake-Provider ports declared by worktrees."""
+    """Collect server and seeded fake-Provider ports declared by worktrees.
+
+    A server port counts both as recorded in the marker at creation and as
+    configured in the worktree's settings.
+    """
     ports: set[int] = set()
     if not worktrees_dir.exists():
         return ports
@@ -42,6 +46,9 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
             continue
 
         try:
+            recorded_port = data.get(SERVER_PORT_KEY)
+            if isinstance(recorded_port, int) and not isinstance(recorded_port, bool):
+                ports.add(recorded_port)
             raw_data_dir = data.get(DATA_DIR_KEY, "")
             if not isinstance(raw_data_dir, str) or not raw_data_dir:
                 continue
