@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, time, timedelta, tzinfo
 from typing import TYPE_CHECKING, cast
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.calendar.when import parse_when
 from core.tools._calendar_arguments import (
@@ -24,6 +24,7 @@ from core.tools._calendar_arguments import (
     choice,
     is_date,
     is_time_of_day,
+    missing_date_reason,
     parse_date,
     parse_local,
     parse_time_of_day,
@@ -43,7 +44,7 @@ from core.tools._named_zones import (
 from core.tools.tools import JsonObject
 
 if TYPE_CHECKING:
-    from core.calendar import CalendarService
+    from core.calendar import CalendarEvent, CalendarService
 
 _FREE_WINDOW_DAYS = 7
 
@@ -363,9 +364,15 @@ def _duration_between(
     if first_day is not None:
         last_day = parse_date(end)
         if last_day is None:
+            reason = missing_date_reason(end)
+            problem = (
+                "an all-day event ends on a date;"
+                if reason is None
+                else f'"end" {end.strip()} does not exist: {reason}. For an all-day event,'
+            )
             raise CalendarCallRefusedError(
                 refusal(
-                    "an all-day event ends on a date; send its length in days as duration.",
+                    f"{problem} send its length in days as duration.",
                     arguments,
                     duration=STAND_INS["duration"],
                 )
@@ -431,6 +438,25 @@ def _duration_between(
 def server_zone(calendar_service: CalendarService) -> ZoneInfo:
     """The server time zone every event and window is kept in."""
     return ZoneInfo(calendar_service.system_timezone_name())
+
+
+def event_zone(calendar_service: CalendarService, event: CalendarEvent) -> ZoneInfo:
+    """The zone a repeating event keeps its wall-clock times in; refuse when unknown here.
+
+    The calendar checks the zone when it stores or loads an event and skips a
+    stored event whose zone it does not know, so only time zone data that
+    changes while vBot runs can lack it.
+    """
+    if not event.tz_name:
+        return server_zone(calendar_service)
+    try:
+        return ZoneInfo(event.tz_name)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise CalendarCallRefusedError(
+            f'calendar was not run: event {event.id} ("{event.title}") keeps its times in the '
+            f'time zone "{event.tz_name}", which this server\'s time zone data does not '
+            "contain. Tell the user that the event's time zone is unknown on this server."
+        ) from error
 
 
 def unknown_zone(name: str, server: ZoneInfo, arguments: JsonObject) -> str:

@@ -6,7 +6,6 @@ import json
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
 from typing import TYPE_CHECKING, Any
-from zoneinfo import ZoneInfo
 
 from core.calendar.errors import (
     CalendarEventNotFoundError,
@@ -42,6 +41,7 @@ from core.tools._calendar_times import (
     apply_end,
     apply_length,
     apply_timezone,
+    event_zone,
     length_text,
     local_text,
     minute_text,
@@ -613,7 +613,7 @@ def _occurrence_start(
     """Return the stored form of the occurrence start a delete names, or refuse."""
     server = server_zone(calendar_service)
     # Occurrence starts are written in the event's own wall-clock zone.
-    own = ZoneInfo(event.tz_name) if event.tz_name else server
+    own = event_zone(calendar_service, event)
     text = start.strip()
     if event.all_day:
         wanted = text[:10]
@@ -740,7 +740,7 @@ def _event_fields(calendar_service: CalendarService, event: CalendarEvent) -> Js
     if event.all_day:
         data["days"] = event.duration_days or 1
     else:
-        zone = ZoneInfo(event.tz_name) if event.tz_name else server_zone(calendar_service)
+        zone = event_zone(calendar_service, event)
         data["end"] = local_text(calendar_service.event_span(event)[1], zone)
     if event.rrule is not None:
         # The rule as the Agent would send it: no nulls, no default interval.
@@ -768,7 +768,7 @@ def _event_start(calendar_service: CalendarService, event: CalendarEvent) -> str
         return event.start_date or ""
     if event.start_local:
         return minute_text(event.start_local)
-    zone = ZoneInfo(event.tz_name) if event.tz_name else server_zone(calendar_service)
+    zone = event_zone(calendar_service, event)
     return local_text(calendar_service.event_span(event)[0], zone)
 
 
