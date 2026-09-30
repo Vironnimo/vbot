@@ -173,6 +173,7 @@ async def board(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator
         registry=registry,
         groups=groups,
         databases=databases,
+        host=host,
     )
     try:
         yield fixture

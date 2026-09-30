@@ -650,6 +650,17 @@ The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; th
 deletion marker blocks Resume, including request replay, and survives restart so
 a failed deletion can be retried. Tests: `test_swarm_operations.py`, `SwarmPage.test.js`.
 
+Startup reconcile: after `recover_interrupted`, startup pages its participant groups
+(`temporary_agents.groups()`, API 10; group id = Swarm id) and archives each group
+whose Swarm row is missing (`existing_swarm_ids`) through `archive_group`, logging a
+WARNING per group. Such participants remain when the database was restored to an older
+state, unregistered or replaced; without their Board they can never resume, and only
+Swarm may remove them. Archiving rather than deleting keeps their transcripts, which may
+be the only record left. Adoption is impossible (no goal, profile snapshot or Board).
+Groups are read before rows because a Swarm row precedes its first participant Session,
+so a Swarm starting concurrently is never unknown. A failed archive is logged and
+retried at the next startup (`test_startup_archives_participant_sessions_of_swarms_missing_from_the_board`).
+
 A saved Swarm profile is deleted through `profiles.delete` from its editor header or
 beside the goal form's Swarm selector, after the same kind of confirmation (failures
 stay in the dialog for retry). Existing Runs keep their profile snapshots. Deletion
