@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, cast
 
 from core.extensions.databases import Database
+from core.runs import RunNotFoundError
 from core.sessions import TemporarySessionBinding
 
 from ._store_board import (
@@ -334,6 +335,36 @@ class SwarmStore:
     async def list_prepared_deliveries(self, *, cursor: str | None = None, limit: int = 20) -> Page:
         """Return bounded unacknowledged receipts for read-only startup reconciliation."""
         return await self._run(_list_prepared_deliveries, cursor, _limit(limit))
+
+    async def reconcile_prepared_deliveries(self) -> Json:
+        """Acknowledge every saved batch whose Session already committed its receipt.
+
+        Startup repair for a stop between a Session's receipt commit and the
+        batch acknowledgment, which would otherwise deliver the posts again.
+        A batch without a receipt stays pending; a batch whose receipt conflicts
+        or whose Session binding is gone is counted and left unacknowledged.
+        """
+        # Acknowledging removes rows from the listing, so page through it first.
+        receipt_ids: list[str] = []
+        cursor: str | None = None
+        while True:
+            page = await self.list_prepared_deliveries(cursor=cursor, limit=_MAX_LIMIT)
+            receipt_ids.extend(str(entry["receipt_id"]) for entry in page.entries)
+            if not page.has_more:
+                break
+            cursor = page.cursor
+        counts = {"acknowledged": 0, "conflicting": 0, "unreachable": 0}
+        for receipt_id in receipt_ids:
+            try:
+                if await self.reconcile_delivery(receipt_id):
+                    counts["acknowledged"] += 1
+            except SwarmStoreError as error:
+                if error.code != "receipt_conflict":
+                    raise
+                counts["conflicting"] += 1
+            except RunNotFoundError:
+                counts["unreachable"] += 1
+        return counts
 
     async def list_wake_intents(
         self, swarm_id: str, *, cursor: str | None = None, limit: int = 20

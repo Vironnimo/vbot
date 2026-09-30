@@ -188,6 +188,16 @@ class SwarmExtension:
         self.store = SwarmStore(database, lookup_delivery_receipt=receipt)
         await self.store.open()
         await self.store.recover_interrupted()
+        reconciled = await self.store.reconcile_prepared_deliveries()
+        # Unreachable batches recur on every start, so they alone stay silent.
+        if reconciled["acknowledged"] or reconciled["conflicting"]:
+            _LOGGER.log(
+                logging.WARNING if reconciled["conflicting"] else logging.INFO,
+                "Swarm saved deliveries reconciled (acknowledged=%d conflicting=%d unreachable=%d)",
+                reconciled["acknowledged"],
+                reconciled["conflicting"],
+                reconciled["unreachable"],
+            )
         await self._archive_unknown_groups(groups)
 
     async def _archive_unknown_groups(self, groups: Any) -> None:

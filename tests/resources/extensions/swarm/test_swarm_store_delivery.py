@@ -7,6 +7,7 @@ from contextlib import contextmanager
 
 import pytest
 
+from core.runs import RunNotFoundError
 from core.sessions import DeliveryReceipt, SessionAddress, TemporarySessionBinding
 from resources.extensions.swarm.store import SwarmStore, SwarmStoreError
 from tests.resources.extensions.swarm.swarm_test_support import _swarm, open_swarm_database
@@ -58,6 +59,81 @@ async def test_prepared_delivery_reconciles_only_matching_canonical_receipts(tmp
         )
         with pytest.raises(SwarmStoreError, match="receipt_conflict"):
             await value.reconcile_delivery(prepared["receipt_id"])
+    finally:
+        await value.close()
+        database.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_reconciliation_acknowledges_batches_whose_receipt_was_saved(
+    tmp_path,
+) -> None:
+    receipts: dict[str, DeliveryReceipt] = {}
+
+    async def lookup(
+        address: SessionAddress, _generation: str, _owner: str, receipt_id: str
+    ) -> DeliveryReceipt | None:
+        if address.session_id == "ses_gone":
+            raise RunNotFoundError("This Session is no longer available.")
+        return receipts.get(receipt_id)
+
+    def saved(prepared: dict[str, object], content_hash: object = None) -> None:
+        receipts[str(prepared["receipt_id"])] = DeliveryReceipt(
+            str(prepared["receipt_id"]),
+            str(content_hash or prepared["content_hash"]),
+            str(prepared["effect_kind"]),
+            {"kind": "tool", "sequence": 4},
+        )
+
+    database = open_swarm_database(tmp_path, "startup")
+    value = SwarmStore(database, lookup_delivery_receipt=lookup)
+    await value.open()
+    try:
+        started = await _swarm(value, count=4)
+        swarm_id = started["swarm_id"]
+        swarm = await value.get_swarm(swarm_id)
+        sender, committed, conflicting, gone = [item["id"] for item in swarm["participants"]]
+        for participant_id, session_id in (
+            (committed, "ses_committed"),
+            (conflicting, "ses_conflicting"),
+            (gone, "ses_gone"),
+        ):
+            await value.bind_participant_session(
+                TemporarySessionBinding(
+                    SessionAddress(None, "tmp_agent", session_id),
+                    "gen_startup",
+                    "swarm",
+                    swarm_id,
+                    participant_id,
+                    {},
+                )
+            )
+        await value.post(swarm_id, sender, text="one", request_id="startup-one")
+        saved(await value.prepare_inbox_delivery(swarm_id, committed))
+        saved(await value.prepare_inbox_delivery(swarm_id, conflicting), "different")
+        saved(await value.prepare_inbox_delivery(swarm_id, gone))
+        await value.post(swarm_id, sender, text="two", request_id="startup-two")
+        unsaved = await value.prepare_inbox_delivery(swarm_id, committed)
+
+        assert await value.reconcile_prepared_deliveries() == {
+            "acknowledged": 1,
+            "conflicting": 1,
+            "unreachable": 1,
+        }
+
+        pending = await value.list_prepared_deliveries(limit=100)
+        assert unsaved["receipt_id"] in {entry["receipt_id"] for entry in pending.entries}
+        assert len(pending.entries) == 3
+        texts = {
+            participant_id: [
+                entry["text"]
+                for entry in (await value.prepare_inbox_delivery(swarm_id, participant_id))[
+                    "entries"
+                ]
+            ]
+            for participant_id in (committed, conflicting, gone)
+        }
+        assert texts == {committed: ["two"], conflicting: ["one", "two"], gone: ["one", "two"]}
     finally:
         await value.close()
         database.close()
