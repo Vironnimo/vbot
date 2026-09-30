@@ -20,9 +20,10 @@ from core.tools.arguments import (
     split_text_lines,
 )
 from core.tools.tools import JsonObject
+from core.utils.text_pages import TEXT_PAGE_MAX_BYTES, TEXT_PAGE_MAX_LINES
 
-MAX_FILE_BYTES = 50 * 1024
-DEFAULT_LINE_LIMIT = 2000
+MAX_FILE_BYTES = TEXT_PAGE_MAX_BYTES
+DEFAULT_LINE_LIMIT = TEXT_PAGE_MAX_LINES
 # UTF-8 BOM that some Windows editors prepend; stripped on read so the model sees
 # clean content (apply_patch preserves it on the round-trip).
 UTF8_BOM_BYTES = b"\xef\xbb\xbf"

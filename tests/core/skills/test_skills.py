@@ -8,7 +8,7 @@ import pytest
 from core.settings import PROJECT_SOURCE_FORMATS
 from core.skills import skills as skills_module
 from core.skills.requirements import environment_requirement_names
-from core.skills.skill_validator import MAX_SKILL_NAME_LENGTH
+from core.skills.skill_validator import MAX_SKILL_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH
 from core.skills.skills import (
     PROJECT_SKILLS_SUBPATHS,
     SKILL_ORIGIN_AGENT,
@@ -88,6 +88,24 @@ allowed-tools:
 MISSING_NAME = "Skill metadata missing name; using directory name 'broken'."
 BODY_DESCRIPTION = "Skill metadata missing description; using the first body text line."
 LONG_NAME = "a" * (MAX_SKILL_NAME_LENGTH + 1)
+LONG_DESCRIPTION = "d" * (MAX_SKILL_DESCRIPTION_LENGTH + 1)
+
+
+def instructions_document(lines: int, size: int) -> str:
+    """A Skill whose instructions have exactly *lines* lines and *size* UTF-8 bytes."""
+    body = "\n".join(["x"] * lines)
+    body += "x" * (size - len(body))
+    return f"---\nname: manual\ndescription: Use it.\n---\n\n{body}\n"
+
+
+def oversized_instructions(kilobytes: int, lines: int) -> str:
+    return (
+        f"SKILL.md instructions do not fit one page ({kilobytes} KB, {lines} lines; "
+        "a page holds at most 50 KB and 2000 lines). Loading the Skill returns only "
+        "the first page, and the rest takes further calls to the skill tool. Move "
+        "reference material into separate files, such as references/*.md, that the "
+        "instructions name."
+    )
 
 
 @pytest.mark.parametrize(
@@ -161,6 +179,42 @@ LONG_NAME = "a" * (MAX_SKILL_NAME_LENGTH + 1)
             "Useful.",
             [f"Skill name '{LONG_NAME}' is longer than {MAX_SKILL_NAME_LENGTH} characters."],
             id="oversized-name",
+        ),
+        pytest.param(
+            "wordy",
+            f"---\nname: wordy\ndescription: {LONG_DESCRIPTION}\n---\n",
+            "wordy",
+            LONG_DESCRIPTION,
+            [
+                "Skill description has 1,025 characters, more than 1,024. Every Agent "
+                "request lists it in full; keep it to what the Skill is for and when to "
+                "load it, and move details into the instructions."
+            ],
+            id="oversized-description",
+        ),
+        pytest.param(
+            "manual",
+            instructions_document(lines=2000, size=50 * 1024),
+            "manual",
+            "Use it.",
+            [],
+            id="instructions-fill-one-page",
+        ),
+        pytest.param(
+            "manual",
+            instructions_document(lines=2001, size=4001),
+            "manual",
+            "Use it.",
+            [oversized_instructions(kilobytes=4, lines=2001)],
+            id="instructions-over-page-lines",
+        ),
+        pytest.param(
+            "manual",
+            instructions_document(lines=1, size=50 * 1024 + 1),
+            "manual",
+            "Use it.",
+            [oversized_instructions(kilobytes=51, lines=1)],
+            id="instructions-over-page-bytes",
         ),
         pytest.param(
             "careful",
