@@ -16,7 +16,7 @@ The short version:
 
 `scripts/worktree.py` manages parallel vBot checkouts under `.worktrees/`.
 
-The entrypoint owns checkout creation/removal and merge orchestration. Private `_worktree_lock.py`, `_worktree_ports.py`, `_worktree_records.py`, and `_worktree_args.py` own portable locks/repair keepers, paired-port selection, marker/Git read projections, and command grammar. Behavioral tests are grouped under `tests/scripts/test_worktree*.py`, with reusable repository fixtures in `worktree_helpers.py`.
+The entrypoint owns checkout creation/removal and merge orchestration. Private `_worktree_lock.py`, `_worktree_ports.py`, `_worktree_records.py`, `_worktree_seed.py`, and `_worktree_args.py` own portable locks/repair keepers, paired-port selection, marker/Git read projections, dependency seeding from the primary checkout, and command grammar. Behavioral tests are grouped under `tests/scripts/test_worktree*.py`, with reusable repository fixtures in `worktree_helpers.py`.
 
 For each created worktree it does all of the following:
 
@@ -26,10 +26,10 @@ For each created worktree it does all of the following:
 - writes `settings.json` in that data directory with a dedicated `server_port`, a paired local fake-Provider endpoint, and chat/fallback/image/speech fake Models
 - writes a `.vbot-worktree` marker into the worktree root, which also records the assigned `server_port`
 - copies the primary checkout's test-impact records (`.testmondata`, `.testfiledeps`), which the branch check before the merge reuses
-- installs frontend dependencies in `webui/`
-- builds the frontend once during creation
+- copies the primary checkout's downloaded native executables (`resources/native/`), so provisioning the search engine only verifies the pinned digest instead of downloading it
+- copies the primary checkout's `webui/node_modules` (without the Vite and Vitest caches) when npm's record of that installation (`node_modules/.package-lock.json`) matches the worktree's `webui/package-lock.json`: every installed package equals its locked entry, and only optional packages for other platforms may be missing; otherwise it runs `npm install` in `webui/`
 
-The two frontend steps print a progress line each and then stay silent until done: on a cold npm cache `create` takes several minutes with no intermediate output. Wait for the final `name:`/`path:`/`port:` block rather than cancelling — an aborted run typically dies mid-build and leaves a worktree without `webui/dist`.
+`create` does not build the frontend: `scripts/test-env.py start` builds it before every start, and most tasks never serve the WebUI. On Windows the copy takes seconds where `npm install` takes minutes, because writing thousands of small files dominates either way. The `npm install` fallback, needed when the branch changes frontend dependencies or the primary checkout's installation is stale, prints a progress line and then stays silent until done: on a cold npm cache it takes several minutes. Wait for the final `name:`/`path:`/`port:` block rather than cancelling.
 
 The Worktree utility does not seed an Agent or copy machine-local Workspace content. Runtime creates the bootstrap Identity Agent and first Session on the first server start. Once you are inside the worktree, `python scripts/test-env.py start` uses the Worktree's own data dir, starts its Settings-declared fake Provider, builds the WebUI, and starts vBot. Direct `python cli/main.py server start` starts only vBot and therefore leaves fake-Model calls unavailable.
 
@@ -490,16 +490,9 @@ this automatically:
 In both cases the delete finishes: owned data dir and managed branch are cleaned up
 and the worktree name is immediately reusable.
 
-### The worktree build step failed during creation
+### The frontend dependency step failed during creation
 
-`create` runs:
-
-```bash
-npm install
-npm run build
-```
-
-inside the worktree's `webui/` directory. Fix the frontend dependency or build issue, then create the worktree again.
+When the primary checkout's `webui/node_modules` does not match the worktree's lock, `create` runs `npm install` inside the worktree's `webui/` directory and removes the worktree when it fails. Fix the frontend dependency issue, then create the worktree again. Running `npm ci` in the primary checkout's `webui/` makes later creates copy its installation again.
 
 ### `merge` reports uncommitted changes in the primary checkout
 

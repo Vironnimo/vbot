@@ -18,6 +18,7 @@ from core.sessions.store import SessionStore
 from core.storage import StorageManager
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from scripts import _worktree_ports as worktree_ports
+from scripts import _worktree_seed as worktree_seed
 from tests.scripts.worktree_helpers import MODULE_PATH, PROJECT_ROOT, _load_worktree_module
 
 
@@ -160,7 +161,32 @@ def test_cmd_create_rejects_unsafe_name(tmp_path, monkeypatch, name):
     assert commands == []
 
 
-def test_cmd_create_adopts_test_records_then_installs_and_builds_webui(tmp_path, monkeypatch):
+_LOCKED_PACKAGES = {
+    "": {"name": "vbot-webui"},
+    "node_modules/vite": {"version": "8.0.0", "dev": True},
+    "node_modules/@rolldown/binding-darwin-x64": {"version": "1.0.0", "optional": True},
+}
+
+
+def _write_webui_lock(webui_path: Path, packages: dict[str, dict[str, object]]) -> None:
+    webui_path.mkdir(parents=True, exist_ok=True)
+    (webui_path / "package-lock.json").write_text(
+        json.dumps({"lockfileVersion": 3, "packages": packages}), encoding="utf-8"
+    )
+
+
+def _write_installed_packages(webui_path: Path, packages: dict[str, dict[str, object]]) -> None:
+    """Write a primary checkout's node_modules whose npm record lists *packages*."""
+    node_modules = webui_path / "node_modules"
+    (node_modules / "vite").mkdir(parents=True)
+    (node_modules / "vite" / "package.json").write_text("{}", encoding="utf-8")
+    (node_modules / ".vite" / "vitest").mkdir(parents=True)
+    (node_modules / ".package-lock.json").write_text(
+        json.dumps({"lockfileVersion": 3, "packages": packages}), encoding="utf-8"
+    )
+
+
+def test_cmd_create_adopts_test_records_then_installs_webui_packages(tmp_path, monkeypatch):
     module = _load_worktree_module()
 
     name = "fresh-worktree"
@@ -186,15 +212,83 @@ def test_cmd_create_adopts_test_records_then_installs_and_builds_webui(tmp_path,
     result = module.cmd_create(argparse.Namespace(name=name, from_branch="main"))
 
     assert result == 0
-    assert commands[-2:] == [
-        (["npm", "install"], webui_path),
-        (["npm", "run", "build"], webui_path),
-    ]
+    # Without packages to copy from the primary checkout, npm installs them;
+    # the WebUI build is left to `test-env.py start`.
+    assert commands[-1] == (["npm", "install"], webui_path)
+    assert ["npm", "run", "build"] not in [command for command, _cwd in commands]
     with closing(sqlite3.connect(worktree_path / ".testmondata")) as copy:
         assert copy.execute("SELECT name FROM sqlite_master").fetchall() == [("test_execution",)]
     assert not (worktree_path / ".vorch" / "WORKTREE.md").exists()
     # The port allocation lock lands in the scratch repository, not the real one.
     assert (tmp_path / ".git" / module.PORT_ALLOCATION_LOCK_NAME).is_file()
+
+
+def test_cmd_create_copies_primary_webui_packages_and_native_resources(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+
+    name = "seeded-packages"
+    worktree_path = tmp_path / ".worktrees" / name
+    webui_path = worktree_path / "webui"
+
+    _patch_create_environment(monkeypatch, module, tmp_path)
+    _write_installed_packages(
+        tmp_path / "webui",
+        {key: value for key, value in _LOCKED_PACKAGES.items() if key and "darwin" not in key},
+    )
+    primary_search_engine = tmp_path / "resources" / "native" / "ripgrep" / "rg.exe"
+    primary_search_engine.parent.mkdir(parents=True)
+    primary_search_engine.write_bytes(b"verified engine")
+
+    commands: list[tuple[list[str], Path | None]] = []
+
+    def fake_run_command(command, *, cwd=None):
+        commands.append((command, cwd))
+        if command[:3] == ["git", "worktree", "add"]:
+            _write_webui_lock(webui_path, _LOCKED_PACKAGES)
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    assert module.cmd_create(argparse.Namespace(name=name, from_branch="main")) == 0
+
+    assert not [command for command, _cwd in commands if command[0] == "npm"]
+    assert (webui_path / "node_modules" / "vite" / "package.json").is_file()
+    # Vite's and Vitest's caches belong to the primary checkout.
+    assert not (webui_path / "node_modules" / ".vite").exists()
+    # The search engine provisioner then verifies the copy instead of downloading.
+    assert (worktree_path / "resources" / "native" / "ripgrep" / "rg.exe").read_bytes() == (
+        b"verified engine"
+    )
+
+
+@pytest.mark.parametrize(
+    ("installed", "seeded"),
+    [
+        pytest.param({"node_modules/vite": {"version": "8.0.0", "dev": True}}, True, id="match"),
+        pytest.param(
+            {"node_modules/vite": {"version": "8.0.1", "dev": True}}, False, id="other-version"
+        ),
+        pytest.param(
+            {
+                "node_modules/vite": {"version": "8.0.0", "dev": True},
+                "node_modules/left-pad": {"version": "1.0.0"},
+            },
+            False,
+            id="unlocked-package",
+        ),
+        pytest.param({}, False, id="missing-required-package"),
+    ],
+)
+def test_seed_webui_packages_copies_only_a_tree_matching_the_worktree_lock(
+    tmp_path, installed, seeded
+):
+    primary = tmp_path / "primary"
+    worktree = tmp_path / "worktree"
+    _write_installed_packages(primary / "webui", installed)
+    _write_webui_lock(worktree / "webui", _LOCKED_PACKAGES)
+
+    assert worktree_seed.seed_webui_packages(primary, worktree) is seeded
+    assert (worktree / "webui" / "node_modules").exists() is seeded
 
 
 @pytest.mark.parametrize(
@@ -409,7 +503,7 @@ def test_script_checkout_root_is_the_checkout_holding_the_script():
     assert module._script_checkout_root() == PROJECT_ROOT
 
 
-def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(
+def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_install_failure(
     tmp_path, monkeypatch
 ):
     module = _load_worktree_module()
@@ -431,8 +525,8 @@ def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(
         if command[:3] == ["git", "worktree", "add"]:
             webui_path.mkdir(parents=True, exist_ok=True)
             return 0, ""
-        if command == ["npm", "run", "build"]:
-            return 1, "build failed"
+        if command == ["npm", "install"]:
+            return 1, "install failed"
         return 0, ""
 
     removed_paths = []
