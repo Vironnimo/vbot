@@ -682,7 +682,10 @@ failed wake, and a changed aggregate state), `participants` their Runs, states a
 pending counts (delivery acknowledgments, wake admission, Run start and finish),
 `posts` new Board posts (Board Tool post and create, `board.post`), `discussions`
 discussions and members (Board Tool create, join, leave) and `wiki` Wiki pages
-(`_changed` and `_BOARD_CHANGES` in `extension.py`). The overview reloads profiles
+(`_changed` and `_BOARD_CHANGES` in `extension.py`). A change whose registration
+already retired for reload or disable (`publish_change` raises `ValueError`) is skipped:
+the mutation is stored, so the call that made it still succeeds
+(`test_post_stored_while_the_registration_retires_is_reported_as_posted`). The overview reloads profiles
 only for `profiles`, the Run list only for `swarms`, and the selected Swarm
 (`swarms.get`) for any change naming it, plus the changed parts of its visible
 tab: on the Board `board.list` for `discussions` and, for `posts`, a `board.read`

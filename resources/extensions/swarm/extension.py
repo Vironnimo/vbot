@@ -423,8 +423,16 @@ class SwarmExtension:
     # ``posts`` new Board posts, ``discussions`` discussions and their members,
     # ``wiki`` its Wiki pages.
     def _changed(self, resource: str, record_id: str, revision: int = 0) -> None:
-        if self.host is not None and self.host.publish_change is not None:
-            self.host.publish_change(resource, [record_id], revision)
+        host = self.host
+        if host is None or host.publish_change is None:
+            return
+        try:
+            host.publish_change(resource, [record_id], revision)
+        except ValueError:
+            # The registration retired for a reload or disable, which
+            # invalidates every Extension surface itself. The change is
+            # already stored, so the call that made it still succeeded.
+            _LOGGER.debug("Swarm change not published: registration retired")
 
     def _participants_changed(self, swarm_id: str, result: Json, revision: int = 0) -> None:
         """Publish a participant change and, when it changed the Swarm's state, its entry."""

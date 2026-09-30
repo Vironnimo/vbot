@@ -135,6 +135,22 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
 
 
 @pytest.mark.asyncio
+async def test_post_stored_while_the_registration_retires_is_reported_as_posted(board):
+    # A reload or disable retires the registration and refreshes every open page
+    # itself; the post is stored, so the call must not read as failed.
+    def retired(*_change):
+        raise ValueError("extension change is unavailable")
+
+    board.service.host = replace(board.service.host, publish_change=retired)
+
+    posted, _ = await dispatch(board, {"action": "post", "text": "stored anyway"})
+
+    assert posted["ok"]
+    read, _ = await call(board, {"action": "read", "message_id": posted["data"]["post_id"]})
+    assert read["data"]["content"].endswith(":\nstored anyway")
+
+
+@pytest.mark.asyncio
 async def test_invalid_board_calls_have_no_effect(board):
     for arguments in [
         {},
