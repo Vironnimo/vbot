@@ -734,9 +734,10 @@ def _rerun_alone(root: Path, failed: list[str], env: dict[str, str]) -> tuple[li
     if not tests:
         return failed, []
     result = _run([*_pytest(), "-n", "0", *tests], root, env)
-    if result.returncode not in (0, 1):
-        return failed, []
     failing = set(failed_tests(result.stdout))
+    # A run that ends with 1 but names no failure died before its report.
+    if result.returncode not in (0, 1) or (result.returncode == 1 and not failing):
+        return failed, []
     passed = [test for test in tests if test not in failing]
     return [test for test in failed if test not in passed], passed
 
@@ -788,20 +789,26 @@ def check_tests(
                 f"Commit check: discarded the corrupt {name}; this run records afresh.", flush=True
             )
         result = _run(command, root, env)
-        if result.returncode not in (0, 1, 5):  # 5: no test selected
+        output = result.stdout
+        failed = failed_tests(output)
+        # 5: no test selected. A run that ends with 1 but names no failure died
+        # before its report, as when pytest-timeout ends the process.
+        if result.returncode not in (0, 1, 5) or (result.returncode == 1 and not failed):
             return [
                 StepResult("pytest", f"FAIL (exit code {result.returncode})", True, _output(result))
             ]
-        _record_tested_state(root, dirty)
-        output = result.stdout
-        failed = failed_tests(output)
         if not failed:
+            _record_tested_state(root, dirty)
             return [StepResult("pytest", "PASS", False)]
         commit, committed, in_progress = classify_failures(root, failed, set(changed), dirty)
         # A busy machine can fail any test: only a test that fails alone as well blocks.
         failing, flaky = _rerun_alone(root, [*commit, *committed], env)
         commit = [test for test in commit if test in failing]
         committed = [test for test in committed if test in failing]
+        # A blocked run leaves the tested state as it was, so the next run judges
+        # every change since then again, tests whose failure left no record included.
+        if not commit and not committed:
+            _record_tested_state(root, dirty)
 
     results: list[StepResult] = []
     if commit:

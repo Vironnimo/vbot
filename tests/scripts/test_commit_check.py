@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Mapping
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -683,6 +684,58 @@ def test_worktree_commits_leave_the_tests_to_the_branch_check(
     assert "FAIL: tests affected by this commit" in output
     assert "test_calc.py::test_double" in output
     assert "test_wip.py" not in output
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "reported"),
+    [
+        ("calc.py", BROKEN_CALC, "test_calc.py::test_double"),
+        # Like pytest-timeout ending the run: no report, and no record of the test.
+        (
+            "tests/test_crash.py",
+            "import os\n\n\ndef test_crash():\n    os._exit(1)\n",
+            "FAIL (exit code 1)",
+        ),
+    ],
+    ids=["failing test", "run ended without report"],
+)
+def test_a_failed_branch_check_fails_again_when_retried(
+    impact_project: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    path: str,
+    content: str,
+    reported: str,
+) -> None:
+    worktree = tmp_path / "worktree"
+    _git(impact_project, "worktree", "add", "-q", "-b", "task", str(worktree))
+    (worktree / path).parent.mkdir(exist_ok=True)
+    _write(worktree, path, content)
+    _git(worktree, "add", path)
+    _git(worktree, "commit", "-q", "-m", path, "--no-verify")
+
+    # A retry without a fix, as after a failure blamed on a busy machine.
+    for _attempt in range(2):
+        assert commit_check.check_branch(worktree) == 1
+        assert reported in capsys.readouterr().out
+
+
+def test_a_test_that_failed_last_time_runs_with_every_commit_until_it_passes(
+    impact_project: Path,
+) -> None:
+    # As testmon records a failure that no change since the tested state explains.
+    with closing(sqlite3.connect(impact_project / _test_impact.TESTMON_DATA)) as records, records:
+        records.execute(
+            "UPDATE test_execution SET failed = 1 WHERE test_name = ?",
+            ("test_wip.py::test_triple",),
+        )
+    for number in (1, 2):
+        _write(impact_project, f"notes{number}.txt", "read by no test")
+        _git(impact_project, "add", f"notes{number}.txt")
+
+        # It runs with an unrelated change, passes, and is left out afterwards.
+        assert _check_tests(impact_project) == ({"PASS": (False, "")} if number == 1 else {})
+        _git(impact_project, "commit", "-q", "-m", f"notes {number}", "--no-verify")
 
 
 @pytest.mark.parametrize(

@@ -147,9 +147,8 @@ class Selection:
     """The tests a change affects, judged against recorded test runs."""
 
     tests: frozenset[str]
-    """Selected tests: their recorded code changed, or they read a changed file."""
-    failed: frozenset[str]
-    """Tests that failed in their last recorded run."""
+    """Selected tests: their recorded code changed, they read a changed file, or they
+    failed in their last recorded run."""
     durations: Mapping[str, float]
     """Recorded duration of every recorded test."""
     complete: bool
@@ -159,9 +158,7 @@ class Selection:
 
     def selects(self, test: str) -> bool:
         """Whether *test* lacks a passing run with the code and files it has now."""
-        return (
-            self.complete or test in self.tests or test in self.failed or test not in self.durations
-        )
+        return self.complete or test in self.tests or test not in self.durations
 
     def __and__(self, other: Selection) -> Selection:
         """Return the tests both selections select.
@@ -178,7 +175,7 @@ class Selection:
             if selection.complete:
                 candidates |= set(selection.durations)
         tests = frozenset(test for test in candidates if self.selects(test) and other.selects(test))
-        return Selection(tests, frozenset(), durations, complete=False)
+        return Selection(tests, durations, complete=False)
 
     @property
     def seconds(self) -> float:
@@ -210,8 +207,9 @@ def select(root: Path, changed: Iterable[str] | None, records: Path | None = Non
     *root*); *changed* are the paths that differ from that state, None when that
     state is unknown. Changed Python code selects through pytest-testmon's record
     of the code each test executed; any other changed file selects the tests that
-    read it. testmon also selects the tests that failed in their last run. Records
-    that are missing, unreadable or without a tested state select every test.
+    read it. A test that failed in its last run is selected whatever changed, until
+    it passes. Records that are missing, unreadable or without a tested state
+    select every test.
     """
     records = records or root
     if not (records / TESTMON_DATA).is_file():
@@ -244,7 +242,7 @@ def _select(root: Path, changed: Iterable[str] | None, records: Path) -> Selecti
         if isinstance(affected, str):
             return Selection(frozenset(), failed, durations, True, affected)
         tests |= affected
-    return Selection(frozenset(tests), failed, durations, complete=False)
+    return Selection(frozenset(tests | failed), failed, durations, complete=False)
 
 
 def _affected_by_code(root: Path, records: Path) -> set[str] | str:
@@ -263,7 +261,7 @@ def _affected_by_code(root: Path, records: Path) -> set[str] | str:
         if not data.all_tests:
             return "there are no test records"
         data.determine_stable()
-        return set(data.unstable_test_names) | set(data.failing_tests)
+        return set(data.unstable_test_names)
     finally:
         data.db.con.close()
 
