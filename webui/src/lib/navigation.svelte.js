@@ -14,7 +14,8 @@
 //   selection, a vanished record) and never adds a step.
 // - Back/Forward first dismiss the topmost registered layer (a dialog, menu,
 //   sheet or the setup wizard) instead of navigating, then go through the same
-//   autosave gate as every other navigation.
+//   autosave gate as every other navigation. When the gate drops one
+//   (`cancelPendingMove`), the browser returns to the displayed entry.
 // - With `guardExit` (the Desktop app) Back never leaves the app: a floor entry
 //   below the first app entry sends the WebView forward again.
 // - Choosing a main view returns to the place last shown there; choosing the
@@ -222,12 +223,17 @@ export function createNavigator({
   // Back/Forward waits for pending edits to save.
   let entryIndex = baseIndex;
   let topIndex = baseIndex;
+  // The entry of the displayed Location.
+  let shownIndex = baseIndex;
   // Known Locations by entry index; unknown entries (another document, a
   // lost mirror) stay null.
   let entries = [];
   let synced = true;
   // The index a revert or floor bounce will land on; its popstate is ours.
   let expectedPopIndex = null;
+  // Where a bounce requested while another one is under way ends: it
+  // continues from where the first one lands.
+  let settleIndex = null;
   // A startup Location whose view is not known yet (an Extension page link
   // before the page catalog loads). The entry and URL keep it meanwhile.
   let pendingStart = null;
@@ -335,6 +341,7 @@ export function createNavigator({
     }
     writeEntry(location, entryIndex, replace);
     synced = true;
+    shownIndex = entryIndex;
     display(location, origin);
     persistStack();
     return true;
@@ -405,6 +412,10 @@ export function createNavigator({
   }
 
   function bounce(targetIndex, steps) {
+    if (expectedPopIndex !== null) {
+      settleIndex = targetIndex;
+      return;
+    }
     expectedPopIndex = targetIndex;
     try {
       browserHistory?.go(steps);
@@ -413,12 +424,30 @@ export function createNavigator({
     }
   }
 
+  // The autosave gate dropped a pending Back/Forward (the user stays with
+  // edits that did not save): the browser returns to the displayed entry.
+  function cancelPendingMove() {
+    if (synced || entryIndex === shownIndex) return false;
+    const steps = shownIndex - entryIndex;
+    entryIndex = shownIndex;
+    synced = true;
+    bounce(shownIndex, steps);
+    return true;
+  }
+
   function handlePopState(event) {
     const state = event?.state;
     if (expectedPopIndex !== null) {
       const expected = expectedPopIndex;
+      const settle = settleIndex;
       expectedPopIndex = null;
-      if (isOwnState(state) && state.index === expected) return;
+      settleIndex = null;
+      if (isOwnState(state) && state.index === expected) {
+        if (settle !== null && settle !== expected) {
+          bounce(settle, settle - expected);
+        }
+        return;
+      }
     }
     if (isOwnState(state) && state.floor) {
       bounce(state.index + 1, 1);
@@ -465,6 +494,7 @@ export function createNavigator({
       persistStack();
     }
     synced = true;
+    shownIndex = index;
     display(location, 'history');
     return true;
   }
@@ -531,6 +561,7 @@ export function createNavigator({
       writeEntry(location, index, false);
     }
     entryIndex = index;
+    shownIndex = index;
 
     if (!isKnownView(location.view) && isExtensionViewId(location.view)) {
       // Keep the link's entry and URL, so a reload keeps it too, until the
@@ -570,6 +601,7 @@ export function createNavigator({
     entries[entryIndex] = plain;
     writeEntry(plain, entryIndex, true);
     synced = true;
+    shownIndex = entryIndex;
     if (available) display(plain, 'history');
     persistStack();
     return available;
@@ -684,6 +716,7 @@ export function createNavigator({
       return handleInput;
     },
     back,
+    cancelPendingMove,
     destroy,
     forget,
     forward,

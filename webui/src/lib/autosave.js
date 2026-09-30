@@ -4,6 +4,9 @@ const AUTOSAVE_CONTEXT = Symbol('vbot-autosave');
 const MAX_STABLE_SAVE_PASSES = 10;
 
 export const DEFAULT_AUTOSAVE_DEBOUNCE_MS = 800;
+// How long a navigation waits for a running save before it offers to leave
+// while the save finishes in the background.
+export const AUTOSAVE_STILL_SAVING_MS = 12_000;
 
 const composingInputs = new WeakSet();
 
@@ -71,7 +74,17 @@ export function createAutosaveParticipant({
   save,
 }) {
   let activeSave = null;
+  let activeSnapshot = null;
   let failedSnapshot = null;
+  // The running write a navigation left behind (`release`). It finishes in
+  // the background; transitions no longer wait for it unless the draft
+  // changed after it started.
+  let releasedSave = null;
+
+  const coveredByReleasedSave = () =>
+    activeSave !== null &&
+    activeSave === releasedSave &&
+    (!hasChanges() || snapshotKey(getSnapshot()) === activeSnapshot);
 
   function runSave(reason = 'auto', { force = false } = {}) {
     if (reason !== 'auto') cancelPending();
@@ -103,6 +116,7 @@ export function createAutosaveParticipant({
       resolveOperation = resolve;
     });
     activeSave = operation;
+    activeSnapshot = savedSnapshot;
 
     const complete = (succeeded) => {
       if (succeeded) {
@@ -112,6 +126,10 @@ export function createAutosaveParticipant({
       }
       if (activeSave === operation) {
         activeSave = null;
+        activeSnapshot = null;
+      }
+      if (releasedSave === operation) {
+        releasedSave = null;
       }
       resolveOperation(succeeded);
     };
@@ -132,6 +150,9 @@ export function createAutosaveParticipant({
     cancelPending();
 
     for (let pass = 0; pass < MAX_STABLE_SAVE_PASSES; pass += 1) {
+      if (coveredByReleasedSave()) {
+        return true;
+      }
       if (activeSave && !(await activeSave)) {
         return false;
       }
@@ -152,7 +173,13 @@ export function createAutosaveParticipant({
     // Reactive when the caller's `hasChanges` reads reactive draft state;
     // in-flight writes are not tracked here (see hasPending).
     hasChanges,
-    hasPending: () => activeSave !== null || hasChanges(),
+    hasPending: () =>
+      (activeSave !== null || hasChanges()) && !coveredByReleasedSave(),
+    // Stop holding transitions for the write running now; edits made after
+    // it started still wait for it, because writes stay serialized.
+    release: () => {
+      releasedSave = activeSave;
+    },
     runSave,
   };
 }
@@ -249,10 +276,19 @@ export function createAutosaveCoordinator() {
     return false;
   }
 
+  // The user left while saves were still running: they finish in the
+  // background, and later transitions wait only for edits made after them.
+  function releaseRunningSaves() {
+    for (const participant of participants) {
+      participant.release?.();
+    }
+  }
+
   return {
     flushPending,
     hasPending,
     register,
+    releaseRunningSaves,
   };
 }
 

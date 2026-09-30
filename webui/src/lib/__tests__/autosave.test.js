@@ -101,6 +101,49 @@ describe('autosave coordination', () => {
     expect(save).toHaveBeenNthCalledWith(2, 'transition');
   });
 
+  it('stops holding transitions for a released save until the draft changes again', async () => {
+    const running = deferred();
+    const draft = { value: 'first' };
+    let baseline = '';
+    const save = vi
+      .fn()
+      .mockImplementationOnce(() => running.promise)
+      .mockImplementation(async () => true);
+    const coordinator = createAutosaveCoordinator();
+    const participant = createAutosaveParticipant({
+      getSnapshot: () => ({ ...draft }),
+      hasChanges: () => draft.value !== baseline,
+      save: async (reason) => {
+        const value = draft.value;
+        const succeeded = await save(reason);
+        if (succeeded) baseline = value;
+        return succeeded;
+      },
+    });
+    coordinator.register(participant);
+    void participant.runSave();
+    expect(coordinator.hasPending()).toBe(true);
+
+    coordinator.releaseRunningSaves();
+    expect(coordinator.hasPending()).toBe(false);
+    await expect(coordinator.flushPending()).resolves.toBe(true);
+
+    // A newer edit still waits for the released save: writes stay serialized.
+    draft.value = 'second';
+    expect(coordinator.hasPending()).toBe(true);
+    let flushed = false;
+    const flush = coordinator.flushPending().then((result) => {
+      flushed = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+    running.resolve(true);
+    await expect(flush).resolves.toBe(true);
+    expect(save.mock.calls).toEqual([['auto'], ['transition']]);
+    expect(baseline).toBe('second');
+  });
+
   it('reports a failed transition save without accepting the snapshot', async () => {
     const save = vi.fn().mockResolvedValue(false);
     const participant = createAutosaveParticipant({
