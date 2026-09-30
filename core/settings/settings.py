@@ -237,6 +237,24 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     return parsed_update
 
 
+def parse_settings_update_base(raw_base: Any, settings_update: Mapping[str, Any]) -> JsonObject:
+    """Parse ``params.base``: the caller's view of the sections it updates.
+
+    ``base`` has the update's shape and may name only sections the parsed
+    ``settings_update`` changes; the storage transaction compares it with the
+    current values before it writes.
+    """
+    if not isinstance(raw_base, dict):
+        raise SettingsValidationError("params.base must be an object of settings sections")
+    base = parse_settings_update(raw_base)
+    extra_sections = sorted(set(base) - set(settings_update))
+    if extra_sections:
+        raise SettingsValidationError(
+            f"params.base names sections the update does not change: {', '.join(extra_sections)}"
+        )
+    return base
+
+
 def _parse_notifications_update(notifications: Any) -> JsonObject:
     """Parse the desktop-notification switches (sparse update, like reflection)."""
     if not isinstance(notifications, dict):

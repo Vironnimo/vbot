@@ -57,6 +57,7 @@ from core.settings.settings import (
     is_valid_agent_id,
     is_valid_project_id,
     parse_settings_update,
+    parse_settings_update_base,
     validate_temperature,
     validate_thinking_effort,
 )
@@ -126,6 +127,7 @@ __all__ = [
     "parse_patch_operations",
     "parse_settings_path",
     "parse_settings_update",
+    "parse_settings_update_base",
     "resolve_setting",
     "setting_definitions",
     "setting_details",

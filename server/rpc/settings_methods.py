@@ -24,11 +24,11 @@ from core.settings import (
     parse_patch_operations,
     parse_settings_path,
     parse_settings_update,
+    parse_settings_update_base,
     setting_details,
 )
 from core.settings.normalizers import normalize_model_task_settings
 from core.settings.settings import available_timezone_names, effective_timezone_name
-from core.storage import SettingsConflictError
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS, RESOURCE_KIND_SKILLS
@@ -195,7 +195,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     raw_base = sections.pop("base", None)
     try:
         settings_update = parse_settings_update(sections)
-        base = None if raw_base is None else _parse_update_base(raw_base, settings_update)
+        base = None if raw_base is None else parse_settings_update_base(raw_base, settings_update)
     except SettingsValidationError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
@@ -231,10 +231,6 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             refresh_sections=settings_update,
         )
         response = await _settings_response(state)
-    except SettingsConflictError as exc:
-        # Nothing was written: the editor re-reads Settings and reapplies its edit.
-        _LOGGER.debug("Stale settings update refused (paths=%s)", ",".join(exc.paths))
-        raise _map_expected_error(exc) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -257,19 +253,6 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         _LOGGER.info("Settings updated (paths=%s%s)", ",".join(changed_paths), details)
     _publish_settings_effects(state, effects)
     return response
-
-
-def _parse_update_base(raw_base: Any, settings_update: JsonObject) -> JsonObject:
-    """Parse ``params.base``: the caller's view of the sections it updates."""
-    if not isinstance(raw_base, dict):
-        raise SettingsValidationError("params.base must be an object of settings sections")
-    base = parse_settings_update(raw_base)
-    extra_sections = sorted(set(base) - set(settings_update))
-    if extra_sections:
-        raise SettingsValidationError(
-            f"params.base names sections the update does not change: {', '.join(extra_sections)}"
-        )
-    return base
 
 
 def _changed_setting_paths(path: str, previous: Any, current: Any) -> list[str]:

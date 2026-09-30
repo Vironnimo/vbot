@@ -402,6 +402,8 @@ class StorageManager:
             if base is not None:
                 stale_paths = settings_updates.stale_setting_paths(settings, settings_update, base)
                 if stale_paths:
+                    # An expected outcome: the writer re-reads and reapplies its change.
+                    _LOGGER.debug("Stale settings update refused (paths=%s)", ",".join(stale_paths))
                     raise SettingsConflictError(stale_paths)
             return settings_updates.apply_settings_update(settings, settings_update)
 
@@ -627,15 +629,25 @@ class StorageManager:
     def update_model_task_settings(
         self,
         model_tasks: Mapping[str, Any],
+        *,
+        base: Mapping[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Persist sparse task-model binding updates and return the full section."""
+        """Persist sparse task-model binding updates and return the full section.
+
+        ``base`` is the caller's view of the bindings it writes; like
+        :meth:`update_settings_sections`, the write is refused with
+        :class:`SettingsConflictError` when it would change a value that no
+        longer matches that view.
+        """
 
         if not isinstance(model_tasks, Mapping):
             raise StorageError("Model task settings must be a mapping")
 
-        return self.update_settings(
-            lambda settings: settings_updates.apply_model_task_settings(settings, model_tasks)
+        updated = self.update_settings_sections(
+            {"model_tasks": model_tasks},
+            base=None if base is None else {"model_tasks": base},
         )
+        return cast("dict[str, dict[str, Any]]", updated["model_tasks"])
 
     def save_settings(self, settings: Mapping[str, Any]) -> None:
         """Atomically write ``settings.json``, keeping the unknown fields on disk.

@@ -140,8 +140,9 @@ class _Storage:
     def load_model_task_settings(self) -> dict[str, object]:
         return dict(self._settings)
 
-    def update_model_task_settings(self, model_tasks: object) -> object:
+    def update_model_task_settings(self, model_tasks: object, *, base: object = None) -> object:
         assert isinstance(model_tasks, Mapping)
+        assert base is None, "based writes are covered with the real StorageManager"
         for task_type, binding in model_tasks.items():
             if isinstance(binding, Mapping) and binding.get("target"):
                 self._settings[task_type] = dict(binding)
