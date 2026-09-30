@@ -45,6 +45,9 @@ _ORIGIN_HOST_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.-_:")
 _ACTIVATION_POLL_MS = 500
 ACTIVATION_REQUEST_FILE_NAME = "activation-request.json"
 ACTIVATION_REQUEST_MAX_AGE_SECONDS = 60.0
+#: How long a restart successor waits for its predecessor to release the guard.
+HANDOFF_CLAIM_TIMEOUT_SECONDS = 30.0
+_HANDOFF_CLAIM_POLL_SECONDS = 0.1
 
 
 def win32_library(name: str) -> ctypes.CDLL:
@@ -360,8 +363,11 @@ def claim_desktop_instance(
     config_directory: Path,
     *,
     request: Mapping[str, Any] | None = None,
+    handoff: str | None = None,
     api: InstanceApi | None = None,
     clock: Callable[[], float] = time.time,
+    monotonic: Callable[[], float] = time.monotonic,
+    pause: Callable[[float], None] = time.sleep,
 ) -> DesktopInstance | None:
     """Claim the Desktop for ``config_directory`` or hand off to the running one.
 
@@ -381,6 +387,13 @@ def claim_desktop_instance(
     :data:`ACTIVATION_REQUEST_MAX_AGE_SECONDS` or malformed reaches the listener
     as ``None``. A request that cannot be written is logged; the running
     instance still comes to the front.
+
+    ``handoff`` makes this launch the successor of a restarting Desktop (see
+    :mod:`desktop.restart`): instead of a request to come to the front, the
+    running instance receives ``{"handoff": handoff}``, and this launch waits
+    up to :data:`HANDOFF_CLAIM_TIMEOUT_SECONDS` for it to exit and release the
+    guard, then owns the Desktop. It returns ``None`` when the guard stays
+    taken.
     """
 
     if sys.platform != "win32":
@@ -403,6 +416,8 @@ def claim_desktop_instance(
         # A request left over from an ended instance expires on its own; deleting
         # it here could drop the request of a launch that raced this one.
         return DesktopInstance(instance_api, mutex, event, request_path=request_path, clock=clock)
+    if handoff is not None:
+        request = {"handoff": handoff}
     try:
         if event:
             if request is not None:
@@ -413,6 +428,40 @@ def claim_desktop_instance(
         for handle in (event, mutex):
             if handle:
                 instance_api.close(handle)
+    if handoff is None:
+        return None
+    return _claim_after_predecessor(
+        instance_api, scope, request_path, clock=clock, monotonic=monotonic, pause=pause
+    )
+
+
+def _claim_after_predecessor(
+    api: InstanceApi,
+    scope: str,
+    request_path: Path,
+    *,
+    clock: Callable[[], float],
+    monotonic: Callable[[], float],
+    pause: Callable[[float], None],
+) -> DesktopInstance | None:
+    """Wait for the restarting Desktop to release the guard, then own it."""
+
+    deadline = monotonic() + HANDOFF_CLAIM_TIMEOUT_SECONDS
+    while monotonic() < deadline:
+        pause(_HANDOFF_CLAIM_POLL_SECONDS)
+        mutex, already_running = api.create_mutex(f"{scope}.instance")
+        if not mutex:
+            logger.warning("Desktop single-instance guard could not be created")
+            return DesktopInstance()
+        if not already_running:
+            event = api.create_event(f"{scope}.activate")
+            if not event:
+                logger.warning("Desktop activation event could not be created")
+            logger.info("The previous Desktop handed over; this Desktop now owns the window")
+            return DesktopInstance(api, mutex, event, request_path=request_path, clock=clock)
+        # The guard disappears only when no process holds a handle to it.
+        api.close(mutex)
+    logger.warning("The previous Desktop did not hand over in time; not opening a window")
     return None
 
 
@@ -475,6 +524,32 @@ def _take_activation_request(path: Path, *, now: float) -> ActivationRequest | N
         logger.info("Ignoring a stale request from another Desktop launch")
         return None
     return request
+
+
+def foreground_is_own_process() -> bool:
+    """Whether the foreground window belongs to this process; ``True`` off Windows.
+
+    The Desktop's only top-level window is its main window, so this reports
+    whether the user has the Desktop in front.
+    """
+
+    if sys.platform != "win32":
+        return True
+    from ctypes import wintypes
+
+    user32 = win32_library("user32")
+    get_foreground = user32.GetForegroundWindow
+    get_foreground.argtypes = []
+    get_foreground.restype = wintypes.HWND
+    get_thread_process = user32.GetWindowThreadProcessId
+    get_thread_process.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    get_thread_process.restype = wintypes.DWORD
+    window = get_foreground()
+    if not window:
+        return False
+    process_id = wintypes.DWORD()
+    get_thread_process(window, ctypes.byref(process_id))
+    return process_id.value == os.getpid()
 
 
 # -- WebView2 browser arguments -------------------------------------------------

@@ -304,6 +304,7 @@ class ConnectionController:
         # (WebView2 permission requests), so it has its own short lock.
         self._active_server_lock = threading.Lock()
         self._active_server_url: str | None = None
+        self._active_target: tuple[str, int] | None = None
 
     def attach_window(self, window: WindowProtocol) -> None:
         """Bind the live pywebview window the controller navigates."""
@@ -320,6 +321,12 @@ class ConnectionController:
 
         with self._active_server_lock:
             return self._active_server_url
+
+    def active_target(self) -> tuple[str, int] | None:
+        """Return the ``(host, port)`` of the last successfully prepared connection."""
+
+        with self._active_server_lock:
+            return self._active_target
 
     # -- Remembered-servers surface (delegates to the module operations) -----
 
@@ -352,13 +359,16 @@ class ConnectionController:
         label: str | None = None,
         *,
         open_session: SessionLink | None = None,
+        location: str | None = None,
     ) -> DesktopProbeResult:
         """Probe a target and navigate the window to it, or to the error screen.
 
         On a successful probe the host/port are remembered (carrying ``label``)
         and marked last-used, and the window loads the WebUI with the
         ``accessor=desktop`` marker; ``open_session`` adds the ``open_agent`` /
-        ``open_session`` parameters, so the WebUI opens that Session once loaded.
+        ``open_session`` parameters, so the WebUI opens that Session once loaded,
+        and ``location`` (a URL fragment such as ``#settings``, restored after a
+        Desktop restart) opens that place of the WebUI.
         On any failure the window shows the connection screen with the failed
         host/port prefilled and an inline error, so the user corrects the target
         in place. Returns the probe result so callers/tests can assert the
@@ -370,6 +380,8 @@ class ConnectionController:
             url = prepared.navigation_url
             if open_session is not None:
                 url = _with_session_link(url, open_session)
+            if location is not None:
+                url = f"{url}{location}"
             self._navigate_url(url)
         else:
             self._show_connection_screen(prepared.result)
@@ -399,6 +411,7 @@ class ConnectionController:
             logger.info("Desktop connecting to %s:%s", target.host, target.port)
             with self._active_server_lock:
                 self._active_server_url = target.url
+                self._active_target = (target.host, target.port)
             self._notify_active_server(target.url)
             return PreparedConnection(
                 result=result,

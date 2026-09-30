@@ -11,10 +11,10 @@ looks like a code, and is logged with its traceback.
 
 The same instance stays the window's ``js_api`` across navigation, so it
 serves both the shell connection screen (server selection) and the remote
-WebUI (capabilities, clipboard and browser, the Live voice hotkey, Voice). The
-facade holds no Voice state: Voice methods delegate to
+WebUI (capabilities, clipboard and browser, the Live voice hotkey, Voice, the
+update restart). The facade holds no Voice state: Voice methods delegate to
 :class:`desktop.wakeword.controller.VoiceController`, server selection to the
-connection controller.
+connection controller, the update restart to :class:`desktop.restart.DesktopRestart`.
 """
 
 from __future__ import annotations
@@ -29,12 +29,14 @@ import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
+from desktop.restart import RestartError
 from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordModelError
 
 if TYPE_CHECKING:
     from desktop.connection import PreparedConnection, ServerEntry
     from desktop.hotkey import LiveHotkeyController
+    from desktop.restart import DesktopRestart
     from desktop.wakeword.controller import VoiceController
 
 logger = logging.getLogger("vbot.desktop.bridge")
@@ -124,11 +126,13 @@ class DesktopBridge:
         system_actions: DesktopSystemActions | None = None,
         live_hotkey: LiveHotkeyController | None = None,
         secure_origins: tuple[str, ...] = (),
+        restart: DesktopRestart | None = None,
     ) -> None:
         self._voice = voice
         self._connection = connection
         self._system_actions = system_actions or DesktopSystemActions()
         self._live_hotkey = live_hotkey
+        self._restart = restart
         # Remote HTTP origins WebView2 treats as secure for this process. A
         # server added later needs a Desktop restart before its microphone works.
         self._secure_origins = tuple(secure_origins)
@@ -147,6 +151,7 @@ class DesktopBridge:
             "contextMenu": True,
             "liveHotkey": self._live_hotkey is not None and self._live_hotkey.supported,
             "secureOrigins": list(self._secure_origins),
+            "restart": self._restart is not None,
         }
 
     def setClipboardText(self, text: Any) -> dict[str, bool]:  # noqa: N802
@@ -232,6 +237,23 @@ class DesktopBridge:
     def setLiveHotkey(self, changes: Any) -> dict[str, Any]:  # noqa: N802
         """Merge, persist, and re-register the Live voice hotkey; returns its status."""
         return self._require_live_hotkey().update(changes)
+
+    # -- Update restart --------------------------------------------------------
+
+    def getDesktopUpdate(self) -> dict[str, bool]:  # noqa: N802
+        """Return ``{pending, restarting, failed}`` for the update restart."""
+        if self._restart is None:
+            return {"pending": False, "restarting": False, "failed": False}
+        return self._restart.status()
+
+    def restartDesktop(self) -> dict[str, bool]:  # noqa: N802
+        """Hand the Desktop over to the newer active version; the window closes soon."""
+        if self._restart is None:
+            raise RestartError(
+                "This Desktop cannot restart into a new version", error_code="restart_unavailable"
+            )
+        self._restart.restart()
+        return {"accepted": True}
 
     # -- Server selection ------------------------------------------------------
 
