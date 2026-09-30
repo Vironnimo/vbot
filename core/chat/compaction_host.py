@@ -182,6 +182,7 @@ class ChatCompactionHost:
                 self._dependencies,
                 run.agent_id,
                 run.session_id,
+                agent,
                 prompt_project,
                 prompt_context,
                 run.project_id,
@@ -395,6 +396,7 @@ class ChatCompactionHost:
         read_paths: list[Path] = []
         if project_prompt_context is not None:
             working_project_context = system_prompts.render_working_project_context(
+                refreshed_agent,
                 project_prompt_context,
                 on_read=read_paths.append,
             )

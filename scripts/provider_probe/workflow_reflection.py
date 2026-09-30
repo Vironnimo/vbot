@@ -71,7 +71,7 @@ async def _probe_reflection_case(
         if {tool["name"] for tool in definitions} != set(names):
             raise RuntimeError("Reflection probe requires all three production Tool definitions")
         catalog = _format_skill_catalog(skills().filter_allowed(["*"]))
-        memory_text = memory.read_prompt_files(root, "agent_user")
+        memory_text = memory.read_prompt_files(root, "agent_user", memory_tool="memory")
         if case.get("stale_memory_prompt"):
             memory_text = "# Agent Memory\nNo entries yet.\n# User Profile\nNo entries yet."
         system = "\n\n".join(

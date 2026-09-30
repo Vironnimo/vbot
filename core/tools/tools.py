@@ -13,6 +13,7 @@ from functools import wraps
 from typing import Any, ClassVar, TypeVar
 
 from core.tools._tool_context import (
+    TOOL_ALLOWLIST_WILDCARD,
     ToolCall,
     ToolCallCancelCheck,
     ToolCallCancelRegistrar,
@@ -89,7 +90,6 @@ from core.utils.workers import BoundedWorkerPool
 
 _LOGGER = get_logger("tools")
 
-TOOL_ALLOWLIST_WILDCARD = "*"
 DEFAULT_TOOL_CONCURRENCY_LIMIT = 500
 DEFAULT_TOOL_WORKER_LIMIT = 8
 BUILTIN_TOOL_FAMILY_LABELS = {
@@ -572,6 +572,7 @@ class ToolRegistry:
         except ToolNotFoundError:
             raise ToolNotFoundError(self._unknown_tool_message(context, allowed_tools)) from None
         context._retain_result_contract(tool.contract)
+        context._retain_dispatch_allowlist(allowed_tools)
         if tool.session_scoped and context.tool_name not in context.session_tool_grants:
             raise SessionToolUnavailableError(f"Session tool unavailable: {context.tool_name}")
         if (

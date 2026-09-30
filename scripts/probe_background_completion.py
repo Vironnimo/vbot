@@ -156,7 +156,7 @@ class _ProbePromptManager:
     def render_skill_catalog(self, _agent: Agent, _skills: Any) -> PinnedSkillCatalog:
         return PinnedSkillCatalog(catalog_text="")
 
-    def render_working_project_context(self, _context: Any, **_kwargs: Any) -> str:
+    def render_working_project_context(self, _agent: Any, _context: Any, **_kwargs: Any) -> str:
         return ""
 
 

@@ -24,6 +24,7 @@ from core.memory._history import (
 )
 from core.utils.atomic import atomic_write_bytes
 from core.utils.errors import VBotError
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     from core.prompts.blocks import BlockDefinition
 
 _LOGGER = get_logger("memory")
+# Memory files whose prompt section the process has logged as cut to its budget.
+_PROMPT_CUT_CONDITIONS = LoggedConditions()
 
 MemoryScope = Literal["user", "agent"]
 MemoryPromptMode = Literal["off", "agent", "agent_user"]
@@ -73,6 +76,18 @@ _MAX_ENTRY_LENGTH = 2_000
 # Both exceed _MAX_ENTRY_LENGTH so a single normal add into an empty scope always
 # fits; agent notes accumulate more than the user profile, so its budget is larger.
 _MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000}
+# The budget also caps what the System Prompt shows of a scope, because a hand-edited
+# file can exceed it. The prompt shows the entries that fit, in file order, and this
+# notice in place of the rest. The label above keeps the true total, so the Agent
+# also sees that the scope is over budget.
+_PROMPT_CUT_NOTICE = (
+    "[Not shown: {count} {noun} ({chars} characters) that do not fit the "
+    "{budget}-character limit of this section.{list_hint}]"
+)
+# Appended to the notice only when the Agent can call the memory Tool.
+_PROMPT_CUT_LIST_HINT = (
+    " Call `{memory_tool}` with action `list` and scope `{scope}` to see every entry."
+)
 # Behavioral guidance rendered at the top of the pinned-memory block. It is the
 # editable default text of the ``memory:guidance`` block (D6): the memory domain
 # declares the block, so the guidance ships with its owner instead of as a
@@ -537,7 +552,9 @@ class FilePinnedMemoryBackend:
             for scope in scopes
         )
 
-    def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
+    def read_prompt_files(
+        self, workspace: Path, mode: MemoryPromptMode, *, memory_tool: str | None
+    ) -> str:
         """Return the rendered pinned-memory entries for a mode.
 
         The data half of the memory block — only the per-scope entry lists, with no
@@ -548,9 +565,17 @@ class FilePinnedMemoryBackend:
         this so the file reading stays in the memory domain. ``off`` mode reads nothing
         (``""``); a not-yet-created or emptied file renders as its label plus the
         placeholder, and an unreadable file raises :class:`MemoryError`.
+
+        A scope above its budget (a hand edit) shows the entries that fit, in file
+        order, and a notice counting the rest. *memory_tool* is the name under which
+        the Agent can call the memory Tool, or ``None`` when it cannot; the notice
+        names the Tool only when it is given.
         """
         validated_mode = validate_memory_prompt_mode(mode)
-        return self.render_scopes(workspace, MEMORY_PROMPT_MODE_SCOPES[validated_mode])
+        return "\n\n".join(
+            self._render_prompt_scope(Path(workspace), scope, memory_tool)
+            for scope in MEMORY_PROMPT_MODE_SCOPES[validated_mode]
+        )
 
     def _render_scope_block(self, workspace: Path, scope: MemoryScope) -> str:
         """Render one scope's memory block: heading, character usage, and entries.
@@ -560,12 +585,44 @@ class FilePinnedMemoryBackend:
         followed by the ``- `` bullet list or the empty-scope placeholder.
         """
         entries = _read_entries(self._path(workspace, scope))
+        return _format_scope(scope, _total(entries), entries)
+
+    def _render_prompt_scope(
+        self, workspace: Path, scope: MemoryScope, memory_tool: str | None
+    ) -> str:
+        """Render one scope for the System Prompt, cut to the scope's budget."""
+        path = self._path(workspace, scope)
+        entries = _read_entries(path)
         used = _total(entries)
-        label = f"{MEMORY_SCOPE_LABELS[scope]} ({used}/{_MAX_SCOPE_BUDGET[scope]} chars used)"
-        if not entries:
-            return f"{label}\n{_EMPTY_SCOPE_TEXT}"
-        body = "\n".join(f"{_BULLET_PREFIX}{entry}" for entry in entries)
-        return f"{label}\n{body}"
+        budget = _MAX_SCOPE_BUDGET[scope]
+        shown, omitted = _fit_budget(entries, budget)
+        condition = str(path)
+        if not omitted:
+            if _PROMPT_CUT_CONDITIONS.ended(condition):
+                _LOGGER.info("Showed all Memory entries in the prompt again (path=%s)", path)
+            return _format_scope(scope, used, entries)
+        if _PROMPT_CUT_CONDITIONS.started(condition):
+            _LOGGER.warning(
+                "Left Memory entries above the budget out of the prompt "
+                "(path=%s chars=%d budget=%d omitted=%d)",
+                path,
+                used,
+                budget,
+                len(omitted),
+            )
+        list_hint = (
+            _PROMPT_CUT_LIST_HINT.format(memory_tool=memory_tool, scope=scope)
+            if memory_tool is not None
+            else ""
+        )
+        notice = _PROMPT_CUT_NOTICE.format(
+            count=len(omitted),
+            noun="entry" if len(omitted) == 1 else "entries",
+            chars=_total(omitted),
+            budget=budget,
+            list_hint=list_hint,
+        )
+        return f"{_format_scope(scope, used, shown, placeholder=False)}\n{notice}"
 
     def _path(self, workspace: Path, scope: MemoryScope) -> Path:
         workspace_path = Path(workspace)
@@ -742,20 +799,28 @@ class MemoryService:
     def render_scopes(self, workspace: Path, scopes: Sequence[MemoryScope]) -> str:
         return self._backend.render_scopes(workspace, scopes)
 
-    def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
-        return self._backend.read_prompt_files(workspace, mode)
+    def read_prompt_files(
+        self, workspace: Path, mode: MemoryPromptMode, *, memory_tool: str | None
+    ) -> str:
+        return self._backend.read_prompt_files(workspace, mode, memory_tool=memory_tool)
 
 
 class _MemoryFileReader(Protocol):
     """The one method :func:`read_memory_files` needs from a memory provider."""
 
-    def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
+    def read_prompt_files(
+        self, workspace: Path, mode: MemoryPromptMode, *, memory_tool: str | None
+    ) -> str:
         """Return the rendered pinned-memory entries for a mode."""
         ...
 
 
 def read_memory_files(
-    workspace: Path, mode: MemoryPromptMode, *, provider: _MemoryFileReader
+    workspace: Path,
+    mode: MemoryPromptMode,
+    *,
+    provider: _MemoryFileReader,
+    memory_tool: str | None,
 ) -> str:
     """Render the embedded ``{generated:memory_files}`` text for one agent/mode.
 
@@ -765,18 +830,22 @@ def read_memory_files(
     that selects scopes always renders them, an empty scope via its placeholder. Kept
     in the memory domain so the producer the manager registers stays a thin closure;
     *provider* is the manager's memory provider (a :class:`MemoryService` or any stub
-    exposing ``read_prompt_files``).
+    exposing ``read_prompt_files``). *memory_tool* is the name under which the Agent
+    can call the memory Tool, or ``None``; see
+    :meth:`FilePinnedMemoryBackend.read_prompt_files`.
     """
-    return provider.read_prompt_files(Path(workspace), mode)
+    return provider.read_prompt_files(Path(workspace), mode, memory_tool=memory_tool)
 
 
 def memory_prompt_file_paths(workspace: Path, mode: MemoryPromptMode) -> list[Path]:
-    """Resolved absolute paths of the pinned-memory files a mode injects that exist.
+    """Resolved absolute paths of the pinned-memory files the prompt shows whole.
 
     The prompt renders every scope a mode selects — an empty one via its placeholder
     — but only an on-disk file can be stamped as read-before-write: a still-absent
     file has nothing whose ``(mtime, size)`` to record, and a later Add to it is
-    a new-file write (exempt) anyway. So this returns just the existing selected files,
+    a new-file write (exempt) anyway. A file above its scope's budget shows only
+    part of its entries, so stamping it would let the Agent overwrite entries it
+    never saw. So this returns just the existing selected files within their budget,
     resolved the same way the backend reads them (``workspace / the scope's file``),
     for the chat loop to stamp. ``off`` mode selects no scope, so it returns ``[]``.
     The caller must not pass an empty-string workspace (a config agent) — that would
@@ -787,7 +856,13 @@ def memory_prompt_file_paths(workspace: Path, mode: MemoryPromptMode) -> list[Pa
     paths: list[Path] = []
     for scope in MEMORY_PROMPT_MODE_SCOPES[validate_memory_prompt_mode(mode)]:
         path = (workspace_path / MEMORY_FILES[scope]).resolve()
-        if path.is_file():
+        if not path.is_file():
+            continue
+        try:
+            entries = _read_entries(path)
+        except MemoryError:
+            continue
+        if _total(entries) <= _MAX_SCOPE_BUDGET[scope]:
             paths.append(path)
     return paths
 
@@ -1006,6 +1081,38 @@ def _log_history_failure(event: str, error: Exception) -> None:
 
 def _total(entries: Sequence[str]) -> int:
     return sum(len(entry) for entry in entries)
+
+
+def _fit_budget(entries: Sequence[str], budget: int) -> tuple[list[str], list[str]]:
+    """Split *entries* into those that fit *budget* in file order and the rest.
+
+    An entry that does not fit is skipped and later, shorter ones still fit, so one
+    oversized entry cannot hide the others.
+    """
+    shown: list[str] = []
+    omitted: list[str] = []
+    used = 0
+    for entry in entries:
+        if used + len(entry) <= budget:
+            shown.append(entry)
+            used += len(entry)
+        else:
+            omitted.append(entry)
+    return shown, omitted
+
+
+def _format_scope(
+    scope: MemoryScope, used: int, entries: Sequence[str], *, placeholder: bool = True
+) -> str:
+    """Return a scope's label with its usage, then *entries* as ``- `` bullets.
+
+    With no entries, *placeholder* adds the empty-scope text below the label.
+    """
+    label = f"{MEMORY_SCOPE_LABELS[scope]} ({used}/{_MAX_SCOPE_BUDGET[scope]} chars used)"
+    if not entries:
+        return f"{label}\n{_EMPTY_SCOPE_TEXT}" if placeholder else label
+    body = "\n".join(f"{_BULLET_PREFIX}{entry}" for entry in entries)
+    return f"{label}\n{body}"
 
 
 def _require_revisions(

@@ -25,7 +25,7 @@ The dynamic `tool:project` block renders only when `project` is in the Agent's e
 
 - `register_project_tool(registry, projects, get_renderer, list_project_skills, file_state, prompt_blocks=None)` registers the Tool and, when supplied, its dynamic prompt block.
 - `make_project_handler(projects, get_renderer, list_project_skills, file_state)` builds the bound handler that `register_project_tool` registers; tests dispatch the Tool through the registry.
-- `SystemPromptManager.render_project_files(...)` and `render_project_skills(...)` are the shared presentation seam; the Tool must not duplicate Project auto-load or Skill formatting. `render_project_skills(...)` exposes Skill names and descriptions, never Skill filesystem paths.
+- `SystemPromptManager.render_project_files(...)` and `render_project_skills(...)` are the shared presentation seam; the Tool must not duplicate Project auto-load or Skill formatting. `render_project_skills(...)` exposes Skill names and descriptions, never Skill filesystem paths. `render_project_files` takes `tool_available`; the Tool passes `ToolContext.can_call`, so an oversized file's notice names `read` only when this Run can call it (`test_project_tool_lets_file_notices_name_read_only_when_the_run_can_call_it`).
 
 ## Constraints & Gotchas
 

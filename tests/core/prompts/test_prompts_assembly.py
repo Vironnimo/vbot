@@ -3,8 +3,10 @@
 import asyncio
 import logging
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -16,12 +18,13 @@ from core.memory import (
     MemoryPromptMode,
 )
 from core.prompts import INLINE_FILE_MAX_BYTES
+from core.prompts.blocks import FILE_READ_HINT, FILE_TOO_LARGE_NOTICE
 from core.prompts.prompts import (
-    PROJECT_FILE_TOO_LARGE_NOTICE,
     SOUL_FRAMING,
     ProjectPromptContext,
     SystemPromptManager,
 )
+from core.tools.availability import ToolAccess
 from core.utils.paths import model_path
 from tests.core.prompts.prompts_test_support import (
     StubChannels,
@@ -62,7 +65,7 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
         ]
     )
     manager = _manager(tmp_path, tools=tools, skills=skills, channels=channels)
-    agent = _agent(workspace, allowed_tools=["read_file"], allowed_skills=["agent-cli"])
+    agent = _agent(workspace, allowed_tools=["read"], allowed_skills=["agent-cli"])
     details: list[dict[str, object]] = []
 
     prompt = manager.build_system_prompt(agent, block_details=details)
@@ -120,7 +123,7 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "<system-reminder>" in str(anchor["text"])
     assert str(anchor["text"]).strip() in prompt
     # Same agent allowlist drives prompt tools and gate 2's memory-tool check.
-    assert tools.prompt_allowlist_calls[0] == ["read_file", "memory"]
+    assert tools.prompt_allowlist_calls[0] == ["read", "memory"]
     assert skills.allowlist == ["agent-cli"]
 
 
@@ -245,7 +248,7 @@ def test_channels_block_renders_only_with_an_enabled_channel_of_this_agent(
     workspace: Path, tmp_path: Path
 ) -> None:
     # Without such a Channel the whole block gates out (owner "channel").
-    agent = _agent(workspace, allowed_tools=["read_file"])
+    agent = _agent(workspace, allowed_tools=["read"])
 
     def prompt(channels: StubChannels | None) -> str:
         return _manager(tmp_path, channels=channels).build_system_prompt(agent)
@@ -401,7 +404,7 @@ def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
     manager = _manager(tmp_path)
     agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
     context = ProjectPromptContext.from_project("vbot", "vBot", repo, [])
-    snapshot = manager.render_working_project_context(context)
+    snapshot = manager.render_working_project_context(agent, context)
 
     prompt = manager.build_system_prompt(
         agent,
@@ -413,12 +416,28 @@ def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
     assert model_path(repo) in prompt
 
 
+@pytest.mark.parametrize(
+    ("allowed_tools", "request_tools", "read_offered"),
+    [
+        (None, None, True),
+        (["shell"], None, False),
+        # The request's Tool list wins over the Agent's policy.
+        (None, [{"name": "shell", "description": "Run a shell command"}], False),
+    ],
+    ids=["policy-offers-read", "policy-withholds-read", "request-lists-no-read"],
+)
 def test_project_files_render_readable_files_after_memory_and_report_them(
-    workspace: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    workspace: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    allowed_tools: list[str] | None,
+    request_tools: list[dict[str, Any]] | None,
+    read_offered: bool,
 ) -> None:
     # A missing, unreadable or non-UTF-8 auto-load file is dropped without aborting
     # the Run and is not reported as read. An oversized one keeps its frame with a
-    # notice instead of its content, is not reported as read, and warns once.
+    # notice instead of its content, is not reported as read, and warns once. The
+    # notice points to `read` only when the request offers it.
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
@@ -427,7 +446,9 @@ def test_project_files_render_readable_files_after_memory_and_report_them(
     (repo / "BINARY.md").write_bytes(b"\xff\xfe\x00\x01 not utf-8")
     (repo / "HUGE.md").write_bytes(b"HUGE-RULES " + b"x" * INLINE_FILE_MAX_BYTES)
     manager = _manager(tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
+    agent = _agent(
+        workspace, allowed_tools=allowed_tools, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT
+    )
     context = ProjectPromptContext.from_project(
         "vbot",
         "vBot",
@@ -437,15 +458,29 @@ def test_project_files_render_readable_files_after_memory_and_report_them(
     read_paths: list[Path] = []
 
     with caplog.at_level(logging.WARNING):
-        prompt = manager.build_system_prompt(agent, project_context=context, read_paths=read_paths)
-        manager.build_system_prompt(agent, project_context=context)
+        prompt = manager.build_system_prompt(
+            agent,
+            project_context=context,
+            read_paths=read_paths,
+            effective_tool_definitions=request_tools,
+        )
+        manager.build_system_prompt(
+            agent, project_context=context, effective_tool_definitions=request_tools
+        )
 
     assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in prompt
     assert ' <file name="CONTEXT.md">\nProject\ncontext\n </file>' in prompt
     assert '<file name="ADIR">' not in prompt
     assert '<file name="BINARY.md">' not in prompt
-    notice = PROJECT_FILE_TOO_LARGE_NOTICE.format(
-        size=INLINE_FILE_MAX_BYTES + len("HUGE-RULES "), limit=INLINE_FILE_MAX_BYTES
+    read_hint = (
+        FILE_READ_HINT.format(path=model_path(repo / "HUGE.md"), read_tool="read")
+        if read_offered
+        else ""
+    )
+    notice = FILE_TOO_LARGE_NOTICE.format(
+        size=INLINE_FILE_MAX_BYTES + len("HUGE-RULES "),
+        limit=INLINE_FILE_MAX_BYTES,
+        read_hint=read_hint,
     )
     assert f' <file name="HUGE.md">\n{notice}\n </file>' in prompt
     assert "HUGE-RULES" not in prompt
@@ -461,6 +496,45 @@ def test_project_files_render_readable_files_after_memory_and_report_them(
         (repo / "AGENTS.md").resolve(),
         (repo / "CONTEXT.md").resolve(),
     }
+
+
+@pytest.mark.parametrize("denied", [(), ("read", "memory")], ids=["offered", "withheld"])
+def test_epoch_snapshots_point_to_tools_only_when_the_agent_policy_offers_them(
+    workspace: Path, tmp_path: Path, denied: tuple[str, ...]
+) -> None:
+    # Chat renders these snapshots before a request exists, so the Agent's live Tool
+    # policy decides whether a cut SOUL, Project file or Memory section names the
+    # Tool that shows the rest. A cut file is never reported as read.
+    (workspace / "SOUL.md").write_bytes(b"SOUL-START " + b"x" * INLINE_FILE_MAX_BYTES)
+    (workspace / "MEMORY.md").write_text(
+        "".join(f"- Fact {index}: {'y' * 990}\n" for index in range(5)), encoding="utf-8"
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_bytes(b"RULES-START " + b"x" * INLINE_FILE_MAX_BYTES)
+    agent = replace(
+        _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT),
+        tool_access=ToolAccess(mode="all", denied=denied),
+    )
+    context = ProjectPromptContext.from_project("vbot", "vBot", repo, ["AGENTS.md"])
+    manager = _manager(tmp_path)
+    reads: list[Path] = []
+
+    soul = manager.render_soul(agent, on_read=reads.append)
+    working_project = manager.render_working_project_context(agent, context, on_read=reads.append)
+    memory = manager.render_memory_files(agent, on_read=reads.append)
+
+    offered = not denied
+    assert ("`read`" in soul) is offered
+    assert (model_path(workspace / "SOUL.md") in soul) is offered
+    assert ("`read`" in working_project) is offered
+    assert (model_path(repo / "AGENTS.md") in working_project) is offered
+    assert ("`memory`" in memory) is offered
+    assert "SOUL-START" not in soul
+    assert "RULES-START" not in working_project
+    assert "Fact 0" in memory
+    assert "Fact 4" not in memory
+    assert reads == []
 
 
 def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -> None:
@@ -480,7 +554,7 @@ def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -
     )
     read_paths: list[Path] = []
 
-    snapshot = manager.render_working_project_context(context, on_read=read_paths.append)
+    snapshot = manager.render_working_project_context(agent, context, on_read=read_paths.append)
 
     assert snapshot == (
         "## Working Project\n\n"
@@ -535,7 +609,7 @@ def test_working_project_template_preserves_plain_metadata_and_file_placeholders
         ["CONTEXT.md"],
     )
 
-    snapshot = manager.render_working_project_context(context)
+    snapshot = manager.render_working_project_context(_agent(""), context)
 
     assert "Research & Development" in snapshot
     assert model_path(repo) in snapshot
@@ -551,7 +625,7 @@ def test_legacy_working_project_placeholders_are_not_resolved(tmp_path: Path) ->
     )
     context = ProjectPromptContext.from_project("vbot", "vBot", tmp_path, [])
 
-    snapshot = manager.render_working_project_context(context)
+    snapshot = manager.render_working_project_context(_agent(""), context)
 
     assert snapshot == legacy
 
@@ -564,7 +638,7 @@ def test_render_project_files_one_source_for_reminder_and_prompt(tmp_path: Path)
     agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
     context = ProjectPromptContext.from_project("vbot", "vBot", repo, ["AGENTS.md"])
 
-    rendered = manager.render_project_files(context)
+    rendered = manager.render_project_files(context, tool_available=lambda _name: False)
     in_prompt = manager.build_system_prompt(agent, project_context=context)
 
     assert rendered == '<file name="AGENTS.md">\nTeam rules\n</file>'

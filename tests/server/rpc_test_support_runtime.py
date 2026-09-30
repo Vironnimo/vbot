@@ -107,6 +107,7 @@ class StubPrompts:
 
     def render_working_project_context(
         self,
+        _agent: StubAgent,
         project_context: object,
         *,
         on_read: object = None,

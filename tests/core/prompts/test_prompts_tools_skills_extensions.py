@@ -36,8 +36,8 @@ _TOOLS_LIST_ON = StubBlockStore(
 @pytest.mark.parametrize(
     ("mode", "names"),
     [
-        (MEMORY_PROMPT_MODE_AGENT_USER, ["read_file", "memory"]),
-        (MEMORY_PROMPT_MODE_OFF, ["read_file"]),
+        (MEMORY_PROMPT_MODE_AGENT_USER, ["read", "memory"]),
+        (MEMORY_PROMPT_MODE_OFF, ["read"]),
     ],
 )
 def test_tool_definitions_follow_the_agent_allowlist_profile_and_memory_mode(
@@ -45,14 +45,14 @@ def test_tool_definitions_follow_the_agent_allowlist_profile_and_memory_mode(
 ) -> None:
     tools = StubTools()
     manager = _manager(tmp_path, tools=tools)
-    agent = _agent(workspace, allowed_tools=["read_file"], memory_prompt_mode=mode)
+    agent = _agent(workspace, allowed_tools=["read"], memory_prompt_mode=mode)
 
     definitions = manager.provider_tool_definitions(agent)
     manager.build_system_prompt(agent)
 
     assert [definition["name"] for definition in definitions] == names
     assert definitions[0] == {
-        "name": "read_file",
+        "name": "read",
         "description": "Read a workspace file",
         "parameters": {"type": "object"},
     }
@@ -170,7 +170,7 @@ def test_provider_subagent_definition_narrows_agent_id_to_self_and_allowed_targe
         # The loader never waits for the Agent to have a Skill: one can be authored or
         # activated mid-Session.
         (True, ["*"], {"skill", "skill_manage"}),
-        (True, ["read_file", "memory"], set()),
+        (True, ["read", "memory"], set()),
         # A config Agent has no private Skill home, even under a wildcard allow-list.
         (False, ["*"], {"skill"}),
     ],
@@ -231,18 +231,18 @@ def test_tool_block_gated_on_tool_allowlist(workspace: Path, tmp_path: Path) -> 
     # matches any listed Tool with that name prefix.
     blocks = [
         BlockDefinition(
-            id="tool:read_file",
-            owner="tool:read_file",
+            id="tool:read",
+            owner="tool:read",
             default_text="Read-file guidance.",
         ),
         BlockDefinition(
             id="extension:read_family",
-            owner="tool:read_*",
+            owner="tool:rea*",
             default_text="Read-family guidance.",
         ),
     ]
     manager = _manager(tmp_path, block_definitions=blocks)
-    allowed = _agent(workspace, allowed_tools=["read_file"])
+    allowed = _agent(workspace, allowed_tools=["read"])
     denied = _agent(workspace, allowed_tools=["shell"])
 
     allowed_prompt = manager.build_system_prompt(allowed)
@@ -389,8 +389,8 @@ def test_enabled_tools_list_block_names_tools_as_the_model_sees_them(
     # core:tools_list ships disabled; a saved layout that switches it on renders the
     # name/description list, an opt-in booster for models that attend poorly to
     # native Tool schemas.
-    monkeypatch.setattr(model_names, "_MODEL_NAMES", {"read_file": "host_read"})
-    agent = _agent(workspace, allowed_tools=["read_file"])
+    monkeypatch.setattr(model_names, "_MODEL_NAMES", {"read": "host_read"})
+    agent = _agent(workspace, allowed_tools=["read"])
 
     prompt = _manager(tmp_path, block_store=_TOOLS_LIST_ON).build_system_prompt(agent)
 

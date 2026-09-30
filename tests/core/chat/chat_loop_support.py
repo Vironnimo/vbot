@@ -400,7 +400,9 @@ class StubPrompts:
         rendered_project = (
             working_project_context
             if working_project_context is not None
-            else self.render_project_files(project_context, on_read=on_read)
+            else self.render_project_files(
+                project_context, tool_available=lambda _name: False, on_read=on_read
+            )
         )
         parts = [
             agent_body,
@@ -424,12 +426,16 @@ class StubPrompts:
 
     def render_working_project_context(
         self,
+        agent: StubAgent,
         project_context: Any,
         *,
         on_read: Any = None,
     ) -> str:
+        del agent
         self.render_working_project_context_calls.append(project_context)
-        files = self.render_project_files(project_context, on_read=on_read)
+        files = self.render_project_files(
+            project_context, tool_available=lambda _name: False, on_read=on_read
+        )
         indented_files = files.replace("<file ", " <file ").replace("</file>", " </file>")
         cwd = str(project_context.cwd)
         framed_files = f"\n{indented_files}\n" if indented_files else "\n"
@@ -466,7 +472,10 @@ class StubPrompts:
         lines.extend(f"- {skill.name}: {skill.description} ({skill.path})" for skill in skills)
         return "\n".join(lines)
 
-    def render_project_files(self, project_context: Any, *, on_read: Any = None) -> str:
+    def render_project_files(
+        self, project_context: Any, *, tool_available: Any, on_read: Any = None
+    ) -> str:
+        del tool_available
         self.render_project_files_calls.append(project_context)
         if project_context is None:
             return ""

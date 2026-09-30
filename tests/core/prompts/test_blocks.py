@@ -12,6 +12,9 @@ from core.prompts import PromptAgent
 from core.prompts.blocks import (
     BLOCK_KIND_DATA,
     BLOCK_KIND_TEXT,
+    FILE_READ_HINT,
+    FILE_TOO_LARGE_NOTICE,
+    INLINE_FILE_MAX_BYTES,
     BlockDefinition,
     BlockProducer,
     BlockRenderContext,
@@ -25,6 +28,7 @@ from core.prompts.blocks import (
     dedupe_definitions,
     expand_block_template,
     expand_workspace_includes,
+    no_tools_available,
     normalize_blocks,
     parse_block_source,
     passes_gates,
@@ -34,6 +38,7 @@ from core.prompts.blocks import (
     wrap_include_file,
 )
 from core.tools.availability import ToolAccess
+from core.utils.paths import model_path
 
 # Every template marker kind, including an unsafe include that would fail the build if
 # it were ever expanded.
@@ -351,7 +356,9 @@ def test_include_inlines_a_readable_workspace_file_and_reports_only_that_read(
     seen: list[Path] = []
 
     with caplog.at_level(logging.WARNING):
-        result = expand_workspace_includes(template, workspace, on_read=seen.append)
+        result = expand_workspace_includes(
+            template, workspace, tool_available=no_tools_available, on_read=seen.append
+        )
 
     assert result == expected
     assert any(record.levelno == logging.WARNING for record in caplog.records) is warns
@@ -359,7 +366,7 @@ def test_include_inlines_a_readable_workspace_file_and_reports_only_that_read(
     assert seen == ([soul.resolve()] if setup == "file" else [])
 
 
-def test_a_missing_include_is_logged_when_it_goes_missing_and_returns_not_per_build(
+def test_an_include_condition_is_logged_when_it_starts_changes_and_ends_not_per_build(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     soul = tmp_path / "SOUL.md"
@@ -368,14 +375,46 @@ def test_a_missing_include_is_logged_when_it_goes_missing_and_returns_not_per_bu
         caplog.clear()
         with caplog.at_level(logging.INFO, logger="vbot.prompts"):
             for _build in range(count):
-                expand_workspace_includes("{include:SOUL.md}", str(tmp_path))
+                expand_workspace_includes(
+                    "{include:SOUL.md}", str(tmp_path), tool_available=no_tools_available
+                )
         return [record.levelno for record in caplog.records]
 
     assert levels_of_builds(3) == [logging.WARNING]
+    soul.write_bytes(b"SECRET-SOUL " + b"x" * INLINE_FILE_MAX_BYTES)
+    assert levels_of_builds(2) == [logging.WARNING]
+    # The oversized-file warning names the file, never its content.
+    assert "SECRET-SOUL" not in caplog.text
     soul.write_text("Soul text", encoding="utf-8")
     assert levels_of_builds(2) == [logging.INFO]
     soul.unlink()
     assert levels_of_builds(2) == [logging.WARNING]
+
+
+@pytest.mark.parametrize("read_available", [True, False], ids=["read-offered", "no-read"])
+def test_an_oversized_include_keeps_its_frame_with_a_notice_naming_read_only_when_offered(
+    tmp_path: Path, read_available: bool
+) -> None:
+    soul = tmp_path / "SOUL.md"
+    soul.write_bytes(b"SOUL-START " + b"x" * INLINE_FILE_MAX_BYTES)
+    seen: list[Path] = []
+    context = BlockRenderContext(
+        agent=StubAgent(workspace=str(tmp_path)),
+        read_observer=seen.append,
+        tool_available=lambda name: read_available and name == "read",
+    )
+
+    result = expand_block_template("{include:SOUL.md}", context, producers={})
+
+    read_hint = (
+        FILE_READ_HINT.format(path=model_path(soul), read_tool="read") if read_available else ""
+    )
+    notice = FILE_TOO_LARGE_NOTICE.format(
+        size=soul.stat().st_size, limit=INLINE_FILE_MAX_BYTES, read_hint=read_hint
+    )
+    assert result == wrap_include_file("SOUL.md", notice)
+    # The Agent did not see the content, so the file is not stamped as read.
+    assert seen == []
 
 
 @pytest.mark.parametrize(

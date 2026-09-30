@@ -88,9 +88,14 @@ class ProjectContextRenderer(Protocol):
         self,
         project_context: Any,
         *,
+        tool_available: Callable[[str], bool],
         on_read: Callable[[Path], None] | None = None,
     ) -> str:
-        """Render configured Project files and report successfully read paths."""
+        """Render configured Project files and report successfully read paths.
+
+        *tool_available* answers which Tools the receiving Agent can call, by
+        registry name; a notice for an oversized file names only those.
+        """
         ...
 
     def render_project_skills(self, project_name: str, skills: Sequence[Any]) -> str:
@@ -166,6 +171,7 @@ def make_project_handler(
                     project.cwd,
                     project.auto_load,
                 ),
+                tool_available=context.can_call,
                 on_read=read_paths.append,
             )
             skills = list_project_skills(project.project_id)

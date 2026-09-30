@@ -686,6 +686,7 @@ async def create_run_execution_context(
             dependencies,
             run.agent_id,
             run.session_id,
+            agent,
             prompt_project,
             project_prompt_context,
             project_id,

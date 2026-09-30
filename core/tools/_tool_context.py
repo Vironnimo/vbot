@@ -28,6 +28,8 @@ from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract
 
 _DISPLAY_MEDIA_KINDS = ("image", "video", "audio")
+# An allowlist entry that allows every Tool.
+TOOL_ALLOWLIST_WILDCARD = "*"
 
 
 def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
@@ -170,6 +172,11 @@ class ToolContext:
     result_contract: ToolContract | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    # The Tool allowlist canonical dispatch checked this call against (``None``
+    # allows every Tool), retained for ``can_call``.
+    dispatch_allowed_tools: Sequence[str] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
     presentation_facts: list[JsonObject] = field(
         default_factory=list,
         repr=False,
@@ -214,6 +221,24 @@ class ToolContext:
         if follow_final_link or target.name in {"", ".", ".."}:
             return target.resolve()
         return target.parent.resolve() / target.name
+
+    def can_call(self, tool_name: str) -> bool:
+        """Return whether this Run lets the Agent call the Tool named *tool_name*.
+
+        True when the Tool is in the allowlist canonical dispatch checked this call
+        against and the Run does not deny it. A result names another Tool only when
+        this is true, so the Agent is never pointed at a Tool it cannot call.
+        *tool_name* is the registry name.
+        """
+        allowed = self.dispatch_allowed_tools
+        if (
+            allowed is not None
+            and TOOL_ALLOWLIST_WILDCARD not in allowed
+            and tool_name not in allowed
+        ):
+            return False
+        denial = self.tool_denial_resolver
+        return denial is None or denial(tool_name) is None
 
     def add_display_count(self, value: int, unit: str, *, at_least: bool = False) -> None:
         """Record one presentation-only count without changing the Tool result."""
@@ -427,6 +452,14 @@ class ToolContext:
     def _retain_result_contract(self, contract: ToolContract) -> None:
         """Keep the canonical dispatch selection for this call's result checks."""
         object.__setattr__(self, "result_contract", contract)
+
+    def _retain_dispatch_allowlist(self, allowed_tools: Sequence[str] | None) -> None:
+        """Keep the allowlist canonical dispatch checked this call against."""
+        object.__setattr__(
+            self,
+            "dispatch_allowed_tools",
+            None if allowed_tools is None else tuple(allowed_tools),
+        )
 
 
 @dataclass(frozen=True)

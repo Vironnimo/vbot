@@ -222,6 +222,7 @@ def pinned_working_project_context(
     dependencies: PinnedContextDependencies,
     agent_id: str,
     session_id: str,
+    agent: Any,
     prompt_project: Any | None,
     project_context: ProjectPromptContext | None,
     project_id: str | None,
@@ -248,6 +249,7 @@ def pinned_working_project_context(
         session_id,
         project_id,
         lambda: dependencies.get_system_prompts().render_working_project_context(
+            agent,
             project_context,
             on_read=read_paths.append,
         ),
