@@ -29,6 +29,13 @@ enter at once. One that enters after the freeze instant would break the
 copies, so the capture discards them and starts over, up to
 :data:`CAPTURE_ATTEMPTS` times before it fails (``DatabaseUnavailableError``).
 
+The freeze state is process-wide and keyed by the resolved data directory,
+because it guards files, not objects: every owner, standalone store and
+offline tool in the process that changes a member passes the same gate, and
+``write_json_document`` has no injected object through which a per-Runtime
+freeze could reach its callers (the named exception in PROJECT.md ->
+Conventions -> Dependency injection).
+
 **Compound barrier.** A compound mutation changes the Session database and a
 held member as one unit - an Agent rename retargets Sessions in ``sessions.db``
 and moves ``agents/<id>/agent.json`` - so a capture between its steps would
