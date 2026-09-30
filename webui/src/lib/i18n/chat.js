@@ -220,6 +220,8 @@ export default Object.freeze({
   'chat.toolFact.lines': 'lines {start}-{end}',
   'chat.toolResultLabel': 'Result',
   'chat.toolChanges': 'Changes',
+  'chat.showMore': 'Show more',
+  'chat.showLess': 'Show less',
   'chat.fileChange.created': 'Created',
   'chat.fileChange.updated': 'Updated',
   'chat.fileChange.replaced': 'Replaced',

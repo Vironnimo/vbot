@@ -60,6 +60,7 @@
   import ChatReasoning from './ChatReasoning.svelte';
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
+  import UserMessageText from './UserMessageText.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
   let {
@@ -180,11 +181,17 @@
   {/each}
 {/snippet}
 
-{#snippet userContentBlock(block)}
+{#snippet userText(text, key)}
+  <UserMessageText
+    {text}
+    open={viewState.isOpen(disclosureKey(key))}
+    onOpenChange={(open) => viewState.setOpen(disclosureKey(key), open)}
+  />
+{/snippet}
+
+{#snippet userContentBlock(block, blockIndex)}
   {#if isTextContentBlock(block)}
-    <p class="msg-body-text msg-body-text--user">
-      {@render linkifiedText(block.text)}
-    </p>
+    {@render userText(block.text, `user-text-${blockIndex}`)}
   {:else if isImageMediaContentBlock(block)}
     {@const mediaUrl = attachmentUrlForBlock(block)}
     {#if mediaUrl}
@@ -388,7 +395,7 @@
         {#if hasUserContentBlocks(item.message)}
           <div class="msg-body-blocks">
             {#each userContentBlocks(item.message) as block, blockIndex (`${item.id}-block-${blockIndex}`)}
-              {@render userContentBlock(block)}
+              {@render userContentBlock(block, blockIndex)}
             {/each}
           </div>
         {:else if textFromMessage(item.message)}
@@ -427,11 +434,10 @@
                   class="error-details-body">{errorPresentation.details}</pre>
               </details>
             {/if}
+          {:else if item.message.role === 'user'}
+            {@render userText(textFromMessage(item.message), 'user-text')}
           {:else}
-            <p
-              class="msg-body-text"
-              class:msg-body-text--user={item.message.role === 'user'}
-            >
+            <p class="msg-body-text">
               {@render linkifiedText(textFromMessage(item.message))}
             </p>
           {/if}
@@ -560,11 +566,13 @@
         {:else if hasUserContentBlocks(messageFromEvent(item.event))}
           <div class="msg-body-blocks">
             {#each userContentBlocks(messageFromEvent(item.event)) as block, blockIndex (`${item.id}-block-${blockIndex}`)}
-              {@render userContentBlock(block)}
+              {@render userContentBlock(block, blockIndex)}
             {/each}
           </div>
+        {:else if isUserItem(item)}
+          {@render userText(textFromEvent(item.event), 'user-text')}
         {:else}
-          <p class="msg-body-text" class:msg-body-text--user={isUserItem(item)}>
+          <p class="msg-body-text">
             {@render linkifiedText(textFromEvent(item.event))}
           </p>
         {/if}

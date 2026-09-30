@@ -979,3 +979,28 @@
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+
+/* A very long user text shows its first 14 lines until the reader asks for
+   more; the fade marks the cut. 1.55 is the bubble's line height, 20px its
+   vertical padding. */
+.msg-body-text--clamped {
+  position: relative;
+  max-height: calc(1.55em * 14 + 20px);
+  overflow: hidden;
+}
+
+.msg-body-text--clamped::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 4.5em;
+  background: linear-gradient(transparent, var(--surface-2));
+  content: '';
+  pointer-events: none;
+}
+
+.msg-content > .msg-clamp-toggle,
+.msg-body-blocks > .msg-clamp-toggle {
+  margin-top: -3px;
+}

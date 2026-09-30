@@ -84,6 +84,42 @@ describe('ChatTimeline messages', () => {
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
+  it('clamps only a very long user text and expands it on request', () => {
+    // jsdom has no layout: a 24 px line (the fallback) makes 2000 px of text
+    // far longer than the collapsible bound, 300 px shorter.
+    const heights = { long: 2000, short: 300 };
+    const scrollHeight = vi
+      .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+      .mockImplementation(function height() {
+        return heights[this.textContent.startsWith('long') ? 'long' : 'short'];
+      });
+    try {
+      timeline.render(
+        sessionWithMessages([
+          userMessage('short text', { id: 'user-short' }),
+          userMessage('long text', { id: 'user-long' }),
+        ]),
+      );
+
+      const [short, long] = document.querySelectorAll('.msg.user');
+      expect(short.querySelector('.msg-clamp-toggle')).toBeNull();
+      const bubble = long.querySelector('.msg-body-text--user');
+      const toggle = long.querySelector('.msg-clamp-toggle');
+      expect(bubble.classList.contains('msg-body-text--clamped')).toBe(true);
+      expect(toggle.textContent.trim()).toBe(t('chat.showMore'));
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+      toggle.click();
+      flushSync();
+
+      expect(bubble.classList.contains('msg-body-text--clamped')).toBe(false);
+      expect(toggle.textContent.trim()).toBe(t('chat.showLess'));
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    } finally {
+      scrollHeight.mockRestore();
+    }
+  });
+
   it('renders error History messages with the error label', () => {
     timeline.render(
       sessionWithMessages([
