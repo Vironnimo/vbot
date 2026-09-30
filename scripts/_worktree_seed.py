@@ -9,49 +9,21 @@ seed is refused or fails.
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys
 from contextlib import suppress
 from pathlib import Path
 
+from scripts._webui_packages import installed_differences
+
 WEBUI_PACKAGES_DIR_NAME = "node_modules"
-# npm records the tree it installed here; npm itself trusts it as the
-# description of what ``node_modules`` holds.
-INSTALLED_PACKAGES_FILE_NAME = ".package-lock.json"
 # Tool caches Vite and Vitest keep inside node_modules; they belong to one checkout.
 CHECKOUT_CACHE_DIR_NAMES = (".vite", ".vite-temp")
 NATIVE_RESOURCES_RELATIVE_PATH = Path("resources") / "native"
 # robocopy exit codes 0-7 report success (copied, extra or mismatched files);
 # 8 and above report failures.
 ROBOCOPY_FAILURE_EXIT_CODE = 8
-
-
-def installed_packages_match_lock(node_modules: Path, lock_path: Path) -> bool:
-    """Return whether *node_modules* holds exactly the tree *lock_path* locks.
-
-    Every installed package must equal its locked entry; a locked package may
-    be missing only when it is optional (platform packages for other hosts).
-    """
-    try:
-        installed = json.loads(
-            (node_modules / INSTALLED_PACKAGES_FILE_NAME).read_text(encoding="utf-8")
-        )["packages"]
-        locked = json.loads(lock_path.read_text(encoding="utf-8"))["packages"]
-    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
-        return False
-    if not isinstance(installed, dict) or not isinstance(locked, dict):
-        return False
-    # The root entry "" describes the project itself, not an installed package.
-    locked_packages = {key: value for key, value in locked.items() if key}
-    if any(locked_packages.get(key) != value for key, value in installed.items()):
-        return False
-    return all(
-        isinstance(value, dict) and value.get("optional") is True
-        for key, value in locked_packages.items()
-        if key not in installed
-    )
 
 
 def _copy_tree(source: Path, destination: Path) -> bool:
@@ -102,10 +74,10 @@ def seed_webui_packages(primary_root: Path, worktree_path: Path) -> bool:
     worktree_webui = worktree_path / "webui"
     destination = worktree_webui / WEBUI_PACKAGES_DIR_NAME
     lock_path = worktree_webui / "package-lock.json"
-    if destination.exists() or not installed_packages_match_lock(source, lock_path):
+    if destination.exists() or installed_differences(source, lock_path):
         return False
     # Checked again on the copy: the primary checkout may reinstall meanwhile.
-    if _copy_tree(source, destination) and installed_packages_match_lock(destination, lock_path):
+    if _copy_tree(source, destination) and not installed_differences(destination, lock_path):
         return True
     shutil.rmtree(destination, ignore_errors=True)
     return False

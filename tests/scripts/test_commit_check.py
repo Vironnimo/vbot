@@ -147,6 +147,8 @@ LOCKED_PACKAGES: dict[str, dict[str, object]] = {
     },
 }
 INSTALLED_PACKAGES = {"node_modules/vite": LOCKED_PACKAGES["node_modules/vite"]}
+# npm copies the manifest's dependency maps into the lock's root entry.
+DEPENDENCIES = {"devDependencies": {"vite": "^8.0.0"}, "optionalDependencies": {"fsevents": "^2"}}
 
 
 def _webui_project(
@@ -162,8 +164,10 @@ def _webui_project(
         manifest = webui / "node_modules" / package / "package.json"
         manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({"bin": {package: f"bin/{package}.js"}}), encoding="utf-8")
-    lock = {"lockfileVersion": 3, "packages": {"": {"name": "vbot-webui"}, **LOCKED_PACKAGES}}
+    root_entry = {"name": "vbot-webui", **DEPENDENCIES}
+    lock = {"lockfileVersion": 3, "packages": {"": root_entry, **LOCKED_PACKAGES}}
     (webui / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    (webui / "package.json").write_text(json.dumps(root_entry), encoding="utf-8")
     if installed is not None:
         record = {"lockfileVersion": 3, "packages": installed}
         (webui / "node_modules" / ".package-lock.json").write_text(
@@ -201,11 +205,22 @@ def _webui_checks(root: Path, path: str) -> list[commit_check.StepResult]:
             {"node_modules/vite": {**INSTALLED_PACKAGES["node_modules/vite"], "version": "8.0.1"}},
             False,
         ),
+        (
+            {"node_modules/vite": {**INSTALLED_PACKAGES["node_modules/vite"], "dev": False}},
+            False,
+        ),
         ({}, False),
         ({**INSTALLED_PACKAGES, "node_modules/left-pad": {"version": "1.3.0"}}, False),
         (None, False),
     ],
-    ids=["as locked", "other version", "missing package", "extra package", "never installed"],
+    ids=[
+        "as locked",
+        "other version",
+        "other entry",
+        "missing package",
+        "extra package",
+        "never installed",
+    ],
 )
 def test_webui_checks_refuse_packages_that_differ_from_the_lock(
     repo: Path,
@@ -249,6 +264,33 @@ def test_webui_configuration_changes_run_the_complete_checks(
 
     assert commands == expected
     assert not any(result.blocking for result in results)
+
+
+@pytest.mark.parametrize(
+    ("manifest", "runs"),
+    [
+        (DEPENDENCIES, True),
+        # npm leaves out of the lock a dependency that optionalDependencies lists too.
+        ({**DEPENDENCIES, "dependencies": {"fsevents": "^2"}}, True),
+        ({**DEPENDENCIES, "devDependencies": {"vite": "^8.1.0"}}, False),
+    ],
+    ids=["as locked", "optional listed twice", "edited without npm install"],
+)
+def test_webui_checks_refuse_a_package_manifest_the_lock_does_not_record(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, manifest: Mapping[str, object], runs: bool
+) -> None:
+    commands = _webui_project(repo, monkeypatch, INSTALLED_PACKAGES)
+    _write(repo, "webui/package.json", json.dumps({"name": "vbot-webui", **manifest}))
+
+    results = commit_check.check_frontend(repo, ["webui/package.json"], set())
+
+    if runs:
+        assert not any(result.blocking for result in results)
+        assert "npm run lint" in commands
+    else:
+        # `npm ci`, as CI runs it, would refuse the lock; `npm install` updates it.
+        assert [(result.label, result.blocking) for result in results] == [("webui deps", True)]
+        assert commands == []
 
 
 # The test step drives a real pytest-testmon run in a small project; its selection
