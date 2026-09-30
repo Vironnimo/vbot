@@ -159,6 +159,9 @@
     },
   });
   const navigation = createChatViewNavigation({
+    get active() {
+      return active;
+    },
     get sessionsRefreshToken() {
       return sessionsRefreshToken;
     },
@@ -323,7 +326,7 @@
   let composerDisabled = $derived(
     !target.activeAgent ||
       chatState.loadingHistory ||
-      navigation.creatingSession,
+      navigation.creatingDisplayedSession,
   );
   // Provider availability is the first prerequisite for every current Agent.
   // Do not infer it from Models: App supplies Settings' authoritative usable-
