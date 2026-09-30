@@ -301,9 +301,11 @@ async def test_read_file_parses_the_log_off_the_event_loop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", [Change.added, Change.deleted], ids=["new-day", "deleted"])
 async def test_subscribe_pushes_catalog_changes_for_other_log_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    change: Change,
 ) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
@@ -312,14 +314,20 @@ async def test_subscribe_pushes_catalog_changes_for_other_log_files(
         "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n",
         encoding="utf-8",
     )
-    next_file = logs_dir / "2026-05-12"
+    # A new day's file appears, or log retention deletes an old one.
+    other_file = logs_dir / ("2026-05-12" if change == Change.added else "2026-05-10")
+    if change == Change.deleted:
+        other_file.write_text("2026-05-10 00:00:00 [INFO] vbot.core - Old day\n", encoding="utf-8")
 
     async def fake_awatch(*_args: object, **_kwargs: object):
-        next_file.write_text(
-            "2026-05-12 00:00:00 [INFO] vbot.core - New day\n",
-            encoding="utf-8",
-        )
-        yield {(Change.added, str(next_file))}
+        if change == Change.added:
+            other_file.write_text(
+                "2026-05-12 00:00:00 [INFO] vbot.core - New day\n",
+                encoding="utf-8",
+            )
+        else:
+            other_file.unlink()
+        yield {(change, str(other_file))}
         await asyncio.Event().wait()
 
     monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
@@ -328,11 +336,14 @@ async def test_subscribe_pushes_catalog_changes_for_other_log_files(
     async with aclosing(viewer.subscribe(selected_file.name)) as stream:
         event = await asyncio.wait_for(stream.__anext__(), timeout=1)
 
+    files = (
+        [other_file.name, selected_file.name] if change == Change.added else [selected_file.name]
+    )
     assert event == {
         "type": "catalog",
         "file": selected_file.name,
-        "files": [next_file.name, selected_file.name],
-        "default_file": next_file.name,
+        "files": files,
+        "default_file": files[0],
     }
 
 

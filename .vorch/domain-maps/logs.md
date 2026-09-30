@@ -4,7 +4,7 @@ Read-only daily log viewer subsystem spanning backend parsing/watching and the W
 
 ## Overview
 
-The logs subsystem exposes application log files from `<data_dir>/logs/` for inspection in the WebUI. It owns daily file discovery, parsing the canonical log format into structured entries, and live updates for one selected file through a dedicated WebSocket. It does not write logs, edit log files, or reuse the shared app event bus. Every read and event carries a bounded page of entries; filtering stays local in the WebUI over the entries it has loaded of one file.
+The logs subsystem exposes application log files from `<data_dir>/logs/` for inspection in the WebUI. It owns daily file discovery, parsing the canonical log format into structured entries, and live updates for one selected file through a dedicated WebSocket. It does not write logs, edit or delete log files, or reuse the shared app event bus; the writing pipeline deletes old daily files (Retention in `logging.md`), and open views see that as a catalog event. Every read and event carries a bounded page of entries; filtering stays local in the WebUI over the entries it has loaded of one file.
 
 ## Data Model
 
