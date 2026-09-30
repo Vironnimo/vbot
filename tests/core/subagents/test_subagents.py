@@ -583,6 +583,43 @@ async def test_unusable_model_is_refused_before_any_session_work(
     assert harness.stored_overrides("worker", kept["session_id"]) == {"model": "openai/gpt-mini"}
     assert len(harness.manager.started) == 1
 
+    # The Model the continued Session stores stopped running, or its stored settings
+    # cannot be read. Either refusal comes before the Session is linked to this call.
+    child = address("worker", kept["session_id"])
+    link = harness.sessions.get_metadata(child)["subagent_parent"]
+    harness.runtime.agent_resolver.models.unusable.add("openai/gpt-mini")
+    stale_model = await harness.call(
+        {"content": "go on", "agent_id": "worker", "session_id": kept["session_id"]}
+    )
+
+    def break_settings(metadata: JsonObject) -> None:
+        metadata["agent_overrides"] = {"model": ""}
+
+    harness.sessions.mutate_metadata(child, break_settings)
+    unreadable = await harness.call(
+        {"content": "go on", "agent_id": "worker", "session_id": kept["session_id"]}
+    )
+
+    assert stale_model["error"] == {
+        "code": "invalid_arguments",
+        "message": (
+            f"subagent was not run: Session {kept['session_id']} of Agent worker is set to a "
+            "Model that cannot run: model is not usable in this instance: openai/gpt-mini. "
+            'To continue this Session, repeat this call with "model" set to a Model that can '
+            'run. To start a new Session instead, repeat it without "session_id".'
+        ),
+    }
+    assert unreadable["error"] == {
+        "code": "invalid_arguments",
+        "message": (
+            f"subagent was not run: Session {kept['session_id']} of Agent worker has Agent "
+            "settings that cannot be read (model must be a non-empty string), so it "
+            'cannot be continued. To start a new Session, repeat this call without "session_id".'
+        ),
+    }
+    assert harness.sessions.get_metadata(child)["subagent_parent"] == link
+    assert len(harness.manager.started) == 1
+
 
 async def test_execution_owner_is_inherited_without_session_grants(
     harness: SubAgentHarness,
@@ -768,6 +805,8 @@ async def test_session_id_alone_continues_your_own_or_a_tracked_session(
     harness: SubAgentHarness,
 ) -> None:
     harness.sessions.create("parent", session_id="own-session")
+    # The finished child stays tracked until the Parent stores its result.
+    harness.triggers.defer_persistence = True
     child = await harness.spawn({"content": BRIEF, "agent_id": "worker"})
     (await harness.started())[0].run.mark_completed(done())
 

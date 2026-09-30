@@ -213,7 +213,8 @@ class FakeAgentResolver:
     """Resolves every known Agent in any scope and records each request.
 
     Session Agent overrides are the real resolver's, stored in the harness's real
-    Sessions, and a resolution that names its Session applies them.
+    Sessions, and a resolution that names its Session applies them after checking
+    their Model, as the real resolver does.
     """
 
     def __init__(self, agents: FakeAgents, sessions: ChatSessionManager) -> None:
@@ -235,6 +236,8 @@ class FakeAgentResolver:
         if session_id is None:
             return agent
         overrides = await self.session_overrides_async(address(agent_id, session_id, project_id))
+        if overrides.model is not None:
+            self.models.require_configured(overrides.model)
         return SimpleNamespace(**{**vars(agent), **overrides.as_dict()})
 
     async def require_model_configured_async(self, model: str) -> None:
