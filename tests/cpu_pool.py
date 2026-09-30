@@ -5,11 +5,16 @@ run would otherwise start as many workers as the machine has cores; together the
 overload it until tests time out. So before it starts its workers, each local run
 claims cores from one pool per machine: one lock file per physical core, held until
 the run ends. The operating system releases a lock when its process dies, so a
-crashed run never keeps its cores. Runs claim their cores one after another: a run
-waits until the cores it asks for are free, and the runs behind it wait for it.
+crashed run never keeps its cores. A run waits until the cores it asks for are
+free instead of starting beside the others.
+
+The checks of the commit hook (scripts/commit_check.py marks their runs) take at
+most the cores beyond ``RESERVED_CORES``; those stay free for the runs an Agent
+starts directly, so a quick run never waits for a long check. Direct runs take
+the shared cores too while no check holds them.
 
 ``-n auto`` asks for ``LOCAL_AUTO_WORKERS`` cores here; an explicit ``-n N`` asks for
-N, at most the pool. Every run appends one line to ``RUN_LOG`` in the pool
+N, at most the cores the run may take. Every run appends one line to ``RUN_LOG`` in the pool
 directory: the checkout, who started it, cores, wait, duration and outcome.
 
 CI runs on machines of its own and skips the pool, as does a pytest run started by
@@ -36,6 +41,8 @@ RUN_LOG = "runs.jsonl"
 # The log starts afresh beside one previous generation once it grows beyond this.
 RUN_LOG_LIMIT = 2_000_000
 LOCAL_AUTO_WORKERS = 2
+# Cores the checks of the commit hook leave to the runs an Agent starts directly.
+RESERVED_CORES = 2
 # Set while a run holds cores; the pytest processes it starts inherit it.
 HELD_VARIABLE = "VBOT_TEST_CORES_HELD"
 # Set by scripts/commit_check.py: who started the run, and why it runs every test.
@@ -98,18 +105,38 @@ def release(handles: list[IO[bytes]]) -> None:
         handle.close()
 
 
+def _lanes(size: int) -> tuple[list[int], list[int]]:
+    """Return the cores of a pool of *size* that only direct runs take, and the shared ones."""
+    reserved = min(RESERVED_CORES, size - 1)
+    return list(range(reserved)), list(range(reserved, size))
+
+
+def check_cores() -> int:
+    """The most cores a check of the commit hook holds; the others stay free for direct runs."""
+    return len(_lanes(pool_size())[1])
+
+
 def take(
-    directory: Path, cores: int, size: int, on_wait: Callable[[], None] = lambda: None
+    directory: Path,
+    cores: int,
+    size: int,
+    on_wait: Callable[[], None] = lambda: None,
+    *,
+    check: bool = False,
 ) -> list[IO[bytes]]:
     """Wait until *cores* of the *size* cores in *directory* are free; hold and return them.
 
-    Only one run at a time collects its cores, so a run waiting for several
-    cores cannot lose them one by one to smaller runs behind it, and two runs
-    never wait for each other's cores. *on_wait* is called once when the run
-    has to wait.
+    A *check* of the commit hook takes only the shared cores, and collects them one
+    by one: only one check collects at a time, so a check waiting for several cores
+    does not lose them to smaller checks behind it. A direct run takes the cores
+    reserved for direct runs first and the shared ones after them, all at once:
+    it holds none while it waits, so a check and a direct run never wait for each
+    other's cores. *on_wait* is called once when the run has to wait.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    cores = max(1, min(cores, size))
+    reserved, shared = _lanes(size)
+    candidates = shared if check else reserved + shared
+    cores = max(1, min(cores, len(candidates)))
     waiting = False
 
     def wait() -> None:
@@ -119,16 +146,16 @@ def take(
             on_wait()
         time.sleep(_POLL_SECONDS)
 
-    queue = (directory / "queue.lock").open("a+b")
+    queue = (directory / ("checks.lock" if check else "queue.lock")).open("a+b")
     held: dict[int, IO[bytes]] = {}
     try:
         while not _try_lock(queue):
             wait()
         try:
             while True:
-                for index in range(size):
+                for index in candidates:
                     if len(held) == cores:
-                        return list(held.values())
+                        break
                     if index in held:
                         continue
                     handle = (directory / f"core-{index}.lock").open("a+b")
@@ -138,6 +165,9 @@ def take(
                         handle.close()
                 if len(held) == cores:
                     return list(held.values())
+                if not check:
+                    release(list(held.values()))
+                    held.clear()
                 wait()
         finally:
             _unlock(queue)
@@ -198,11 +228,11 @@ class _Claim:
 
 
 def claim(config: pytest.Config, directory: Path = POOL_DIR) -> None:
-    """Hold the cores this pytest run's workers need; start no more workers than the pool has.
+    """Hold the cores this pytest run's workers need; start no more workers than it may hold.
 
     Runs in the controller before pytest-xdist starts its workers: xdist has
-    already resolved ``-n``, and a run asking for more cores than the pool has
-    starts as many workers as the pool has.
+    already resolved ``-n``, and a run asking for more cores than it may take
+    starts as many workers as it may take.
     """
     if hasattr(config, "workerinput") or not active():
         return
@@ -210,17 +240,18 @@ def claim(config: pytest.Config, directory: Path = POOL_DIR) -> None:
     workers = workers if isinstance(workers, int) else 0
     size = pool_size()
     asked = max(1, workers)
+    check = bool(os.environ.get(KIND_VARIABLE))
     start = time.monotonic()
 
     def announce() -> None:
         print(
-            f"pytest: waiting for {min(asked, size)} of {size} CPU cores that other "
+            "pytest: waiting for CPU cores that other "
             f"test runs on this machine hold (log: {directory / RUN_LOG})...",
             file=sys.stderr,
             flush=True,
         )
 
-    handles = take(directory, asked, size, announce)
+    handles = take(directory, asked, size, announce, check=check)
     if workers > len(handles):
         config.option.numprocesses = len(handles)
         config.option.tx = ["popen"] * len(handles)

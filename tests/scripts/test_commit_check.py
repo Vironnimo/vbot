@@ -419,8 +419,8 @@ def test_a_checkout_without_usable_test_impact_data_runs_the_complete_suite(
     assert _check_tests(impact_project) == {"PASS": (False, "")}
 
     [command] = commands
-    # As many workers as the test core pool has, which a single run then holds.
-    assert command[-2:] == ["-n", str(cpu_pool.pool_size())]
+    # As many workers as the test core pool lets a check hold.
+    assert command[-2:] == ["-n", str(cpu_pool.check_cores())]
     [env] = environments
     assert env is not None
     assert env[cpu_pool.KIND_VARIABLE] == "commit"
