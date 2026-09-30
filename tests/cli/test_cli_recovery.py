@@ -61,6 +61,7 @@ def test_every_published_leaf_example_has_valid_read_or_help_recovery(
                     "show",
                     "operations",
                     "options",
+                    "history",
                 }
         count += 1
         capsys.readouterr()

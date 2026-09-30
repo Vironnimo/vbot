@@ -283,7 +283,8 @@ def bootstrap(runtime: Runtime) -> None:
         # catalogs/guidance here; the runtime hands declarations to the prompt
         # manager without importing tool classes into the prompt domain.
         runtime._tool_prompt_blocks = ToolPromptBlockRegistry()
-        runtime._memory_service = MemoryService()
+        # Each Agent's Memory history lives beside its default Workspace.
+        runtime._memory_service = MemoryService(history_root=runtime._storage.layout.agents)
         # Read stamps protect full-file writes; apply_patch uses the same state
         # for mutation locks and post-success drift warnings (file_state.py).
         runtime._file_state = FileReadState()

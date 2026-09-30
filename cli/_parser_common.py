@@ -116,7 +116,7 @@ AREA_HELP = {
     "model": "Inspect and refresh model catalogs",
     "task-model": "Inspect and manage specialized task-model bindings",
     "skill": "Inspect and manage skills, including the disable/share policy",
-    "memory": "Inspect and manage one agent's pinned memory entries",
+    "memory": "Inspect and manage one agent's pinned memory entries and their history",
     "extensions": "Inspect and toggle loaded extensions",
     "cron": "Inspect and manage scheduled cron jobs",
     "bootstrap": "Inspect and manage startup-triggered Agent Runs",
@@ -357,6 +357,10 @@ MEMORY_HELP = {
     "add": "Add one pinned memory entry",
     "replace": "Replace one pinned memory entry's content",
     "remove": "Remove one pinned memory entry",
+    "history": "List recorded changes of one agent's memory, newest first",
+    "show": "Show one agent's memory entries as they were after a revision",
+    "diff": "Compare one agent's memory between two revisions, or a revision and now",
+    "revert": "Take back the changes of one or more revisions",
 }
 
 

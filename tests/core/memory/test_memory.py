@@ -21,6 +21,7 @@ from core.memory import (
     MemoryScope,
     MemoryService,
     MemoryTextChange,
+    MemoryWriter,
     memory_block_definition,
     memory_prompt_file_paths,
     read_memory_files,
@@ -111,7 +112,9 @@ def test_entries_are_replaced_and_removed_by_id(
     service: MemoryService, workspace: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.INFO, logger="vbot.memory"):
-        service.add_entry(workspace, "agent", "old fact", agent_id="agent-one", actor="rpc")
+        service.add_entry(
+            workspace, "agent", "old fact", writer=MemoryWriter(agent_id="agent-one", actor="rpc")
+        )
         service.add_entry(workspace, "agent", "second fact")
         service.add_entry(workspace, "agent", "second fact")
 

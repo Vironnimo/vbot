@@ -39,7 +39,16 @@ from cli.debug_management import (
     debug_trace_show,
 )
 from cli.log_management import log_read
-from cli.memory_management import memory_add, memory_list, memory_remove, memory_replace
+from cli.memory_management import (
+    memory_add,
+    memory_diff,
+    memory_history,
+    memory_list,
+    memory_remove,
+    memory_replace,
+    memory_revert,
+    memory_show,
+)
 from cli.performance_management import (
     performance_heap,
     performance_history,
@@ -277,6 +286,14 @@ def dispatch_memory_command(
         return memory_replace(instance, args.agent, args.scope, args.entry_id, content or "")
     if args.command == "remove":
         return memory_remove(instance, args.agent, args.scope, args.entry_id, args.yes)
+    if args.command == "history":
+        return memory_history(instance, args.agent, args.scope, args.limit)
+    if args.command == "show":
+        return memory_show(instance, args.agent, args.revision)
+    if args.command == "diff":
+        return memory_diff(instance, args.agent, args.from_revision, args.to_revision)
+    if args.command == "revert":
+        return memory_revert(instance, args.agent, args.revisions)
     raise ValueError(f"Unsupported memory command: {args.command}")
 
 

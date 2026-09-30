@@ -14,6 +14,7 @@ from core.memory import (
     MemoryMatchError,
     MemoryScope,
     MemoryService,
+    MemoryWriter,
 )
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools._call_vocabulary import spelling
@@ -196,7 +197,13 @@ def memory_handler(
             return tool_failure("memory_error", str(error))
 
     try:
-        data = _mutate(memory_service, workspace, action, scope, arguments, context.agent_id)
+        writer = MemoryWriter(
+            agent_id=context.agent_id,
+            actor="tool",
+            session_id=context.session_id,
+            run_id=context.run_id,
+        )
+        data = _mutate(memory_service, workspace, action, scope, arguments, writer)
     except _MemoryRefusalError as refusal:
         if refusal.code == "invalid_arguments":
             return tool_failure(refusal.code, str(refusal))
@@ -254,13 +261,13 @@ def _mutate(
     action: str,
     scope: str | None,
     arguments: JsonObject,
-    agent_id: str | None,
+    writer: MemoryWriter,
 ) -> JsonObject:
     content = arguments.get("content")
     old_text = arguments.get("old_text")
     entry_id = arguments.get("entry_id")
     if action == "add":
-        return _add(service, workspace, scope, content, old_text, entry_id, agent_id)
+        return _add(service, workspace, scope, content, old_text, entry_id, writer)
     if old_text is None and entry_id is None and action == "remove" and content is not None:
         # The entry text itself, sent in the only text field the Agent had for it.
         old_text, content = content, None
@@ -287,18 +294,14 @@ def _mutate(
         )
     target = _memory_scope(scope) if scope is not None else _scope_for(service, workspace, old_text)
     if action == "replace":
-        change = service.replace_matching(
-            workspace, target, old_text, str(content), agent_id=agent_id, actor="tool"
-        )
+        change = service.replace_matching(workspace, target, old_text, str(content), writer=writer)
         if change.current == change.previous:
             return {
                 "content": f"The {target} Memory entry already reads that way; nothing changed."
             }
         verb = "Replaced in"
     else:
-        change = service.remove_matching(
-            workspace, target, old_text, agent_id=agent_id, actor="tool"
-        )
+        change = service.remove_matching(workspace, target, old_text, writer=writer)
         verb = "Removed from"
     used, budget = service.scope_usage(workspace, target)
     return {
@@ -316,7 +319,7 @@ def _add(
     content: Any,
     old_text: Any,
     entry_id: Any,
-    agent_id: str | None,
+    writer: MemoryWriter,
 ) -> JsonObject:
     if old_text is not None or entry_id is not None:
         located = f'the entry containing "{_preview(str(old_text))}"' if old_text else "an entry"
@@ -336,7 +339,7 @@ def _add(
         raise _MemoryRefusalError("invalid_arguments", "add needs content: the fact to save.")
     target = _memory_scope(scope)
     existing = {entry.content for entry in service.list_entries(workspace, target)}
-    entry = service.add_entry(workspace, target, content, agent_id=agent_id, actor="tool")
+    entry = service.add_entry(workspace, target, content, writer=writer)
     if entry.content in existing:
         return {"content": f"{target.capitalize()} Memory already has this entry; nothing changed."}
     used, budget = service.scope_usage(workspace, target)

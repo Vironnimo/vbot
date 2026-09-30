@@ -422,6 +422,49 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     remove_parser.add_argument("entry_id", type=int, metavar="<entry-id>")
     remove_parser.add_argument("--yes", action="store_true", help="Confirm removal")
 
+    history_parser = _add_command_parser(
+        memory_subparsers,
+        "history",
+        MEMORY_HELP["history"],
+        example="memory history assistant --limit 10",
+    )
+    history_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    history_parser.add_argument(
+        "--scope", choices=("agent", "user"), help="Only changes of this memory scope"
+    )
+    history_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        metavar="<n>",
+        help="Newest revisions to show (default: 20)",
+    )
+
+    show_parser = _add_command_parser(
+        memory_subparsers, "show", MEMORY_HELP["show"], example="memory show assistant 12"
+    )
+    show_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    show_parser.add_argument("revision", type=int, metavar="<revision>")
+
+    diff_parser = _add_command_parser(
+        memory_subparsers, "diff", MEMORY_HELP["diff"], example="memory diff assistant 12"
+    )
+    diff_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    diff_parser.add_argument("from_revision", type=int, metavar="<from-revision>")
+    diff_parser.add_argument(
+        "to_revision",
+        type=int,
+        nargs="?",
+        metavar="<to-revision>",
+        help="Compare with this revision instead of the current entries",
+    )
+
+    revert_parser = _add_command_parser(
+        memory_subparsers, "revert", MEMORY_HELP["revert"], example="memory revert assistant 14"
+    )
+    revert_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    revert_parser.add_argument("revisions", type=int, nargs="+", metavar="<revision>")
+
 
 def _add_memory_agent_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")

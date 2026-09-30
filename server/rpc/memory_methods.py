@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
-from core.memory import MemoryEntry, MemoryScope
+from core.memory import MemoryEntry, MemoryRevision, MemoryScope, MemoryWriter
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MEMORIES
 from server.rpc._mutations import MutationHandler, serialized_mutation
@@ -19,6 +19,7 @@ from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
+_Result = TypeVar("_Result")
 _MEMORY_SCOPES: tuple[MemoryScope, ...] = ("agent", "user")
 # Memory files are read and rewritten here, never on the Event Loop.
 _MEMORY_RPC_WORKERS = BoundedWorkerPool(name="memory-rpc", max_workers=2)
@@ -58,8 +59,7 @@ async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
             workspace,
             scope,
             content,
-            agent_id=agent_id,
-            actor="rpc",
+            writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
         ),
     )
     return response
@@ -86,8 +86,7 @@ async def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
             scope,
             entry_id,
             content,
-            agent_id=agent_id,
-            actor="rpc",
+            writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
         ),
     )
     return response
@@ -112,11 +111,119 @@ async def _remove_memory(state: Any, params: JsonObject) -> JsonObject:
             workspace,
             scope,
             entry_id,
-            agent_id=agent_id,
-            actor="rpc",
+            writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
         ),
     )
     return response
+
+
+async def _memory_history(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_id", "scope", "limit"}, "memory.history")
+    scope = _memory_scope(params) if params.get("scope") is not None else None
+    limit = _optional_positive_int(params, "limit")
+    async with _agent_reference_lock(state):
+        agent_id, workspace = await _agent_workspace(state, params)
+        revisions = await _MEMORY_RPC_WORKERS.run(
+            _expected(state.runtime.memory.history), workspace, agent_id
+        )
+    if scope is not None:
+        revisions = [revision for revision in revisions if revision.scope == scope]
+    shown = revisions[-limit:] if limit is not None else revisions
+    return {
+        "agent_id": agent_id,
+        "total": len(revisions),
+        "revisions": [_revision_response(revision) for revision in reversed(shown)],
+    }
+
+
+async def _memory_show(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_id", "revision"}, "memory.show")
+    revision = _optional_positive_int(params, "revision")
+    async with _agent_reference_lock(state):
+        agent_id, workspace = await _agent_workspace(state, params)
+        scopes = await _MEMORY_RPC_WORKERS.run(
+            _expected(state.runtime.memory.entries_at), workspace, agent_id, revision
+        )
+    return {"agent_id": agent_id, "revision": revision, "scopes": scopes}
+
+
+async def _memory_diff(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_id", "from", "to"}, "memory.diff")
+    from_id = _optional_positive_int(params, "from")
+    if from_id is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.from must be a positive integer")
+    to_id = _optional_positive_int(params, "to")
+    async with _agent_reference_lock(state):
+        agent_id, workspace = await _agent_workspace(state, params)
+        changes = await _MEMORY_RPC_WORKERS.run(
+            _expected(state.runtime.memory.compare), workspace, agent_id, from_id, to_id
+        )
+    return {
+        "agent_id": agent_id,
+        "from": from_id,
+        "to": to_id,
+        "changes": {
+            scope: [change.to_dict() for change in scope_changes]
+            for scope, scope_changes in changes.items()
+        },
+    }
+
+
+@_guard_memory_mutation
+async def _memory_revert(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_id", "revisions"}, "memory.revert")
+    revision_ids = params.get("revisions")
+    if (
+        not isinstance(revision_ids, list)
+        or not revision_ids
+        or any(
+            isinstance(item, bool) or not isinstance(item, int) or item <= 0
+            for item in revision_ids
+        )
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.revisions must be a non-empty list of positive integers",
+        )
+    agent_id, workspace = await _agent_workspace(state, params)
+    recorded = await _MEMORY_RPC_WORKERS.run(
+        _expected(state.runtime.memory.revert),
+        workspace,
+        revision_ids,
+        writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
+    )
+    response = await _MEMORY_RPC_WORKERS.run(_memory_response, state, agent_id, workspace)
+    if recorded:
+        _publish_memory_changed(state, agent_id)
+    response["revisions"] = [_revision_response(revision) for revision in recorded]
+    return response
+
+
+def _expected(operation: Callable[..., _Result]) -> Callable[..., _Result]:
+    """Run a Memory operation, mapping its expected failures to RPC errors."""
+
+    def run(*args: Any, **kwargs: Any) -> _Result:
+        try:
+            return operation(*args, **kwargs)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+
+    return run
+
+
+def _optional_positive_int(params: JsonObject, name: str) -> int | None:
+    value = params.get(name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{name} must be a positive integer")
+    return value
+
+
+def _revision_response(revision: MemoryRevision) -> JsonObject:
+    data = revision.to_dict()
+    data.pop("entries", None)
+    return data
 
 
 async def _agent_workspace(state: Any, params: JsonObject) -> tuple[str, Path]:
@@ -216,4 +323,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "memory.add": _add_memory,
         "memory.replace": _replace_memory,
         "memory.remove": _remove_memory,
+        "memory.history": _memory_history,
+        "memory.show": _memory_show,
+        "memory.diff": _memory_diff,
+        "memory.revert": _memory_revert,
     }

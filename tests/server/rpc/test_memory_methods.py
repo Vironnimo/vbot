@@ -1,4 +1,4 @@
-"""Pinned Memory RPCs: list, add, replace and remove for an Identity Agent's Workspace."""
+"""Pinned Memory RPCs: entry CRUD for an Identity Agent's Workspace and its Memory history."""
 
 from __future__ import annotations
 
@@ -59,6 +59,42 @@ async def test_memory_crud_works_independently_of_prompt_mode(tmp_path: Path) ->
     assert (workspace / "MEMORY.md").read_text(encoding="utf-8") == "- Keep releases focused.\n"
     assert (workspace / "USER.md").read_text(encoding="utf-8") == ""
     # Each mutation announces a content-free invalidation scoped to its Agent.
+    assert resource_changes(state) == [_CODER_MEMORIES] * 4
+
+
+@pytest.mark.asyncio
+async def test_memory_history_lists_compares_and_reverts_changes(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    (tmp_path / "agents" / "coder").mkdir(parents=True)
+    state.runtime.agents.update("coder", workspace=str(tmp_path / "agents" / "coder" / "workspace"))
+    await rpc_result(state, "memory.add", agent_id="coder", scope="agent", content="Old fact.")
+    await rpc_result(
+        state, "memory.replace", agent_id="coder", scope="agent", entry_id=1, content="New fact."
+    )
+    await rpc_result(state, "memory.remove", agent_id="coder", scope="agent", entry_id=1)
+
+    history = await rpc_result(state, "memory.history", agent_id="coder", limit=2)
+    shown = await rpc_result(state, "memory.show", agent_id="coder", revision=1)
+    diff = await rpc_result(state, "memory.diff", agent_id="coder", **{"from": 1})
+    reverted = await rpc_result(state, "memory.revert", agent_id="coder", revisions=[3, 2])
+    conflict = await rpc_error(state, "memory.revert", agent_id="coder", revisions=[2])
+
+    # Newest first; each revision names who changed which entries.
+    assert history["total"] == 3
+    assert [(item["id"], item["kind"], item["actor"]) for item in history["revisions"]] == [
+        (3, "edit", "rpc"),
+        (2, "edit", "rpc"),
+    ]
+    assert history["revisions"][1]["changes"] == [
+        {"op": "replaced", "text": "New fact.", "index": 0, "previous": "Old fact."}
+    ]
+    assert shown["scopes"] == {"user": [], "agent": ["Old fact."]}
+    assert diff["changes"]["agent"] == [{"op": "removed", "text": "Old fact.", "index": 0}]
+    assert reverted["scopes"]["agent"] == [{"id": 1, "scope": "agent", "content": "Old fact."}]
+    assert [(item["id"], item["reverts"]) for item in reverted["revisions"]] == [(4, [3, 2])]
+    assert conflict["code"] == "domain_error"
+    assert 'no entry reads "New fact."' in conflict["message"]
+    # Four mutations announced; the refused revert changed nothing.
     assert resource_changes(state) == [_CODER_MEMORIES] * 4
 
 
