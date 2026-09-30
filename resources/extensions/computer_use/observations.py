@@ -147,7 +147,7 @@ def _present(
         }
     )
     original = observation.original or path
-    context.presentation_images.append({"path": original.as_posix(), "filename": original.name})
+    context.add_display_media(original, "image")
     result: dict[str, Any] = {
         "view_id": observation.view_id,
         "image_width": image.width,

@@ -27,7 +27,7 @@ from core.tools._tool_display import (
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract
 
-_DISPLAY_MEDIA_PREFIXES = ("image/", "video/", "audio/")
+_DISPLAY_MEDIA_KINDS = ("image", "video", "audio")
 
 
 def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
@@ -175,8 +175,8 @@ class ToolContext:
         repr=False,
         compare=False,
     )
-    presentation_images: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
-    # Files the call produced for the user to view or play, by path and media type.
+    # Images, videos and audio the user sees in the call's details, recorded
+    # via ``add_display_media``.
     presentation_media: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # User-facing detail blocks in the order recorded, for Tools whose display
     # declares ``details``.
@@ -280,17 +280,37 @@ class ToolContext:
         """Record the things a call found as one results detail block (``display_results``)."""
         self.presentation_details.append(display_results(items))
 
-    def add_display_media(self, path: Path | str, media_type: str) -> None:
-        """Record one image, video or audio file the call produced, for the user to view or play.
+    def add_display_media(
+        self,
+        path: Path | str,
+        media_type: str,
+        *,
+        filename: str | None = None,
+        source: bool = False,
+    ) -> None:
+        """Show one image, video or audio file in the call's details.
 
-        Other media types are not shown. The display carries the absolute path
-        only internally; the server turns it into a signed file address before
-        any client sees it.
+        ``media_type`` is a media type such as ``image/png`` or only its kind
+        (``image``, ``video``, ``audio``); other kinds are not shown. A file the
+        call read, looked at or produced is shown as media; ``source=True``
+        marks one it started from, such as a generation's reference image.
+        ``filename`` names a file whose path does not, such as a download. The
+        display carries the absolute path only internally; the server turns it
+        into a signed file address before any client sees it, and a missing
+        file still shows as unavailable.
         """
-        if isinstance(media_type, str) and media_type.startswith(_DISPLAY_MEDIA_PREFIXES):
-            self.presentation_media.append(
-                {"path": str(Path(path).resolve()), "media_type": media_type}
-            )
+        kind = media_type.partition("/")[0] if isinstance(media_type, str) else ""
+        if kind not in _DISPLAY_MEDIA_KINDS:
+            return
+        absolute = Path(path).absolute()
+        item: JsonObject = {
+            "path": str(absolute),
+            "kind": kind,
+            "filename": filename or absolute.name,
+        }
+        if source:
+            item["role"] = "source"
+        self.presentation_media.append(item)
 
     def add_display_memory_changes(
         self,

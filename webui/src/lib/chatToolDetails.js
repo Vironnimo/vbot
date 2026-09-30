@@ -18,96 +18,61 @@ const TOOL_ERROR_DETAIL_KEYS = [
   'type',
 ];
 
-// Use server-issued file URLs or stored attachment identities, never raw Tool paths.
-export function toolDetailImages(
-  value,
-  { preferPayload = false, tool = null } = {},
-) {
-  if (!preferPayload) {
-    const images = toolDisplay(tool)?.images;
-    if (!Array.isArray(images)) return [];
-    const seen = new Set();
-    return images.flatMap((image) => {
-      if (
-        typeof image?.url !== 'string' ||
-        !/^\/api\/files\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(image.url) ||
-        seen.has(image.url)
-      )
-        return [];
-      seen.add(image.url);
-      return [
-        {
-          src: image.url,
-          filename:
-            typeof image.filename === 'string' && image.filename
-              ? image.filename
-              : t('chat.attachment.preview'),
-        },
-      ];
-    });
-  }
-  const result = parseJsonValue(value);
-  const candidates = Array.isArray(result?.artifacts)
-    ? result.artifacts.filter((item) => item?.kind === 'read_media')
-    : [];
-  if (!Array.isArray(candidates)) return [];
-  const seen = new Set();
-  return candidates.flatMap((item) => {
-    const id = item?.attachment_id;
-    if (
-      typeof id !== 'string' ||
-      !/^[a-z0-9][a-z0-9_-]{0,127}$/.test(id) ||
-      typeof item?.media_type !== 'string' ||
-      !item.media_type.startsWith('image/') ||
-      seen.has(id)
-    )
-      return [];
-    seen.add(id);
-    return [
-      {
-        src: getAttachmentUrl(id),
-        filename:
-          typeof item.filename === 'string' && item.filename
-            ? item.filename
-            : t('chat.attachment.preview'),
-      },
-    ];
-  });
+const TOOL_MEDIA_KINDS = ['image', 'video', 'audio'];
+const SIGNED_FILE_URL = /^\/api\/files\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+const ATTACHMENT_ID = /^[a-z0-9][a-z0-9_-]{0,127}$/;
+
+function mediaFilename(value) {
+  return typeof value === 'string' && value
+    ? value
+    : t('chat.attachment.preview');
 }
 
-const TOOL_MEDIA_KINDS = ['image', 'video', 'audio'];
-
-// The images, videos and audio a Tool produced, from the server's signed file
-// addresses in its display; each item's kind follows its media type.
-export function toolDetailMedia(tool) {
-  const media = toolDisplay(tool)?.media;
-  if (!Array.isArray(media)) return [];
+// The images, videos and audio of a Tool call's details, in order: the
+// server-signed files of its display (those it read, looked at or produced,
+// and the `source` files it started from), then the stored media of its
+// result. Only signed file URLs and opaque Attachment identities are used,
+// never raw Tool paths or external addresses.
+export function toolDetailMedia(tool, result) {
+  const displayed = toolDisplay(tool)?.media;
+  const parsed = parseJsonValue(result);
+  const stored = Array.isArray(parsed?.artifacts)
+    ? parsed.artifacts.filter((item) => item?.kind === 'read_media')
+    : [];
+  const candidates = [
+    ...(Array.isArray(displayed) ? displayed : []).map((item) => ({
+      kind: item?.kind,
+      src:
+        typeof item?.url === 'string' && SIGNED_FILE_URL.test(item.url)
+          ? item.url
+          : null,
+      filename: item?.filename,
+      source: item?.role === 'source',
+    })),
+    ...stored.map((item) => ({
+      kind:
+        typeof item.media_type === 'string'
+          ? item.media_type.split('/')[0]
+          : null,
+      src:
+        typeof item.attachment_id === 'string' &&
+        ATTACHMENT_ID.test(item.attachment_id)
+          ? getAttachmentUrl(item.attachment_id)
+          : null,
+      filename: item.filename,
+      source: false,
+    })),
+  ];
   const seen = new Set();
-  return media.flatMap((item) => {
-    const kind =
-      typeof item?.media_type === 'string'
-        ? TOOL_MEDIA_KINDS.find((prefix) =>
-            item.media_type.startsWith(`${prefix}/`),
-          )
-        : undefined;
+  return candidates.flatMap((item) => {
     if (
-      !kind ||
-      typeof item.url !== 'string' ||
-      !/^\/api\/files\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(item.url) ||
-      seen.has(item.url)
+      !item.src ||
+      !TOOL_MEDIA_KINDS.includes(item.kind) ||
+      seen.has(item.src)
     )
       return [];
-    seen.add(item.url);
-    return [
-      {
-        kind,
-        src: item.url,
-        filename:
-          typeof item.filename === 'string' && item.filename
-            ? item.filename
-            : t('chat.attachment.preview'),
-      },
-    ];
+    seen.add(item.src);
+    return [{ ...item, filename: mediaFilename(item.filename) }];
   });
 }
 

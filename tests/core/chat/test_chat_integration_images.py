@@ -691,7 +691,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                     if message.name == "read":
                         assert artifacts == []
                         assert message.tool_display is not None
-                        assert message.tool_display["image_files"]
+                        assert message.tool_display["media_files"]
                     else:
                         record = runtime.attachment_store.get(artifacts[0]["attachment_id"])
                         assert Path(record.file_path).read_bytes() in frames

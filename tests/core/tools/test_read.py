@@ -441,8 +441,8 @@ async def test_an_image_passes_its_pixels_in_memory_without_creating_files(tmp_p
     assert store.stored == []
     assert set(tmp_path.rglob("*")) == before
     assert base64.b64decode(context.result_media[0]["base64"]) == _PNG
-    assert context.presentation_images == [
-        {"path": str(tmp_path / "diagram.png"), "filename": "diagram.png"}
+    assert context.presentation_media == [
+        {"path": str(tmp_path / "diagram.png"), "kind": "image", "filename": "diagram.png"}
     ]
 
 

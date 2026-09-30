@@ -252,9 +252,10 @@ async def test_unusable_calls_are_refused_before_generating(
     assert result["ok"] is False
     assert result["error"] == error
     assert service.output_dirs == []
-    # Only a missing local file leaves an unavailable-image placeholder in the row.
-    shown = ["photo.jpg"] if error["code"] == "image_not_found" else []
-    assert [item["filename"] for item in context.presentation_images] == shown
+    # Only a missing local file leaves an unavailable-image placeholder in the row,
+    # shown as an image the call started from.
+    shown = [("photo.jpg", "source")] if error["code"] == "image_not_found" else []
+    assert [(item["filename"], item.get("role")) for item in context.presentation_media] == shown
 
 
 @pytest.mark.asyncio

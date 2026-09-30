@@ -362,7 +362,7 @@ def _read_image(
     media_type: str,
 ) -> JsonObject:
     """Pass loaded pixels to Chat without creating a persistent attachment."""
-    context.presentation_images.append({"path": str(resolved), "filename": resolved.name})
+    context.add_display_media(resolved, media_type)
     context.result_media.append(
         {
             "path": str(resolved),

@@ -20,6 +20,8 @@ from core.attachments import sniff_media_type
 JsonObject = dict[str, Any]
 
 FILE_URL_PREFIX = "/api/files/"
+# How the WebUI presents the files of a Tool display.
+_TOOL_MEDIA_KINDS = ("image", "video", "audio")
 FILE_SNIFF_BYTES = 65_536
 MAX_FILE_TOKEN_LENGTH = 16_384
 PREVIEW_URL_PREFIX = "/api/preview-assets/"
@@ -548,12 +550,14 @@ class FileDelivery:
     def project_message(self, message: JsonObject) -> JsonObject:
         """Replace recognized Assistant file markers with fresh public Markdown URLs."""
         projected = dict(message)
+        # Tool displays recorded before ``media_files`` hold ``image_files``.
         image_files = projected.pop("image_files", None)
-        if isinstance(image_files, list):
-            projected["images"] = self._project_image_files(image_files)
         media_files = projected.pop("media_files", None)
-        if isinstance(media_files, list):
-            projected["media"] = self._project_media_files(media_files)
+        if isinstance(image_files, list) or isinstance(media_files, list):
+            projected["media"] = [
+                *self._project_media_files(image_files, legacy_kind="image"),
+                *self._project_media_files(media_files),
+            ]
         content = projected.get("content")
         references = projected.pop("output_files", None)
         if (
@@ -604,56 +608,43 @@ class FileDelivery:
         projected["content"] = "".join(lines)
         return projected
 
-    def _project_image_files(self, references: list[Any]) -> list[JsonObject]:
-        """Expose revision-aware original Tool image URLs without copying bytes.
+    def _project_media_files(
+        self, references: Any, *, legacy_kind: str | None = None
+    ) -> list[JsonObject]:
+        """Expose a Tool's display images, videos and audio as revision-aware URLs.
 
-        Missing originals still get URLs: the ordinary 404 lets the UI render
-        its unavailable-image placeholder, including after a server restart.
+        Nothing is read or copied. Missing originals still get URLs: the
+        ordinary 404 lets the UI show its unavailable placeholder, including
+        after a server restart. References recorded without a ``kind`` take
+        it from their ``media_type`` or else ``legacy_kind``.
         """
-        images: list[JsonObject] = []
-        for reference in references:
-            if not isinstance(reference, dict):
-                continue
-            path_value = reference.get("path")
-            if not isinstance(path_value, str) or "\0" in path_value:
-                continue
-            path = Path(path_value)
-            if not path.is_absolute():
-                continue
-            images.append(
-                {"url": f"{FILE_URL_PREFIX}{self._mint_token(path)}", "filename": path.name}
-            )
-        return images
-
-    def _project_media_files(self, references: list[Any]) -> list[JsonObject]:
-        """Expose the images, videos and audio a Tool produced as revision-aware URLs.
-
-        The recorded media type decides how the UI presents each file, so a
-        missing file still keeps its address and kind, as for Tool images.
-        """
+        if not isinstance(references, list):
+            return []
         media: list[JsonObject] = []
         for reference in references:
             if not isinstance(reference, dict):
                 continue
             path_value = reference.get("path")
+            kind = reference.get("kind", legacy_kind)
             media_type = reference.get("media_type")
-            if (
-                not isinstance(path_value, str)
-                or "\0" in path_value
-                or not isinstance(media_type, str)
-                or not media_type.startswith(("image/", "video/", "audio/"))
-            ):
+            if kind is None and isinstance(media_type, str):
+                kind = media_type.partition("/")[0]
+            if not isinstance(path_value, str) or "\0" in path_value:
+                continue
+            if kind not in _TOOL_MEDIA_KINDS:
                 continue
             path = Path(path_value)
             if not path.is_absolute():
                 continue
-            media.append(
-                {
-                    "url": f"{FILE_URL_PREFIX}{self._mint_token(path)}",
-                    "filename": path.name,
-                    "media_type": media_type,
-                }
-            )
+            filename = reference.get("filename")
+            item: JsonObject = {
+                "url": f"{FILE_URL_PREFIX}{self._mint_token(path)}",
+                "filename": filename if isinstance(filename, str) and filename else path.name,
+                "kind": kind,
+            }
+            if reference.get("role") == "source":
+                item["role"] = "source"
+            media.append(item)
         return media
 
     def resolve_token(self, token: str) -> DeliveredFile | None:
