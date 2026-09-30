@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -17,6 +17,7 @@ import pytest
 from core.agents import (
     AgentAlreadyExistsError,
     AgentOrderConflictError,
+    AgentReferencedError,
     AgentRename,
     AgentRenameResult,
     InvalidAgentOrderError,
@@ -241,10 +242,14 @@ class StubAgents:
             backup_dir=None,
         )
 
-    def rename(self, agent_id: str, new_agent_id: str) -> AgentRenameResult:
+    def rename(
+        self, agent_id: str, new_agent_id: str, *, external_references: Iterable[str] = ()
+    ) -> AgentRenameResult:
         if new_agent_id in self._agents:
             raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
         self._get_raw(agent_id)
+        if references := tuple(external_references):
+            raise AgentReferencedError(new_agent_id, references)
         rename = AgentRename(source_id=agent_id, target_id=new_agent_id)
         self._move(rename)
         return AgentRenameResult(rename=rename, agent=cast(Any, self.get(new_agent_id)))

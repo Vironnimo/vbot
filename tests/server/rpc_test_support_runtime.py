@@ -31,7 +31,11 @@ from core.providers.accounts import (
 from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
 from core.runs import ChatRunManager
 from core.runtime import AgentRenameOutcome, SettingsChangeEffects
-from core.runtime._agent_rename import AgentRenameServices, rename_identity_agent
+from core.runtime._agent_rename import (
+    AgentRenameServices,
+    identity_agent_references,
+    rename_identity_agent,
+)
 from core.runtime.runtime import Runtime
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
@@ -425,7 +429,13 @@ class StubRuntime:
         return self.chat_runs
 
     async def rename_agent(self, agent_id: str, new_agent_id: str) -> AgentRenameOutcome:
-        services = AgentRenameServices(
+        return await rename_identity_agent(self._rename_services(), agent_id, new_agent_id)
+
+    def agent_references(self, agent_id: str) -> tuple[str, ...]:
+        return identity_agent_references(self._rename_services(), agent_id)
+
+    def _rename_services(self) -> AgentRenameServices:
+        return AgentRenameServices(
             agents=cast(Any, self.agents),
             sessions=self.chat_sessions,
             channels=cast(Any, self.channel_service),
@@ -433,7 +443,6 @@ class StubRuntime:
             bootstrap=cast(Any, self.bootstrap_service),
             calendar=cast(Any, self.calendar_service),
         )
-        return await rename_identity_agent(services, agent_id, new_agent_id)
 
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:
         return self.skills

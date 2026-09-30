@@ -6,7 +6,7 @@ import builtins
 import shutil
 import tempfile
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -65,6 +65,7 @@ from core.agents._types import (
     AgentListResult,
     AgentNotFoundError,
     AgentOrderConflictError,
+    AgentReferencedError,
     AgentRename,
     AgentRenameResult,
     AgentUpdateResult,
@@ -116,6 +117,7 @@ __all__ = [
     "AgentListResult",
     "AgentNotFoundError",
     "AgentOrderConflictError",
+    "AgentReferencedError",
     "AgentRename",
     "AgentRenameResult",
     "AgentStore",
@@ -662,15 +664,24 @@ class AgentStore:
                 relocation.rollback()
             self._write_agent(previous_agent)
 
-    def rename(self, agent_id: str, new_agent_id: str) -> AgentRenameResult:
+    def rename(
+        self, agent_id: str, new_agent_id: str, *, external_references: Iterable[str] = ()
+    ) -> AgentRenameResult:
         """Start renaming one Identity Agent and apply the Agent-owned half.
 
         Sessions, prompts, private Skills, the default Workspace, and every other
         Agent-owned file live below the same directory, so moving that directory
         preserves the whole identity. A Workspace anywhere inside the tree is
         rebased to the same relative location; an external Workspace is unchanged.
-        Live Session addresses, Sub-Agent parent links, the roster order and
-        delegation allow-lists move to the new id with it.
+        Live Session addresses, the Sub-Agent parent links to them, the roster
+        order and delegation allow-lists move to the new id with it.
+
+        The new id must be unused. No Agent, live Session, delegation allow-list
+        entry or ``external_references`` entry (the references other owners hold
+        to ``new_agent_id``) may name it; references raise
+        :class:`AgentReferencedError` naming each of them. Reverting a rename
+        moves what names the new id back to the old one, so it would take along a
+        reference that named the new id before the rename.
 
         ``agents/rename-pending.json`` records the rename before its first change
         and every step converges when repeated, so a rename interrupted at any
@@ -701,6 +712,15 @@ class AgentStore:
             # Rolling back renames the new id's Sessions back, so it must own none yet.
             if sessions.list_addresses(None, agent_id=new_agent_id):
                 raise AgentAlreadyExistsError(f"Sessions already exist for Agent: {new_agent_id}")
+            references = [
+                *(
+                    f"allowed_agents:{agent.id}"
+                    for agent, _ in self._allow_lists_naming(new_agent_id)
+                ),
+                *external_references,
+            ]
+            if references:
+                raise AgentReferencedError(new_agent_id, references)
             # Repairs a dangling current-Session pointer before the Sessions move.
             self._load_verified_agent(agent_path)
             session_ids = tuple(
@@ -873,14 +893,27 @@ class AgentStore:
         )
 
     def _retarget_allowed_agents(self, old_agent_id: str, new_agent_id: str) -> tuple[str, ...]:
-        """Retarget bare Identity Agent ids in every delegation allow-list.
+        """Retarget a bare Identity Agent id in every delegation allow-list.
 
-        Project-qualified addresses such as ``builder@project`` name Config Agents
-        and are a separate address space, so they are deliberately left untouched.
-        Configs are read side-effect free, and an invalid one is skipped as the
-        roster skips it. Returns the ids of the Agents whose configs changed.
+        Returns the ids of the Agents whose configs changed.
         """
         changed: builtins.list[str] = []
+        for agent, allowed_agents in self._allow_lists_naming(old_agent_id):
+            tools = deepcopy(agent.tools)
+            tools["subagent"]["allowed_agents"] = _replace_list_item_once(
+                allowed_agents, old_agent_id, new_agent_id
+            )
+            self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
+            changed.append(agent.id)
+        return tuple(changed)
+
+    def _allow_lists_naming(self, agent_id: str) -> Iterator[tuple[Agent, builtins.list[str]]]:
+        """Yield each Agent whose delegation allow-list names bare ``agent_id``, with that list.
+
+        Project-qualified addresses such as ``builder@project`` name Config Agents
+        and are a separate address space, so they never match. Configs are read
+        side-effect free, and an invalid one is skipped as the roster skips it.
+        """
         for agent_path in sorted((self._data_dir / "agents").glob("*/agent.json")):
             try:
                 agent = self._read_agent_config(agent_path)
@@ -890,15 +923,8 @@ class AgentStore:
             if not isinstance(subagent, dict):
                 continue
             allowed_agents = subagent.get("allowed_agents")
-            if not isinstance(allowed_agents, list) or old_agent_id not in allowed_agents:
-                continue
-            tools = deepcopy(agent.tools)
-            tools["subagent"]["allowed_agents"] = _replace_list_item_once(
-                allowed_agents, old_agent_id, new_agent_id
-            )
-            self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
-            changed.append(agent.id)
-        return tuple(changed)
+            if isinstance(allowed_agents, list) and agent_id in allowed_agents:
+                yield agent, allowed_agents
 
     def agents_rooted_in(self, project_id: str) -> builtins.list[Agent]:
         """Return Identity Agents explicitly referencing one Project."""

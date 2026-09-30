@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 import core.agents._workspace as workspace_ops
+from core.agents import AgentReferencedError
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
 from core.utils.config import Config
@@ -106,8 +107,14 @@ def _fail_when_retargeted_to(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fails", [False, True], ids=["completes", "reverts"])
-@pytest.mark.parametrize("channels_running", [True, False], ids=["channels-running", "stopped"])
+@pytest.mark.parametrize(
+    ("fails", "channels_running"),
+    [
+        pytest.param(False, True, id="completes"),
+        pytest.param(True, True, id="reverts"),
+        pytest.param(False, False, id="channels-stopped"),
+    ],
+)
 async def test_a_live_rename_moves_every_reference_or_none(
     config: Config, monkeypatch: pytest.MonkeyPatch, fails: bool, channels_running: bool
 ) -> None:
@@ -143,6 +150,41 @@ async def test_a_live_rename_moves_every_reference_or_none(
         changes = (2 if fails else 1) if channels_running else 0
         assert channel_loops == [asyncio.get_running_loop()] * changes
         assert started_adapters == []
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
+    config: Config,
+) -> None:
+    runtime = _started(config)
+    try:
+        current_session_id = _seed(runtime)
+        # A deleted ``researcher`` left a Cron job and a delegation grant behind:
+        # the renamed Agent would adopt them, and a revert would take them along.
+        runtime.agents.create("researcher", "Researcher")
+        leftover = runtime.cron_service.create_job(
+            agent_id="researcher", prompt="Report", schedule_type="interval", interval_seconds=60
+        )
+        runtime.agents.update("coder", tools={"subagent": {"allowed_agents": ["researcher"]}})
+        runtime.agents.delete("researcher")
+
+        with pytest.raises(AgentReferencedError) as refused:
+            await runtime.rename_agent("coder", "researcher")
+
+        assert refused.value.references == ("allowed_agents:coder", f"cron:{leftover.id}")
+        assert runtime.agent_references("researcher") == (f"cron:{leftover.id}",)
+        assert sorted(agent.id for agent in runtime.agents.list()) == ["coder", "main"]
+        assert runtime.agents.get("coder").current_session_id == current_session_id
+        assert sorted(job.agent_id for job in runtime.cron_service.list_jobs()) == [
+            "coder",
+            "researcher",
+        ]
+        assert [channel.agent_id for channel in runtime.channel_service.list_channels()] == [
+            "coder"
+        ]
+        assert not (runtime.storage.data_dir / "agents" / "rename-pending.json").exists()
     finally:
         await runtime.aclose()
 

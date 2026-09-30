@@ -480,12 +480,20 @@ def _write_subagent_parent(
 def retarget_identity_agent_references(
     connection: sqlite3.Connection, old_agent_id: str, new_agent_id: str
 ) -> tuple[SessionIdentityReferenceUpdate, ...]:
-    """Point every live Sub-Agent parent reference to the renamed Identity Agent."""
+    """Point live Sub-Agent parent links at the renamed Identity Agent's moved Sessions.
+
+    A link follows its parent Session's address: it moves only while that Session
+    is live under ``new_agent_id``. Links to a parent that stayed behind, such as
+    an archived Session, or that no longer exists keep their Agent id.
+    """
     rows = connection.execute(
         f"SELECT {_store_values._SESSION_STATE_COLUMNS} FROM sessions AS s "
         "WHERE s.state = 'live' AND s.subagent_parent_project_id IS NULL "
-        "AND s.subagent_parent_agent_id = ? ORDER BY s.session_key",
-        (old_agent_id,),
+        "AND s.subagent_parent_agent_id = ? AND EXISTS (SELECT 1 FROM sessions AS parent "
+        "WHERE parent.project_id = '' AND parent.agent_id = ? "
+        "AND parent.session_id = s.subagent_parent_session_id AND parent.state = 'live') "
+        "ORDER BY s.session_key",
+        (old_agent_id, new_agent_id),
     ).fetchall()
     updates = []
     for row in rows:

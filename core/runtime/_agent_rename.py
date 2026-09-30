@@ -11,7 +11,9 @@ then the record is finished.
 Every step selects only what still names the id it replaces, so repeating a
 direction converges and reversing the ids reverts it. A failure reverts the whole
 rename; a process that dies mid-rename leaves the record, and the next start
-completes its direction (:func:`complete_pending_rename`).
+completes its direction (:func:`complete_pending_rename`). Because a revert moves
+everything that names the new id back, a rename is refused while any reference
+still names the new id (:func:`identity_agent_references`, ``AgentStore.rename``).
 """
 
 from __future__ import annotations
@@ -79,6 +81,38 @@ async def rename_identity_agent(
     return await services.sessions.run_async(_rename, services, agent_id, new_agent_id, loop)
 
 
+def identity_agent_references(services: AgentRenameServices, agent_id: str) -> tuple[str, ...]:
+    """Name the Channels, jobs and Calendar actions outside the Agent store that address an id.
+
+    This is the selection a rename retargets, labelled ``channel:<id>``,
+    ``cron:<id>``, ``bootstrap:<id>`` and ``calendar:<action id>`` and sorted:
+    Channels that answer as the Identity Agent, its non-terminal identity Cron and
+    Bootstrap jobs, and the actions of live Calendar events that target it.
+    Blocking: it reads every Channel config.
+    """
+    references = [
+        f"channel:{channel.id}"
+        for channel in services.channels.list_channels()
+        if channel.agent_id == agent_id
+    ]
+    references.extend(
+        f"cron:{job.id}"
+        for job in services.cron.list_jobs()
+        if _targets_identity(job, agent_id, TERMINAL_CRON_JOB_STATUSES)
+    )
+    references.extend(
+        f"bootstrap:{job.id}"
+        for job in services.bootstrap.list_jobs()
+        if _targets_identity(job, agent_id, TERMINAL_BOOTSTRAP_STATUSES)
+    )
+    references.extend(
+        f"calendar:{action['id']}"
+        for action in services.calendar.actions.list_actions()
+        if action["target"] == agent_id
+    )
+    return tuple(sorted(references))
+
+
 def complete_pending_rename(services: AgentRenameServices, rename: AgentRename) -> None:
     """Finish a rename whose Agent-owned half ``AgentStore.recover_rename`` completed.
 
@@ -123,7 +157,11 @@ def _rename(
     new_agent_id: str,
     loop: asyncio.AbstractEventLoop,
 ) -> AgentRenameOutcome:
-    result = services.agents.rename(agent_id, new_agent_id)
+    result = services.agents.rename(
+        agent_id,
+        new_agent_id,
+        external_references=identity_agent_references(services, new_agent_id),
+    )
     try:
         references = _retarget_references(services, result.rename, loop)
     except Exception as error:
