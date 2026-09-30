@@ -397,6 +397,8 @@ const FILE_CHANGE_KINDS = new Set([
 const DIFF_LINE_KINDS = { '+': 'added', '-': 'removed', ' ': 'context' };
 
 const NOTICE_LEVELS = new Set(['info', 'warning', 'error']);
+const MEMORY_SCOPES = new Set(['agent', 'user']);
+const MEMORY_CHANGE_OPS = new Set(['added', 'removed', 'replaced']);
 const TEXT_LABELS = new Set(['command', 'output', 'query']);
 
 // The user-facing detail blocks of a Tool whose display declares them
@@ -405,8 +407,10 @@ const TEXT_LABELS = new Set(['command', 'output', 'query']);
 // from each hunk's start; `notice` blocks a leveled message; `text` blocks a
 // labelled text, either given or read from the call's `args` or `result` at
 // the block's source path; `results` blocks the items a call found, each with
-// a title and optional meta, ISO time and text. Malformed blocks and entries,
-// texts without a value and empty result lists are dropped.
+// a title and optional meta, ISO time and text; `memory_changes` blocks the
+// entries a call added, removed or replaced (with its previous text) in one
+// Memory scope and the history revision that recorded them. Malformed blocks
+// and entries, texts without a value and empty lists are dropped.
 export function toolDetailBlocks(tool, { args, result } = {}) {
   const blocks = toolDisplay(tool)?.details;
   if (!Array.isArray(blocks)) return null;
@@ -432,6 +436,40 @@ export function toolDetailBlocks(tool, { args, result } = {}) {
           : [],
       );
       return items.length > 0 ? [{ type: 'results', items }] : [];
+    }
+    if (
+      block?.type === 'memory_changes' &&
+      MEMORY_SCOPES.has(block.scope) &&
+      Array.isArray(block.changes)
+    ) {
+      const changes = block.changes.flatMap((change) =>
+        isPlainObject(change) &&
+        MEMORY_CHANGE_OPS.has(change.op) &&
+        typeof change.text === 'string' &&
+        change.text &&
+        (change.op !== 'replaced' ||
+          (typeof change.previous === 'string' && change.previous))
+          ? [
+              {
+                op: change.op,
+                text: change.text,
+                previous: change.op === 'replaced' ? change.previous : '',
+              },
+            ]
+          : [],
+      );
+      return changes.length > 0
+        ? [
+            {
+              type: 'memory_changes',
+              scope: block.scope,
+              revision: Number.isInteger(block.revision)
+                ? block.revision
+                : null,
+              changes,
+            },
+          ]
+        : [];
     }
     if (block?.type === 'file_changes' && Array.isArray(block.files)) {
       const files = fileChanges(block.files);

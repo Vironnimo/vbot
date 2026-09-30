@@ -325,6 +325,24 @@ function plannedToolResponse(prompt, results, offeredTools) {
     return { text: "Session search completed." };
   }
 
+  if (prompt.includes("E2E_TOOL_MEMORY")) {
+    const steps = [
+      { action: "add", scope: "user", content: "User works in UTC+2." },
+      {
+        action: "replace",
+        scope: "user",
+        old_text: "UTC+2",
+        content: "User works in UTC+1.",
+      },
+      { action: "remove", scope: "user", old_text: "UTC+1" },
+    ];
+    const done = resultsFor(results, "memory").length;
+    if (done < steps.length) {
+      return { calls: [toolCall("memory", steps[done])] };
+    }
+    return { text: "Memory changes completed." };
+  }
+
   if (prompt.includes("E2E_TOOL_MISSING_FILE")) {
     if (resultsFor(results, "read").length === 0) {
       return {

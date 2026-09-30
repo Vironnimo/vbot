@@ -4,7 +4,7 @@
   //
   // A Tool whose display declares detail blocks shows those to the user
   // (texts such as its command and output, the files it changed, what it
-  // found, notices),
+  // found, the Memory entries it changed, notices),
   // with the raw call and result behind a disclosure. Live Stdout/Stderr
   // take the place of an Output block, or follow the blocks while the call
   // runs. Any other Tool shows Args, live Stdout/Stderr and its Result.
@@ -12,6 +12,7 @@
   import { t } from '$lib/i18n.js';
   import ToolDetailSection from './ToolDetailSection.svelte';
   import ToolDiff from './ToolDiff.svelte';
+  import ToolMemoryChanges from './ToolMemoryChanges.svelte';
   import ToolNotice from './ToolNotice.svelte';
   import ToolResults from './ToolResults.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
@@ -111,6 +112,8 @@
         <ToolDiff changes={block.files} />
       {:else if block.type === 'results'}
         <ToolResults items={block.items} />
+      {:else if block.type === 'memory_changes'}
+        <ToolMemoryChanges {block} />
       {:else}
         <ToolNotice notice={block} />
       {/if}
