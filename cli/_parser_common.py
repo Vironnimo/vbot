@@ -105,6 +105,7 @@ AREA_HELP = {
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
     "session": "Inspect and manage agent chat sessions",
+    "chat": "Send one message to an Agent Session and print the answer",
     "data-store": (
         "Inspect, snapshot, verify, recover, and release the canonical SQLite databases"
     ),

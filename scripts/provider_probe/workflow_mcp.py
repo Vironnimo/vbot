@@ -107,7 +107,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
         host = ExtensionHost(
             data_dir=root,
             sample=sample,
-            resolve_agent=lambda *_: agent,
+            resolve_agent=lambda *_, **__: agent,
             resolve_tool_agent=lambda context: agent,
             store_attachment=lambda *_: None,
             resolve_credential=lambda _: "",

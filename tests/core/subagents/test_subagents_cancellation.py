@@ -92,15 +92,18 @@ async def test_queued_work_counts_against_the_per_turn_limit(harness: SubAgentHa
     assert len(harness.manager.enqueued) == 1
 
 
-async def test_queued_runs_keep_their_own_overrides(harness: SubAgentHarness) -> None:
+async def test_queued_work_sets_the_session_overrides_it_names(harness: SubAgentHarness) -> None:
     _busy_child(harness)
 
     await harness.spawn({**FOLLOW_UP, "content": "first", "model": "openai/gpt-mini"})
     await harness.spawn({**FOLLOW_UP, "content": "second", "thinking_effort": "high"})
 
-    first, second = harness.loop.tasks["first"].overrides, harness.loop.tasks["second"].overrides
-    assert (first.model, first.thinking_effort) == ("openai/gpt-mini", None)
-    assert (second.model, second.thinking_effort) == (None, "high")
+    # Queued Runs run with the child Session's overrides, which each call updates at once.
+    assert len(harness.manager.enqueued) == 2
+    assert harness.stored_overrides("worker", "busy-child") == {
+        "model": "openai/gpt-mini",
+        "thinking_effort": "high",
+    }
 
 
 async def test_foreground_call_waits_for_its_queued_run_to_finish(

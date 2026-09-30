@@ -1,6 +1,7 @@
 """Connection-bound Model configuration and Run override tests."""
 
-from core.projects import AgentRunOverrides, ModelConfigurationError
+from core.projects import AgentOverrides, ModelConfigurationError
+from core.sessions import SessionAddress
 
 from .resolver_test_support import (
     AgentStore,
@@ -122,46 +123,77 @@ def test_resolver_model_gate_uses_the_domain_checker(
         resolver.require_model_configured("openai/ghost-model")
 
 
-def test_identity_run_overrides_are_immutable_and_not_persisted(
+def test_session_overrides_persist_in_the_session_and_never_in_the_agent(
     agents: AgentStore, projects: ProjectStore
 ) -> None:
-    agents.create(
-        "identity",
-        model="openai/gpt-5.2",
-        thinking_effort="low",
-    )
+    agents.create("identity", model="openai/gpt-5.2", thinking_effort="low", temperature=0.2)
     resolver = _resolver(agents, projects, _openai_configured())
-
-    resolved = resolver.resolve_agent(
-        None,
-        "identity",
-        run_overrides=AgentRunOverrides(
-            model="openai/gpt-mini",
-            thinking_effort="high",
-        ),
+    sessions = agents._session_manager()
+    session = sessions.create("identity")
+    other = sessions.create("identity")
+    address = SessionAddress(None, "identity", session.id)
+    # A field a newer vBot stored survives every update.
+    sessions.mutate_metadata(
+        address, lambda metadata: metadata.update(agent_overrides={"future": True})
     )
 
-    assert resolved.model == "openai/gpt-mini"
-    assert resolved.thinking_effort == "high"
-    assert agents.get("identity").model == "openai/gpt-5.2"
-    assert agents.get("identity").thinking_effort == "low"
+    resolver.update_session_overrides(
+        address, {"model": "openai/gpt-mini", "thinking_effort": "high", "temperature": 1}
+    )
+    # A partial update keeps the other fields; None clears one.
+    updated = resolver.update_session_overrides(address, {"temperature": None})
+
+    resolved = resolver.resolve_agent(None, "identity", session_id=session.id)
+    assert updated == AgentOverrides(model="openai/gpt-mini", thinking_effort="high")
+    assert (resolved.model, resolved.thinking_effort, resolved.temperature) == (
+        "openai/gpt-mini",
+        "high",
+        0.2,
+    )
+    assert sessions.metadata_value(address, "agent_overrides") == {
+        "future": True,
+        "model": "openai/gpt-mini",
+        "thinking_effort": "high",
+    }
+    effective = resolver.effective_config(None, "identity", session_id=session.id)
+    assert effective["model"] == {"value": "openai/gpt-mini", "source": "session"}
+    assert effective["temperature"] == {"value": 0.2, "source": "agent"}
+    # Other Sessions, the stored Agent and a Session that does not exist yet
+    # keep the Agent's own values.
+    for resolved_elsewhere in (
+        resolver.resolve_agent(None, "identity", session_id=other.id),
+        resolver.resolve_agent(None, "identity", session_id="ses_missing"),
+        agents.get("identity"),
+    ):
+        assert resolved_elsewhere.model == "openai/gpt-5.2"
+        assert resolved_elsewhere.thinking_effort == "low"
 
 
-def test_run_override_rejects_unusable_model(agents: AgentStore, projects: ProjectStore) -> None:
+def test_session_overrides_reject_invalid_values_before_writing(
+    agents: AgentStore, projects: ProjectStore
+) -> None:
     agents.create("identity", model="openai/gpt-5.2")
     resolver = _resolver(agents, projects, _openai_configured())
+    sessions = agents._session_manager()
+    session = sessions.create("identity")
+    address = SessionAddress(None, "identity", session.id)
 
     with pytest.raises(ModelConfigurationError):
-        resolver.resolve_agent(
-            None,
-            "identity",
-            run_overrides=AgentRunOverrides(model="openai/ghost-model"),
+        resolver.update_session_overrides(
+            address, {"model": "openai/ghost-model", "thinking_effort": "high"}
         )
+    for invalid in ({"thinking_effort": "extreme"}, {"temperature": 3}, {"unknown": "x"}):
+        with pytest.raises(ValueError):
+            resolver.update_session_overrides(address, invalid)
+    assert sessions.metadata_value(address, "agent_overrides") is None
 
-
-def test_run_override_rejects_unknown_thinking_effort() -> None:
-    with pytest.raises(ValueError):
-        AgentRunOverrides(thinking_effort="extreme")
+    # A stored Model that can no longer run fails the Session's resolution.
+    sessions.mutate_metadata(
+        address,
+        lambda metadata: metadata.update(agent_overrides={"model": "openai/ghost-model"}),
+    )
+    with pytest.raises(ModelConfigurationError):
+        resolver.resolve_agent(None, "identity", session_id=session.id)
 
 
 def test_connection_bound_declared_model_falls_through_and_is_a_scan_finding(

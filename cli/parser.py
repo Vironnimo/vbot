@@ -10,6 +10,7 @@ from typing import NoReturn
 
 from cli._parser_agents import (
     _add_agent_parsers,
+    _add_chat_parser,
     _add_data_store_parsers,
     _add_project_parsers,
     _add_session_parsers,
@@ -166,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_agent_parsers(subparsers)
     _add_project_parsers(subparsers)
     _add_session_parsers(subparsers)
+    _add_chat_parser(subparsers)
     _add_data_store_parsers(subparsers)
     _add_channel_parsers(subparsers)
     _add_tool_parsers(subparsers)
@@ -257,7 +259,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error(
                 f"--{clear.replace('_', '-')} cannot be combined with --{value.replace('_', '-')}"
             )
+    if getattr(args, "area", None) == "chat" and args.prompt is None and _stdin_is_terminal():
+        parser.error("chat needs a message: pass it as <prompt> or pipe it on stdin")
     return args
+
+
+def _stdin_is_terminal() -> bool:
+    """A terminal stdin (or none) cannot supply an omitted message without prompting."""
+    stdin = sys.stdin
+    return stdin is None or stdin.isatty()
 
 
 def _is_command_group(parser: argparse.ArgumentParser, tokens: list[str]) -> bool:

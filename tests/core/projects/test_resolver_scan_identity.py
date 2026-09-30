@@ -4,10 +4,9 @@ import threading
 from typing import Any
 
 from core.database import DatabaseUnavailableError
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 
 from .resolver_test_support import (
-    AgentRunOverrides,
     AgentStore,
     ConfigAgent,
     FindingType,
@@ -153,7 +152,7 @@ async def test_async_resolution_runs_each_agent_kind_on_its_pool(
     threads: dict[str, str] = {}
     store_get = agents.get
     read_fresh = resolver._read_agent_fresh
-    apply_overrides = resolver._apply_run_overrides
+    apply_overrides = resolver._apply_overrides
 
     def recording_get(agent_id: str) -> Any:
         threads["identity"] = threading.current_thread().name
@@ -169,18 +168,20 @@ async def test_async_resolution_runs_each_agent_kind_on_its_pool(
 
     monkeypatch.setattr(agents, "get", recording_get)
     monkeypatch.setattr(resolver, "_read_agent_fresh", recording_read)
-    monkeypatch.setattr(resolver, "_apply_run_overrides", recording_overrides)
+    monkeypatch.setattr(resolver, "_apply_overrides", recording_overrides)
 
     # Act
     resolved = await resolver.resolve_agent_async(None, "orchestrator")
-    overridden = await resolver.resolve_agent_async(
-        None, "orchestrator", run_overrides=AgentRunOverrides(thinking_effort="high")
+    session = agents._session_manager().create("orchestrator")
+    resolver.update_session_overrides(
+        SessionAddress(None, "orchestrator", session.id), {"thinking_effort": "high"}
     )
+    overridden = await resolver.resolve_agent_async(None, "orchestrator", session_id=session.id)
     member = await resolver.resolve_agent_async(project.project_id, "builder")
 
     # Assert: the ordinary results. The Identity read, which verifies the
     # current-Session pointer, runs on the Session database's pool; the Model
-    # check of Run overrides and Project resolution on the resolution pool.
+    # check of Session overrides and Project resolution on the resolution pool.
     assert resolved == created
     assert overridden.thinking_effort == "high"
     assert isinstance(member, ConfigAgent)

@@ -8,7 +8,7 @@ import json
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -27,10 +27,14 @@ from core.models.models import ModelRegistry
 from core.projects import ProjectNotFoundError
 from core.projects.paths import cwd_identity_key
 from core.projects.resolver import (
+    AgentOverrides,
     AgentResolutionError,
+    AgentResolver,
     ConfigAgent,
+    ModelConfigurationError,
     ResolutionAgentNotFoundError,
 )
+from core.sessions import SessionAddress
 from core.settings import AgentDefaults, bake_agent_defaults
 from core.tools.availability import ToolAccess
 from server.rpc import (
@@ -330,6 +334,17 @@ class StubProjects:
         return None
 
 
+class StubModelChecker:
+    """Every Model can run except those in ``unusable``."""
+
+    def __init__(self) -> None:
+        self.unusable: set[str] = set()
+
+    def require_configured(self, model: str) -> None:
+        if model in self.unusable:
+            raise ModelConfigurationError(f"model is not usable in this instance: {model}")
+
+
 class StubAgentResolver:
     """Resolver seam the chat loop calls; identity path delegates to ``StubAgents``.
 
@@ -339,39 +354,79 @@ class StubAgentResolver:
     surface. A set ``project_id`` returns a :class:`ConfigAgent` registered via
     :meth:`register_project_agent`, mirroring the real resolver's config path; an
     unregistered Team member raises :class:`ResolutionAgentNotFoundError`.
+
+    Session Agent overrides are the real resolver's, stored in ``sessions``; a
+    resolution or provenance read that names its Session applies them.
     """
 
-    def __init__(self, agents: StubAgents) -> None:
+    def __init__(self, agents: StubAgents, sessions: Any | None = None) -> None:
         self._agents = agents
         self._project_agents: dict[tuple[str, str], ConfigAgent] = {}
+        self.models = StubModelChecker()
+        self._overrides = AgentResolver(
+            cast(Any, agents), cast(Any, None), cast(Any, self.models), dict, sessions=sessions
+        )
 
     def register_project_agent(self, project_id: str, agent: ConfigAgent) -> None:
         self._project_agents[(project_id, agent.id)] = agent
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> StubAgent | ConfigAgent:
+    def resolve_agent(
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> StubAgent | ConfigAgent:
+        agent: StubAgent | ConfigAgent
         if project_id is None:
             try:
-                return self._agents.get(agent_id)
+                agent = self._agents.get(agent_id)
             except KeyError as error:
                 raise ResolutionAgentNotFoundError(str(error)) from error
-        try:
-            return self._project_agents[(project_id, agent_id)]
-        except KeyError as error:
-            raise ResolutionAgentNotFoundError(
-                f"agent '{agent_id}' is not on project '{project_id}' team"
-            ) from error
+        else:
+            try:
+                agent = self._project_agents[(project_id, agent_id)]
+            except KeyError as error:
+                raise ResolutionAgentNotFoundError(
+                    f"agent '{agent_id}' is not on project '{project_id}' team"
+                ) from error
+        if session_id is None:
+            return agent
+        overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
+        return replace(agent, **overrides.as_dict())
 
     async def resolve_agent_async(
         self, project_id: str | None, agent_id: str, **options: Any
     ) -> Any:
         return self.resolve_agent(project_id, agent_id, **options)
 
-    def effective_config(self, project_id: str | None, agent_id: str) -> dict[str, dict[str, Any]]:
+    def require_model_configured(self, model: str) -> None:
+        self.models.require_configured(model)
+
+    async def require_model_configured_async(self, model: str) -> None:
+        self.models.require_configured(model)
+
+    def session_overrides(self, address: SessionAddress) -> AgentOverrides:
+        return self._overrides.session_overrides(address)
+
+    async def session_overrides_async(self, address: SessionAddress) -> AgentOverrides:
+        return await self._overrides.session_overrides_async(address)
+
+    def update_session_overrides(
+        self, address: SessionAddress, changes: Mapping[str, Any]
+    ) -> AgentOverrides:
+        return self._overrides.update_session_overrides(address, changes)
+
+    async def update_session_overrides_async(
+        self, address: SessionAddress, changes: Mapping[str, Any]
+    ) -> AgentOverrides:
+        return await self._overrides.update_session_overrides_async(address, changes)
+
+    def effective_config(
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> dict[str, dict[str, Any]]:
         """Identity provenance seam the agent payload reads (agent CRUD is identity-only).
 
         Mirrors the real resolver's identity branch: the agent's raw own value wins
         (source ``agent``) unless it is ``""``/``None``, in which case a global default
-        applies (source ``global_default``), else ``None``.
+        applies (source ``global_default``), else ``None``. A Session's overrides win
+        with source ``session``.
         """
         if project_id is not None:
             raise AgentResolutionError("project effective_config not stubbed")
@@ -382,7 +437,7 @@ class StubAgentResolver:
         defaults = (
             self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
         )
-        return {
+        effective = {
             "model": _identity_source(raw.model, defaults, "model", empty=""),
             "fallback_models": _identity_source(
                 raw.fallback_models,
@@ -395,6 +450,11 @@ class StubAgentResolver:
                 raw.thinking_effort, defaults, "thinking_effort", empty=None
             ),
         }
+        if session_id is not None:
+            overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
+            for name, value in overrides.as_dict().items():
+                effective[name] = {"value": value, "source": "session"}
+        return effective
 
 
 def _identity_source(

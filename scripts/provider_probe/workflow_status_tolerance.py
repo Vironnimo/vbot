@@ -52,7 +52,7 @@ async def status_case(
         ):
             sessions.create(agent_id, session_id=session_id)
         resolver = Mock()
-        resolver.resolve_agent.side_effect = lambda project, agent_id: Agent(
+        resolver.resolve_agent.side_effect = lambda project, agent_id, **_: Agent(
             id=agent_id,
             name=agent_id,
             model="openai/fixture",

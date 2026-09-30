@@ -211,7 +211,9 @@ def make_status_handler(
         # exactly as before. Only a missing Agent or Project is "not found"; an
         # existing target that cannot run reports why.
         try:
-            agent = agent_resolver.resolve_agent(context.project_id, agent_id)
+            agent = agent_resolver.resolve_agent(
+                context.project_id, agent_id, session_id=session_id
+            )
         except ResolutionProjectNotFoundError:
             return tool_failure(
                 "project_not_found",

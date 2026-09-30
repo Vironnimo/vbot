@@ -31,9 +31,10 @@ from core.projects.projects import (
     validate_project_file,
 )
 from core.projects.resolver import (
+    AGENT_OVERRIDE_FIELDS,
+    AgentOverrides,
     AgentResolutionError,
     AgentResolver,
-    AgentRunOverrides,
     ConfigAgent,
     ModelConfigurationChecker,
     ModelConfigurationError,
@@ -50,7 +51,8 @@ from core.projects.resolver import (
 from core.projects.store import ProjectStore
 
 __all__ = [
-    "AgentRunOverrides",
+    "AGENT_OVERRIDE_FIELDS",
+    "AgentOverrides",
     "AgentResolutionError",
     "AgentResolver",
     "ConfigAgent",

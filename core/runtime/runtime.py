@@ -328,9 +328,11 @@ class Runtime:
             ):
                 raise ValueError("Temporary Tool invocation no longer owns this Session")
             return self.agent_resolver.resolve_temporary_agent(
-                address, generation_id=binding.generation_id
+                address, generation_id=binding.generation_id, session=address
             )
-        return self.agent_resolver.resolve_agent(context.project_id, context.agent_id)
+        return self.agent_resolver.resolve_agent(
+            context.project_id, context.agent_id, session_id=context.session_id
+        )
 
     async def _sample_extension(self, context: Any, request: dict[str, Any]) -> dict[str, Any]:
         from core.chat.model_resolution import resolve_agent_model_target

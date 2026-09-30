@@ -27,7 +27,7 @@ Registers the single public `subagent` Tool and delegates lifecycle orchestratio
 - Target lookup after authorization fails before Session work: `agent_not_found` only when the Agent does not exist (unknown Identity Agent, or not or no longer on the Project Team) and `project_not_found` when the addressed Project does not exist. A target that cannot run for another reason (no usable Model, an unreadable Identity or Project configuration, an unavailable temporary Session binding) fails `agent_unavailable` with `retryable: false`; its message names the target address, carries the resolver's reason, and tells the Agent to delegate to another allowed Agent or tell the user (`SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE`). An unusable explicit `model` override stays `invalid_arguments`. Coverage: `tests/core/subagents/test_subagents.py`.
 - `run` without `session_id` creates a new persisted Session whose automatic title is the whitespace-normalized `description`, or the normalized beginning of `content` when `description` is blank/omitted, capped at 48 characters. Continuing an existing Session uses its exact `session_id` with the owning `agent_id` (or the owner derived as described under Run interpretation) and never retitles that Session; manual titles therefore remain stable.
 - `content` is a self-contained delegation brief when `run` creates a new Session: it carries the goal, relevant context, scope, constraints, and expected result. A continuation with `session_id` may rely on that Sub-Agent Session's existing history and should carry the follow-up instruction plus any new context.
-- `model` and `thinking_effort` are optional Run-local overrides for only the newly admitted Child Run. Missing or empty selections inherit the freshly resolved target Agent; `"none"` explicitly disables Reasoning. An empty effort does not clear a configured Agent effort to the Provider default. Overrides never mutate or become defaults for the target Agent, Project, or Session and do not flow into later continuations or nested calls.
+- `model` and `thinking_effort` set the child Session's Agent overrides. Omitted or empty selections keep the Session's current value: the target Agent's for a new Session, the stored override for a continued one; `"none"` explicitly disables Reasoning. An empty effort does not clear a configured effort to the Provider default. Overrides never change the target Agent or Project configuration and do not flow into nested calls.
 - Busy target Sessions enqueue a follow-up Run through `ChatRunManager` without changing the public id.
 - The `agent_id` argument resolves a bare id in the caller's scope, so every result field `agent_id` carries exactly the value that argument accepts for that child: `agent@project` when the child Session has a Project, the bare id for Identity Agents; `project_id` remains a separate field. Copying the returned `agent_id` and `session_id` continues the same child Session for Identity callers, Project callers targeting their Team, and Project self-delegation. Continuation and resume notes name the same values. A successful `cancel` of started work carries such a resume note; removing queued work does not. Coverage: `tests/core/subagents/test_subagents.py`, `tests/core/subagents/test_subagents_status.py`, `tests/core/subagents/test_subagents_cancellation.py`.
 - Successful `run` results carry `activity_note` with its concrete path when an activity file is allocated, and no separate `activity_file` field. Status snapshots keep `activity_file`, never carry the activity note, and a single snapshot carries a behavioral `note` while queued or running that names automatic delivery and how to wait for the result. The list form states that note once at list level (`data.note`, `SUBAGENT_STATUS_LIST_NOTE`) when any listed work is unfinished, instead of repeating it per entry.
@@ -57,3 +57,14 @@ separate conformance evidence.
 replays anonymized call shapes (dialects, placeholders, echoed fields, conflicts) for
 `subagent`, `status` and `project` through production dispatch and shows what the
 Model reads back.
+
+## Agent-facing text
+
+Reasons for the parameter descriptions of `model` and `thinking_effort` (`core/tools/subagent.py`):
+
+| Text | Reason |
+|---|---|
+| `Model for this Sub-Agent Session, as <provider>/<model-id>.` | The value applies to the whole child Session, including continuations; the format prevents bare Model names. |
+| `Omit on a new Session to use the Agent's model.` | Weak Models filled the field on every call; omission is the normal case. |
+| `Thinking effort for this Sub-Agent Session.` | Same Session scope as `model`. |
+| `Omit on a new Session to use the Agent's setting.` | Same as for `model`. |

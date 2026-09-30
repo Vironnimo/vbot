@@ -1,4 +1,4 @@
-"""Uniform runtime Agent contracts and immutable Run overrides."""
+"""Uniform runtime Agent contracts and Session Agent overrides."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from core.memory import MemoryPromptMode
-from core.settings import validate_thinking_effort
+from core.settings import validate_temperature, validate_thinking_effort
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -94,12 +94,21 @@ class RuntimeAgent(Protocol):
     def compaction_policy(self) -> dict[str, Any] | None: ...
 
 
+AGENT_OVERRIDE_FIELDS = ("model", "thinking_effort", "temperature")
+
+
 @dataclass(frozen=True)
-class AgentRunOverrides:
-    """The only Agent fields one admitted Run may replace ephemerally."""
+class AgentOverrides:
+    """The Agent Run settings one Session replaces for every Run it executes.
+
+    ``None`` keeps the Agent's resolved value. A Session stores these values as
+    one object in its metadata (``agent_overrides``); :meth:`from_stored` reads
+    it, ignoring fields a newer vBot may have added.
+    """
 
     model: str | None = None
     thinking_effort: str | None = None
+    temperature: float | None = None
 
     def __post_init__(self) -> None:
         if self.model is not None and (not isinstance(self.model, str) or not self.model):
@@ -110,11 +119,36 @@ class AgentRunOverrides:
                 label="thinking_effort",
                 allow_none=False,
             )
+            if not self.thinking_effort:
+                raise ValueError("thinking_effort must name an effort")
+        if self.temperature is not None:
+            object.__setattr__(
+                self,
+                "temperature",
+                validate_temperature(self.temperature, label="temperature"),
+            )
+
+    @classmethod
+    def from_stored(cls, value: Any) -> AgentOverrides:
+        """Read a Session's stored ``agent_overrides`` object (absent: no overrides)."""
+        if value is None:
+            return cls()
+        if not isinstance(value, dict):
+            raise ValueError("Session agent_overrides must be an object")
+        return cls(**{name: value.get(name) for name in AGENT_OVERRIDE_FIELDS})
 
     @property
     def is_empty(self) -> bool:
-        """Return whether this value changes neither permitted field."""
-        return self.model is None and self.thinking_effort is None
+        """Return whether this value replaces no Agent setting."""
+        return all(getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS)
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return only the replaced settings, keyed by field name."""
+        return {
+            name: getattr(self, name)
+            for name in AGENT_OVERRIDE_FIELDS
+            if getattr(self, name) is not None
+        }
 
 
 @dataclass(frozen=True)

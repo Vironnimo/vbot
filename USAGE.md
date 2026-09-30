@@ -663,6 +663,21 @@ Built-in Commands are owned by Chat and work in the WebUI; Channels support the 
 
 `/agent` changes Session ownership; `/handoff` creates a new target Session and leaves the source intact. Through a Channel, `/handoff` relays the target's first response once but does not change the Channel's configured Agent or future routing.
 
+### Chat from the command line
+
+`vbot chat` sends one message to an Agent Session, waits for the Run, and prints the answer, which makes it usable from scripts and other tools:
+
+```bash
+vbot chat "Summarize the open issues"                     # new Session of the main Agent
+vbot chat --agent coder@my-project -c "Continue with the next step"
+git diff | vbot chat --agent reviewer --model openrouter/anthropic/claude-sonnet-4
+vbot chat --session SESSION_ID --json "What changed?"
+```
+
+Without `-c` or `--session`, every call starts a new Session; `-c` continues the Agent's most recently active conversation (automated Cron, Channel, Sub-Agent, and reflection Sessions are skipped), and `--session` continues a specific one. The message comes from the argument or, when it is `-` or omitted, from piped stdin. `--model`, `--thinking-effort`, and `--temperature` are saved on the Session and also apply to its later messages; omitting them keeps what the Session already has.
+
+The answer goes to stdout. Tool calls, Tool errors, and retries appear on stderr in a terminal (or with `--output human`), followed by the Session id, Model, and a command to continue. `--json` prints one object with the answer, Tool calls, Usage, and ids instead. A Built-in Command such as `/status` prints its reply. The exit code is 0 for a completed Run or handled command and 1 for a failed or cancelled Run; when the Session is busy, the message is queued, the command exits 1 and names the queue item without waiting. Ctrl-C cancels the Run and exits 130.
+
 ## Skills, Tools, and Sub-Agents
 
 Skills are instruction packages loaded from bundled resources, `<data-dir>/skills`, the active Project's Source Format directory, trusted Extensions, and an Identity Agent's private `skills/` directory. The effective catalog also respects Agent and Project allowlists and Skill requirements.
@@ -1134,6 +1149,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` and 
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent reorder`, `agent delete` |
 | Projects | `project add`, `project list`, `project show`, `project set`, `project override set`, `project override clear`, `project detect`, `project remove` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
+| Chat | `chat [<prompt>] [--agent ...] [-c \| --session ...] [--model ...] [--thinking-effort ...] [--temperature ...] [--json]` |
 | Data store | `data-store status`, `data-store snapshot list|create|verify|restore`, `data-store incident acknowledge`, `data-store unregister` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel whatsapp setup/status/pair`, `channel remove` |
 | Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill install`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill file write`, `skill file remove` |

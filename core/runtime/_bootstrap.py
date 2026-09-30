@@ -431,6 +431,7 @@ def bootstrap(runtime: Runtime) -> None:
             lambda: _global_agent_defaults(runtime._storage),
             project_skill_names=runtime.project_skill_names,
             temporary_agents=runtime._temporary_agents,
+            sessions=runtime._chat_sessions,
         )
         runtime._agents.ensure_bootstrap()
         runtime._recall = RecallIntegration(

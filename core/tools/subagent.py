@@ -101,13 +101,17 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
         "model": {
             "type": "string",
             "description": (
-                "Model for this run only, as <provider>/<model-id>. Omit to use the Agent's model."
+                "Model for this Sub-Agent Session, as <provider>/<model-id>. Omit on a new "
+                "Session to use the Agent's model."
             ),
         },
         "thinking_effort": {
             "type": "string",
             "enum": sorted(e for e in ALLOWED_THINKING_EFFORTS if e),
-            "description": "Thinking effort for this run only. Omit to use the Agent's setting.",
+            "description": (
+                "Thinking effort for this Sub-Agent Session. Omit on a new Session to use the "
+                "Agent's setting."
+            ),
         },
         "id": {
             "type": "string",

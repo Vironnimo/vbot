@@ -1,5 +1,5 @@
 """Model resolution in Chat Runs: the Provider Connection and Model a Run's requests use, how
-invalid Model bindings fail, Run overrides and the sampling parameters sent."""
+invalid Model bindings fail, Session Agent overrides and the sampling parameters sent."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 
 from core.chat import ChatError
-from core.projects import AgentRunOverrides
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -115,41 +114,50 @@ async def test_invalid_model_binding_fails_before_any_session_or_request(
 
 
 @pytest.mark.asyncio
-async def test_run_executor_applies_overrides_to_only_its_admitted_run(tmp_path: Path) -> None:
+async def test_session_agent_overrides_apply_to_every_run_of_only_that_session(
+    tmp_path: Path,
+) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
         thinking_effort="low",
+        temperature=0.1,
         allowed_tools=["*"],
     )
     adapter = StubAdapter(
         [
             {"content": "Overridden", "tool_calls": None},
+            {"content": "Overridden again", "tool_calls": None},
             {"content": "Configured", "tool_calls": None},
         ]
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = build_chat_loop(runtime)
-    executor = loop.run_executor(
-        "First",
-        agent_overrides=AgentRunOverrides(
-            model="openai/gpt-mini",
-            thinking_effort="high",
-        ),
-    )
-
-    run = await runtime.chat_run_manager.start(
+    runtime.agent_resolver.update_session_overrides(
         session_address("coder", "session-one"),
-        executor,
+        {"model": "openai/gpt-mini", "thinking_effort": "high", "temperature": 0.7},
+    )
+    loop = build_chat_loop(runtime)
+
+    await loop.send("coder", "First", session_id="session-one")
+    run = await runtime.chat_run_manager.start(
+        session_address("coder", "session-one"), loop.run_executor("Second")
     )
     await run.wait()
-    await loop.send("coder", "Second", session_id="session-one")
+    await loop.send("coder", "Elsewhere", session_id="session-two")
 
-    assert adapter.requests[0]["model_id"] == "gpt-mini"
-    assert adapter.requests[0]["kwargs"]["thinking_effort"] == "high"
-    assert adapter.requests[1]["model_id"] == "gpt-5.2"
-    assert adapter.requests[1]["kwargs"]["thinking_effort"] == "low"
+    overridden = [
+        (
+            request["model_id"],
+            request["kwargs"]["thinking_effort"],
+            request["kwargs"]["temperature"],
+        )
+        for request in adapter.requests
+    ]
+    assert overridden == [
+        ("gpt-mini", "high", 0.7),
+        ("gpt-mini", "high", 0.7),
+        ("gpt-5.2", "low", 0.1),
+    ]
 
 
 @pytest.mark.asyncio

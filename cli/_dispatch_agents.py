@@ -1,4 +1,4 @@
-"""CLI argument translation for Agents, Projects, and Sessions."""
+"""CLI argument translation for Agents, Projects, Sessions, and chat."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ import argparse
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from cli._input import _read_stdin_utf8
 from cli.agent_management import agent_reorder
+from cli.chat_management import ChatRequest, chat
 from cli.data_store_management import (
     data_store_incident_acknowledge,
     data_store_snapshot_create,
@@ -294,6 +296,35 @@ def dispatch_session_command(
     if args.command == "link-channel":
         return link_session_fn(instance, args.agent, args.session, args.channel, args.conversation)
     raise ValueError(f"Unsupported session command: {args.command}")
+
+
+def dispatch_chat_command(args: argparse.Namespace, instance: ServerInstance) -> CommandResult:
+    """Send one message to an Agent Session and follow the Run it starts."""
+    prompt = _read_stdin_utf8() if args.prompt in {None, "-"} else args.prompt
+    if not prompt.strip():
+        return CommandResult(
+            ok=False,
+            message="chat needs a non-empty message as <prompt> or on stdin",
+            instance=instance,
+        )
+    overrides: dict[str, Any] = {}
+    if args.model is not None:
+        overrides["model"] = args.model
+    if args.thinking_effort is not None:
+        overrides["thinking_effort"] = args.thinking_effort
+    if args.temperature is not None:
+        overrides["temperature"] = args.temperature
+    return chat(
+        instance,
+        ChatRequest(
+            agent=args.agent,
+            prompt=prompt,
+            session_id=args.session,
+            continue_latest=args.continue_latest,
+            overrides=overrides,
+            json_output=args.json,
+        ),
+    )
 
 
 def dispatch_data_store_command(

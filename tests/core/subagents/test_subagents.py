@@ -17,7 +17,6 @@ import pytest
 
 from core.projects import (
     AgentResolutionError,
-    ModelConfigurationError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
@@ -281,11 +280,6 @@ async def test_generic_name_selects_an_agent_with_exactly_that_id(
     ("error", "code", "message"),
     [
         (
-            ModelConfigurationError("model is not usable in this instance"),
-            "invalid_arguments",
-            "model is not usable in this instance",
-        ),
-        (
             AgentResolutionError("agent 'stranded' has no usable model"),
             "agent_unavailable",
             "agent 'stranded' has no usable model",
@@ -303,10 +297,7 @@ async def test_target_that_cannot_run_fails_before_session_work(
 ) -> None:
     harness.runtime.agent_resolver = RaisingResolver(error)
 
-    result = await harness.call(
-        {"content": "spawn", "agent_id": "stranded", "model": "openai/ghost-model"},
-        project_id="acme",
-    )
+    result = await harness.call({"content": "spawn", "agent_id": "stranded"}, project_id="acme")
 
     assert result["error"]["code"] == code
     assert message in result["error"]["message"]
@@ -530,28 +521,67 @@ async def test_session_started_events_precede_the_foreground_result(
     assert (result["data"]["id"], result["data"]["delivery"]) == (work_id, "inline")
 
 
-async def test_run_local_overrides_reach_resolution_and_the_child_loop(
+async def test_model_and_thinking_effort_become_the_child_sessions_overrides(
     harness: SubAgentHarness,
 ) -> None:
-    await harness.spawn({"content": "do work", "model": "openai/gpt-mini", "thinking_effort": ""})
-    await harness.spawn(
-        {"content": "more work", "model": "openai/gpt-mini", "thinking_effort": "none"}
+    first = await harness.spawn(
+        {
+            "content": "do work",
+            "agent_id": "worker",
+            "model": "openai/gpt-mini",
+            "thinking_effort": "none",
+        }
     )
-    await harness.spawn(
-        {"content": "deep work", "model": "openai/gpt-mini", "thinking_effort": "high"}
-    )
+    session_id = first["session_id"]
+    stored = [harness.stored_overrides("worker", session_id)]
+    for arguments in (
+        # A continuation without them keeps them, so its Run uses the same Model.
+        {},
+        # A new value replaces only its own field; an empty effort counts as omitted.
+        {"model": "openai/gpt-5", "thinking_effort": ""},
+    ):
+        (await harness.started(len(stored)))[-1].run.mark_completed(done())
+        await harness.settle()
+        await harness.spawn(
+            {"content": "go on", "agent_id": "worker", "session_id": session_id, **arguments}
+        )
+        stored.append(harness.stored_overrides("worker", session_id))
 
-    efforts = [
-        harness.loop.tasks[task].overrides.thinking_effort
-        for task in ("do work", "more work", "deep work")
+    assert stored == [
+        {"model": "openai/gpt-mini", "thinking_effort": "none"},
+        {"model": "openai/gpt-mini", "thinking_effort": "none"},
+        {"model": "openai/gpt-5", "thinking_effort": "none"},
     ]
-    assert efforts == [None, "none", "high"]
-    assert all(
-        harness.loop.tasks[task].overrides.model == "openai/gpt-mini"
-        for task in ("do work", "more work", "deep work")
+    # Every child Run resolves its Agent as its Session runs it.
+    session_resolutions = [call for call in harness.runtime.agent_resolver.calls if call[2]]
+    assert session_resolutions == [(None, "worker", session_id)] * 3
+
+
+async def test_unusable_model_is_refused_before_any_session_work(
+    harness: SubAgentHarness,
+) -> None:
+    harness.runtime.agent_resolver.models.unusable.add("openai/ghost-model")
+    kept = await harness.spawn(
+        {"content": "first", "agent_id": "worker", "model": "openai/gpt-mini"}
     )
-    # Target validation resolves the Agent with the same overrides the child Run uses.
-    assert harness.runtime.agent_resolver.calls[0][2] == harness.loop.tasks["do work"].overrides
+    [first] = await harness.started()
+    first.run.mark_completed(done())
+    await harness.settle()
+    ghost: JsonObject = {
+        "agent_id": "worker",
+        "model": "openai/ghost-model",
+        "thinking_effort": "high",
+    }
+
+    new = await harness.call({"content": "new", **ghost})
+    continued = await harness.call({"content": "go on", "session_id": kept["session_id"], **ghost})
+
+    for result in (new, continued):
+        assert result["error"]["code"] == "invalid_arguments"
+        assert "openai/ghost-model" in result["error"]["message"]
+    assert [session.id for session in harness.sessions.list("worker")] == [kept["session_id"]]
+    assert harness.stored_overrides("worker", kept["session_id"]) == {"model": "openai/gpt-mini"}
+    assert len(harness.manager.started) == 1
 
 
 async def test_execution_owner_is_inherited_without_session_grants(

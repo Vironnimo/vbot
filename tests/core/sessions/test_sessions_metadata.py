@@ -89,6 +89,7 @@ def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> 
             "project_id": None,
         },
         "compaction_policy": {"enabled": False},
+        "agent_overrides": {"model": "openai/gpt-mini", "thinking_effort": "high"},
         "extension_state": "x" * 100_000,
     }
 
@@ -100,7 +101,8 @@ def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> 
         connection.row_factory = sqlite3.Row
         row = connection.execute(
             "SELECT session_key, metadata_json, title, subagent_parent_session_id, "
-            "subagent_parent_tool_call_index, compaction_policy_json FROM sessions "
+            "subagent_parent_tool_call_index, compaction_policy_json, agent_overrides_json "
+            "FROM sessions "
             "WHERE agent_id = ? AND session_id = ?",
             (address.agent_id, address.session_id),
         ).fetchone()
@@ -114,6 +116,10 @@ def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> 
     assert row["subagent_parent_session_id"] == "root"
     assert row["subagent_parent_tool_call_index"] == 1
     assert json.loads(row["compaction_policy_json"]) == {"enabled": False}
+    assert json.loads(row["agent_overrides_json"]) == {
+        "model": "openai/gpt-mini",
+        "thinking_effort": "high",
+    }
     assert [tuple(kind) for kind in run_kinds] == [("subagent",)]
 
 

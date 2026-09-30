@@ -1,6 +1,6 @@
 # Agents, Projects, Sessions
 
-Address form: a bare id (`assistant`) targets an identity agent; `agent@project` (e.g. `orchestrator@vbot`) targets a project agent. Accepted by `session list|create|delete`, `cron create|update`, and `prompt preview`.
+Address form: a bare id (`assistant`) targets an identity agent; `agent@project` (e.g. `orchestrator@vbot`) targets a project agent. Accepted by `session list|create|delete`, `cron create|update`, `chat --agent`, and `prompt preview`.
 
 ## Agents
 

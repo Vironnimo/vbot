@@ -1,4 +1,5 @@
-"""Session RPCs: create, list, get, activity, read marks, rename, Policy and Channel links.
+"""Session RPCs: create, list, get, activity, read marks, rename, Policy, Agent overrides and
+Channel links.
 
 Fork and delete live in ``test_session_methods_fork.py`` and
 ``test_session_methods_delete.py``. Tests on ``stub_session_state`` check what the
@@ -114,6 +115,39 @@ def _assert_store_untouched(sessions: FakeSessions) -> None:
             },
             "",
         ),
+        ("session.create", {"agent_id": "builder", "agent_overrides": {"speed": 1}}, "speed"),
+        # A new Session has nothing to clear.
+        ("session.create", {"agent_id": "builder", "agent_overrides": {"model": None}}, "null"),
+        (
+            "session.create",
+            {"agent_id": "builder", "agent_overrides": {"thinking_effort": "extreme"}},
+            "thinking_effort",
+        ),
+        (
+            "session.set_agent_overrides",
+            {"agent_id": "builder", "session_id": "s1", "agent_overrides": {}},
+            "at least one",
+        ),
+        (
+            "session.set_agent_overrides",
+            {"agent_id": "builder", "session_id": "s1", "agent_overrides": {"speed": 1}},
+            "speed",
+        ),
+        (
+            "session.set_agent_overrides",
+            {"agent_id": "builder", "session_id": "s1", "agent_overrides": {"temperature": "hot"}},
+            "temperature",
+        ),
+        (
+            "session.set_agent_overrides",
+            {
+                "agent_id": "builder",
+                "session_id": "s1",
+                "agent_overrides": {"model": "openai/gpt-mini"},
+                "bogus": 1,
+            },
+            "bogus",
+        ),
     ],
 )
 async def test_malformed_session_requests_are_rejected_before_the_store(
@@ -181,6 +215,41 @@ async def test_session_create_stores_an_explicit_id_and_makes_it_current(tmp_pat
     address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
     assert state.runtime.chat_sessions.get(address).id == "session-one"
     assert state.runtime.agents.get("coder").current_session_id == "session-one"
+
+
+@pytest.mark.asyncio
+async def test_session_create_stores_its_agent_overrides(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agent_resolver.models.unusable.add("openai/ghost")
+    sessions = state.runtime.chat_sessions
+    overrides = {"model": "openai/gpt-mini", "thinking_effort": "high", "temperature": 0.4}
+
+    refused = await rpc_error(
+        state,
+        "session.create",
+        agent_id="coder",
+        session_id="ghost",
+        agent_overrides={"model": "openai/ghost"},
+    )
+    result = await rpc_result(
+        state,
+        "session.create",
+        agent_id="coder",
+        session_id="session-one",
+        agent_overrides=overrides,
+    )
+
+    # A Model that cannot run fails before the Session exists.
+    assert refused["code"] == "invalid_request"
+    assert "openai/ghost" in refused["message"]
+    assert not sessions.exists(SessionAddress(None, "coder", "ghost"))
+    assert result == {
+        "agent_id": "coder",
+        "session_id": "session-one",
+        "agent_overrides": overrides,
+    }
+    address = SessionAddress(None, "coder", "session-one")
+    assert sessions.metadata_value(address, "agent_overrides") == overrides
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +551,7 @@ async def test_session_rename_sets_or_clears_the_title(
 
 
 # ---------------------------------------------------------------------------
-# session.set_compaction_policy / session.link_channel
+# session.set_compaction_policy / session.set_agent_overrides / session.link_channel
 # ---------------------------------------------------------------------------
 
 
@@ -524,6 +593,48 @@ async def test_session_policy_resolution_failure_does_not_persist_override(
 
     assert "missing Agent" in error["message"]
     assert sessions.saved_metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_session_agent_overrides_change_only_the_fields_named(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agent_resolver.models.unusable.add("openai/ghost")
+    sessions = state.runtime.chat_sessions
+    session = {"agent_id": "coder", "session_id": "session-one"}
+    address = SessionAddress(None, "coder", "session-one")
+    await rpc_result(
+        state,
+        "session.create",
+        **session,
+        agent_overrides={"model": "openai/gpt-mini", "thinking_effort": "high"},
+    )
+
+    refused = await rpc_error(
+        state, "session.set_agent_overrides", **session, agent_overrides={"model": "openai/ghost"}
+    )
+    result = await rpc_result(
+        state,
+        "session.set_agent_overrides",
+        **session,
+        agent_overrides={"temperature": 0.4, "thinking_effort": None},
+    )
+
+    assert refused["code"] == "invalid_request"
+    # A value sets its field, null clears one, and fields left out keep their value.
+    assert result == {
+        **session,
+        "agent_overrides": {"model": "openai/gpt-mini", "temperature": 0.4},
+        "effective": {
+            "model": {"value": "openai/gpt-mini", "source": "session"},
+            "thinking_effort": {"value": "", "source": "agent"},
+            "temperature": {"value": 0.4, "source": "session"},
+        },
+    }
+    assert sessions.metadata_value(address, "agent_overrides") == result["agent_overrides"]
+    assert resource_changes(state, "sessions")[-1]["scope"] == {
+        "project_id": None,
+        **session,
+    }
 
 
 @pytest.mark.asyncio

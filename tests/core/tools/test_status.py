@@ -93,18 +93,27 @@ class _StubResolver:
 
     def __init__(self, agent: Agent) -> None:
         self._agent = agent
-        self.calls: list[tuple[str | None, str]] = []
+        self.calls: list[tuple[str | None, str, str | None]] = []
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> Agent:
-        self.calls.append((project_id, agent_id))
+    def resolve_agent(
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> Agent:
+        self.calls.append((project_id, agent_id, session_id))
         return self._agent
+
+    async def resolve_agent_async(
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> Agent:
+        return self.resolve_agent(project_id, agent_id, session_id=session_id)
 
 
 class _RaisingResolver:
     def __init__(self, error: AgentResolutionError) -> None:
         self._error = error
 
-    def resolve_agent(self, _project_id: str | None, _agent_id: str) -> Agent:
+    def resolve_agent(
+        self, _project_id: str | None, _agent_id: str, *, session_id: str | None = None
+    ) -> Agent:
         raise self._error
 
 
@@ -268,7 +277,8 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
 
 
 def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_path: Path) -> None:
-    # A project run: the resolver and the Session lookup receive the Project, and the Model
+    # A project run: the resolver and the Session lookup receive the Project and the Session
+    # (whose Agent overrides the report must reflect), and the Model
     # registry, the Project store and the reasoning describer each feed their report line.
     resolver = _StubResolver(_make_agent(thinking_effort="xhigh", temperature=None))
     sessions = _StubSessions([])
@@ -289,7 +299,7 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
     result = _dispatch(registry, tmp_path, project_id="vbot")
 
     text = result["data"]["text"]
-    assert resolver.calls == [("vbot", "coder")]
+    assert resolver.calls == [("vbot", "coder", "session-one")]
     assert sessions.calls == [("coder", "session-one", "vbot")]
     assert described == [("openai", "gpt-5.2", "xhigh")]
     for line in (

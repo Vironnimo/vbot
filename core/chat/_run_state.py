@@ -72,7 +72,7 @@ if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
     from core.extensions import ExtensionRegistry
     from core.models.models import ModelRegistry
-    from core.projects import AgentResolver, AgentRunOverrides, Project, ProjectStore
+    from core.projects import AgentResolver, Project, ProjectStore
     from core.prompts import SystemPromptManager
     from core.providers.adapter import ProviderAdapter
     from core.providers.providers import ProviderRegistry
@@ -166,7 +166,6 @@ class _RunRequest:
     tool_restriction: tuple[str, ...] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = None
     input_persisted_hook: Callable[[], None] | None = None
-    agent_overrides: AgentRunOverrides | None = None
     resume_process_restart: bool = False
     edit_message_id: str | None = None
     temporary_binding: TemporarySessionBinding | None = None
@@ -183,7 +182,6 @@ class _RunRequest:
             and self.tool_restriction is None
             and self.tool_denial_resolver is None
             and self.input_persisted_hook is None
-            and self.agent_overrides is None
             and self.temporary_binding is None
             and self.temporary_parent_binding is None
             and not self.input_already_persisted
@@ -604,7 +602,9 @@ async def create_run_execution_context(
                 "Ask the user to resume it through its Extension."
             )
         agent = await dependencies.agent_resolver.resolve_temporary_agent_async(
-            temporary_binding.address, generation_id=temporary_binding.generation_id
+            temporary_binding.address,
+            generation_id=temporary_binding.generation_id,
+            session=temporary_binding.address,
         )
     elif request.temporary_parent_binding is not None:
         parent = request.temporary_parent_binding
@@ -625,15 +625,13 @@ async def create_run_execution_context(
         agent = await dependencies.agent_resolver.resolve_temporary_agent_async(
             parent.address,
             generation_id=parent.generation_id,
-            run_overrides=request.agent_overrides,
+            session=SessionAddress(
+                project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
+            ),
         )
-    elif request.agent_overrides is None:
-        agent = await dependencies.agent_resolver.resolve_agent_async(project_id, run.agent_id)
     else:
         agent = await dependencies.agent_resolver.resolve_agent_async(
-            project_id,
-            run.agent_id,
-            run_overrides=request.agent_overrides,
+            project_id, run.agent_id, session_id=run.session_id
         )
     provider_id, connection_id = _resolve_agent_connection(dependencies, agent)
     _ensure_provider_exists(dependencies.providers, provider_id)

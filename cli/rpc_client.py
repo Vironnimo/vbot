@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, Literal
 
 import httpx
@@ -29,6 +30,9 @@ _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
     }
 )
 RPC_LONG_RUNNING_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
+# A Run's SSE stream sends a heartbeat after 10 quiet seconds; six missed
+# heartbeats mean the connection is gone, not that a Tool call is slow.
+RUN_EVENTS_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=60.0)
 
 _PROGRESS_PHASES = {
     "skill.install": "Preparing and validating the Skill package",
@@ -159,6 +163,68 @@ def _transport_failure(
             f"request_state: {request_state}\n{recovery}"
         ),
     )
+
+
+class RunEventStreamError(Exception):
+    """A Run's event stream could not be opened or read; the Run itself may continue."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def stream_run_events(
+    instance: ServerInstance, sse_path: str, *, after_sequence: int = 0
+) -> Iterator[dict[str, Any]]:
+    """Yield one Run's timeline events after ``after_sequence`` from its SSE stream.
+
+    ``sse_path`` is the server-relative ``sse_url`` a ``chat.stream`` result names.
+    Transport heartbeats are skipped. The iteration ends when the server closes the
+    stream, normally right after the terminal event; a lagging subscriber can be
+    closed earlier and reconnects with the last sequence it received.
+    """
+    try:
+        with httpx.stream(
+            "GET",
+            f"{instance.url}{sse_path}",
+            params={"after_sequence": after_sequence},
+            timeout=RUN_EVENTS_TIMEOUT,
+            # Same hardening as rpc_call: never route through ambient proxies.
+            trust_env=False,
+        ) as response:
+            if response.status_code != httpx.codes.OK:
+                raise RunEventStreamError(
+                    f"Run event stream unavailable (HTTP {response.status_code})",
+                    status_code=response.status_code,
+                )
+            yield from _server_sent_events(response.iter_lines())
+    except httpx.RequestError as exc:
+        raise RunEventStreamError(f"Run event stream failed: {exc.__class__.__name__}") from exc
+
+
+def _server_sent_events(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
+    """Decode SSE frames whose data is one JSON object; skip heartbeats and comments."""
+    name = ""
+    data: list[str] = []
+    for line in lines:
+        if not line:
+            if data and name != "heartbeat":
+                try:
+                    event = json.loads("\n".join(data))
+                except ValueError as exc:
+                    raise RunEventStreamError("Run event stream sent malformed JSON") from exc
+                if isinstance(event, dict):
+                    yield event
+            name, data = "", []
+            continue
+        if line.startswith(":"):
+            continue
+        field, _separator, value = line.partition(":")
+        value = value.removeprefix(" ")
+        if field == "event":
+            name = value
+        elif field == "data":
+            data.append(value)
 
 
 def _rpc_error_message(error: object, *, fallback: str) -> str:

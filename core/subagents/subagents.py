@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, cast
 from core.chat import ChatSessionError
 from core.projects import (
     AgentResolutionError,
-    AgentRunOverrides,
     InvalidAgentAddressError,
     ModelConfigurationError,
     ResolutionAgentNotFoundError,
@@ -106,6 +105,7 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat import ChatLoop
+    from core.projects import RuntimeAgent
     from core.runtime.interfaces import RuntimeServices
     from core.sessions.session import ChatSession
 
@@ -265,7 +265,7 @@ async def _handle_subagent(
             target_agent_id, target_project_id = _resolve_target_address(
                 run_target.agent_address or context.agent_id, context.project_id
             )
-        run_overrides = _parse_agent_run_overrides(arguments)
+        session_overrides = _parse_session_overrides(arguments)
     except (ToolArgumentError, InvalidAgentAddressError, SettingsValidationError) as error:
         return tool_failure("invalid_arguments", str(error))
     notes = run_target.notes
@@ -322,7 +322,7 @@ async def _handle_subagent(
         runtime,
         target_agent_id,
         target_project_id,
-        run_overrides=run_overrides,
+        model=session_overrides.get("model"),
         temporary_parent_binding=temporary_parent,
     )
     if validation_error is not None:
@@ -374,6 +374,7 @@ async def _handle_subagent(
                 title,
                 work_id,
                 context,
+                session_overrides,
             )
         except ChatSessionError:
             if session_id is None or not reads_as_new_session(session_id):
@@ -401,6 +402,7 @@ async def _handle_subagent(
                 title,
                 work_id,
                 context,
+                session_overrides,
             )
 
         activity = SubAgentActivity.create(
@@ -434,7 +436,6 @@ async def _handle_subagent(
                 session.id,
                 content,
                 context,
-                run_overrides,
                 work_id,
                 temporary_parent_binding=temporary_parent,
             )
@@ -449,19 +450,16 @@ async def _handle_subagent(
                 runtime,
                 content,
                 context,
-                run_overrides,
                 temporary_parent_binding=temporary_parent,
             )
-            target_agent = (
-                await runtime.agent_resolver.resolve_temporary_agent_async(
-                    temporary_parent.address,
-                    generation_id=temporary_parent.generation_id,
-                    run_overrides=run_overrides,
-                )
-                if temporary_parent is not None
-                else await runtime.agent_resolver.resolve_agent_async(
-                    target_project_id, target_agent_id
-                )
+            target_agent = await _resolve_child_agent(
+                runtime,
+                SessionAddress(
+                    project_id=target_project_id,
+                    agent_id=target_agent_id,
+                    session_id=session.id,
+                ),
+                temporary_parent,
             )
             item = await runtime.chat_run_manager.enqueue(
                 SessionAddress(
@@ -785,7 +783,6 @@ async def _start_subagent_run(
     session_id: str,
     content: str,
     context: ToolContext,
-    run_overrides: AgentRunOverrides | None,
     work_id: str,
     *,
     temporary_parent_binding: TemporarySessionBinding | None = None,
@@ -794,20 +791,12 @@ async def _start_subagent_run(
         runtime,
         content,
         context,
-        run_overrides,
         temporary_parent_binding=temporary_parent_binding,
     )
-    target_agent = (
-        await runtime.agent_resolver.resolve_temporary_agent_async(
-            temporary_parent_binding.address,
-            generation_id=temporary_parent_binding.generation_id,
-            run_overrides=run_overrides,
-        )
-        if temporary_parent_binding is not None
-        else await runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
-    )
+    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+    target_agent = await _resolve_child_agent(runtime, address, temporary_parent_binding)
     return await runtime.chat_run_manager.start(
-        SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
+        address,
         executor,
         admission=RunAdmission(
             working_project_id=resolve_working_project_id(project_id, target_agent),
@@ -819,11 +808,27 @@ async def _start_subagent_run(
     )
 
 
+async def _resolve_child_agent(
+    runtime: RuntimeServices,
+    address: SessionAddress,
+    temporary_parent_binding: TemporarySessionBinding | None,
+) -> RuntimeAgent:
+    """Resolve the target Agent as the child Session runs it."""
+    if temporary_parent_binding is not None:
+        return await runtime.agent_resolver.resolve_temporary_agent_async(
+            temporary_parent_binding.address,
+            generation_id=temporary_parent_binding.generation_id,
+            session=address,
+        )
+    return await runtime.agent_resolver.resolve_agent_async(
+        address.project_id, address.agent_id, session_id=address.session_id
+    )
+
+
 def _make_subagent_executor(
     runtime: RuntimeServices,
     content: str,
     context: ToolContext,
-    run_overrides: AgentRunOverrides | None = None,
     *,
     temporary_parent_binding: TemporarySessionBinding | None = None,
 ) -> tuple[ChatLoop, RunExecutor]:
@@ -839,13 +844,9 @@ def _make_subagent_executor(
     if temporary_parent_binding is not None:
         return sub_loop, sub_loop.run_executor(
             content,
-            agent_overrides=run_overrides,
             temporary_parent_binding=temporary_parent_binding,
         )
-    return sub_loop, sub_loop.run_executor(
-        content,
-        agent_overrides=run_overrides,
-    )
+    return sub_loop, sub_loop.run_executor(content)
 
 
 def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:
@@ -869,14 +870,14 @@ def _positive_int(value: Any, default: int) -> int:
     return default
 
 
-def _parse_agent_run_overrides(arguments: JsonObject) -> AgentRunOverrides | None:
-    """Parse the Run-only override fields.
+def _parse_session_overrides(arguments: JsonObject) -> dict[str, str]:
+    """Parse the child Session's Agent overrides the call sets.
 
-    An empty ``thinking_effort`` string is the internal ``provider default``
-    sentinel used by the Agent configuration chain. As a Tool override it is
-    meaningless — omitting the field already inherits the target Agent's value —
-    so it is collapsed to ``None`` (no override) rather than treated as an
-    explicit request to clear the Agent's configured level.
+    An omitted field keeps the child Session's current value: the Agent's own
+    for a new Session, the stored override for a continued one. An empty
+    ``thinking_effort`` string is the internal ``provider default`` sentinel of
+    the Agent configuration chain; as a Tool value it is meaningless and counts
+    as omitted.
     """
     model = optional_string(arguments.get("model"), field_name="model")
     thinking_effort: str | None = None
@@ -891,11 +892,12 @@ def _parse_agent_run_overrides(arguments: JsonObject) -> AgentRunOverrides | Non
                     allow_none=False,
                 ),
             )
-    overrides = AgentRunOverrides(
-        model=model,
-        thinking_effort=thinking_effort,
-    )
-    return None if overrides.is_empty else overrides
+    overrides: dict[str, str] = {}
+    if model is not None:
+        overrides["model"] = model
+    if thinking_effort is not None:
+        overrides["thinking_effort"] = thinking_effort
+    return overrides
 
 
 async def _validate_target_agent(
@@ -903,7 +905,7 @@ async def _validate_target_agent(
     target_agent_id: str,
     project_id: str | None,
     *,
-    run_overrides: AgentRunOverrides | None = None,
+    model: str | None = None,
     temporary_parent_binding: TemporarySessionBinding | None = None,
 ) -> JsonObject | None:
     """Validate the spawn target resolves under its addressed project.
@@ -914,19 +916,19 @@ async def _validate_target_agent(
     envelope instead of escaping the tool boundary: only a missing Agent (unknown
     or off-Team) or Project reports ``agent_not_found`` / ``project_not_found``;
     a target that cannot run (for example, a model chain that fell through)
-    reports ``agent_unavailable`` with the resolver's reason.
+    reports ``agent_unavailable`` with the resolver's reason. A requested *model*
+    that cannot run reports ``invalid_arguments`` before any Session work.
     """
     try:
         if temporary_parent_binding is not None:
             await runtime.agent_resolver.resolve_temporary_agent_async(
                 temporary_parent_binding.address,
                 generation_id=temporary_parent_binding.generation_id,
-                run_overrides=run_overrides,
             )
         else:
-            await runtime.agent_resolver.resolve_agent_async(
-                project_id, target_agent_id, run_overrides=run_overrides
-            )
+            await runtime.agent_resolver.resolve_agent_async(project_id, target_agent_id)
+        if model is not None:
+            await runtime.agent_resolver.require_model_configured_async(model)
     except ResolutionProjectNotFoundError as error:
         return tool_failure("project_not_found", str(error))
     except ResolutionAgentNotFoundError as error:
@@ -952,11 +954,13 @@ def _open_subagent_session(
     title: str,
     work_id: str,
     context: ToolContext,
+    overrides: dict[str, str],
 ) -> ChatSession:
-    """Create or load the child Session and link it to its Parent. Blocking.
+    """Create or load the child Session, link it to its Parent and store *overrides*.
 
-    One unit of Session work on the Session database's pool, so a cancelled
-    Parent never leaves a created child Session without its Parent link.
+    Blocking. One unit of Session work on the Session database's pool, so a
+    cancelled Parent never leaves a created child Session without its Parent
+    link or the Agent overrides the call asked for.
     """
     sessions = runtime.chat_sessions
     if session_id is None:
@@ -971,6 +975,11 @@ def _open_subagent_session(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         )
     _mark_subagent_session(runtime, agent_id, project_id, session.id, work_id, context)
+    if overrides:
+        runtime.agent_resolver.update_session_overrides(
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
+            overrides,
+        )
     return session
 
 

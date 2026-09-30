@@ -12,7 +12,7 @@ from typing import Any
 
 from core.chat import ChatMessage
 from core.database import write_bootstrap_marker
-from core.projects import ResolutionAgentNotFoundError
+from core.projects import AgentOverrides, ResolutionAgentNotFoundError
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import TemporaryFileManager
@@ -55,6 +55,8 @@ class FirstUseFixture:
         self.seed_run: Any = None
         self.trusted_execution_files: dict[str, bytes] = {}
         self.release = asyncio.Event()
+        # Session Agent overrides the subagent Tool stores, keyed by Session address.
+        self.session_overrides: dict[SessionAddress, dict[str, Any]] = {}
         self.agents = {
             key: SimpleNamespace(
                 id=key, name=key, project=None, tools={"subagent": {"allowed_agents": ["reviewer"]}}
@@ -65,7 +67,10 @@ class FirstUseFixture:
             agents=SimpleNamespace(list=lambda: list(self.agents.values())),
             projects=SimpleNamespace(list=lambda: []),
             agent_resolver=SimpleNamespace(
-                resolve_agent=self.resolve_agent, resolve_agent_async=self.resolve_agent_async
+                resolve_agent=self.resolve_agent,
+                resolve_agent_async=self.resolve_agent_async,
+                require_model_configured_async=self.require_model_configured_async,
+                update_session_overrides=self.update_session_overrides,
             ),
             chat_sessions=self.sessions,
             chat_run_manager=self.runs,
@@ -122,22 +127,40 @@ class FirstUseFixture:
             if path.is_file() and path.name != "check-result.txt"
         }
 
-    def resolve_agent(self, project_id, agent_id, *, run_overrides=None):
+    def resolve_agent(self, project_id, agent_id, *, session_id=None):
+        # The fixture Agents carry no Model settings; each child Run records its
+        # Session's overrides instead.
         if project_id is not None or agent_id not in self.agents:
             raise ResolutionAgentNotFoundError(f"Agent not found: {agent_id}")
         return self.agents[agent_id]
 
-    async def resolve_agent_async(self, project_id, agent_id, *, run_overrides=None):
-        return self.resolve_agent(project_id, agent_id, run_overrides=run_overrides)
+    async def resolve_agent_async(self, project_id, agent_id, *, session_id=None):
+        return self.resolve_agent(project_id, agent_id, session_id=session_id)
+
+    async def require_model_configured_async(self, model):
+        del model  # Child Model execution is recorded, so every Model is accepted.
+
+    def update_session_overrides(self, address, changes):
+        stored = self.session_overrides.setdefault(address, {})
+        for name, value in changes.items():
+            if value is None:
+                stored.pop(name, None)
+            else:
+                stored[name] = value
+        return AgentOverrides.from_stored(stored or None)
 
     def child_loop(self, *, nesting_depth):
         fixture = self
 
-        def run_executor(content, *, agent_overrides=None):
+        def run_executor(content):
             started = asyncio.Event()
             fixture.started_events.append(started)
 
             async def execute(run):
+                address = SessionAddress(
+                    project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+                )
+                overrides = fixture.session_overrides.get(address, {})
                 fixture.received.append(
                     {
                         "agent_id": run.agent_id,
@@ -145,8 +168,8 @@ class FirstUseFixture:
                         "run_id": run.id,
                         "content": content,
                         "depth": nesting_depth,
-                        "model": getattr(agent_overrides, "model", None),
-                        "thinking_effort": getattr(agent_overrides, "thinking_effort", None),
+                        "model": overrides.get("model"),
+                        "thinking_effort": overrides.get("thinking_effort"),
                     }
                 )
                 started.set()
@@ -155,11 +178,7 @@ class FirstUseFixture:
                 message = ChatMessage.assistant(
                     model="fixture/child", content="Fixture review completed: CHECK-42."
                 )
-                session = fixture.sessions.get(
-                    SessionAddress(
-                        project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
-                    )
-                )
+                session = fixture.sessions.get(address)
                 # A real child Run and Session receive the delegation. Its Model's
                 # reasoning/review quality is deliberately outside this interface test.
                 session.append(message)

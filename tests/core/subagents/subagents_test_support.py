@@ -21,7 +21,12 @@ import pytest_asyncio
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.database import write_bootstrap_marker
-from core.projects import ResolutionAgentNotFoundError
+from core.projects import (
+    AgentOverrides,
+    AgentResolver,
+    ModelConfigurationError,
+    ResolutionAgentNotFoundError,
+)
 from core.runs import (
     DEFAULT_RUN_ADMISSION,
     ActiveRunError,
@@ -193,21 +198,55 @@ class FakeAgents:
         return [SimpleNamespace(id=agent_id, name=agent_id) for agent_id in sorted(self._agent_ids)]
 
 
-class FakeAgentResolver:
-    """Resolves every known Agent in any scope and records each request."""
+class FakeModelChecker:
+    """Every Model can run except those in ``unusable``."""
 
-    def __init__(self, agents: FakeAgents) -> None:
+    def __init__(self) -> None:
+        self.unusable: set[str] = set()
+
+    def require_configured(self, model: str) -> None:
+        if model in self.unusable:
+            raise ModelConfigurationError(f"model is not usable in this instance: {model}")
+
+
+class FakeAgentResolver:
+    """Resolves every known Agent in any scope and records each request.
+
+    Session Agent overrides are the real resolver's, stored in the harness's real
+    Sessions, and a resolution that names its Session applies them.
+    """
+
+    def __init__(self, agents: FakeAgents, sessions: ChatSessionManager) -> None:
         self._agents = agents
-        self.calls: list[tuple[str | None, str, Any | None]] = []
+        self.models = FakeModelChecker()
+        self._overrides = AgentResolver(
+            cast(Any, agents), cast(Any, None), cast(Any, self.models), dict, sessions=sessions
+        )
+        self.calls: list[tuple[str | None, str, str | None]] = []
 
     async def resolve_agent_async(
-        self, project_id: str | None, agent_id: str, *, run_overrides: Any | None = None
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
     ) -> SimpleNamespace:
-        self.calls.append((project_id, agent_id, run_overrides))
+        self.calls.append((project_id, agent_id, session_id))
         try:
-            return self._agents.get(agent_id)
+            agent = self._agents.get(agent_id)
         except AgentNotFoundError as error:
             raise ResolutionAgentNotFoundError(str(error)) from error
+        if session_id is None:
+            return agent
+        overrides = await self.session_overrides_async(address(agent_id, session_id, project_id))
+        return SimpleNamespace(**{**vars(agent), **overrides.as_dict()})
+
+    async def require_model_configured_async(self, model: str) -> None:
+        self.models.require_configured(model)
+
+    async def session_overrides_async(self, target: SessionAddress) -> AgentOverrides:
+        return await self._overrides.session_overrides_async(target)
+
+    def update_session_overrides(
+        self, target: SessionAddress, changes: dict[str, Any]
+    ) -> AgentOverrides:
+        return self._overrides.update_session_overrides(target, changes)
 
 
 class RaisingResolver:
@@ -215,12 +254,12 @@ class RaisingResolver:
 
     def __init__(self, error: BaseException) -> None:
         self.error = error
-        self.calls: list[tuple[str | None, str, Any | None]] = []
+        self.calls: list[tuple[str | None, str, str | None]] = []
 
     async def resolve_agent_async(
-        self, project_id: str | None, agent_id: str, *, run_overrides: Any | None = None
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
     ) -> Any:
-        self.calls.append((project_id, agent_id, run_overrides))
+        self.calls.append((project_id, agent_id, session_id))
         raise self.error
 
 
@@ -421,16 +460,14 @@ class FakeChatLoop:
 
     def __init__(self, *, nesting_depth: int = 0, tasks: dict[str, Any] | None = None) -> None:
         self.nesting_depth = nesting_depth
-        # Task text -> the nesting depth and Run-local overrides it was built with.
+        # Task text -> the nesting depth it was built with.
         self.tasks: dict[str, SimpleNamespace] = {} if tasks is None else tasks
 
     def child_loop(self, *, nesting_depth: int) -> FakeChatLoop:
         return FakeChatLoop(nesting_depth=nesting_depth, tasks=self.tasks)
 
-    def run_executor(self, content: str, *, agent_overrides: Any | None = None) -> Any:
-        self.tasks[content] = SimpleNamespace(
-            nesting_depth=self.nesting_depth, overrides=agent_overrides
-        )
+    def run_executor(self, content: str) -> Any:
+        self.tasks[content] = SimpleNamespace(nesting_depth=self.nesting_depth)
 
         async def execute(run: Run) -> ChatMessage:
             del run
@@ -449,8 +486,8 @@ class ExecutorLoop:
         del nesting_depth
         return self
 
-    def run_executor(self, content: str, *, agent_overrides: Any | None = None) -> Any:
-        del content, agent_overrides
+    def run_executor(self, content: str) -> Any:
+        del content
         return self._executor
 
 
@@ -493,11 +530,22 @@ class SubAgentHarness:
     def use_agents(self, agent_ids: set[str]) -> None:
         agents = FakeAgents(agent_ids)
         self.runtime.agents = agents
-        self.runtime.agent_resolver = FakeAgentResolver(agents)
+        self.runtime.agent_resolver = FakeAgentResolver(agents, self.sessions)
 
     @property
     def resolver_calls(self) -> list[tuple[str | None, str]]:
         return [call[:2] for call in self.runtime.agent_resolver.calls]
+
+    def stored_overrides(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> JsonObject | None:
+        """Return the Agent overrides one child Session stores in its metadata."""
+        return cast(
+            "JsonObject | None",
+            self.sessions.metadata_value(
+                address(agent_id, session_id, project_id), "agent_overrides"
+            ),
+        )
 
     async def call(
         self, arguments: JsonObject, context: ToolContext | None = None, **context_options: Any
