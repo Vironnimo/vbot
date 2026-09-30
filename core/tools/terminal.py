@@ -24,6 +24,7 @@ from core.tools.arguments import (
     required_string,
 )
 from core.tools.bash import get_shell_env
+from core.tools.contracts import ToolContractError
 from core.tools.terminal_backend import default_terminal_argv
 from core.tools.terminal_manager import (
     TERMINAL_DEFAULT_COLUMNS,
@@ -312,7 +313,7 @@ async def _handle_terminal(
             f"Interactive terminal executable was not found: {command}",
             retryable=False,
         )
-    except (OSError, ValueError) as error:
+    except ToolContractError as error:
         return tool_failure("invalid_arguments", str(error), retryable=False)
 
 
@@ -333,7 +334,7 @@ async def _handle_start(
             typing = json.dumps(
                 {"action": "input", "terminal_id": requested_id, "text": "...", "key": "enter"}
             )
-            raise ValueError(
+            raise ToolContractError(
                 f"start opens a new terminal and was not run. To type into {requested_id}, "
                 f"send {typing}; to start another terminal, omit terminal_id."
             )
@@ -344,7 +345,7 @@ async def _handle_start(
     environment = await get_shell_env()
     if raw_command in (None, ""):
         if args:
-            raise ValueError("args requires command to be set")
+            raise ToolContractError("args requires command to be set")
         argv = default_terminal_argv(environment)
     else:
         command = required_string(raw_command, field_name="command")
@@ -374,12 +375,15 @@ async def _handle_start(
     if text == "":
         text = None
     if text is not None and (not isinstance(text, str) or not text.strip()):
-        raise ValueError("text must be a non-empty string when provided")
+        raise ToolContractError("text must be a non-empty string when provided")
     raw_workdir = arguments.get("workdir")
     workdir_value = optional_string(raw_workdir, field_name="workdir")
     if raw_workdir == "":
         workdir_value = None
     workdir = _resolve_workdir(projects, context, workdir_value)
+    if not workdir.is_dir():
+        # Checked here, before a named group is created for the terminal.
+        raise ToolContractError(f"Terminal workdir is not a directory: {model_path(workdir)}")
     raw_name = arguments.get("name")
     name = optional_string(raw_name, field_name="name")
     if raw_name == "":
@@ -387,7 +391,7 @@ async def _handle_start(
     if name is not None:
         name = name.strip()
         if not name:
-            raise ValueError("name must not be blank")
+            raise ToolContractError("name must not be blank")
     owner = _owner(context)
     group_id = None
     raw_group = arguments.get("group")
@@ -395,7 +399,7 @@ async def _handle_start(
         raw_group = None
     if raw_group is not None:
         if not isinstance(raw_group, str) or not raw_group.strip():
-            raise ValueError("group must be a non-empty string")
+            raise ToolContractError("group must be a non-empty string")
         group_id = terminal_manager.resolve_or_create_agent_group(raw_group.strip()).group_id
     session = await terminal_manager.spawn(
         owner,
@@ -547,25 +551,25 @@ async def _handle_input(
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     raw_data = arguments.get("data")
     if raw_data is not None and not isinstance(raw_data, str):
-        raise ValueError("data must be a string")
+        raise ToolContractError("data must be a string")
     if raw_data == "":
         raw_data = None
     text = arguments.get("text")
     if text is not None and not isinstance(text, str):
-        raise ValueError("text must be a string")
+        raise ToolContractError("text must be a string")
     if text == "":
         text = None
     key = optional_string(arguments.get("key"), field_name="key")
     if key == "":
         key = None
     if raw_data is not None and (text is not None or key is not None):
-        raise ValueError(
+        raise ToolContractError(
             "data is sent exactly as given, so it cannot be combined with text or key; put the "
             'whole sequence in data (end it with "\\r" to press Enter), or send text and key '
             "without data."
         )
     if key is not None and key not in TERMINAL_KEYS:
-        raise ValueError(
+        raise ToolContractError(
             f'key "{key}" is not a named key. Named keys: {TERMINAL_KEY_SUMMARY}. Type other '
             "characters as text, or send exact sequences as data."
         )
@@ -867,9 +871,9 @@ def _optional_string_array(value: object, *, field_name: str) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"{field_name} must be an array of strings")
+        raise ToolContractError(f"{field_name} must be an array of strings")
     if any("\x00" in item for item in value):
-        raise ValueError(f"{field_name} must not contain NUL characters")
+        raise ToolContractError(f"{field_name} must not contain NUL characters")
     return list(value)
 
 
@@ -885,7 +889,7 @@ def _resolve_workdir(
 
     project_id = workdir_value.removeprefix(TERMINAL_PROJECT_WORKDIR_PREFIX)
     if not project_id:
-        raise ValueError(
+        raise ToolContractError(
             "workdir Project reference must use project:<project-id> with a non-empty id"
         )
     try:

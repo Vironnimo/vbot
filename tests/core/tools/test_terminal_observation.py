@@ -167,6 +167,35 @@ async def test_invalid_or_inapplicable_arguments_return_stable_failure(
     assert manager[1].calls == []
 
 
+@pytest.mark.asyncio
+async def test_a_failure_while_acting_reports_unknown_effects(
+    manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    terminal_manager, factory = manager
+    context = make_context(tmp_path)
+    started = await call(terminal_manager, context, {"action": "start", "command": "fake-tui"})
+    terminal_id = started["data"]["terminal_id"]
+
+    def fail(rows: int, columns: int) -> None:
+        raise OSError("resize ioctl failed")
+
+    monkeypatch.setattr(factory.adapters[0], "resize", fail)
+
+    result = await call(
+        terminal_manager,
+        context,
+        {"action": "resize", "terminal_id": terminal_id, "columns": 100, "rows": 30},
+    )
+
+    assert result["error"] == {
+        "code": "tool_execution_error",
+        "message": "terminal failed while running: resize ioctl failed. It is unknown how much "
+        "of the call took effect. Check the current state before you call terminal again.",
+    }
+
+
 async def _start_persisted(
     terminal_manager: TerminalManager, tmp_path: Path
 ) -> tuple[str, list[Callable[[], None]]]:

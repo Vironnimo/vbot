@@ -78,22 +78,37 @@ def test_buttons_reach_the_channel(
 
 
 @pytest.mark.parametrize(
-    ("error", "code"),
+    ("error", "code", "message"),
     [
-        (ChannelNotFoundError("Channel not active: tg-main"), "channel_not_found"),
-        (ChannelError("Telegram rejected the message"), "channel_error"),
+        (
+            ChannelNotFoundError("Channel not active: tg-main"),
+            "channel_not_found",
+            "Channel not active: tg-main",
+        ),
+        (
+            ChannelError("Telegram rejected the message"),
+            "channel_error",
+            "Telegram rejected the message",
+        ),
+        # Raised while sending, so the message may be out; not a refused argument.
+        (
+            ValueError("Invalid IPv6 URL"),
+            "tool_execution_error",
+            "channel_send failed while running: Invalid IPv6 URL. It is unknown how much of the "
+            "call took effect. Check the current state before you call channel_send again.",
+        ),
     ],
-    ids=["inactive-channel", "platform-rejection"],
+    ids=["inactive-channel", "platform-rejection", "failure-while-sending"],
 )
 def test_a_failed_delivery_is_a_failure_result(
-    tmp_path: Path, error: ChannelError, code: str
+    tmp_path: Path, error: Exception, code: str, message: str
 ) -> None:
     tool = channel_send(tmp_path)
     tool.service.send.side_effect = error
 
     envelope = tool.call({"message": "Task finished"})
 
-    assert refused(envelope, code) == str(error)
+    assert refused(envelope, code) == message
     tool.service.ensure_outbound_session.assert_not_awaited()
 
 

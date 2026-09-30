@@ -291,23 +291,36 @@ async def test_start_resolves_project_workdirs_by_stable_id_and_relative_workdir
 
 
 @pytest.mark.asyncio
-async def test_start_rejects_unresolvable_project_workdirs_before_spawn(
+async def test_start_rejects_unresolvable_workdirs_before_spawn(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     terminal_manager, factory = manager
     projects = ProjectStore(tmp_path / "data")
     projects.create("offline", "Offline", tmp_path / "missing-repo")
     context = make_context(tmp_path)
+    groups_before = terminal_manager.list_groups_for_operator()
 
-    codes = []
-    for workdir in ("project:missing", "project:offline", "project:"):
+    errors = []
+    for workdir in ("project:missing", "project:offline", "project:", "missing-dir"):
         result = await call(
-            terminal_manager, context, {"action": "start", "workdir": workdir}, projects
+            terminal_manager,
+            context,
+            {"action": "start", "workdir": workdir, "group": "build"},
+            projects,
         )
-        codes.append(cast(dict[str, Any], result["error"])["code"])
+        errors.append(cast(dict[str, Any], result["error"]))
 
-    assert codes == ["project_not_found", "project_unavailable", "invalid_arguments"]
+    assert [error["code"] for error in errors] == [
+        "project_not_found",
+        "project_unavailable",
+        "invalid_arguments",
+        "invalid_arguments",
+    ]
+    assert errors[3]["message"] == (
+        f"Terminal workdir is not a directory: {model_path(tmp_path / 'missing-dir')}"
+    )
     assert factory.calls == []
+    assert terminal_manager.list_groups_for_operator() == groups_before
 
 
 @pytest.mark.asyncio
