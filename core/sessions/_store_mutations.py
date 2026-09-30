@@ -499,17 +499,6 @@ def retarget_identity_agent_references(
     return tuple(updates)
 
 
-def restore_identity_agent_references(
-    connection: sqlite3.Connection, updates: tuple[SessionIdentityReferenceUpdate, ...]
-) -> None:
-    """Undo retargeted parent references that nothing changed since."""
-    for update in reversed(updates):
-        state = _store_values._require_live(connection, update.address)
-        if _store_values._subagent_parent_from_state(state) != update.updated_parent:
-            continue
-        _write_subagent_parent(connection, int(state["session_key"]), update.previous_parent)
-
-
 def _archive_scope(connection: sqlite3.Connection, where: str, params: tuple[Any, ...]) -> None:
     _store_values._reject_owner_managed_scope_mutation(connection, where, params)
     connection.execute(

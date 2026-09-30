@@ -236,15 +236,6 @@ class SessionStore:
             )
         )
 
-    def restore_identity_agent_references(
-        self, updates: tuple[SessionIdentityReferenceUpdate, ...]
-    ) -> None:
-        self._execute_write(
-            lambda connection: _store_mutations.restore_identity_agent_references(
-                connection, updates
-            )
-        )
-
     def archive_identity_agent_sessions(self, agent_id: str) -> None:
         return self._execute_write(
             lambda connection: _store_mutations.archive_identity_agent_sessions(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, replace
@@ -13,6 +14,7 @@ from core.agents._types import (
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
     Agent,
     AgentError,
+    AgentRename,
     InvalidAgentIdError,
     _AgentOrderDocument,
 )
@@ -123,8 +125,14 @@ _BASH_TOOL_SETTING_FIELDS = frozenset({BASH_ALLOWED_ENV_KEY})
 
 _AGENT_ORDER_FIELDS = frozenset({"agent_ids", "revision"})
 
+_AGENT_RENAME_FIELDS = frozenset({"source_id", "target_id", "staging_name", "rollback"})
+
+# The sibling directory a case-only rename passes through: ``.<id>.rename-<hex>.tmp``.
+_RENAME_STAGING_NAME = re.compile(r"\.[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.rename-[0-9a-f]{32}\.tmp")
+
 AGENT_FORMAT_VERSION = 1
 AGENT_ORDER_FORMAT_VERSION = 1
+AGENT_RENAME_FORMAT_VERSION = 1
 
 TOOL_ACCESS_SHAPE = json_object(TOOL_ACCESS_FIELDS)
 AGENT_SHAPE = json_document(
@@ -142,6 +150,7 @@ AGENT_SHAPE = json_document(
     },
 )
 AGENT_ORDER_SHAPE = json_document(_AGENT_ORDER_FIELDS)
+AGENT_RENAME_SHAPE = json_document(_AGENT_RENAME_FIELDS)
 
 
 def validate_agent_order_file(order_path: str | Path) -> JsonValidationReport:
@@ -178,6 +187,36 @@ def validate_agent_order_data(data: Any) -> list[JsonDiagnostic]:
             if agent_id in seen:
                 add_error(diagnostics, f"$.agent_ids[{index}]", "must be unique")
             seen.add(agent_id)
+    return diagnostics
+
+
+def validate_agent_rename_file(rename_path: str | Path) -> JsonValidationReport:
+    """Validate the optional pending Identity Agent rename record."""
+    return validate_json_file(rename_path, validate_agent_rename_data, missing_ok=True)
+
+
+def validate_agent_rename_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``agents/rename-pending.json`` document."""
+    diagnostics: list[JsonDiagnostic] = []
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    if not validate_format_version(diagnostics, data, AGENT_RENAME_FORMAT_VERSION):
+        return diagnostics
+
+    warn_unknown_keys(diagnostics, "$", data, AGENT_RENAME_SHAPE.fields, "agent rename field")
+    validate_required_fields(diagnostics, "$", data, frozenset({"source_id", "target_id"}))
+    for field_name in ("source_id", "target_id"):
+        if field_name in data and not is_valid_agent_id(data[field_name]):
+            add_error(diagnostics, f"$.{field_name}", "must be a valid Agent id")
+    if "source_id" in data and data.get("source_id") == data.get("target_id"):
+        add_error(diagnostics, "$.target_id", "must differ from source_id")
+    staging_name = data.get("staging_name")
+    if staging_name is not None and not (
+        isinstance(staging_name, str) and _RENAME_STAGING_NAME.fullmatch(staging_name)
+    ):
+        add_error(diagnostics, "$.staging_name", "must be null or a rename staging directory name")
+    if "rollback" in data and not isinstance(data["rollback"], bool):
+        add_error(diagnostics, "$.rollback", "must be a boolean")
     return diagnostics
 
 
@@ -582,6 +621,25 @@ def _agent_order_document(order: _AgentOrderDocument) -> JsonObject:
     return {"revision": order.revision, "agent_ids": list(order.agent_ids)}
 
 
+def _agent_rename_document(rename: AgentRename) -> JsonObject:
+    return {
+        "source_id": rename.source_id,
+        "target_id": rename.target_id,
+        "staging_name": rename.staging_name,
+        "rollback": rename.rollback,
+    }
+
+
+def _agent_rename_from_data(data: Mapping[str, Any]) -> AgentRename:
+    """Build the record from a document validated by ``validate_agent_rename_data``."""
+    return AgentRename(
+        source_id=data["source_id"],
+        target_id=data["target_id"],
+        staging_name=data.get("staging_name"),
+        rollback=bool(data.get("rollback", False)),
+    )
+
+
 AGENT_FORMAT = JsonDocumentFormat(
     name="Agent config",
     version=AGENT_FORMAT_VERSION,
@@ -593,6 +651,12 @@ AGENT_ORDER_FORMAT = JsonDocumentFormat(
     version=AGENT_ORDER_FORMAT_VERSION,
     shape=AGENT_ORDER_SHAPE,
     validate=validate_agent_order_data,
+)
+AGENT_RENAME_FORMAT = JsonDocumentFormat(
+    name="Agent rename",
+    version=AGENT_RENAME_FORMAT_VERSION,
+    shape=AGENT_RENAME_SHAPE,
+    validate=validate_agent_rename_data,
 )
 
 

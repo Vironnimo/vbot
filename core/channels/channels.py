@@ -512,6 +512,30 @@ class ChannelService:
             self._preflight_adapter_start(updated)
             await self._change_config(config, updated)
 
+    def retarget_agent(self, agent_id: str, new_agent_id: str) -> tuple[str, ...]:
+        """Point every Channel that answers as ``agent_id`` at ``new_agent_id``.
+
+        One step of an Identity Agent rename that completes during startup, before
+        this service starts adapters, so only ``channel.json`` changes. Once the
+        service runs, adapters hold their config and a rename changes each Channel
+        through :meth:`update_channel`. Returns the ids of the changed Channels.
+        """
+        if self._started:
+            raise ChannelError("Retarget running Channels through update_channel")
+        changed: list[str] = []
+        for config in self._storage.load_all():
+            if config.agent_id != agent_id:
+                continue
+            self._storage.save(replace(config, agent_id=new_agent_id))
+            changed.append(config.id)
+            _LOGGER.debug(
+                "Channel retargeted (channel=%s agent=%s new_agent=%s)",
+                config.id,
+                agent_id,
+                new_agent_id,
+            )
+        return tuple(changed)
+
     async def delete_channel(self, channel_id: str) -> None:
         """Delete one channel config and state, and stop any active adapter task.
 

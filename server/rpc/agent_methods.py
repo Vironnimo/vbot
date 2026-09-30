@@ -9,8 +9,6 @@ the Event Loop.
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any, TypeVar, cast
@@ -43,7 +41,6 @@ from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import (
     _agent_reference_ids,
     _agent_reference_lock,
-    _rename_agent_and_retarget_references,
     _subagents_reference_identity_agent,
 )
 from server.rpc.dispatcher import RpcMethodHandler
@@ -270,15 +267,7 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
                             f"Sub-Agent activity: {', '.join(busy_subagent_ids)}"
                         ),
                     )
-                result = await state.runtime.chat_sessions.run_async(
-                    _rename_agent_and_retarget_references,
-                    state,
-                    agent_id,
-                    new_agent_id,
-                    asyncio.get_running_loop(),
-                )
-                state.runtime.invalidate_agent_skills(agent_id)
-                state.runtime.invalidate_agent_skills(new_agent_id)
+                result = await state.runtime.rename_agent(agent_id, new_agent_id)
         except RunAdmissionBlockedError as exc:
             raise RpcError(
                 RPC_ERROR_AGENT_BUSY,
@@ -290,8 +279,6 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    await _remove_renamed_sessions_from_recall(state, agent_id, result.session_ids)
-
     response = _agent_response(state, result.agent)
     response["rename"] = {
         "old_id": agent_id,
@@ -300,7 +287,7 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
         "cron_jobs_updated": list(result.cron_job_ids),
         "bootstrap_jobs_updated": list(result.bootstrap_job_ids),
         "agent_policies_updated": list(result.policy_agent_ids),
-        "session_links_updated": result.session_reference_count,
+        "session_links_updated": result.session_link_count,
     }
     rename_scope = {"old_agent_id": agent_id, "new_agent_id": new_agent_id}
     publish_resource_changed(state, RESOURCE_KIND_AGENTS, scope=rename_scope)
@@ -309,43 +296,7 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
         publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
     if result.cron_job_ids:
         publish_resource_changed(state, RESOURCE_KIND_CRON)
-    _LOGGER.info(
-        "Agent renamed (agent=%s new_agent=%s sessions=%s channels=%s cron=%s "
-        "bootstrap=%s calendar_actions=%s policies=%s session_links=%s)",
-        agent_id,
-        new_agent_id,
-        len(result.session_ids),
-        len(result.channel_ids),
-        len(result.cron_job_ids),
-        len(result.bootstrap_job_ids),
-        result.calendar_action_count,
-        len(result.policy_agent_ids),
-        result.session_reference_count,
-    )
     return response
-
-
-async def _remove_renamed_sessions_from_recall(
-    state: Any,
-    old_agent_id: str,
-    session_ids: tuple[str, ...],
-) -> None:
-    """Best-effort cleanup of disposable old-address recall index rows."""
-    remove_session = getattr(state.runtime, "remove_session_from_recall", None)
-    if not callable(remove_session):
-        return
-    for session_id in session_ids:
-        try:
-            cleanup = remove_session(old_agent_id, session_id, None)
-            if inspect.isawaitable(cleanup):
-                await cleanup
-        except Exception as error:
-            _LOGGER.warning(
-                "Recall cleanup failed after Agent rename (agent=%s session=%s): %s",
-                old_agent_id,
-                session_id,
-                error,
-            )
 
 
 def _seed_agent_custom_prompt(state: Any, agent_id: str) -> None:

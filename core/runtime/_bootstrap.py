@@ -48,6 +48,7 @@ from core.providers.runtime import ProviderRuntime
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
 from core.runs import ChatRunManager
+from core.runtime._agent_rename import complete_pending_rename
 from core.runtime._configuration import (
     _SKILLS_DIRNAME,
     _VBOT_ROOT,
@@ -272,6 +273,10 @@ def bootstrap(runtime: Runtime) -> None:
             defaults_provider=lambda: storage.load_defaults().get("agent", {}),
             sessions=runtime._chat_sessions,
         )
+        # An Identity Agent rename interrupted by the last process ends before any
+        # roster read or bootstrap Agent: its Agent-owned half first, its references
+        # once their owners exist and before any of them starts.
+        pending_rename = runtime._agents.recover_rename()
         runtime._process_manager = ProcessManager(
             temporary_files=runtime._storage.temporary_files,
         )
@@ -583,9 +588,6 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._channel_service._notify_tool_registration_changed_hook = (
             runtime._reload_channel_tool_if_started
         )
-        if runtime.safe_startup_mode is None:
-            runtime._start_channel_service()
-        runtime._sync_channel_tool_registration()
         runtime._cron_service = CronService(
             runtime._trigger_service,
             runtime._storage.data_dir,
@@ -593,13 +595,17 @@ def bootstrap(runtime: Runtime) -> None:
             sessions=runtime._chat_sessions,
             tz=timezone_name,
         )
-        if runtime.safe_startup_mode is None:
-            runtime._start_cron_service()
         runtime._calendar_service = CalendarService(runtime._storage.data_dir, tz=timezone_name)
         runtime._calendar_service.actions.configure(
             runtime._trigger_service, runtime._agent_resolver, runtime._chat_sessions
         )
+        if pending_rename is not None:
+            complete_pending_rename(runtime._agent_rename_services(), pending_rename)
         if runtime.safe_startup_mode is None:
+            runtime._start_channel_service()
+        runtime._sync_channel_tool_registration()
+        if runtime.safe_startup_mode is None:
+            runtime._start_cron_service()
             runtime._start_calendar_service()
         register_cron_tool(runtime._tools, runtime._cron_service)
         register_calendar_tool(runtime._tools, runtime._calendar_service)

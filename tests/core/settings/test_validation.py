@@ -45,6 +45,20 @@ _VALID_PROJECT = {
             ("$.agent_ids[1]", ""),
             id="agent-order",
         ),
+        # The staging directory name never leaves the Agent directory.
+        pytest.param(
+            "agents/rename-pending.json",
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "source_id": "main",
+                    "target_id": "Main",
+                    "staging_name": "../escape",
+                }
+            ),
+            ("$.staging_name", ""),
+            id="agent-rename",
+        ),
         pytest.param(
             "bootstrap/jobs.json",
             '{"format_version": 1, "jobs": [{"mode": "sometimes"}]}',
@@ -102,6 +116,7 @@ _SPEECH_ARTIFACT_METADATA: dict[str, object] = {
 _DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
     "settings.json": ("{}", {}),
     "agents/order.json": ("{}", {"revision": 1, "agent_ids": []}),
+    "agents/rename-pending.json": ("{}", {"source_id": "main", "target_id": "renamed"}),
     "agents/main/prompts/layout.json": ("[]", {"entries": []}),
     "prompts/layout.json": ("[]", {"entries": []}),
     "cron/jobs.json": ("[]", {"jobs": []}),

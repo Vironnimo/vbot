@@ -15,7 +15,9 @@ from core.agents._types import (
     Agent,
     AgentAlreadyExistsError,
     AgentError,
+    AgentRename,
 )
+from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 
 WORKSPACE_TEMPLATE_FILES = ("SOUL.md",)
@@ -188,17 +190,26 @@ def relocate_workspace(
         raise
 
 
-def _move_agent_tree(source: Path, destination: Path) -> None:
-    """Move one Agent tree, including a Windows-safe case-only rename."""
-    if _paths_are_same_location(source, destination):
-        temporary = source.with_name(f".{source.name}.rename-{uuid.uuid4().hex}.tmp")
-        os.replace(source, temporary)
-        try:
-            os.replace(temporary, destination)
-        except Exception:
-            os.replace(temporary, source)
-            raise
-        return
-    if destination.exists():
-        raise AgentAlreadyExistsError(f"Agent already exists: {destination.name}")
-    os.replace(source, destination)
+def _move_renamed_tree(agents_dir: Path, rename: AgentRename) -> bool:
+    """Move one Agent tree to ``rename.target_id``; repeating the move converges.
+
+    A case-only rename passes through ``rename.staging_name`` so it also works on
+    case-insensitive filesystems, and an interrupted one resumes from there. Returns
+    whether the tree is at the target now; ``False`` when neither side exists.
+    """
+    target = agents_dir / rename.target_id
+    staging = agents_dir / rename.staging_name if rename.staging_name else None
+    if staging is not None and staging.is_dir():
+        os.replace(staging, target)
+        return True
+    if has_id_entry(agents_dir, rename.source_id):
+        source = agents_dir / rename.source_id
+        if staging is not None:
+            os.replace(source, staging)
+            os.replace(staging, target)
+            return True
+        if target.exists():
+            raise AgentAlreadyExistsError(f"Agent already exists: {rename.target_id}")
+        os.replace(source, target)
+        return True
+    return has_id_entry(agents_dir, rename.target_id)

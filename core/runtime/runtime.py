@@ -61,6 +61,11 @@ from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
 from core.recall import RecallBackend
 from core.runs import ChatRunManager
+from core.runtime._agent_rename import (
+    AgentRenameOutcome,
+    AgentRenameServices,
+    rename_identity_agent,
+)
 from core.runtime._bootstrap import RuntimeStartupSummary, bootstrap, start_event_loop_service
 from core.runtime._configuration import _resolve_data_dir, _resolve_resources_path
 from core.runtime._extension_host import ExtensionHostFactory
@@ -873,6 +878,59 @@ class Runtime:
     ) -> None:
         """Best-effort eviction of a deleted Session from the active Recall index."""
         await self._recall_operations().remove_session_from_recall(agent_id, session_id, project_id)
+
+    async def rename_agent(self, agent_id: str, new_agent_id: str) -> AgentRenameOutcome:
+        """Rename one Identity Agent and every reference to it as one recoverable change.
+
+        The Agent's tree, config, Sessions and Sub-Agent links move together with
+        the Channels, Cron and Bootstrap jobs, Calendar actions and delegation
+        allow-lists that name it. A failure reverts all of it; an interrupted
+        rename completes on the next start. The caller holds the Run admission
+        guards of both ids. Afterwards Skills of both ids are invalidated and the
+        active Recall index forgets the moved Sessions' old addresses.
+        """
+        self._ensure_started()
+        outcome = await rename_identity_agent(self._agent_rename_services(), agent_id, new_agent_id)
+        self.invalidate_agent_skills(agent_id)
+        self.invalidate_agent_skills(new_agent_id)
+        for session_id in outcome.session_ids:
+            try:
+                await self.remove_session_from_recall(agent_id, session_id, None)
+            except Exception as error:
+                if self.logger is not None:
+                    self.logger.warning(
+                        "Recall cleanup failed after Agent rename (agent=%s session=%s): %s",
+                        agent_id,
+                        session_id,
+                        error,
+                    )
+        return outcome
+
+    def _agent_rename_services(self) -> AgentRenameServices:
+        """The owners an Identity Agent rename changes, also while startup builds them."""
+        agents = self._agents
+        sessions = self._chat_sessions
+        channels = self._channel_service
+        cron = self._cron_service
+        bootstrap_jobs = self._bootstrap_service
+        calendar = self._calendar_service
+        if (
+            agents is None
+            or sessions is None
+            or channels is None
+            or cron is None
+            or bootstrap_jobs is None
+            or calendar is None
+        ):
+            raise RuntimeError("Agent rename services are not available")
+        return AgentRenameServices(
+            agents=agents,
+            sessions=sessions,
+            channels=channels,
+            cron=cron,
+            bootstrap=bootstrap_jobs,
+            calendar=calendar,
+        )
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
