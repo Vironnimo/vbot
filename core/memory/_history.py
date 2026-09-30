@@ -9,6 +9,10 @@ entries found when a scope's history starts, and ``external``, a change made to
 the file outside the Memory service (a file Tool, a shell, an editor), which is
 noticed on the next Memory operation and dated by the file's modification time.
 
+A line that is not a readable revision (a torn write, a hand edit) is skipped;
+an append after a last line without its newline starts a new line, so the
+fragment stays separate and the new revision stays readable.
+
 Callers hold the scope file's lock; the history file has its own lock, always
 taken last.
 """
@@ -240,16 +244,18 @@ class MemoryHistory:
         log = _Log(signature=signature)
         if signature is not None:
             try:
-                lines = path.read_text(encoding="utf-8").splitlines()
+                content = path.read_bytes()
             except OSError as exc:
                 from core.memory.memory import MemoryError
 
                 raise MemoryError(f"failed to read Memory history {path}: {exc}") from exc
             skipped = 0
-            for line in lines:
+            for line in content.split(b"\n"):
+                if not line.strip():
+                    continue
                 revision = _parse_revision(line)
                 if revision is None:
-                    skipped += bool(line.strip())
+                    skipped += 1
                     continue
                 log.revisions.append(revision)
                 _advance(log, revision)
@@ -294,9 +300,17 @@ class MemoryHistory:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        data = (line + "\n").encode("utf-8")
         try:
-            with path.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(line + "\n")
+            with path.open("a+b") as handle:
+                end = handle.seek(0, os.SEEK_END)
+                if end:
+                    handle.seek(end - 1)
+                    if handle.read(1) != b"\n":
+                        # A torn last line stays its own (skipped) line instead of
+                        # swallowing this revision.
+                        data = b"\n" + data
+                handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
         except OSError as exc:
@@ -474,46 +488,57 @@ def _modified_at(file: Path) -> str:
     return format_canonical_timestamp(moment)
 
 
-def _parse_revision(line: str) -> MemoryRevision | None:
+def _parse_revision(line: bytes) -> MemoryRevision | None:
+    """Return the revision one history line records, or ``None`` for any other line.
+
+    Bytes that are not UTF-8, text that is not JSON, another format version and
+    a missing or mistyped field all make a line unreadable; the history skips it.
+    """
     try:
-        data = json.loads(line)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict) or data.get("v") != _FORMAT_VERSION:
-        return None
-    try:
-        changes = tuple(_parse_change(item) for item in data.get("changes", []))
+        data = json.loads(line.decode("utf-8"))
+        if not isinstance(data, dict) or data.get("v") != _FORMAT_VERSION:
+            return None
         entries = data.get("entries")
-        reverts = data.get("reverts", [])
-        revision = MemoryRevision(
+        return MemoryRevision(
             id=_integer(data["id"]),
             at=_text(data["at"]),
-            scope=data["scope"],
-            kind=data["kind"],
+            scope=_member(data["scope"], _SCOPES),
+            kind=_member(data["kind"], _REVISION_KINDS),
             actor=_text(data["actor"]),
             state=_text(data["state"]),
-            changes=changes,
-            entries=tuple(_text(item) for item in entries) if entries is not None else None,
+            changes=tuple(_parse_change(item) for item in _array(data.get("changes", []))),
+            entries=None if entries is None else tuple(_text(item) for item in _array(entries)),
             session_id=_optional_text(data.get("session_id")),
             run_id=_optional_text(data.get("run_id")),
-            reverts=tuple(_integer(item) for item in reverts),
+            reverts=tuple(_integer(item) for item in _array(data.get("reverts", []))),
         )
-    except (KeyError, TypeError, ValueError):
+    # ValueError includes undecodable bytes and invalid JSON; RecursionError is
+    # deeply nested JSON.
+    except (KeyError, TypeError, ValueError, RecursionError):
         return None
-    if revision.scope not in _SCOPES or revision.kind not in _REVISION_KINDS:
-        return None
-    return revision
 
 
 def _parse_change(data: Any) -> MemoryChange:
-    if not isinstance(data, dict) or data.get("op") not in _CHANGE_OPS:
+    if not isinstance(data, dict):
         raise ValueError("malformed Memory change")
     return MemoryChange(
-        op=data["op"],
+        op=_member(data.get("op"), _CHANGE_OPS),
         text=_text(data["text"]),
         index=_integer(data["index"]),
         previous=_optional_text(data.get("previous")),
     )
+
+
+def _member(value: Any, allowed: frozenset[str]) -> Any:
+    if not isinstance(value, str) or value not in allowed:
+        raise ValueError("unexpected value")
+    return value
+
+
+def _array(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        raise ValueError("expected a list")
+    return value
 
 
 def _integer(value: Any) -> int:

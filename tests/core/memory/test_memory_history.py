@@ -1,12 +1,24 @@
 """Memory history: recorded revisions, external edits, past states and reverts."""
 
+import errno
 import json
+import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from core.memory import MemoryError, MemoryRevertError, MemoryService, MemoryWriter
+import core.memory.memory as memory_module
+from core.memory import (
+    MemoryError,
+    MemoryRevertError,
+    MemoryRevertIncompleteError,
+    MemoryService,
+    MemoryWriter,
+)
+from core.memory._history import MemoryHistory
 
 _TOOL = MemoryWriter(agent_id="coder", actor="tool", session_id="s-1", run_id="r-1")
 _RPC = MemoryWriter(agent_id="coder", actor="rpc")
@@ -183,6 +195,72 @@ def test_revert_refuses_to_overwrite_later_changes_and_changes_nothing(
     assert service.entries_at(workspace, "coder", None)["agent"] == ["Baseline.", "Unrelated."]
 
 
+def test_a_revert_whose_write_fails_changes_nothing(
+    service: MemoryService, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.add_entry(workspace, "user", "Prefers German.", writer=_TOOL)
+    service.add_entry(workspace, "agent", "Uses pytest.", writer=_TOOL)
+    files = _memory_files(workspace)
+    revisions = service.history(workspace, "coder")
+
+    with monkeypatch.context() as patch:
+        _fail_writes(patch, lambda path: path.name == "MEMORY.md")
+        with pytest.raises(MemoryError) as failure:
+            service.revert(workspace, [1, 2], writer=_RPC)
+
+    assert not isinstance(failure.value, MemoryRevertIncompleteError)
+    assert _memory_files(workspace) == files
+    assert service.history(workspace, "coder") == revisions
+    # Nothing half-done is left for a retry to trip over.
+    service.revert(workspace, [1, 2], writer=_RPC)
+    assert service.entries_at(workspace, "coder", None) == {"user": [], "agent": []}
+
+
+def test_a_revert_that_cannot_be_undone_names_the_scopes_it_changed(
+    service: MemoryService, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.add_entry(workspace, "user", "Prefers German.", writer=_TOOL)
+    service.add_entry(workspace, "agent", "Uses pytest.", writer=_TOOL)
+    writes: list[Path] = []
+
+    def fails(path: Path) -> bool:
+        # Only the first write succeeds: USER.md is reverted, then writing
+        # MEMORY.md and restoring USER.md fail.
+        writes.append(path)
+        return len(writes) > 1
+
+    with monkeypatch.context() as patch:
+        _fail_writes(patch, fails)
+        with pytest.raises(MemoryRevertIncompleteError) as incomplete:
+            service.revert(workspace, [1, 2], writer=_RPC)
+
+    assert incomplete.value.changed == ("user",)
+    assert service.entries_at(workspace, "coder", None) == {
+        "user": [],
+        "agent": ["Uses pytest."],
+    }
+    # The history did not record the change and notices it as an external one.
+    assert [(r.id, r.scope, r.kind) for r in service.history(workspace, "coder")[2:]] == [
+        (3, "user", "external")
+    ]
+
+
+def _memory_files(workspace: Path) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in sorted(workspace.iterdir())}
+
+
+def _fail_writes(monkeypatch: pytest.MonkeyPatch, fails: Callable[[Path], bool]) -> None:
+    """Make the Memory file writes that *fails* selects fail like a full disk."""
+    write = memory_module.atomic_write_bytes
+
+    def atomic_write_bytes(path: Path, data: bytes, **kwargs: Any) -> None:
+        if fails(Path(path)):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        write(path, data, **kwargs)
+
+    monkeypatch.setattr(memory_module, "atomic_write_bytes", atomic_write_bytes)
+
+
 def test_compare_describes_changes_between_two_states(
     service: MemoryService, workspace: Path
 ) -> None:
@@ -212,14 +290,70 @@ def test_memory_without_an_agent_directory_works_without_history(tmp_path: Path)
         service.history(workspace, "coder")
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(b'{"v": 1, "id": "broken"}\nnot json\n', id="invalid-lines"),
+        pytest.param('{"v":1,"id":2,"at":"ä'.encode()[:-1], id="torn-utf-8-sequence"),
+        pytest.param(b'{"v":1,"id":2,"at":"', id="incomplete-last-line"),
+        pytest.param(
+            b'{"v":1,"id":2,"at":"x","scope":["agent"],"kind":"edit","actor":"tool","state":"s"}\n',
+            id="mistyped-field",
+        ),
+    ],
+)
 def test_unreadable_history_lines_are_skipped(
-    service: MemoryService, workspace: Path, agents_root: Path
+    service: MemoryService, workspace: Path, agents_root: Path, damage: bytes
 ) -> None:
     service.add_entry(workspace, "agent", "A", writer=_TOOL)
     history_file = agents_root / "coder" / "memory-history.jsonl"
-    with history_file.open("a", encoding="utf-8") as handle:
-        handle.write('{"v": 1, "id": "broken"}\nnot json\n')
+    with history_file.open("ab") as handle:
+        handle.write(damage)
 
     service.add_entry(workspace, "agent", "B", writer=_TOOL)
 
-    assert [r.id for r in service.history(workspace, "coder")] == [1, 2]
+    assert [(r.id, r.kind, r.run_id) for r in service.history(workspace, "coder")] == [
+        (1, "edit", "r-1"),
+        (2, "edit", "r-1"),
+    ]
+    # The new revision is a line of its own, so it is read back after a restart.
+    last = json.loads(history_file.read_bytes().splitlines()[-1])
+    assert (last["id"], last["actor"], last["run_id"]) == (2, "tool", "r-1")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [MemoryError("failed to write Memory history"), RuntimeError("history defect")],
+    ids=["history-io-failure", "unexpected-history-error"],
+)
+def test_a_failing_history_never_fails_a_change(
+    service: MemoryService,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    service.add_entry(workspace, "user", "Prefers German.", writer=_TOOL)
+    service.add_entry(workspace, "agent", "Uses pytest.", writer=_TOOL)
+
+    def failing_record(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    with monkeypatch.context() as patch, caplog.at_level(logging.WARNING, logger="vbot.memory"):
+        patch.setattr(MemoryHistory, "record", failing_record)
+        added = service.add_entry(workspace, "agent", "Deploys from main.", writer=_TOOL)
+        reverted = service.revert(workspace, [1, 2], writer=_RPC)
+
+    assert (added.revision, reverted) == (None, [])
+    # Every change the history missed is noticed as an external one.
+    assert [(r.id, r.scope, r.kind) for r in service.history(workspace, "coder")[2:]] == [
+        (3, "agent", "external"),
+        (4, "user", "external"),
+        (5, "agent", "external"),
+    ]
+    assert service.entries_at(workspace, "coder", None) == {
+        "user": [],
+        "agent": ["Deploys from main."],
+    }
+    logged = [r for r in caplog.records if r.name == "vbot.memory" and r.levelno >= logging.WARNING]
+    assert len(logged) == 3
