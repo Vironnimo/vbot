@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 
 from cli.application.operations import child_environment
 from cli.application.state import ApplicationError, Installation, exclusive
 from core.utils.processes import subprocess_creation_flags
+
+#: The relaunch contract of ``desktop.restart``: how the Desktop recognizes a
+#: newer active version and starts it.
+RELAUNCH_ENV = "VBOT_DESKTOP_RELAUNCH"
 
 
 def open_desktop(
@@ -21,6 +26,8 @@ def open_desktop(
 
     ``open_session`` names an Agent address and Session id for the Desktop to
     show; an already running Desktop receives it through its own handoff.
+    The Desktop also receives :data:`RELAUNCH_ENV`, so it can restart into a
+    version activated while it runs.
     """
     from cli.application.state import ensure_not_removing
 
@@ -29,7 +36,8 @@ def open_desktop(
         ensure_not_removing(install.root)
         if install.install_shape not in {"server-desktop", "desktop-client"}:
             raise ApplicationError("This installation does not include the Desktop app")
-        arguments = [str(install.interpreter(role="Desktop")), "-m", "desktop.main"]
+        version = install.version()
+        arguments = [str(install.interpreter(version.name, role="Desktop")), "-m", "desktop.main"]
         if host is not None or port is not None:
             if host is not None:
                 arguments.extend(("--host", host))
@@ -42,11 +50,33 @@ def open_desktop(
             arguments.extend(("--open-session", *open_session))
         subprocess.Popen(
             arguments,
-            cwd=install.version() / "app",
-            env=child_environment(install),
+            cwd=version / "app",
+            env={
+                **child_environment(install),
+                RELAUNCH_ENV: relaunch_contract(install, version.name),
+            },
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=subprocess_creation_flags(new_process_group=True, breakaway=True),
             start_new_session=os.name != "nt",
         )
+
+
+def relaunch_contract(install: Installation, version_id: str) -> str:
+    """Return the JSON contract a Desktop running ``version_id`` restarts with.
+
+    The command is the stable GUI companion with exactly ``desktop``, which
+    resolves the active version again; an installation from before the GUI
+    companion falls back to the console bootstrap.
+    """
+    launcher = install.root / "vBot.GUI.exe"
+    if not launcher.is_file():
+        launcher = install.root / "vBot.exe"
+    return json.dumps(
+        {
+            "version_file": str(install.root / "active-version"),
+            "version": version_id,
+            "command": [str(launcher), "desktop"],
+        }
+    )

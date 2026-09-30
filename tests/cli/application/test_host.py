@@ -296,6 +296,12 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
     assert options["creationflags"] == 7
     environment = cast(dict[str, str], cast(dict[str, Any], options)["env"])
     assert environment["VBOT_INSTALL_ROOT"] == str(install.root)
+    # The Desktop restarts into a later active version through the stable launcher.
+    assert json.loads(environment[desktop.RELAUNCH_ENV]) == {
+        "version_file": str(install.root / "active-version"),
+        "version": install.version().name,
+        "command": [str(install.root / "vBot.exe"), "desktop"],
+    }
 
 
 @pytest.mark.parametrize(
