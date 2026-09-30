@@ -264,6 +264,19 @@ async def test_status_without_process_id_lists_owned_processes_only(manager, con
         PROCESS_TOOL_NAME, {"action": "status"}, result=result
     )
     assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": False}]
+    # The user sees the command and where it stands; ids and paging stay raw.
+    assert display["details"] == [
+        {
+            "type": "results",
+            "items": [
+                {
+                    "title": "npm run dev",
+                    "meta": "running",
+                    "time": result["data"]["processes"][0]["started_at"],
+                }
+            ],
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -471,6 +484,10 @@ async def test_kill_stops_the_command_and_a_failed_tree_kill_can_be_retried(
     result = await dispatch(manager, context, {"action": "kill", "process_id": process_id})
 
     assert result == tool_success({"process_id": process_id, "status": "killed"})
+    arguments = {"action": "kill", "process_id": process_id}
+    assert make_registry(manager).display_for_call(PROCESS_TOOL_NAME, arguments, result=result)[
+        "details"
+    ] == [{"type": "notice", "level": "info", "text": "The command was stopped."}]
 
 
 @pytest.mark.parametrize("action", ["status", "kill"])
@@ -545,6 +562,23 @@ async def test_wait_returns_when_a_line_matches_and_the_command_keeps_running(ma
     assert data["output"].splitlines() == ["booting", "Server READY on port 3000"]
     assert data["note"] == "The command is still running; vBot delivers its result when it exits."
     assert manager.get_process(process_id, AGENT_A).status == "running"
+    arguments = {"action": "wait", "process_id": process_id}
+    assert make_registry(manager).display_for_call(PROCESS_TOOL_NAME, arguments, result=result)[
+        "details"
+    ] == [
+        {
+            "type": "text",
+            "label": "output",
+            "source": {"from": "result", "path": ["data", "output"]},
+        },
+        {
+            "type": "notice",
+            "level": "info",
+            "text": "An output line matched.",
+            "subject": "Server READY on port 3000",
+        },
+        {"type": "notice", "level": "info", "text": "The command is still running."},
+    ]
 
 
 @pytest.mark.asyncio

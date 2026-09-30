@@ -25,6 +25,9 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    display_notice,
+    display_results,
+    display_text,
     result_count_fact_builder,
     tool_failure,
     tool_success,
@@ -631,11 +634,82 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
             fact_builder=result_count_fact_builder(
                 "processes", when_arguments={"action": "status"}
             ),
+            detail_builder=_process_detail_blocks,
         ),
         open_input_schema=True,
         unadvertised_parameters=PROCESS_UNADVERTISED_PARAMETERS,
         argument_normalizer=normalize_process_arguments,
     )
+
+
+_EMPTY_LIST_TEXT = {
+    "running": "No background command is running.",
+    "finished": "No finished background command is kept.",
+    "all": "No background command is kept.",
+}
+
+
+def _process_state_text(process: JsonObject) -> str:
+    """Describe where a command stands, in the words of the Bash Tool's exit warning."""
+    status = process.get("status")
+    exit_code = process.get("exit_code")
+    if status == "running":
+        return "running"
+    if status == "killed":
+        return "stopped"
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+        return f"exited with code {exit_code}"
+    return str(status or "")
+
+
+def _process_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
+    """Show the user the listed commands, or one command's output and state.
+
+    Process ids, paging calls, log paths and the Agent's notes stay in the raw
+    result.
+    """
+    data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
+    if not isinstance(data, dict):
+        return []
+    processes = data.get("processes")
+    if isinstance(processes, list):
+        listed = [process for process in processes if isinstance(process, dict)]
+        if not listed:
+            text = _EMPTY_LIST_TEXT.get(str(data.get("filter")), _EMPTY_LIST_TEXT["all"])
+            return [display_notice("info", text)]
+        blocks = [
+            display_results(
+                [
+                    {
+                        "title": process.get("command") or process.get("process_id"),
+                        "meta": _process_state_text(process),
+                        "time": process.get("started_at"),
+                    }
+                    for process in listed
+                ]
+            )
+        ]
+        if data.get("next_call"):
+            blocks.append(display_notice("info", "More commands follow on the next page."))
+        return blocks
+    if "output" not in data:
+        # A kill: the command stopped now, or had ended before.
+        state = _process_state_text(data)
+        if state == "stopped":
+            return [display_notice("info", "The command was stopped.")]
+        return [display_notice("info", f"The command had already {state}.")] if state else []
+    blocks = [display_text("output", source="result", path=("data", "output"))]
+    matched = data.get("matched")
+    exit_code = data.get("exit_code")
+    if isinstance(matched, str) and matched:
+        blocks.append(display_notice("info", "An output line matched.", subject=matched))
+    if data.get("status") == "running":
+        blocks.append(display_notice("info", "The command is still running."))
+    elif data.get("status") == "killed":
+        blocks.append(display_notice("info", "The command was stopped."))
+    elif isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
+        blocks.append(display_notice("warning", f"The command exited with code {exit_code}."))
+    return blocks
 
 
 def _process_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
