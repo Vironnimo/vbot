@@ -68,11 +68,12 @@ def _patch_carry_forward(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _exact_installed_server(monkeypatch: pytest.MonkeyPatch):
+    """The previous version's normal server runs and answers; no other server exists."""
     monkeypatch.setattr(
         worker.processes,
-        "running_server_matches",
+        "server_state",
         lambda _install, *, version_id=None, verification=False: (
-            version_id in {None, "rel_old"} and not verification
+            "running" if version_id in {None, "rel_old"} and not verification else "absent"
         ),
     )
 
@@ -124,11 +125,6 @@ def _patch_server_update(monkeypatch: pytest.MonkeyPatch, install: Installation)
     _patch_carry_forward(monkeypatch)
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     _target_data(monkeypatch, install)
-    monkeypatch.setattr(
-        worker,
-        "probe_health",
-        lambda _target: SimpleNamespace(is_vbot=True, reachable=True),
-    )
     monkeypatch.setattr(worker, "quiesce", lambda *_args: None)
     monkeypatch.setattr(worker.processes, "stop", lambda _install, **_kwargs: _ok())
 
@@ -270,11 +266,6 @@ def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
     _patch_carry_forward(monkeypatch)
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     _target_data(monkeypatch, install)
-    monkeypatch.setattr(
-        worker,
-        "probe_health",
-        lambda _target: SimpleNamespace(is_vbot=True, reachable=True),
-    )
     ready = iter((False, True))
 
     def control(_install, method, _operation, **_extra):
@@ -316,6 +307,76 @@ def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
     assert sequence.index("wait") < sequence.index("stop")
     # The snapshot is taken only once no server can write any more.
     assert sequence.index("stop") < sequence.index("snapshot")
+
+
+@pytest.mark.parametrize("state", ["unresponsive", "foreign"])
+def test_a_server_the_update_cannot_drain_fails_it_before_anything_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+):
+    install = _install(tmp_path)
+    operation = Operation(
+        id="upd_unclear", previous_version="rel_old", package="release.zip", local_package=True
+    )
+    operation.save(install)
+    calls: list[str] = []
+    _patch_carry_forward(monkeypatch)
+    monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
+    _target_data(monkeypatch, install)
+    monkeypatch.setattr(worker.processes, "server_state", lambda _install, **_kwargs: state)
+    monkeypatch.setattr(worker, "quiesce", lambda *_args: pytest.fail("must not drain"))
+    monkeypatch.setattr(worker.processes, "stop", lambda *_a, **_k: pytest.fail("must not stop"))
+    monkeypatch.setattr(worker.processes, "start", lambda *_a, **_k: pytest.fail("must not start"))
+    monkeypatch.setattr(
+        worker, "create_update_snapshot", lambda *_a, **_k: pytest.fail("must not snapshot")
+    )
+
+    def control(_install, method, _operation, **_extra):
+        calls.append(method)
+        return {}
+
+    monkeypatch.setattr(worker, "control", control)
+
+    worker.run(install, operation.id)
+
+    saved = load_operation(install, operation.id)
+    assert saved.phase == "failed"
+    assert saved.error
+    assert install.version().name == "rel_old"
+    assert "maintenance_begin" not in calls
+
+
+def test_a_stopped_server_is_neither_stopped_nor_started_by_the_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    _server_data(install)
+    operation = Operation(
+        id="upd_stopped", previous_version="rel_old", package="release.zip", local_package=True
+    )
+    calls: list[object] = []
+    _patch_server_update(monkeypatch, install)
+    monkeypatch.setattr(worker.processes, "server_state", lambda _install, **_kwargs: "absent")
+    monkeypatch.setattr(worker, "quiesce", lambda *_args: pytest.fail("nothing to drain"))
+
+    def stop(_install, **_kwargs):
+        calls.append("stop")
+        return _ok()
+
+    def start(_install, *, version_id=None, verification=False, breakaway=True):
+        calls.append((version_id, verification))
+        return _ok()
+
+    monkeypatch.setattr(worker.processes, "stop", stop)
+    monkeypatch.setattr(worker.processes, "start", start)
+    monkeypatch.setattr(worker, "validate_release", lambda *_args, **_kwargs: None)
+
+    worker.execute(install, operation)
+
+    assert operation.phase == "completed"
+    assert operation.server_was_running is False
+    assert install.version().name == "rel_new"
+    # Only the candidate's verification server is started and stopped again.
+    assert calls == [("rel_new", True), "stop"]
 
 
 def test_candidate_failure_restores_the_update_snapshot_before_the_previous_version(
@@ -691,9 +752,26 @@ def test_recovery_after_an_interrupted_data_restore_never_starts_a_version(
     )
 
 
-@pytest.mark.parametrize("survived", [True, False])
+@pytest.mark.parametrize(
+    ("candidate", "previous", "calls", "phase"),
+    [
+        pytest.param("absent", "running", ["maintenance_end"], "rolled_back", id="old-survived"),
+        # A busy old server is released like an answering one, never duplicated.
+        pytest.param("absent", "unresponsive", ["maintenance_end"], "rolled_back", id="old-busy"),
+        pytest.param("absent", "absent", ["restart"], "rolled_back", id="old-stopped"),
+        pytest.param(
+            "running", "absent", ["stop", "restart"], "rolled_back", id="candidate-verifying"
+        ),
+        pytest.param("unresponsive", "foreign", [], "needs_attention", id="candidate-busy"),
+    ],
+)
 def test_interrupted_stop_recovers_old_server_lifetime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, survived: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    candidate: str,
+    previous: str,
+    calls: list[str],
+    phase: str,
 ):
     install = _install(tmp_path)
     operation = Operation(
@@ -703,33 +781,37 @@ def test_interrupted_stop_recovers_old_server_lifetime(
         candidate_version="rel_new",
         server_was_running=True,
     )
-    calls: list[str] = []
+    recorded: list[str] = []
     monkeypatch.setattr(
         worker.processes,
-        "running_server_matches",
+        "server_state",
         lambda _install, *, version_id=None, verification=False: (
-            survived and version_id == "rel_old" and not verification
+            candidate if (version_id, verification) == ("rel_new", True) else previous
         ),
     )
 
     def record_control(_install, method, _operation, **_extra):
-        calls.append(method)
+        recorded.append(method)
         return {}
 
     monkeypatch.setattr(worker, "control", record_control)
 
-    def start(_install, *, version_id=None, breakaway=True):
-        assert not survived
-        assert version_id == "rel_old" and breakaway is False
-        calls.append("restart")
+    def stop(_install, **_kwargs):
+        recorded.append("stop")
         return _ok()
 
+    def start(_install, *, version_id=None, breakaway=True):
+        assert version_id == "rel_old" and breakaway is False
+        recorded.append("restart")
+        return _ok()
+
+    monkeypatch.setattr(worker.processes, "stop", stop)
     monkeypatch.setattr(worker.processes, "start", start)
 
     assert worker.recover_interrupted(install, operation) is True
 
-    assert operation.phase == "rolled_back"
-    assert calls == (["maintenance_end"] if survived else ["restart"])
+    assert operation.phase == phase
+    assert recorded == calls
 
 
 def test_worker_holds_operation_lock_for_the_entire_transaction(

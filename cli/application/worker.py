@@ -42,7 +42,6 @@ from cli.application.state import (
     read_json,
 )
 from cli.rpc_client import rpc_call
-from cli.server_management import probe_health
 from core.database import (
     DatabaseError,
     DatabaseSpec,
@@ -189,10 +188,16 @@ def data_fence(install: Installation, snapshot: UpdateSnapshot | None) -> str | 
     return None if change is None else f"the data changed after the pre-update snapshot: {change}"
 
 
-def keep_previous(install: Installation, operation: Operation, reason: str) -> None:
-    """End an update whose candidate never started; the previous version stays active."""
+def keep_previous(
+    install: Installation, operation: Operation, reason: str, *, restart: bool = True
+) -> None:
+    """End an update whose candidate never started; the previous version stays active.
+
+    A previous server that ran is started again, unless *restart* is false because
+    this update never stopped it.
+    """
     operation.error = reason
-    if install.owns_server and operation.server_was_running:
+    if restart and install.owns_server and operation.server_was_running:
         require_ok(processes.start(install, version_id=operation.previous_version, breakaway=False))
     operation.transition(
         install,
@@ -288,6 +293,45 @@ def _interrupted_restore(install: Installation, operation: Operation) -> str | N
     return message
 
 
+def _restore_previous_server(install: Installation, operation: Operation) -> bool:
+    """Return the server to how the interrupted update found it; ``False`` when unsafe.
+
+    A candidate verification server that answers is stopped. The previous server is
+    started again only when none of it is alive, so a busy one is never duplicated; a
+    living one leaves this operation's maintenance. A verification server that does
+    not answer is left alone and the operation needs attention instead.
+    """
+    candidate = processes.server_state(
+        install, version_id=operation.candidate_version, verification=True
+    )
+    if candidate == "running":
+        require_ok(processes.stop(install, initiator="update"))
+    elif candidate == "unresponsive":
+        operation.transition(
+            install,
+            "needs_attention",
+            "The new version's verification server is running but does not answer its health "
+            "check; versions and data have been preserved. Stop it with `vbot server stop` "
+            "before trying again",
+        )
+        return False
+    if not operation.server_was_running:
+        return True
+    previous = processes.server_state(install, version_id=operation.previous_version)
+    if previous == "foreign":
+        raise ApplicationError(
+            "The server target is occupied by a different application version or startup mode"
+        )
+    if previous == "absent":
+        require_ok(processes.start(install, version_id=operation.previous_version, breakaway=False))
+    else:
+        # A crash between recording ``stopping`` and stop() leaves the old server
+        # alive in maintenance, possibly still busy. Release the exact operation
+        # before making this rollback terminal so normal admission resumes.
+        control(install, "maintenance_end", operation)
+    return True
+
+
 def recover_interrupted(install: Installation, operation: Operation) -> bool:
     """Never blindly replay activation after losing the worker mid-transaction.
 
@@ -315,9 +359,7 @@ def recover_interrupted(install: Installation, operation: Operation) -> bool:
         if (
             operation.server_was_running
             and install.owns_server
-            and not processes.running_server_matches(
-                install, version_id=candidate, verification=False
-            )
+            and processes.server_state(install, version_id=candidate) != "running"
         ):
             operation.transition(
                 install,
@@ -337,22 +379,8 @@ def recover_interrupted(install: Installation, operation: Operation) -> bool:
         )
         return True
     if active == operation.previous_version:
-        if install.owns_server and processes.running_server_matches(
-            install, version_id=operation.candidate_version, verification=True
-        ):
-            require_ok(processes.stop(install, initiator="update"))
-        previous_server_running = install.owns_server and processes.running_server_matches(
-            install, version_id=operation.previous_version, verification=False
-        )
-        if operation.server_was_running and install.owns_server and not previous_server_running:
-            require_ok(
-                processes.start(install, version_id=operation.previous_version, breakaway=False)
-            )
-        elif operation.server_was_running and previous_server_running:
-            # A crash between recording ``stopping`` and stop() leaves the old
-            # server alive in maintenance. Release the exact operation before
-            # making this rollback terminal so normal admission resumes.
-            control(install, "maintenance_end", operation)
+        if install.owns_server and not _restore_previous_server(install, operation):
+            return True
         operation.transition(
             install, "rolled_back", "Interrupted activation retained the previous version"
         )
@@ -424,22 +452,34 @@ def execute(install: Installation, operation: Operation) -> None:
         return
     update_snapshot: UpdateSnapshot | None = None
     if install.owns_server:
-        current_health = probe_health(processes.target(install))
-        operation.server_was_running = processes.running_server_matches(
-            install, version_id=operation.previous_version, verification=False
-        )
-        if current_health.reachable and not operation.server_was_running:
+        # One classification decides the server's part: only a drained server is
+        # stopped, and only a server that ran is started again.
+        state = processes.server_state(install, version_id=operation.previous_version)
+        if state == "foreign":
             raise ApplicationError(
                 "The server target is occupied by a different application version or startup mode"
             )
+        operation.server_was_running = state != "absent"
         operation.save(install)
-        if operation.server_was_running:
+        if state == "unresponsive":
+            # A server that does not answer cannot be drained, and stopping it would
+            # end its accepted work: fail before anything changed, leaving it running.
+            keep_previous(
+                install,
+                operation,
+                "the running server did not answer its health check, so the update left it "
+                "running; try the update again once the server responds",
+                restart=False,
+            )
+            return
+        if state == "running":
             quiesce(install, operation)
-        operation.transition(
-            install, "stopping", "Stopping the current server after draining accepted work"
-        )
-        require_ok(processes.stop(install, initiator="update"))
+            operation.transition(
+                install, "stopping", "Stopping the current server after draining accepted work"
+            )
+            require_ok(processes.stop(install, initiator="update"))
         # Taken only now: no server can write between this snapshot and a rollback.
+        # With no server running, its claim check also proves that none started since.
         operation.transition(install, "stopping", "Saving a recovery snapshot of the data")
         try:
             update_snapshot = take_update_snapshot(install, operation)
