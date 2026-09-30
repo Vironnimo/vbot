@@ -13,6 +13,7 @@ from core.agents.temporary import (
     TemporaryAgentConfig,
     TemporaryAgentRegistry,
     TemporaryExecutionGroups,
+    archive_temporary_group,
 )
 from core.chat import ChatLoop
 from core.extensions import ExtensionRegistry
@@ -24,7 +25,7 @@ from core.projects import AgentResolver, ProjectStore
 from core.projects.resolver import effective_project_allowed_skills
 from core.prompts import SystemPromptManager
 from core.prompts.prompts import ProjectPromptContext
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, RunAdmissionBlockedError
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     LoggerProtocol,
@@ -204,6 +205,48 @@ class ExtensionHostFactory:
             ),
         )
 
+    async def archive_uninstalled_owner_groups(self, installed: frozenset[str]) -> None:
+        """Archive the live owner-managed Sessions of every owner not in *installed*.
+
+        A group with active or queued work stays live until the next load.
+        """
+        for owner_name in await self.chat_sessions.temporary_owners_async():
+            if owner_name in installed:
+                continue
+            groups = sessions = 0
+            after = ""
+            while True:
+                group_ids = await self.chat_sessions.temporary_groups_async(
+                    owner_name=owner_name, after=after, limit=100
+                )
+                for group_id in group_ids:
+                    try:
+                        archived = await archive_temporary_group(
+                            self.chat_sessions, self.chat_run_manager, owner_name, group_id
+                        )
+                    except RunAdmissionBlockedError:
+                        if self.logger is not None:
+                            self.logger.warning(
+                                "Owner-managed Sessions kept while they have work "
+                                "(owner=%s group=%s)",
+                                owner_name,
+                                group_id,
+                            )
+                        continue
+                    groups += 1
+                    sessions += archived
+                if len(group_ids) < 100:
+                    break
+                after = group_ids[-1]
+            if self.logger is not None and sessions:
+                self.logger.warning(
+                    "Archived owner-managed Sessions of a removed Extension "
+                    "(owner=%s groups=%d sessions=%d)",
+                    owner_name,
+                    groups,
+                    sessions,
+                )
+
     async def _load_result_payload(
         self, identity: Any, context: ToolContext, payload_id: str
     ) -> Any:
@@ -223,8 +266,6 @@ class ExtensionHostFactory:
             return
         matching = [groups for groups in self._temporary_groups if groups.owns(admission.owner)]
         if len(matching) != 1:
-            from core.runs import RunAdmissionBlockedError
-
             raise RunAdmissionBlockedError(
                 "This Session is no longer available. Check its state through its Extension."
             )

@@ -15,7 +15,7 @@ from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.operations import ExtensionHost
 from core.runs import RunAdmission, RunAdmissionBlockedError, RunExecutionOwner
 from core.runtime.runtime import Runtime
-from core.sessions import ToolResultFacts, ToolResultPayload
+from core.sessions import SessionAddress, ToolResultFacts, ToolResultPayload
 from core.tools import ToolContext
 from core.tools.availability import ToolAccess
 from core.utils.config import Config
@@ -289,6 +289,45 @@ async def test_owner_groups_run_observably_and_reject_completions_after_close(
             0,
             [],
         )
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_owner_pages_and_archives_only_its_own_closed_groups(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        _accept_every_model(runtime, monkeypatch)
+        groups = _owner_host(runtime, "swarm").temporary_agents
+        assert groups is not None
+        await groups.create("group-a", "peer", _participant(tmp_path))
+        await groups.create("group-b", "peer", _participant(tmp_path))
+        runtime.chat_sessions.create_bound_temporary_session(
+            SessionAddress(None, "tmp_other", "ses_other"),
+            owner_name="other",
+            group_id="group-0",
+            participant_id="peer",
+            config={},
+        )
+
+        assert await groups.groups() == ["group-a", "group-b"]
+        assert await groups.groups(after="group-a", limit=1) == ["group-b"]
+        await groups.open_group("group-a")
+        with pytest.raises(ValueError, match="group_not_closed"):
+            await groups.archive_group("group-a")
+        await groups.close_group("group-a")
+
+        assert await groups.archive_group("group-a") == 1
+        assert await groups.groups() == ["group-b"]
+        assert await groups.list("group-a") == []
+        with pytest.raises(RunAdmissionBlockedError):
+            await groups.open_group("group-a")
+        assert await groups.archive_group("group-0") == 0  # another owner's group
+        assert await runtime.chat_sessions.temporary_groups_async(owner_name="other") == ["group-0"]
+        assert await groups.delete_group("group-a") == 1
     finally:
         await runtime.aclose()
 

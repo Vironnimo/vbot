@@ -42,6 +42,7 @@ class ExtensionRuntime:
         recover_recall: Callable[[set[str]], None],
         logger: Any,
         make_host: Callable[[], ExtensionHost] | None = None,
+        archive_uninstalled_groups: Callable[[frozenset[str]], Awaitable[None]] | None = None,
     ) -> None:
         self._storage = storage
         self._resources_path = resources_path
@@ -59,6 +60,7 @@ class ExtensionRuntime:
         self._recover_recall = recover_recall
         self._logger = logger
         self._make_host = make_host
+        self._archive_uninstalled_groups = archive_uninstalled_groups
         self._mutation_lock = asyncio.Lock()
         self._closing = False
 
@@ -112,6 +114,7 @@ class ExtensionRuntime:
         self._reload_recall()
         self._refresh_prompts()
         await self._reload_skills()
+        await self._release_uninstalled_owners(new_registry)
         if self._make_host is not None:
             new_registry.bind_host(self._make_host())
         await new_registry.fire_startup()
@@ -153,9 +156,35 @@ class ExtensionRuntime:
                 return
             registry = self._get_registry()
             if registry is not None:
-                if self._make_host is not None:
-                    registry.bind_host(self._make_host())
-                await self._finish_mutation(registry.fire_startup(), name="startup")
+                await self._finish_mutation(self._start(registry), name="startup")
+
+    async def _start(self, registry: ExtensionRegistry) -> None:
+        await self._release_uninstalled_owners(registry)
+        if self._make_host is not None:
+            registry.bind_host(self._make_host())
+        await registry.fire_startup()
+
+    async def _release_uninstalled_owners(self, registry: ExtensionRegistry) -> None:
+        """Archive owner-managed Sessions whose Extension is no longer installed.
+
+        While an Extension is installed, even disabled or failed, only it may
+        manage its Sessions. Once it is gone nothing else could, so they leave
+        into the archive. A failure never blocks the Extension layer.
+        """
+        if self._archive_uninstalled_groups is None:
+            return
+        installed = registry.installed_names()
+        if installed is None:
+            self._logger.info(
+                "Owner-managed Sessions kept: an Extension directory is missing or unreadable"
+            )
+            return
+        try:
+            await self._archive_uninstalled_groups(installed)
+        except Exception:
+            self._logger.error(
+                "Archiving owner-managed Sessions of removed Extensions failed", exc_info=True
+            )
 
     async def aclose(self) -> None:
         """Reject new mutations and drain the admitted one before shutdown."""

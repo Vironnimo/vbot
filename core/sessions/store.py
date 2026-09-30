@@ -546,6 +546,23 @@ class SessionStore:
             )
         )
 
+    def archive_temporary_group(self, *, owner_name: str, group_id: str) -> int:
+        return self._execute_write(
+            lambda connection: _store_owned.archive_temporary_group(
+                connection, owner_name=owner_name, group_id=group_id
+            )
+        )
+
+    def temporary_groups(self, *, owner_name: str, after: str = "", limit: int = 100) -> list[str]:
+        return self._read(
+            lambda connection: _store_owned.temporary_groups(
+                connection, owner_name=owner_name, after=after, limit=limit
+            )
+        )
+
+    def temporary_owners(self) -> list[str]:
+        return self._read(_store_owned.temporary_owners)
+
     def temporary_bindings(
         self,
         *,

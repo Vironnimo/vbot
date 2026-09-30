@@ -131,6 +131,48 @@ def delete_temporary_group(
     return len(keys)
 
 
+def archive_temporary_group(
+    connection: sqlite3.Connection, *, owner_name: str, group_id: str
+) -> int:
+    """Archive this owner's live bound participant Sessions; return how many.
+
+    Bindings, titles, receipts and Run records stay as provenance, so usage
+    keeps its attribution and the owner can still delete the group.
+    """
+    return connection.execute(
+        "UPDATE sessions SET state = 'archived', archived_at = ?, "
+        "state_revision = state_revision + 1 WHERE state = 'live' AND session_key IN "
+        "(SELECT session_key FROM temporary_session_bindings WHERE owner_name = ? AND group_id = ?)",
+        (utc_now_timestamp(), owner_name, group_id),
+    ).rowcount
+
+
+def temporary_groups(
+    connection: sqlite3.Connection, *, owner_name: str, after: str = "", limit: int = 100
+) -> list[str]:
+    """Page the ids of this owner's groups with live bound Sessions after ``after``."""
+    if type(limit) is not int or not 1 <= limit <= 1000 or not isinstance(after, str):
+        raise ValueError("invalid temporary group page bounds")
+    rows = connection.execute(
+        "SELECT DISTINCT b.group_id FROM temporary_session_bindings AS b "
+        "JOIN sessions AS s ON s.session_key = b.session_key "
+        "WHERE b.owner_name = ? AND b.group_id > ? AND s.state = 'live' "
+        "ORDER BY b.group_id LIMIT ?",
+        (owner_name, after, limit),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def temporary_owners(connection: sqlite3.Connection) -> list[str]:
+    """Read the names of every owner with live bound Sessions, sorted."""
+    rows = connection.execute(
+        "SELECT DISTINCT b.owner_name FROM temporary_session_bindings AS b "
+        "JOIN sessions AS s ON s.session_key = b.session_key "
+        "WHERE s.state = 'live' ORDER BY b.owner_name"
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
 def temporary_bindings(
     connection: sqlite3.Connection,
     *,

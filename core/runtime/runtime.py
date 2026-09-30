@@ -271,6 +271,9 @@ class Runtime:
     def _extension_host(self) -> ExtensionHost:
         return self._host_operations().make_host()
 
+    async def _archive_uninstalled_extension_groups(self, installed: frozenset[str]) -> None:
+        await self._host_operations().archive_uninstalled_owner_groups(installed)
+
     def _validate_temporary_admission(self, address: Any, admission: Any) -> None:
         if admission.owner is not None:
             self._host_operations()._validate_temporary_admission(address, admission)

@@ -572,12 +572,15 @@ def _reject_owner_managed_scope_mutation(
     connection: sqlite3.Connection, where: str, params: tuple[Any, ...]
 ) -> None:
     binding = connection.execute(
-        "SELECT 1 FROM temporary_session_bindings AS b "
-        "JOIN sessions AS s ON s.session_key = b.session_key WHERE " + where,
+        "SELECT b.owner_name FROM temporary_session_bindings AS b "
+        "JOIN sessions AS s ON s.session_key = b.session_key WHERE " + where + " LIMIT 1",
         params,
     ).fetchone()
     if binding is not None:
-        raise ChatSessionError(_OWNER_MANAGED_ERROR)
+        raise ChatSessionError(
+            f"Some of these Sessions are managed by an Extension ({binding[0]}). "
+            "Delete them through that Extension, or remove the Extension, then try again."
+        )
 
 
 _LIVE_ADDRESS = "s.project_id = ? AND s.agent_id = ? AND s.session_id = ? AND s.state = 'live'"

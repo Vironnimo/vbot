@@ -366,6 +366,7 @@ def bootstrap(runtime: Runtime) -> None:
             recover_recall=runtime._recover_recall_backend_if_deactivated,
             logger=runtime.logger,
             make_host=runtime._extension_host,
+            archive_uninstalled_groups=runtime._archive_uninstalled_extension_groups,
         )
         # Skills load after extensions: a loaded extension may bundle its own skills
         # under ``<extension>/skills/``, which ``_skill_scan_roots`` folds into the

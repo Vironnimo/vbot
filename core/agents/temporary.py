@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import hashlib
 from collections.abc import Awaitable, Callable, Sequence
 from copy import deepcopy
@@ -247,6 +248,30 @@ class ExecutionResources(Protocol):
 
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None: ...
     def has_execution_work(self, owner: RunExecutionOwner) -> bool: ...
+
+
+async def archive_temporary_group(
+    sessions: ChatSessionManager, run_manager: ChatRunManager, owner_name: str, group_id: str
+) -> int:
+    """Archive one owner group's live participant Sessions under a no-Run boundary.
+
+    Raises :class:`RunAdmissionBlockedError` while any of them has active,
+    queued or guarded work; nothing is archived then.
+    """
+    addresses: list[SessionAddress] = []
+    after = ""
+    while True:
+        page = await sessions.temporary_bindings_async(
+            owner_name=owner_name, group_id=group_id, after=after, limit=1000
+        )
+        addresses.extend(binding.address for binding in page)
+        if len(page) < 1000:
+            break
+        after = page[-1].participant_id
+    if not addresses:
+        return 0
+    async with run_manager.session_admission_guard(*addresses):
+        return await sessions.archive_temporary_group(owner_name=owner_name, group_id=group_id)
 
 
 @dataclass
@@ -565,6 +590,34 @@ class TemporaryExecutionGroups:
             )
             self._groups.pop(group_id, None)
             return count
+
+    async def archive_group(self, group_id: str) -> int:
+        """Archive a closed group's live participant Sessions and keep their history.
+
+        Archived participants leave this owner's listings and can no longer be
+        opened or re-created; :meth:`delete_group` still removes them.
+        """
+        async with self._lifecycle:
+            self._require_current()
+            state = self._groups.get(group_id)
+            if state is not None and state.open:
+                raise ValueError("group_not_closed")
+            await self.close_group(group_id)
+            self._require_current()
+            count = await archive_temporary_group(
+                self._sessions, self._manager, self._identity.name, group_id
+            )
+            self._groups.pop(group_id, None)
+            return count
+
+    async def groups(self, *, after: str = "", limit: int = 100) -> builtins.list[str]:
+        """Page the ids of this owner's groups that still have live participant Sessions."""
+        self._require_current()
+        group_ids = await self._sessions.temporary_groups_async(
+            owner_name=self._identity.name, after=after, limit=limit
+        )
+        self._require_current()
+        return group_ids
 
     async def close_group(self, group_id: str, reason: str = "extension") -> dict[str, Any]:
         state = self._groups.setdefault(group_id, _Group())
