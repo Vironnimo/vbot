@@ -276,30 +276,47 @@ describe('ChatTimeline Tools', () => {
       expect(resultCode.textContent).toContain('Invalid regular expression');
     });
 
-    it('shows the changed files as a numbered diff in place of empty Args', () => {
+    it("shows a Tool's detail blocks and keeps its raw call behind a disclosure", () => {
       const display = structuredDisplay({
         hidden_argument_keys: ['patch'],
-        file_changes: [
+        details: [
           {
-            path: 'src/app.py',
-            change: 'updated',
-            added: 1,
-            removed: 1,
-            hunks: [
-              { old_start: 4, new_start: 4, lines: [' a', '-b', '+B', ' c'] },
-              { old_start: 20, new_start: 20, lines: ['+tail'] },
+            type: 'file_changes',
+            files: [
+              {
+                path: 'src/app.py',
+                change: 'updated',
+                added: 1,
+                removed: 1,
+                hunks: [
+                  {
+                    old_start: 4,
+                    new_start: 4,
+                    lines: [' a', '-b', '+B', ' c'],
+                  },
+                  { old_start: 20, new_start: 20, lines: ['+tail'] },
+                ],
+                omitted_lines: 7,
+              },
+              {
+                path: 'logo.png',
+                change: 'moved',
+                destination: 'img/logo.png',
+                added: 0,
+                removed: 0,
+                hunks: [],
+                binary: true,
+              },
             ],
-            omitted_lines: 7,
           },
           {
-            path: 'logo.png',
-            change: 'moved',
-            destination: 'img/logo.png',
-            added: 0,
-            removed: 0,
-            hunks: [],
-            binary: true,
+            type: 'notice',
+            level: 'warning',
+            text: 'Syntax error at line 5.',
+            subject: 'src/app.py',
           },
+          { type: 'notice', level: 'error', text: 'Text not found.' },
+          { type: 'notice', level: 'unknown', text: 'Dropped.' },
         ],
       });
       timeline.render(
@@ -308,13 +325,12 @@ describe('ChatTimeline Tools', () => {
           toolResult(
             'call',
             'apply_patch',
-            { ok: true, data: { status: 'applied', content: 'Updated.' } },
+            { ok: true, data: { status: 'partial', content: 'Updated.' } },
             { display },
           ),
         ]),
       );
 
-      expect(detailRow('chat.toolArgs')).toBeNull();
       const files =
         detailRow('chat.toolChanges').querySelectorAll('.tool-diff-file');
       expect(files[0].querySelector('.tool-diff-file__path').textContent).toBe(
@@ -341,9 +357,29 @@ describe('ChatTimeline Tools', () => {
       );
       expect(files[1].textContent).toContain('logo.png → img/logo.png');
       expect(files[1].textContent).toContain(t('chat.fileChange.binary'));
-      expect(detailText('chat.toolResultLabel')).toBe(
-        'status: applied\ncontent: Updated.',
+      expect(
+        Array.from(document.querySelectorAll('.tool-notice'), (notice) => [
+          notice.className.replace(/.*tool-notice--/, ''),
+          notice.textContent.replace(/\s+/g, ' ').trim(),
+        ]),
+      ).toEqual([
+        [
+          'warning',
+          `${t('chat.toolNotice.warning')} src/app.py Syntax error at line 5.`,
+        ],
+        ['error', `${t('chat.toolNotice.error')} Text not found.`],
+      ]);
+
+      const rawCall = document.querySelector('.tool-raw-call');
+      expect(rawCall.open).toBe(false);
+      expect(rawCall.querySelector('summary').textContent.trim()).toBe(
+        t('chat.toolRawCall'),
       );
+      expect(detailText('chat.toolArgs')).toBe('patch: *** Begin Patch');
+      expect(detailText('chat.toolResultLabel')).toBe(
+        'status: partial\ncontent: Updated.',
+      );
+      expect(rawCall.contains(detailRow('chat.toolResultLabel'))).toBe(true);
     });
 
     it.each([

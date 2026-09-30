@@ -6,6 +6,10 @@ shows its changed regions as they are now, numbered like ``read`` output, so the
 next patch can reuse those lines directly. Failures show the closest current
 text with line numbers. A call in which nothing applied is a failure envelope
 with the same failure text.
+
+The user reads the call through its display instead: the changed files' diffs
+and one notice per note, warning and failed change, without the text the next
+call needs.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from core.tools._change_preview import _PREVIEW_CONTEXT_LINES, _change_preview
 from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, split_text_lines
 from core.tools.model_names import model_tool_name
 from core.tools.syntax_check import warning_for_edited_file, warning_for_written_file
-from core.tools.tools import JsonObject, tool_failure, tool_success
+from core.tools.tools import JsonObject, ToolContext, tool_failure, tool_success
 
 _FAILED = {"failed", "skipped", "partial"}
 _NOT_FOUND_CODES = {"text_not_found", "context_not_found", "line_numbered_content"}
@@ -351,7 +355,27 @@ def _partial_lead(entries: list[JsonObject], failed: list[JsonObject]) -> str:
     )
 
 
+def _record_notices(
+    context: ToolContext,
+    files: list[_FileReport],
+    notes: list[str],
+    failed: list[JsonObject],
+) -> None:
+    """Record the user's notices: per-file notes and warnings, the call's notes, failures."""
+    for report in files:
+        for note in dict.fromkeys(report.notes):
+            context.add_display_notice("info", note, subject=report.label)
+        if report.syntax_warning:
+            context.add_display_notice("warning", report.syntax_warning, subject=report.label)
+    for note in notes:
+        context.add_display_notice("info", note)
+    # A failure message names the file and change it is about.
+    for entry in failed:
+        context.add_display_notice("error", str(entry["error"]["message"]))
+
+
 def patch_result(
+    context: ToolContext,
     files: list[_FileReport],
     entries: list[JsonObject],
     cancelled: list[str],
@@ -359,11 +383,13 @@ def patch_result(
 ) -> JsonObject:
     """Return the Tool Result envelope for a completed apply_patch call.
 
-    ``call_notes`` say how the call was read; they follow the applied changes.
+    ``call_notes`` say how the call was read; they follow the applied changes
+    and stay out of the user's notices, which ``context`` records.
     """
     failed = [entry for entry in entries if entry["status"] in _FAILED]
     no_ops = [entry for entry in entries if entry["status"] in {"unchanged", "already_applied"}]
     if failed and not files and len(failed) == len(entries):
+        _record_notices(context, [], [], failed)
         if len(failed) == 1:
             error = failed[0]["error"]
             return tool_failure(
@@ -385,7 +411,7 @@ def patch_result(
     if failed:
         sections.append(_partial_lead(entries, failed))
     sections.extend(_file_text(report) for report in files)
-    notes = list(call_notes or [])
+    notes: list[str] = []
     # Changes that leave no net effect, such as a line changed and changed back.
     notes.extend(
         f"The changes to {path} cancel each other out, so it is the same as before."
@@ -400,7 +426,8 @@ def patch_result(
             shown.setdefault(entry["path"], _no_op_text(entry))
         if shown:
             notes.append(" ".join(shown.values()) + ("" if cancelled else " No file was changed."))
-    sections.extend(notes)
+    _record_notices(context, files, notes, failed)
+    sections.extend([*(call_notes or []), *notes])
     sections.extend(_entry_text(entry) for entry in failed)
     status = "partial" if failed else "applied" if files else "unchanged"
     return tool_success({"status": status, "content": "\n".join(sections)})

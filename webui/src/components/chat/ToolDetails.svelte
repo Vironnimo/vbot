@@ -1,14 +1,16 @@
 <script>
-  // The expanded body of a Tool row: Args, live Stdout/Stderr, the files the
-  // Tool changed, and its Result, in that order. Ordinary Run rows and
-  // standalone Tool events share it.
-  import {
-    toolDetailPresentation,
-    toolFileChanges,
-  } from '$lib/chatToolDetails.js';
+  // The expanded body of a Tool row. Ordinary Run rows and standalone Tool
+  // events share it.
+  //
+  // A Tool whose display declares detail blocks shows those to the user (the
+  // files it changed, notices), with the raw call and result behind a
+  // disclosure. Any other Tool shows Args, live Stdout/Stderr and its Result.
+  import { toolDetailBlocks } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import ToolDetailSection from './ToolDetailSection.svelte';
   import ToolDiff from './ToolDiff.svelte';
+  import ToolNotice from './ToolNotice.svelte';
+  import { timelineViewState } from './timelineViewState.svelte.js';
 
   let {
     tool,
@@ -21,25 +23,28 @@
     showResult = true,
     // Output is still arriving: its sections keep showing the newest lines.
     live = false,
+    // The Tool row's stable key; the raw-call disclosure keeps its state
+    // under it while the row is unmounted.
+    viewKey = '',
   } = $props();
 
-  let fileChanges = $derived(toolFileChanges(tool));
-  // A diff already shows what an edit Tool's hidden arguments said.
-  let showArgs = $derived(
-    fileChanges.length === 0 ||
-      toolDetailPresentation(args, { toolName, tool }).kind !== 'empty',
-  );
+  const viewState = timelineViewState();
+
+  let blocks = $derived(toolDetailBlocks(tool));
+  let rawKey = $derived(`${viewKey}:raw-call`);
 </script>
 
-<div class="tool-event-body tool-event-details">
-  {#if showArgs}
-    <ToolDetailSection
-      label={t('chat.toolArgs')}
-      value={args}
-      {toolName}
-      {tool}
-    />
-  {/if}
+{#snippet argsSection(raw)}
+  <ToolDetailSection
+    label={t('chat.toolArgs')}
+    value={args}
+    {raw}
+    {toolName}
+    {tool}
+  />
+{/snippet}
+
+{#snippet outputSections()}
   {#if stdout}
     <ToolDetailSection
       label={t('chat.toolStdout')}
@@ -55,9 +60,9 @@
       follow={live}
     />
   {/if}
-  {#if fileChanges.length > 0}
-    <ToolDiff changes={fileChanges} />
-  {/if}
+{/snippet}
+
+{#snippet resultSection()}
   {#if showResult}
     <ToolDetailSection
       label={t('chat.toolResultLabel')}
@@ -67,5 +72,41 @@
       {toolName}
       {tool}
     />
+  {/if}
+{/snippet}
+
+<div class="tool-event-body tool-event-details">
+  {#if blocks}
+    {@render outputSections()}
+    {#each blocks as block, index (index)}
+      {#if block.type === 'file_changes'}
+        <ToolDiff changes={block.files} />
+      {:else}
+        <ToolNotice notice={block} />
+      {/if}
+    {/each}
+    {#if blocks.length > 0}
+      <details
+        class="tool-raw-call"
+        open={viewState.isOpen(rawKey)}
+        ontoggle={(event) =>
+          viewState.setOpen(rawKey, event.currentTarget.open)}
+      >
+        <summary class="tool-raw-call__summary">
+          {t('chat.toolRawCall')}
+        </summary>
+        <div class="tool-raw-call__body">
+          {@render argsSection(true)}
+          {@render resultSection()}
+        </div>
+      </details>
+    {:else}
+      {@render argsSection(true)}
+      {@render resultSection()}
+    {/if}
+  {:else}
+    {@render argsSection(false)}
+    {@render outputSections()}
+    {@render resultSection()}
   {/if}
 </div>

@@ -532,8 +532,15 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   feed the existing ChangeTracker with actual before/after contents and publish
   presentation-only line/file counts. Each reported file also records its diff
   of actual before/after text (`ToolContext.add_display_file_change`, display
-  `file_changes`); the line counts are that diff's, so a replaced file counts
-  its changed lines, not its whole content. Updates reuse syntax-delta warnings; Add uses full-file syntax warnings.
+  `file_changes` block); the line counts are that diff's, so a replaced file counts
+  its changed lines, not its whole content. A call that changed no file records no
+  counts. Updates reuse syntax-delta warnings; Add uses full-file syntax warnings.
+- The display declares detail blocks: after the diffs, `patch_result` records one
+  notice per file note (`info`), syntax warning (`warning`) and net-effect note,
+  and one `error` notice per failed change with its message alone - not the
+  excerpts, difference and `read` continuations the Model's recovery needs. Call
+  notes about how the arguments were read stay Model-only. The user reads the
+  Model's result text only in the raw call disclosure.
 - The handler uses the shared cancellation-shielded Tool worker boundary so
   an in-flight mutation settles before cancellation returns.
 

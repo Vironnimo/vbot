@@ -1,7 +1,7 @@
 <script>
   // The Changes section of expanded Tool details: each file the Tool changed
   // with its kind of change, line counts and a numbered diff in a scroll box
-  // of bounded height. Rows come from `toolFileChanges`.
+  // of bounded height. Rows come from `toolDetailBlocks`.
   import { fileChangesCopyText } from '$lib/chatToolDetails.js';
   import { boundedScroll } from '$lib/boundedScroll.js';
   import { t } from '$lib/i18n.js';

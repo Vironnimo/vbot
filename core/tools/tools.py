@@ -64,6 +64,7 @@ from core.tools._tool_display import (
     ToolDisplayPart,
     ToolDisplayPartBuilder,
     ToolSummaryBuilder,
+    display_notice,
     result_count_fact_builder,
 )
 from core.tools._tool_results import (
@@ -137,6 +138,24 @@ def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
         return result
 
     return offloaded
+
+
+def _detail_blocks(context: ToolContext | None, result: JsonObject | None) -> list[JsonObject]:
+    """Return the call's recorded detail blocks.
+
+    A failed call whose Tool recorded no error notice, such as one rejected
+    before its handler ran, shows the result's error message.
+    """
+    blocks = copy.deepcopy(context.presentation_details) if context is not None else []
+    error = result.get("error") if isinstance(result, dict) and result.get("ok") is False else None
+    message = error.get("message") if isinstance(error, dict) else None
+    if (
+        isinstance(message, str)
+        and message.strip()
+        and not any(block["type"] == "notice" and block["level"] == "error" for block in blocks)
+    ):
+        blocks.append(display_notice("error", message))
+    return blocks
 
 
 class ToolRegistry:
@@ -301,8 +320,8 @@ class ToolRegistry:
         )
         if context is not None and context.presentation_images:
             payload["image_files"] = [dict(image) for image in context.presentation_images]
-        if context is not None and context.presentation_file_changes:
-            payload["file_changes"] = [dict(change) for change in context.presentation_file_changes]
+        if "details" in payload:
+            payload["details"] = _detail_blocks(context, result)
         return payload
 
     def get(self, name: str) -> Tool:

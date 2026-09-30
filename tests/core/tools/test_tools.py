@@ -305,6 +305,31 @@ def test_facts_recorded_by_the_handler_precede_the_display_facts() -> None:
     ]
 
 
+def test_detail_blocks_keep_the_recorded_order_and_show_an_unnoticed_failure() -> None:
+    display = ToolDisplay(details=True)
+    context = make_context("probe")
+    context.add_display_notice("warning", "  Check the syntax.  ", subject="a.py")
+    context.add_display_file_change("a.py", "created", None, "a\n")
+    context.add_display_notice("error", "Could not write b.py.")
+    context.add_display_file_change("c.py", "deleted", "c\n", None)
+    rejected = tool_failure("invalid_arguments", "The call was rejected.")
+
+    details = _display_for_call(display, {}, context=context, result=rejected)["details"]
+
+    assert [block["type"] for block in details] == ["notice", "file_changes", "notice"]
+    assert details[0] == {
+        "type": "notice",
+        "level": "warning",
+        "text": "Check the syntax.",
+        "subject": "a.py",
+    }
+    assert [change["path"] for change in details[1]["files"]] == ["a.py", "c.py"]
+    assert _display_for_call(display, {}, context=make_context("probe"), result=rejected)[
+        "details"
+    ] == [{"type": "notice", "level": "error", "text": "The call was rejected."}]
+    assert "details" not in _display_for_call(ToolDisplay(), {}, context=context)
+
+
 @pytest.mark.parametrize(
     ("arguments", "result", "facts"),
     [

@@ -512,6 +512,7 @@
             result={toolResultValueForEvent(item.event)}
             resultFailed={isFailedToolEvent(item.event)}
             showResult={Boolean(toolResultValueForEvent(item.event))}
+            viewKey={disclosureKey('tool')}
           />
         </details>
         {#if isTextToSpeechResult(item.event)}
