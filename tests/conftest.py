@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from tests import file_dependencies
+from tests import cpu_pool, file_dependencies
 
 # pytest-testmon attributes executed lines to single tests through coverage contexts.
 # The sys.monitoring core (the default on Python 3.12+) reports a line only the
@@ -237,7 +237,14 @@ def in_shard(nodeid: str, index: int, count: int) -> bool:
     return zlib.crc32(nodeid.encode("utf-8")) % count == index - 1
 
 
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int | None:
+    return cpu_pool.auto_workers()
+
+
+# First, so that pytest-xdist starts only the workers the pool grants.
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
+    cpu_pool.claim(config)
     # Records the data files each test reads while pytest-testmon collects data.
     config.pluginmanager.register(file_dependencies, "vbot-file-dependencies")
 

@@ -29,6 +29,12 @@
 - The records attribute each failure: a failed test that depends on a changed file (staged, or changed on the branch for the branch check) blocks; one that depends on unstaged or untracked work and on no changed file is reported without blocking; any other failure is on committed code. That one runs once more, alone in one process: a test that fails only among the parallel runs of a busy machine passes then and is reported without blocking. A test that fails again blocks every commit until a separate commit fixes it.
 - A lock in the checkout's git directory serializes its test runs.
 
+## Test core pool
+
+- Every local pytest run, the hook's and an Agent's alike, claims its workers' cores from one pool per machine before xdist starts them (`tests/cpu_pool.py`, called first in `tests/conftest.py`'s `pytest_configure`): one lock file per physical core in `~/.cache/vbot-test-cores/`. Runs collect their cores one after another, so a run asking for many cores is not starved by smaller runs, and a run waits while the cores it asks for are busy. The operating system releases the locks of a process that dies.
+- The hook sizes its runs to the pool (`_workers`, and the complete suite with all of it); `-n auto` means 2 workers locally. CI (`CI` set) and pytest runs that tests start inside a run holding cores (`VBOT_TEST_CORES_HELD`) skip the pool.
+- Each run appends a JSON line to `runs.jsonl` there: checkout, kind (`commit`, `merge`, `branch`, `rerun` from the hook, `manual` otherwise), cores asked and granted, wait, duration, exit status and outcome counts, and for a complete suite the reason `_test_impact` gives.
+
 ## Merge commits
 
 - A merge commit selects twice: against this checkout's records, and against the records of the worktree holding the merged branch (with the changes since that worktree's tested state, normally the changes made here since the fork). It runs only the tests both select; a test either side leaves out passed there with the code and files it has now.

@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from scripts import _test_impact, commit_check
+from tests import cpu_pool
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -379,9 +380,11 @@ def test_a_checkout_without_usable_test_impact_data_runs_the_complete_suite(
 ) -> None:
     # The pytest command is recorded instead of started.
     commands: list[list[str]] = []
+    environments: list[dict[str, str] | None] = []
 
     def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> Any:
         commands.append(command)
+        environments.append(env)
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(commit_check, "_run", run)
@@ -404,8 +407,13 @@ def test_a_checkout_without_usable_test_impact_data_runs_the_complete_suite(
     assert _check_tests(impact_project) == {"PASS": (False, "")}
 
     [command] = commands
-    assert command[-2:] == ["-n", "auto"]
-    assert "no usable test-impact data" in capsys.readouterr().out
+    # As many workers as the test core pool has, which a single run then holds.
+    assert command[-2:] == ["-n", str(cpu_pool.pool_size())]
+    [env] = environments
+    assert env is not None
+    assert env[cpu_pool.KIND_VARIABLE] == "commit"
+    assert env[cpu_pool.REASON_VARIABLE]
+    assert env[cpu_pool.REASON_VARIABLE] in capsys.readouterr().out
     if records == "corrupt":
         # testmon cannot open it: the complete run starts without it and records afresh.
         assert not testmon_data.exists()
