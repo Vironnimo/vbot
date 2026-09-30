@@ -40,9 +40,14 @@ from core.json_documents import (
     warn_unknown_fields,
     write_json_document,
 )
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
 from core.projects.address import InvalidAgentAddressError, parse_agent_address
 from core.runs import RunKind
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.workers import OrderedWorker
@@ -61,6 +66,7 @@ _WHEN = re.compile(r"^(start|end)(?:\s*([+-])\s*([1-9][0-9]*)\s*([mhd]))?$")
 _TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted", "missed"})
 _MAX_OFFSET = 31 * 24 * 60
 _MAX_ACTIONS = 16
+_MAX_ERROR_CHARS = 500
 # Finished history is kept this long after expiry, then pruned once the scan
 # window no longer reaches its occurrence (it can then never become due again).
 _RETENTION = timedelta(days=30)
@@ -86,6 +92,7 @@ _EXECUTION_FIELDS = frozenset(
         "session",
         "run_id",
         "status",
+        "error",
     )
 )
 _ACTION_SHAPE = json_object(_ACTION_FIELDS)
@@ -259,6 +266,16 @@ def _validate_execution_record(key: str, row: Any) -> None:
         if not isinstance(row.get(field), str):
             raise ValueError(f"{field} must be a timestamp string")
         _instant(row[field])
+    if row.get("error") is not None and not isinstance(row["error"], str):
+        raise ValueError("error must be a string or null")
+
+
+class _TargetUnavailableError(CalendarValidationError):
+    """The action's target does not resolve into a runnable Agent; the cause says why."""
+
+
+class _SessionMissingError(CalendarValidationError):
+    """The action's selected Session does not exist for its target."""
 
 
 class CalendarActions:
@@ -405,7 +422,7 @@ class CalendarActions:
             try:
                 self._resolver.resolve_agent(project, agent)
             except Exception as error:
-                raise CalendarValidationError(
+                raise _TargetUnavailableError(
                     "target does not identify an available agent"
                 ) from error
         if (
@@ -416,7 +433,7 @@ class CalendarActions:
                 SessionAddress(project_id=project, agent_id=agent, session_id=session)
             )
         ):
-            raise CalendarValidationError("session does not exist for the selected target")
+            raise _SessionMissingError("session does not exist for the selected target")
 
     def add(
         self,
@@ -907,10 +924,19 @@ class CalendarActions:
         except asyncio.CancelledError:
             mark(status="interrupted" if run is not None or input_persisted else "pending")
             raise
-        except Exception:
+        except Exception as error:
             if run is None:
-                mark(status="failed")
-                _LOGGER.exception("Calendar action admission failed (action=%s)", action["id"])
+                reason, expected = _admission_failure(action, error)
+                mark(status="failed", error=reason)
+                if expected:
+                    _LOGGER.warning(
+                        "Calendar action could not start its Run (action=%s event=%s reason=%s)",
+                        action["id"],
+                        event.id,
+                        reason,
+                    )
+                else:
+                    _LOGGER.exception("Calendar action admission failed (action=%s)", action["id"])
             else:
                 mark(status=run.status.value)
         finally:
@@ -919,6 +945,30 @@ class CalendarActions:
             self._worker_events.pop(key, None)
             await self._save_async()
             self._calendar._notify_action_changed()
+
+
+def _admission_failure(action: dict[str, Any], error: Exception) -> tuple[str, bool]:
+    """Say why an occurrence could not start its Run, and whether that is an expected state.
+
+    A missing target or selected Session lasts until the action is edited, so it
+    is expected; its reason is stored on the occurrence for the user and Agents.
+    """
+    target = action["target"]
+    if isinstance(error, (_SessionMissingError, SessionNotFoundError)):
+        return f"Session does not exist for calendar target {target}: {action.get('session')}", True
+    cause = error.__cause__ if isinstance(error, _TargetUnavailableError) else error
+    if isinstance(cause, (ResolutionAgentNotFoundError, ResolutionProjectNotFoundError)):
+        return f"Calendar target does not exist: {target}", True
+    if isinstance(error, _TargetUnavailableError) or isinstance(cause, AgentResolutionError):
+        return _bounded(f"Calendar target {target} cannot run: {cause}"), True
+    return _bounded(str(error) or type(error).__name__), False
+
+
+def _bounded(text: str) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= _MAX_ERROR_CHARS:
+        return normalized
+    return normalized[: _MAX_ERROR_CHARS - 3] + "..."
 
 
 def _log_missed(row: dict[str, Any], reason: str) -> None:

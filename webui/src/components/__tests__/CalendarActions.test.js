@@ -179,6 +179,46 @@ it('preserves the Session and result after a single event moves', async () => {
   });
 });
 
+it('shows why an execution could not start its Run', async () => {
+  const reason = 'Session does not exist for calendar target main: existing';
+  component = mount(CalendarActions, {
+    target: document.body,
+    props: {
+      eventId: 'event1',
+      occurrenceStart: '2027-01-01T12:00',
+      onOpenSession: vi.fn(),
+      actions: [
+        {
+          id: 'a1',
+          event_id: 'event1',
+          target: 'main',
+          when: 'start',
+          session: 'existing',
+          prompt: 'Review meeting',
+        },
+      ],
+      executions: [
+        {
+          action_id: 'a1',
+          occurrence_start: '2027-01-01T12:00',
+          target: 'main',
+          session: 'existing',
+          status: 'failed',
+          error: reason,
+          scheduled_at: '2027-01-01T12:00:00Z',
+          expires_at: '2027-01-01T13:00:00Z',
+        },
+      ],
+    },
+  });
+  await settle();
+  expect(document.body.textContent).toContain(
+    t('calendar.actions.error', { reason }),
+  );
+  // No Run started, so there is no Session to open.
+  expect(button(t('calendar.actions.openSession'))).toBeUndefined();
+});
+
 it.each([
   [
     'another Team fails',

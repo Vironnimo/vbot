@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,7 +20,9 @@ from core.calendar.actions import (
     parse_action_when,
     validate_calendar_actions_file,
 )
+from core.projects import AgentResolutionError, ResolutionAgentNotFoundError
 from core.runs import RunKind, RunStatus
+from core.sessions import SessionNotFoundError
 
 
 def setup(
@@ -437,6 +440,67 @@ async def test_timeout_after_admission_is_failed_not_missed(tmp_path):
     assert trigger.trigger_run.call_args.kwargs["run_kind"] == RunKind.CALENDAR
     await service.actions.tick(now)
     assert trigger.trigger_run.await_count == 1
+
+
+def _session_gone(service, trigger):
+    service.actions._sessions.exists.return_value = False
+
+
+def _session_gone_at_admission(service, trigger):
+    trigger.trigger_run.side_effect = SessionNotFoundError("session does not exist: chosen")
+
+
+def _target_gone(service, trigger):
+    service.actions._resolver.resolve_agent.side_effect = ResolutionAgentNotFoundError("gone")
+
+
+def _target_cannot_run(service, trigger):
+    service.actions._resolver.resolve_agent.side_effect = AgentResolutionError("no usable model")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arrange", "reason"),
+    [
+        pytest.param(
+            _session_gone,
+            "Session does not exist for calendar target main: chosen",
+            id="selected-session-missing",
+        ),
+        # The Session can disappear between validation and admission.
+        pytest.param(
+            _session_gone_at_admission,
+            "Session does not exist for calendar target main: chosen",
+            id="selected-session-missing-at-admission",
+        ),
+        pytest.param(_target_gone, "Calendar target does not exist: main", id="target-missing"),
+        pytest.param(
+            _target_cannot_run,
+            "Calendar target main cannot run: no usable model",
+            id="target-cannot-run",
+        ),
+    ],
+)
+async def test_occurrence_that_cannot_start_its_run_records_why(tmp_path, caplog, arrange, reason):
+    service, event, trigger, now = setup(tmp_path)
+    service.actions.add(
+        event.id, when="start - 1h", prompt="prepare", target="main", session="chosen"
+    )
+    arrange(service, trigger)
+
+    with caplog.at_level(logging.WARNING, logger="vbot.calendar.actions"):
+        await service.actions.tick(now)
+        await drain(service)
+
+    row = service.actions.project(window(service, now))[0]
+    assert (row["status"], row["error"]) == ("failed", reason)
+    stored = json.loads((tmp_path / "calendar" / "actions.json").read_text())["executions"]
+    assert [item["error"] for item in stored.values()] == [reason]
+    # An expected state: one WARNING naming the reason, without a traceback.
+    [record] = [item for item in caplog.records if item.levelno >= logging.WARNING]
+    assert record.levelno == logging.WARNING
+    assert reason in record.getMessage()
+    assert record.exc_info is None
 
 
 @pytest.mark.asyncio

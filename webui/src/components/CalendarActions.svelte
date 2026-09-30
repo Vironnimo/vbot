@@ -302,6 +302,11 @@
             })}
           </p>
         {/if}
+        {#if execution.error}
+          <p class="calendar-detail-meta">
+            {t('calendar.actions.error', { reason: execution.error })}
+          </p>
+        {/if}
       {/if}
       <div class="calendar-action-controls">
         {#if execution?.session && execution?.run_id && onOpenSession}

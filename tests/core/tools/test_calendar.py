@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
+from core.projects import AgentResolutionError
 from core.tools.calendar import (
     CALENDAR_TOOL_DESCRIPTION,
     CALENDAR_TOOL_NAME,
@@ -135,6 +140,30 @@ class TestList:
             f"action {action['id']}: start - 1h, runs agent-one in a fresh Session\n"
             "  prompt: Prepare the notes.\n"
             "  next: 2030-01-10T11:00"
+        )
+
+    def test_list_shows_why_a_run_could_not_start(self, tmp_path: Path) -> None:
+        tool = calendar_tool(tmp_path)
+        event = tool.service.create_event(title="Meeting", start="2030-01-10T12:00")
+        action = tool.service.actions.add(
+            event.id, when="start - 1h", prompt="Prepare the notes.", target="agent-one"
+        )
+        # The target cannot run when the occurrence comes due.
+        resolver = SimpleNamespace(resolve_agent=Mock(side_effect=AgentResolutionError("gone")))
+        tool.service.actions.configure(Mock(), cast(Any, resolver), cast(Any, None))
+
+        async def come_due() -> None:
+            await tool.service.actions.tick(datetime(2030, 1, 10, 10, 30, tzinfo=UTC))
+            await asyncio.gather(*tool.service.actions._workers.values())
+
+        asyncio.run(come_due())
+
+        _, text = tool.call({"action": "list", "when": "2030-01"})
+
+        assert text.endswith(
+            f"action {action['id']}: start - 1h, runs agent-one in a fresh Session\n"
+            "  prompt: Prepare the notes.\n"
+            "  2030-01-10T11:00 failed: Calendar target agent-one cannot run: gone"
         )
 
     def test_list_rejects_unknown_when_with_a_corrected_call(self, tmp_path: Path) -> None:

@@ -326,6 +326,10 @@ def action_lines(action: dict[str, Any], rows: list[dict[str, Any]], zone: ZoneI
             if upcoming is None and _instant(row["expires_at"]) > now:
                 upcoming = due
             continue
+        if row.get("error"):
+            # The Run never started, so there is no Session to show; the reason is.
+            done.append(f"  {due} {row['status']}: {row['error']}")
+            continue
         detail = f", Session {row['session']}" if row.get("session") else ""
         done.append(f"  {due} {row['status']}{detail}")
     if len(done) > _LISTED_RUNS:
