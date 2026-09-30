@@ -61,6 +61,16 @@ def _call(
     return asyncio.run(dispatch_as_executor(registry, context, arguments))
 
 
+def _details(arguments: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the detail blocks the user sees for one call."""
+    registry = ToolRegistry()
+    register_history_tool(registry, cast(ChatSessionManager, None))
+    return cast(
+        list[dict[str, Any]],
+        registry.display_for_call(HISTORY_TOOL_NAME, arguments, result=result)["details"],
+    )
+
+
 def _data(result: dict[str, Any]) -> dict[str, Any]:
     assert result["ok"] is True, result
     return cast(dict[str, Any], result["data"])
@@ -212,7 +222,8 @@ def test_overview_reports_fixed_checkpoint_sections(tmp_path: Path) -> None:
     ):
         session.append(message)
 
-    data = _data(_call(manager, session, {"action": "overview"}))
+    result = _call(manager, session, {"action": "overview"})
+    data = _data(result)
 
     assert [item["checkpoint"] for item in data["items"]] == [1, 2]
     assert data["items"][0] == {
@@ -230,6 +241,26 @@ def test_overview_reports_fixed_checkpoint_sections(tmp_path: Path) -> None:
     assert data["has_more"] is False
     assert "next_cursor" not in data
     assert "content" not in data
+    # The user sees each section's summary; snapshot identity stays raw.
+    assert _details({"action": "overview"}, result) == [
+        {
+            "type": "results",
+            "items": [
+                {
+                    "title": "Checkpoint 1",
+                    "meta": "2 messages",
+                    "time": first_assistant.timestamp,
+                    "text": "First summary",
+                },
+                {
+                    "title": "Checkpoint 2",
+                    "meta": "1 message",
+                    "time": second_user.timestamp,
+                    "text": "Second summary",
+                },
+            ],
+        }
+    ]
 
 
 def test_read_uses_all_history_or_one_non_overlapping_section(tmp_path: Path) -> None:
@@ -257,13 +288,9 @@ def test_read_uses_all_history_or_one_non_overlapping_section(tmp_path: Path) ->
 
     all_data = _data(_call(manager, session, {"action": "read"}))
     second_data = _data(_call(manager, session, {"action": "read", "checkpoint": 2}))
-    end_data = _data(
-        _call(
-            manager,
-            session,
-            {"action": "read", "checkpoint": 2, "direction": "end", "limit": 2},
-        )
-    )
+    end_read = {"action": "read", "checkpoint": 2, "direction": "end", "limit": 2}
+    end_result = _call(manager, session, end_read)
+    end_data = _data(end_result)
 
     assert [message["id"] for message in _messages(all_data)] == [
         first_user.id,
@@ -283,6 +310,25 @@ def test_read_uses_all_history_or_one_non_overlapping_section(tmp_path: Path) ->
         error.id,
     ]
     assert _messages(second_data)[0] == second_user.to_dict()
+    # The user sees who wrote each message, when, and its text; the cursor stays raw.
+    assert _details(end_read, end_result) == [
+        {
+            "type": "results",
+            "items": [
+                {
+                    "title": title,
+                    "meta": "checkpoint 2",
+                    "time": message.timestamp,
+                    "text": text,
+                }
+                for title, message, text in (
+                    ("Assistant", second_assistant, "Answer two"),
+                    ("Error", error, "Temporary failure"),
+                )
+            ],
+        },
+        {"type": "notice", "level": "info", "text": "More history follows."},
+    ]
 
 
 @pytest.mark.parametrize(

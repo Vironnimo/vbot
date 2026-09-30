@@ -51,6 +51,9 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    display_notice,
+    display_results,
+    display_text,
     offload_tool_handler,
     result_count_fact_builder,
     tool_failure,
@@ -198,6 +201,7 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         display=ToolDisplay(
             parts_builder=_history_display_parts,
             fact_builder=result_count_fact_builder("items", at_least_field="has_more"),
+            detail_builder=_history_detail_blocks,
             hidden_argument_keys=("query", "message_id", "cursor"),
         ),
     )
@@ -808,6 +812,99 @@ def _serialized_result_bytes(data: JsonObject) -> int:
             separators=(",", ":"),
         ).encode("utf-8")
     )
+
+
+_ROLE_TITLES = {
+    "system": "System",
+    "user": "User",
+    "assistant": "Assistant",
+    "tool": "Tool result",
+    "note": "Note",
+    "error": "Error",
+    "run_summary": "Run summary",
+    "agent_takeover": "Agent takeover",
+}
+
+
+def _message_text(message: JsonObject) -> str:
+    """Return a message's readable text, or the Tools an Assistant turn called."""
+    content = message.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = "\n".join(
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        )
+    else:
+        text = ""
+    if text.strip():
+        return text
+    calls = message.get("tool_calls")
+    names = [
+        call["name"]
+        for call in (calls if isinstance(calls, list) else [])
+        if isinstance(call, dict) and isinstance(call.get("name"), str)
+    ]
+    return f"Called {', '.join(names)}" if names else ""
+
+
+def _history_item(item: JsonObject) -> dict[str, str | None]:
+    """Describe one returned section, match, record or record part for the user."""
+    checkpoint = item.get("checkpoint")
+    section = f"checkpoint {checkpoint}" if isinstance(checkpoint, int) else None
+    if "summary" in item:
+        count = item.get("eligible_count")
+        return {
+            "title": f"Checkpoint {checkpoint}",
+            "meta": f"{count} message{'' if count == 1 else 's'}"
+            if isinstance(count, int)
+            else None,
+            "time": item.get("end_timestamp") or item.get("timestamp"),
+            "text": item.get("summary"),
+        }
+    message = item.get("message")
+    record = message if isinstance(message, dict) else item
+    meta = [section]
+    if isinstance(record.get("name"), str):
+        meta.insert(0, record["name"])
+    if isinstance(item.get("segment"), dict):
+        meta.append("part of a long message")
+    role = record.get("role")
+    return {
+        "title": _ROLE_TITLES.get(str(role), str(role or "Message")),
+        "meta": " · ".join(part for part in meta if part),
+        "time": record.get("timestamp"),
+        "text": item["excerpt"] if "excerpt" in item else _message_text(record),
+    }
+
+
+def _history_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
+    """Show the user the searched words and the sections or messages the call returned.
+
+    Snapshot identity, cursors and notes are for the Agent and stay in the raw
+    result.
+    """
+    blocks: list[JsonObject] = []
+    if arguments.get("action") == "search":
+        blocks.append(display_text("query", source="arguments", path=("query",)))
+    data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return blocks
+    items = [item for item in data["items"] if isinstance(item, dict)]
+    if items:
+        blocks.append(display_results([_history_item(item) for item in items]))
+    else:
+        empty = (
+            "Nothing matched in the earlier history."
+            if arguments.get("action") == "search"
+            else "No earlier messages were returned."
+        )
+        blocks.append(display_notice("info", empty))
+    if data.get("has_more") is True:
+        blocks.append(display_notice("info", "More history follows."))
+    return blocks
 
 
 def _history_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
