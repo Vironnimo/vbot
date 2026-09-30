@@ -479,8 +479,10 @@ async def test_ending_a_channel_ends_its_construction_failure_recovery(
         raise ChannelConfigError("credential temporarily unavailable")
 
     monkeypatch.setattr(service, "_create_adapter", fail_construction)
-    if ending == "service-stop":
-        monkeypatch.setattr(service, "_restart_delay_seconds", lambda _attempt: 0.0)
+    # Disabling must end the retry before it fires, however slowly the disable
+    # runs; stopping the service must happen right after a retry has failed.
+    retry_delay = 0.0 if ending == "service-stop" else 3600.0
+    monkeypatch.setattr(service, "_restart_delay_seconds", lambda _attempt: retry_delay)
     service.start()
     try:
         retry = service._adapter_restart_tasks[config.id]
