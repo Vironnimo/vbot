@@ -14,6 +14,7 @@ from core.utils.atomic import (
     atomic_write_stream,
     atomic_write_text,
     temporary_path,
+    write_new_bytes,
 )
 
 
@@ -72,6 +73,44 @@ def test_atomic_write_fsyncs_data_before_replace_and_directories_after(
     assert events[:2] == ["file_fsync", "replace"]
     assert all(event == "directory_fsync" for event in events[2:])
     assert len(events[2:]) == (2 if os.name == "posix" else 0)
+
+
+def test_write_new_bytes_fsyncs_the_file_then_its_directory_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "blob.bin"
+    events: list[str] = []
+
+    def record_fsync(descriptor: int) -> None:
+        mode = os.fstat(descriptor).st_mode
+        events.append("directory_fsync" if stat.S_ISDIR(mode) else "file_fsync")
+
+    monkeypatch.setattr("core.utils.atomic.os.fsync", record_fsync)
+
+    write_new_bytes(target, b"new")
+
+    assert target.read_bytes() == b"new"
+    assert events == ["file_fsync", *(["directory_fsync"] if os.name == "posix" else [])]
+
+
+def test_write_new_bytes_never_replaces_and_removes_the_file_it_failed_to_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    existing = tmp_path / "taken.bin"
+    existing.write_bytes(b"old")
+
+    with pytest.raises(FileExistsError):
+        write_new_bytes(existing, b"new")
+
+    def fail_fsync(_descriptor: int) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("core.utils.atomic.os.fsync", fail_fsync)
+    with pytest.raises(OSError, match="disk full"):
+        write_new_bytes(tmp_path / "new.bin", b"new")
+
+    assert existing.read_bytes() == b"old"
+    assert [path.name for path in tmp_path.iterdir()] == ["taken.bin"]
 
 
 def test_atomic_write_cleans_staging_file_after_replace_failure(
