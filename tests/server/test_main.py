@@ -198,12 +198,12 @@ def _serve_until(cause: str) -> Callable[[Any], None]:
             raise SystemExit(3)
         app["on_ready"](_READY_RUNTIME)
         server.started = True
-        if cause == "control":
-            app["request_shutdown"]("tray_quit")
-        elif cause == "signal":
+        if cause == "signal":
             server.handle_exit(signal.SIGINT, None)
+        else:
+            app["request_shutdown"]("tray_quit")
         assert server.should_exit
-        app["on_stopped"]()
+        app["on_stopped"](cause != "shutdown_failed")
 
     return run
 
@@ -214,6 +214,11 @@ def _serve_until(cause: str) -> Callable[[Any], None]:
         ("control", "[INFO] vbot.server - Server stopped (reason=control initiator=tray_quit "),
         ("signal", "[INFO] vbot.server - Server stopped (reason=signal signal=SIGINT "),
         ("startup_failed", "[WARN] vbot.server - Server stopped (reason=startup_failed "),
+        (
+            "shutdown_failed",
+            "[WARN] vbot.server - Server stopped (reason=control initiator=tray_quit "
+            "shutdown=failed ",
+        ),
     ],
 )
 def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
@@ -222,9 +227,14 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
     _patch_serving(monkeypatch, _serve_until(cause))
     data_dir = tmp_path / "data"
 
-    if cause == "startup_failed":
-        with pytest.raises(SystemExit):
+    if cause in {"startup_failed", "shutdown_failed"}:
+        with pytest.raises(SystemExit) as exited:
             main(["--data-dir", str(data_dir), "--port", "8765", "--verification-only"])
+        # A failed Runtime shutdown, already logged per step, still fails the process.
+        assert (exited.value.code == server_main.SHUTDOWN_FAILED_EXIT_CODE) is (
+            cause == "shutdown_failed"
+        )
+        assert not (data_dir / "runtime" / "server-8765.json").exists()
     else:
         main(["--data-dir", str(data_dir), "--port", "8765", "--verification-only"])
 

@@ -41,6 +41,7 @@ __all__ = [
     "DEFAULT_HOST",
     "DEFAULT_PORT",
     "PORT_SETTING_KEYS",
+    "SHUTDOWN_FAILED_EXIT_CODE",
     "ServerBind",
     "main",
     "parse_args",
@@ -49,6 +50,10 @@ __all__ = [
 ]
 
 _LOGGER = get_logger("server")
+# A stop whose Runtime shutdown failed ends with this status (sysexits EX_SOFTWARE),
+# distinct from uvicorn's exit 1 after a failed bind. A signal stop still ends by
+# re-raising its signal.
+SHUTDOWN_FAILED_EXIT_CODE = 70
 # The directory holding this code: `app` inside an installed version of a packaged build.
 _APP_ROOT = Path(__file__).resolve().parents[1]
 
@@ -76,7 +81,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Start uvicorn for the vBot FastAPI app."""
+    """Start uvicorn for the vBot FastAPI app.
+
+    Exits with ``SHUTDOWN_FAILED_EXIT_CODE`` after a stop whose Runtime shutdown failed.
+    """
     if uvicorn is None:
         raise RuntimeError("uvicorn is required to start the server") from _UVICORN_IMPORT_ERROR
     args = parse_args(argv)
@@ -135,8 +143,11 @@ def main(argv: list[str] | None = None) -> None:
                 _prepare_for_serving()
                 lifecycle.started(runtime)
 
-            def on_stopped() -> None:
-                lifecycle.stopped(listening=_server_listening(server_holder))
+            def on_stopped(runtime_stopped_cleanly: bool) -> None:
+                lifecycle.stopped(
+                    listening=_server_listening(server_holder),
+                    runtime_stopped_cleanly=runtime_stopped_cleanly,
+                )
 
             app_kwargs: dict[str, Any] = {
                 "config": config,
@@ -181,6 +192,8 @@ def main(argv: list[str] | None = None) -> None:
                 lifecycle.stopped(listening=_server_listening(server_holder))
                 log_manager.close()
             remove_server_control(control)
+    if lifecycle.shutdown_failed:
+        raise SystemExit(SHUTDOWN_FAILED_EXIT_CODE)
 
 
 class _ServerLifecycle:
@@ -205,6 +218,7 @@ class _ServerLifecycle:
         self._stop_cause: dict[str, str] | None = None
         self._ready = False
         self._stopped = False
+        self.shutdown_failed = False
 
     def request_stop(self, reason: str, **details: str) -> None:
         """Remember why the server stops; the first cause wins."""
@@ -235,19 +249,29 @@ class _ServerLifecycle:
             "Server started (%s %s)", _format_fields(fields), runtime.startup_summary.describe()
         )
 
-    def stopped(self, *, listening: bool) -> None:
+    def stopped(self, *, listening: bool, runtime_stopped_cleanly: bool = True) -> None:
+        """Write the stop line once; a failed Runtime shutdown marks it ``shutdown=failed``.
+
+        The Runtime logged each failed shutdown step; the stop line only records
+        the outcome, which also sets the process exit status.
+        """
         if self._stopped:
             return
         self._stopped = True
+        self.shutdown_failed = not runtime_stopped_cleanly
         cause = self._stop_cause
         if cause is None:
             cause = {"reason": "unknown" if self._ready and listening else "startup_failed"}
+        fields: dict[str, object] = dict(cause)
+        if self.shutdown_failed:
+            fields["shutdown"] = "failed"
+        fields["uptime"] = _format_duration(time.time() - self._process_created)
         _LOGGER.log(
-            logging.WARNING if cause["reason"] in {"startup_failed", "unknown"} else logging.INFO,
+            logging.WARNING
+            if self.shutdown_failed or cause["reason"] in {"startup_failed", "unknown"}
+            else logging.INFO,
             "Server stopped (%s)",
-            _format_fields(
-                {**cause, "uptime": _format_duration(time.time() - self._process_created)}
-            ),
+            _format_fields(fields),
         )
 
 

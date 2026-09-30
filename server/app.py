@@ -245,7 +245,7 @@ def create_app(
     request_restart: Callable[[], None] | None = None,
     safe_startup_mode: Literal["verification", "test"] | None = None,
     on_ready: Callable[[Any], None] | None = None,
-    on_stopped: Callable[[], None] | None = None,
+    on_stopped: Callable[[bool], None] | None = None,
 ) -> FastAPIType:
     """Create the FastAPI app and wire runtime services into app state.
 
@@ -253,7 +253,9 @@ def create_app(
     ``STOP_INITIATORS`` value or ``unknown``). ``on_ready`` receives the
     started Runtime once at the end of lifespan startup, before the server
     accepts connections; ``on_stopped`` runs once at the end of lifespan
-    shutdown, after the Runtime stopped.
+    shutdown, after the Runtime stopped, and receives whether it stopped cleanly.
+    A failed Runtime shutdown is reported only that way, not raised to uvicorn:
+    the Runtime already logged each failed step.
     """
     if FastAPI is None:
         raise RuntimeError(
@@ -304,6 +306,7 @@ def create_app(
         try:
             yield
         finally:
+            runtime_stopped_cleanly = False
             try:
                 server_logger.debug("Server application stopping")
                 await _shutdown_live_calls(app.state, server_logger)
@@ -328,10 +331,10 @@ def create_app(
                     server_logger,
                 )
                 await _shutdown_model_list_refreshes(app_runtime)
-                await _shutdown_runtime(app_runtime)
+                runtime_stopped_cleanly = await _shutdown_runtime(app_runtime)
             finally:
                 if on_stopped is not None:
-                    on_stopped()
+                    on_stopped(runtime_stopped_cleanly)
 
     app = FastAPI(lifespan=lifespan)
     if effective_safe_mode == "verification":

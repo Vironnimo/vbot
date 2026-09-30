@@ -288,12 +288,21 @@ async def _fire_extension_startup(runtime: Any) -> None:
         await fire()
 
 
-async def _shutdown_runtime(runtime: Any) -> None:
+async def _shutdown_runtime(runtime: Any) -> bool:
+    """Shut the Runtime down; return whether every shutdown step succeeded.
+
+    The Runtime logs each failed step with its name and traceback, so the failure
+    is not raised again: uvicorn would log the same traceback a second time.
+    """
     aclose = getattr(runtime, "aclose", None)
-    if callable(aclose):
-        await aclose()
-        return
-    runtime.stop()
+    try:
+        if callable(aclose):
+            await aclose()
+        else:
+            runtime.stop()
+    except Exception:
+        return False
+    return True
 
 
 async def _shutdown_model_list_refreshes(runtime: Any) -> None:
