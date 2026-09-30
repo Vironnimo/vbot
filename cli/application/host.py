@@ -10,6 +10,7 @@ import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from types import EllipsisType
 from typing import Any
 from urllib.parse import urlencode
 
@@ -25,15 +26,21 @@ from cli.application.state import (
     contained,
     discover,
     exclusive,
+    loaded_version_id,
     read_json,
     write_json,
 )
 from cli.application.tray import TraySink, TrayState, run_tray
 from core.utils.logging import LogManager
+from core.utils.processes import subprocess_creation_flags
 
 _LOGGER = logging.getLogger("vbot.application.host")
 _ACTIVITY_LIMIT = 200
 _FAILED_UPDATE_PHASES = frozenset({"failed", "rolled_back", "needs_attention"})
+#: How long a successor must survive before the handoff counts as started.
+_SUCCESSOR_GRACE_SECONDS = 2.0
+#: How long a successor waits for its predecessor to release the host lock.
+_SUCCESSOR_LOCK_SECONDS = 30.0
 
 
 class ApplicationFacade:
@@ -42,12 +49,23 @@ class ApplicationFacade:
     ``state`` stays cheap enough to call every second: update records are
     reread only when their files change, and the server state comes from the
     event-stream monitor that :meth:`watch` starts.
+
+    ``running_version`` names the installed version whose code this tray runs,
+    by default derived from the loaded module; ``None`` (a source checkout)
+    disables restarts into a newly activated version.
     """
 
-    def __init__(self, install: Installation) -> None:
+    def __init__(
+        self, install: Installation, *, running_version: str | None | EllipsisType = ...
+    ) -> None:
         self._install = install
+        self._running_version = (
+            loaded_version_id(Path(__file__))
+            if isinstance(running_version, EllipsisType)
+            else running_version
+        )
         self._status_error = ""
-        self._display_version_id = ""
+        self._active_version_id = ""
         self._display_version = ""
         self._version_signature: tuple[int, int] | None = None
         self._observer = operations.OperationObserver(install)
@@ -66,22 +84,25 @@ class ApplicationFacade:
     def state(self) -> TrayState:
         try:
             operation = self._observer.latest()
+            update_idle = operation is None or operation.terminal
         except Exception as error:
             self.report_error(f"Could not read update status: {error}")
-            operation = None
+            operation, update_idle = None, False
         activity = self._observe_progress(operation)
         server_state, server_url = self._server()
+        version = self._version()
         return TrayState(
             server_state=server_state,
             install_shape=self._install.install_shape,
             update_phase=operation.phase if operation else None,
             update_message=operation.message if operation else "",
-            version=self._version(),
+            version=version,
             exit_requested=_valid_exit_request(self._install.root),
             error=self._status_error,
             server_url=server_url,
             update_activity=activity,
             details=self._details(server_url),
+            restart_pending=update_idle and self._activation_changed(),
         )
 
     def watch(self, sink: TraySink) -> None:
@@ -175,6 +196,42 @@ class ApplicationFacade:
         path.mkdir(parents=True, exist_ok=True)
         _open_folder(path)
 
+    def restart(self) -> None:
+        """Start a successor tray on the active version; the server keeps running.
+
+        The successor is the stable bootstrap, which resolves the active version
+        itself and waits for this host to release its lock. Raises
+        ``ApplicationError`` when the successor exits at once; this tray then
+        keeps running. The caller stops this tray after a successful handoff.
+        """
+
+        if self._running_version is None:
+            raise ApplicationError("This tray does not run from an installed version")
+        self._version()
+        process = subprocess.Popen(
+            [str(self._install.root / "vBot.exe")],
+            cwd=self._install.root,
+            env={**operations.child_environment(self._install), operations.HOST_SUCCESSOR_ENV: "1"},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess_creation_flags(new_process_group=True, breakaway=True),
+            start_new_session=os.name != "nt",
+        )
+        try:
+            process.wait(timeout=_SUCCESSOR_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            raise ApplicationError(
+                f"The tray for the active version exited at once (exit code {process.returncode})"
+            )
+        _LOGGER.info(
+            "Tray restarting into the active version (from=%s to=%s)",
+            self._running_version,
+            self._active_version_id,
+        )
+
     def quit(self) -> None:
         if self._install.owns_server:
             self.stop_server(initiator="tray_quit")
@@ -215,13 +272,25 @@ class ApplicationFacade:
             return self._display_version
         self._version_signature = signature
         active = self._install.version()
-        if active.name != self._display_version_id:
+        if active.name != self._active_version_id:
             release = read_json(active / "release.json", limit=32 * 1024**2)
             version = release.get("version")
             self._display_version = version if isinstance(version, str) else ""
-            self._display_version_id = active.name
+            self._active_version_id = active.name
             self._source_label = None
         return self._display_version
+
+    def _activation_changed(self) -> bool:
+        """Whether another version became active than the one this tray runs.
+
+        Compares the active id that :meth:`_version` caches, so it reads no file.
+        """
+
+        return (
+            self._running_version is not None
+            and bool(self._active_version_id)
+            and os.path.normcase(self._active_version_id) != os.path.normcase(self._running_version)
+        )
 
     def _server(self) -> tuple[str, str]:
         status = self._monitor.status if self._monitor is not None else MonitorStatus()
@@ -360,8 +429,10 @@ def main() -> int:
     install = discover()
     if install is None:
         return 0
+    # A successor started by a restart waits for its predecessor to exit.
+    successor = os.environ.get(operations.HOST_SUCCESSOR_ENV) == "1"
     try:
-        with exclusive(install.root, "host"):
+        with exclusive(install.root, "host", timeout=_SUCCESSOR_LOCK_SECONDS if successor else 0):
             contained(install.root, "host-exit-request.json").unlink(missing_ok=True)
             write_json(
                 contained(install.root, "host.json"),
@@ -377,7 +448,13 @@ def main() -> int:
                 try:
                     operations.recover_operations(install)
                     operation = operations.status(install)
-                    if install.owns_server and (operation is None or operation.terminal):
+                    # A successor keeps the server as its predecessor left it,
+                    # including a server the user stopped on purpose.
+                    if (
+                        not successor
+                        and install.owns_server
+                        and (operation is None or operation.terminal)
+                    ):
                         facade.start_server()
                 except Exception as error:
                     _LOGGER.exception(

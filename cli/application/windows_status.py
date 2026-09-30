@@ -24,6 +24,7 @@ _CLASS_NAME = "vBotTrayStatus"
 _BUTTON_SLOTS = 3
 _BUTTON_ID = 100
 _IDCANCEL = 2
+_SIZE_MINIMIZED = 1
 _EMPTY_ACTIVITY = "No update activity since the tray started."
 _PATH_ROWS = frozenset({"Data", "Installed in"})
 
@@ -61,8 +62,15 @@ class StatusWindow:
         self._buttons: list[int] = []
         self._button_items: list[TrayMenuItem | None] = [None] * _BUTTON_SLOTS
         self._close = 0
+        self._minimized = False
         self._registered = False
         self._procedure = native.WNDPROC(self._window_proc)
+
+    @property
+    def visible(self) -> bool:
+        """Whether the window is open and not minimized; readable from any thread."""
+
+        return bool(self.hwnd) and not self._minimized
 
     def show(self, status: TrayStatus) -> None:
         self._status = status
@@ -305,6 +313,7 @@ class StatusWindow:
         if message == native.WM_ERASEBKGND:
             return 1
         if message == native.WM_SIZE:
+            self._minimized = wparam == _SIZE_MINIMIZED
             self._layout()
             return 0
         if message == native.WM_GETMINMAXINFO:
@@ -360,6 +369,7 @@ class StatusWindow:
                 native.gdi32.DeleteObject(brush)
         self._background_brush = self._field_brush = 0
         self.hwnd = self._edit = self._close = 0
+        self._minimized = False
         self._buttons = []
         self._button_items = [None] * _BUTTON_SLOTS
 

@@ -66,6 +66,9 @@ class Actions(TrayActions):
     def open_server_logs(self) -> None:
         self._call("open_server_logs")
 
+    def restart(self) -> None:
+        self._call("restart")
+
     def quit(self) -> None:
         self._call("quit")
 
@@ -77,6 +80,7 @@ class View:
         self.dismissed: list[str] = []
         self.status_shown = 0
         self.stopped = False
+        self.busy = False
 
     def present(self, presentation: TrayPresentation) -> None:
         self.presented.append(presentation)
@@ -89,6 +93,9 @@ class View:
 
     def show_status(self) -> None:
         self.status_shown += 1
+
+    def interacting(self) -> bool:
+        return self.busy
 
     def stop(self) -> None:
         self.stopped = True
@@ -414,6 +421,42 @@ def test_quit_stops_the_view_only_after_the_facade_quits_successfully():
         controller.close()
 
 
+def test_pending_restart_waits_for_an_idle_tray_and_retries_ten_minutes_after_a_failure():
+    now = [1000.0]
+    actions = Actions(TrayState("running", "server", restart_pending=True))
+    view = View()
+    controller = TrayController(actions, poll_interval=0.01, clock=lambda: now[0])
+    controller.attach_view(view)
+
+    view.busy = True
+    controller._poll_state()
+    assert actions.calls == []
+
+    view.busy = False
+    actions.fail = "restart"
+    controller._poll_state()
+    assert actions.calls == ["restart"]
+    assert view.stopped is False
+    assert controller.presentation().status.rows[0][0] == "Last error"
+    now[0] += 599
+    controller._poll_state()
+    assert actions.calls == ["restart"]
+
+    now[0] += 1
+    actions.fail = None
+    # A queued tray action goes first; the handoff never quits or stops the server.
+    controller.invoke("open_logs")
+    controller._poll_state()
+    assert actions.calls == ["restart"]
+    controller.start()
+    try:
+        _wait_until(lambda: view.stopped)
+    finally:
+        controller.close()
+    controller._poll_state()
+    assert actions.calls == ["restart", "open_logs", "restart"]
+
+
 class Commands:
     def __init__(self) -> None:
         self.calls: list[object] = []
@@ -428,12 +471,12 @@ class Commands:
         self.calls.append(toast)
 
 
-def _tray(commands: Commands, monkeypatch: pytest.MonkeyPatch, tmp_path):
+def _tray(commands: Commands, monkeypatch: pytest.MonkeyPatch, tmp_path, **options):
     if sys.platform != "win32":
         pytest.skip("native Windows tray")
     from cli.application import windows_tray
 
-    tray = windows_tray.WindowsTray(commands, tmp_path / "icon.ico")
+    tray = windows_tray.WindowsTray(commands, tmp_path / "icon.ico", **options)
     tray._hwnd = 23
     notified: list[tuple[int, str]] = []
 
@@ -541,6 +584,68 @@ def test_windows_toast_click_opens_it_and_switching_to_desktop_dismisses_it(
     tray._on_foreground(7, 3, 99, 0, 0, 0, 0)
     assert tray._toast is None
     assert notified[-1] == (1, "")  # NIM_MODIFY with empty text removes the toast
+
+
+def test_windows_tray_is_interacting_while_its_menu_toast_or_status_window_shows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    if sys.platform != "win32":
+        pytest.skip("native Windows tray")
+    from cli.application import windows_status, windows_tray
+    from cli.application.tray import TrayMenuItem, TrayStatus
+
+    now = [0.0]
+    tray, _notified = _tray(Commands(), monkeypatch, tmp_path, clock=lambda: now[0])
+    user32 = windows_tray.native.user32
+    for name in (
+        "SetWindowPos",
+        "SetForegroundWindow",
+        "PostMessageW",
+        "SetCursor",
+        "SetWinEventHook",
+        "UnhookWinEvent",
+    ):
+        monkeypatch.setattr(user32, name, lambda *_args: True)
+    during_menu: list[bool] = []
+
+    def popup(*_args: object) -> int:
+        during_menu.append(tray.interacting())
+        return 0
+
+    monkeypatch.setattr(user32, "TrackPopupMenuEx", popup)
+    tray._presentation = TrayPresentation(
+        "normal",
+        "vBot",
+        (TrayMenuItem("Status…", "show_status"),),
+        TrayStatus("vBot", "", False, (), (), ()),
+    )
+    assert tray.interacting() is False
+
+    tray._on_tray(windows_tray.native.WM_CONTEXTMENU, 0)
+    assert during_menu == [True]
+    assert tray.interacting() is False
+
+    toast = Toast("update:upd_1", "update_result", "vBot updated", "Update completed")
+    tray.show_toast(toast)
+    assert tray.interacting() is True  # before the UI thread shows it
+    tray._drain()
+    tray._on_tray(0x404, 0)  # NIN_BALLOONTIMEOUT
+    assert tray.interacting() is False
+    tray.show_toast(toast)
+    tray._drain()
+    now[0] += 300  # a toast whose close Windows never reports cannot block forever
+    assert tray.interacting() is False
+
+    status = windows_status.StatusWindow(lambda _action: None, lambda: 0, lambda: 0)
+    monkeypatch.setattr(status, "_layout", lambda: None)
+    tray._status = status
+    assert tray.interacting() is False
+    status.hwnd = 5
+    status._handle(5, windows_tray.native.WM_SIZE, 0, 0)
+    assert tray.interacting() is True
+    status._handle(5, windows_tray.native.WM_SIZE, 1, 0)  # SIZE_MINIMIZED
+    assert tray.interacting() is False
+    status.hwnd = 0
 
 
 @pytest.mark.parametrize("state", ["stopped", "updating", "error"])

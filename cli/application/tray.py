@@ -11,6 +11,7 @@ import logging
 import queue
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,8 @@ _FINISHED_UPDATE_PHASES = frozenset(
     {"completed", "failed", "rolled_back", "needs_attention", "prepared"}
 )
 _FAILED_UPDATE_PHASES = frozenset({"failed", "rolled_back", "needs_attention"})
+#: Earliest retry after a failed restart into the active version.
+_RESTART_RETRY_SECONDS = 600.0
 
 
 @dataclass(frozen=True)
@@ -33,7 +36,9 @@ class TrayState:
 
     ``update_activity`` holds the progress lines observed for the newest update,
     like the console of a waiting ``vbot update``; ``details`` holds the labeled
-    rows of the status window.
+    rows of the status window. ``restart_pending`` means another version became
+    active since this tray started and no update is running, so the tray should
+    hand over to a successor running the active version.
     """
 
     server_state: str
@@ -46,6 +51,7 @@ class TrayState:
     server_url: str = ""
     update_activity: tuple[str, ...] = ()
     details: tuple[tuple[str, str], ...] = ()
+    restart_pending: bool = False
 
 
 class TraySink(Protocol):
@@ -84,6 +90,8 @@ class TrayActions(Protocol):
     def open_logs(self) -> None: ...
 
     def open_server_logs(self) -> None: ...
+
+    def restart(self) -> None: ...
 
     def quit(self) -> None: ...
 
@@ -135,21 +143,34 @@ class TrayView(Protocol):
 
     def show_status(self) -> None: ...
 
+    def interacting(self) -> bool:
+        """Whether the user may be using the tray: open menu, shown toast or status window."""
+        ...
+
     def stop(self) -> None: ...
 
 
 class TrayController:
     """Serialize facade work and project facade state onto one native view."""
 
-    def __init__(self, actions: TrayActions, *, poll_interval: float = 1.0) -> None:
+    def __init__(
+        self,
+        actions: TrayActions,
+        *,
+        poll_interval: float = 1.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be positive")
         self._actions = actions
         self._poll_interval = poll_interval
+        self._clock = clock
         self._state: TrayState | None = None
         self._status_error = ""
         self._update_requested = False
-        self._work: queue.Queue[Callable[[], None] | None] = queue.Queue()
+        self._restarted = False
+        self._restart_retry_at: float | None = None
+        self._work: queue.Queue[Callable[[], object] | None] = queue.Queue()
         self._poll_queued = threading.Event()
         self._closed = threading.Event()
         self._view: TrayView | None = None
@@ -335,9 +356,34 @@ class TrayController:
                 self._update_requested = False
         if state.exit_requested:
             self._run_action("quit", self._actions.quit)
+        elif state.restart_pending:
+            self._restart(state)
         self._publish()
 
-    def _run_action(self, action: str, callback: Callable[[], None]) -> None:
+    def _restart(self, state: TrayState) -> None:
+        """Hand the tray over to the active version once nobody is using it.
+
+        Runs on the worker, so attempts never overlap. A successful handoff stops
+        the view without quitting: the server keeps running for the successor.
+        """
+
+        view = self._view
+        if (
+            view is None
+            or self._restarted
+            or self._update_active(state)
+            or (self._restart_retry_at is not None and self._clock() < self._restart_retry_at)
+            # A queued tray action goes first; the next poll checks again.
+            or not self._work.empty()
+            or view.interacting()
+        ):
+            return
+        if self._run_action("restart_tray", self._actions.restart):
+            self._restarted = True
+        else:
+            self._restart_retry_at = self._clock() + _RESTART_RETRY_SECONDS
+
+    def _run_action(self, action: str, callback: Callable[[], None]) -> bool:
         try:
             callback()
         except Exception as error:  # no facade exception may leave the worker unusable
@@ -345,11 +391,12 @@ class TrayController:
                 with self._state_lock:
                     self._update_requested = False
             self._record_error(f"Could not {action.replace('_', ' ')}", error)
-        else:
-            with self._state_lock:
-                self._status_error = ""
-            if action == "quit" and self._view is not None:
-                self._view.stop()
+            return False
+        with self._state_lock:
+            self._status_error = ""
+        if action in {"quit", "restart_tray"} and self._view is not None:
+            self._view.stop()
+        return True
 
     def _record_error(self, message: str, error: Exception) -> None:
         _LOGGER.exception("%s", message, exc_info=error)
