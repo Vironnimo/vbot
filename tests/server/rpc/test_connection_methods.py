@@ -292,6 +292,8 @@ async def test_provider_set_key_writes_the_account_credential_and_signals_provid
 ) -> None:
     state = _openrouter_state(tmp_path, monkeypatch)
     account_params = {"account": account} if account else {}
+    if account:
+        state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY__wOrK", "old-alias-key")
 
     result = await rpc_result(
         state, "provider.set_key", provider_id="openrouter", value="sk-or-test", **account_params
@@ -309,6 +311,12 @@ async def test_provider_set_key_writes_the_account_credential_and_signals_provid
     assert state.runtime.provider_credentials.has_credentials(
         "openrouter", f"openrouter:api-key{account_suffix}"
     )
+    assert (
+        state.runtime.provider_credentials.get_credentials(
+            "openrouter", f"openrouter:api-key{account_suffix}"
+        )
+        == "sk-or-test"
+    )
     # A credential change alters which Models are selectable.
     assert resource_changes(state) == [{"kind": "providers"}]
 
@@ -317,7 +325,11 @@ async def test_provider_set_key_writes_the_account_credential_and_signals_provid
 @pytest.mark.parametrize(
     ("account", "credential_key", "remaining"),
     [
-        (None, "OPENROUTER_API_KEY", {"OPENROUTER_API_KEY__WORK": "sk-or-work"}),
+        (
+            None,
+            "OPENROUTER_API_KEY",
+            {"OPENROUTER_API_KEY__WORK": "sk-or-work", "OPENROUTER_API_KEY__wOrK": "alias-work"},
+        ),
         ("work", "OPENROUTER_API_KEY__WORK", {"OPENROUTER_API_KEY": "sk-or-default"}),
     ],
 )
@@ -331,6 +343,7 @@ async def test_provider_unset_key_removes_only_the_account_credential(
     state = _openrouter_state(tmp_path, monkeypatch)
     state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY", "sk-or-default")
     state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY__WORK", "sk-or-work")
+    state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY__wOrK", "alias-work")
     account_params = {"account": account} if account else {}
 
     result = await rpc_result(
