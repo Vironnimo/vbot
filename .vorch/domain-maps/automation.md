@@ -44,7 +44,11 @@ admission. Admitted notices join only a matching owned Run's request boundary or
 the injected owned continuation starter; admission failure never falls back to an
 arbitrary Session write. A blocked admission re-checks the owner: a stale owner (closed
 group, retired Extension) fails its notices terminally like the fallback instead of
-retrying. Group closure withdraws only matching pending notices and
+retrying. Producers treat that `RunAdmissionBlockedError` as the expected end of the
+owner's lifecycle: the Sub-Agent tracker and Terminal attention delivery leave the
+result undelivered and log it at DEBUG without a traceback, while any other terminal
+failure logs ERROR (`tests/core/subagents/test_tracker.py`,
+`tests/core/tools/test_terminal_manager_attention.py`). Group closure withdraws only matching pending notices and
 keeps no per-group state: late submissions fail validation, which matters because a
 Terminal's stale activity owner can submit long after the group closed. Unrelated
 notices retain normal delivery behavior (`automation.py`,
