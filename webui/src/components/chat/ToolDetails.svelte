@@ -37,10 +37,13 @@
 
   const TEXT_LABELS = {
     command: () => t('chat.toolDetailLabel.command'),
+    input: () => t('chat.toolDetailLabel.input'),
     output: () => t('chat.toolDetailLabel.output'),
     page: () => t('chat.toolDetailLabel.page'),
     query: () => t('chat.toolDetailLabel.query'),
     results: () => t('chat.toolDetailLabel.results'),
+    screen: () => t('chat.toolDetailLabel.screen'),
+    scrollback: () => t('chat.toolDetailLabel.scrollback'),
   };
 
   let blocks = $derived(toolDetailBlocks(tool, { args, result }));

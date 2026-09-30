@@ -69,3 +69,15 @@ async def call(
         registry, manager, projects if projects is not None else ProjectStore(context.data_root)
     )
     return await dispatch_as_executor(registry, context, arguments)
+
+
+def details(
+    manager: TerminalManager, tmp_path: Path, arguments: JsonObject, result: JsonObject
+) -> list[JsonObject]:
+    """Return the detail blocks the user sees for one terminal call."""
+    registry = ToolRegistry()
+    register_terminal_tool(registry, manager, ProjectStore(tmp_path))
+    shown: list[JsonObject] = registry.display_for_call(
+        TERMINAL_TOOL_NAME, arguments, result=result
+    )["details"]
+    return shown

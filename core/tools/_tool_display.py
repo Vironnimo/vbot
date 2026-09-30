@@ -28,7 +28,9 @@ TOOL_DISPLAY_TOOLTIP_MODES = frozenset({"always", "none", "truncated"})
 TOOL_DISPLAY_FACT_UNITS = frozenset({"edits", "failures", "files", "matches", "results"})
 TOOL_DISPLAY_LINE_CHANGES = frozenset({"added", "removed"})
 TOOL_DISPLAY_NOTICE_LEVELS = frozenset({"info", "warning", "error"})
-TOOL_DISPLAY_TEXT_LABELS = frozenset({"command", "output", "page", "query", "results"})
+TOOL_DISPLAY_TEXT_LABELS = frozenset(
+    {"command", "input", "output", "page", "query", "results", "screen", "scrollback"}
+)
 TOOL_DISPLAY_TEXT_SOURCES = frozenset({"arguments", "result"})
 MAX_TOOL_DISPLAY_TEXT_LENGTH = 16_384
 MAX_TOOL_DISPLAY_RESULTS = 20

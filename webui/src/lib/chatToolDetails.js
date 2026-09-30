@@ -399,7 +399,16 @@ const DIFF_LINE_KINDS = { '+': 'added', '-': 'removed', ' ': 'context' };
 const NOTICE_LEVELS = new Set(['info', 'warning', 'error']);
 const MEMORY_SCOPES = new Set(['agent', 'user']);
 const MEMORY_CHANGE_OPS = new Set(['added', 'removed', 'replaced']);
-const TEXT_LABELS = new Set(['command', 'output', 'page', 'query', 'results']);
+const TEXT_LABELS = new Set([
+  'command',
+  'input',
+  'output',
+  'page',
+  'query',
+  'results',
+  'screen',
+  'scrollback',
+]);
 
 // The user-facing detail blocks of a Tool whose display declares them
 // (`display.details`), in the Tool's order, or null for a Tool without them.

@@ -502,6 +502,9 @@ describe('ChatTimeline Tools', () => {
           },
           { type: 'text', label: 'results', text: 'a.py:1:needle' },
           { type: 'text', label: 'page', text: '# Example Domain' },
+          { type: 'text', label: 'input', text: 'y <enter>' },
+          { type: 'text', label: 'scrollback', text: 'line-0' },
+          { type: 'text', label: 'screen', text: 'ready> ' },
         ],
       });
       timeline.render(
@@ -521,6 +524,9 @@ describe('ChatTimeline Tools', () => {
       expect(detailRow('chat.toolDetailLabel.query')).toBeNull();
       expect(detailText('chat.toolDetailLabel.results')).toBe('a.py:1:needle');
       expect(detailText('chat.toolDetailLabel.page')).toBe('# Example Domain');
+      expect(detailText('chat.toolDetailLabel.input')).toBe('y <enter>');
+      expect(detailText('chat.toolDetailLabel.scrollback')).toBe('line-0');
+      expect(detailText('chat.toolDetailLabel.screen')).toBe('ready> ');
       expect(document.querySelector('.tool-raw-call')).not.toBeNull();
     });
 
