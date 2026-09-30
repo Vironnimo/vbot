@@ -13,6 +13,11 @@ the target or the temp file open (antivirus scanners, search indexers) is
 retried for at most about 0.4 s in total. On failure the temp file is removed
 and the error (normally an ``OSError``) re-raised for the caller to translate
 into its own domain error.
+
+``write_new_bytes`` is the counterpart for a file that must never replace
+another: it creates the target exclusively and writes it in place with the
+same flush, fsync and POSIX directory flush. A reader can observe that file
+while it is written, so its caller publishes it through a later step.
 """
 
 from __future__ import annotations
@@ -108,6 +113,32 @@ def atomic_write_stream(
             os.fsync(handle.fileno())
 
     _atomic_write(target_path, write_temporary, data_dir=data_dir, mode=mode)
+
+
+def write_new_bytes(target_path: Path, data: bytes) -> None:
+    """Durably create ``target_path`` holding ``data``; never replace anything there.
+
+    Raises ``FileExistsError`` when an entry already exists at ``target_path``
+    and leaves it untouched. The data is flushed and fsynced and, on POSIX, the
+    new directory entry too - the durability of the atomic writes. The file is
+    written in place, not staged, so the caller publishes it through a later
+    step (for example metadata written afterwards). On any failure after the
+    file was created it is removed and the error re-raised.
+    """
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = target_path.open("xb")
+    try:
+        with handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.name == "posix":
+            _fsync_directory(target_path.parent)
+    except BaseException:
+        with suppress(OSError):
+            target_path.unlink(missing_ok=True)
+        raise
 
 
 def _atomic_write(

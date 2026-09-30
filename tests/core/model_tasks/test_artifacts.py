@@ -129,16 +129,28 @@ def test_read_rejects_every_unusable_artifact(
         store.read(read_id or written.id)
 
 
-def test_short_artifact_ids_reserve_sidecars_across_extensions(tmp_path, monkeypatch):
+def test_artifact_ids_never_reuse_a_reserved_sidecar_or_an_existing_blob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from core.utils import ids
 
-    values = iter((1, 1, 2))
+    values = iter((1, 2, 2, 3))
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    artifact_dir = tmp_path / "speech"
+    artifact_dir.mkdir()
+    # A blob without sidecar, as an interrupted write can leave it behind.
+    orphan = artifact_dir / "aud_000000000001.mp3"
+    orphan.write_bytes(b"orphan")
     store = _store(tmp_path)
+
     first = store.write(b"first", extension="mp3", media_type="audio/mpeg")
+    # The id reserved by the first write is taken for every extension.
     second = store.write(b"second", extension="wav", media_type="audio/wav")
-    assert first.id == "aud_000000000001"
-    assert second.id == "aud_000000000002"
+
+    assert first.id == "aud_000000000002"
+    assert second.id == "aud_000000000003"
+    assert orphan.read_bytes() == b"orphan"
+    assert not (artifact_dir / "aud_000000000001.json").exists()
     assert store.read(first.id).file_path.read_bytes() == b"first"
     assert store.read(second.id).file_path.read_bytes() == b"second"
 

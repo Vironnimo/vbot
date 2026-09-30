@@ -9,6 +9,7 @@ and preserve each task's own error type.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,7 @@ from core.json_documents import (
     strip_unknown_fields,
     validate_format_version,
 )
-from core.utils.atomic import atomic_write_text
+from core.utils.atomic import atomic_write_text, write_new_bytes
 from core.utils.errors import TaskError
 from core.utils.ids import is_safe_id, new_id, write_id_file
 
@@ -88,10 +89,13 @@ class TaskArtifactStore:
     def write(self, payload: bytes, *, extension: str, media_type: str) -> StoredArtifact:
         """Persist one blob and its sidecar; returns the stored artifact.
 
-        Reserves the sidecar name, then writes the blob and complete metadata.
-        Interrupted writes can leave invalid metadata or an orphaned blob;
-        those names stay occupied and reads fail closed. A sidecar is written
-        once and never rewritten.
+        Reserves the id by creating its sidecar exclusively, the id's only
+        uniqueness claim across every extension, then creates the blob durably
+        without replacing any file: a blob an interrupted write left behind keeps
+        its bytes, and the store releases the reservation and draws a fresh id.
+        The complete metadata is written last. Interrupted writes can leave
+        invalid metadata or an orphaned blob; those names stay occupied and
+        reads fail closed. A sidecar is written once and never rewritten.
         """
         self._artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -102,16 +106,21 @@ class TaskArtifactStore:
                     pass
             except FileExistsError:
                 return False
-            if any(path != metadata_path for path in self._artifact_dir.glob(f"{candidate}.*")):
+            try:
+                write_new_bytes(self._artifact_dir / f"{candidate}.{extension}", payload)
+            except FileExistsError:
                 metadata_path.unlink()
                 return False
+            except BaseException:
+                with suppress(OSError):
+                    metadata_path.unlink(missing_ok=True)
+                raise
             return True
 
         artifact_id = new_id("aud" if self._kind == "speech" else "img", claim=claim)
         filename = f"{artifact_id}.{extension}"
         file_path = self._artifact_dir / filename
         metadata_path = self._artifact_dir / f"{artifact_id}.json"
-        file_path.write_bytes(payload)
         metadata = {
             "id": artifact_id,
             "filename": filename,

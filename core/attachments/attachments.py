@@ -34,7 +34,7 @@ from core.json_documents import (
     write_json_document,
 )
 from core.storage.layout import DataDirectoryLayout
-from core.utils.atomic import atomic_write_bytes, atomic_write_text
+from core.utils.atomic import atomic_write_text, write_new_bytes
 from core.utils.errors import VBotError
 from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
@@ -42,8 +42,8 @@ from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
 
-# Storing sniffs the content, scans the attachment directory for an id claim and
-# fsyncs a blob of up to the size limit: never on the Event Loop.
+# Storing sniffs the content and fsyncs a blob of up to the size limit: never on
+# the Event Loop.
 _STORE_WORKERS = BoundedWorkerPool(name="attachments", max_workers=4)
 
 _OOXML_PREFIX = "application/vnd.openxmlformats-officedocument."
@@ -231,19 +231,24 @@ class AttachmentStore:
         self._attachments_dir.mkdir(parents=True, exist_ok=True)
 
         def claim(candidate: str) -> bool:
-            # Reserve the shared sidecar name, independent of blob extension.
+            # The exclusively created sidecar is the id's only uniqueness claim and
+            # covers every blob extension. The blob is then created without replacing
+            # anything: a blob an interrupted store left behind keeps its bytes, and
+            # the store releases the reservation and draws a fresh id.
+            sidecar_path = self._sidecar_path(candidate)
             try:
-                with self._sidecar_path(candidate).open("x", encoding="utf-8"):
+                with sidecar_path.open("x", encoding="utf-8"):
                     pass
             except FileExistsError:
                 return False
-            if any(
-                path != self._sidecar_path(candidate)
-                for path in self._attachments_dir.glob(f"{candidate}.*")
-            ):
-                self._sidecar_path(candidate).unlink()
-                return False
-            return True
+            try:
+                created = self._create_blob(self._blob_path(candidate, media_type), data)
+            except BaseException:
+                self._safe_remove_path(sidecar_path)
+                raise
+            if not created:
+                sidecar_path.unlink()
+            return created
 
         try:
             attachment_id = new_id("att", claim=claim)
@@ -262,7 +267,6 @@ class AttachmentStore:
         )
 
         try:
-            self._write_blob(blob_path, data)
             self._write_new_sidecar(sidecar_path, record)
         except AttachmentError:
             self._safe_remove_path(blob_path)
@@ -358,11 +362,17 @@ class AttachmentStore:
     def _sidecar_path(self, attachment_id: str) -> Path:
         return self._attachments_dir / f"{attachment_id}.json"
 
-    def _write_blob(self, path: Path, data: bytes) -> None:
+    @staticmethod
+    def _create_blob(path: Path, data: bytes) -> bool:
+        """Write a new blob; False when an existing file occupies ``path`` (left untouched)."""
+
         try:
-            atomic_write_bytes(path, data)
+            write_new_bytes(path, data)
+        except FileExistsError:
+            return False
         except OSError as exc:
             raise AttachmentError(f"Cannot write attachment blob {path}: {exc}") from exc
+        return True
 
     def _write_new_sidecar(self, path: Path, record: AttachmentRecord) -> None:
         # Replaces the empty reservation of a new attachment: there is nothing to keep.

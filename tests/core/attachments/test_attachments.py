@@ -175,14 +175,14 @@ async def test_store_async_keeps_the_event_loop_responsive_during_the_blob_write
     store = AttachmentStore(tmp_path)
     entered = threading.Event()
     release = threading.Event()
-    write_blob = attachments_module.atomic_write_bytes
+    write_blob = attachments_module.write_new_bytes
 
     def slow_write_blob(path: Path, data: bytes) -> None:
         entered.set()
         release.wait(timeout=5)
         write_blob(path, data)
 
-    monkeypatch.setattr(attachments_module, "atomic_write_bytes", slow_write_blob)
+    monkeypatch.setattr(attachments_module, "write_new_bytes", slow_write_blob)
     storing = asyncio.create_task(store.store_async("photo.jpg", b"\xff\xd8\xff\x00\x10"))
     try:
         assert await asyncio.to_thread(entered.wait, 5)
@@ -453,16 +453,28 @@ def test_delete_rejects_path_traversal_id_without_removing_existing_files(tmp_pa
     assert sidecar_path.exists()
 
 
-def test_short_attachment_ids_reserve_sidecars_across_extensions(tmp_path, monkeypatch):
+def test_attachment_ids_never_reuse_a_reserved_sidecar_or_an_existing_blob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from core.utils import ids
 
-    values = iter((1, 1, 2))
+    values = iter((1, 2, 2, 3))
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
+    attachments_dir = DataDirectoryLayout(tmp_path).attachments
+    attachments_dir.mkdir(parents=True)
+    # A blob without sidecar, as an interrupted store can leave it behind.
+    orphan = attachments_dir / "att_000000000001.txt"
+    orphan.write_bytes(b"orphan")
     store = AttachmentStore(tmp_path)
+
     first = store.store("first.txt", b"first")
+    # The id reserved by the first store is taken for every blob extension.
     second = store.store("second.pdf", b"%PDF-1.7 second")
-    assert first.id == "att_000000000001"
-    assert second.id == "att_000000000002"
+
+    assert first.id == "att_000000000002"
+    assert second.id == "att_000000000003"
+    assert orphan.read_bytes() == b"orphan"
+    assert not (attachments_dir / "att_000000000001.json").exists()
     assert Path(store.get(first.id).file_path).read_bytes() == b"first"
     assert Path(store.get(second.id).file_path).read_bytes() == b"%PDF-1.7 second"
 
