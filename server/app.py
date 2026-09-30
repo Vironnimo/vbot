@@ -770,7 +770,9 @@ def create_app(
         cursor = websocket.query_params.get("cursor")
         stream = websocket.app.state.log_viewer.subscribe(file_name or "", cursor=cursor)
         try:
-            await _stream_websocket_events(websocket, stream)
+            if await _stream_websocket_events(websocket, stream):
+                # The file's watcher stopped; the accessor reads again and reconnects.
+                await websocket.close(code=1011, reason="log stream ended")
         except ValueError as exc:
             await websocket.close(code=1008, reason=str(exc))
         except FileNotFoundError as exc:

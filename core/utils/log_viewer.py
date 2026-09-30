@@ -24,6 +24,7 @@ from typing import Any
 
 from watchfiles import awatch
 
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import (
     extract_websocket_path_from_message,
     get_logger,
@@ -32,6 +33,8 @@ from core.utils.logging import (
 from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
+# A subscriber queue carries events; ``None`` ends the subscriber's stream.
+_SubscriberQueue = asyncio.Queue[JsonObject | None]
 
 _LOGGER = get_logger("log_viewer")
 
@@ -70,7 +73,7 @@ class _WatcherState:
     catalog: tuple[str, ...]
     directory_modified_ns: int | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
-    subscribers: list[asyncio.Queue[JsonObject]] = field(default_factory=list)
+    subscribers: list[_SubscriberQueue] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
 
 
@@ -181,6 +184,8 @@ class LogViewer:
         self._logs_dir = Path(data_dir).expanduser() / "logs"
         self._watchers: dict[str, _WatcherState] = {}
         self._watch_lock = asyncio.Lock()
+        # Files whose watcher polls currently fail, so a failure logs once per streak.
+        self._poll_failures = LoggedConditions(limit=64)
 
     async def list_files(self) -> JsonObject:
         return await _LOG_WORKERS.run(self._list_files)
@@ -202,15 +207,17 @@ class LogViewer:
         that read; when the file no longer starts with the bytes the read covered
         (truncated, rotated, rewritten, or another file's cursor), that replay is
         a ``reset`` carrying the whole file. Without a cursor the stream starts at
-        the file's current end. Raises ``ValueError`` for an invalid file name or
-        a malformed cursor and ``FileNotFoundError`` for a missing file.
+        the file's current end. The stream ends when the file's watcher stops
+        unexpectedly; the caller then reads again and subscribes to a fresh one.
+        Raises ``ValueError`` for an invalid file name or a malformed cursor and
+        ``FileNotFoundError`` for a missing file.
         """
         read_cursor = None if cursor is None else _parse_cursor(cursor)
         file_path = await _LOG_WORKERS.run(self._resolve_existing_file, file_name)
-        queue: asyncio.Queue[JsonObject] = asyncio.Queue()
+        queue: _SubscriberQueue = asyncio.Queue()
         pending_event: JsonObject | None = None
         catch_up_event: JsonObject | None = None
-        catch_up_subscribers: list[asyncio.Queue[JsonObject]] = []
+        catch_up_subscribers: list[_SubscriberQueue] = []
 
         # Finding or starting the watcher and registering the queue are one step under
         # the lock that also retires watchers. Split, the last other subscriber could
@@ -238,12 +245,12 @@ class LogViewer:
             queue.put_nowait(pending_event)
 
         try:
-            while True:
-                yield await queue.get()
+            while (event := await queue.get()) is not None:
+                yield event
         except asyncio.CancelledError:
             return
         finally:
-            await self._remove_subscriber(file_path.name, queue)
+            await self._remove_subscriber(watcher, queue)
 
     async def aclose(self) -> None:
         async with self._watch_lock:
@@ -269,11 +276,14 @@ class LogViewer:
         return len(watcher.subscribers)
 
     async def _ensure_watcher(self, file_name: str) -> _WatcherState:
-        """Return the file's watcher, starting it on first use; the caller holds the lock."""
+        """Return the file's running watcher, starting one if needed; the caller holds the lock."""
 
         watcher = self._watchers.get(file_name)
         if watcher is not None:
-            return watcher
+            if watcher.task is not None and not watcher.task.done():
+                return watcher
+            # Its watch loop has ended and serves nobody: never attach to it.
+            self._retire_locked(watcher)
 
         directory_modified_ns, catalog, snapshot = await _LOG_WORKERS.run(
             self._read_watch_start, self._logs_dir / file_name
@@ -284,7 +294,7 @@ class LogViewer:
             catalog=catalog,
             directory_modified_ns=directory_modified_ns,
         )
-        watcher.task = asyncio.create_task(self._watch_file(watcher))
+        watcher.task = asyncio.create_task(self._run_watcher(watcher))
 
         def on_done(task: asyncio.Task[None], file_name: str = file_name) -> None:
             _log_watcher_task_result(file_name, task)
@@ -293,35 +303,48 @@ class LogViewer:
         self._watchers[file_name] = watcher
         return watcher
 
-    async def _remove_subscriber(
-        self,
-        file_name: str,
-        queue: asyncio.Queue[JsonObject],
-    ) -> None:
+    def _retire_locked(self, watcher: _WatcherState) -> None:
+        """Unregister a watcher whose loop ended and end its subscribers' streams.
+
+        The caller holds the lock. Ending the streams closes their sockets, so each
+        accessor reads again and subscribes to a fresh watcher instead of waiting
+        on one that no longer delivers anything.
+        """
+        watcher.stop_event.set()
+        if self._watchers.get(watcher.file_name) is watcher:
+            del self._watchers[watcher.file_name]
+        subscribers, watcher.subscribers = watcher.subscribers, []
+        for subscriber in subscribers:
+            subscriber.put_nowait(None)
+
+    async def _remove_subscriber(self, watcher: _WatcherState, queue: _SubscriberQueue) -> None:
         task: asyncio.Task[None] | None = None
 
         async with self._watch_lock:
-            watcher = self._watchers.get(file_name)
-            if watcher is None:
+            if queue not in watcher.subscribers:
                 return
-
-            if queue in watcher.subscribers:
-                watcher.subscribers.remove(queue)
-
-            if watcher.subscribers:
+            watcher.subscribers.remove(queue)
+            # A retired watcher may already have a successor for the same file.
+            if watcher.subscribers or self._watchers.get(watcher.file_name) is not watcher:
                 return
 
             watcher.stop_event.set()
             task = watcher.task
-            self._watchers.pop(file_name, None)
+            del self._watchers[watcher.file_name]
 
         if task is not None:
             await _cancel_watcher_task(task)
 
-    async def _watch_file(self, watcher: _WatcherState) -> None:
-        watched_path = self._logs_dir / watcher.file_name
-        watched_path_str = str(watched_path)
+    async def _run_watcher(self, watcher: _WatcherState) -> None:
+        """Run the watch loop; one that ends before it was stopped retires its watcher."""
+        try:
+            await self._watch_file(watcher)
+        finally:
+            if not watcher.stop_event.is_set():
+                async with self._watch_lock:
+                    self._retire_locked(watcher)
 
+    async def _watch_file(self, watcher: _WatcherState) -> None:
         try:
             async for changes in awatch(
                 self._logs_dir,
@@ -336,60 +359,78 @@ class LogViewer:
             ):
                 if watcher.stop_event.is_set():
                     continue
-
-                should_refresh_catalog = bool(changes)
-                should_read_snapshot = _includes_path(changes, watched_path_str)
-                if not changes:
-                    should_refresh_catalog, should_read_snapshot = await _LOG_WORKERS.run(
-                        _metadata_changes,
-                        self._logs_dir,
-                        watcher.directory_modified_ns,
-                        watched_path,
-                        watcher.snapshot,
-                    )
-                if not should_refresh_catalog and not should_read_snapshot:
-                    continue
-
-                async with self._watch_lock:
-                    refresh = await _LOG_WORKERS.run(
-                        self._read_refresh,
-                        watched_path,
-                        catalog=should_refresh_catalog,
-                        snapshot=should_read_snapshot,
-                    )
-                    catalog_event = None
-                    if refresh.catalog is not None:
-                        next_catalog = tuple(refresh.catalog["files"])
-                        watcher.directory_modified_ns = refresh.directory_modified_ns
-                        if next_catalog != watcher.catalog:
-                            watcher.catalog = next_catalog
-                            catalog_event = {
-                                "type": CATALOG_EVENT,
-                                "file": watcher.file_name,
-                                **refresh.catalog,
-                            }
-
-                    event = None
-                    if refresh.snapshot is not None:
-                        event = _build_snapshot_event(
+                try:
+                    await self._poll(watcher, changes)
+                except OSError as error:
+                    # A share lock or a virus scanner can deny access for a moment.
+                    # Nothing was consumed, so the next poll sees the change again.
+                    if self._poll_failures.started(watcher.file_name, type(error).__name__):
+                        _LOGGER.warning(
+                            "Live-log watcher poll failed, retrying (file=%s error=%s: %s)",
                             watcher.file_name,
-                            watcher.snapshot,
-                            refresh.snapshot,
+                            type(error).__name__,
+                            error,
                         )
-                        watcher.snapshot = refresh.snapshot
-                    subscribers = list(watcher.subscribers)
-
-                for subscriber in subscribers:
-                    if catalog_event is not None:
-                        subscriber.put_nowait(catalog_event)
-                    if event is not None:
-                        subscriber.put_nowait(event)
+                    continue
+                if self._poll_failures.ended(watcher.file_name):
+                    _LOGGER.info("Live-log watcher poll recovered (file=%s)", watcher.file_name)
         except asyncio.CancelledError:
             return
         except UnboundLocalError:
             if watcher.stop_event.is_set():
                 return
             raise
+
+    async def _poll(self, watcher: _WatcherState, changes: set[tuple[Any, str]]) -> None:
+        """Reconcile one watch batch (empty on a timeout) and fan out its events."""
+        watched_path = self._logs_dir / watcher.file_name
+        should_refresh_catalog = bool(changes)
+        should_read_snapshot = _includes_path(changes, str(watched_path))
+        if not changes:
+            should_refresh_catalog, should_read_snapshot = await _LOG_WORKERS.run(
+                _metadata_changes,
+                self._logs_dir,
+                watcher.directory_modified_ns,
+                watched_path,
+                watcher.snapshot,
+            )
+        if not should_refresh_catalog and not should_read_snapshot:
+            return
+
+        async with self._watch_lock:
+            refresh = await _LOG_WORKERS.run(
+                self._read_refresh,
+                watched_path,
+                catalog=should_refresh_catalog,
+                snapshot=should_read_snapshot,
+            )
+            catalog_event = None
+            if refresh.catalog is not None:
+                next_catalog = tuple(refresh.catalog["files"])
+                watcher.directory_modified_ns = refresh.directory_modified_ns
+                if next_catalog != watcher.catalog:
+                    watcher.catalog = next_catalog
+                    catalog_event = {
+                        "type": CATALOG_EVENT,
+                        "file": watcher.file_name,
+                        **refresh.catalog,
+                    }
+
+            event = None
+            if refresh.snapshot is not None:
+                event = _build_snapshot_event(
+                    watcher.file_name,
+                    watcher.snapshot,
+                    refresh.snapshot,
+                )
+                watcher.snapshot = refresh.snapshot
+            subscribers = list(watcher.subscribers)
+
+        for subscriber in subscribers:
+            if catalog_event is not None:
+                subscriber.put_nowait(catalog_event)
+            if event is not None:
+                subscriber.put_nowait(event)
 
     # Worker-pool operations: they touch the filesystem and never watcher state.
 
@@ -466,7 +507,8 @@ def _read_log(file_path: Path) -> tuple[bytes, _LogSnapshot]:
 
 
 def _decode_log(data: bytes) -> str:
-    return data.decode("utf-8")
+    # A torn or foreign byte sequence must show as U+FFFD, not stop the viewer.
+    return data.decode("utf-8", errors="replace")
 
 
 def _read_subscribe_start(

@@ -488,7 +488,7 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
         encoding="utf-8",
     )
     viewer = LogViewer(tmp_path)
-    subscriber: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    subscriber: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
     watcher = _WatcherState(
         file_name=selected_file.name,
         snapshot=viewer._read_snapshot(selected_file),
@@ -651,38 +651,116 @@ async def test_cancel_watcher_task_logs_a_real_crash_before_suppressing(
 
 
 @pytest.mark.asyncio
-async def test_ensure_watcher_attaches_crash_logging_done_callback(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a_fresh_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
-    (logs_dir / "2026-05-11").write_text(
-        "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n", encoding="utf-8"
-    )
-
-    viewer = LogViewer(tmp_path)
-
-    async def explode(_watcher: object) -> None:
-        raise RuntimeError("awatch exploded")
-
-    # Replace the watch loop so the created task fails with a real exception.
-    viewer._watch_file = explode  # type: ignore[method-assign,assignment]
-
+    log_file = logs_dir / "2026-05-11"
+    log_file.write_text(_line(0, "Ready"), encoding="utf-8")
+    watch = _FakeWatch()
+    monkeypatch.setattr(log_viewer_module, "awatch", watch.awatch)
+    monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
     caplog.set_level(logging.ERROR, logger="vbot.log_viewer")
-    async with viewer._watch_lock:
-        watcher = await viewer._ensure_watcher("2026-05-11")
-    assert watcher.task is not None
-    with suppress(RuntimeError):
-        await watcher.task
+    viewer = LogViewer(tmp_path)
+    crashed = viewer.subscribe(log_file.name)
+    fresh = viewer.subscribe(log_file.name)
+    crashed_next = asyncio.create_task(_next_event(crashed))
+    fresh_next: asyncio.Task[dict[str, Any]] | None = None
+    try:
+        await _until(lambda: viewer.subscriber_count(log_file.name) == 1)
+        watch.changes.put_nowait(RuntimeError("awatch exploded"))
 
+        # The stream ends, so the socket closes and the accessor reconnects,
+        # instead of waiting on a watcher that delivers nothing any more.
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(crashed_next, timeout=1)
+        assert viewer.watcher_count == 0
+
+        fresh_next = asyncio.create_task(_next_event(fresh))
+        await _until(lambda: viewer.subscriber_count(log_file.name) == 1)
+        log_file.write_text(_line(0, "Ready") + _line(1, "Updated"), encoding="utf-8")
+        watch.changes.put_nowait({(Change.modified, str(log_file))})
+        event = await asyncio.wait_for(fresh_next, timeout=1)
+    finally:
+        tasks = [task for task in (crashed_next, fresh_next) if task is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await fresh.aclose()
+        await viewer.aclose()
+
+    assert _messages(event) == ["Updated"]
     crash_records = [
         record
         for record in caplog.records
-        if record.name == "vbot.log_viewer" and "watcher task crashed" in record.getMessage()
+        if record.name == "vbot.log_viewer" and record.levelno == logging.ERROR
     ]
     assert len(crash_records) == 1
     assert crash_records[0].exc_info is not None
-    assert "2026-05-11" in crash_records[0].getMessage()
+    assert log_file.name in crash_records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_watch_file_skips_polls_it_cannot_read_and_catches_up_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    log_file.write_text(_line(0, "Ready"), encoding="utf-8")
+    viewer = LogViewer(tmp_path)
+    subscriber: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    watcher = _WatcherState(
+        file_name=log_file.name,
+        snapshot=viewer._read_snapshot(log_file),
+        catalog=(log_file.name,),
+        directory_modified_ns=logs_dir.stat().st_mtime_ns,
+        subscribers=[subscriber],
+    )
+    denied = PermissionError(13, "The process cannot access the file", str(log_file))
+    metadata_changes = log_viewer_module._metadata_changes
+    read_snapshot = viewer._read_snapshot
+    metadata_failures = [denied]
+    read_failures = [denied]
+
+    def locked_metadata_changes(*arguments: Any) -> tuple[bool, bool]:
+        if metadata_failures:
+            raise metadata_failures.pop()
+        return metadata_changes(*arguments)
+
+    def locked_read_snapshot(file_path: Path) -> _LogSnapshot:
+        if read_failures:
+            raise read_failures.pop()
+        return read_snapshot(file_path)
+
+    async def fake_awatch(*_args: object, **_kwargs: object):
+        # Undecodable bytes (a torn or foreign write) must not stop the watcher either.
+        log_file.write_bytes(
+            _line(0, "Ready").encode() + b"2026-05-11 09:00:01 [INFO] vbot.core - bad \xff byte\n"
+        )
+        yield set()
+        yield {(Change.modified, str(log_file))}
+        yield set()
+
+    monkeypatch.setattr(log_viewer_module, "_metadata_changes", locked_metadata_changes)
+    monkeypatch.setattr(viewer, "_read_snapshot", locked_read_snapshot)
+    monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
+    caplog.set_level(logging.INFO, logger="vbot.log_viewer")
+
+    await viewer._watch_file(watcher)
+
+    assert subscriber.get_nowait() == {
+        "type": "append",
+        "file": log_file.name,
+        "entries": parse_log_entries(
+            _line(0, "Ready") + "2026-05-11 09:00:01 [INFO] vbot.core - bad � byte\n"
+        )[1:],
+    }
+    assert subscriber.empty()
+    # Two failed polls in a row are one degradation, logged once, then its recovery.
+    levels = [record.levelno for record in caplog.records if record.name == "vbot.log_viewer"]
+    assert levels == [logging.WARNING, logging.INFO]
 
 
 @pytest.mark.asyncio
