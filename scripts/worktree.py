@@ -25,16 +25,24 @@ _checkout_root = Path(__file__).resolve().parents[1]
 if sys.path[:1] != [str(_checkout_root)]:
     sys.path.insert(0, str(_checkout_root))
 
+from scripts._webui_packages import installed_differences  # noqa: E402
 from scripts._worktree_args import parse_args  # noqa: E402
 from scripts._worktree_lock import (  # noqa: E402
     KIND_MERGE,
     KIND_REPAIR,
     MergeLockBusyError,
+    _acquire_file_lock,
+    _extended_repair_window,
+    _held_file_lock,
     _holder_record_is_current,
+    _lease_path,
     _merge_exclusive_lock,
     _own_repair_window_is_active,
     _probe_lock_is_busy,
     _read_holder_record,
+    _release_file_lock,
+    _repair_window_is_extended,
+    _repair_window_stays_open,
     _request_window_release,
     cmd_keeper_hold,
 )
@@ -60,7 +68,12 @@ from scripts._worktree_records import (  # noqa: E402
     _read_worktree_registrations,
     _worktree_server_port,
 )
-from scripts._worktree_seed import seed_native_resources, seed_webui_packages  # noqa: E402
+from scripts._worktree_seed import (  # noqa: E402
+    NATIVE_RESOURCES_RELATIVE_PATH,
+    seed_native_resources,
+    seed_type_check_cache,
+    seed_webui_packages,
+)
 
 
 def _script_checkout_root() -> Path:
@@ -103,6 +116,16 @@ WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
 FAKE_PROVIDER_SETTINGS_RELATIVE_PATH = Path("tests") / "e2e" / "fake-provider-settings.json"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
+# A merge prepares its merge commit in a private checkout named with this prefix.
+LANDING_DIR_PREFIX = ".landing-"
+LANDING_LOCK_SUFFIX = ".lock"
+# A merge whose base main left behind while its commit was checked merges again
+# onto the new main, up to this many checks in all.
+LANDING_ATTEMPTS = 3
+# git refuses to fast-forward main while another git command holds its index lock.
+FAST_FORWARD_ATTEMPTS = 5
+FAST_FORWARD_RETRY_SECONDS = 0.5
+MAIN_TESTS_LOCK_NOTICE = "waiting for the tests of a commit in the primary checkout..."
 PORT_ALLOCATION_LOCK_NAME = "vbot-worktree-port.lock"
 PRIMARY_BRANCH = "main"
 MERGE_LOCK_FILE_NAME = "vbot-merge.lock"
@@ -291,6 +314,49 @@ def _move_to_trash(worktree_path: Path) -> Path | None:
     return trash_path
 
 
+def _remove_checkout(checkout: Path) -> None:
+    """Remove a linked checkout and its registration, even while processes hold files in it."""
+    return_code, _ = _run_command(["git", "worktree", "remove", "--force", str(checkout)])
+    if return_code == 0:
+        return
+    if checkout.exists():
+        # The npm steps may leave processes (e.g. esbuild) locking files that
+        # break git's directory deletion on Windows — finish it ourselves.
+        _terminate_worktree_processes(checkout)
+        if _remove_directory_tree(checkout) is not None and checkout.exists():
+            _move_to_trash(checkout)
+    _run_command(["git", "worktree", "prune"])
+
+
+def _landing_lock_path(landing: Path) -> Path:
+    """Return the lock a merge holds while its landing checkout is in use."""
+    return landing.with_name(landing.name + LANDING_LOCK_SUFFIX)
+
+
+def sweep_landing_checkouts(worktrees_dir: Path) -> None:
+    """Remove the landing checkouts of merges that ended without removing them.
+
+    A running merge holds its landing checkout's lock; the OS frees it when the
+    merge process dies, however it ends.
+    """
+    if not worktrees_dir.exists():
+        return
+
+    for candidate in list(worktrees_dir.iterdir()):
+        if not candidate.name.startswith(LANDING_DIR_PREFIX) or not candidate.is_dir():
+            continue
+        lock_path = _landing_lock_path(candidate)
+        with lock_path.open("a+b") as lock_file:
+            if not _acquire_file_lock(lock_file):
+                continue
+            try:
+                _remove_checkout(candidate)
+            finally:
+                _release_file_lock(lock_file)
+        with suppress(OSError):
+            lock_path.unlink()
+
+
 def sweep_trash_directories(worktrees_dir: Path) -> None:
     """Best-effort removal of trash directories left by earlier deletes."""
     if not worktrees_dir.exists():
@@ -469,14 +535,7 @@ def cleanup_failed_create(
     marker_data: dict[str, object] | None,
 ) -> None:
     """Remove artifacts created before a failed create operation."""
-    return_code, _ = _run_command(["git", "worktree", "remove", "--force", str(worktree_path)])
-    if return_code != 0 and worktree_path.exists():
-        # The npm steps may leave processes (e.g. esbuild) locking files that
-        # break git's directory deletion on Windows — finish it ourselves.
-        _terminate_worktree_processes(worktree_path)
-        if _remove_directory_tree(worktree_path) is not None and worktree_path.exists():
-            _move_to_trash(worktree_path)
-        _run_command(["git", "worktree", "prune"])
+    _remove_checkout(worktree_path)
 
     if _owns_data_dir(worktree_path, data_dir, marker_data):
         shutil.rmtree(data_dir, ignore_errors=True)
@@ -550,6 +609,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     data_dir = _expected_data_dir(name)
     managed_branch = args.from_branch is None
 
+    sweep_landing_checkouts(WORKTREES_DIR)
     sweep_trash_directories(WORKTREES_DIR)
 
     if worktree_path.exists():
@@ -667,6 +727,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
     worktree_path = WORKTREES_DIR / name
 
+    sweep_landing_checkouts(WORKTREES_DIR)
     sweep_trash_directories(WORKTREES_DIR)
 
     if not worktree_path.exists():
@@ -904,15 +965,245 @@ def _print_branch_check_hints(name: str, *, window_open: bool) -> None:
         print("note: your protected repair window stays open while you fix this")
 
 
-def _merge_replaces_webui_packages() -> bool:
-    """Whether the staged merge changes the lock of main's installed WebUI packages."""
-    if not (PROJECT_ROOT / "webui" / "node_modules").is_dir():
-        return False
-    return_code, _ = _run_command(
-        ["git", "-C", str(PROJECT_ROOT), "diff", "--cached", "--quiet", "HEAD", "--"]
-        + [WEBUI_LOCK_FILE]
+def _git_stdout(repo: Path, *arguments: str) -> str | None:
+    """Return the output of a git command in *repo*, or None when it fails."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *arguments],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except OSError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _nul_separated(output: str) -> set[str]:
+    """Return the paths of a ``-z`` git listing."""
+    return {path for path in output.split("\0") if path}
+
+
+def _main_head() -> str | None:
+    """Return the commit the primary checkout has checked out."""
+    head = _git_stdout(PROJECT_ROOT, "rev-parse", "-q", "--verify", "HEAD")
+    return head.strip() if head else None
+
+
+def _main_tests_lock_path() -> Path:
+    """Return the lock main's commit check holds while it runs tests and writes its records."""
+    from scripts import commit_check
+
+    return _git_common_dir() / commit_check.TESTS_LOCK_NAME
+
+
+def _merge_changes_since(tree: str, merge_paths: set[str]) -> list[str] | None:
+    """Return the paths of a merge staged in main that changed after it was staged.
+
+    *tree* is the merge's result and *merge_paths* the paths it changed. None when
+    git cannot tell.
+    """
+    staged = _git_stdout(
+        PROJECT_ROOT, "diff", "--cached", "--name-only", "--no-renames", "-z", tree
     )
-    return return_code == 1
+    unstaged = _git_stdout(PROJECT_ROOT, "diff", "--name-only", "--no-renames", "-z")
+    deleted = _git_stdout(
+        PROJECT_ROOT, "diff", "--name-only", "--no-renames", "--diff-filter=D", "-z", "HEAD", tree
+    )
+    if staged is None or unstaged is None or deleted is None:
+        return None
+    changed = merge_paths & (_nul_separated(staged) | _nul_separated(unstaged))
+    # A file the merge deleted and someone created again is untracked.
+    changed |= {path for path in _nul_separated(deleted) if os.path.lexists(PROJECT_ROOT / path)}
+    return sorted(changed)
+
+
+def _roll_back_unfinished_merge() -> bool:
+    """Undo a merge an interrupted earlier merge left staged in main; return whether none is left.
+
+    Merges used to be staged in main for their commit check, so a killed merge of
+    such a version leaves one behind. Only the paths that merge changed are
+    restored, and only while each is exactly as the merge left it: other sessions'
+    staged and unstaged work stays. Otherwise the merge stays and the reason is
+    printed.
+    """
+    merge_head_path = PROJECT_ROOT / ".git" / "MERGE_HEAD"
+    if not merge_head_path.exists():
+        return True
+    try:
+        merge_heads = merge_head_path.read_text(encoding="utf-8").split()
+    except OSError:
+        merge_heads = []
+    head = _main_head()
+    merge_paths: set[str] = set()
+    changed: list[str] | None = []
+    reason = None
+    if head is None or len(merge_heads) != 1:
+        reason = "it does not merge a single branch"
+    else:
+        merged = _git_stdout(
+            PROJECT_ROOT, "merge-tree", "--write-tree", "--no-messages", head, merge_heads[0]
+        )
+        tree = merged.split("\n", 1)[0].strip() if merged else ""
+        paths = _git_stdout(PROJECT_ROOT, "diff", "--name-only", "--no-renames", "-z", head, tree)
+        if not tree or paths is None:
+            reason = "its result cannot be computed without conflicts"
+        else:
+            merge_paths = _nul_separated(paths)
+            changed = _merge_changes_since(tree, merge_paths)
+            if changed is None:
+                reason = "git cannot compare it with the primary checkout"
+            elif changed:
+                reason = "files it changed were changed again since"
+    if reason is not None:
+        print_error(
+            f"primary checkout has an unfinished merge that cannot be rolled back safely: {reason}"
+        )
+        for path in changed or []:
+            print(f"changed-since-merge: {path}")
+        print(
+            "hint: conclude or undo that merge in the primary checkout by hand; "
+            "`git merge --abort` also discards other sessions' staged changes"
+        )
+        return False
+
+    # Without MERGE_HEAD, a commit concluding that merge can no longer record it.
+    _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--quit"])
+    if _main_head() != head:
+        # A commit concluded it meanwhile, such as a killed merge's commit check.
+        return True
+    if merge_paths:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(PROJECT_ROOT), "--literal-pathspecs", "restore"]
+                + ["--source=HEAD", "--staged", "--worktree"]
+                + ["--pathspec-from-file=-", "--pathspec-file-nul"],
+                input="\0".join(sorted(merge_paths)) + "\0",
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            failure = result.stderr.strip() if result.returncode != 0 else None
+        except OSError as exc:
+            failure = str(exc)
+        if failure is not None:
+            print_error(
+                f"the unfinished merge in the primary checkout was not rolled back: {failure}"
+            )
+            return False
+    print(
+        "recovered: rolled back an unfinished merge left in the primary checkout "
+        f"({len(merge_paths)} files)"
+    )
+    return True
+
+
+@contextmanager
+def _claimed_landing(name: str) -> Iterator[Path]:
+    """Name a landing checkout for this merge and hold its lock until it is removed again."""
+    landing = WORKTREES_DIR / f"{LANDING_DIR_PREFIX}{name}-{uuid4().hex[:8]}"
+    lock_path = _landing_lock_path(landing)
+    try:
+        with _held_file_lock(lock_path):
+            try:
+                yield landing
+            finally:
+                if landing.exists():
+                    _remove_checkout(landing)
+    finally:
+        with suppress(OSError):
+            lock_path.unlink()
+
+
+def _create_landing_checkout(landing: Path, worktree_path: Path) -> str | None:
+    """Check main out detached in *landing*; return why that failed, or None.
+
+    The type checker's cache and the native executables come from the task's
+    worktree, else from the primary checkout.
+    """
+    return_code, stderr = _run_command(
+        ["git", "worktree", "add", "--detach", str(landing), PRIMARY_BRANCH]
+    )
+    if return_code != 0:
+        return stderr or "git worktree add failed"
+    for source in (worktree_path, PROJECT_ROOT):
+        if seed_type_check_cache(source, landing):
+            break
+    for source in (worktree_path, PROJECT_ROOT):
+        if (source / NATIVE_RESOURCES_RELATIVE_PATH).is_dir():
+            seed_native_resources(source, landing)
+            break
+    return None
+
+
+def _provide_webui_packages(landing: Path, worktree_path: Path) -> str | None:
+    """Install the merged WebUI packages in *landing* when its commit check needs them.
+
+    The commit check runs the WebUI checks for the merge's WebUI changes, on packages
+    matching the merged lock, when main has installed packages. A matching
+    installation of main or of the task's worktree is copied; otherwise ``npm ci``
+    installs one. Returns why that failed, or None.
+    """
+    from scripts import commit_check
+
+    if not (PROJECT_ROOT / "webui" / "node_modules").is_dir():
+        return None
+    staged = _git_stdout(landing, "diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD")
+    scope = commit_check.webui_scope(_nul_separated(staged or ""))
+    if not (scope.sources or scope.all_styles or scope.all_tests):
+        return None
+    webui = landing / "webui"
+    node_modules = webui / "node_modules"
+    if node_modules.is_dir():
+        if not installed_differences(node_modules, webui / "package-lock.json"):
+            return None
+        _remove_directory_tree(node_modules)
+    for source in (PROJECT_ROOT, worktree_path):
+        if seed_webui_packages(source, landing):
+            return None
+    print("installing the merged webui dependencies (npm ci, no output until done)...", flush=True)
+    return_code, stderr = _run_command([_npm_command(), "ci"], cwd=webui)
+    if return_code == 0:
+        return None
+    return stderr or f"npm ci exited with code {return_code}"
+
+
+def _commit_landing(landing: Path, message: str) -> tuple[int, str]:
+    """Commit the merge staged in *landing*; its commit check runs the tests of a landing."""
+    from scripts import commit_check
+
+    environment = {**os.environ, commit_check.LANDING_VARIABLE: "1"}
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(landing), "commit", "-m", message],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            check=False,
+        )
+    except OSError as exc:
+        return 1, str(exc)
+    return result.returncode, result.stderr.strip()
+
+
+def _fast_forward_main(commit: str) -> tuple[int, str]:
+    """Move main to *commit*; git refuses when main moved or local changes overlap."""
+    return_code, stderr = 1, ""
+    for attempt in range(FAST_FORWARD_ATTEMPTS):
+        if attempt:
+            time.sleep(FAST_FORWARD_RETRY_SECONDS)
+        return_code, stderr = _run_command(
+            ["git", "-C", str(PROJECT_ROOT), "merge", "--ff-only", "-q", commit]
+        )
+        if return_code == 0 or "index.lock" not in stderr:
+            break
+    return return_code, stderr
 
 
 def _install_webui_packages(action: str) -> str | None:
@@ -924,29 +1215,49 @@ def _install_webui_packages(action: str) -> str | None:
     return stderr or f"npm ci exited with code {return_code}"
 
 
-def _abort_merge(*, restore_packages: bool) -> None:
-    """Roll main back to its last commit, and its WebUI packages when the merge replaced them."""
-    _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--abort"])
-    for line in _list_uncommitted_paths(PROJECT_ROOT):
-        print(f"uncommitted-after-abort: {line}")
-    if not restore_packages:
-        return
-    failure = _install_webui_packages("reinstalling main's webui dependencies")
-    if failure is not None:
-        print_error(
-            "main's webui/node_modules does not match its package-lock.json; run `npm ci` in "
-            f"{PROJECT_ROOT / 'webui'} before its next WebUI commit: {failure}"
-        )
+@contextmanager
+def _merge_protection(name: str, wait_timeout: float) -> Iterator[bool]:
+    """Keep every other merge and repair window off main until this landing is done.
+
+    Yields whether this task's own repair window does that: its keeper holds the
+    merge lock, past the window's deadline if need be, while this merge holds the
+    window's lease. Otherwise the merge holds the merge lock itself. Raises
+    MergeLockBusyError when that stays busy for *wait_timeout* seconds.
+    """
+    lock_path, holder_path, release_path = _merge_lock_paths()
+    if _own_repair_window_is_active(holder_path, name):
+        with _extended_repair_window(lock_path, holder_path, name) as extended:
+            if extended:
+                yield True
+                return
+        # A keeper that cannot extend the window holds the lock until its deadline.
+        # It is closed so that this merge takes the lock at once, unless another
+        # merge of this task holds the lease.
+        if _own_repair_window_is_active(holder_path, name) and not _probe_lock_is_busy(
+            _lease_path(lock_path)
+        ):
+            _request_window_release(release_path, holder_path, lock_path)
+    with _merge_exclusive_lock(
+        task=name,
+        kind=KIND_MERGE,
+        timeout_seconds=wait_timeout,
+        lock_path=lock_path,
+        holder_path=holder_path,
+    ):
+        yield False
 
 
 def cmd_merge(args: argparse.Namespace) -> int:
     """Merge a finished worktree branch into main and remove the worktree.
 
     A conflict with main is reported before any test runs. The branch's tests
-    run first, in the worktree and outside the merge lock.
+    run first, in the worktree and outside the merge lock. The merge commit is
+    then made and checked in a private landing checkout, and main fast-forwards
+    to it only once it passed: an interrupted merge leaves main as it was.
     Concurrency contract: only one merge or protected repair window may touch
     the primary checkout at a time. A task with an active repair window merges
-    under its own window; every other task waits for the lock.
+    under its own window, which stays open until the merge is done; every other
+    task waits for the lock.
     """
     name: str = args.name
     validation_error = validate_worktree_name(name)
@@ -979,131 +1290,190 @@ def cmd_merge(args: argparse.Namespace) -> int:
     lock_path, holder_path, release_path = _merge_lock_paths()
     message = args.message or f"merge: {name}"
 
-    window_active = _own_repair_window_is_active(holder_path, name)
-    protected = False
-    if window_active and _probe_lock_is_busy(lock_path):
-        # The keeper process holds the lock on our behalf; verify its
-        # heartbeat again so a dead keeper can never open a race window.
-        if _own_repair_window_is_active(holder_path, name):
-            protected = True
-        else:
-            window_active = False
-
     # A conflict needs a repair first; the branch's tests would run in vain.
     conflicted = _merge_conflicts(branch)
     if conflicted:
         for conflict_path in conflicted:
             print(f"conflicted: {conflict_path}")
         print_error(f"merging '{branch}' into {PRIMARY_BRANCH} conflicts; no test ran")
-        _print_merge_conflict_hints(name, window_open=protected)
+        _print_merge_conflict_hints(name, window_open=_repair_window_stays_open(holder_path, name))
         return MERGE_CONFLICT_EXIT_CODE
 
     if _check_branch(worktree_path) != 0:
-        _print_branch_check_hints(name, window_open=protected)
+        _print_branch_check_hints(name, window_open=_repair_window_stays_open(holder_path, name))
         return MERGE_CONFLICT_EXIT_CODE
 
-    if not protected:
+    sweep_landing_checkouts(WORKTREES_DIR)
+    with _claimed_landing(name) as landing:
+        failure = _create_landing_checkout(landing, worktree_path)
+        if failure is not None:
+            print_error(f"the landing checkout could not be created: {failure}")
+            return 1
         try:
-            with _merge_exclusive_lock(
-                task=name,
-                kind=KIND_MERGE,
-                timeout_seconds=args.wait_timeout,
-                lock_path=lock_path,
-                holder_path=holder_path,
-            ):
-                return _merge_and_cleanup(args, name, branch, message, window_open=False)
+            with _merge_protection(name, args.wait_timeout) as window:
+                outcome, landed = _land_merge(
+                    name, branch, message, worktree_path, landing, window=window
+                )
+                # Success closes the window; a failure keeps it open for the retry.
+                if (
+                    landed
+                    and window
+                    and not _request_window_release(release_path, holder_path, lock_path)
+                ):
+                    print_error("repair keeper did not shut down; it expires at its deadline")
         except MergeLockBusyError as exc:
             print_error(str(exc))
             return 1
 
-    outcome = _merge_and_cleanup(args, name, branch, message, window_open=True)
-    # Success closes the window; a conflict keeps it open for the retry.
-    if outcome == 0 and not _request_window_release(release_path, holder_path, lock_path):
-        print_error("repair keeper did not shut down; it expires at its deadline")
+    if not landed:
+        return outcome
+    cleanup_code = cmd_delete(argparse.Namespace(name=name, force=False))
+    if cleanup_code != 0:
+        print_error(f"worktree cleanup failed; run 'python scripts/worktree.py delete {name}'")
+        return 1
     return outcome
 
 
-def _merge_and_cleanup(
-    args: argparse.Namespace,
+def _land_merge(
     name: str,
     branch: str,
     message: str,
+    worktree_path: Path,
+    landing: Path,
     *,
-    window_open: bool,
-) -> int:
-    """Merge the branch into main, commit it through the commit check, remove the worktree.
+    window: bool,
+) -> tuple[int, bool]:
+    """Land the branch on main through *landing*; return the exit code and whether it landed.
 
-    The merge is staged first and committed separately: the commit check runs the
-    WebUI checks on main's installed packages, so a merge that changes the WebUI
-    lock installs the merged packages in main before its commit, and reinstalls
-    main's own when the merge does not land.
+    Runs under the merge lock or this task's extended repair window. The merge
+    commit is made and checked in *landing*, which starts from main and main's test
+    records; main only fast-forwards to it and takes its records over. When main
+    moved meanwhile, the merge is made and checked again onto the new main.
     """
-    merge_head_path = PROJECT_ROOT / ".git" / "MERGE_HEAD"
-    if merge_head_path.exists():
-        _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--abort"])
-        print("recovered: aborted an unfinished merge left in the primary checkout")
+    from scripts import _test_impact
 
-    # Checked under the merge lock: while another merge's commit check runs, main
-    # holds that merge's staged result, and git writes MERGE_HEAD only afterwards.
+    lock_path, holder_path, _ = _merge_lock_paths()
+
+    def window_open() -> bool:
+        return window and _repair_window_stays_open(holder_path, name)
+
+    tests_lock = _main_tests_lock_path()
+    # A test run in main, such as one a killed older merge left behind, ends first.
+    with _held_file_lock(tests_lock, notice=MAIN_TESTS_LOCK_NOTICE):
+        if not _roll_back_unfinished_merge():
+            return 1, False
+        with suppress(OSError, sqlite3.Error):
+            _test_impact.copy_data(PROJECT_ROOT, landing)
+
+    primary_branch = _read_primary_branch()
+    if primary_branch != PRIMARY_BRANCH:
+        print_error(
+            f"primary checkout is on '{primary_branch}', not '{PRIMARY_BRANCH}'; "
+            "switch it back before merging"
+        )
+        return 1, False
     uncommitted = _list_uncommitted_paths(PROJECT_ROOT)
     if uncommitted:
         print_error("primary checkout has uncommitted changes; commit or clean it first")
         for line in uncommitted:
             print(f"uncommitted: {line}")
-        return 1
+        return 1, False
 
-    return_code, stderr = _run_command(
-        ["git", "-C", str(PROJECT_ROOT), "merge", branch, "--no-ff", "--no-commit"]
-    )
-    if return_code != 0:
-        conflicted = _list_conflicted_paths(PROJECT_ROOT)
-        for conflict_path in conflicted:
-            print(f"conflicted: {conflict_path}")
-        _abort_merge(restore_packages=False)
-        print_error(stderr or "git merge failed")
-        if conflicted:
-            _print_merge_conflict_hints(name, window_open=window_open)
-        else:
-            _print_merge_check_hints(name, window_open=window_open)
-        return MERGE_CONFLICT_EXIT_CODE
-
-    # Without MERGE_HEAD, main already contains the branch: nothing to commit.
-    if merge_head_path.exists():
-        replaces_packages = _merge_replaces_webui_packages()
-        if replaces_packages:
-            failure = _install_webui_packages("installing the merged webui dependencies in main")
-            if failure is not None:
-                print_error(f"npm ci failed in main's webui; the merge did not land: {failure}")
-                _abort_merge(restore_packages=True)
-                print("hint: stop programs that use main's webui/node_modules, such as dev servers")
-                print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
-                if window_open:
-                    print("note: your protected repair window stays open while you fix this")
-                return 1
-        # The commit hook checks the merge commit against the merged result.
+    base = _main_head()
+    landed: str | None = None
+    for _attempt in range(LANDING_ATTEMPTS):
+        if base is None:
+            print_error("the primary checkout's HEAD cannot be read")
+            return 1, False
         return_code, stderr = _run_command(
-            ["git", "-C", str(PROJECT_ROOT), "commit", "-m", message]
+            ["git", "-C", str(landing), "reset", "-q", "--hard", base]
         )
+        if return_code == 0:
+            return_code, stderr = _run_command(
+                ["git", "-C", str(landing), "merge", "--no-ff", "--no-commit", branch]
+            )
         if return_code != 0:
-            _abort_merge(restore_packages=replaces_packages)
+            conflicted = _list_conflicted_paths(landing)
+            for conflict_path in conflicted:
+                print(f"conflicted: {conflict_path}")
+            print_error(stderr or "git merge failed")
+            if conflicted:
+                _print_merge_conflict_hints(name, window_open=window_open())
+            else:
+                _print_merge_check_hints(name, window_open=window_open())
+            return MERGE_CONFLICT_EXIT_CODE, False
+        # Without MERGE_HEAD, main already contains the branch: nothing to commit.
+        if _git_stdout(landing, "rev-parse", "-q", "--verify", "MERGE_HEAD") is None:
+            landed = base
+            break
+
+        failure = _provide_webui_packages(landing, worktree_path)
+        if failure is not None:
+            print_error(f"npm ci failed for the merged webui; main is unchanged: {failure}")
+            print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
+            if window_open():
+                print("note: your protected repair window stays open while you fix this")
+            return 1, False
+        print(
+            "checking the merge commit: the tests the branch check did not cover and the "
+            "WebUI checks (no output until done)...",
+            flush=True,
+        )
+        return_code, stderr = _commit_landing(landing, message)
+        commit = _git_stdout(landing, "rev-parse", "-q", "--verify", "HEAD")
+        if return_code != 0 or commit is None or commit.strip() == base:
             print_error(stderr or "git commit failed")
-            _print_merge_check_hints(name, window_open=window_open)
-            return MERGE_CONFLICT_EXIT_CODE
+            _print_merge_check_hints(name, window_open=window_open())
+            return MERGE_CONFLICT_EXIT_CODE, False
+        commit = commit.strip()
 
-    head_result = subprocess.run(
-        ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--short", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
+        if window and not _repair_window_is_extended(lock_path, holder_path, name):
+            print_error(
+                "your repair window ended while the merge commit was checked; main is unchanged"
+            )
+            print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
+            return 1, False
+        with _held_file_lock(tests_lock, notice=MAIN_TESTS_LOCK_NOTICE):
+            return_code, stderr = _fast_forward_main(commit)
+            if return_code == 0:
+                # main's records now describe the merge commit, as its check left them.
+                with suppress(OSError, sqlite3.Error):
+                    _test_impact.copy_data(landing, PROJECT_ROOT)
+        if return_code == 0:
+            landed = commit
+            break
+        head = _main_head()
+        if head == base:
+            print_error(f"main could not be fast-forwarded to the merge commit: {stderr}")
+            print("hint: main is unchanged; commit or clean main's changes to the files listed")
+            print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
+            return 1, False
+        print("main moved while the merge commit was checked; merging onto it again...", flush=True)
+        base = head
+
+    if landed is None or base is None:
+        print_error(
+            f"main moved during each of {LANDING_ATTEMPTS} checks of the merge commit; "
+            "main is unchanged by this merge"
+        )
+        print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
+        return 1, False
+
+    short = (_git_stdout(PROJECT_ROOT, "rev-parse", "--short", landed) or "").strip()
+    print_ok(name=name, status="merged", commit=short or UNKNOWN_VALUE, branch=branch)
+    # The WebUI checks refuse installed packages that differ from the lock.
+    lock_changed, _ = _run_command(
+        ["git", "-C", str(PROJECT_ROOT), "diff", "--quiet", base, landed, "--", WEBUI_LOCK_FILE]
     )
-    head = head_result.stdout.strip() or UNKNOWN_VALUE
-
-    print_ok(name=name, status="merged", commit=head, branch=branch)
-    cleanup_code = cmd_delete(argparse.Namespace(name=name, force=False))
-    if cleanup_code != 0:
-        print_error(f"worktree cleanup failed; run 'python scripts/worktree.py delete {name}'")
-        return 1
-    return 0
+    if lock_changed == 1 and (PROJECT_ROOT / "webui" / "node_modules").is_dir():
+        failure = _install_webui_packages("installing the merged webui dependencies in main")
+        if failure is not None:
+            print_error(
+                "main's webui/node_modules does not match its package-lock.json; run `npm ci` "
+                f"in {PROJECT_ROOT / 'webui'} before its next WebUI commit: {failure}"
+            )
+            return 1, True
+    return 0, True
 
 
 def cmd_repair_start(args: argparse.Namespace) -> int:

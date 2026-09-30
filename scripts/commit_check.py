@@ -6,11 +6,14 @@ once a clone has enabled the tracked hooks with ``git config core.hooksPath
 .githooks``. It covers staged Python files (Ruff, mypy), staged frontend sources
 (Prettier, ESLint) and the tests those changes affect.
 
-Tests run when work lands in the primary checkout: its commits and the merge
-commits of ``scripts/worktree.py merge``. A commit in a linked worktree gets the
-static checks only. Before a merge takes the merge lock, ``worktree.py merge`` runs
-``commit_check.py --branch`` in the worktree: the pytest tests the branch's changes
-affect, so the merge commit only has to run the tests neither side covered.
+Tests run when work lands on main: the primary checkout's commits and the merge
+commits of ``scripts/worktree.py merge``. That command prepares each merge commit in
+a private landing checkout, a linked worktree whose commit it marks with
+``VBOT_COMMIT_CHECK_LANDING``, and moves main to the commit only once it passed.
+Any other commit in a linked worktree gets the static checks only. Before a merge
+takes the merge lock, ``worktree.py merge`` runs ``commit_check.py --branch`` in the
+worktree: the pytest tests the branch's changes affect, so the merge commit only has
+to run the tests neither side covered.
 
 Formatter and linter fixes are applied and re-staged only for files whose whole
 change is staged, so unstaged work in the same checkout (another session's
@@ -97,6 +100,8 @@ MYPY_LINE_PATTERN = re.compile(r"^(?P<path>[^:\n]+?):\d+(?::\d+)?: (?P<kind>erro
 PYTEST_SUMMARY_PATTERN = re.compile(r"^(?:FAILED|ERROR) (?P<test>.+?)(?: - .*)?$")
 TESTS_LOCK_NAME = "vbot-commit-tests.lock"
 TESTS_ARGUMENTS_NAME = "vbot-commit-tests.args"
+# Set by ``worktree.py merge`` for the merge commit it checks in its landing checkout.
+LANDING_VARIABLE = "VBOT_COMMIT_CHECK_LANDING"
 # Recorded test seconds per xdist worker; starting a worker costs about a second.
 SECONDS_PER_WORKER = 4.0
 TEST_MODULE_PATTERN = re.compile(r"^tests/(?:.+/)?(?:test_[^/]*|[^/]*_test)\.py$")
@@ -145,9 +150,14 @@ def _test_environment(root: Path) -> dict[str, str]:
     A git hook exports variables such as GIT_DIR and GIT_INDEX_FILE. Tests that run
     git in temporary repositories would inherit them and change this repository.
     ``git merge`` keeps an inherited GIT_REFLOG_ACTION instead of naming its own
-    merged heads there, which a test's merge hook reads.
+    merged heads there, which a test's merge hook reads. The landing mark would make
+    the commit checks those tests run in temporary worktrees run tests.
     """
-    local = {*_git(root, "rev-parse", "--local-env-vars").split(), "GIT_REFLOG_ACTION"}
+    local = {
+        *_git(root, "rev-parse", "--local-env-vars").split(),
+        "GIT_REFLOG_ACTION",
+        LANDING_VARIABLE,
+    }
     return {name: value for name, value in os.environ.items() if name not in local}
 
 
@@ -939,7 +949,7 @@ def main(root: Path = PROJECT_ROOT, argv: list[str] | None = None) -> int:
     dirty = dirty_files(root)
     start = time.monotonic()
     results = [*check_python(root, staged, dirty), *check_frontend(root, staged, dirty)]
-    if _primary_checkout(root) is not None:
+    if _primary_checkout(root) is not None and not os.environ.get(LANDING_VARIABLE):
         if results:
             notice = "NOT RUN in a worktree; `python scripts/worktree.py merge` runs them"
             results.append(StepResult("tests", notice, False))

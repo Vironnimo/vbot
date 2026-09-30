@@ -47,7 +47,7 @@ Write the Step 7 summary. Then merge yourself — no user confirmation is needed
 python scripts/worktree.py merge <task-name>
 ```
 
-Use a generous shell timeout: the command runs the branch's tests, blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` (`--no-ff`), removes the worktree, its data dir, and the managed branch, and prints the merge commit.
+Use a generous shell timeout: the command runs the branch's tests, blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` (`--no-ff`), removes the worktree, its data dir, and the managed branch, and prints the merge commit. A merge that is killed, for example by a shell timeout, leaves `main` as it was; run it again.
 
 ## Conflicts: the protected repair window
 

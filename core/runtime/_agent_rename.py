@@ -7,8 +7,11 @@ Calendar each hold references to the Agent id that their owners retarget. Runtim
 owns every one of these services, so it orders the two halves: the Agent-owned
 half first, so references always name an existing Agent, then the references,
 then the record is finished. The running Channel, Cron, Bootstrap and Calendar
-services keep their state on the Event Loop, so a live rename reads and changes
-their references there, while its blocking work runs on a worker.
+services keep their state on the Event Loop, so a live rename runs there: it
+reads and changes their references on the loop and runs each blocking step of
+the Agent store as its own call on the Session database's pool. No step holds a
+pool worker while it waits for the loop, because the reference steps need that
+same pool (Cron and Calendar check Sessions there).
 
 Every step selects only what still names the id it replaces, so repeating a
 direction converges and reversing the ids reverts it. A failure reverts the whole
@@ -21,10 +24,7 @@ another owner still names the new id (:func:`identity_agent_references`);
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Coroutine
 from dataclasses import dataclass
-from typing import Any, TypeVar
 
 from core.agents import Agent, AgentRename, AgentStore
 from core.automation import BootstrapService, CronService
@@ -35,10 +35,9 @@ from core.channels import ChannelService
 from core.database import SnapshotBarrier
 from core.sessions import ChatSessionManager
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 _LOGGER = get_logger("runtime.agent_rename")
-
-_Result = TypeVar("_Result")
 
 
 @dataclass(frozen=True)
@@ -81,16 +80,16 @@ async def rename_identity_agent(
 ) -> AgentRenameOutcome:
     """Rename one Identity Agent and every reference to it as one recoverable change.
 
-    Blocking work runs on the Session database's pool; the Channel, Cron, Bootstrap
-    and Calendar references are read and changed on this Event Loop, which owns
-    those running services. The caller holds the Run admission guards of both ids.
-    A failure reverts every change before it is raised. The rename, every
-    reference change and any revert form one compound mutation, so a data
-    snapshot copies the Sessions and the documents either before or after all of
-    it.
+    Runs on the Event Loop that owns the running Channel, Cron, Bootstrap and
+    Calendar services, whose references it reads and changes there; each blocking
+    step of the Agent store is one call on the Session database's pool. The caller
+    holds the Run admission guards of both ids. A failure reverts every change
+    before it is raised, and a cancelled caller waits until the rename or its
+    revert has settled. The rename, every reference change and any revert form
+    one compound mutation, so a data snapshot copies the Sessions and the
+    documents either before or after all of it.
     """
-    loop = asyncio.get_running_loop()
-    return await services.sessions.run_async(_rename, services, agent_id, new_agent_id, loop)
+    return await settle_before_cancelling(_rename(services, agent_id, new_agent_id))
 
 
 async def identity_agent_references(
@@ -134,7 +133,7 @@ def complete_pending_rename(services: AgentRenameServices, rename: AgentRename) 
     instead. A rename that reaches neither end keeps its record for the next start.
     """
     try:
-        _retarget_references(services, rename, None)
+        _retarget_references(services, rename)
     except Exception as error:
         _LOGGER.warning(
             "Agent rename could not be completed after restart; reverting it "
@@ -145,7 +144,7 @@ def complete_pending_rename(services: AgentRenameServices, rename: AgentRename) 
         )
         try:
             rename = services.agents.revert_rename(rename)
-            _retarget_references(services, rename, None)
+            _retarget_references(services, rename)
         except Exception as revert_error:
             _LOGGER.error(
                 "Agent rename recovery failed; the next start retries it (agent=%s new_agent=%s)",
@@ -164,33 +163,29 @@ def complete_pending_rename(services: AgentRenameServices, rename: AgentRename) 
     )
 
 
-def _rename(
-    services: AgentRenameServices,
-    agent_id: str,
-    new_agent_id: str,
-    loop: asyncio.AbstractEventLoop,
+async def _rename(
+    services: AgentRenameServices, agent_id: str, new_agent_id: str
 ) -> AgentRenameOutcome:
-    with services.snapshot_barrier.compound_mutation():
-        return _rename_and_retarget(services, agent_id, new_agent_id, loop)
+    async with services.snapshot_barrier.compound_mutation_async():
+        return await _rename_and_retarget(services, agent_id, new_agent_id)
 
 
-def _rename_and_retarget(
-    services: AgentRenameServices,
-    agent_id: str,
-    new_agent_id: str,
-    loop: asyncio.AbstractEventLoop,
+async def _rename_and_retarget(
+    services: AgentRenameServices, agent_id: str, new_agent_id: str
 ) -> AgentRenameOutcome:
-    result = services.agents.rename(
+    external_references = await identity_agent_references(services, new_agent_id)
+    result = await services.sessions.run_async(
+        services.agents.rename,
         agent_id,
         new_agent_id,
-        external_references=_on_loop(loop, identity_agent_references(services, new_agent_id)),
+        external_references=external_references,
     )
     try:
-        references = _retarget_references(services, result.rename, loop)
+        references = await _retarget_on_loop(services, result.rename)
     except Exception as error:
-        _revert(services, result.rename, loop, error)
+        await _revert(services, result.rename, error)
         raise
-    _finish(services, result.rename)
+    await services.sessions.run_async(_finish, services, result.rename)
     outcome = AgentRenameOutcome(
         agent=result.agent,
         session_ids=result.session_ids,
@@ -217,16 +212,11 @@ def _rename_and_retarget(
     return outcome
 
 
-def _revert(
-    services: AgentRenameServices,
-    rename: AgentRename,
-    loop: asyncio.AbstractEventLoop,
-    error: Exception,
-) -> None:
-    """Revert a rename whose references failed; the next start finishes a failed revert."""
+async def _revert(services: AgentRenameServices, rename: AgentRename, error: Exception) -> None:
+    """Revert a live rename whose references failed; the next start finishes a failed revert."""
     try:
-        reverse = services.agents.revert_rename(rename)
-        _retarget_references(services, reverse, loop)
+        reverse = await services.sessions.run_async(services.agents.revert_rename, rename)
+        await _retarget_on_loop(services, reverse)
     except Exception as revert_error:
         _LOGGER.error(
             "Agent rename rollback incomplete; the next start finishes it "
@@ -237,7 +227,7 @@ def _revert(
             exc_info=(type(revert_error), revert_error, revert_error.__traceback__),
         )
         return
-    _finish(services, reverse)
+    await services.sessions.run_async(_finish, services, reverse)
 
 
 def _finish(services: AgentRenameServices, rename: AgentRename) -> bool:
@@ -256,22 +246,15 @@ def _finish(services: AgentRenameServices, rename: AgentRename) -> bool:
     return True
 
 
-def _retarget_references(
-    services: AgentRenameServices,
-    rename: AgentRename,
-    loop: asyncio.AbstractEventLoop | None,
-) -> _References:
+def _retarget_references(services: AgentRenameServices, rename: AgentRename) -> _References:
     """Point every Channel, Cron job, Bootstrap job and Calendar action at the target id.
 
     Only non-terminal jobs that target the Identity Agent itself move: completed
     history stays as it ran, and a Project-qualified job targets that Project's
-    Team Agent. Without ``loop`` (startup), no owner has started yet and each
-    changes its stored references directly; with it, the changes run on that
-    loop, which owns the state of the started owners.
+    Team Agent. For a rename that completes at startup, before any owner has
+    started: each owner changes its stored references directly. Blocking.
     """
     source, target = rename.source_id, rename.target_id
-    if loop is not None:
-        return _on_loop(loop, _retarget_on_loop(services, source, target))
     channel_ids = services.channels.retarget_agent(source, target)
     cron_job_ids = _identity_job_ids(services.cron, source, TERMINAL_CRON_JOB_STATUSES)
     for job_id in cron_job_ids:
@@ -287,8 +270,9 @@ def _retarget_references(
     )
 
 
-async def _retarget_on_loop(services: AgentRenameServices, source: str, target: str) -> _References:
-    """:func:`_retarget_references` on the Event Loop of the started owners."""
+async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) -> _References:
+    """:func:`_retarget_references` on the Event Loop, which owns the started owners' state."""
+    source, target = rename.source_id, rename.target_id
     # A running Channel service rebuilds each adapter; a stopped one only
     # rewrites the configs and starts none.
     channel_ids = await services.channels.retarget_agent_async(source, target)
@@ -307,11 +291,6 @@ async def _retarget_on_loop(services: AgentRenameServices, source: str, target: 
             source, target
         ),
     )
-
-
-def _on_loop(loop: asyncio.AbstractEventLoop, step: Coroutine[Any, Any, _Result]) -> _Result:
-    """Run ``step`` on ``loop`` from the rename's worker and wait for its result."""
-    return asyncio.run_coroutine_threadsafe(step, loop).result()
 
 
 def _identity_job_ids(

@@ -117,6 +117,29 @@ def _fail_when_retargeted_to(
     monkeypatch.setattr(service, name, failing)
 
 
+def _one_session_worker(runtime: Runtime, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give the Session pool a single worker; a call that would wait for it fails instead.
+
+    On a pool of one worker, a call that holds the worker while it waits for
+    another call on the pool never finishes. Failing at once keeps that
+    starvation a test failure instead of a hang.
+    """
+    sessions = runtime.chat_sessions
+    run_async = sessions.run_async
+    busy = False
+
+    async def one_worker(function: Callable[..., Any], *arguments: Any, **keywords: Any) -> Any:
+        nonlocal busy
+        assert not busy, "a Session pool call waited for the pool's only worker"
+        busy = True
+        try:
+            return await run_async(function, *arguments, **keywords)
+        finally:
+            busy = False
+
+    monkeypatch.setattr(sessions, "run_async", one_worker)
+
+
 def _record_threads(
     owner: Any, names: tuple[str, ...], threads: set[int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -159,8 +182,11 @@ async def test_a_live_rename_moves_every_reference_or_none(
         if channels_running:
             runtime.channel_service.start()
         channel_loops, started_adapters = _record_channel_changes(runtime, monkeypatch)
+        # The rename never holds a Session pool worker while its Cron and
+        # Calendar steps wait for that pool, so a single worker serves it.
+        _one_session_worker(runtime, monkeypatch)
         # Every read and change of the jobs and actions the running services keep
-        # on the Event Loop happens there, never on the rename's worker.
+        # on the Event Loop happens there, never on a worker.
         automation_threads: set[int] = set()
         for owner, names in (
             (runtime.cron_service, ("list_jobs", "retarget_agent_async", "_notify_changed")),
@@ -188,8 +214,8 @@ async def test_a_live_rename_moves_every_reference_or_none(
             assert outcome.calendar_action_count == 1
 
         _assert_agent_is(runtime, "coder" if fails else "researcher", current_session_id)
-        # The rename worker hands every change of a running Channel, forward and
-        # back, to this Event Loop, which owns the Channel adapters.
+        # Every change of a running Channel, forward and back, runs on this Event
+        # Loop, which owns the Channel adapters.
         changes = (2 if fails else 1) if channels_running else 0
         assert channel_loops == [asyncio.get_running_loop()] * changes
         assert started_adapters == []
