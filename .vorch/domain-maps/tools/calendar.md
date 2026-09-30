@@ -49,7 +49,7 @@ Events store no zone of their own (recurring events anchor in the server zone; a
 
 ## Constraints & Gotchas
 
-- Error codes: `invalid_arguments` (every refusal above), `event_not_found`/`action_not_found` (point to `{"action":"list"}` and a later `when`), `calendar_storage_error` and `calendar_service_error` ("Do not repeat the same call unchanged"). Target validation keeps the service reason plus target guidance.
+- Error codes: `invalid_arguments` (every refusal above), `event_not_found`/`action_not_found` (point to `{"action":"list"}` and a later `when`), `calendar_storage_error` and `calendar_service_error` ("Do not repeat the same call unchanged"). Target validation keeps the service reason plus target guidance; a malformed `target` address is a `CalendarValidationError` (`target does not identify an agent (...)`) from `core/calendar/actions.py`. A date or clock time that names no real day or time (`2030-02-30`, `25:99`) counts as no date or time (`parse_date`, `parse_time_of_day` in `_calendar_arguments.py`), so it is refused with the same calls as other unreadable values instead of escaping as an execution error (`TestImpossibleValues` in `test_calendar_call_tolerance.py`).
 - Absent and explicit-null arguments differ: omitted `rrule` on create is a single event; on update omission keeps the rule and null clears it.
 - `add_exdate` does not verify that the value is an occurrence; the Tool verifies it before calling (`_occurrence_start`), other accessors use the UI's server-provided `occurrence_start`.
 - The Tool cannot invite attendees, keep reminders, select another calendar or hold a per-event zone; these are refused or recorded in notes rather than approximated.

@@ -161,6 +161,7 @@ class TestLengths:
             (DENTIST_START, "2030-01-10T16:30", 90),
             (DENTIST_START, "16:00", 60),
             ("2030-01-10T23:00", "01:00", 120),
+            ("2030-01-10T08:00", "9:30", 90),
         ],
     )
     def test_end_time_becomes_the_duration(

@@ -40,7 +40,7 @@ from core.json_documents import (
     warn_unknown_fields,
     write_json_document,
 )
-from core.projects.address import parse_agent_address
+from core.projects.address import InvalidAgentAddressError, parse_agent_address
 from core.runs import RunKind
 from core.sessions import SessionAddress
 from core.utils.ids import new_id
@@ -235,7 +235,10 @@ def _validate_action_record(action: Any) -> None:
     parse_action_when(action.get("when"))
     _instant(action["created_at"])
     _instant(action["scanned_until"])
-    parse_agent_address(action["target"])
+    try:
+        parse_agent_address(action["target"])
+    except InvalidAgentAddressError as error:
+        raise CalendarValidationError(f"target does not identify an agent ({error})") from error
     session = action.get("session")
     if session is not None and (not isinstance(session, str) or not session.strip()):
         raise CalendarValidationError("session must be a non-empty string or null")

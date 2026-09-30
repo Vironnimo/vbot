@@ -448,6 +448,44 @@ class TestStandIns:
         )
 
 
+class TestImpossibleValues:
+    @pytest.mark.parametrize(
+        ("call", "reason"),
+        [
+            (
+                {"action": "create", "title": "E", "start": DENTIST_START, "end": "25:99"},
+                '"end" 25:99 must be a local time',
+            ),
+            (
+                {"action": "create", "title": "E", "start": "2030-01-10", "end": "2030-02-30"},
+                "an all-day event ends on a date",
+            ),
+            (
+                {"action": "add_action", "when": "2030-02-30", "prompt": "p"},
+                "when must be start or end",
+            ),
+            (
+                {"action": "add_action", "when": "start", "prompt": "p", "target": "a b"},
+                "target does not identify an agent",
+            ),
+        ],
+        ids=["end-time", "all-day-end", "action-date", "action-target"],
+    )
+    def test_value_naming_no_real_time_or_agent_is_refused(
+        self, tool: CalendarTool, call: dict[str, Any], reason: str
+    ) -> None:
+        event_id = tool.add_dentist()
+        if call["action"] == "add_action":
+            call = {**call, "id": event_id}
+
+        _, text = tool.call(call)
+
+        assert _refused(text)
+        assert reason in text
+        assert [event.id for event in tool.events()] == [event_id]
+        assert tool.actions() == []
+
+
 class TestConflicts:
     def test_create_with_an_id_offers_update_or_create(self, tool: CalendarTool) -> None:
         event_id = tool.add_dentist()

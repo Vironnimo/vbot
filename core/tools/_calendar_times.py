@@ -8,7 +8,7 @@ the call, with the corrected call, when it is not.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from datetime import UTC, datetime, time, timedelta, tzinfo
 from typing import TYPE_CHECKING, cast
 from zoneinfo import ZoneInfo
 
@@ -24,7 +24,9 @@ from core.tools._calendar_arguments import (
     choice,
     is_date,
     is_time_of_day,
+    parse_date,
     parse_local,
+    parse_time_of_day,
     refusal,
     render_call,
 )
@@ -357,8 +359,10 @@ def apply_end(
 def _duration_between(
     server: ZoneInfo, start: str, end: str, recurring: bool, arguments: JsonObject
 ) -> int:
-    if is_date(start):
-        if not is_date(end):
+    first_day = parse_date(start)
+    if first_day is not None:
+        last_day = parse_date(end)
+        if last_day is None:
             raise CalendarCallRefusedError(
                 refusal(
                     "an all-day event ends on a date; send its length in days as duration.",
@@ -366,7 +370,7 @@ def _duration_between(
                     duration=STAND_INS["duration"],
                 )
             )
-        days = (date.fromisoformat(end) - date.fromisoformat(start)).days
+        days = (last_day - first_day).days
         if days < 0:
             raise CalendarCallRefusedError(
                 refusal('"end" is before "start".', arguments, duration=STAND_INS["duration"])
@@ -387,8 +391,9 @@ def _duration_between(
     if begin is None:
         # The service explains a malformed start.
         return 60
-    if is_time_of_day(end):
-        finish = datetime.combine(begin.date(), time.fromisoformat(end), begin.tzinfo)
+    clock = parse_time_of_day(end)
+    if clock is not None:
+        finish = datetime.combine(begin.date(), clock, begin.tzinfo)
         if finish <= begin:
             # An end time before the start time can only be on the next day.
             finish += timedelta(days=1)

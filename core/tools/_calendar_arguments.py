@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
@@ -494,12 +494,35 @@ def choice(text: str, alternatives: list[str]) -> str:
     return f"{_REFUSAL_PREFIX}{text} " + " or ".join(alternatives)
 
 
+def parse_date(text: str) -> date | None:
+    """Parse a date written as YYYY-MM-DD; None when it is not one or no such day exists."""
+    value = text.strip()
+    if not _DATE_ONLY.match(value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def is_date(text: str) -> bool:
-    return bool(_DATE_ONLY.match(text.strip()))
+    return parse_date(text) is not None
+
+
+def parse_time_of_day(text: str) -> time | None:
+    """Parse a clock time such as 9:00 or 16:30:15; None when it is not one."""
+    value = text.strip()
+    if not _TIME_ONLY.match(value):
+        return None
+    hours, _, rest = value.partition(":")
+    try:
+        return time.fromisoformat(f"{int(hours):02d}:{rest}")
+    except ValueError:
+        return None
 
 
 def is_time_of_day(text: str) -> bool:
-    return bool(_TIME_ONLY.match(text.strip()))
+    return parse_time_of_day(text) is not None
 
 
 def parse_local(text: str) -> datetime | None:
@@ -1328,7 +1351,9 @@ __all__ = [
     "is_time_of_day",
     "minutes_text",
     "normalize_calendar_arguments",
+    "parse_date",
     "parse_local",
+    "parse_time_of_day",
     "refusal",
     "render_call",
 ]
