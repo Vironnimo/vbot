@@ -26,6 +26,13 @@ STOP_INITIATORS = frozenset(
     {"cli", "scheduled_restart", "tray_quit", "tray_restart", "tray_stop", "update"}
 )
 UNKNOWN_STOP_INITIATOR = "unknown"
+# Exit statuses of a server process that a supervisor must not answer with a restart:
+# a failed application startup (uvicorn's own status for it) would fail again, and a
+# stop whose Runtime shutdown failed was requested. A crash and a failed bind still
+# end with other statuses.
+STARTUP_FAILED_EXIT_CODE = 3
+# sysexits EX_SOFTWARE.
+SHUTDOWN_FAILED_EXIT_CODE = 70
 CONTROL_RECORD_VERSION = 2
 CONTROL_RECORD_MAX_BYTES = 16_384
 CONTROL_TOKEN_BYTES = 32
