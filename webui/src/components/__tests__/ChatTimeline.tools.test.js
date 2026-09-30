@@ -396,6 +396,12 @@ describe('ChatTimeline Tools', () => {
               },
               { title: '' },
               { title: 'Untitled conversation' },
+              {
+                title: 'Example Domain',
+                url: 'https://example.com/',
+                meta: 'example.com',
+              },
+              { title: 'Not a link', url: 'javascript:alert(1)' },
             ],
           },
           { type: 'results', items: [{ meta: 'no title' }] },
@@ -414,13 +420,20 @@ describe('ChatTimeline Tools', () => {
         lists[0].querySelectorAll('.tool-results__item'),
         (item) => item.textContent.replace(/\s+/g, ' ').trim(),
       );
-      expect(items).toHaveLength(2);
+      expect(items).toHaveLength(4);
       expect(items[0]).toContain('Release planning User');
       expect(items[0]).toContain('Ship on Monday.');
       expect(lists[0].querySelector('time')?.getAttribute('datetime')).toBe(
         '2026-09-30T12:00:00Z',
       );
       expect(items[1]).toBe('Untitled conversation');
+      // Only a web address turns the title into a link that opens elsewhere.
+      const links = lists[0].querySelectorAll('a.tool-results__title');
+      expect(Array.from(links, (link) => link.getAttribute('href'))).toEqual([
+        'https://example.com/',
+      ]);
+      expect(links[0].getAttribute('target')).toBe('_blank');
+      expect(items[3]).toBe('Not a link');
     });
 
     it('shows changed Memory entries with their scope and revision', () => {

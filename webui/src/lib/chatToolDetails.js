@@ -407,7 +407,7 @@ const TEXT_LABELS = new Set(['command', 'output', 'page', 'query', 'results']);
 // from each hunk's start; `notice` blocks a leveled message; `text` blocks a
 // labelled text, either given or read from the call's `args` or `result` at
 // the block's source path; `results` blocks the items a call found, each with
-// a title and optional meta, ISO time and text; `memory_changes` blocks the
+// a title and optional http(s) link, meta, ISO time and text; `memory_changes` blocks the
 // entries a call added, removed or replaced (with its previous text) in one
 // Memory scope and the history revision that recorded them. Malformed blocks
 // and entries, texts without a value and empty lists are dropped.
@@ -428,6 +428,10 @@ export function toolDetailBlocks(tool, { args, result } = {}) {
           ? [
               {
                 title: item.title,
+                url:
+                  typeof item.url === 'string' && /^https?:\/\//i.test(item.url)
+                    ? item.url
+                    : '',
                 meta: typeof item.meta === 'string' ? item.meta : '',
                 time: typeof item.time === 'string' ? item.time : '',
                 text: typeof item.text === 'string' ? item.text : '',

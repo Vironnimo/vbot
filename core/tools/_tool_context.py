@@ -21,6 +21,7 @@ from core.tools._tool_display import (
     _normalize_display_fact,
     display_memory_changes,
     display_notice,
+    display_results,
     display_text,
 )
 from core.tools.change_tracker import ChangeTracker
@@ -270,6 +271,10 @@ class ToolContext:
     def add_display_text(self, label: str, text: str) -> None:
         """Record one labelled text detail block, such as output the result does not hold."""
         self.presentation_details.append(display_text(label, text=text))
+
+    def add_display_results(self, items: Sequence[Mapping[str, str | None]]) -> None:
+        """Record the things a call found as one results detail block (``display_results``)."""
+        self.presentation_details.append(display_results(items))
 
     def add_display_memory_changes(
         self,

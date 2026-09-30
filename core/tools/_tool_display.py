@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from core.tools.contracts import JsonObject
 from core.utils.paths import model_path
@@ -33,6 +34,7 @@ MAX_TOOL_DISPLAY_TEXT_LENGTH = 16_384
 MAX_TOOL_DISPLAY_RESULTS = 20
 MAX_TOOL_DISPLAY_RESULT_TEXT_LENGTH = 600
 TOOL_DISPLAY_RESULT_FIELDS = ("meta", "time", "text")
+MAX_TOOL_DISPLAY_RESULT_URL_LENGTH = 2048
 TOOL_DISPLAY_MEMORY_SCOPES = frozenset({"agent", "user"})
 TOOL_DISPLAY_MEMORY_CHANGE_OPS = frozenset({"added", "removed", "replaced"})
 
@@ -476,13 +478,28 @@ def display_text(
     return block
 
 
+def _display_url(value: str | None) -> str:
+    """Return an absolute http(s) URL unchanged, or ``""`` for anything else."""
+    if not isinstance(value, str) or len(value) > MAX_TOOL_DISPLAY_RESULT_URL_LENGTH:
+        return ""
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return ""
+    if parts.scheme.lower() not in {"http", "https"} or not parts.netloc or value != value.strip():
+        return ""
+    return value
+
+
 def display_results(items: Sequence[Mapping[str, str | None]]) -> JsonObject:
     """Return one results detail block: the things a call found, as a list.
 
-    Each item has a ``title`` and optionally ``meta`` (a short description such
-    as its kind), ``time`` (an ISO-8601 moment the WebUI shows in local time)
-    and ``text`` (an excerpt, cut at 600 characters). Items without a title and
-    empty fields are left out; at most 20 items are kept.
+    Each item has a ``title`` and optionally ``url`` (a web address the title
+    links to), ``meta`` (a short description such as its kind), ``time`` (an
+    ISO-8601 moment the WebUI shows in local time) and ``text`` (an excerpt, cut
+    at 600 characters). Items without a title, empty fields and addresses that
+    are not absolute http(s) URLs of at most 2048 characters are left out; at
+    most 20 items are kept.
     """
     shown: list[JsonObject] = []
     for item in items:
@@ -490,6 +507,9 @@ def display_results(items: Sequence[Mapping[str, str | None]]) -> JsonObject:
         if not title:
             continue
         entry: JsonObject = {"title": title}
+        url = _display_url(item.get("url"))
+        if url:
+            entry["url"] = url
         for key in TOOL_DISPLAY_RESULT_FIELDS:
             value = _normalize_display_value(item.get(key))
             if key == "text" and len(value) > MAX_TOOL_DISPLAY_RESULT_TEXT_LENGTH:

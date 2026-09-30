@@ -835,6 +835,15 @@
   overflow-wrap: anywhere;
 }
 
+.tool-results__link {
+  text-decoration: none;
+}
+
+.tool-results__link:hover,
+.tool-results__link:focus-visible {
+  text-decoration: underline;
+}
+
 .tool-results__meta,
 .tool-results__time {
   color: var(--text-lo);

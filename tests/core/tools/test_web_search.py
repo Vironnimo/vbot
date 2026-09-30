@@ -433,7 +433,9 @@ async def test_empty_or_contradictory_requests_fail_without_searching(
 
 
 @pytest.mark.asyncio
-async def test_results_read_as_a_numbered_list_and_count_for_the_row(tmp_path: Path) -> None:
+async def test_results_read_as_a_numbered_list_and_show_the_user_linked_entries(
+    tmp_path: Path,
+) -> None:
     registry = web_search_registry()
     context = make_context(tmp_path)
     long_text = "word " * 150
@@ -466,6 +468,21 @@ async def test_results_read_as_a_numbered_list_and_count_for_the_row(tmp_path: P
     assert context.presentation_facts == [
         {"kind": "count", "value": 2, "unit": "results", "at_least": False}
     ]
+    # The user sees each result as a linked title with its site and date.
+    [block] = context.presentation_details
+    assert block["type"] == "results"
+    first_item, second_item = block["items"]
+    assert first_item["text"].startswith("word word") and len(first_item["text"]) == 600
+    assert {key: value for key, value in first_item.items() if key != "text"} == {
+        "title": "Release notes",
+        "url": "https://example.com/a",
+        "meta": "example.com · 2026-09-01",
+    }
+    assert second_item == {
+        "title": "https://example.com/b",
+        "url": "https://example.com/b",
+        "meta": "example.com",
+    }
 
 
 @pytest.mark.asyncio

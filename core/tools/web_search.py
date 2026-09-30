@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from core.search_config import (
     DEFAULT_SEARXNG_BASE_URL,
@@ -500,15 +501,50 @@ async def web_search_handler(
         )
     results = payload.get("results")
     context.add_display_count(len(results) if isinstance(results, list) else 0, "results")
-    return tool_success(
-        _model_view(
-            payload,
-            domains=domains,
-            exclude=exclude,
-            page=page,
-            notes=[age_note] if age_note else [],
-        )
+    data = _model_view(
+        payload,
+        domains=domains,
+        exclude=exclude,
+        page=page,
+        notes=[age_note] if age_note else [],
     )
+    _record_display(context, results if isinstance(results, list) else [], data)
+    return tool_success(data)
+
+
+def _record_display(context: ToolContext, results: list[Any], data: JsonObject) -> None:
+    """Show the user each result as a linked title with its site, date and description.
+
+    The notes on applied limits and further pages follow; the numbered result
+    text stays in the raw result.
+    """
+    items = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        url = _normalize_text(result.get("url"))
+        try:
+            site = urlsplit(url).hostname or ""
+        except ValueError:
+            site = ""
+        items.append(
+            {
+                "title": " ".join(_normalize_text(result.get("title")).split()) or url,
+                "url": url,
+                "meta": " · ".join(
+                    part for part in (site, _display_date(result.get("page_age"))) if part
+                ),
+                "text": " ".join(_normalize_text(result.get("description")).split()),
+            }
+        )
+    if items:
+        context.add_display_results(items)
+    else:
+        context.add_display_notice("info", "No results found.")
+    if data.get("note"):
+        context.add_display_notice("info", data["note"])
+    if data.get("more"):
+        context.add_display_notice("info", "More results are available on the next page.")
 
 
 def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:

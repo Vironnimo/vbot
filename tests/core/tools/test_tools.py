@@ -305,11 +305,18 @@ def test_facts_recorded_by_the_handler_precede_the_display_facts() -> None:
     ]
 
 
-def test_results_block_keeps_titled_items_with_bounded_text() -> None:
+def test_results_block_keeps_titled_items_with_bounded_text_and_web_links() -> None:
     items: list[dict[str, str | None]] = [
-        {"title": " First ", "meta": "User", "time": "2026-09-30T12:00:00Z", "text": "x" * 700},
+        {
+            "title": " First ",
+            "url": "https://example.com/a?b=1",
+            "meta": "User",
+            "time": "2026-09-30T12:00:00Z",
+            "text": "x" * 700,
+        },
         {"title": "", "text": "untitled"},
-        {"title": "Second", "meta": " ", "text": None},
+        # Only an absolute http(s) address becomes a link.
+        {"title": "Second", "url": "javascript:alert(1)", "meta": " ", "text": None},
     ]
     items.extend({"title": f"More {index}"} for index in range(30))
 
@@ -319,6 +326,7 @@ def test_results_block_keeps_titled_items_with_bounded_text() -> None:
     assert len(block["items"]) == 20
     assert block["items"][0] == {
         "title": "First",
+        "url": "https://example.com/a?b=1",
         "meta": "User",
         "time": "2026-09-30T12:00:00Z",
         "text": "x" * 599 + "…",
