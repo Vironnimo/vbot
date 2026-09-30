@@ -96,6 +96,7 @@ export {
   getStatisticsRunActivity,
   listLogs,
   readLogFile,
+  readOlderLogEntries,
   listClients,
   deleteChannel,
   connectProvider,

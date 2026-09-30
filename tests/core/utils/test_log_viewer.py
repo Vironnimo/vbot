@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing, suppress
@@ -16,26 +17,44 @@ from watchfiles import Change
 from core.utils import log_viewer as log_viewer_module
 from core.utils.log_viewer import (
     LogViewer,
-    _build_snapshot_event,
     _cancel_watcher_task,
     _log_watcher_task_result,
-    _LogSnapshot,
+    _read_tail,
     _WatcherState,
     parse_log_entries,
 )
 
+_NOISE = "2026-05-11 09:00:01 [INFO] vbot.server.uvicorn - connection open"
 
-def test_parse_log_entries_groups_multiline_continuations() -> None:
-    entries = parse_log_entries(
-        "\n".join(
-            [
-                "2026-05-11 09:00:00 [INFO] vbot.server.app - Server started",
-                "Traceback (most recent call last):",
-                '  File "server/app.py", line 10, in create_app',
-                "2026-05-11 09:00:01 [WARN] vbot.server.app - Slow request",
-            ]
-        )
+
+def _line(second: int, message: str, level: str = "INFO") -> str:
+    return f"2026-05-11 09:00:{second:02d} [{level}] vbot.core - {message}"
+
+
+def _text(*lines: str) -> str:
+    return "".join(f"{line}\n" for line in lines)
+
+
+def _offset(text: str, line: str) -> int:
+    return text.encode("utf-8").index(line.encode("utf-8"))
+
+
+def _messages(event: dict[str, Any]) -> list[str]:
+    return [entry["message"] for entry in event["entries"]]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_parse_log_entries_groups_multiline_continuations(newline: str) -> None:
+    text = newline.join(
+        [
+            "2026-05-11 09:00:00 [INFO] vbot.server.app - Server started",
+            "Traceback (most recent call last):",
+            '  File "server/app.py", line 10, in create_app',
+            "2026-05-11 09:00:01 [WARN] vbot.server.app - Slow request",
+        ]
     )
+
+    entries = parse_log_entries(text)
 
     assert entries == [
         {
@@ -51,6 +70,7 @@ def test_parse_log_entries_groups_multiline_continuations() -> None:
                 "Traceback (most recent call last):\n"
                 '  File "server/app.py", line 10, in create_app'
             ),
+            "offset": 0,
         },
         {
             "timestamp": "2026-05-11 09:00:01",
@@ -59,6 +79,8 @@ def test_parse_log_entries_groups_multiline_continuations() -> None:
             "message": "Slow request",
             "continuation": "",
             "raw": "2026-05-11 09:00:01 [WARN] vbot.server.app - Slow request",
+            # The byte offset of the entry's first line: the paging position.
+            "offset": _offset(text, "2026-05-11 09:00:01 [WARN]"),
         },
     ]
 
@@ -74,6 +96,7 @@ def test_parse_log_entries_keeps_orphan_lines_visible() -> None:
             "message": "orphan line",
             "continuation": "",
             "raw": "orphan line",
+            "offset": 0,
         },
         {
             "timestamp": "2026-05-11 09:00:00",
@@ -82,6 +105,7 @@ def test_parse_log_entries_keeps_orphan_lines_visible() -> None:
             "message": "Boom",
             "continuation": "",
             "raw": "2026-05-11 09:00:00 [ERROR] vbot.core - Boom",
+            "offset": 12,
         },
     ]
 
@@ -100,47 +124,39 @@ def test_parse_log_entries_captures_verbatim_raw_line() -> None:
 
 
 def test_parse_log_entries_filters_routine_websocket_noise_but_keeps_real_transport_logs() -> None:
-    entries = parse_log_entries(
-        "\n".join(
-            [
-                "2026-05-11 09:00:00 [INFO] vbot.server.uvicorn - "
-                '127.0.0.1:55090 - "WebSocket /ws" [accepted]',
-                "2026-05-11 09:00:01 [INFO] vbot.server.uvicorn - connection open",
-                "2026-05-11 09:00:02 [INFO] vbot.server.uvicorn - "
-                '127.0.0.1:60756 - "WebSocket /ws/logs?cursor=abc" [accepted]',
-                "2026-05-11 09:00:03 [INFO] vbot.server.uvicorn - connection closed",
-                "2026-05-11 09:00:04 [WARN] vbot.server.uvicorn - keepalive ping timeout",
-                "2026-05-11 09:00:05 [ERROR] vbot.server.uvicorn - opening handshake failed",
-                "2026-05-11 09:00:06 [INFO] vbot.server.app - Ready",
-            ]
-        )
+    text = "\n".join(
+        [
+            "2026-05-11 09:00:00 [INFO] vbot.server.uvicorn - "
+            '127.0.0.1:55090 - "WebSocket /ws" [accepted]',
+            _NOISE,
+            "2026-05-11 09:00:02 [INFO] vbot.server.uvicorn - "
+            '127.0.0.1:60756 - "WebSocket /ws/logs?cursor=abc" [accepted]',
+            "2026-05-11 09:00:03 [INFO] vbot.server.uvicorn - connection closed",
+            "2026-05-11 09:00:04 [WARN] vbot.server.uvicorn - keepalive ping timeout",
+            "2026-05-11 09:00:05 [ERROR] vbot.server.uvicorn - opening handshake failed",
+            "2026-05-11 09:00:06 [INFO] vbot.server.app - Ready",
+        ]
     )
 
-    assert entries == [
-        {
-            "timestamp": "2026-05-11 09:00:04",
-            "level": "warn",
-            "logger_name": "vbot.server.uvicorn",
-            "message": "keepalive ping timeout",
-            "continuation": "",
-            "raw": "2026-05-11 09:00:04 [WARN] vbot.server.uvicorn - keepalive ping timeout",
-        },
-        {
-            "timestamp": "2026-05-11 09:00:05",
-            "level": "error",
-            "logger_name": "vbot.server.uvicorn",
-            "message": "opening handshake failed",
-            "continuation": "",
-            "raw": "2026-05-11 09:00:05 [ERROR] vbot.server.uvicorn - opening handshake failed",
-        },
-        {
-            "timestamp": "2026-05-11 09:00:06",
-            "level": "info",
-            "logger_name": "vbot.server.app",
-            "message": "Ready",
-            "continuation": "",
-            "raw": "2026-05-11 09:00:06 [INFO] vbot.server.app - Ready",
-        },
+    entries = parse_log_entries(text)
+
+    assert [
+        (entry["level"], entry["logger_name"], entry["message"], entry["offset"])
+        for entry in entries
+    ] == [
+        (
+            "warn",
+            "vbot.server.uvicorn",
+            "keepalive ping timeout",
+            _offset(text, "2026-05-11 09:00:04"),
+        ),
+        (
+            "error",
+            "vbot.server.uvicorn",
+            "opening handshake failed",
+            _offset(text, "2026-05-11 09:00:05"),
+        ),
+        ("info", "vbot.server.app", "Ready", _offset(text, "2026-05-11 09:00:06")),
     ]
 
 
@@ -174,6 +190,7 @@ async def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
             ]
         ),
         encoding="utf-8",
+        newline="\n",
     )
 
     viewer = LogViewer(tmp_path)
@@ -189,6 +206,7 @@ async def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
             "message": "Server started",
             "continuation": "details line",
             "raw": "2026-05-11 09:00:00 [INFO] vbot.server.app - Server started\ndetails line",
+            "offset": 0,
         },
         {
             "timestamp": "2026-05-11 09:00:01",
@@ -197,10 +215,52 @@ async def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
             "message": "Boom",
             "continuation": "",
             "raw": "2026-05-11 09:00:01 [ERROR] vbot.core - Boom",
+            "offset": 73,
         },
     ]
+    assert result["next_before"] is None
     assert isinstance(result["cursor"], str)
     assert result["cursor"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "read_max_bytes", [4 * 1024 * 1024, 160], ids=["whole-pages", "byte-capped-pages"]
+)
+async def test_read_file_pages_from_the_newest_entries_to_the_file_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_max_bytes: int
+) -> None:
+    monkeypatch.setattr(log_viewer_module, "LOG_PAGE_ENTRIES", 2)
+    monkeypatch.setattr(log_viewer_module, "_PAGE_CHUNK_BYTES", 32)
+    monkeypatch.setattr(log_viewer_module, "LOG_READ_MAX_BYTES", read_max_bytes)
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    lines = [
+        _line(0, "First", "ERROR"),
+        "Traceback (most recent call last):",
+        "  RuntimeError: boom",
+        _NOISE,
+        *(_line(second, f"Entry {second}") for second in range(2, 7)),
+    ]
+    text = "\n".join(lines) + "\n"
+    (logs_dir / "2026-05-11").write_text(text, encoding="utf-8", newline="\n")
+    viewer = LogViewer(tmp_path)
+
+    newest = await viewer.read_file("2026-05-11")
+    pages = [newest]
+    while pages[-1]["next_before"] is not None:
+        older = await viewer.read_file("2026-05-11", before=pages[-1]["next_before"])
+        # Only the newest page hands a cursor over to the live stream.
+        assert "cursor" not in older
+        pages.append(older)
+
+    assert [entry["message"] for entry in newest["entries"]] == ["Entry 5", "Entry 6"]
+    assert newest["next_before"] == _offset(text, _line(5, "Entry 5"))
+    # Following next_before yields every visible entry once, in file order.
+    paged = [entry for page in reversed(pages) for entry in page["entries"]]
+    assert paged == parse_log_entries(text)
+    with pytest.raises(ValueError):
+        await viewer.read_file("2026-05-11", before=len(text.encode("utf-8")) + 1)
 
 
 @pytest.mark.asyncio
@@ -216,14 +276,14 @@ async def test_read_file_parses_the_log_off_the_event_loop(
     viewer = LogViewer(tmp_path)
     entered = threading.Event()
     release = threading.Event()
-    parse = log_viewer_module.parse_log_entries
+    parse = log_viewer_module._parse_lines
 
-    def slow_parse(text: str) -> list[dict[str, object]]:
+    def slow_parse(*args: Any, **kwargs: Any) -> Any:
         entered.set()
         release.wait(timeout=5)
-        return parse(text)
+        return parse(*args, **kwargs)
 
-    monkeypatch.setattr(log_viewer_module, "parse_log_entries", slow_parse)
+    monkeypatch.setattr(log_viewer_module, "_parse_lines", slow_parse)
     reading = asyncio.create_task(viewer.read_file("2026-05-11"))
     try:
         assert await asyncio.to_thread(entered.wait, 5)
@@ -319,18 +379,50 @@ class _FakeWatch:
             yield item
 
 
-def _line(second: int, message: str) -> str:
-    return f"2026-05-11 09:00:{second:02d} [INFO] vbot.core - {message}\n"
+class _LiveFile:
+    """A watched log whose watcher sees a change batch only when the test sends one."""
 
+    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        self.path = logs_dir / "2026-05-11"
+        self.path.write_bytes(text.encode("utf-8"))
+        self.watch = _FakeWatch()
+        self.viewer = LogViewer(tmp_path)
+        monkeypatch.setattr(log_viewer_module, "awatch", self.watch.awatch)
+        monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
 
-def _messages(event: dict[str, Any]) -> list[str]:
-    return [entry["message"] for entry in event["entries"]]
+    def changed(self) -> None:
+        self.watch.changes.put_nowait({(Change.modified, str(self.path))})
+
+    def append(self, text: str) -> None:
+        with self.path.open("ab") as handle:
+            handle.write(text.encode("utf-8"))
+        self.changed()
+
+    def replace(self, text: str) -> None:
+        self.path.write_bytes(text.encode("utf-8"))
+        self.changed()
+
+    async def subscribe(self) -> AsyncGenerator[dict[str, Any], None]:
+        read = await self.viewer.read_file(self.path.name)
+        return self.viewer.subscribe(self.path.name, cursor=read["cursor"])
+
+    async def next_after(
+        self, stream: AsyncGenerator[dict[str, Any], None], change: Callable[[], None]
+    ) -> dict[str, Any]:
+        pending = asyncio.ensure_future(stream.__anext__())
+        await _until(lambda: self.viewer.subscriber_count(self.path.name) == 1)
+        change()
+        return await asyncio.wait_for(pending, timeout=1)
 
 
 @pytest.mark.asyncio
 async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(log_viewer_module, "_CURSOR_WINDOW_BYTES", 128)
+    monkeypatch.setattr(log_viewer_module, "_PAGE_CHUNK_BYTES", 128)
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     log_file = logs_dir / "2026-05-11"
@@ -338,12 +430,23 @@ async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
     monkeypatch.setattr(log_viewer_module, "awatch", watch.awatch)
     monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
     viewer = LogViewer(tmp_path)
+    history = _text(*(_line(second % 60, f"History {second}") for second in range(100)))
 
-    log_file.write_text(_line(0, "Ready"), encoding="utf-8")
+    log_file.write_bytes((history + _text(_line(0, "Ready"))).encode())
     first_read = await viewer.read_file(log_file.name)
-    log_file.write_text(_line(0, "Ready") + _line(1, "Failed"), encoding="utf-8")
+    # The second read catches the next entry half written.
+    second_text = history + _text(_line(0, "Ready"), _line(1, "Failed")) + _line(2, "Retr")
+    log_file.write_bytes(second_text.encode())
     second_read = await viewer.read_file(log_file.name)
-    log_file.write_text(_line(0, "Ready") + _line(1, "Failed") + _line(2, "Retried"), "utf-8")
+    log_file.write_bytes(
+        (history + _text(_line(0, "Ready"), _line(1, "Failed"), _line(2, "Retried"))).encode()
+    )
+    read_starts: list[int] = []
+    read_range = log_viewer_module._read_range
+
+    def record_range(handle: Any, start: int, end: int) -> bytes:
+        read_starts.append(start)
+        return read_range(handle, start, end)
 
     async def replay(cursor: str) -> dict[str, Any]:
         async with aclosing(viewer.subscribe(log_file.name, cursor=cursor)) as stream:
@@ -355,13 +458,18 @@ async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
     live_event = asyncio.create_task(_next_event(live))
     try:
         await _until(lambda: viewer.subscriber_count(log_file.name) == 1)
+        monkeypatch.setattr(log_viewer_module, "_read_range", record_range)
         second_replay = await replay(second_read["cursor"])
         first_replay = await replay(first_read["cursor"])
         first_again = await replay(first_read["cursor"])
 
-        log_file.write_text(
-            _line(0, "Ready") + _line(1, "Failed") + _line(2, "Retried") + _line(3, "Done"),
-            encoding="utf-8",
+        log_file.write_bytes(
+            (
+                history
+                + _text(
+                    _line(0, "Ready"), _line(1, "Failed"), _line(2, "Retried"), _line(3, "Done")
+                )
+            ).encode()
         )
         watch.changes.put_nowait({(Change.modified, str(log_file))})
         first_live_event = await asyncio.wait_for(live_event, timeout=1)
@@ -372,12 +480,18 @@ async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
         await viewer.aclose()
 
     assert second_replay["type"] == "append"
+    # The half-written entry the read showed is replaced by its complete form.
+    assert second_replay["from_offset"] == _offset(second_text, _line(2, "Retr"))
     assert _messages(second_replay) == ["Retried"]
     assert first_replay == first_again
     assert first_replay["type"] == "append"
+    assert first_replay["from_offset"] == _offset(second_text, _line(1, "Failed"))
     assert _messages(first_replay) == ["Failed", "Retried"]
     assert first_live_event["type"] == "append"
     assert _messages(first_live_event) == ["Done"]
+    # Checking and resuming a cursor reads only a bounded window before its end,
+    # never the history before it, however long the file is.
+    assert min(read_starts) >= len(history) - 128
 
 
 @pytest.mark.asyncio
@@ -385,16 +499,22 @@ async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
     ("read_name", "read_text", "current_text"),
     [
         pytest.param(
-            "2026-05-11", _line(0, "Ready") + _line(1, "Failed"), _line(2, "Reset"), id="truncated"
+            "2026-05-11",
+            _text(_line(0, "Ready"), _line(1, "Failed")),
+            _text(_line(2, "Reset")),
+            id="truncated",
         ),
         pytest.param(
             "2026-05-11",
-            _line(0, "Ready"),
-            _line(0, "Reset") + _line(1, "Failed"),
+            _text(_line(0, "Ready")),
+            _text(_line(0, "Reset"), _line(1, "Failed")),
             id="rewritten-in-place",
         ),
         pytest.param(
-            "2026-05-10", _line(0, "Ready"), _line(0, "Ready") + _line(1, "Failed"), id="other-file"
+            "2026-05-10",
+            _text(_line(0, "Ready")),
+            _text(_line(0, "Ready"), _line(1, "Failed")),
+            id="other-file",
         ),
     ],
 )
@@ -409,9 +529,9 @@ async def test_subscribe_resets_when_the_file_no_longer_starts_with_the_read(
     logs_dir.mkdir()
     monkeypatch.setattr(log_viewer_module, "awatch", _FakeWatch().awatch)
     viewer = LogViewer(tmp_path)
-    (logs_dir / read_name).write_text(read_text, encoding="utf-8")
+    (logs_dir / read_name).write_bytes(read_text.encode())
     cursor = (await viewer.read_file(read_name))["cursor"]
-    (logs_dir / "2026-05-11").write_text(current_text, encoding="utf-8")
+    (logs_dir / "2026-05-11").write_bytes(current_text.encode())
 
     async with aclosing(viewer.subscribe("2026-05-11", cursor=cursor)) as stream:
         event = await asyncio.wait_for(stream.__anext__(), timeout=1)
@@ -421,7 +541,116 @@ async def test_subscribe_resets_when_the_file_no_longer_starts_with_the_read(
         "type": "reset",
         "file": "2026-05-11",
         "entries": parse_log_entries(current_text),
+        "next_before": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_subscribe_tails_only_the_open_entry_and_the_appended_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = _text(_line(0, "Ready"), _line(1, "Serving"))
+    live = _LiveFile(tmp_path, monkeypatch, prefix)
+    reads: list[tuple[int, int]] = []
+    read_range = log_viewer_module._read_range
+
+    def record_range(handle: Any, start: int, end: int) -> bytes:
+        reads.append((start, end))
+        return read_range(handle, start, end)
+
+    monkeypatch.setattr(log_viewer_module, "_read_range", record_range)
+    serving_at = _offset(prefix, _line(1, "Serving"))
+    failed_at = len(prefix)
+
+    def append_partial_line() -> None:
+        reads.clear()  # Starting the subscription read the file once.
+        live.append(_line(2, "Fai", "ERROR"))
+
+    stream = await live.subscribe()
+    try:
+        # A partial last line is shown as written so far...
+        partial = await live.next_after(stream, append_partial_line)
+        # ...and replaced by its complete form once the rest arrives.
+        completed = await live.next_after(stream, lambda: live.append("led\n"))
+        # A traceback line continues the open entry, which is replaced again.
+        continued = await live.next_after(stream, lambda: live.append("  RuntimeError: boom\n"))
+        # A new entry closes it: only the new entry is sent.
+        appended = await live.next_after(stream, lambda: live.append(_text(_line(3, "Next"))))
+    finally:
+        await stream.aclose()
+        await live.viewer.aclose()
+
+    assert (partial["from_offset"], _messages(partial)) == (failed_at, ["Fai"])
+    assert (completed["from_offset"], [entry["raw"] for entry in completed["entries"]]) == (
+        failed_at,
+        [_line(2, "Failed", "ERROR")],
+    )
+    assert continued["from_offset"] == failed_at
+    assert continued["entries"][0]["continuation"] == "  RuntimeError: boom"
+    assert appended["type"] == "append"
+    assert _messages(appended) == ["Next"]
+    assert appended["from_offset"] == appended["entries"][0]["offset"]
+    # Each change re-read the file from the open entry's start, never from the top.
+    assert [start for start, _end in reads] == [serving_at, failed_at, failed_at, failed_at]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["truncated", "replaced"])
+async def test_subscribe_resets_when_the_file_shrinks_or_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    live = _LiveFile(tmp_path, monkeypatch, _text(_line(0, "Ready"), _line(1, "Serving")))
+    stream = await live.subscribe()
+
+    def rewrite() -> None:
+        if change == "truncated":
+            live.replace(_text(_line(5, "Restarted")))
+            return
+        # A replacement larger than the old file still counts as a new file.
+        replacement = live.path.with_name("replacement")
+        lines = [_line(second, f"Replaced {second}") for second in range(5, 9)]
+        replacement.write_bytes(_text(*lines).encode())
+        os.replace(replacement, live.path)
+        live.changed()
+
+    try:
+        event = await live.next_after(stream, rewrite)
+    finally:
+        await stream.aclose()
+        await live.viewer.aclose()
+
+    assert event["type"] == "reset"
+    assert event["next_before"] is None
+    assert event["entries"] == parse_log_entries(live.path.read_bytes().decode("utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_subscriber_that_falls_behind_is_resynchronized_with_one_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(log_viewer_module, "LOG_SUBSCRIBER_QUEUE_SIZE", 2)
+    live = _LiveFile(tmp_path, monkeypatch, _text(_line(0, "Ready")))
+    stream = await live.subscribe()
+    try:
+        first = await live.next_after(stream, lambda: live.append(_text(_line(1, "One"))))
+        # The subscriber reads nothing while four more changes arrive: its queue
+        # holds two events, so its backlog is dropped for a resynchronization.
+        for second in range(2, 6):
+            live.append(_text(_line(second, f"Burst {second}")))
+            await _until(live.watch.changes.empty)
+            await asyncio.sleep(0)
+        resync = await asyncio.wait_for(stream.__anext__(), timeout=1)
+        after = await asyncio.wait_for(stream.__anext__(), timeout=1)
+    finally:
+        await stream.aclose()
+        await live.viewer.aclose()
+
+    assert _messages(first) == ["One"]
+    assert resync["type"] == "reset"
+    assert _messages(resync) == ["Ready", "One", "Burst 2", "Burst 3", "Burst 4"]
+    # Events after the dropped backlog continue from the reset.
+    assert after["type"] == "append"
+    assert _messages(after) == ["Burst 5"]
 
 
 @pytest.mark.asyncio
@@ -483,31 +712,29 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     selected_file = logs_dir / "2026-05-11"
-    selected_file.write_text(
-        "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n",
-        encoding="utf-8",
-    )
+    ready = "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n"
+    selected_file.write_text(ready, encoding="utf-8", newline="\n")
     viewer = LogViewer(tmp_path)
-    subscriber: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    subscriber: asyncio.Queue[Any] = asyncio.Queue()
     watcher = _WatcherState(
         file_name=selected_file.name,
-        snapshot=viewer._read_snapshot(selected_file),
+        tail=_read_tail(selected_file),
         catalog=(selected_file.name,),
         directory_modified_ns=logs_dir.stat().st_mtime_ns,
         subscribers=[subscriber],
     )
-    snapshot_reads = 0
+    file_reads = 0
     catalog_reads = 0
     read_threads: list[threading.Thread] = []
-    original_read_snapshot = viewer._read_snapshot
+    advance_tails = log_viewer_module._advance_tails
     original_list_files = viewer._list_files
     awatch_kwargs: dict[str, object] = {}
 
-    def count_snapshot_reads(file_path: Path) -> _LogSnapshot:
-        nonlocal snapshot_reads
-        snapshot_reads += 1
+    def count_file_reads(*args: Any) -> Any:
+        nonlocal file_reads
+        file_reads += 1
         read_threads.append(threading.current_thread())
-        return original_read_snapshot(file_path)
+        return advance_tails(*args)
 
     def count_catalog_reads() -> dict[str, object]:
         nonlocal catalog_reads
@@ -518,30 +745,27 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
         awatch_kwargs.update(kwargs)
         yield set()
         selected_file.write_text(
-            "".join(
-                [
-                    "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n",
-                    "2026-05-11 09:00:01 [INFO] vbot.core - Updated\n",
-                ]
-            ),
+            ready + "2026-05-11 09:00:01 [INFO] vbot.core - Updated\n",
             encoding="utf-8",
+            newline="\n",
         )
         yield set()
 
-    monkeypatch.setattr(viewer, "_read_snapshot", count_snapshot_reads)
+    monkeypatch.setattr(log_viewer_module, "_advance_tails", count_file_reads)
     monkeypatch.setattr(viewer, "_list_files", count_catalog_reads)
     monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
 
     await viewer._watch_file(watcher)
 
     assert awatch_kwargs["yield_on_timeout"] is True
-    assert snapshot_reads == 1
+    assert file_reads == 1
     assert catalog_reads == 0
     # The watched log is re-read on every change: never on the Event Loop.
     assert threading.current_thread() not in read_threads
     assert subscriber.get_nowait() == {
         "type": "append",
         "file": selected_file.name,
+        "from_offset": len(ready),
         "entries": [
             {
                 "timestamp": "2026-05-11 09:00:01",
@@ -550,6 +774,7 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
                 "message": "Updated",
                 "continuation": "",
                 "raw": "2026-05-11 09:00:01 [INFO] vbot.core - Updated",
+                "offset": len(ready),
             }
         ],
     }
@@ -654,10 +879,11 @@ async def test_cancel_watcher_task_logs_a_real_crash_before_suppressing(
 async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a_fresh_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    monkeypatch.setattr(log_viewer_module, "LOG_SUBSCRIBER_QUEUE_SIZE", 1)
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     log_file = logs_dir / "2026-05-11"
-    log_file.write_text(_line(0, "Ready"), encoding="utf-8")
+    log_file.write_bytes(_text(_line(0, "Ready")).encode())
     watch = _FakeWatch()
     monkeypatch.setattr(log_viewer_module, "awatch", watch.awatch)
     monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
@@ -669,17 +895,31 @@ async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a
     fresh_next: asyncio.Task[dict[str, Any]] | None = None
     try:
         await _until(lambda: viewer.subscriber_count(log_file.name) == 1)
+        crashed_queue = viewer._watchers[log_file.name].subscribers[0]
+        log_file.write_bytes(_text(_line(0, "Ready"), _line(1, "Seen")).encode())
+        watch.changes.put_nowait({(Change.modified, str(log_file))})
+        assert _messages(await asyncio.wait_for(crashed_next, timeout=1)) == ["Seen"]
+        # Its reader falls behind: the stream's queue is full when the watcher dies.
+        log_file.write_bytes(
+            _text(_line(0, "Ready"), _line(1, "Seen"), _line(2, "Unread")).encode()
+        )
+        watch.changes.put_nowait({(Change.modified, str(log_file))})
+        await _until(crashed_queue.full)
         watch.changes.put_nowait(RuntimeError("awatch exploded"))
+        await _until(lambda: viewer.watcher_count == 0)
 
         # The stream ends, so the socket closes and the accessor reconnects,
         # instead of waiting on a watcher that delivers nothing any more.
         with pytest.raises(StopAsyncIteration):
-            await asyncio.wait_for(crashed_next, timeout=1)
-        assert viewer.watcher_count == 0
+            await asyncio.wait_for(crashed.__anext__(), timeout=1)
 
         fresh_next = asyncio.create_task(_next_event(fresh))
         await _until(lambda: viewer.subscriber_count(log_file.name) == 1)
-        log_file.write_text(_line(0, "Ready") + _line(1, "Updated"), encoding="utf-8")
+        log_file.write_bytes(
+            _text(
+                _line(0, "Ready"), _line(1, "Seen"), _line(2, "Unread"), _line(3, "Updated")
+            ).encode()
+        )
         watch.changes.put_nowait({(Change.modified, str(log_file))})
         event = await asyncio.wait_for(fresh_next, timeout=1)
     finally:
@@ -687,6 +927,7 @@ async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await crashed.aclose()
         await fresh.aclose()
         await viewer.aclose()
 
@@ -708,19 +949,20 @@ async def test_watch_file_skips_polls_it_cannot_read_and_catches_up_after(
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     log_file = logs_dir / "2026-05-11"
-    log_file.write_text(_line(0, "Ready"), encoding="utf-8")
+    ready = _text(_line(0, "Ready"))
+    log_file.write_bytes(ready.encode())
     viewer = LogViewer(tmp_path)
-    subscriber: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    subscriber: asyncio.Queue[Any] = asyncio.Queue()
     watcher = _WatcherState(
         file_name=log_file.name,
-        snapshot=viewer._read_snapshot(log_file),
+        tail=_read_tail(log_file),
         catalog=(log_file.name,),
         directory_modified_ns=logs_dir.stat().st_mtime_ns,
         subscribers=[subscriber],
     )
     denied = PermissionError(13, "The process cannot access the file", str(log_file))
     metadata_changes = log_viewer_module._metadata_changes
-    read_snapshot = viewer._read_snapshot
+    advance_tails = log_viewer_module._advance_tails
     metadata_failures = [denied]
     read_failures = [denied]
 
@@ -729,22 +971,22 @@ async def test_watch_file_skips_polls_it_cannot_read_and_catches_up_after(
             raise metadata_failures.pop()
         return metadata_changes(*arguments)
 
-    def locked_read_snapshot(file_path: Path) -> _LogSnapshot:
+    def locked_advance_tails(*arguments: Any) -> Any:
         if read_failures:
             raise read_failures.pop()
-        return read_snapshot(file_path)
+        return advance_tails(*arguments)
 
     async def fake_awatch(*_args: object, **_kwargs: object):
         # Undecodable bytes (a torn or foreign write) must not stop the watcher either.
         log_file.write_bytes(
-            _line(0, "Ready").encode() + b"2026-05-11 09:00:01 [INFO] vbot.core - bad \xff byte\n"
+            ready.encode() + b"2026-05-11 09:00:01 [INFO] vbot.core - bad \xff byte\n"
         )
         yield set()
         yield {(Change.modified, str(log_file))}
         yield set()
 
     monkeypatch.setattr(log_viewer_module, "_metadata_changes", locked_metadata_changes)
-    monkeypatch.setattr(viewer, "_read_snapshot", locked_read_snapshot)
+    monkeypatch.setattr(log_viewer_module, "_advance_tails", locked_advance_tails)
     monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
     caplog.set_level(logging.INFO, logger="vbot.log_viewer")
 
@@ -753,8 +995,9 @@ async def test_watch_file_skips_polls_it_cannot_read_and_catches_up_after(
     assert subscriber.get_nowait() == {
         "type": "append",
         "file": log_file.name,
+        "from_offset": len(ready),
         "entries": parse_log_entries(
-            _line(0, "Ready") + "2026-05-11 09:00:01 [INFO] vbot.core - bad � byte\n"
+            ready + "2026-05-11 09:00:01 [INFO] vbot.core - bad \ufffd byte\n"
         )[1:],
     }
     assert subscriber.empty()
@@ -769,82 +1012,3 @@ async def test_read_file_rejects_invalid_name(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         await viewer.read_file("../2026-05-11")
-
-
-def test_build_snapshot_event_appends_only_new_entries() -> None:
-    previous = _LogSnapshot(
-        exists=True,
-        size=10,
-        entries=[
-            {
-                "timestamp": "2026-05-11 09:00:00",
-                "level": "info",
-                "logger_name": "vbot.server.app",
-                "message": "Server started",
-                "continuation": "",
-            }
-        ],
-    )
-    current = _LogSnapshot(
-        exists=True,
-        size=20,
-        entries=[
-            previous.entries[0],
-            {
-                "timestamp": "2026-05-11 09:00:01",
-                "level": "warn",
-                "logger_name": "vbot.server.app",
-                "message": "Slow request",
-                "continuation": "",
-            },
-        ],
-    )
-
-    assert _build_snapshot_event("2026-05-11", previous, current) == {
-        "type": "append",
-        "file": "2026-05-11",
-        "entries": [
-            {
-                "timestamp": "2026-05-11 09:00:01",
-                "level": "warn",
-                "logger_name": "vbot.server.app",
-                "message": "Slow request",
-                "continuation": "",
-            }
-        ],
-    }
-
-
-def test_build_snapshot_event_resets_when_previous_tail_changes() -> None:
-    previous = _LogSnapshot(
-        exists=True,
-        size=10,
-        entries=[
-            {
-                "timestamp": "2026-05-11 09:00:00",
-                "level": "error",
-                "logger_name": "vbot.server.app",
-                "message": "Boom",
-                "continuation": "",
-            }
-        ],
-    )
-    current = _LogSnapshot(
-        exists=True,
-        size=25,
-        entries=[
-            {
-                "timestamp": "2026-05-11 09:00:00",
-                "level": "error",
-                "logger_name": "vbot.server.app",
-                "message": "Boom",
-                "continuation": "Traceback line",
-            }
-        ],
-    )
-
-    assert _build_snapshot_event("2026-05-11", previous, current) == {
-        "type": "reset",
-        "file": "2026-05-11",
-        "entries": current.entries,
-    }

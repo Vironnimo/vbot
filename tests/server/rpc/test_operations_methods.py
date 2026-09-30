@@ -264,7 +264,9 @@ def _log_state(tmp_path: Path) -> Any:
     for name in ("2026-05-09", "2026-05-11", "2026-05-10"):
         (logs_dir / name).write_text("", encoding="utf-8")
     (logs_dir / "2026-05-11").write_text(
-        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\ntrace line", encoding="utf-8"
+        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\ntrace line",
+        encoding="utf-8",
+        newline="\n",
     )
     return SimpleNamespace(log_viewer=LogViewer(tmp_path))
 
@@ -287,6 +289,7 @@ async def test_log_list_and_read_return_the_log_viewer_results(tmp_path: Path) -
     assert read["result"]["file"] == "2026-05-11"
     assert read["result"]["entries"] == [
         {
+            "offset": 0,
             "timestamp": "2026-05-11 09:00:00",
             "level": "info",
             "logger_name": "vbot.server.app",
@@ -295,9 +298,24 @@ async def test_log_list_and_read_return_the_log_viewer_results(tmp_path: Path) -
             "raw": "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\ntrace line",
         }
     ]
+    assert read["result"]["next_before"] is None
     # The cursor lets the log stream continue after this read.
     assert isinstance(read["result"]["cursor"], str)
     assert read["result"]["cursor"]
+
+    # An older page ends before a byte offset and carries no stream cursor.
+    size = (tmp_path / "logs" / "2026-05-11").stat().st_size
+    older = await dispatch_rpc(
+        state, {"method": "log.read", "params": {"file": "2026-05-11", "before": size}}
+    )
+    assert older == {
+        "ok": True,
+        "result": {
+            "file": "2026-05-11",
+            "entries": read["result"]["entries"],
+            "next_before": None,
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -311,6 +329,18 @@ async def test_log_list_and_read_return_the_log_viewer_results(tmp_path: Path) -
             "log.read", {"file": "2026-05-11", "extra": True}, "invalid_request", id="extra-field"
         ),
         pytest.param("log.read", {"file": "2026-05-12"}, "domain_error", id="missing-file"),
+        pytest.param(
+            "log.read", {"file": "2026-05-11", "before": 0}, "invalid_request", id="before-zero"
+        ),
+        pytest.param(
+            "log.read", {"file": "2026-05-11", "before": "9"}, "invalid_request", id="before-text"
+        ),
+        pytest.param(
+            "log.read",
+            {"file": "2026-05-11", "before": 10_000},
+            "invalid_request",
+            id="before-past-end",
+        ),
     ],
 )
 async def test_invalid_log_requests_are_rejected(

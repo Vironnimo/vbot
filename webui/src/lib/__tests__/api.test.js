@@ -170,6 +170,11 @@ describe('RPC wrappers', () => {
       { file: '2026-05-11' },
     ],
     [
+      'log.read',
+      (o) => api.readOlderLogEntries('2026-05-11', 4096, o),
+      { file: '2026-05-11', before: 4096 },
+    ],
+    [
       'chat.queue_list',
       (o) => api.listQueue('agent-1', 'session-1', o),
       { agent_id: 'agent-1', session_id: 'session-1' },

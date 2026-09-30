@@ -37,6 +37,11 @@ export default Object.freeze({
     'Live updates will appear here when the file grows.',
   'logs.noMatchesTitle': 'No entries match the current filters',
   'logs.noMatchesSubtitle': 'Try another level or broaden the search text.',
+  'logs.loadOlder': 'Load older entries',
+  'logs.loadingOlder': 'Loading older entries…',
+  'logs.olderError': 'Older log entries could not be loaded.',
+  'logs.windowFull':
+    'Showing the newest {count} entries of this file; older entries are not loaded.',
   'logs.catalogLoadError': 'Log files could not be loaded.',
   'logs.readError': 'Log file could not be loaded.',
   'logs.streamError': 'Live log updates failed.',

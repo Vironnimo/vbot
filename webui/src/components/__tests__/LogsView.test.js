@@ -8,6 +8,7 @@ import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 
 const listLogsMock = vi.fn();
 const readLogFileMock = vi.fn();
+const readOlderLogEntriesMock = vi.fn();
 const subscribeLogEventsMock = vi.fn();
 const streamConnections = [];
 
@@ -18,6 +19,7 @@ vi.mock('svelte', async () => {
 vi.mock('$lib/api.js', () => ({
   listLogs: (...args) => listLogsMock(...args),
   readLogFile: (...args) => readLogFileMock(...args),
+  readOlderLogEntries: (...args) => readOlderLogEntriesMock(...args),
   subscribeLogEvents: (...args) => subscribeLogEventsMock(...args),
 }));
 
@@ -34,6 +36,7 @@ describe('LogsView', () => {
 
     listLogsMock.mockReset();
     readLogFileMock.mockReset();
+    readOlderLogEntriesMock.mockReset();
     subscribeLogEventsMock.mockReset();
     subscribeLogEventsMock.mockImplementation((file, handlers = {}) => {
       const connection = createStreamConnection(file, handlers);
@@ -365,16 +368,16 @@ describe('LogsView', () => {
     const initialReadCalls = readLogFileMock.mock.calls.length;
 
     streamConnections[0].emitOpen();
+    const failed = entry({
+      level: 'error',
+      message: 'Failed',
+      continuation: 'Traceback line',
+    });
     streamConnections[0].emitEvent({
       type: 'append',
       file: '2026-05-11',
-      entries: [
-        entry({
-          level: 'error',
-          message: 'Failed',
-          continuation: 'Traceback line',
-        }),
-      ],
+      from_offset: failed.offset,
+      entries: [failed],
     });
     flushSync();
 
@@ -423,9 +426,14 @@ describe('LogsView', () => {
       files: ['2026-05-11'],
       default_file: '2026-05-11',
     });
+    const runFailed = entry({
+      level: 'error',
+      message: 'Run failed',
+      continuation,
+    });
     readLogFileMock.mockResolvedValue({
       file: '2026-05-11',
-      entries: [entry({ level: 'error', message: 'Run failed', continuation })],
+      entries: [runFailed],
       cursor: 'cursor-expand',
     });
 
@@ -455,17 +463,24 @@ describe('LogsView', () => {
     flushSync();
     expect(row.querySelector('.logs-entry__detail')).toBeTruthy();
 
-    // Newest first: a live append lands above without collapsing the row.
+    // Newest first: a live append lands above without collapsing the row,
+    // also when it replaces the row's entry with a longer version of it.
     streamConnections[0].emitEvent({
       type: 'append',
       file: '2026-05-11',
-      entries: [entry({ message: 'Recovered' })],
+      from_offset: runFailed.offset,
+      entries: [
+        { ...runFailed, continuation: `${continuation}\n    raise Error` },
+        entry({ message: 'Recovered' }),
+      ],
     });
     flushSync();
     expect(logEntryMessages()).toEqual(['Recovered', 'Run failed']);
     const rows = document.querySelectorAll('.logs-entry');
     expect(rows[1]).toBe(row);
-    expect(row.querySelector('.logs-entry__detail')).toBeTruthy();
+    expect(row.querySelector('.logs-entry__detail').textContent).toBe(
+      `Run failed\n${continuation}\n    raise Error`,
+    );
 
     // A drag that selected text in the row is not a toggle.
     const timestamp = row.querySelector('.logs-entry__timestamp');
@@ -626,6 +641,60 @@ describe('LogsView', () => {
     );
   });
 
+  it('loads older entries past the oldest row and retries a failed load', async () => {
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11'],
+      default_file: '2026-05-11',
+    });
+    const newest = entry({ message: 'Newest page' });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11',
+      entries: [newest],
+      next_before: newest.offset,
+      cursor: 'cursor-older',
+    });
+    readOlderLogEntriesMock
+      .mockRejectedValueOnce(new Error('server unavailable'))
+      .mockResolvedValue({
+        file: '2026-05-11',
+        entries: [{ ...entry({ message: 'Older page' }), offset: 1 }],
+        next_before: null,
+      });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => streamConnections.length === 1);
+
+    // Newest first: the control follows the oldest row.
+    const scroll = document.querySelector('.logs-view__scroll');
+    const listControl = buttonByText(t('logs.loadOlder'));
+    expect(scroll.lastElementChild.contains(listControl)).toBe(true);
+    expect(scroll.querySelector('[role="list"]').contains(listControl)).toBe(
+      false,
+    );
+
+    // Without a match among the loaded entries, the empty state offers it.
+    setSearch('older');
+    const emptyControl = buttonByText(t('logs.loadOlder'));
+    expect(emptyControl.closest('.empty-state')).toBeTruthy();
+
+    emptyControl.click();
+    await waitForCondition(() => buttonByText(t('common.retry')) !== null);
+    expect(readOlderLogEntriesMock).toHaveBeenCalledWith(
+      '2026-05-11',
+      newest.offset,
+    );
+    expect(document.body.textContent).toContain(t('logs.olderError'));
+
+    buttonByText(t('common.retry')).click();
+    await waitForCondition(() => logEntryMessages().includes('Older page'));
+    setSearch('');
+    expect(logEntryMessages()).toEqual(['Newest page', 'Older page']);
+    // The file start is shown: nothing older to load, no error left.
+    expect(buttonByText(t('logs.loadOlder'))).toBeNull();
+    expect(buttonByText(t('common.retry'))).toBeNull();
+  });
+
   it('reconnects with backoff after the live stream closes, also across a failed attempt', async () => {
     vi.useFakeTimers();
     // Pin reconnect jitter to its midpoint so the attempts fire at exactly the
@@ -718,8 +787,13 @@ function createStreamConnection(file, handlers) {
   };
 }
 
+// Entries get increasing byte offsets in the order they are created.
+let nextEntryOffset = 0;
+
 function entry(overrides = {}) {
+  nextEntryOffset += 100;
   return {
+    offset: nextEntryOffset,
     timestamp: '2026-05-11 09:00:00',
     level: 'info',
     logger_name: 'vbot.server.app',
@@ -734,6 +808,13 @@ function inputByLabel(label) {
   const element = document.body.querySelector(`[aria-label="${label}"]`);
   expect(element).toBeTruthy();
   return element;
+}
+
+function setSearch(value) {
+  const search = inputByLabel('Search');
+  search.value = value;
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
 }
 
 function buttonByText(text) {

@@ -8,7 +8,12 @@
   import EmptyState from './ui/EmptyState.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import LogsEntry from './logs/LogsEntry.svelte';
-  import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
+  import {
+    listLogs,
+    readLogFile,
+    readOlderLogEntries,
+    subscribeLogEvents,
+  } from '$lib/api.js';
   import { reconnectBackoffDelay } from '$lib/backoff.js';
   import { t, tOr } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -18,20 +23,30 @@
     LOGS_STREAM_STATUS_ERROR,
     LOGS_STREAM_STATUS_IDLE,
     LOGS_STREAM_STATUS_RECONNECTING,
+    LOGS_OLDER_FULL,
+    LOGS_OLDER_LOAD,
+    LOGS_OLDER_REVEAL,
     applyLogCatalog,
     changedFilterSelectionCount,
+    clearLogEntries,
     createLogsViewState,
     deriveLevelOptions,
     deriveSortOptions,
+    failOlderLogEntriesLoad,
     levelOptionValue,
+    logEntryCount,
     mergeLogStreamEvent,
-    normalizeLevelFilter,
+    olderLogEntriesState,
+    prependOlderLogEntries,
+    renderedLogEntries,
     replaceLogEntries,
+    revealOlderLogEntries,
     selectLogFile,
     setLevelFilter,
     setSortOrder,
     setSearchText,
-    visibleLogEntries,
+    startOlderLogEntriesLoad,
+    visibleLogEntryCount,
   } from '$lib/logsView.js';
 
   const RECONNECT_INITIAL_DELAY_MS = 1000;
@@ -56,8 +71,29 @@
   let filtersOpen = $state(false);
   let changedFilterCount = $derived(changedFilterSelectionCount(viewState));
 
-  let filteredEntries = $derived(visibleLogEntries(viewState));
-  let levelOptions = $derived(deriveLevelOptions(viewState.entries));
+  // The loaded entries are not deep reactive state; every change to them bumps
+  // viewState.revision, which these reads depend on.
+  let renderedEntries = $derived.by(() => {
+    void viewState.revision;
+    return renderedLogEntries(viewState);
+  });
+  let visibleCount = $derived.by(() => {
+    void viewState.revision;
+    return visibleLogEntryCount(viewState);
+  });
+  let loadedCount = $derived.by(() => {
+    void viewState.revision;
+    return logEntryCount(viewState);
+  });
+  let olderState = $derived.by(() => {
+    void viewState.revision;
+    return olderLogEntriesState(viewState);
+  });
+  let levelOptions = $derived.by(() => {
+    void viewState.revision;
+    return deriveLevelOptions(viewState);
+  });
+  let olderListFirst = $derived(viewState.sortOrder === 'oldest');
   let sortOrderOptions = $derived(
     deriveSortOptions().map((value) => ({
       value,
@@ -170,10 +206,10 @@
         Boolean(selectedFile) &&
         (options.forceReload === true ||
           selectedFile !== previousSelection ||
-          viewState.entries.length === 0);
+          logEntryCount(viewState) === 0);
 
       if (!selectedFile) {
-        viewState.entries = [];
+        clearLogEntries(viewState);
         viewState.readError = '';
         viewState.streamError = '';
         viewState.streamStatus = LOGS_STREAM_STATUS_IDLE;
@@ -337,7 +373,7 @@
     }
 
     if (!selectedFile) {
-      viewState.entries = [];
+      clearLogEntries(viewState);
       viewState.streamStatus = LOGS_STREAM_STATUS_IDLE;
       closeCurrentStream();
       return;
@@ -374,7 +410,6 @@
 
   function handleLevelChange(level) {
     setLevelFilter(viewState, level);
-    normalizeLevelFilter(viewState);
   }
 
   function handleSortChange(sortOrder) {
@@ -383,6 +418,33 @@
 
   function handleSearchInput(event) {
     setSearchText(viewState, event.currentTarget.value);
+  }
+
+  // Mounts more of the loaded entries, or reads the page before them.
+  async function showOlderEntries() {
+    if (revealOlderLogEntries(viewState)) {
+      return;
+    }
+
+    const request = startOlderLogEntriesLoad(viewState);
+    if (!request) {
+      return;
+    }
+
+    try {
+      const result = await readOlderLogEntries(request.file, request.before);
+      if (!destroyed) {
+        prependOlderLogEntries(viewState, request, result);
+      }
+    } catch (error) {
+      if (!destroyed) {
+        failOlderLogEntriesLoad(
+          viewState,
+          request,
+          `${t('logs.olderError')} ${errorMessageText(error, t('common.unknown'))}`,
+        );
+      }
+    }
   }
 
   async function retryCurrentFile() {
@@ -510,6 +572,35 @@
     </Banner>
   {/if}
 
+  {#if viewState.olderError}
+    <Banner variant="error" aria-live="polite">
+      <span>{viewState.olderError}</span>
+      <Button variant="secondary" onClick={showOlderEntries}>
+        {t('common.retry')}
+      </Button>
+    </Banner>
+  {/if}
+
+  {#snippet olderEntriesButton()}
+    <Button
+      variant="secondary"
+      loading={viewState.loadingOlder}
+      onClick={showOlderEntries}
+    >
+      {viewState.loadingOlder ? t('logs.loadingOlder') : t('logs.loadOlder')}
+    </Button>
+  {/snippet}
+
+  {#snippet olderEntries()}
+    {#if olderState === LOGS_OLDER_REVEAL || olderState === LOGS_OLDER_LOAD}
+      <div class="logs-view__older">{@render olderEntriesButton()}</div>
+    {:else if olderState === LOGS_OLDER_FULL}
+      <p class="logs-view__older logs-view__older-note">
+        {t('logs.windowFull', { count: loadedCount })}
+      </p>
+    {/if}
+  {/snippet}
+
   {#snippet searchInput()}
     <input
       class="logs-view__input"
@@ -626,10 +717,10 @@
 
     <div class="logs-view__summary view-toolbar__meta">
       <span>
-        {filteredEntries.length === 1
+        {visibleCount === 1
           ? t('logs.resultsCountOne')
           : t('logs.resultsCount', {
-              count: filteredEntries.length,
+              count: visibleCount,
             })}
       </span>
       {#if viewState.selectedFile}
@@ -654,7 +745,7 @@
       title={t('logs.emptyTitle')}
       description={t('logs.emptySubtitle')}
     />
-  {:else if filteredEntries.length === 0}
+  {:else if visibleCount === 0}
     <EmptyState
       fill
       title={hasActiveFilters
@@ -663,14 +754,26 @@
       description={hasActiveFilters
         ? t('logs.noMatchesSubtitle')
         : t('logs.fileEmptySubtitle')}
+      actions={olderState === LOGS_OLDER_LOAD ? olderEntriesButton : undefined}
     />
   {:else}
-    <div class="logs-view__list" role="list" aria-label={t('logs.entries')}>
-      <!-- Keyed by entry: appends and order changes keep each row, and so its
-           expanded state, in place. -->
-      {#each filteredEntries as entry (entry)}
-        <LogsEntry {entry} levelLabel={levelLabel(entry.level)} />
-      {/each}
+    <!-- Only the newest rows are mounted; the control past the oldest one
+         mounts more or reads the page before them. -->
+    <div class="logs-view__scroll">
+      {#if olderListFirst}
+        {@render olderEntries()}
+      {/if}
+      <div class="logs-view__list" role="list" aria-label={t('logs.entries')}>
+        <!-- Keyed by the entry's place in the file: appends, a growing last
+             entry and order changes keep each row, and so its expanded state,
+             in place. -->
+        {#each renderedEntries as entry (`${viewState.generation}:${entry.offset}`)}
+          <LogsEntry {entry} levelLabel={levelLabel(entry.level)} />
+        {/each}
+      </div>
+      {#if !olderListFirst}
+        {@render olderEntries()}
+      {/if}
     </div>
   {/if}
 </section>
@@ -830,13 +933,30 @@
     color: var(--text-med);
   }
 
-  .logs-view__list {
+  .logs-view__scroll {
     display: flex;
     min-height: 0;
     flex: 1;
     flex-direction: column;
     overflow: auto;
     padding-right: 4px;
+  }
+
+  .logs-view__list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .logs-view__older {
+    display: flex;
+    justify-content: center;
+    margin: 0;
+    padding: 12px 0;
+  }
+
+  .logs-view__older-note {
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
   }
 
   @media (max-width: 960px) {

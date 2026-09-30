@@ -29,21 +29,39 @@ def log_list(instance: ServerInstance) -> CommandResult:
 def log_read(
     instance: ServerInstance, file_name: str, *, limit: int = 100, level: str | None = None
 ) -> CommandResult:
-    """Read one log file via `log.read` RPC."""
+    """Read one log file via `log.read` RPC.
 
-    payload = _rpc_call(instance, "log.read", {"file": file_name})
-    if not payload.ok:
-        return payload.to_command_result()
-    entries = payload.data.get("entries")
-    if not isinstance(entries, list):
-        return CommandResult(ok=False, message="RPC result missing log entries", instance=instance)
-    resolved_file = _string_or_default(payload.data.get("file"), file_name)
-    if level is not None:
-        entries = [
-            entry for entry in entries if isinstance(entry, dict) and entry.get("level") == level
-        ]
-    total = len(entries)
-    selected = entries[-limit:] if limit > 0 else entries
+    `log.read` returns one page of the newest entries; older pages are read until
+    ``limit`` entries match, or the whole file for ``limit`` 0.
+    """
+
+    params: dict[str, object] = {"file": file_name}
+    resolved_file = file_name
+    matching: list[object] = []
+    while True:
+        payload = _rpc_call(instance, "log.read", params)
+        if not payload.ok:
+            return payload.to_command_result()
+        entries = payload.data.get("entries")
+        if not isinstance(entries, list):
+            return CommandResult(
+                ok=False, message="RPC result missing log entries", instance=instance
+            )
+        resolved_file = _string_or_default(payload.data.get("file"), resolved_file)
+        if level is not None:
+            entries = [
+                entry
+                for entry in entries
+                if isinstance(entry, dict) and entry.get("level") == level
+            ]
+        matching = entries + matching
+        next_before = payload.data.get("next_before")
+        more = isinstance(next_before, int) and not isinstance(next_before, bool)
+        if not more or 0 < limit <= len(matching):
+            break
+        params = {"file": resolved_file, "before": next_before}
+    selected = matching[-limit:] if limit > 0 else matching
+    total = f"{len(matching)}+" if more else str(len(matching))
     return CommandResult(
         ok=True,
         message=_format_log_entries(
