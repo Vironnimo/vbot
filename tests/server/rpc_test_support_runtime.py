@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-from core.automation import ReflectionService, TriggerService
+from core.automation import AutomationReferences, ReflectionService, TriggerService
 from core.chat import (
     ChatMessage,
     ChatSessionManager,
@@ -398,6 +398,11 @@ class StubRuntime:
         self.cron_service: Any = StubJobService()
         self.bootstrap_service: Any = StubJobService()
         self.calendar_service: Any = StubCalendarService()
+        self.automation_references = AutomationReferences(
+            bootstrap=cast(Any, self.bootstrap_service),
+            cron=cast(Any, self.cron_service),
+            calendar=cast(Any, self.calendar_service),
+        )
         self.channel_service: Any = StubChannelService()
         self.subagents: Any = SimpleNamespace(
             batch_tracker=SimpleNamespace(references_identity_agent=lambda _agent_id: False)
@@ -421,6 +426,7 @@ class StubRuntime:
             agents=cast(Any, self.agents),
             storage=cast(Any, self.storage),
             terminal_manager=cast(Any, self.terminal_manager),
+            automation_references=self.automation_references,
         )
 
     @property

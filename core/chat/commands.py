@@ -27,6 +27,7 @@ from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.agents import AgentStore
+    from core.automation import AutomationReferences
     from core.models.models import ModelRegistry
     from core.projects import AgentResolver, ProjectStore, RuntimeAgent
     from core.providers.providers import ProviderRegistry
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 else:
     AgentResolver = Any
     AgentStore = Any
+    AutomationReferences = Any
     ChatSessionManager = Any
     ModelRegistry = Any
     ProjectStore = Any
@@ -401,6 +403,7 @@ class CommandDispatcher:
         storage: Any | None = None,
         terminal_manager: TerminalManager | None = None,
         reasoning_render_describer: ReasoningRenderDescriber | None = None,
+        automation_references: AutomationReferences | None = None,
     ) -> None:
         from core.chat import _command_builtin, _command_status
 
@@ -411,6 +414,7 @@ class CommandDispatcher:
                 _command_builtin._execute_agent,
                 agent_resolver=agent_resolver,
                 agents=agents,
+                automation_references=automation_references,
                 chat_runs=chat_runs,
                 projects=projects,
                 sessions=sessions,

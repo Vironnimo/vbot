@@ -57,7 +57,9 @@ def test_real_runtime_serves_a_fresh_data_directory_and_stops_with_the_app(
         assert isinstance(app.state.chat_loop, ChatLoop)
         assert isinstance(app.state.event_bus, ServerEventBus)
         assert isinstance(app.state.client_registry, ClientRegistry)
-        assert isinstance(app.state.agent_delete_lock, asyncio.Lock)
+        # RPC reference checks share one lock with the Tools and commands that
+        # select Sessions for automations.
+        assert app.state.agent_delete_lock is runtime.automation_references.lock
         assert runtime.trigger_service is not None
         assert app.state.server_bind == {
             "listen_host": "127.0.0.1",

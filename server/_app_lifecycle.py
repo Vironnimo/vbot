@@ -82,7 +82,9 @@ def _initialize_app_state(
     app.state.streaming_chat_loop = runtime.streaming_chat_loop
     app.state.command_dispatcher = runtime.command_dispatcher
     app.state.log_viewer = LogViewer(runtime.storage.data_dir)
-    app.state.agent_delete_lock = asyncio.Lock()
+    # One lock for every reference check and reference edit, shared with the
+    # Tools and commands that select Sessions for automations.
+    app.state.agent_delete_lock = runtime.automation_references.lock
     app.state.server_bind = dict(server_bind)
     app.state.live_calls = _build_live_call_registry(
         app.state, LiveCallRecorder(DataDirectoryLayout(runtime.storage.data_dir).live_calls)

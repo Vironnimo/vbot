@@ -13,6 +13,7 @@ from core.automation.cron import (
     validate_cron_jobs_data,
     validate_cron_jobs_file,
 )
+from core.automation.references import AutomationReference, AutomationReferences
 from core.automation.reflection import (
     REFLECTION_COUNTERS_META_KEY,
     REFLECTION_TOOL_RESTRICTION,
@@ -23,6 +24,8 @@ from core.automation.reflection import (
 __all__ = [
     "REFLECTION_COUNTERS_META_KEY",
     "REFLECTION_TOOL_RESTRICTION",
+    "AutomationReference",
+    "AutomationReferences",
     "CronOccurrence",
     "CronService",
     "BootstrapService",

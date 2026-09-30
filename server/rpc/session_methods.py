@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
-from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.channels import ChannelConfigError
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
 from core.projects import (
@@ -221,7 +219,9 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
                     _session_address(agent_id, session_id, project_id)
                 ),
             ):
-                _ensure_no_session_references(state, agent_id, project_id, session_id)
+                _ensure_no_session_references(
+                    state, _session_address(agent_id, session_id, project_id)
+                )
                 # Existence check under the guard: concurrent deletes cannot both
                 # cross the storage boundary, and a missing Session still maps to
                 # the ordinary domain error.
@@ -277,12 +277,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     return {"agent_id": agent_id, "session_id": session_id, "next_session_id": next_session_id}
 
 
-def _ensure_no_session_references(
-    state: Any,
-    agent_id: str,
-    project_id: str | None,
-    session_id: str,
-) -> None:
+def _ensure_no_session_references(state: Any, address: SessionAddress) -> None:
     """Refuse archiving a Session that a Bootstrap job, Cron job or Calendar action pins.
 
     Each of them starts its Runs in exactly that Session, so every later start
@@ -290,63 +285,14 @@ def _ensure_no_session_references(
     ``data.references`` (``kind``, ``id`` and the ``name`` the user knows it by:
     the job name, or the title of the action's event), for accessors.
     """
-    references = _session_references(state, agent_id, project_id, session_id)
+    references = state.runtime.automation_references.session_references(address)
     if references:
-        named = ", ".join(f"{reference['kind']}:{reference['id']}" for reference in references)
+        named = ", ".join(reference.label for reference in references)
         raise RpcError(
             RPC_ERROR_SESSION_IN_USE,
             f"cannot delete Session referenced by {named}",
-            data={"references": references},
+            data={"references": [reference.to_dict() for reference in references]},
         )
-
-
-def _session_references(
-    state: Any,
-    agent_id: str,
-    project_id: str | None,
-    session_id: str,
-) -> list[JsonObject]:
-    """Return the live automations pinned to one Session address.
-
-    Terminal history never starts another Run and does not count: completed
-    Bootstrap jobs and completed or missed Cron jobs. A paused or failed job can
-    be enabled again, so it counts.
-    """
-    runtime = state.runtime
-    references: list[JsonObject] = [
-        {"kind": "bootstrap", "id": job.id, "name": job.name}
-        for job in runtime.bootstrap_service.list_jobs()
-        if (
-            (job.agent_id, job.project_id, job.session_id) == (agent_id, project_id, session_id)
-            and job.status not in TERMINAL_BOOTSTRAP_STATUSES
-        )
-    ]
-    references.extend(
-        {"kind": "cron", "id": job.id, "name": job.name}
-        for job in runtime.cron_service.list_jobs()
-        if (
-            (job.agent_id, job.project_id, job.session_id) == (agent_id, project_id, session_id)
-            and job.status not in TERMINAL_CRON_JOB_STATUSES
-        )
-    )
-    calendar = runtime.calendar_service
-    pinning_actions = [
-        action
-        for action in calendar.actions.list_actions()
-        if action.get("session") == session_id
-        and parse_agent_address(action["target"]) == (agent_id, project_id)
-    ]
-    if pinning_actions:
-        titles = {event.id: event.title for event in calendar.list_events()}
-        references.extend(
-            {
-                "kind": "calendar",
-                "id": action["id"],
-                "name": titles.get(action["event_id"], action["event_id"]),
-            }
-            for action in pinning_actions
-        )
-    return sorted(references, key=lambda reference: (reference["kind"], reference["id"]))
 
 
 def _resolve_post_delete_landing(

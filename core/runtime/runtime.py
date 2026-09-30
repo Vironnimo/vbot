@@ -17,7 +17,13 @@ from typing import Any, Literal, cast
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
 from core.attachments import AttachmentStore
-from core.automation import BootstrapService, CronService, ReflectionService, TriggerService
+from core.automation import (
+    AutomationReferences,
+    BootstrapService,
+    CronService,
+    ReflectionService,
+    TriggerService,
+)
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
@@ -203,6 +209,7 @@ class Runtime:
         self._cron_service: CronService | None = None
         self._calendar_service: CalendarService | None = None
         self._bootstrap_service: BootstrapService | None = None
+        self._automation_references: AutomationReferences | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
         self._session_title_service: SessionTitleService | None = None
@@ -1129,6 +1136,10 @@ class Runtime:
 
     bootstrap_service: _StartedService[BootstrapService] = _StartedService(
         lambda runtime: runtime._bootstrap_service, "Bootstrap service not available"
+    )
+
+    automation_references: _StartedService[AutomationReferences] = _StartedService(
+        lambda runtime: runtime._automation_references, "Automation references not available"
     )
 
     provider_usage: _StartedService[ProviderUsageService] = _StartedService(
