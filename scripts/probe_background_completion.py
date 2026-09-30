@@ -96,9 +96,11 @@ class _ProbeAgentResolver:
         project_id: str | None,
         agent_id: str,
         *,
-        run_overrides: Any | None = None,
+        session_id: str | None = None,
     ) -> Agent:
-        if project_id is not None or agent_id != self._agent.id or run_overrides is not None:
+        # The probe's Sessions store no Agent overrides.
+        del session_id
+        if project_id is not None or agent_id != self._agent.id:
             raise ValueError("background completion probe received an unexpected Agent target")
         return self._agent
 
@@ -107,9 +109,9 @@ class _ProbeAgentResolver:
         project_id: str | None,
         agent_id: str,
         *,
-        run_overrides: Any | None = None,
+        session_id: str | None = None,
     ) -> Agent:
-        return self.resolve_agent(project_id, agent_id, run_overrides=run_overrides)
+        return self.resolve_agent(project_id, agent_id, session_id=session_id)
 
 
 class _EmptyProjects:

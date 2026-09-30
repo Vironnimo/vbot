@@ -361,13 +361,13 @@ class StubRuntime:
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
         )
         self.memory = MemoryService(history_root=self.storage.layout.agents)
-        self.agent_resolver = StubAgentResolver(self.agents)
         self.projects = StubProjects()
         tmp_path.mkdir(parents=True, exist_ok=True)
         marker = tmp_path / "data-store.json"
         if not marker.exists():
             write_bootstrap_marker(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
+        self.agent_resolver = StubAgentResolver(self.agents, sessions=self.chat_sessions)
         self.file_read_state = FileReadState()
         self.tools = ToolRegistry()
         self.system_prompts = StubPrompts(self.tools)

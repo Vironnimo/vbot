@@ -112,13 +112,24 @@ class _StubResolver:
         # tier).
         self._model_value = agent.model if model_value is _UNSET else model_value
         self._model_source = "agent" if model_source is _UNSET else model_source
-        self.calls: list[tuple[str | None, str]] = []
+        # Every resolution and provenance read, with the Session it names.
+        self.calls: list[tuple[str | None, str, str | None]] = []
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> Agent:
-        self.calls.append((project_id, agent_id))
+    def resolve_agent(
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> Agent:
+        self.calls.append((project_id, agent_id, session_id))
         return self._agent
 
-    def effective_config(self, project_id: str | None, agent_id: str) -> dict[str, dict[str, Any]]:
+    async def resolve_agent_async(
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> Agent:
+        return self.resolve_agent(project_id, agent_id, session_id=session_id)
+
+    def effective_config(
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> dict[str, dict[str, Any]]:
+        self.calls.append((project_id, agent_id, session_id))
         return {"model": {"value": self._model_value, "source": self._model_source}}
 
 

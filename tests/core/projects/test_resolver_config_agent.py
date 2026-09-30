@@ -14,7 +14,6 @@ from core.tools.availability import ToolAccess, resolve_tool_access
 
 from .resolver_test_support import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
-    AgentRunOverrides,
     AgentStore,
     ConfigAgent,
     Path,
@@ -63,7 +62,7 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.thinking_effort is None
 
 
-def test_config_agent_run_overrides_change_only_the_runtime_view(
+def test_config_agent_session_overrides_change_only_the_runtime_view(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
     _write_agent(
@@ -74,21 +73,19 @@ def test_config_agent_run_overrides_change_only_the_runtime_view(
     )
     project = _project(projects, repo)
     resolver = _resolver(agents, projects, _openai_configured())
-
-    overridden = resolver.resolve_agent(
-        project.project_id,
-        "builder",
-        run_overrides=AgentRunOverrides(
-            model="openai/gpt-mini",
-            thinking_effort="",
-        ),
+    session = agents._session_manager().create("builder", project_id=project.project_id)
+    resolver.update_session_overrides(
+        SessionAddress(project.project_id, "builder", session.id),
+        {"model": "openai/gpt-mini", "thinking_effort": "high"},
     )
+
+    overridden = resolver.resolve_agent(project.project_id, "builder", session_id=session.id)
     configured = resolver.resolve_agent(project.project_id, "builder")
 
     assert isinstance(overridden, ConfigAgent)
     assert isinstance(configured, ConfigAgent)
     assert overridden.model == "openai/gpt-mini"
-    assert overridden.thinking_effort == ""
+    assert overridden.thinking_effort == "high"
     assert configured.model == "openai/gpt-5.2"
     assert configured.thinking_effort == "low"
     assert overridden.tool_access == configured.tool_access
@@ -126,12 +123,18 @@ def test_temporary_profile_keeps_its_selection_inside_a_narrower_project(
         lambda: {},
         project_skill_names=lambda _project_id: frozenset({"project-skill", "disabled-skill"}),
         temporary_agents=SimpleNamespace(resolve=lambda *_args, **_kwargs: temporary),
+        sessions=agents._session_manager(),
+    )
+    address = SessionAddress(project.project_id, "temporary", "session")
+    agents._session_manager().create(
+        "temporary", session_id="session", project_id=project.project_id
+    )
+    resolver.update_session_overrides(
+        address, {"model": "openai/gpt-mini", "thinking_effort": "high"}
     )
 
     resolved = resolver.resolve_temporary_agent(
-        SessionAddress(project.project_id, "temporary", "session"),
-        generation_id="generation",
-        run_overrides=AgentRunOverrides(model="openai/gpt-mini", thinking_effort="high"),
+        address, generation_id="generation", session=address
     )
 
     assert resolved.model == "openai/gpt-mini"

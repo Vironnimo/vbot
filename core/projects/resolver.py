@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 from core.projects._model_configuration import (
     ConnectionRestrictedModel,
@@ -31,8 +31,9 @@ from core.projects._resolution_values import (
     effective_project_allowed_skills,
 )
 from core.projects._runtime_agent import (
+    AGENT_OVERRIDE_FIELDS,
+    AgentOverrides,
     AgentResolutionError,
-    AgentRunOverrides,
     ConfigAgent,
     GlobalAgentDefaultsProvider,
     ProjectSkillNamesProvider,
@@ -53,7 +54,6 @@ from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
-    from typing import Any
 
     from core.agents.agents import Agent, AgentStore
     from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig
@@ -62,11 +62,14 @@ if TYPE_CHECKING:
     from core.projects.store import ProjectStore
     from core.providers.providers import ProviderRegistry
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
+    from core.sessions import SessionAddress
 
 __all__ = [
+    "AGENT_OVERRIDE_FIELDS",
+    "AgentOverrides",
     "AgentResolutionError",
     "AgentResolver",
-    "AgentRunOverrides",
+    "SessionMetadataStore",
     "ConfigAgent",
     "ConnectionRestrictedModel",
     "CredentialProbe",
@@ -95,6 +98,21 @@ __all__ = [
 # cached yet also lists its Session-owning Agents here, for the scan report.
 _RESOLUTION_WORKERS = BoundedWorkerPool(name="agent-resolution", max_workers=4)
 
+# The Session metadata key holding a Session's Agent overrides.
+_AGENT_OVERRIDES_KEY = "agent_overrides"
+
+
+class SessionMetadataStore(Protocol):
+    """The Session metadata operations the resolver needs for Agent overrides."""
+
+    def metadata_value(self, address: SessionAddress, key: str) -> Any: ...
+
+    async def metadata_value_async(self, address: SessionAddress, key: str) -> Any: ...
+
+    def mutate_metadata(self, address: SessionAddress, mutation: Callable[[Any], None]) -> Any: ...
+
+    async def run_async(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any: ...
+
 
 def _no_project_skills(_project_id: str) -> frozenset[str]:
     """Default project-skill probe: a project with no own skills (bundled-only)."""
@@ -121,6 +139,12 @@ def _identity_resolution_error(error: Exception) -> AgentResolutionError:
     if isinstance(error, AgentNotFoundError):
         return ResolutionAgentNotFoundError(str(error))
     return AgentResolutionError(str(error))
+
+
+def _session_address(project_id: str | None, agent_id: str, session_id: str) -> SessionAddress:
+    from core.sessions import SessionAddress
+
+    return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
 def _require_temporary_binding(agent: TemporaryAgent | None) -> TemporaryAgent:
@@ -157,6 +181,7 @@ class AgentResolver:
         detector_registry: list[DetectorRegistration] | None = None,
         project_skill_names: ProjectSkillNamesProvider | None = None,
         temporary_agents: Any | None = None,
+        sessions: SessionMetadataStore | None = None,
     ) -> None:
         self._agents = agents
         self._projects = projects
@@ -170,6 +195,8 @@ class AgentResolver:
         # rather than failing (the runtime always wires the real probe).
         self._project_skill_names = project_skill_names or _no_project_skills
         self._temporary_agents = temporary_agents
+        # Without Sessions (tests of the chains alone) no Session has overrides.
+        self._sessions = sessions
         # Team-scan cache keyed by project id. A run reads from here; an explicit
         # re-scan / project-open repopulates it via ``rescan_project``.
         self._team_cache: dict[str, ScanResult] = {}
@@ -179,38 +206,48 @@ class AgentResolver:
         project_id: str | None,
         agent_id: str,
         *,
-        run_overrides: AgentRunOverrides | None = None,
+        session_id: str | None = None,
     ) -> RuntimeAgent:
         """Resolve one agent to a runnable :class:`RuntimeAgent`.
 
         ``project_id is None`` returns the store identity agent unchanged. A set
         ``project_id`` returns a :class:`ConfigAgent` synthesized from the
-        project's Team scan plus the resolved model. Optional Run overrides are
-        applied only to the returned immutable runtime view after normal
-        resolution; they never mutate either source configuration. Raises
+        project's Team scan plus the resolved model. With ``session_id`` the
+        result is the Agent as that Session runs it: the Session's Agent overrides
+        replace the resolved values in an immutable runtime view, never in either
+        source configuration; a Session that does not exist yet has none. Raises
         :class:`ResolutionProjectNotFoundError` / :class:`ResolutionAgentNotFoundError`
         (both :class:`AgentResolutionError`) for an unknown project/agent, a plain
         :class:`AgentResolutionError` for a config agent whose model chain fell
-        through, and :class:`ModelConfigurationError` for an unusable explicit Run
-        Model.
+        through, and :class:`ModelConfigurationError` for a Session Model that
+        cannot run.
         """
         if project_id is None:
             agent: RuntimeAgent = self._resolve_identity_agent(agent_id)
         else:
             agent = self._resolve_config_agent(project_id, agent_id)
-        return self._apply_run_overrides(agent, run_overrides)
+        if session_id is None:
+            return agent
+        return self._apply_overrides(
+            agent, self.session_overrides(_session_address(project_id, agent_id, session_id))
+        )
 
     def resolve_temporary_agent(
         self,
         address: Any,
         *,
         generation_id: str,
-        run_overrides: AgentRunOverrides | None = None,
+        session: SessionAddress | None = None,
     ) -> RuntimeAgent:
-        """Resolve only an exact canonical temporary Session generation."""
+        """Resolve only an exact canonical temporary Session generation.
+
+        ``session`` names the Session whose Agent overrides apply, usually
+        ``address`` itself; omit it for the binding's own configuration.
+        """
         binding = self._temporary_registry().resolve(address, generation_id=generation_id)
+        overrides = AgentOverrides() if session is None else self.session_overrides(session)
         return self._apply_temporary_address(
-            _require_temporary_binding(binding), address, run_overrides
+            _require_temporary_binding(binding), address, overrides
         )
 
     async def resolve_agent_async(
@@ -218,54 +255,137 @@ class AgentResolver:
         project_id: str | None,
         agent_id: str,
         *,
-        run_overrides: AgentRunOverrides | None = None,
+        session_id: str | None = None,
     ) -> RuntimeAgent:
         """Event-Loop-safe :meth:`resolve_agent`.
 
         A Project Agent resolves on the ``agent-resolution`` pool. An Identity
         Agent read verifies, and may repair, its current-Session pointer, so it
         runs as one unit on the Session database's pool
-        (:meth:`AgentStore.get_async`); Run overrides then check their Model on
-        the ``agent-resolution`` pool.
+        (:meth:`AgentStore.get_async`). The Session's overrides are read on the
+        Session database's pool; their Model is checked on the
+        ``agent-resolution`` pool.
         """
-        if project_id is not None:
-            return await _RESOLUTION_WORKERS.run(
-                self.resolve_agent, project_id, agent_id, run_overrides=run_overrides
+        overrides = (
+            AgentOverrides()
+            if session_id is None
+            else await self.session_overrides_async(
+                _session_address(project_id, agent_id, session_id)
             )
-        from core.agents.agents import AgentError
+        )
+        if project_id is not None:
+            agent: RuntimeAgent = await _RESOLUTION_WORKERS.run(
+                self._resolve_config_agent, project_id, agent_id
+            )
+        else:
+            from core.agents.agents import AgentError
 
-        try:
-            agent: RuntimeAgent = await self._agents.get_async(agent_id)
-        except AgentError as error:
-            raise _identity_resolution_error(error) from error
-        if run_overrides is None or run_overrides.is_empty:
+            try:
+                agent = await self._agents.get_async(agent_id)
+            except AgentError as error:
+                raise _identity_resolution_error(error) from error
+        if overrides.is_empty:
             return agent
-        return await _RESOLUTION_WORKERS.run(self._apply_run_overrides, agent, run_overrides)
+        return await _RESOLUTION_WORKERS.run(self._apply_overrides, agent, overrides)
 
     async def resolve_temporary_agent_async(
         self,
         address: Any,
         *,
         generation_id: str,
-        run_overrides: AgentRunOverrides | None = None,
+        session: SessionAddress | None = None,
     ) -> RuntimeAgent:
         """Event-Loop-safe :meth:`resolve_temporary_agent`.
 
-        The binding read runs on the Session database's pool; the Project check
-        and Run overrides, which read Project and Model configuration, run on the
-        ``agent-resolution`` pool.
+        The binding and override reads run on the Session database's pool; the
+        Project check and the overrides' Model check, which read Project and Model
+        configuration, run on the ``agent-resolution`` pool.
         """
         registry = self._temporary_registry()
         agent = _require_temporary_binding(
             await registry.resolve_async(address, generation_id=generation_id)
         )
-        if getattr(address, "project_id", None) is None and (
-            run_overrides is None or run_overrides.is_empty
-        ):
+        overrides = (
+            AgentOverrides() if session is None else await self.session_overrides_async(session)
+        )
+        if getattr(address, "project_id", None) is None and overrides.is_empty:
             return agent
         return await _RESOLUTION_WORKERS.run(
-            self._apply_temporary_address, agent, address, run_overrides
+            self._apply_temporary_address, agent, address, overrides
         )
+
+    def session_overrides(self, address: SessionAddress) -> AgentOverrides:
+        """Return the Agent overrides *address* stores (none for a missing Session)."""
+        if self._sessions is None:
+            return AgentOverrides()
+        from core.sessions import SessionNotFoundError
+
+        try:
+            stored = self._sessions.metadata_value(address, _AGENT_OVERRIDES_KEY)
+        except SessionNotFoundError:
+            return AgentOverrides()
+        return AgentOverrides.from_stored(stored)
+
+    async def session_overrides_async(self, address: SessionAddress) -> AgentOverrides:
+        """Event-Loop-safe :meth:`session_overrides`."""
+        if self._sessions is None:
+            return AgentOverrides()
+        from core.sessions import SessionNotFoundError
+
+        try:
+            stored = await self._sessions.metadata_value_async(address, _AGENT_OVERRIDES_KEY)
+        except SessionNotFoundError:
+            return AgentOverrides()
+        return AgentOverrides.from_stored(stored)
+
+    def update_session_overrides(
+        self, address: SessionAddress, changes: Mapping[str, Any]
+    ) -> AgentOverrides:
+        """Replace or clear some of one Session's Agent overrides; return the result.
+
+        *changes* maps override fields to their new value; ``None`` clears one.
+        Fields it leaves out keep their stored value, and stored fields a newer
+        vBot added survive. Every value is validated first, a Model also for
+        usability, so an invalid change writes nothing.
+        """
+        unknown = sorted(set(changes) - set(AGENT_OVERRIDE_FIELDS))
+        if unknown:
+            raise ValueError("unknown Agent override: " + ", ".join(unknown))
+        requested = AgentOverrides(
+            **{name: value for name, value in changes.items() if value is not None}
+        )
+        if requested.model is not None:
+            self._model_checker.require_configured(requested.model)
+        if self._sessions is None:
+            raise AgentResolutionError("Session Agent overrides are unavailable")
+        normalized = requested.as_dict()
+
+        def mutate(metadata: Any) -> None:
+            stored = metadata.get(_AGENT_OVERRIDES_KEY)
+            merged = dict(stored) if isinstance(stored, dict) else {}
+            for name in changes:
+                if name in normalized:
+                    merged[name] = normalized[name]
+                else:
+                    merged.pop(name, None)
+            if merged:
+                metadata[_AGENT_OVERRIDES_KEY] = merged
+            else:
+                metadata.pop(_AGENT_OVERRIDES_KEY, None)
+
+        updated = self._sessions.mutate_metadata(address, mutate)
+        return AgentOverrides.from_stored(updated.get(_AGENT_OVERRIDES_KEY))
+
+    async def update_session_overrides_async(
+        self, address: SessionAddress, changes: Mapping[str, Any]
+    ) -> AgentOverrides:
+        """Event-Loop-safe :meth:`update_session_overrides` on the Session database's pool."""
+        if self._sessions is None:
+            raise AgentResolutionError("Session Agent overrides are unavailable")
+        result: AgentOverrides = await self._sessions.run_async(
+            self.update_session_overrides, address, changes
+        )
+        return result
 
     def preview_temporary_agent(
         self, config: TemporaryAgentConfig, project_id: str | None = None
@@ -300,11 +420,11 @@ class AgentResolver:
         self,
         agent: TemporaryAgent,
         address: Any,
-        run_overrides: AgentRunOverrides | None,
+        overrides: AgentOverrides,
     ) -> RuntimeAgent:
-        """Check the address's Project, then apply the Run overrides."""
+        """Check the address's Project, then apply the Session's overrides."""
         self._require_temporary_project(getattr(address, "project_id", None))
-        return self._apply_run_overrides(agent, run_overrides)
+        return self._apply_overrides(agent, overrides)
 
     def _require_temporary_project(self, project_id: str | None) -> None:
         # A temporary Agent keeps its owner's Tool and Skill selection: like a
@@ -313,21 +433,14 @@ class AgentResolver:
         if project_id is not None:
             self._load_project(project_id)
 
-    def _apply_run_overrides(
-        self,
-        agent: RuntimeAgent,
-        run_overrides: AgentRunOverrides | None,
-    ) -> RuntimeAgent:
-        """Return an immutable runtime view with only the admitted fields replaced."""
-        if run_overrides is None or run_overrides.is_empty:
+    def _apply_overrides(self, agent: RuntimeAgent, overrides: AgentOverrides) -> RuntimeAgent:
+        """Return an immutable runtime view with only the overridden fields replaced."""
+        if overrides.is_empty:
             return agent
 
-        changes: dict[str, Any] = {}
-        if run_overrides.model is not None:
-            self._model_checker.require_configured(run_overrides.model)
-            changes["model"] = run_overrides.model
-        if run_overrides.thinking_effort is not None:
-            changes["thinking_effort"] = run_overrides.thinking_effort
+        changes = overrides.as_dict()
+        if overrides.model is not None:
+            self._model_checker.require_configured(overrides.model)
         if isinstance(agent, ConfigAgent):
             return replace(agent, **changes)
         from core.agents.agents import Agent
@@ -385,7 +498,9 @@ class AgentResolver:
             project_id=project_id,
         )
 
-    def effective_config(self, project_id: str | None, agent_id: str) -> dict[str, dict[str, Any]]:
+    def effective_config(
+        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> dict[str, dict[str, Any]]:
         """Report, per run field, the effective value and the tier that supplied it.
 
         The provenance-aware companion to :meth:`resolve_agent`, sharing the *same*
@@ -408,10 +523,19 @@ class AgentResolver:
           ``core.agents._config.apply_defaults`` exactly: a default applies when the persisted
           ``model`` is ``""`` / ``fallback_models`` is ``[]`` or
           ``temperature``/``thinking_effort`` is ``None``.
+
+        With ``session_id``, each field that Session overrides reports its value
+        with source ``"session"``.
         """
         if project_id is None:
-            return self._identity_effective_config(agent_id)
-        return self._config_effective_config(project_id, agent_id)
+            effective = self._identity_effective_config(agent_id)
+        else:
+            effective = self._config_effective_config(project_id, agent_id)
+        if session_id is not None:
+            overrides = self.session_overrides(_session_address(project_id, agent_id, session_id))
+            for name, value in overrides.as_dict().items():
+                effective[name] = {"value": value, "source": "session"}
+        return effective
 
     def effective_tools_for_member(self, project: Project, member: ScannedAgent) -> dict[str, Any]:
         """Project repository-owned Tool settings for one current Team member."""
@@ -554,6 +678,10 @@ class AgentResolver:
     def require_model_configured(self, model: str) -> None:
         """Raise with the shared Model-usability reason when *model* cannot run."""
         self._model_checker.require_configured(model)
+
+    async def require_model_configured_async(self, model: str) -> None:
+        """Event-Loop-safe :meth:`require_model_configured` on the ``agent-resolution`` pool."""
+        await _RESOLUTION_WORKERS.run(self._model_checker.require_configured, model)
 
     def _project_team(self, project: Project) -> list[ScannedAgent]:
         cached = self._team_cache.get(project.project_id)
@@ -753,6 +881,7 @@ def build_agent_resolver(
     detector_registry: list[DetectorRegistration] | None = None,
     project_skill_names: ProjectSkillNamesProvider | None = None,
     temporary_agents: Any | None = None,
+    sessions: SessionMetadataStore | None = None,
 ) -> AgentResolver:
     """Assemble an :class:`AgentResolver` from the runtime services.
 
@@ -772,4 +901,5 @@ def build_agent_resolver(
         detector_registry=detector_registry,
         project_skill_names=project_skill_names,
         temporary_agents=temporary_agents,
+        sessions=sessions,
     )

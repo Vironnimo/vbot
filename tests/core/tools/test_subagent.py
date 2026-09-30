@@ -213,7 +213,7 @@ async def test_placeholder_fields_count_as_omitted(
     assert await child.task() == BRIEF
     # A new Session, the Agent's own model and effort, and no notes about the placeholders.
     assert len(harness.sessions.list(target)) == 1
-    assert harness.loop.tasks[BRIEF].overrides is None
+    assert harness.stored_overrides(target, child.run.session_id) is None
     assert result["data"]["note"] == TOP_LEVEL_BACKGROUND_NOTE
 
 

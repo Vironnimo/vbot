@@ -190,7 +190,7 @@ def test_status_reports_the_identity_sessions_agent_model_and_cache() -> None:
 
     assert result.feedback is not None
     reply = result.feedback.text
-    assert resolver.calls == [(None, "coder")]
+    assert resolver.calls == [(None, "coder", "session-one")]
     assert models.calls == [("openai", "gpt-5.2")]
     assert "Agent: Coder (openai/gpt-5.2::primary)" in reply
     assert "Model display name: GPT-5.2 Registry" in reply
@@ -212,7 +212,7 @@ def test_status_in_a_project_session_resolves_its_config_agent() -> None:
     result = _execute_sync(dispatcher, "/status", agent_id="builder", project_id="vbot")
 
     assert result.feedback is not None
-    assert resolver.calls == [("vbot", "builder")]
+    assert resolver.calls == [("vbot", "builder", "session-one")]
     assert "Agent: Coder (openai/gpt-5.2)" in result.feedback.text
     assert "Project: vBot (vbot)" in result.feedback.text
 

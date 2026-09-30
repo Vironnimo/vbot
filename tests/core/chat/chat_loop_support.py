@@ -17,7 +17,7 @@ from core.chat import (
 from core.chat._run_state import RequestBuildInputs
 from core.database import write_bootstrap_marker
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
-from core.projects import AgentResolutionError, ConfigAgent
+from core.projects import AgentOverrides, AgentResolutionError, ConfigAgent
 from core.providers.accounts import ConnectionRef
 from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ChatRunManager, Run
 from core.sessions import ChatSession, SessionAddress
@@ -227,7 +227,8 @@ class StubAgentResolver:
     identity agent so a project run still resolves something runnable; an
     ``(project_id, agent_id)`` in ``unresolvable`` raises
     :class:`AgentResolutionError`, modelling an off-Team target or a model chain
-    that fell through.
+    that fell through. Session Agent overrides live in memory, keyed by Session
+    address, and apply whenever a resolution names its Session.
     """
 
     def __init__(
@@ -239,6 +240,7 @@ class StubAgentResolver:
         self._agents = agents
         self._project_agents = dict(project_agents or {})
         self._unresolvable = set(unresolvable or set())
+        self._session_overrides: dict[SessionAddress, dict[str, Any]] = {}
         self.calls: list[tuple[str | None, str]] = []
         self.temporary_agents: Any | None = None
 
@@ -247,7 +249,7 @@ class StubAgentResolver:
         project_id: str | None,
         agent_id: str,
         *,
-        run_overrides: Any | None = None,
+        session_id: str | None = None,
     ) -> StubAgent | ConfigAgent:
         self.calls.append((project_id, agent_id))
         if project_id is None:
@@ -258,24 +260,23 @@ class StubAgentResolver:
                     f"agent '{agent_id}' is not on project '{project_id}' team"
                 )
             agent = self._project_agents.get((project_id, agent_id)) or self._agents.get(agent_id)
-        if run_overrides is None:
-            return agent
-        changes: dict[str, Any] = {}
-        if run_overrides.model is not None:
-            changes["model"] = run_overrides.model
-        if run_overrides.thinking_effort is not None:
-            changes["thinking_effort"] = run_overrides.thinking_effort
-        return replace(agent, **changes)
+        if session_id is not None:
+            agent = self._with_overrides(agent, SessionAddress(project_id, agent_id, session_id))
+        return agent
 
     def resolve_temporary_agent(
-        self, address: SessionAddress, *, generation_id: str, run_overrides: Any | None = None
+        self,
+        address: SessionAddress,
+        *,
+        generation_id: str,
+        session: SessionAddress | None = None,
     ) -> Any:
         if self.temporary_agents is None:
             raise AgentResolutionError("temporary Session is unavailable")
         agent = self.temporary_agents.resolve(address, generation_id=generation_id)
         if agent is None:
             raise AgentResolutionError("temporary Session binding is unavailable")
-        return agent
+        return agent if session is None else self._with_overrides(agent, session)
 
     async def resolve_agent_async(
         self, project_id: str | None, agent_id: str, **options: Any
@@ -284,6 +285,39 @@ class StubAgentResolver:
 
     async def resolve_temporary_agent_async(self, address: Any, **options: Any) -> Any:
         return self.resolve_temporary_agent(address, **options)
+
+    async def require_model_configured_async(self, model: str) -> None:
+        del model  # Every Model can run.
+
+    def session_overrides(self, address: SessionAddress) -> AgentOverrides:
+        return AgentOverrides.from_stored(self._session_overrides.get(address))
+
+    async def session_overrides_async(self, address: SessionAddress) -> AgentOverrides:
+        return self.session_overrides(address)
+
+    def update_session_overrides(
+        self, address: SessionAddress, changes: dict[str, Any]
+    ) -> AgentOverrides:
+        """Set (a value) or clear (``None``) the named fields; others keep their value."""
+        requested = AgentOverrides(**{k: v for k, v in changes.items() if v is not None})
+        merged = dict(self._session_overrides.get(address, {}))
+        for name in changes:
+            merged.pop(name, None)
+        merged.update(requested.as_dict())
+        if merged:
+            self._session_overrides[address] = merged
+        else:
+            self._session_overrides.pop(address, None)
+        return self.session_overrides(address)
+
+    async def update_session_overrides_async(
+        self, address: SessionAddress, changes: dict[str, Any]
+    ) -> AgentOverrides:
+        return self.update_session_overrides(address, changes)
+
+    def _with_overrides(self, agent: Any, address: SessionAddress) -> Any:
+        overrides = self.session_overrides(address)
+        return agent if overrides.is_empty else replace(agent, **overrides.as_dict())
 
 
 class StubProviders:

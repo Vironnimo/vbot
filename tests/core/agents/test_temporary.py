@@ -4,7 +4,6 @@ import asyncio
 import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -354,21 +353,6 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
     runtime_any = cast(Any, runtime)
     runtime_any.storage.temporary_files = TemporaryFileManager(tmp_path)
     runtime_any.storage.load_subagent_settings = lambda: {}
-    resolved_overrides = []
-    original_resolve_temporary = runtime.agent_resolver.resolve_temporary_agent
-
-    def resolve_temporary_with_overrides(address, *, generation_id, run_overrides=None):
-        resolved_overrides.append(run_overrides)
-        agent = original_resolve_temporary(address, generation_id=generation_id)
-        if run_overrides is None:
-            return agent
-        return replace(
-            agent,
-            model=run_overrides.model or agent.model,
-            thinking_effort=run_overrides.thinking_effort or agent.thinking_effort,
-        )
-
-    runtime_any.agent_resolver.resolve_temporary_agent = resolve_temporary_with_overrides
     loop = build_chat_loop(runtime)
     runtime_any.streaming_chat_loop = loop
     owner = RunExecutionOwner("swarm", "group", "participant", binding.generation_id, "epoch")
@@ -421,11 +405,17 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
         assert child_run.session_id == child_id
         assert runtime.chat_sessions.temporary_binding(child_address) is None
 
+        # The requested Model and effort are the child Session's own overrides.
         request = runtime.adapter.requests[0]
-        assert request["model_id"] == "gpt-override"
-        assert resolved_overrides
-        assert all(item.model == "openai/gpt-override" for item in resolved_overrides)
-        assert all(item.thinking_effort == "low" for item in resolved_overrides)
+        assert (request["model_id"], request["kwargs"]["thinking_effort"]) == (
+            "gpt-override",
+            "low",
+        )
+        assert runtime.agent_resolver.session_overrides(child_address).as_dict() == {
+            "model": "openai/gpt-override",
+            "thinking_effort": "low",
+        }
+        assert runtime.agent_resolver.session_overrides(binding.address).is_empty
         assert {tool["name"] for tool in request["kwargs"]["tools"]} == {"ordinary_tool"}
         assert "fixture_private" not in str(request["kwargs"]["tools"])
         assert "swarm-orientation" not in str(request["messages"])

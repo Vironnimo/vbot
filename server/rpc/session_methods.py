@@ -13,6 +13,8 @@ from typing import Any
 from core.channels import ChannelConfigError
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
 from core.projects import (
+    AGENT_OVERRIDE_FIELDS,
+    AgentOverrides,
     InvalidAgentAddressError,
     format_agent_address,
     parse_agent_address,
@@ -72,16 +74,53 @@ def _session_address(
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
+def _agent_overrides_param(params: JsonObject, *, allow_clear: bool) -> JsonObject | None:
+    """Read ``params.agent_overrides``: a map of Agent override fields to values.
+
+    With *allow_clear* a ``null`` value clears that field; otherwise every value
+    must be set. Values are validated here, the Model's usability by the resolver.
+    """
+    if "agent_overrides" not in params or params["agent_overrides"] is None:
+        return None
+    raw = params["agent_overrides"]
+    if not isinstance(raw, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.agent_overrides must be an object")
+    unknown = sorted(set(raw) - set(AGENT_OVERRIDE_FIELDS))
+    if unknown:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.agent_overrides has unsupported fields: "
+            + ", ".join(unknown)
+            + "; supported: "
+            + ", ".join(AGENT_OVERRIDE_FIELDS),
+        )
+    if not allow_clear and any(value is None for value in raw.values()):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.agent_overrides values must not be null here"
+        )
+    try:
+        AgentOverrides(**{name: value for name, value in raw.items() if value is not None})
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.agent_overrides: {exc}") from exc
+    return dict(raw)
+
+
 async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     make_current = _optional_bool(params, "make_current", default=False)
+    overrides = _agent_overrides_param(params, allow_clear=False)
     chat_sessions = state.runtime.chat_sessions
+    resolver = state.runtime.agent_resolver
 
     def create_session() -> Any:
         created = chat_sessions.create(
             agent_id, session_id=session_id, project_id=project_id, actor="rpc"
         )
+        if overrides:
+            resolver.update_session_overrides(
+                _session_address(agent_id, created.id, project_id), overrides
+            )
         if make_current and project_id is None:
             state.runtime.agents.update(agent_id, current_session_id=created.id)
         return created
@@ -90,7 +129,10 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
         # One resolver seam validates both sources: identity agents through the
         # store, project agents through the team scan. The session is then created
         # under the matching anchor (identity dir vs. project anchor).
-        await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
+        await resolver.resolve_agent_async(project_id, agent_id)
+        # An unusable Model fails before the Session exists.
+        if overrides and overrides.get("model") is not None:
+            await resolver.require_model_configured_async(overrides["model"])
         session = await chat_sessions.run_async(create_session)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -100,7 +142,51 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     # agent; they do NOT switch to the new session. Scoped to the new Session so
     # windows not listing this Agent ignore it.
     publish_session_changed(state, project_id, agent_id, session.id)
-    return {"agent_id": agent_id, "session_id": session.id}
+    response: JsonObject = {"agent_id": agent_id, "session_id": session.id}
+    if overrides:
+        response["agent_overrides"] = AgentOverrides(**overrides).as_dict()
+    return response
+
+
+async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonObject:
+    """Set or clear some of one Session's Agent overrides; other fields keep their value."""
+    _reject_unsupported(
+        params, {"agent_id", "session_id", "agent_overrides"}, "session.set_agent_overrides"
+    )
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    changes = _agent_overrides_param(params, allow_clear=True)
+    if not changes:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.agent_overrides must name at least one of: " + ", ".join(AGENT_OVERRIDE_FIELDS),
+        )
+    address = _session_address(agent_id, session_id, project_id)
+    try:
+        overrides = await state.runtime.agent_resolver.update_session_overrides_async(
+            address, changes
+        )
+        effective = await state.runtime.chat_sessions.run_async(
+            state.runtime.agent_resolver.effective_config,
+            project_id,
+            agent_id,
+            session_id=session_id,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_session_changed(state, project_id, agent_id, session_id)
+    _LOGGER.info(
+        "Session agent overrides updated (agent=%s session=%s fields=%s)",
+        format_agent_address(agent_id, project_id),
+        session_id,
+        ",".join(sorted(changes)),
+    )
+    return {
+        "agent_id": format_agent_address(agent_id, project_id),
+        "session_id": session_id,
+        "agent_overrides": overrides.as_dict(),
+        "effective": {name: effective[name] for name in AGENT_OVERRIDE_FIELDS if name in effective},
+    }
 
 
 async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
@@ -743,5 +829,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.delete": _delete_session,
         "session.rename": _rename_session,
         "session.set_compaction_policy": _set_session_compaction_policy,
+        "session.set_agent_overrides": _set_session_agent_overrides,
         "session.link_channel": _link_session_to_channel,
     }

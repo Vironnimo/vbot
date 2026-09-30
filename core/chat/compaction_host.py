@@ -385,7 +385,9 @@ class ChatCompactionHost:
         refreshed_agent = (
             agent
             if is_temporary
-            else self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+            else self._dependencies.agent_resolver.resolve_agent(
+                project_id, agent_id, session_id=session_id
+            )
         )
         working_project_context: str | None = None
         soul_context: str | None = None

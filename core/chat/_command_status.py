@@ -46,11 +46,13 @@ if TYPE_CHECKING:
 _MODEL_ORIGIN_NOT_CONFIGURED = "not configured"
 
 _IDENTITY_MODEL_ORIGINS: dict[str | None, str] = {
+    "session": "this session",
     "agent": "agent configuration",
     "global_default": "global default",
 }
 
 _PROJECT_MODEL_ORIGINS: dict[str | None, str] = {
+    "session": "this session",
     "override": "override (set via /model)",
     "agent": "agent file in repo",
     "project_default": "project default",
@@ -100,6 +102,7 @@ async def _execute_model(
                     partial(_build_model_summary, agent_resolver=agent_resolver),
                     context.agent_id,
                     context.project_id,
+                    context.session_id,
                 ),
             ),
         )
@@ -114,6 +117,11 @@ async def _execute_model(
         context.project_id,
         model,
         is_reset,
+    )
+    # The Agent's Model is what this Session runs next, so a Session Model
+    # override stops shadowing it.
+    await _require_dependency(agent_resolver, "AgentResolver").update_session_overrides_async(
+        SessionAddress(context.project_id, context.agent_id, context.session_id), {"model": None}
     )
     if changed:
         _LOGGER.info(
@@ -178,10 +186,10 @@ async def _execute_status(
     status_session: list[ChatMessage] | StatusSessionFacts = []
     try:
         if agent_resolver is not None:
-            agent = await _COMMAND_WORKERS.run(
-                agent_resolver.resolve_agent,
+            agent = await agent_resolver.resolve_agent_async(
                 context.project_id,
                 context.agent_id,
+                session_id=context.session_id,
             )
     except Exception as error:
         log = (
@@ -265,7 +273,11 @@ async def _execute_status(
 
 
 def _build_model_summary(
-    agent_id: str, project_id: str | None, *, agent_resolver: AgentResolver | None
+    agent_id: str,
+    project_id: str | None,
+    session_id: str,
+    *,
+    agent_resolver: AgentResolver | None,
 ) -> str:
     """Describe the session's current model and where it resolves from.
 
@@ -279,7 +291,7 @@ def _build_model_summary(
     source: str | None = None
     if agent_resolver is not None:
         try:
-            effective = agent_resolver.effective_config(project_id, agent_id)
+            effective = agent_resolver.effective_config(project_id, agent_id, session_id=session_id)
             model_field = effective.get("model", {})
             value = model_field.get("value")
             model = (value or "").strip() or STATUS_PLACEHOLDER

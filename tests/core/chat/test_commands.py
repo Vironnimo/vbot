@@ -229,6 +229,8 @@ def test_agent_is_unavailable_on_every_channel_form(message: str) -> None:
         ("vbot", "openai/gpt-5.2", "agent", ("agent file in repo",)),
         ("vbot", "openai/gpt-5.2", "project_default", ("project default",)),
         ("vbot", "openai/gpt-5.2", "global_default", ("global default",)),
+        (None, "openai/gpt-mini", "session", ("openai/gpt-mini", "this session")),
+        ("vbot", "openai/gpt-mini", "session", ("openai/gpt-mini", "this session")),
     ],
     ids=[
         "identity-agent",
@@ -237,6 +239,8 @@ def test_agent_is_unavailable_on_every_channel_form(message: str) -> None:
         "project-agent-file",
         "project-default",
         "global-default",
+        "identity-session",
+        "project-session",
     ],
 )
 def test_model_without_argument_names_the_winning_configuration_tier(
@@ -245,12 +249,10 @@ def test_model_without_argument_names_the_winning_configuration_tier(
     model_source: str | None,
     fragments: tuple[str, ...],
 ) -> None:
+    resolver = _StubResolver(_make_agent(), model_value=model_value, model_source=model_source)
     dispatcher = CommandDispatcher(
         ChatRunManager(),
-        agent_resolver=cast(
-            AgentResolver,
-            _StubResolver(_make_agent(), model_value=model_value, model_source=model_source),
-        ),
+        agent_resolver=cast(AgentResolver, resolver),
         projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot")))
         if project_id is not None
         else None,
@@ -262,6 +264,8 @@ def test_model_without_argument_names_the_winning_configuration_tier(
     assert result.feedback.kind == "detail"
     assert not result.facts
     assert all(fragment in result.feedback.text for fragment in fragments)
+    # The reply describes the Model this Session runs, including its own override.
+    assert resolver.calls == [(project_id, "coder", "session-one")]
 
 
 def test_model_without_services_degrades_to_placeholder() -> None:
@@ -362,22 +366,37 @@ class _RecordingProjects:
 
 
 class _ConfiguredModels:
-    """Model-validation stub: only the configured set is usable."""
+    """Model-validation stub (only the configured set is usable) with in-memory Session
+    Agent overrides."""
 
     def __init__(self, configured: set[str]) -> None:
         self._configured = configured
+        self.session_overrides: dict[SessionAddress, dict[str, Any]] = {}
 
     def require_model_configured(self, model: str) -> None:
         if model not in self._configured:
             raise ModelConfigurationError(f"model is not configured: {model}")
 
+    async def update_session_overrides_async(
+        self, address: SessionAddress, changes: dict[str, Any]
+    ) -> None:
+        stored = self.session_overrides.setdefault(address, {})
+        for name, value in changes.items():
+            if value is None:
+                stored.pop(name, None)
+            else:
+                stored[name] = value
+
+
+_SESSION_OVERRIDES = {"model": "openai/gpt-mini", "thinking_effort": "high"}
+
 
 def _model_dispatcher(
-    agents: _RecordingAgents, projects: _RecordingProjects, *, configured: set[str]
+    agents: _RecordingAgents, projects: _RecordingProjects, resolver: _ConfiguredModels
 ) -> CommandDispatcher:
     return CommandDispatcher(
         ChatRunManager(),
-        agent_resolver=cast(AgentResolver, _ConfiguredModels(configured)),
+        agent_resolver=cast(AgentResolver, resolver),
         agents=cast(Any, agents),
         projects=cast(ProjectStore, projects),
         models=cast(Any, SimpleNamespace()),
@@ -439,13 +458,18 @@ async def test_model_value_writes_the_identity_model_or_project_override(
     facts: dict[str, Any] | None,
 ) -> None:
     agents, projects = _RecordingAgents(), _RecordingProjects()
-    dispatcher = _model_dispatcher(agents, projects, configured={"openai/gpt-5"})
+    resolver = _ConfiguredModels({"openai/gpt-5"})
+    session = SessionAddress(project_id=project_id, agent_id="coder", session_id="session-one")
+    resolver.session_overrides[session] = dict(_SESSION_OVERRIDES)
+    dispatcher = _model_dispatcher(agents, projects, resolver)
 
     result = await _execute(dispatcher, message, project_id=project_id)
 
     assert agents.updates == agent_updates
     assert projects.set_calls == override_sets
     assert projects.clear_calls == override_clears
+    # The Session runs the Agent's Model next; its other overrides stay.
+    assert resolver.session_overrides[session] == {"thinking_effort": "high"}
     if facts is not None:
         assert result.facts == facts
     assert result.feedback is not None
@@ -457,12 +481,16 @@ async def test_model_value_writes_nothing_when_the_resolver_refuses_the_model() 
     # The resolver's Model checker owns usability, including forbidden pinned
     # Connections (tests/core/projects/test_resolver_connections.py).
     agents, projects = _RecordingAgents(), _RecordingProjects()
-    dispatcher = _model_dispatcher(agents, projects, configured={"openai/gpt-5"})
+    resolver = _ConfiguredModels({"openai/gpt-5"})
+    session = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    resolver.session_overrides[session] = dict(_SESSION_OVERRIDES)
+    dispatcher = _model_dispatcher(agents, projects, resolver)
 
     with pytest.raises(ModelConfigurationError):
         await _execute(dispatcher, "/model openai/ghost")
 
     assert (agents.updates, projects.set_calls, projects.clear_calls) == ([], [], [])
+    assert resolver.session_overrides[session] == _SESSION_OVERRIDES
 
 
 class _RecordingTitles:

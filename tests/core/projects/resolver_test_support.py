@@ -12,9 +12,9 @@ from core.agents.agents import AgentStore
 from core.database import write_bootstrap_marker
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import (
+    AgentOverrides,
     AgentResolutionError,
     AgentResolver,
-    AgentRunOverrides,
     ConfigAgent,
     ModelConfigurationChecker,
     ResolutionAgentNotFoundError,
@@ -223,6 +223,8 @@ def _resolver(
         checker,
         lambda: defaults,
         project_skill_names=lambda project_id: skill_names.get(project_id, frozenset()),
+        # The Agent store's own Session database, which it also closes.
+        sessions=agents._session_manager(),
     )
 
 
@@ -263,7 +265,7 @@ __all__ = [
     "AgentStore",
     "PROJECT_DEFAULT_ALLOWED_TOOLS",
     "AgentResolutionError",
-    "AgentRunOverrides",
+    "AgentOverrides",
     "AgentResolver",
     "ConfigAgent",
     "ModelConfigurationChecker",
