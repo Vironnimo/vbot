@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
-from core.channels import ChannelConfig, ChannelConfigError, DeniedChatFacts
+from core.channels import ChannelConfig, ChannelConfigError, ChannelNotFoundError, DeniedChatFacts
 from server.events import ServerEventBus
 from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_result
 
@@ -58,7 +58,7 @@ def _channel_config(
 
 
 def _channel_service(*configs: ChannelConfig) -> Mock:
-    """A ChannelService double whose config changes are awaitable like the real ones."""
+    """A ChannelService double whose config reads and changes are awaitable like the real ones."""
     service = Mock()
     for name in (
         "create_channel",
@@ -69,7 +69,15 @@ def _channel_service(*configs: ChannelConfig) -> Mock:
         "restart_channel",
     ):
         setattr(service, name, AsyncMock())
-    service.list_channels.return_value = list(configs)
+    saved = {config.id: config for config in configs}
+
+    def get_channel(channel_id: str) -> ChannelConfig:
+        if channel_id not in saved:
+            raise ChannelNotFoundError(f"Channel not found: {channel_id}")
+        return saved[channel_id]
+
+    service.get_channel = AsyncMock(side_effect=get_channel)
+    service.list_channels_async = AsyncMock(return_value=list(configs))
     service.is_running.return_value = True
     service.is_failed.return_value = False
     service.failure_reason.return_value = None
@@ -435,6 +443,9 @@ async def test_channel_status_reports_health_and_denied_chats(
         "failure_reason": failure_reason,
         "denied_chats": denied_chats,
     }
+    # The status of one Channel reads only that Channel's config.
+    service.get_channel.assert_awaited_once_with("tg-assistant")
+    service.list_channels_async.assert_not_awaited()
     service.denied_chats.assert_called_once_with("tg-assistant")
 
 
@@ -580,6 +591,21 @@ async def test_channel_access_methods_return_saved_state_without_runtime_reload(
         (
             "channel.status",
             {"id": "missing-channel"},
+            None,
+            "channel_not_found",
+            "missing-channel",
+        ),
+        # A config that fails to load is reported as such, not as a missing Channel.
+        (
+            "channel.status",
+            {"id": "tg-broken"},
+            ("get_channel", ChannelConfigError("Invalid Channel config tg-broken")),
+            "channel_config_error",
+            "tg-broken",
+        ),
+        (
+            "channel.set_token",
+            {"id": "missing-channel", "token": "secret"},
             None,
             "channel_not_found",
             "missing-channel",

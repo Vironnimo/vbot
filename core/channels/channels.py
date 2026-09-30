@@ -338,7 +338,7 @@ class ChannelService:
         normalized_id = _normalize_channel_id(channel_id)
         self._require_idle(normalized_id)
         with self._config_change(normalized_id):
-            config = await self._load_config(normalized_id)
+            config = await self.get_channel(normalized_id)
         self._validate_agent_exists(config.agent_id)
         self._preflight_adapter_start(config)
 
@@ -392,8 +392,29 @@ class ChannelService:
         return await adapter.ensure_outbound_session(platform_target, thread_id=thread_id)
 
     def list_channels(self) -> list[ChannelConfig]:
-        """Return all persisted channels, enabled and disabled."""
+        """Return all persisted channels, enabled and disabled.
+
+        Blocking: reads every ``channel.json``. Event Loop callers use
+        ``list_channels_async``.
+        """
         return self._storage.load_all()
+
+    async def list_channels_async(self) -> list[ChannelConfig]:
+        """Return all persisted channels, read on the state database's worker pool.
+
+        Like ``list_channels``, a config that fails to load is skipped with a
+        logged warning.
+        """
+        return await self._state.database.run_async(self._storage.load_all)
+
+    async def get_channel(self, channel_id: str) -> ChannelConfig:
+        """Read one ``channel.json`` on the state database's worker pool.
+
+        Raises ``ChannelNotFoundError`` when the Channel has no config and
+        ``ChannelConfigError`` when its id is invalid or its config fails to
+        load, which a listing skips instead.
+        """
+        return await self._state.database.run_async(self._storage.get, channel_id)
 
     async def channel_access(self, channel_id: str) -> JsonObject:
         """Return one Channel's durable identity and per-group access state."""
@@ -478,7 +499,7 @@ class ChannelService:
         normalized_id = _normalize_channel_id(channel_id)
         self._require_idle(normalized_id)
         with self._config_change(normalized_id):
-            config = await self._load_config(normalized_id)
+            config = await self.get_channel(normalized_id)
             unknown_fields = sorted(set(fields) - _MUTABLE_FIELDS)
             if unknown_fields:
                 joined = ", ".join(unknown_fields)
@@ -542,7 +563,7 @@ class ChannelService:
     async def _enable_channel(self, channel_id: str) -> None:
         """Apply enable after public exclusion checks or inside the pairing owner."""
         with self._config_change(channel_id):
-            config = await self._load_config(channel_id)
+            config = await self.get_channel(channel_id)
             self._validate_agent_exists(config.agent_id)
             if config.enabled:
                 # Nothing to persist; (re)start a stopped or failed adapter.
@@ -555,7 +576,7 @@ class ChannelService:
         normalized_id = _normalize_channel_id(channel_id)
         self._require_idle(normalized_id)
         with self._config_change(normalized_id):
-            config = await self._load_config(normalized_id)
+            config = await self.get_channel(normalized_id)
             if not config.enabled:
                 self.stop_channel(normalized_id)
                 return
@@ -835,10 +856,6 @@ class ChannelService:
         if channel_id in self._held_config_leases:
             self._held_config_leases.remove(channel_id)
             self._config_lease(channel_id).release()
-
-    async def _load_config(self, channel_id: str) -> ChannelConfig:
-        """Read one ``channel.json`` on the state database's worker pool."""
-        return await self._state.database.run_async(self._storage.get, channel_id)
 
     async def _change_config(self, previous: ChannelConfig, updated: ChannelConfig) -> None:
         """Persist ``updated``, then bring the adapter in line with it.

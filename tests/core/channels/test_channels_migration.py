@@ -115,7 +115,7 @@ async def test_migration_waits_for_an_in_flight_disable_and_keeps_it_disabled(
     loaded = asyncio.Event()
     release = asyncio.Event()
     migration_entered = threading.Event()
-    real_load = service._load_config
+    real_load = service.get_channel
 
     async def held_load(channel_id: str) -> ChannelConfig:
         result = await real_load(channel_id)
@@ -127,7 +127,7 @@ async def test_migration_waits_for_an_in_flight_disable_and_keeps_it_disabled(
         migration_entered.set()
         service.record_chat_id_migration(config.id, "-500", "-100500")
 
-    monkeypatch.setattr(service, "_load_config", held_load)
+    monkeypatch.setattr(service, "get_channel", held_load)
     disabling = asyncio.create_task(service.disable_channel(config.id))
     migrating: asyncio.Task[None] | None = None
     try:

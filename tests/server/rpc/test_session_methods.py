@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -641,7 +642,7 @@ async def test_session_agent_overrides_change_only_the_fields_named(tmp_path: Pa
 async def test_session_link_channel_records_the_reply_target_for_the_channel_agent_only() -> None:
     state, _resolver, sessions = stub_session_state()
     config = ChannelConfig(id="tg-assistant", platform="telegram", agent_id="assistant")
-    state.runtime.channel_service = SimpleNamespace(list_channels=lambda: [config])
+    state.runtime.channel_service = SimpleNamespace(get_channel=AsyncMock(return_value=config))
     key = ("assistant", "s1", None)
     sessions.saved_metadata[key] = {"persisted": "value"}
     link = {"session_id": "s1", "channel_id": "tg-assistant", "platform_conv_id": "12345"}
@@ -707,7 +708,7 @@ async def test_session_partial_mutation_preserves_concurrent_title(
         state = SimpleNamespace(
             runtime=SimpleNamespace(
                 chat_sessions=sessions,
-                channel_service=SimpleNamespace(list_channels=lambda: [config]),
+                channel_service=SimpleNamespace(get_channel=AsyncMock(return_value=config)),
                 agent_resolver=SimpleNamespace(resolve_agent_async=resolve_agent_async),
                 storage=SimpleNamespace(load_compaction_settings=lambda: _POLICY),
             ),
