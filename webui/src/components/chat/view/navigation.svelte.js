@@ -19,6 +19,30 @@ import { takeSessionInvalidations } from '$lib/sessionInvalidation.js';
 export function createChatViewNavigation(context) {
   let creatingSession = $state(false);
 
+  let creatingSessionPresentation = $state.raw(null);
+
+  const ownsSessionCreation = (presentation) =>
+    context.active &&
+    creatingSessionPresentation === presentation &&
+    context.target.activeOwnAgentAddress() === presentation.agentAddress;
+
+  let creatingDisplayedSession = $derived(
+    creatingSession &&
+      Boolean(creatingSessionPresentation) &&
+      ownsSessionCreation(creatingSessionPresentation) &&
+      context.actions.isDisplayedSessionCurrent(creatingSessionPresentation),
+  );
+
+  // A create accepted while this area is hidden still updates its original
+  // Agent, but showing Chat again must not revive its navigation or focus.
+  $effect(() => {
+    if (!context.active) {
+      untrack(() => {
+        creatingSessionPresentation = null;
+      });
+    }
+  });
+
   let viewingSessionId = $state('');
 
   let viewingSessionAgentId = $state('');
@@ -259,6 +283,7 @@ export function createChatViewNavigation(context) {
   };
 
   const selectAgentSession = async (agentId, { focusComposer }) => {
+    creatingSessionPresentation = null;
     // Choosing an identity agent always returns the chat to the identity bar,
     // tearing down any active project-agent selection (the upper bar wins for
     // the identity path; the project stays selected in the dropdown so its
@@ -321,6 +346,7 @@ export function createChatViewNavigation(context) {
   // browser-history restore. Restores re-enter past overrides (or return to
   // the current session) without creating new history entries.
   const applySessionNavigation = async (navigation) => {
+    creatingSessionPresentation = null;
     stepMarked = false;
     const isCurrent = () => context.pendingSessionNavigation === navigation;
     const selectionChanged = await applyNavigationSelection(
@@ -640,7 +666,10 @@ export function createChatViewNavigation(context) {
     });
   });
 
-  const asStep = async (action) => {
+  const asStep = async (action, { supersedeCreation = true } = {}) => {
+    if (supersedeCreation) {
+      creatingSessionPresentation = null;
+    }
     stepMarked = true;
     try {
       return await action();
@@ -714,7 +743,8 @@ export function createChatViewNavigation(context) {
     await context.loadHistoryForSession(agentAddress, sessionId);
   };
 
-  const handleNewSession = () => asStep(createNewSession);
+  const handleNewSession = () =>
+    asStep(createNewSession, { supersedeCreation: false });
 
   const createNewSession = async () => {
     if (
@@ -727,14 +757,11 @@ export function createChatViewNavigation(context) {
     // "New session" means "make the chat ready for a fresh conversation."
     // Repeating it on an already blank Session is therefore idempotent, while
     // a local draft still counts as work that deserves its own Session.
-    context.layout.requestComposerFocus({ includeMobile: true });
     if (context.composerAvailable && context.displayedSessionIsEmpty()) {
+      context.layout.requestComposerFocus({ includeMobile: true });
       return;
     }
     if (context.target.projectAgentActive) {
-      // Symmetric with the identity path below: a new session always leaves
-      // any override view and becomes the displayed session.
-      clearSessionOverride();
       if (await createProjectAgentSession()) {
         context.layout.requestComposerFocus({ includeMobile: true });
       }
@@ -745,7 +772,11 @@ export function createChatViewNavigation(context) {
       return;
     }
     const sourceSessionState = context.target.activeSessionState;
-    clearSessionOverride();
+    const presentation = {
+      ...context.actions.captureDisplayedSession(),
+      agentAddress: agent.id,
+    };
+    creatingSessionPresentation = presentation;
     creatingSession = true;
     context.actions.clearSessionActionError(sourceSessionState);
     try {
@@ -753,8 +784,16 @@ export function createChatViewNavigation(context) {
         agent_id: agent.id,
         make_current: true,
       });
-      await switchToCurrentSession(agent.id, session.session_id);
-      context.layout.requestComposerFocus({ includeMobile: true });
+      if (
+        (await switchToCurrentSession(agent.id, session.session_id, {
+          present:
+            ownsSessionCreation(presentation) &&
+            context.actions.isDisplayedSessionCurrent(presentation),
+        })) &&
+        ownsSessionCreation(presentation)
+      ) {
+        context.layout.requestComposerFocus({ includeMobile: true });
+      }
     } catch (error) {
       context.actions.setSessionActionError(
         `${t('chat.sessionCreateError')} ${error.message}`,
@@ -762,6 +801,7 @@ export function createChatViewNavigation(context) {
       );
     } finally {
       creatingSession = false;
+      creatingSessionPresentation = null;
     }
   };
 
@@ -774,25 +814,42 @@ export function createChatViewNavigation(context) {
       return false;
     }
     const sourceSessionState = context.target.activeSessionState;
+    const presentation = {
+      ...context.actions.captureDisplayedSession(),
+      agentAddress,
+    };
+    creatingSessionPresentation = presentation;
     creatingSession = true;
     context.actions.clearSessionActionError(sourceSessionState);
     try {
       const created = await context.chatController.createSession({
         agent_id: agentAddress,
       });
-      const sessionId = created?.session_id ?? '';
-      if (
-        !sessionId ||
-        context.target.currentProjectAgentAddress() !== agentAddress
-      ) {
+      const sessionId = String(created?.session_id ?? '').trim();
+      if (!sessionId) {
         return false;
+      }
+      const present =
+        ownsSessionCreation(presentation) &&
+        context.actions.isDisplayedSessionCurrent(presentation);
+      if (!present) {
+        retainShownSession(agentAddress);
       }
       context.target.projectAgentSessions = {
         ...context.target.projectAgentSessions,
         [agentAddress]: sessionId,
       };
+      ensureSessionState(context.chatState, agentAddress, sessionId);
+      if (!present) {
+        return false;
+      }
+      clearSessionOverride();
+      const destination = context.actions.captureDisplayedSession();
       await context.loadHistoryForSession(agentAddress, sessionId);
-      return true;
+      return (
+        ownsSessionCreation(presentation) &&
+        context.actions.isDisplayedSessionCurrent(destination)
+      );
     } catch (error) {
       context.actions.setSessionActionError(
         `${t('chat.sessionCreateError')} ${error.message}`,
@@ -801,16 +858,42 @@ export function createChatViewNavigation(context) {
       return false;
     } finally {
       creatingSession = false;
+      creatingSessionPresentation = null;
     }
   };
 
-  const switchToCurrentSession = async (agentId, sessionId) => {
-    const normalizedSessionId = String(sessionId ?? '').trim();
-    if (!agentId || !normalizedSessionId) {
+  // A successful create still reconciles its original Agent's current
+  // pointer after navigation. Pin the currently shown Session first so that
+  // updating the pointer cannot implicitly replace a later same-Agent view.
+  // An ordinary Agent or Session selection releases this override as usual.
+  const retainShownSession = (agentAddress) => {
+    const session = shownSession();
+    if (session?.agentId !== agentAddress) {
       return;
     }
+    viewingSessionAgentId =
+      agentAddress === context.target.activeOwnAgentAddress()
+        ? ''
+        : agentAddress;
+    viewingSessionId = session.sessionId;
+    viewingSubAgentSession = session.subAgent;
+  };
 
-    clearSessionOverride();
+  const switchToCurrentSession = async (
+    agentId,
+    sessionId,
+    { present = true } = {},
+  ) => {
+    const normalizedSessionId = String(sessionId ?? '').trim();
+    if (!agentId || !normalizedSessionId) {
+      return false;
+    }
+
+    if (present) {
+      clearSessionOverride();
+    } else {
+      retainShownSession(agentId);
+    }
     const updatedAgents = context.chatState.agents.map((candidate) =>
       candidate.id === agentId
         ? { ...candidate, current_session_id: normalizedSessionId }
@@ -818,9 +901,14 @@ export function createChatViewNavigation(context) {
     );
     setAgents(context.chatState, updatedAgents);
     context.onAgentsChanged?.(updatedAgents);
-    context.onAgentSelected?.(agentId);
     ensureSessionState(context.chatState, agentId, normalizedSessionId);
+    if (!present) {
+      return false;
+    }
+    context.onAgentSelected?.(agentId);
+    const destination = context.actions.captureDisplayedSession();
     await context.loadHistoryForSession(agentId, normalizedSessionId);
+    return context.actions.isDisplayedSessionCurrent(destination);
   };
 
   // `/agent <addr>` move: relocate the CURRENT session (same session id) to the
@@ -922,6 +1010,9 @@ export function createChatViewNavigation(context) {
   return {
     get creatingSession() {
       return creatingSession;
+    },
+    get creatingDisplayedSession() {
+      return creatingDisplayedSession;
     },
     get viewingSessionId() {
       return viewingSessionId;

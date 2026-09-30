@@ -270,7 +270,7 @@ class ProviderCredentialResolver:
             )
 
         derived_key = derive_credential_key(connection.auth.credential_key, account_id)
-        credential_value = self._resolve_credential_value(derived_key)
+        _, credential_value = self._environment_account_values(connection).get(account_id, ("", ""))
         if credential_value:
             return credential_value
 
@@ -360,33 +360,42 @@ class ProviderCredentialResolver:
 
     def _environment_accounts(self, connection: ConnectionConfig) -> list[ProviderAccount]:
         base_key = connection.auth.credential_key
-        accounts: dict[str, ProviderAccount] = {}
+        accounts = [
+            ProviderAccount(
+                id=account_id,
+                usable=bool(value),
+                source=source,
+                credential_key=derive_credential_key(base_key, account_id),
+            )
+            for account_id, (source, value) in self._environment_account_values(connection).items()
+        ]
+        return sorted(
+            accounts,
+            key=lambda account: (account.id != DEFAULT_ACCOUNT_ID, account.id),
+        )
+
+    def _environment_account_values(
+        self, connection: ConnectionConfig
+    ) -> dict[str, tuple[str, str]]:
+        """Select each Account's source and value once for projection and lookup."""
+
+        base_key = connection.auth.credential_key
+        accounts: dict[str, tuple[str, str]] = {}
         sources: list[tuple[str, Mapping[str, str]]] = [
             ("process_env", self._process_env),
             ("data_dir", self._fallback_credentials),
         ]
         for source, mapping in sources:
-            for env_key, value in mapping.items():
+            # Canonical uppercase suffixes sort before their case aliases.
+            # The same source's winner must not depend on insertion order.
+            for env_key in sorted(mapping):
                 account_id = account_id_from_credential_key(base_key, env_key)
                 if account_id is None or account_id in accounts:
                     continue
-                accounts[account_id] = ProviderAccount(
-                    id=account_id,
-                    usable=bool(value),
-                    source=source,
-                    credential_key=derive_credential_key(base_key, account_id),
-                )
-        return sorted(
-            accounts.values(),
-            key=lambda account: (account.id != DEFAULT_ACCOUNT_ID, account.id),
-        )
+                accounts[account_id] = (source, mapping[env_key])
+        return accounts
 
     def _uses_token_store(self, connection: ConnectionConfig) -> bool:
         return connection.type == "oauth" and (
             connection.oauth is not None or not connection.auth.credential_key
         )
-
-    def _resolve_credential_value(self, credential_key: str) -> str:
-        if credential_key in self._process_env:
-            return self._process_env[credential_key]
-        return self._fallback_credentials.get(credential_key, "")

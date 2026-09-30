@@ -13,7 +13,7 @@ import pytest
 
 import core.tools.change_tracker as change_tracker_module
 from core.attachments import AttachmentStore
-from core.chat import ChatSessionError
+from core.chat import ChatMessage, ChatSessionError
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import TextBlock
 from core.chat.continuation import ContinuationCause, ContinuationTracker
@@ -75,16 +75,59 @@ def _sent_text(runtime: Any) -> str:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("entry_point", ["start_run", "queue_run"])
+@pytest.mark.parametrize("session_state", ["missing", "archived", "recreated"])
 async def test_start_run_without_an_existing_session_sends_and_creates_nothing(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_point: str,
+    session_state: str,
 ) -> None:
     runtime = _runtime(tmp_path, [_answer()])
+    loop = build_chat_loop(runtime)
+    start = getattr(loop, entry_point)
 
-    with pytest.raises(ChatSessionError):
-        await build_chat_loop(runtime).start_run("coder", "Hi", session_id="missing-session")
+    if session_state == "missing":
+        with pytest.raises(ChatSessionError):
+            await start("coder", "Hi", session_id="missing-session")
+        assert not runtime.chat_sessions.exists(session_address("coder", "missing-session"))
+    else:
+        # The initial presence check has completed, but Chat has not yet handed
+        # the captured generation to Run admission.
+        original = runtime.chat_sessions.get(SESSION)
+        original.append(ChatMessage.user("Original history"))
+        entered, release = asyncio.Event(), asyncio.Event()
+        get_async = runtime.chat_sessions.get_async
+
+        async def paused_get(address):
+            session = await get_async(address)
+            entered.set()
+            await release.wait()
+            return session
+
+        monkeypatch.setattr(runtime.chat_sessions, "get_async", paused_get)
+        pending = asyncio.create_task(start("coder", "Hi", session_id=SESSION.session_id))
+        await asyncio.wait_for(entered.wait(), 5)
+        async with runtime.chat_runs.session_admission_guard(SESSION):
+            await runtime.chat_sessions.archive(SESSION)
+            if session_state == "recreated":
+                replacement = runtime.chat_sessions.create("coder", session_id=SESSION.session_id)
+                replacement.append(ChatMessage.user("Replacement history"))
+        release.set()
+        admitted = await pending
+        run = admitted if entry_point == "start_run" else await admitted.future
+        with pytest.raises(ChatSessionError):
+            await run.wait()
+        assert run.events[-1].payload["history_persisted"] is False
+        assert not runtime.chat_runs.has_activity_for_session(
+            "coder", SESSION.session_id, project_id=None
+        )
+        if session_state == "recreated":
+            assert [message.content for message in replacement.load()] == ["Replacement history"]
+        else:
+            assert not runtime.chat_sessions.exists(SESSION)
 
     assert runtime.adapter.requests == []
-    assert not runtime.chat_sessions.exists(session_address("coder", "missing-session"))
 
 
 @pytest.mark.asyncio

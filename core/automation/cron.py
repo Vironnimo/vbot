@@ -842,16 +842,17 @@ class CronService:
         try:
             async with self._run_slots:
                 latest = self._jobs.get(job.id)
-                if latest is None or latest.status != "active":
+                if latest is None or latest.status != "active" or job.id in self._pending_restarts:
                     return False
 
                 latest.last_attempt_at = _timing._utc_now_iso()
                 latest.last_error = None
                 self._jobs[latest.id] = latest
                 await self._save_jobs_after_fire(latest.id)
-                # An edit may have replaced or paused the job during that write.
+                # Before admission begins, a scheduling edit withdraws this fire;
+                # the replacement task must wait for the new schedule.
                 latest = self._jobs.get(job.id)
-                if latest is None or latest.status != "active":
+                if latest is None or latest.status != "active" or job.id in self._pending_restarts:
                     return False
                 _LOGGER.info(
                     "Cron job fired (job=%s agent=%s session=%s%s)",

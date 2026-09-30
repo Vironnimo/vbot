@@ -8,6 +8,7 @@ from typing import Any
 from core.providers.accounts import (
     CREDENTIAL_KEY_ACCOUNT_SEPARATOR,
     DEFAULT_ACCOUNT_ID,
+    account_id_from_credential_key,
     compose_connection_id,
     derive_credential_key,
     split_connection_id,
@@ -326,8 +327,14 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
         account_id = _effective_account_id(provider_id, connection_id, account)
         public_connection_id = compose_connection_id(provider_id, connection.id)
         credential_key = derive_credential_key(connection.auth.credential_key, account_id)
-        previous_value = runtime.storage.load_environment().get(credential_key)
+        environment = runtime.storage.load_environment()
+        previous_value = environment.get(credential_key)
         runtime.storage.set_data_dir_credential(credential_key, value)
+        for key in environment:
+            if key != credential_key and (
+                account_id_from_credential_key(connection.auth.credential_key, key) == account_id
+            ):
+                runtime.storage.remove_data_dir_credential(key)
         runtime.reload_environment_credentials()
         account_connection_id = compose_connection_id(provider_id, connection.id, account_id)
         usable = runtime.provider_credentials.is_usable(provider_id, account_connection_id)
@@ -368,7 +375,18 @@ def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
         account_id = _effective_account_id(provider_id, connection_id, account)
         public_connection_id = compose_connection_id(provider_id, connection.id)
         credential_key = derive_credential_key(connection.auth.credential_key, account_id)
-        removed = bool(runtime.storage.remove_data_dir_credential(credential_key))
+        credential_keys = {credential_key} | {
+            key
+            for key in runtime.storage.load_environment()
+            if account_id_from_credential_key(connection.auth.credential_key, key) == account_id
+        }
+        removed = (
+            sum(
+                bool(runtime.storage.remove_data_dir_credential(key))
+                for key in sorted(credential_keys)
+            )
+            > 0
+        )
         runtime.reload_environment_credentials()
         configured = runtime.provider_credentials.has_credentials(
             provider_id,

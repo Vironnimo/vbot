@@ -71,16 +71,23 @@ def admit_run(
 ) -> None:
     """Admit one Run: its row, its Run kind and its execution owner together.
 
-    A missing live Session is created. Admitting a Run that is already running
-    here is a no-op when it carries the same owner; a settled or inherited Run
+    Without an expected generation, a missing live Session is created.
+    Otherwise the same generation must still be live. Admitting an already
+    running Run here is a no-op when it carries the same owner; a settled or inherited Run
     is never admitted again. An owner's participant binding must still be live
     in the generation the owner names.
     """
     _validate_admission(admission)
     owner = _owner_fields(admission)
     started_at = _store_values._timestamp(admission.started_at, "Run start")
-    _store_mutations.ensure_live(connection, address)
+    if admission.expected_generation_id is None:
+        _store_mutations.ensure_live(connection, address)
     state = _store_values._require_live(connection, address)
+    if (
+        admission.expected_generation_id is not None
+        and state["generation_id"] != admission.expected_generation_id
+    ):
+        raise ChatSessionError("Session generation changed before Run admission")
     session_key = int(state["session_key"])
     existing = connection.execute(
         "SELECT r.run_key, r.status, r.inherited, o.owner_name, o.group_id, o.participant_id, "

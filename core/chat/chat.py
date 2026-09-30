@@ -351,6 +351,7 @@ class ChatLoop:
                 working_project_id=working_project_id,
                 run_kind=run_kind,
                 contributes_to_agent_activity=contributes_to_agent_activity,
+                expected_session_generation_id=session.generation_id,
             ),
         )
 
@@ -406,7 +407,10 @@ class ChatLoop:
                 compaction_service,
                 instruction=instruction,
             ),
-            admission=RunAdmission(working_project_id=working_project_id),
+            admission=RunAdmission(
+                working_project_id=working_project_id,
+                expected_session_generation_id=session.generation_id,
+            ),
         )
 
     async def compact_session(
@@ -491,6 +495,9 @@ class ChatLoop:
                 run_kind=run_kind,
                 contributes_to_agent_activity=contributes_to_agent_activity,
                 source_session_id=source_session_id,
+                expected_session_generation_id=(
+                    session.generation_id if not create_missing else None
+                ),
             ),
         )
 

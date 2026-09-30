@@ -177,9 +177,13 @@ class SessionStore:
             lambda connection: _store_queries.existing_addresses(connection, addresses)
         )
 
-    def require_live(self, address: SessionAddress) -> None:
-        """Raise ``SessionNotFoundError`` unless *address* names a live Session."""
-        self._read(lambda connection: _store_values._require_live(connection, address))
+    def require_live(self, address: SessionAddress) -> str:
+        """Return the live generation id, or raise ``SessionNotFoundError``."""
+        return self._read(
+            lambda connection: str(
+                _store_values._require_live(connection, address)["generation_id"]
+            )
+        )
 
     def archive(self, address: SessionAddress) -> None:
         return self._execute_write(lambda connection: _store_mutations.archive(connection, address))

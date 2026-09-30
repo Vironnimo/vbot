@@ -21,6 +21,7 @@ from core.utils.errors import StorageError
 
 
 def test_parse_settings_update_normalizes_all_supported_sections() -> None:
+    finite_values = [None, True, -2, 1.25, {"number": 1e300}]
     parsed = parse_settings_update(
         {
             "appearance": {"language": "en", "chat_width": "wide", "chat_working_mode": "compact"},
@@ -56,7 +57,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             "model_tasks": {
                 "speech_to_text": {
                     "target": "openrouter/openai/gpt-4o-transcribe::api-key",
-                    "options": {"language": "auto"},
+                    "options": {"language": "auto", "nested": finite_values},
                 }
             },
             "session_titles": {"enabled": True, "model": " openai/gpt-4.1-mini::api-key "},
@@ -69,7 +70,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             },
             "extensions": {
                 "disabled": [" legacy ", "old"],
-                "config": {"guard_bash": {"deny": ["rm -rf"]}},
+                "config": {"guard_bash": {"deny": ["rm -rf"], "nested": finite_values}},
             },
             "debug": {"enabled": True, "trace_limit": 100},
             "reflection": {
@@ -120,7 +121,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         "model_tasks": {
             "speech_to_text": {
                 "target": "openrouter/openai/gpt-4o-transcribe::api-key",
-                "options": {"language": "auto"},
+                "options": {"language": "auto", "nested": finite_values},
             }
         },
         "session_titles": {"enabled": True, "model": "openai/gpt-4.1-mini::api-key"},
@@ -133,7 +134,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         },
         "extensions": {
             "disabled": ["legacy", "old"],
-            "config": {"guard_bash": {"deny": ["rm -rf"]}},
+            "config": {"guard_bash": {"deny": ["rm -rf"], "nested": finite_values}},
         },
         "debug": {"enabled": True, "trace_limit": 100},
         "reflection": {
@@ -347,6 +348,18 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
             {"model_tasks": {"speech_to_text": {"options": []}}},
             "params.model_tasks.speech_to_text.options must be an object",
         ),
+        *[
+            pytest.param(
+                {
+                    "model_tasks": {
+                        "speech_to_text": {"options": {"nested": [{"amount": float(number)}]}}
+                    }
+                },
+                None,
+                id=f"model-task-options-{number}",
+            )
+            for number in ["nan", "inf", "-inf"]
+        ],
         (
             {"model_tasks": {"text_embedding": {"options": {"dimensions": 0}}}},
             "params.model_tasks.text_embedding dimensions must be a positive integer or null",
@@ -471,9 +484,11 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
     ],
 )
 def test_parse_settings_update_rejects_invalid_payloads(
-    params: dict[str, Any], message: str
+    params: dict[str, Any], message: str | None
 ) -> None:
-    with pytest.raises(SettingsValidationError, match=re.escape(message)):
+    with pytest.raises(
+        SettingsValidationError, match=re.escape(message) if message is not None else None
+    ):
         parse_settings_update(params)
 
 

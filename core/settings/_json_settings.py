@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -22,6 +23,8 @@ def normalize_json_object(value: Any, path: str) -> dict[str, Any]:
 
 
 def _normalize_json_value(value: Any, path: str) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise StorageError(f"Expected {path} to be a finite number")
     if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, list):

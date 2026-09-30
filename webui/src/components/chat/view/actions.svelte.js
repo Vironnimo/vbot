@@ -23,9 +23,11 @@ export function createChatViewActions(context) {
 
   let transientCardsSessionKey = '';
 
-  let displayedSessionGeneration = 0;
+  let displayedSessionGeneration = $state(0);
 
   let generationSessionKey = '';
+
+  let destroyed = false;
 
   let transientCardSeq = 0;
 
@@ -38,21 +40,46 @@ export function createChatViewActions(context) {
   let chatToastTimeoutId = null;
 
   onDestroy(() => {
+    destroyed = true;
     if (chatToastTimeoutId !== null) {
       clearTimeout(chatToastTimeoutId);
       chatToastTimeoutId = null;
     }
   });
 
-  // Transient cards belong to the displayed session only. Switching sessions
-  // (or the page reloading) drops them; reloading the same session's history
-  // (e.g. after /compact) does not, because the displayed key is unchanged.
-  $effect(() => {
+  const updateDisplayedSessionGeneration = () => {
     const key = context.target.displayedSessionKey();
     if (key !== generationSessionKey) {
       generationSessionKey = key;
       displayedSessionGeneration += 1;
     }
+    return key;
+  };
+
+  // Capture synchronously too: a navigation can change the displayed key
+  // before Svelte flushes its effects. Leaving and re-entering the same
+  // Session retires older presentation.
+  const captureDisplayedSession = (
+    sessionKey = context.target.displayedSessionKey(),
+  ) => {
+    updateDisplayedSessionGeneration();
+    return { sessionKey, generation: displayedSessionGeneration };
+  };
+
+  const isDisplayedSessionCurrent = (presentation) => {
+    return (
+      !destroyed &&
+      presentation.sessionKey &&
+      context.target.displayedSessionKey() === presentation.sessionKey &&
+      displayedSessionGeneration === presentation.generation
+    );
+  };
+
+  // Transient cards belong to the displayed session only. Switching sessions
+  // (or the page reloading) drops them; reloading the same session's history
+  // (e.g. after /compact) does not, because the displayed key is unchanged.
+  $effect(() => {
+    const key = updateDisplayedSessionGeneration();
     if (key !== transientCardsSessionKey) {
       transientCardsSessionKey = key;
       transientCards = [];
@@ -127,18 +154,13 @@ export function createChatViewActions(context) {
   };
 
   const sendStream = async (agent, sessionState, content, options = {}) => {
-    const sourceSessionKey = sessionState?.key ?? '';
-    const sourceUiGeneration = displayedSessionGeneration;
+    const presentation = captureDisplayedSession(sessionState?.key ?? '');
     const outcome = await context.chatController.sendMessage(
       sessionState,
       content,
       options,
     );
-    const presentationIsCurrent =
-      sourceSessionKey &&
-      context.target.displayedSessionKey() === sourceSessionKey &&
-      displayedSessionGeneration === sourceUiGeneration;
-    if (!presentationIsCurrent) {
+    if (!isDisplayedSessionCurrent(presentation)) {
       return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
     }
     if (outcome.kind === 'move') {
@@ -205,18 +227,13 @@ export function createChatViewActions(context) {
 
   const handleEditMessage = async (messageId, content) => {
     const sessionState = context.target.activeSessionState;
-    const sourceSessionKey = sessionState?.key ?? '';
-    const sourceUiGeneration = displayedSessionGeneration;
+    const presentation = captureDisplayedSession(sessionState?.key ?? '');
     const outcome = await context.chatController.editMessage(
       sessionState,
       messageId,
       content,
     );
-    const presentationIsCurrent =
-      sourceSessionKey &&
-      context.target.displayedSessionKey() === sourceSessionKey &&
-      displayedSessionGeneration === sourceUiGeneration;
-    if (presentationIsCurrent && outcome.kind === 'started') {
+    if (isDisplayedSessionCurrent(presentation) && outcome.kind === 'started') {
       submittedTurnScrollKey += 1;
     }
     return outcome.kind === 'started';
@@ -335,6 +352,8 @@ export function createChatViewActions(context) {
     context.chatController.loadOlderHistory(context.target.activeSessionState);
 
   return {
+    captureDisplayedSession,
+    isDisplayedSessionCurrent,
     loadCurrentHistory,
     loadHistoryForSession,
     loadOlderHistory,

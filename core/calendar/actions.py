@@ -288,6 +288,7 @@ class CalendarActions:
         self._sessions: ChatSessionManager | None = None
         self._task: asyncio.Task[None] | None = None
         self._workers: dict[str, asyncio.Task[None]] = {}
+        self._worker_events: dict[str, CalendarEvent] = {}
         self._runs: dict[str, Run] = {}
         self._changed = asyncio.Event()
         # Counts wake-ups, so a tick notices a change made while it awaited a save.
@@ -671,6 +672,14 @@ class CalendarActions:
             event = live.get(action["event_id"])
             if event is None:
                 continue
+            if any(
+                self._executions[key]["action_id"] == action["id"]
+                and self._event_anchor(worker_event) != self._event_anchor(event)
+                for key, worker_event in self._worker_events.items()
+            ):
+                # A moved series has new occurrence keys. Let the old execution
+                # settle before scanning its replacement, keeping the scan boundary.
+                continue
             anchor, offset, _ = parse_action_when(action["when"])
             duration = timedelta(days=event.duration_days or 0, minutes=event.duration_minutes or 0)
             shift = timedelta(minutes=offset) + (duration if anchor == "end" else timedelta())
@@ -735,6 +744,7 @@ class CalendarActions:
                 self._execute(key, row, copy.deepcopy(action), event, occurrence),
                 name=f"calendar-action:{action['id']}",
             )
+            self._worker_events[key] = event
             self._workers[key].add_done_callback(partial(self._worker_done, key))
         if changed:
             # Invalidation must not withdraw our own pending work.
@@ -760,10 +770,22 @@ class CalendarActions:
     def _worker_done(self, key: str, task: asyncio.Task[None]) -> None:
         if self._workers.get(key) is task:
             self._workers.pop(key)
+            self._worker_events.pop(key, None)
         self._changed.set()
         if not task.cancelled() and task.exception() is not None:
             error = task.exception()
             _LOGGER.error("Calendar action worker failed", exc_info=error)
+
+    @staticmethod
+    def _event_anchor(event: CalendarEvent) -> tuple[Any, ...]:
+        """Fields that identify a series; text, duration and EXDATE edits keep its keys."""
+        return (
+            event.start_utc,
+            event.start_local,
+            event.start_date,
+            event.tz_name,
+            event.rrule,
+        )
 
     async def _recover(self) -> None:
         """Settle rows a previous process left claimed or running (once per load)."""
@@ -866,6 +888,7 @@ class CalendarActions:
         finally:
             self._runs.pop(key, None)
             self._workers.pop(key, None)
+            self._worker_events.pop(key, None)
             await self._save_async()
             self._calendar._notify_action_changed()
 

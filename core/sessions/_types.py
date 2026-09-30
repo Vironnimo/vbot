@@ -77,7 +77,8 @@ class SessionRunAdmission:
 
     ``owner`` binds an Extension-owned execution to the Session's temporary
     binding in the same transaction; ``input_id`` names the owner input the Run
-    answers, at most once per Session.
+    answers, at most once per Session. ``expected_generation_id`` requires that
+    exact live generation; without it, admission may create a missing Session.
     """
 
     run_id: str
@@ -87,6 +88,7 @@ class SessionRunAdmission:
     contributes_to_activity: bool = True
     owner: RunExecutionOwner | None = None
     input_id: str | None = None
+    expected_generation_id: str | None = None
 
 
 @dataclass(frozen=True)

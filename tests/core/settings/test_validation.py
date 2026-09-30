@@ -221,6 +221,7 @@ def test_validate_settings_file_reports_the_document(
 
 def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
+    finite_values = [None, True, -2, 1.25, {"number": 1e300}]
     settings_path.write_text(
         json.dumps(
             {
@@ -264,7 +265,9 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                 },
                 "extensions": {
                     "disabled": ["legacy-ext"],
-                    "config": {"weather": {"api_key": "x", "units": "metric"}},
+                    "config": {
+                        "weather": {"api_key": "x", "units": "metric", "nested": finite_values}
+                    },
                 },
                 "web_search": {
                     "provider": "searxng",
@@ -282,7 +285,7 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                 "model_tasks": {
                     "speech_to_text": {
                         "target": "openrouter/openai/gpt-4o-transcribe::api-key",
-                        "options": {"language": "auto"},
+                        "options": {"language": "auto", "nested": finite_values},
                     }
                 },
                 "session_titles": {"enabled": False, "model": ""},
@@ -298,12 +301,14 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                             "base_url": "http://127.0.0.1:8080/v1",
                             "auth": "none",
                             "models_endpoint": "/models",
+                            "defaults": {"nested": finite_values},
                             "models": {
                                 "chat-model": {
                                     "capabilities": {
                                         "tools": True,
                                         "input_modalities": ["text"],
                                         "output_modalities": ["text"],
+                                        "task_options": {"nested": finite_values},
                                     }
                                 }
                             },

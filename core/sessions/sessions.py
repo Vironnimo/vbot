@@ -180,9 +180,10 @@ class ChatSessionManager:
         return self._store.existing_addresses(addresses)
 
     def get(self, address: SessionAddress) -> ChatSession:
+        """Resolve a live Session and capture its generation for later Run admission."""
         _validate_session_id(address.session_id)
-        self._store.require_live(address)
-        return ChatSession(self._store, address)
+        generation_id = self._store.require_live(address)
+        return ChatSession(self._store, address, generation_id=generation_id)
 
     async def get_async(self, address: SessionAddress) -> ChatSession:
         return await self._store.run_async(self.get, address)
@@ -288,6 +289,7 @@ class ChatSessionManager:
             contributes_to_activity=run.contributes_to_agent_activity,
             owner=run.execution_owner,
             input_id=run.execution_input_id,
+            expected_generation_id=run.expected_session_generation_id,
         )
         await self._store.run_async(self._store.admit_run, address, admission)
 

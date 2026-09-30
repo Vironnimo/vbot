@@ -105,11 +105,17 @@ def _resolver(
 def test_env_accounts_list_default_first_and_process_env_shadows_data_dir() -> None:
     resolver = _resolver(
         env={
+            "OPENAI_API_KEY__zeta": "shadowed-alias-secret",
             "OPENAI_API_KEY__ZETA": "zeta-secret",
             "OPENAI_API_KEY": "default-secret",
-            "OPENAI_API_KEY__WORK": "",
+            "OPENAI_API_KEY__wOrK": "",
+            "OPENAI_API_KEY__beta": "process-beta",
         },
-        data_dir={"OPENAI_API_KEY__WORK": "data-dir-secret", "OPENAI_API_KEY__ALPHA": "alpha"},
+        data_dir={
+            "OPENAI_API_KEY__WORK": "data-dir-secret",
+            "OPENAI_API_KEY__aLpHa": "alpha",
+            "OPENAI_API_KEY__BETA": "shadowed-data-beta",
+        },
     )
 
     accounts = resolver.list_accounts("openai", "api-key")
@@ -117,10 +123,28 @@ def test_env_accounts_list_default_first_and_process_env_shadows_data_dir() -> N
     assert [(a.id, a.usable, a.source, a.credential_key) for a in accounts] == [
         ("default", True, "process_env", "OPENAI_API_KEY"),
         ("alpha", True, "data_dir", "OPENAI_API_KEY__ALPHA"),
+        ("beta", True, "process_env", "OPENAI_API_KEY__BETA"),
         # An empty process value still shadows the data-dir credential.
         ("work", False, "process_env", "OPENAI_API_KEY__WORK"),
         ("zeta", True, "process_env", "OPENAI_API_KEY__ZETA"),
     ]
+    expected_credentials = {
+        "default": "default-secret",
+        "alpha": "alpha",
+        "beta": "process-beta",
+        "zeta": "zeta-secret",
+    }
+    for account in accounts:
+        connection_id = f"openai:api-key:{account.id}"
+        assert resolver.is_usable("openai", connection_id) is account.usable
+        if account.usable:
+            assert (
+                resolver.get_credentials("openai", connection_id)
+                == expected_credentials[account.id]
+            )
+        else:
+            with pytest.raises(ConfigError):
+                resolver.get_credentials("openai", connection_id)
 
 
 def test_token_store_and_keyless_connections_list_their_own_accounts(tmp_path: Path) -> None:
@@ -151,6 +175,12 @@ def test_token_store_and_keyless_connections_list_their_own_accounts(tmp_path: P
             "openai:api-key:work",
             "work-secret",
             id="explicit-account",
+        ),
+        pytest.param(
+            {"OPENAI_API_KEY__wOrK": "work-secret"},
+            "openai:api-key:work",
+            "work-secret",
+            id="mixed-case-account-suffix",
         ),
         pytest.param(
             {"OPENAI_API_KEY__ALPHA": "alpha-secret", "OPENAI_API_KEY": "default-secret"},

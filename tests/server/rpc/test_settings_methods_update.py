@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from starlette.responses import JSONResponse
 
 from core.extensions.extensions import ExtensionDeclarations, ExtensionRecord
 from core.extensions.settings_schema import parse_settings_fields
@@ -487,21 +488,29 @@ async def test_reset_last_default_preserves_unknown_fields(tmp_path: Path, metho
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["settings.update", "settings.patch"])
 async def test_extensions_update_persists_the_section_with_schemaless_config(
     tmp_path: Path,
+    method: str,
 ) -> None:
-    state = make_state(tmp_path, StubAdapter())  # no registry, so no schemas
-
-    await rpc_result(
-        state,
-        "settings.update",
-        extensions={"disabled": ["legacy"], "config": {"legacy": {"anything": [1, 2]}}},
+    state = _stored_state(tmp_path)  # no registry, so no schemas
+    config = {"anything": [None, True, -2, 1.25, {"number": 1e300}]}
+    params = (
+        {"extensions": {"disabled": ["legacy"], "config": {"legacy": config}}}
+        if method == "settings.update"
+        else _patch(
+            _set("extensions.disabled", ["legacy"]),
+            _set('extensions.config["legacy"]', config),
+        )
     )
+
+    result = await rpc_result(state, method, **params)
 
     assert state.runtime.storage.load_extensions_settings() == {
         "disabled": ["legacy"],
-        "config": {"legacy": {"anything": [1, 2]}},
+        "config": {"legacy": config},
     }
+    assert JSONResponse(result).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -604,15 +613,40 @@ _TTS_BINDING = {"target": "openai/gpt-4o-mini-tts::api-key", "options": {"voice"
             _patch(_set("web_search.provider", "searxng"), _set("debug.trace_limit", 0)),
             None,
         ),
+        *[
+            pytest.param(
+                method,
+                (
+                    _patch(
+                        _set(
+                            'extensions.config["audit"]',
+                            {"nested": [{"amount": json.loads(number)}]},
+                        )
+                    )
+                    if method == "settings.patch"
+                    else {
+                        "extensions": {
+                            "config": {"audit": {"nested": [{"amount": json.loads(number)}]}}
+                        }
+                    }
+                ),
+                None,
+                id=f"{method}-{number}",
+            )
+            for method in ["settings.patch", "settings.update"]
+            for number in ["1e999", "NaN", "Infinity", "-Infinity"]
+        ],
     ],
 )
 async def test_rejected_settings_changes_persist_nothing(
     tmp_path: Path, method: str, params: JsonObject, named: str | None
 ) -> None:
     state = _state_with_schema(tmp_path)
+    state.runtime.storage = StorageManager(tmp_path / "settings-data")
     _add_tts_model(state)
     storage = state.runtime.storage
     storage.save_settings({"web_search": {"provider": "brave"}})
+    original = storage.settings_path.read_bytes()
     appearance = storage.load_appearance_settings()
 
     error = await rpc_error(state, method, **params)
@@ -623,6 +657,10 @@ async def test_rejected_settings_changes_persist_nothing(
     assert storage.load_settings() == {"web_search": {"provider": "brave"}}
     assert storage.load_appearance_settings() == appearance
     assert resource_changes(state) == []
+    assert storage.settings_path.read_bytes() == original
+    assert JSONResponse({"ok": False, "error": error}).status_code == 200
+    for read_method in ["settings.values", "settings.get_raw"]:
+        assert JSONResponse(await rpc_result(state, read_method)).status_code == 200
 
 
 @pytest.mark.asyncio
