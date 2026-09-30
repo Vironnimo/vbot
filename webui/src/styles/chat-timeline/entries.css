@@ -809,6 +809,46 @@
   font-size: var(--fs-mono-xs);
 }
 
+/* What a Tool found: one entry per item, its title line above an excerpt. */
+.tool-results__list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool-results__header {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  font-size: var(--fs-label-sm);
+  line-height: 1.55;
+}
+
+.tool-results__title {
+  min-width: 0;
+  color: var(--text-hi);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.tool-results__meta,
+.tool-results__time {
+  color: var(--text-lo);
+}
+
+.tool-results__text {
+  margin: 2px 0 0;
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* The raw call and result behind a Tool's user-facing details: a quiet
    disclosure whose sections keep the rail of the details above. */
 .tool-raw-call__summary {

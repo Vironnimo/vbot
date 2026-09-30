@@ -382,6 +382,47 @@ describe('ChatTimeline Tools', () => {
       expect(rawCall.contains(detailRow('chat.toolResultLabel'))).toBe(true);
     });
 
+    it('lists the matches of a results block with their local time', () => {
+      const display = structuredDisplay({
+        details: [
+          {
+            type: 'results',
+            items: [
+              {
+                title: 'Release planning',
+                meta: 'User',
+                time: '2026-09-30T12:00:00Z',
+                text: 'Ship on Monday.',
+              },
+              { title: '' },
+              { title: 'Untitled conversation' },
+            ],
+          },
+          { type: 'results', items: [{ meta: 'no title' }] },
+        ],
+      });
+      timeline.render(
+        sessionWithTool([
+          toolStarted('call', 'session_search', { query: 'ship' }),
+          toolResult('call', 'session_search', '{"ok": true}', { display }),
+        ]),
+      );
+
+      const lists = document.querySelectorAll('.tool-results');
+      expect(lists).toHaveLength(1);
+      const items = Array.from(
+        lists[0].querySelectorAll('.tool-results__item'),
+        (item) => item.textContent.replace(/\s+/g, ' ').trim(),
+      );
+      expect(items).toHaveLength(2);
+      expect(items[0]).toContain('Release planning User');
+      expect(items[0]).toContain('Ship on Monday.');
+      expect(lists[0].querySelector('time')?.getAttribute('datetime')).toBe(
+        '2026-09-30T12:00:00Z',
+      );
+      expect(items[1]).toBe('Untitled conversation');
+    });
+
     it('shows text blocks as given or read from the call, as literal text', () => {
       const display = structuredDisplay({
         details: [

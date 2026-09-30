@@ -47,6 +47,9 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    display_notice,
+    display_results,
+    display_text,
     result_count_fact_builder,
     run_tool_worker,
     tool_failure,
@@ -267,6 +270,7 @@ def register_session_search_tool(
             parts_builder=_display_search_parts,
             fact_builder=result_count_fact_builder("items", at_least_field="has_more"),
             hidden_argument_keys=("query",),
+            detail_builder=_session_search_details,
         ),
     )
 
@@ -665,6 +669,64 @@ def _period_bounds(value: Any, zone: _Zone) -> tuple[datetime | None, datetime |
 
 def _display_search_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
     return (ToolDisplayPart("find", truncate="never", tooltip="none"),)
+
+
+_HIT_KINDS = {"user": "User", "assistant": "Assistant"}
+_CONTENT_KINDS = {"conversation_excerpt": "Conversation", "compaction_summary": "Summary"}
+
+
+def _session_search_details(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
+    """Show the user the query and each match with its conversation, time and excerpt."""
+    blocks = [display_text("query", source="arguments", path=("query",))]
+    data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
+    if not isinstance(data, dict):
+        return blocks
+    raw_items = data.get("items")
+    items = (
+        [item for item in raw_items if isinstance(item, dict)]
+        if isinstance(raw_items, list)
+        else []
+    )
+    if not items:
+        blocks.append(display_notice("info", "No saved conversation matched the search."))
+    else:
+        titles = {
+            descriptor.get("session_id"): descriptor.get("title")
+            for descriptor in data.get("sessions") or []
+            if isinstance(descriptor, dict)
+        }
+        blocks.append(display_results([_match_display(item, titles) for item in items]))
+    if data.get("has_more") is True:
+        blocks.append(display_notice("info", "More matches exist than are shown."))
+    if data.get("degraded") is True:
+        blocks.append(
+            display_notice("warning", "The search ran in a reduced mode; matches may be missing.")
+        )
+    return blocks
+
+
+def _match_display(item: JsonObject, titles: dict[Any, Any]) -> dict[str, str | None]:
+    title = titles.get(item.get("session_id"))
+    kind = _CONTENT_KINDS.get(str(item.get("content_kind"))) or _HIT_KINDS.get(
+        str(item.get("role"))
+    )
+    if item.get("include_subagents") is True:
+        kind = f"{kind} · Sub-Agent" if kind else "Sub-Agent"
+    excerpt = item.get("excerpt")
+    text = None
+    if isinstance(excerpt, dict) and isinstance(excerpt.get("text"), str):
+        text = excerpt["text"].strip()
+        if text and excerpt.get("leading_truncated") is True:
+            text = f"…{text}"
+        if text and excerpt.get("trailing_truncated") is True:
+            text = f"{text}…"
+    timestamp = item.get("timestamp")
+    return {
+        "title": title if isinstance(title, str) and title.strip() else "Untitled conversation",
+        "meta": kind,
+        "time": timestamp if isinstance(timestamp, str) else None,
+        "text": text,
+    }
 
 
 __all__ = [

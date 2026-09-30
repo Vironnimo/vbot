@@ -30,6 +30,9 @@ TOOL_DISPLAY_NOTICE_LEVELS = frozenset({"info", "warning", "error"})
 TOOL_DISPLAY_TEXT_LABELS = frozenset({"command", "output", "query"})
 TOOL_DISPLAY_TEXT_SOURCES = frozenset({"arguments", "result"})
 MAX_TOOL_DISPLAY_TEXT_LENGTH = 16_384
+MAX_TOOL_DISPLAY_RESULTS = 20
+MAX_TOOL_DISPLAY_RESULT_TEXT_LENGTH = 600
+TOOL_DISPLAY_RESULT_FIELDS = ("meta", "time", "text")
 
 
 @dataclass(frozen=True)
@@ -219,8 +222,14 @@ class ToolDisplay:
             return []
         blocks = list(self.detail_builder(arguments, result))
         for block in blocks:
-            if not isinstance(block, dict) or block.get("type") not in {"notice", "text"}:
-                raise ValueError("Tool display detail_builder must return notice or text blocks")
+            if not isinstance(block, dict) or block.get("type") not in {
+                "notice",
+                "results",
+                "text",
+            }:
+                raise ValueError(
+                    "Tool display detail_builder must return notice, results or text blocks"
+                )
         return blocks
 
     def _primary_payload(
@@ -463,6 +472,32 @@ def display_text(
         text = f"{text[: MAX_TOOL_DISPLAY_TEXT_LENGTH - 1]}…"
     block["text"] = text
     return block
+
+
+def display_results(items: Sequence[Mapping[str, str | None]]) -> JsonObject:
+    """Return one results detail block: the things a call found, as a list.
+
+    Each item has a ``title`` and optionally ``meta`` (a short description such
+    as its kind), ``time`` (an ISO-8601 moment the WebUI shows in local time)
+    and ``text`` (an excerpt, cut at 600 characters). Items without a title and
+    empty fields are left out; at most 20 items are kept.
+    """
+    shown: list[JsonObject] = []
+    for item in items:
+        title = _normalize_display_value(item.get("title"))
+        if not title:
+            continue
+        entry: JsonObject = {"title": title}
+        for key in TOOL_DISPLAY_RESULT_FIELDS:
+            value = _normalize_display_value(item.get(key))
+            if key == "text" and len(value) > MAX_TOOL_DISPLAY_RESULT_TEXT_LENGTH:
+                value = f"{value[: MAX_TOOL_DISPLAY_RESULT_TEXT_LENGTH - 1]}…"
+            if value:
+                entry[key] = value
+        shown.append(entry)
+        if len(shown) == MAX_TOOL_DISPLAY_RESULTS:
+            break
+    return {"type": "results", "items": shown}
 
 
 def _normalize_display_fact(value: Any) -> JsonObject | None:

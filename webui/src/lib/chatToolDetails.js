@@ -404,8 +404,9 @@ const TEXT_LABELS = new Set(['command', 'output', 'query']);
 // `file_changes` blocks carry the changed files' diffs with rows numbered
 // from each hunk's start; `notice` blocks a leveled message; `text` blocks a
 // labelled text, either given or read from the call's `args` or `result` at
-// the block's source path. Malformed blocks and entries, and texts without a
-// value, are dropped.
+// the block's source path; `results` blocks the items a call found, each with
+// a title and optional meta, ISO time and text. Malformed blocks and entries,
+// texts without a value and empty result lists are dropped.
 export function toolDetailBlocks(tool, { args, result } = {}) {
   const blocks = toolDisplay(tool)?.details;
   if (!Array.isArray(blocks)) return null;
@@ -416,6 +417,21 @@ export function toolDetailBlocks(tool, { args, result } = {}) {
           ? block.text
           : sourceText(block.source, { args, result });
       return text.trim() ? [{ type: 'text', label: block.label, text }] : [];
+    }
+    if (block?.type === 'results' && Array.isArray(block.items)) {
+      const items = block.items.flatMap((item) =>
+        isPlainObject(item) && typeof item.title === 'string' && item.title
+          ? [
+              {
+                title: item.title,
+                meta: typeof item.meta === 'string' ? item.meta : '',
+                time: typeof item.time === 'string' ? item.time : '',
+                text: typeof item.text === 'string' ? item.text : '',
+              },
+            ]
+          : [],
+      );
+      return items.length > 0 ? [{ type: 'results', items }] : [];
     }
     if (block?.type === 'file_changes' && Array.isArray(block.files)) {
       const files = fileChanges(block.files);

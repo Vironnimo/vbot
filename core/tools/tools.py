@@ -66,6 +66,7 @@ from core.tools._tool_display import (
     ToolDisplayPartBuilder,
     ToolSummaryBuilder,
     display_notice,
+    display_results,
     display_text,
     result_count_fact_builder,
 )
@@ -1057,6 +1058,7 @@ __all__ = [
     "ToolDisplayPartBuilder",
     "ToolSummaryBuilder",
     "display_notice",
+    "display_results",
     "display_text",
     "result_count_fact_builder",
 ]

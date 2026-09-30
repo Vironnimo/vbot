@@ -25,7 +25,12 @@ from core.sessions import ChatSessionManager, SessionAddress
 from core.tools._session_recall_results import (
     SESSION_SEARCH_EXCERPT_MAX_CHARS,
 )
-from core.tools.session_search import SESSION_SEARCH_RESULT_MAX_BYTES
+from core.tools.session_search import (
+    SESSION_SEARCH_RESULT_MAX_BYTES,
+    SESSION_SEARCH_TOOL_NAME,
+    register_session_search_tool,
+)
+from core.tools.tools import ToolRegistry
 from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture
 from tests.core.tools.session_search_test_support import search, success, timestamp
 
@@ -75,11 +80,41 @@ async def test_unscoped_search_keeps_repeated_hits_and_one_session_descriptor(
     sessions.set_title(address, "Repeated context")
     await admit_run(sessions, address, RunKind.USER)
 
-    data = success(
-        await search(tmp_path, {"query": "needle"}, CanonicalSessionRecallBackend(sessions))
-    )
+    backend = CanonicalSessionRecallBackend(sessions)
+    result = await search(tmp_path, {"query": "needle"}, backend)
+    data = success(result)
+    registry = ToolRegistry()
+    register_session_search_tool(registry, backend, sessions)
+    details = registry.display_for_call(SESSION_SEARCH_TOOL_NAME, {"query": "x"}, result=result)[
+        "details"
+    ]
+    empty = await search(tmp_path, {"query": "absent"}, backend)
 
     assert [item["message_id"] for item in data["items"]] == [second.id, first.id]
+    # The user sees the query and each match with its conversation, speaker and time.
+    assert details == [
+        {"type": "text", "label": "query", "source": {"from": "arguments", "path": ["query"]}},
+        {
+            "type": "results",
+            "items": [
+                {
+                    "title": "Repeated context",
+                    "meta": "Assistant",
+                    "time": data["items"][0]["timestamp"],
+                    "text": "needle answer",
+                },
+                {
+                    "title": "Repeated context",
+                    "meta": "User",
+                    "time": data["items"][1]["timestamp"],
+                    "text": "needle opening context",
+                },
+            ],
+        },
+    ]
+    assert registry.display_for_call(SESSION_SEARCH_TOOL_NAME, {}, result=empty)["details"][1:] == [
+        {"type": "notice", "level": "info", "text": "No saved conversation matched the search."}
+    ]
     assert len(data["sessions"]) == 1
     assert data["sessions"][0] == {
         "agent_id": "coder",

@@ -224,6 +224,7 @@ export default Object.freeze({
   'chat.toolDetailLabel.command': 'Command',
   'chat.toolDetailLabel.output': 'Output',
   'chat.toolDetailLabel.query': 'Query',
+  'chat.toolMatches': 'Matches',
   'chat.toolNotice.info': 'Note',
   'chat.toolNotice.warning': 'Warning',
   'chat.toolNotice.error': 'Error',

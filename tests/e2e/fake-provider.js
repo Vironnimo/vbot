@@ -316,6 +316,15 @@ function plannedToolResponse(prompt, results, offeredTools) {
     return { text: "Runtime tools completed." };
   }
 
+  if (prompt.includes("E2E_TOOL_SESSION_SEARCH")) {
+    if (resultsFor(results, "session_search").length === 0) {
+      return {
+        calls: [toolCall("session_search", { query: "E2E_TOOL_RUNTIME" })],
+      };
+    }
+    return { text: "Session search completed." };
+  }
+
   if (prompt.includes("E2E_TOOL_MISSING_FILE")) {
     if (resultsFor(results, "read").length === 0) {
       return {

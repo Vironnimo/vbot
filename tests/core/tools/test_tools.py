@@ -40,7 +40,7 @@ from core.tools.skill_manage import SKILL_MANAGE_TOOL_PARAMETERS
 from core.tools.speech import TEXT_TO_SPEECH_TOOL_PARAMETERS
 from core.tools.status import STATUS_TOOL_PARAMETERS
 from core.tools.subagent import SUBAGENT_TOOL_PARAMETERS
-from core.tools.tools import display_text, run_tool_worker
+from core.tools.tools import display_results, display_text, run_tool_worker
 from core.tools.web_fetch import WEB_FETCH_TOOL_PARAMETERS
 from core.tools.web_search import WEB_SEARCH_TOOL_PARAMETERS
 from tests.core.tools.tools_test_support import JsonObject, make_context, read_file_handler
@@ -303,6 +303,27 @@ def test_facts_recorded_by_the_handler_precede_the_display_facts() -> None:
         {"kind": "line_range", "start": 170, "end": 280},
         {"kind": "line_change", "change": "added", "value": 3},
     ]
+
+
+def test_results_block_keeps_titled_items_with_bounded_text() -> None:
+    items: list[dict[str, str | None]] = [
+        {"title": " First ", "meta": "User", "time": "2026-09-30T12:00:00Z", "text": "x" * 700},
+        {"title": "", "text": "untitled"},
+        {"title": "Second", "meta": " ", "text": None},
+    ]
+    items.extend({"title": f"More {index}"} for index in range(30))
+
+    block = display_results(items)
+
+    assert block["type"] == "results"
+    assert len(block["items"]) == 20
+    assert block["items"][0] == {
+        "title": "First",
+        "meta": "User",
+        "time": "2026-09-30T12:00:00Z",
+        "text": "x" * 599 + "…",
+    }
+    assert block["items"][1] == {"title": "Second"}
 
 
 def test_detail_blocks_follow_the_built_then_recorded_order_and_show_an_unnoticed_failure() -> None:

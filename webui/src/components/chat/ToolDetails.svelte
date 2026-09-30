@@ -3,7 +3,8 @@
   // events share it.
   //
   // A Tool whose display declares detail blocks shows those to the user
-  // (texts such as its command and output, the files it changed, notices),
+  // (texts such as its command and output, the files it changed, what it
+  // found, notices),
   // with the raw call and result behind a disclosure. Live Stdout/Stderr
   // take the place of an Output block, or follow the blocks while the call
   // runs. Any other Tool shows Args, live Stdout/Stderr and its Result.
@@ -12,6 +13,7 @@
   import ToolDetailSection from './ToolDetailSection.svelte';
   import ToolDiff from './ToolDiff.svelte';
   import ToolNotice from './ToolNotice.svelte';
+  import ToolResults from './ToolResults.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
   let {
@@ -107,6 +109,8 @@
         {/if}
       {:else if block.type === 'file_changes'}
         <ToolDiff changes={block.files} />
+      {:else if block.type === 'results'}
+        <ToolResults items={block.items} />
       {:else}
         <ToolNotice notice={block} />
       {/if}
