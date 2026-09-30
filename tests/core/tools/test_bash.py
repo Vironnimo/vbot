@@ -31,6 +31,7 @@ from core.tools.tools import (
     ToolExecutionConfig,
     ToolExecutor,
     ToolRegistry,
+    tool_failure,
     tool_success,
 )
 from core.utils.processes import subprocess_creation_flags
@@ -95,6 +96,69 @@ def test_register_bash_tool() -> None:
     assert display["primary"][0]["value"] == "Run the frontend tests"
     assert display["primary"][0]["kind"] == "description"
     assert tool.parallel_safe is True
+
+
+COMMAND_BLOCK = {"type": "text", "label": "command", "text": "npm test"}
+OUTPUT_BLOCK = {
+    "type": "text",
+    "label": "output",
+    "source": {"from": "result", "path": ["data", "output"]},
+}
+
+
+@pytest.mark.parametrize(
+    ("result", "details"),
+    [
+        pytest.param(None, [COMMAND_BLOCK], id="running"),
+        pytest.param(
+            tool_success({"status": "completed", "exit_code": 0, "output": "ok"}),
+            [COMMAND_BLOCK, OUTPUT_BLOCK],
+            id="completed",
+        ),
+        pytest.param(
+            tool_success(
+                {"status": "completed", "exit_code": 2, "output": "", "hint": "Is npm installed?"}
+            ),
+            [
+                COMMAND_BLOCK,
+                OUTPUT_BLOCK,
+                {"type": "notice", "level": "warning", "text": "The command exited with code 2."},
+                {"type": "notice", "level": "info", "text": "Is npm installed?"},
+            ],
+            id="failed-exit",
+        ),
+        pytest.param(
+            tool_success({"status": "running", "process_id": "p1", "output": "", "note": "x"}),
+            [
+                COMMAND_BLOCK,
+                OUTPUT_BLOCK,
+                {
+                    "type": "notice",
+                    "level": "info",
+                    "text": "The command moved to the background.",
+                },
+            ],
+            id="handed-off",
+        ),
+        pytest.param(
+            tool_failure("process_spawn_failed", "failed to start process"),
+            [
+                COMMAND_BLOCK,
+                {"type": "notice", "level": "error", "text": "failed to start process"},
+            ],
+            id="failure",
+        ),
+    ],
+)
+def test_bash_details_show_the_command_output_and_exit(
+    manager: ProcessManager, result: JsonObject | None, details: list[JsonObject]
+) -> None:
+    registry = ToolRegistry()
+    register_bash_tool(registry, manager)
+
+    display = registry.display_for_call("bash", {"cmd": "npm test"}, result=result)
+
+    assert display["details"] == details
 
 
 def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:

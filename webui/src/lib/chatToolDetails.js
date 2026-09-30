@@ -73,22 +73,31 @@ export function toolDetailImages(
   });
 }
 
-// `raw` shows arguments with the keys the Tool's display hides, as sent.
+// `raw` shows arguments with the keys the Tool's display hides, as sent;
+// `literal` shows a text as it is, even one that reads as JSON.
 export const toolDetailPresentation = (
   value,
-  { preferPayload = false, raw = false, toolName = '', tool = null } = {},
+  {
+    preferPayload = false,
+    raw = false,
+    literal = false,
+    toolName = '',
+    tool = null,
+  } = {},
 ) => {
-  const processed = preferPayload
-    ? preferredToolResultValue(value, toolName, tool)
-    : sanitizeToolDetailNode(
-        value,
-        raw
-          ? null
-          : tool
-            ? hiddenArgumentKeysForTool(tool, toolName)
-            : hiddenArgumentKeysForTool(toolName),
-        true,
-      );
+  const processed = literal
+    ? value
+    : preferPayload
+      ? preferredToolResultValue(value, toolName, tool)
+      : sanitizeToolDetailNode(
+          value,
+          raw
+            ? null
+            : tool
+              ? hiddenArgumentKeysForTool(tool, toolName)
+              : hiddenArgumentKeysForTool(toolName),
+          true,
+        );
 
   if (!hasMeaningfulToolDetail(processed)) {
     const emptyText = t('chat.toolNoData');
@@ -388,16 +397,26 @@ const FILE_CHANGE_KINDS = new Set([
 const DIFF_LINE_KINDS = { '+': 'added', '-': 'removed', ' ': 'context' };
 
 const NOTICE_LEVELS = new Set(['info', 'warning', 'error']);
+const TEXT_LABELS = new Set(['command', 'output', 'query']);
 
 // The user-facing detail blocks of a Tool whose display declares them
 // (`display.details`), in the Tool's order, or null for a Tool without them.
 // `file_changes` blocks carry the changed files' diffs with rows numbered
-// from each hunk's start; `notice` blocks a leveled message. Malformed blocks
-// and entries are dropped.
-export function toolDetailBlocks(tool) {
+// from each hunk's start; `notice` blocks a leveled message; `text` blocks a
+// labelled text, either given or read from the call's `args` or `result` at
+// the block's source path. Malformed blocks and entries, and texts without a
+// value, are dropped.
+export function toolDetailBlocks(tool, { args, result } = {}) {
   const blocks = toolDisplay(tool)?.details;
   if (!Array.isArray(blocks)) return null;
   return blocks.flatMap((block) => {
+    if (block?.type === 'text' && TEXT_LABELS.has(block.label)) {
+      const text =
+        typeof block.text === 'string'
+          ? block.text
+          : sourceText(block.source, { args, result });
+      return text.trim() ? [{ type: 'text', label: block.label, text }] : [];
+    }
     if (block?.type === 'file_changes' && Array.isArray(block.files)) {
       const files = fileChanges(block.files);
       return files.length > 0 ? [{ type: 'file_changes', files }] : [];
@@ -419,6 +438,21 @@ export function toolDetailBlocks(tool) {
     }
     return [];
   });
+}
+
+function sourceText(source, { args, result }) {
+  if (!isPlainObject(source) || !Array.isArray(source.path)) return '';
+  let value =
+    source.from === 'arguments'
+      ? parseJsonValue(args)
+      : source.from === 'result'
+        ? parseJsonValue(result)
+        : undefined;
+  for (const key of source.path) {
+    if (!isPlainObject(value)) return '';
+    value = value[key];
+  }
+  return typeof value === 'string' ? value : '';
 }
 
 function fileChanges(changes) {

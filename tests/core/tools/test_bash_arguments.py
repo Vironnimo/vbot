@@ -310,13 +310,19 @@ async def test_timeout_message_names_the_next_call(
 ) -> None:
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
 
+    context = make_context(tmp_path, nesting_depth=depth)
     result = await _dispatch(
-        manager,
-        make_context(tmp_path, nesting_depth=depth),
-        {"command": "import time; time.sleep(30)", **arguments},
+        manager, context, {"command": "import time; time.sleep(30)", **arguments}
     )
 
     assert result["error"]["code"] == "process_timeout"
+    assert context.presentation_details == [
+        {
+            "type": "notice",
+            "level": "error",
+            "text": "The command was stopped when its 0.5 s timeout elapsed.",
+        }
+    ]
     message = result["error"]["message"]
     assert message.startswith(
         "The command was stopped when its 0.5 s timeout elapsed. Check the output before "

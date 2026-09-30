@@ -17,6 +17,8 @@
     preferPayload = false,
     // Show arguments with the keys the Tool's display hides.
     raw = false,
+    // Show a text value as it is, never parsed as JSON.
+    literal = false,
     toolName = '',
     tool = null,
     // Keep showing the end of growing content, such as live command output.
@@ -25,7 +27,13 @@
 
   let images = $derived(toolDetailImages(value, { preferPayload, tool }));
   let presentation = $derived(
-    toolDetailPresentation(value, { preferPayload, raw, toolName, tool }),
+    toolDetailPresentation(value, {
+      preferPayload,
+      raw,
+      literal,
+      toolName,
+      tool,
+    }),
   );
 </script>
 

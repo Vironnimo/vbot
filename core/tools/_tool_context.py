@@ -17,7 +17,7 @@ from core.tools._display_diff import (
     display_diff_line_count,
     display_file_diff,
 )
-from core.tools._tool_display import _normalize_display_fact, display_notice
+from core.tools._tool_display import _normalize_display_fact, display_notice, display_text
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract
 
@@ -261,6 +261,10 @@ class ToolContext:
     def add_display_notice(self, level: str, text: str, *, subject: str | None = None) -> None:
         """Record one notice detail block (``info``, ``warning`` or ``error``) for the user."""
         self.presentation_details.append(display_notice(level, text, subject=subject))
+
+    def add_display_text(self, label: str, text: str) -> None:
+        """Record one labelled text detail block, such as output the result does not hold."""
+        self.presentation_details.append(display_text(label, text=text))
 
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""

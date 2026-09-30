@@ -37,6 +37,7 @@ from core.tools._bash_results import (
     _spawn_failure_message,
     _user_cancelled_failure_message,
     background_bash_statuses,
+    bash_detail_blocks,
 )
 from core.tools._bash_update_handoff import (
     HANDOFF_ENV,
@@ -421,6 +422,9 @@ async def bash_handler(
         process_manager, context, process_id
     ):
         suffix = await _failure_output_suffix(process_manager, context, process_id)
+        context.add_display_notice(
+            "error", f"The command was stopped when its {parsed['timeout']:g} s timeout elapsed."
+        )
         background = not _background_blocked_at_depth(context)
         return tool_failure(
             "process_timeout",
@@ -504,7 +508,7 @@ def register_bash_tool(
         unadvertised_parameters=SHELL_UNADVERTISED_PARAMETERS,
         argument_normalizer=normalize_shell_arguments,
         result_schema={"type": "object", "required": ["status"]},
-        display=ToolDisplay(parts_builder=shell_display_parts),
+        display=ToolDisplay(parts_builder=shell_display_parts, detail_builder=bash_detail_blocks),
     )
     if prompt_blocks is not None:
         prompt_blocks.register(
