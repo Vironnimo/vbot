@@ -618,7 +618,7 @@ class CalendarActions:
             return True  # Unknown; never report a live action as history.
         return self._can_fire(action, event, now or datetime.now(UTC))
 
-    def check_event_change(
+    async def check_event_change(
         self, before: CalendarEvent, after: CalendarEvent, *, now: datetime | None = None
     ) -> None:
         """Refuse an event change that would revive actions into a target that is gone.
@@ -627,7 +627,8 @@ class CalendarActions:
         Project or selected Session did not check it. When the change (for
         example, moving a past one-time event later) lets such an action fire
         again, its target is checked like a new action's; a target that exists
-        but cannot run now is allowed, because it can recover.
+        but cannot run now is allowed, because it can recover. The Agent and
+        Session reads run on the Session pool, and only for revived actions.
 
         Raises:
             CalendarActionTargetMissingError: naming each revived action and
@@ -638,16 +639,30 @@ class CalendarActions:
         except CalendarStorageError:
             return  # Action scheduling is disabled; nothing can fire.
         now = now or datetime.now(UTC)
-        problems = [
-            (action["id"], problem)
+        revived = [
+            dict(action)
             for action in self._actions.values()
             if action["event_id"] == after.id
             and not self._can_fire(action, before, now)
             and self._can_fire(action, after, now)
-            and (problem := self._missing_target(action)) is not None
         ]
+        if not revived:
+            return
+        problems = (
+            self._missing_targets(revived)
+            if self._sessions is None
+            else await self._sessions.run_async(self._missing_targets, revived)
+        )
         if problems:
             raise CalendarActionTargetMissingError(problems)
+
+    def _missing_targets(self, actions: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        """Pair each action whose target is partly gone with what is missing; blocking."""
+        return [
+            (action["id"], problem)
+            for action in actions
+            if (problem := self._missing_target(action)) is not None
+        ]
 
     def _missing_target(self, action: dict[str, Any]) -> str | None:
         """Say which part of the action's target no longer exists, if one does."""

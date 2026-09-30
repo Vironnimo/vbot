@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -41,7 +41,9 @@ def state(tmp_path: Path) -> SimpleNamespace:
 
 def _configure_actions(state: SimpleNamespace, *, session_exists: bool) -> CalendarService:
     service: CalendarService = state.runtime.calendar_service
-    service.actions.configure(Mock(), Mock(), Mock(exists=Mock(return_value=session_exists)))
+    sessions = Mock(exists=Mock(return_value=session_exists))
+    sessions.run_async = AsyncMock(side_effect=lambda function, *args: function(*args))
+    service.actions.configure(Mock(), Mock(), sessions)
     return service
 
 

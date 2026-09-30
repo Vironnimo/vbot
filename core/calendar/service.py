@@ -201,10 +201,44 @@ class CalendarService:
             raise CalendarEventNotFoundError(f"Calendar event not found: {event_id}")
         return _clone_event(event)
 
-    def update_event(
+    async def update_event(
         self, event_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
     ) -> CalendarEvent:
-        """Update one event from the same input shapes as create; omitted fields keep."""
+        """Update one event from the same input shapes as create; omitted fields keep.
+
+        A change that lets an action fire again first checks that action's target
+        (:meth:`CalendarActions.check_event_change`), off the Event Loop.
+        """
+        while True:
+            event, candidate, changed = self._event_update(event_id, fields)
+            if candidate is None:
+                return _clone_event(event)
+            await self.actions.check_event_change(event, candidate)
+            # The check may have waited; build the change again if the event moved on.
+            if self._events.get(event_id) is event:
+                break
+        self._events[event_id] = candidate
+        try:
+            self._save_events()
+        except Exception:
+            self._events[event_id] = event
+            raise
+        self._notify_changed()
+        _LOGGER.info(
+            "Calendar event updated (event=%s fields=%s actor=%s)",
+            event_id,
+            ",".join(changed),
+            actor,
+        )
+        return _clone_event(candidate)
+
+    def _event_update(
+        self, event_id: str, fields: dict[str, Any]
+    ) -> tuple[CalendarEvent, CalendarEvent | None, list[str]]:
+        """Return the stored event, its validated replacement and the changed input names.
+
+        The replacement is None when ``fields`` change nothing.
+        """
         self._ensure_events_loaded()
         event = self._events.get(event_id)
         if event is None:
@@ -224,7 +258,7 @@ class CalendarService:
         if inputs.get("rrule") is None:
             inputs["exdates"] = []
         if inputs == original:
-            return _clone_event(event)
+            return event, None, []
         changed = sorted(name for name in inputs if inputs[name] != original.get(name))
 
         candidate = self._build_event(
@@ -235,21 +269,7 @@ class CalendarService:
         # A title/duration edit must retain the recurrence's original wall-clock zone.
         if candidate.rrule is not None and event.rrule is not None and "start" not in fields:
             candidate.tz_name = event.tz_name
-        self.actions.check_event_change(event, candidate)
-        self._events[event_id] = candidate
-        try:
-            self._save_events()
-        except Exception:
-            self._events[event_id] = event
-            raise
-        self._notify_changed()
-        _LOGGER.info(
-            "Calendar event updated (event=%s fields=%s actor=%s)",
-            event_id,
-            ",".join(changed),
-            actor,
-        )
-        return _clone_event(candidate)
+        return event, candidate, changed
 
     def delete_event(self, event_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         """Delete one event by id."""

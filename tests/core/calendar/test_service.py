@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, date, datetime, timedelta
@@ -53,7 +54,7 @@ class TestCreateEvent:
         with pytest.raises(CalendarValidationError):
             service.create_event(title="Invalid", start="2026-09-03", rrule=invalid_rule)
         with pytest.raises(CalendarValidationError):
-            service.update_event(event.id, rrule=invalid_rule)
+            asyncio.run(service.update_event(event.id, rrule=invalid_rule))
         assert service.list_events() == [event]
 
     def test_single_timed_event_stores_utc_instant(self, service: CalendarService) -> None:
@@ -152,7 +153,9 @@ class TestUpdateEvent:
             rrule={"freq": "weekly", "by_weekday": ["mo"]},
         )
         with caplog.at_level(logging.INFO, logger="vbot.calendar.service"):
-            updated = service.update_event(event.id, title="Daily", duration_minutes=15)
+            updated = asyncio.run(
+                service.update_event(event.id, title="Daily", duration_minutes=15)
+            )
         assert updated.title == "Daily"
         assert updated.duration_minutes == 15
         assert updated.start_local == "2026-08-31T09:00:00"
@@ -169,7 +172,7 @@ class TestUpdateEvent:
             rrule={"freq": "weekly", "by_weekday": ["mo"]},
         )
         service.add_exdate(event.id, "2026-09-14T09:00:00")
-        updated = service.update_event(event.id, rrule=None)
+        updated = asyncio.run(service.update_event(event.id, rrule=None))
         assert updated.rrule is None
         assert updated.exdates == []
         assert updated.start_utc == "2026-08-31T07:00:00+00:00"
@@ -177,11 +180,11 @@ class TestUpdateEvent:
     def test_update_rejects_unknown_fields(self, service: CalendarService) -> None:
         event = service.create_event(title="X", start="2026-09-14")
         with pytest.raises(CalendarValidationError, match="Unsupported"):
-            service.update_event(event.id, bogus=1)
+            asyncio.run(service.update_event(event.id, bogus=1))
 
     def test_update_missing_event(self, service: CalendarService) -> None:
         with pytest.raises(CalendarEventNotFoundError):
-            service.update_event("missing", title="X")
+            asyncio.run(service.update_event("missing", title="X"))
 
 
 class TestDeleteEvent:
@@ -493,7 +496,7 @@ class TestPersistence:
         ]
         assert restarted.find_free_slots(lower, upper, 30, now_utc=lower) == []
 
-        restarted.update_event(valid.id, title="Updated")
+        asyncio.run(restarted.update_event(valid.id, title="Updated"))
         rewritten = json.loads(path.read_text(encoding="utf-8"))
         assert next(entry for entry in rewritten["events"] if entry["id"] == broken.id) == (
             invalid_entry
@@ -519,7 +522,7 @@ class TestPersistence:
         assert len(restarted.occurrences_in_window(lower, upper)) == 2
         assert path.read_text(encoding="utf-8") == original
 
-        restarted.update_event(event.id, title="Updated")
+        asyncio.run(restarted.update_event(event.id, title="Updated"))
         rewritten = json.loads(path.read_text(encoding="utf-8"))
         assert rewritten["events"][0]["rrule"]["future_rule"] == {"kept": True}
 
@@ -568,7 +571,7 @@ class TestPersistence:
         assert loaded.title == "Standup"
         assert loaded.rrule == event.rrule
         assert loaded.exdates == []
-        reloaded.update_event(event.id, title="Weekly standup")
+        asyncio.run(reloaded.update_event(event.id, title="Weekly standup"))
 
         rewritten = json.loads(events_path.read_text(encoding="utf-8"))
         assert rewritten["format_version"] == 1
@@ -607,7 +610,7 @@ class TestPersistence:
         unsubscribe = service.add_changed_callback(lambda: calls.append(1))
         event = service.create_event(title="X", start="2026-09-14")
         assert calls == [1]
-        service.update_event(event.id, title="Y")
+        asyncio.run(service.update_event(event.id, title="Y"))
         assert calls == [1, 1]
         service.delete_event(event.id)
         assert calls == [1, 1, 1]

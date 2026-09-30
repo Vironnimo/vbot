@@ -15,6 +15,7 @@ import pytest
 
 from core.calendar import (
     CalendarActionTargetMissingError,
+    CalendarEventNotFoundError,
     CalendarService,
     CalendarStorageError,
     CalendarValidationError,
@@ -102,8 +103,10 @@ def test_edit_preserves_event_id_and_moves_actions(tmp_path):
     before = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     after = service.actions.add(event.id, when="end + 30m", prompt="review", target="main")
     initial = service.actions.project(window(service, now))
-    updated = service.update_event(
-        event.id, start=(now + timedelta(hours=3)).isoformat(), duration_minutes=120
+    updated = asyncio.run(
+        service.update_event(
+            event.id, start=(now + timedelta(hours=3)).isoformat(), duration_minutes=120
+        )
     )
     assert updated.id == event.id
     rows = service.actions.project(window(service, now))
@@ -162,7 +165,7 @@ async def test_withdrawn_worker_is_redispatched_and_fires_once(tmp_path):
     await service.actions.tick(now)
     await waiting.wait()
     # An event change withdraws work that is still awaiting admission.
-    service.update_event(event.id, title="Renamed")
+    await service.update_event(event.id, title="Renamed")
     await asyncio.gather(*list(service.actions._workers.values()), return_exceptions=True)
     assert service.actions.project(window(service, now))[0]["status"] == "pending"
     for step in range(1, 4):
@@ -223,11 +226,11 @@ async def test_single_action_fires_once_and_rearms_only_after_event_moves(tmp_pa
     old = service.actions.project(window(service, now))[0]
     assert old["status"] == "completed"
     assert old["session"] == "new-session"
-    service.update_event(event.id, title="Renamed")
+    await service.update_event(event.id, title="Renamed")
     await service.actions.tick(now)
     assert trigger.trigger_run.await_count == 1
     moved_start = now + timedelta(minutes=45)
-    service.update_event(event.id, start=moved_start.isoformat())
+    await service.update_event(event.id, start=moved_start.isoformat())
     projected = service.actions.project(window(service, now))[0]
     assert projected["status"] == "pending"
     assert datetime.fromisoformat(projected["scheduled_at"]) == moved_start - timedelta(hours=1)
@@ -295,7 +298,7 @@ async def test_move_during_admitted_run_keeps_claim_until_completion(
         assert len(service.actions._executions) == 1
         await entered.wait()
         original = next(iter(service.actions._executions.values())).copy()
-        service.update_event(event.id, start=(now + timedelta(minutes=45)).isoformat())
+        await service.update_event(event.id, start=(now + timedelta(minutes=45)).isoformat())
         await service.actions.tick(now)
         assert next(iter(service.actions._executions.values())) == original
         assert trigger.trigger_run.await_count == 1
@@ -539,7 +542,7 @@ async def _starting(service, event, trigger, now):
 
 
 async def _yearly(service, event, trigger, now):
-    service.update_event(event.id, rrule={"freq": "yearly"})
+    await service.update_event(event.id, rrule={"freq": "yearly"})
     return now + timedelta(days=40)
 
 
@@ -618,7 +621,8 @@ def _session_deleted(service):
         pytest.param(False, "main", _session_deleted, None, id="action-still-live"),
     ],
 )
-def test_an_event_change_that_revives_an_action_checks_its_target(
+@pytest.mark.asyncio
+async def test_an_event_change_that_revives_an_action_checks_its_target(
     tmp_path, spent, target, arrange, problem
 ):
     now = datetime.now(UTC)
@@ -629,18 +633,56 @@ def test_an_event_change_that_revives_an_action_checks_its_target(
     )
     arrange(service)
     later = (now + timedelta(days=1)).isoformat()
+    # The target reads are blocking; they run on the Session pool, never on the Event Loop.
+    reading_threads = []
+    sessions, resolver = service.actions._sessions, service.actions._resolver
+    failure = resolver.resolve_agent.side_effect
+
+    async def on_the_pool(function, *args):
+        return await asyncio.to_thread(function, *args)
+
+    def resolve(*_args):
+        reading_threads.append(threading.current_thread())
+        if failure is not None:
+            raise failure
+
+    sessions.run_async.side_effect = on_the_pool
+    resolver.resolve_agent.side_effect = resolve
 
     if problem is None:
-        assert service.update_event(event.id, start=later).start_utc != event.start_utc
-        return
-    with pytest.raises(CalendarActionTargetMissingError) as refused:
-        service.update_event(event.id, start=later)
-    assert str(refused.value) == (
-        f"This event change would let an action run again whose target no longer exists: "
-        f"{action['id']} ({problem}). Change each action's target or Session, or delete the "
-        "action, first."
-    )
-    assert service.get_event(event.id) == event
+        assert (await service.update_event(event.id, start=later)).start_utc != event.start_utc
+    else:
+        with pytest.raises(CalendarActionTargetMissingError) as refused:
+            await service.update_event(event.id, start=later)
+        assert str(refused.value) == (
+            f"This event change would let an action run again whose target no longer exists: "
+            f"{action['id']} ({problem}). Change each action's target or Session, or delete the "
+            "action, first."
+        )
+        assert service.get_event(event.id) == event
+    # Only a revived action is checked.
+    assert bool(reading_threads) is spent
+    assert threading.current_thread() not in reading_threads
+    await service.actions.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_event_deleted_while_a_revival_is_checked_stays_deleted(tmp_path):
+    now = datetime.now(UTC)
+    service, event, _, _ = setup(tmp_path, start=now - timedelta(hours=3))
+    service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    sessions = service.actions._sessions
+    on_the_pool = sessions.run_async.side_effect
+
+    async def deleted_meanwhile(function, *args):
+        service.delete_event(event.id)
+        return on_the_pool(function, *args)
+
+    sessions.run_async.side_effect = deleted_meanwhile
+
+    with pytest.raises(CalendarEventNotFoundError):
+        await service.update_event(event.id, start=(now + timedelta(days=1)).isoformat())
+    assert service.list_events() == []
 
 
 @pytest.mark.asyncio
@@ -649,7 +691,7 @@ async def test_cancel_before_worker_starts_releases_capacity(tmp_path):
     service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     tasks = list(service.actions._workers.values())
-    service.update_event(event.id, start=(now + timedelta(days=2)).isoformat())
+    await service.update_event(event.id, start=(now + timedelta(days=2)).isoformat())
     await asyncio.gather(*tasks, return_exceptions=True)
     await asyncio.sleep(0)
     await service.actions.tick(now)
@@ -1041,7 +1083,7 @@ async def test_scheduler_saves_off_the_loop_and_recomputes_after_a_change(tmp_pa
         assert loop.time() - ticked_at < 1
         assert not ticking.done()
         # An edit while the save is in flight: nothing may start from stale state.
-        service.update_event(event.id, title="Moved")
+        await service.update_event(event.id, title="Moved")
     finally:
         writes.release.set()
     await ticking

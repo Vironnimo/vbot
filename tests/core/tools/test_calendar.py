@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -519,7 +519,9 @@ class TestActions:
         action = tool.service.actions.add(
             event.id, when="start", prompt="p", target="agent-one", session="chosen"
         )
-        tool.service.actions.configure(Mock(), Mock(), Mock(exists=Mock(return_value=False)))
+        sessions = Mock(exists=Mock(return_value=False))
+        sessions.run_async = AsyncMock(side_effect=lambda function, *args: function(*args))
+        tool.service.actions.configure(Mock(), Mock(), sessions)
 
         envelope, text = tool.call(
             {"action": "update", "id": event.id, "start": "2030-01-10T12:00"}

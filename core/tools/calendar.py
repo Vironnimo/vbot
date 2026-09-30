@@ -243,8 +243,8 @@ def register_calendar_tool(
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if arguments.get("action") in _REFERENCE_ACTIONS:
             async with reference_lock:
-                return _handle_calendar_tool(calendar_service, arguments, context)
-        return _handle_calendar_tool(calendar_service, arguments, context)
+                return await _handle_calendar_tool(calendar_service, arguments, context)
+        return await _handle_calendar_tool(calendar_service, arguments, context)
 
     registry.register(
         CALENDAR_TOOL_NAME,
@@ -263,7 +263,7 @@ def register_calendar_tool(
     )
 
 
-def _handle_calendar_tool(
+async def _handle_calendar_tool(
     calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None = None
 ) -> JsonObject:
     action = arguments.get("action")
@@ -282,7 +282,7 @@ def _handle_calendar_tool(
         if action == "create":
             return _handle_create(calendar_service, arguments)
         if action == "update":
-            return _handle_update(calendar_service, arguments)
+            return await _handle_update(calendar_service, arguments)
         if action == "delete":
             return _handle_delete(calendar_service, arguments)
         if action == "add_action":
@@ -572,7 +572,7 @@ def _handle_create(calendar_service: CalendarService, arguments: JsonObject) -> 
     return _event_success(calendar_service, event, note)
 
 
-def _handle_update(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
+async def _handle_update(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
     event = calendar_service.get_event(str(arguments["id"]))
     arguments, note = _event_times(calendar_service, arguments, event)
     updates: JsonObject = {}
@@ -596,7 +596,7 @@ def _handle_update(calendar_service: CalendarService, arguments: JsonObject) -> 
                 start=STAND_INS["start"],
             )
         )
-    updated = calendar_service.update_event(event.id, actor="tool", **updates)
+    updated = await calendar_service.update_event(event.id, actor="tool", **updates)
     return _event_success(calendar_service, updated, note)
 
 

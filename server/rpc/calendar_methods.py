@@ -122,7 +122,7 @@ async def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
     # check and the change must not interleave with a reference removal.
     async with _agent_reference_lock(state):
         try:
-            event = service.update_event(event_id, actor="rpc", **updates)
+            event = await service.update_event(event_id, actor="rpc", **updates)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
