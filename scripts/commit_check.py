@@ -656,29 +656,32 @@ def _record_tested_state(root: Path, dirty: set[str]) -> None:
         _test_impact.record_tested_state(root, tree, dirty)
 
 
-def _merge_selection(
-    root: Path, branch: Path, merge_head: str, selection: _test_impact.Selection
-) -> _test_impact.Selection:
-    """Narrow a merge commit's *selection* to the tests neither side ran as merged.
+def _reuse_runs(
+    root: Path, other: Path, untested: str, selection: _test_impact.Selection
+) -> tuple[_test_impact.Selection, set[str] | None]:
+    """Narrow *selection* to the tests neither this checkout nor *other* ran as they are now.
 
-    *selection* judges the merge against this checkout's test runs. The worktree
-    *branch* ran its tests on the state its records describe, normally the merged
-    *merge_head*, which the merge changes by the commits made here since the fork.
-    A test either side leaves out passed there with the code and files it has now.
-    This checkout adopts the branch's record of each test whose current state the
-    branch tested, so later commits here judge that test by it.
+    *selection* judges *root*'s index against its own test runs. The checkout
+    *other* ran its tests on the state its records describe (the commit *untested*
+    when they name none): for a merge commit the merged branch's worktree, for a
+    branch check the primary checkout, whose runs cover what the branch took over
+    from main. A test either side leaves out passed there with the code and files it
+    has now. *root* adopts *other*'s record of each test whose current state *other*
+    tested, so later checks here judge that test by it. Also return the paths that
+    differ from *other*'s tested state, None when its records name none.
     """
-    since_branch = _changed_since_tested(root, branch, merge_head)
-    on_branch = _test_impact.select(root, since_branch, records=branch)
-    tested_on_branch = {
+    since_other = _changed_since_tested(root, other, untested)
+    on_other = _test_impact.select(root, since_other, records=other)
+    tested_on_other = {
         test
-        for test in on_branch.durations
-        if selection.selects(test) and not on_branch.selects(test)
+        for test in on_other.durations
+        if selection.selects(test) and not on_other.selects(test)
     }
     with contextlib.suppress(OSError, sqlite3.Error):
-        _test_impact.adopt(branch, root, tested_on_branch)
-    print(f"Commit check: reusing the test runs of {branch}.", flush=True)
-    return selection & on_branch
+        _test_impact.adopt(other, root, tested_on_other)
+    print(f"Commit check: reusing the test runs of {other}.", flush=True)
+    named = _test_impact.tested_state(other) is not None
+    return selection & on_other, since_other if named else None
 
 
 def _workers(seconds: float) -> list[str]:
@@ -747,6 +750,10 @@ def check_tests(
     merged = _merged_branch_checkout(root)
     if merged is None:
         _adopt_primary_data(root, lock_path)
+    # A merge commit reuses the merged branch's test runs; a branch check reuses the
+    # primary checkout's, which cover what a rebase took over from main.
+    primary = _primary_checkout(root) if kind == "branch" else None
+    reused = merged or (None if primary is None else (primary, "HEAD"))
     selection = _test_impact.select(root, _changed_since_tested(root, root, "HEAD"))
     # Staged test modules may hold tests no record knows yet. Other sessions' new
     # test modules are left to their own commits.
@@ -762,7 +769,11 @@ def check_tests(
     with _exclusive(lock_path):
         if merged is not None:
             env[cpu_pool.KIND_VARIABLE] = "merge"
-            selection = _merge_selection(root, *merged, selection)
+        if reused is not None:
+            selection, since_other = _reuse_runs(root, *reused, selection)
+            # A test module main tested as it is now need not run whole again.
+            if merged is None and since_other is not None:
+                staged_tests = [path for path in staged_tests if path in since_other]
         if selection.complete:
             env[cpu_pool.REASON_VARIABLE] = selection.reason
         command = _pytest_command(root, selection, staged_tests, git_dir / TESTS_ARGUMENTS_NAME)
