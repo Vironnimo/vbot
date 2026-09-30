@@ -477,8 +477,12 @@ class CompactionRunCoordinator:
         async with self._host.sessions.write_lock(session.address):
             await context.session_snapshot.refresh(session)
         session_messages = list(context.session_snapshot.active_messages)
-        if settings.strategy == "summary_tail" and has_unconsumed_skill_activation(
-            session_messages
+        # The next Model step of this Run must read a freshly loaded Skill before
+        # Compaction digests it; a user request compacts without waiting.
+        if (
+            not forced
+            and settings.strategy == "summary_tail"
+            and has_unconsumed_skill_activation(session_messages, run_id=run.id)
         ):
             return current_state
         has_new_context = await self._host.run_transform(

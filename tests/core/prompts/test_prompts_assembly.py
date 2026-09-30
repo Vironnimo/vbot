@@ -15,7 +15,13 @@ from core.memory import (
     MEMORY_PROMPT_MODE_OFF,
     MemoryPromptMode,
 )
-from core.prompts.prompts import SOUL_FRAMING, ProjectPromptContext, SystemPromptManager
+from core.prompts import INLINE_FILE_MAX_BYTES
+from core.prompts.prompts import (
+    PROJECT_FILE_TOO_LARGE_NOTICE,
+    SOUL_FRAMING,
+    ProjectPromptContext,
+    SystemPromptManager,
+)
 from core.utils.paths import model_path
 from tests.core.prompts.prompts_test_support import (
     StubChannels,
@@ -411,31 +417,42 @@ def test_project_files_render_readable_files_after_memory_and_report_them(
     workspace: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     # A missing, unreadable or non-UTF-8 auto-load file is dropped without aborting
-    # the Run and is not reported as read.
+    # the Run and is not reported as read. An oversized one keeps its frame with a
+    # notice instead of its content, is not reported as read, and warns once.
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
+    (repo / "CONTEXT.md").write_bytes(b"Project\r\ncontext")
     (repo / "ADIR").mkdir()
     (repo / "BINARY.md").write_bytes(b"\xff\xfe\x00\x01 not utf-8")
+    (repo / "HUGE.md").write_bytes(b"HUGE-RULES " + b"x" * INLINE_FILE_MAX_BYTES)
     manager = _manager(tmp_path)
     agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
     context = ProjectPromptContext.from_project(
         "vbot",
         "vBot",
         repo,
-        ["AGENTS.md", "MISSING.md", "ADIR", "BINARY.md", "CONTEXT.md"],
+        ["AGENTS.md", "MISSING.md", "ADIR", "BINARY.md", "HUGE.md", "CONTEXT.md"],
     )
     read_paths: list[Path] = []
 
     with caplog.at_level(logging.WARNING):
         prompt = manager.build_system_prompt(agent, project_context=context, read_paths=read_paths)
+        manager.build_system_prompt(agent, project_context=context)
 
     assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in prompt
-    assert ' <file name="CONTEXT.md">\nProject context\n </file>' in prompt
+    assert ' <file name="CONTEXT.md">\nProject\ncontext\n </file>' in prompt
     assert '<file name="ADIR">' not in prompt
     assert '<file name="BINARY.md">' not in prompt
-    assert any(record.levelno == logging.WARNING for record in caplog.records)
+    notice = PROJECT_FILE_TOO_LARGE_NOTICE.format(
+        size=INLINE_FILE_MAX_BYTES + len("HUGE-RULES "), limit=INLINE_FILE_MAX_BYTES
+    )
+    assert f' <file name="HUGE.md">\n{notice}\n </file>' in prompt
+    assert "HUGE-RULES" not in prompt
+    messages = [record.getMessage() for record in caplog.records]
+    [oversized_warning] = [message for message in messages if "HUGE.md" in message]
+    assert "HUGE-RULES" not in oversized_warning
+    assert any("BINARY.md" in message for message in messages)
     # Default layout: memory before Working Project; AGENTS.md before CONTEXT.md.
     assert prompt.index("<memory>") < prompt.index("AGENTS.md") < prompt.index("CONTEXT.md")
     assert set(read_paths) == {

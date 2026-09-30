@@ -20,9 +20,10 @@ from core.tools.arguments import (
     split_text_lines,
 )
 from core.tools.tools import JsonObject
+from core.utils.text_pages import TEXT_PAGE_MAX_BYTES, TEXT_PAGE_MAX_LINES
 
-MAX_FILE_BYTES = 50 * 1024
-DEFAULT_LINE_LIMIT = 2000
+MAX_FILE_BYTES = TEXT_PAGE_MAX_BYTES
+DEFAULT_LINE_LIMIT = TEXT_PAGE_MAX_LINES
 # UTF-8 BOM that some Windows editors prepend; stripped on read so the model sees
 # clean content (apply_patch preserves it on the round-trip).
 UTF8_BOM_BYTES = b"\xef\xbb\xbf"
@@ -32,6 +33,9 @@ _LINE_COUNT_MAX_BYTES = 256 * 1024 * 1024
 _COUNT_CHUNK_BYTES = 1024 * 1024
 # A matching line longer than this is cut, with the offset that continues it.
 _MATCH_LINE_CHARACTERS = 2000
+# How a cut-off window names its next call; ``{offset}`` becomes the offset to
+# send, such as ``813`` or ``"813:5"``.
+READ_CONTINUATION = "Use offset={offset} to continue."
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,7 @@ def _build_read_hint(
     *,
     byte_limited: bool,
     continuation_offset: str | None = None,
+    continuation: str = READ_CONTINUATION,
 ) -> str:
     message = f"[Showing lines {shown_start}-{shown_end}"
     if total_lines is not None:
@@ -87,9 +92,9 @@ def _build_read_hint(
     if byte_limited:
         message += " Output truncated at 50 KB."
     if continuation_offset is not None:
-        message += f' Use offset="{continuation_offset}" to continue.'
+        message += " " + continuation.replace("{offset}", f'"{continuation_offset}"')
     elif total_lines is None or shown_end < total_lines:
-        message += f" Use offset={shown_end + 1} to continue."
+        message += " " + continuation.replace("{offset}", str(shown_end + 1))
     return message + "]"
 
 
@@ -204,26 +209,50 @@ def render_text(
     notebook file is not editable source, so the gutter would only mislead).
     ``limit`` is the caller's line count; without one, the default bound applies.
     """
+    output, _ = render_text_window(
+        text, start_line, limit, number=number, start_character=start_character
+    )
+    return output
+
+
+def render_text_window(
+    text: str,
+    start_line: int,
+    limit: int | None,
+    *,
+    number: bool,
+    start_character: int = 1,
+    continuation: str = READ_CONTINUATION,
+) -> tuple[str, bool]:
+    """Render like ``render_text`` and say whether the window stopped before the end.
+
+    ``continuation`` names the next call in the hint of a cut-off window, so a
+    Tool other than ``read`` can page text with its own call form.
+    """
     max_lines = limit or DEFAULT_LINE_LIMIT
     all_lines = split_text_lines(text, keepends=True)
     total_lines = len(all_lines)
 
     if total_lines == 0:
-        return ""
+        return "", False
 
     start_line = _start_line(start_line, total_lines)
     start_index = start_line - 1
     if start_index >= total_lines:
         return (
-            f"[Offset {start_line} is beyond end of file ({total_lines} lines). Nothing to show.]"
+            f"[Offset {start_line} is beyond end of file ({total_lines} lines). Nothing to show.]",
+            False,
         )
     source_line = all_lines[start_index]
     if start_character > len(source_line):
         fallback = _past_line_end(ReadPosition(start_line, start_character), limit)
         if isinstance(fallback, str):
-            return fallback
+            return fallback, False
         note, line, count = fallback
-        return note + render_text(text, line, count, number=number)
+        output, stopped_early = render_text_window(
+            text, line, count, number=number, continuation=continuation
+        )
+        return note + output, stopped_early
 
     selected_lines = [
         plain_line_end(line) for line in all_lines[start_index : start_index + max_lines]
@@ -240,15 +269,19 @@ def render_text(
     byte_limited = len(output.encode("utf-8")) > MAX_FILE_BYTES
 
     if not (line_limited or byte_limited):
-        return output
+        return output, False
 
-    return finalize_limited_text(
-        rendered_lines,
-        start_line=start_line,
-        start_character=start_character,
-        total_lines=total_lines,
-        byte_limited=byte_limited,
-        number=number,
+    return (
+        finalize_limited_text(
+            rendered_lines,
+            start_line=start_line,
+            start_character=start_character,
+            total_lines=total_lines,
+            byte_limited=byte_limited,
+            number=number,
+            continuation=continuation,
+        ),
+        True,
     )
 
 
@@ -260,6 +293,7 @@ def finalize_limited_text(
     total_lines: int | None,
     byte_limited: bool,
     number: bool,
+    continuation: str = READ_CONTINUATION,
 ) -> str:
     """Fit rendered lines and append a continuation hint."""
     output = "".join(rendered_lines)
@@ -282,6 +316,7 @@ def finalize_limited_text(
                 total_lines,
                 byte_limited=True,
                 continuation_offset=possible_continuation,
+                continuation=continuation,
             )
             reserved_bytes = len(hint.encode("utf-8")) + 2
             available_bytes = max(MAX_FILE_BYTES - reserved_bytes, 0)
@@ -310,6 +345,7 @@ def finalize_limited_text(
         total_lines,
         byte_limited=byte_limited,
         continuation_offset=continuation_offset,
+        continuation=continuation,
     )
 
     return output + ("\n\n" if output and not output.endswith("\n") else "") + hint

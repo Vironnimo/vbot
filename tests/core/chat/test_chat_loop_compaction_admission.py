@@ -9,14 +9,18 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatMessage, ToolCall
+from core.compaction import CompactionService
+from core.providers.errors import ProviderError
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
 from core.runs import COMPACTION_STARTED_EVENT
 from core.tools import tool_success
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_compaction_test_support import (
     JsonObject,
+    RecordingCompactionAdapter,
     auto_compact,
     compaction_runtime,
+    real_compaction_runtime,
 )
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -207,14 +211,44 @@ async def test_checkpoint_records_both_context_sizes_with_the_selected_wire_esti
 
 
 @pytest.mark.asyncio
-async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_path: Path) -> None:
+@pytest.mark.parametrize("compaction_requested", [False, True], ids=["automatic", "user-request"])
+async def test_summary_tail_waits_until_this_runs_loaded_skill_result_is_consumed(
+    tmp_path: Path, compaction_requested: bool
+) -> None:
     runtime = compaction_runtime(tmp_path)
     agent = runtime.agents.get("coder")
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Use the document workflow"))
+    run_session = session.start_run("run-1")
+    _append_loaded_skill(run_session, agent.model, "Instructions")
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted after consumption.",
+        projection=[ChatMessage.user("Tail")],
+        compacted_token_count=20,
+    )
+    service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+
+    await auto_compact(
+        loop, agent, session, usage={"input_tokens": 90}, compaction_requested=compaction_requested
+    )
+
+    # A user request compacts at once; the automatic trigger waits for the next Model step.
+    assert len(service.compact_calls) == (1 if compaction_requested else 0)
+    if compaction_requested:
+        return
+    assert service.compactable_context_calls == []
+
+    run_session.append(ChatMessage.assistant(model=agent.model, content="Skill result consumed"))
+    await auto_compact(loop, agent, session, usage={"input_tokens": 90})
+
+    assert len(service.compact_calls) == 1
+
+
+def _append_loaded_skill(session: Any, model: str, content: str) -> None:
     session.append(
         ChatMessage.assistant(
-            model=agent.model,
+            model=model,
             content=None,
             tool_calls=[ToolCall(id="call-skill", name="skill", arguments={"name": "docx"})],
         )
@@ -224,26 +258,48 @@ async def test_summary_tail_waits_until_a_loaded_skill_result_is_consumed(tmp_pa
             tool_call_id="call-skill",
             name="skill",
             content=json.dumps(
-                tool_success({"name": "docx", "status": "loaded", "content": "Instructions"}),
+                tool_success({"name": "docx", "status": "loaded", "content": content}),
                 separators=(",", ":"),
             ),
         )
     )
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="Compacted after consumption.",
-        projection=[ChatMessage.user("Tail")],
-        compacted_token_count=20,
+
+
+class _OverflowingSkillAdapter(RecordingCompactionAdapter):
+    """Reject every Agent request that still carries the oversized Skill instructions."""
+
+    async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
+        if "HUGE-SKILL" in json.dumps(messages):
+            raise ProviderError("context_length_exceeded", retryable=False)
+        return await super().send(messages, model_id=model_id, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail_tokens", [15_000, 1], ids=["kept-in-tail", "summarized"])
+async def test_a_failed_runs_loaded_skill_result_never_blocks_the_next_runs_compaction(
+    tmp_path: Path, tail_tokens: int
+) -> None:
+    # The Run that loaded the Skill failed before a Model step consumed the Result, so
+    # no later Assistant message exists; the next Run compacts the instructions away.
+    adapter = _OverflowingSkillAdapter(
+        [{"content": "Recovered", "tool_calls": None}], summaries=["The docx Skill was loaded."]
     )
-    service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
-    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    runtime = real_compaction_runtime(
+        tmp_path,
+        adapter,
+        {
+            "enabled": True,
+            "trigger": {"type": "input_tokens", "tokens": 5_000},
+            "strategy": {"type": "summary_tail", "tail_tokens": tail_tokens},
+        },
+    )
+    agent = runtime.agents.get("coder")
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Use the document workflow"))
+    _append_loaded_skill(session.start_run("run-failed"), agent.model, "HUGE-SKILL " * 5_000)
+    loop = build_chat_loop(runtime, compaction_service=CompactionService())
 
-    deferred = await auto_compact(loop, agent, session, usage={"input_tokens": 90})
+    result = await loop.send("coder", "Try again", session_id="session-one")
 
-    assert deferred.rebuilt == deferred.request
-    assert service.compactable_context_calls == []
-    assert service.compact_calls == []
-
-    session.append(ChatMessage.assistant(model=agent.model, content="Skill result consumed"))
-    await auto_compact(loop, agent, session, usage={"input_tokens": 90}, run_id="run-2")
-
-    assert len(service.compact_calls) == 1
+    assert result.content == "Recovered"
+    assert adapter.events == ["compaction", "agent"]

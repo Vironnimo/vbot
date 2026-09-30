@@ -1,5 +1,7 @@
 """Contracts of the ``skill`` Tool: catalog, activation and package file reads."""
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +11,7 @@ from core.skills import SkillAuthoringService
 from core.skills.skills import SkillRegistry
 from core.tools import SKILL_TOOL_NAME, ToolContractError, tool_failure
 from core.tools.model_names import SHELL_MODEL_NAME
-from core.tools.skill import load_skill_content
+from core.tools.skill import SKILL_PARTIAL_INSTRUCTIONS_NOTE, load_skill_content
 from tests.core.tools.skill_test_support import SkillTool
 
 GUIDE = "Read the evidence first.\n"
@@ -56,15 +58,17 @@ class ActivationRecorder:
         return self.accept
 
 
-def test_registration_exposes_one_tool_with_name_and_file_path(tmp_path: Path) -> None:
+def test_registration_exposes_one_tool_with_name_file_path_and_offset(tmp_path: Path) -> None:
     [definition] = debugging_tool(tmp_path).tools.provider_definitions(["*"])
     parameters = definition["parameters"]
 
     assert definition["name"] == SKILL_TOOL_NAME
-    assert set(parameters["properties"]) == {"name", "file_path"}
+    assert set(parameters["properties"]) == {"name", "file_path", "offset"}
     assert parameters["properties"]["name"]["type"] == "string"
     assert parameters["properties"]["name"]["minLength"] == 1
     assert parameters["properties"]["file_path"]["type"] == "string"
+    assert parameters["properties"]["offset"]["type"] == "integer"
+    assert parameters["properties"]["offset"]["minimum"] == 1
     assert parameters["required"] == []
     assert "additionalProperties" not in parameters
 
@@ -285,6 +289,74 @@ def test_file_reads_return_the_named_file_without_activation(
     }
     assert recorder.activations == {}
     assert directory not in str(result)
+
+
+_STEPS = "\n".join(f"step {number}" for number in range(1, 2501))
+_LONG_LINE = "x" * 60_000 + "END"
+
+
+def _next_call(content: str) -> dict[str, Any]:
+    """The arguments of the call a cut-off page names at its end."""
+    call = re.search(r"Continue with skill\((.*)\)\.\]$", content)
+    assert call is not None, content[-200:]
+    return {key: json.loads(value) for key, value in re.findall(r'(\w+)=("[^"]*"|\d+)', call[1])}
+
+
+@pytest.mark.parametrize(
+    ("first_call", "text", "rest"),
+    [
+        # A filled-in offset of 0 still loads the Skill from its start.
+        ({"name": "long", "offset": 0}, _STEPS, _STEPS.split("step 2000\n")[1]),
+        (
+            {"name": "long", "file_path": "references/long.md"},
+            _STEPS + "\n",
+            _STEPS.split("step 2000\n")[1] + "\n",
+        ),
+        ({"name": "long", "file_path": "references/long.md"}, _LONG_LINE, None),
+    ],
+    ids=["instructions", "file-lines", "file-long-line"],
+)
+def test_long_text_arrives_in_pages_that_end_with_the_next_call(
+    tmp_path: Path, first_call: dict[str, object], text: str, rest: str | None
+) -> None:
+    skill_dir = tmp_path / "skills" / "long"
+    (skill_dir / "references").mkdir(parents=True)
+    instructions = text if "file_path" not in first_call else "Read references/long.md."
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: long\ndescription: Long text.\n---\n\n{instructions}\n", encoding="utf-8"
+    )
+    (skill_dir / "references" / "long.md").write_text(text, encoding="utf-8", newline="")
+    tool = SkillTool(tmp_path, SkillRegistry.load(tmp_path / "skills"))
+    first_recorder = ActivationRecorder()
+
+    first = tool.call(first_call, activation_hook=first_recorder)["data"]
+
+    content = first["content"]
+    assert len(content.encode("utf-8")) <= 51 * 1024
+    if "file_path" in first_call:
+        assert first["status"] == "file_loaded"
+        assert first_recorder.activations == {}
+    else:
+        # The loaded instructions say up front that they continue.
+        assert first["status"] == "loaded"
+        assert content.startswith(f"{SKILL_PARTIAL_INSTRUCTIONS_NOTE}\n\nstep 1\n")
+        assert "step 2000\n" in first_recorder.activations["long"]
+        assert "step 2001" not in first_recorder.activations["long"]
+    next_call = _next_call(content)
+    assert {key: value for key, value in next_call.items() if key != "offset"} == {
+        key: value for key, value in first_call.items() if key != "offset"
+    }
+    later_recorder = ActivationRecorder()
+
+    later = tool.call(next_call, activation_hook=later_recorder)["data"]
+
+    assert later["status"] == ("file_loaded" if "file_path" in first_call else "continued")
+    assert later_recorder.activations == {}
+    if rest is not None:
+        assert later["content"] == rest
+    else:
+        assert later["content"].endswith("END")
+        assert "END" not in content
 
 
 @pytest.mark.parametrize(

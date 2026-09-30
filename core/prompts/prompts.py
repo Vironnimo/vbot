@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import socket
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -67,6 +68,7 @@ from core.prompts._types import (
 )
 from core.prompts.blocks import (
     BLOCK_KIND_DATA,
+    INLINE_FILE_MAX_BYTES,
     BlockDefinition,
     BlockProducer,
     BlockRenderContext,
@@ -89,6 +91,7 @@ from core.tools.availability import (
     subagent_allowed_agents,
 )
 from core.tools.tools import ToolDefinitionProfileContext
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 from core.utils.workers import BoundedWorkerPool
@@ -140,6 +143,16 @@ __all__ = [
 
 PROMPT_WORKER_LIMIT = 4
 _LOGGER = get_logger("prompts")
+# Oversized or unreadable Project auto-load files the process has already logged.
+_PROJECT_FILE_CONDITIONS = LoggedConditions()
+
+# Stands in for a Project auto-load file above ``INLINE_FILE_MAX_BYTES`` inside its
+# ``<file>`` frame, so the Agent learns the file exists and how to read it.
+PROJECT_FILE_TOO_LARGE_NOTICE = (
+    "[Not included: this file has {size:,} bytes, more than the {limit:,}-byte limit "
+    "for project context files. Read it with the `read` Tool when your work needs its "
+    "content; `read` returns large files in pages.]"
+)
 
 _PROMPT_WORKERS = BoundedWorkerPool(
     name="prompt",
@@ -557,8 +570,8 @@ class SystemPromptManager:
         the project cwd at any subfolder depth, or absolute, with no location
         restriction (see ``_read_project_file_block``). Lazy: returns ``""`` when
         there is no project context or no readable file, so the placeholder
-        collapses. No size limit, truncation, or warning on large files — the
-        technical user gets the file 1:1.
+        collapses. A file above ``INLINE_FILE_MAX_BYTES`` renders as a notice
+        naming its size instead of its content (see ``_read_project_file_block``).
 
         ``on_read``, when given, is called with the resolved absolute path of every
         file actually inlined, so the caller can stamp it as read-before-write —
@@ -608,20 +621,44 @@ class SystemPromptManager:
         restriction** — the auto-load list is the user's own config naming the
         user's own files, so where a file lives is not vBot's business (project
         philosophy: maximum agency, minimal restrictions). A missing file is skipped
-        silently (lazy rendering); an unreadable file raises, matching ``{include}``.
-        The ``<file>`` wrap is shared with ``{include}`` so framing cannot drift.
+        silently (lazy rendering); an unreadable file is skipped with a warning.
+        A file above ``INLINE_FILE_MAX_BYTES`` keeps its ``<file>`` frame but holds
+        ``PROJECT_FILE_TOO_LARGE_NOTICE`` instead of its content: every request
+        of the Session carries this block, so one runaway file must not fill the
+        Context Window. Only the first ``INLINE_FILE_MAX_BYTES + 1`` bytes are
+        ever read. Oversized and unreadable files warn once per condition, not on
+        every render. The ``<file>`` wrap is shared with ``{include}`` so framing
+        cannot drift.
 
         ``on_read``, when given, is called with the file's resolved absolute path
-        only when its content is actually inlined (never for a missing/unreadable
-        one), so the caller can stamp it as read-before-write.
+        only when its content is actually inlined (never for a missing, unreadable
+        or oversized one), so the caller can stamp it as read-before-write.
         """
         file_path = cwd / filename
+        condition = ("project_file", str(file_path))
         try:
-            content = file_path.read_text(encoding="utf-8")
+            with file_path.open("rb") as handle:
+                raw = handle.read(INLINE_FILE_MAX_BYTES + 1)
+                size = os.fstat(handle.fileno()).st_size
+            if len(raw) > INLINE_FILE_MAX_BYTES:
+                if _PROJECT_FILE_CONDITIONS.started(condition, "too_large"):
+                    _LOGGER.warning(
+                        "Project file not loaded into the prompt: %d bytes exceed %d (path=%s)",
+                        size,
+                        INLINE_FILE_MAX_BYTES,
+                        file_path,
+                    )
+                notice = PROJECT_FILE_TOO_LARGE_NOTICE.format(
+                    size=max(size, len(raw)), limit=INLINE_FILE_MAX_BYTES
+                )
+                return wrap_include_file(model_path(filename), notice)
+            # Text mode's universal newlines, exactly as ``read_text`` applied them.
+            content = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
         except FileNotFoundError:
             # Lazy: a configured-but-absent file is normal — including the seeded
             # AGENTS.md before the repo actually has one — so skip quietly here
             # rather than warn every turn.
+            _PROJECT_FILE_CONDITIONS.ended(condition)
             return None
         except (OSError, ValueError) as exc:
             # Present but unreadable for ANY reason — locked, no permission, a
@@ -629,8 +666,11 @@ class SystemPromptManager:
             # never abort the run (user decision): log and skip, so one bad auto-load
             # entry can never take the whole turn down. OSError covers the filesystem
             # failures, ValueError the decode/bad-path ones.
-            _LOGGER.warning("Skipping unreadable project file %s: %s", file_path, exc)
+            if _PROJECT_FILE_CONDITIONS.started(condition, type(exc).__name__):
+                _LOGGER.warning("Skipping unreadable project file %s: %s", file_path, exc)
             return None
+        if _PROJECT_FILE_CONDITIONS.ended(condition):
+            _LOGGER.info("Project file loads into the prompt again (path=%s)", file_path)
         if on_read is not None:
             on_read(file_path.resolve())
         return wrap_include_file(model_path(filename), content)

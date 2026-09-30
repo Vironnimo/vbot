@@ -93,8 +93,14 @@ def _compacted_skill_activation_result(message: _records.ChatMessage, skill_name
     )
 
 
-def has_unconsumed_skill_activation(messages: Sequence[_records.ChatMessage]) -> bool:
-    """Return whether the latest Assistant Tool batch freshly loaded a Skill."""
+def has_unconsumed_skill_activation(
+    messages: Sequence[_records.ChatMessage], *, run_id: str
+) -> bool:
+    """Return whether Run *run_id*'s latest Assistant Tool batch freshly loaded a Skill.
+
+    A batch written by an earlier Run never counts: that Run ended before a Model
+    step consumed the Result, so waiting for consumption could wait forever.
+    """
     assistant_index = next(
         (
             index
@@ -106,6 +112,8 @@ def has_unconsumed_skill_activation(messages: Sequence[_records.ChatMessage]) ->
     if assistant_index is None:
         return False
     assistant_message = messages[assistant_index]
+    if assistant_message.run_id != run_id:
+        return False
     pending_call_ids = {call.id for call in assistant_message.tool_calls or []}
     if not pending_call_ids:
         return False
@@ -292,6 +300,8 @@ def _overlay_pending_tool_batch(
 
     The restored batch follows the checkpoint Projection and precedes every
     message appended after it in canonical order, such as steered User input.
+    The checkpoint ended every Skill activation, so a restored Skill-loading
+    Result becomes the same instruction-free digest a retained one gets.
     """
     effective_messages = [*projection, *appended]
     latest_assistant_index = next(
@@ -335,6 +345,6 @@ def _overlay_pending_tool_batch(
     return [
         *(message for message in projection if message.id not in batch_ids),
         *kept_appended[:later],
-        *batch,
+        *compaction_projection_without_active_skills(batch),
         *kept_appended[later:],
     ]

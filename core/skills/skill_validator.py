@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,8 +11,13 @@ from typing import Any
 
 import yaml
 
+from core.utils.text_pages import TEXT_PAGE_MAX_BYTES, TEXT_PAGE_MAX_LINES
+
 FRONT_MATTER_DELIMITER = "---"
 MAX_SKILL_NAME_LENGTH = 64
+# The Agent Skills specification's limit. Every request's Skill list carries each
+# description in full, so a longer one only warns and is never cut.
+MAX_SKILL_DESCRIPTION_LENGTH = 1024
 MALFORMED_YAML_FALLBACK_WARNING = (
     "YAML front matter was repaired by quoting scalar values with colons."
 )
@@ -139,8 +145,39 @@ def normalize_and_validate_skill_metadata(
             "'_' (or does not start with a letter or digit); it cannot be triggered "
             "with /name or $name, only loaded by name with the skill tool."
         )
+    if len(description) > MAX_SKILL_DESCRIPTION_LENGTH:
+        warnings.append(
+            f"Skill description has {len(description):,} characters, more than "
+            f"{MAX_SKILL_DESCRIPTION_LENGTH:,}. Every Agent request lists it in full; "
+            "keep it to what the Skill is for and when to load it, and move details "
+            "into the instructions."
+        )
+    oversized_instructions = _oversized_instructions_warning(body)
+    if oversized_instructions:
+        warnings.append(oversized_instructions)
 
     return normalized, ValidationResult(valid=True, warnings=warnings)
+
+
+def _oversized_instructions_warning(body: str) -> str | None:
+    """Warn when loading the Skill cannot return its instructions in one page.
+
+    The skill tool pages the stripped body like ``read`` pages a file; lines are
+    counted as ``str.splitlines`` splits them, which matches the pager for the
+    LF, CRLF and CR line breaks of real documents.
+    """
+    instructions = body.strip()
+    size = len(instructions.encode("utf-8"))
+    lines = len(instructions.splitlines())
+    if size <= TEXT_PAGE_MAX_BYTES and lines <= TEXT_PAGE_MAX_LINES:
+        return None
+    return (
+        f"SKILL.md instructions do not fit one page ({math.ceil(size / 1024)} KB, {lines} lines; "
+        f"a page holds at most {TEXT_PAGE_MAX_BYTES // 1024} KB and {TEXT_PAGE_MAX_LINES} "
+        "lines). Loading the Skill returns only the first page, and the rest takes "
+        "further calls to the skill tool. Move reference material into separate "
+        "files, such as references/*.md, that the instructions name."
+    )
 
 
 def _parse_simple_key_values(front_matter: str) -> dict[str, Any]:

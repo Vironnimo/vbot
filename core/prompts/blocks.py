@@ -462,6 +462,13 @@ def expand_workspace_includes(
     )
 
 
+# Largest text file vBot inlines whole into a Model's Context without being asked
+# per request: an ``@``-mentioned file and each Project auto-load file. About 32k
+# tokens: far above real instruction files, so it only stops a runaway file (a
+# generated dump, a misconfigured path) from flooding the Context of every request.
+INLINE_FILE_MAX_BYTES = 128 * 1024
+
+
 def wrap_include_file(filename: str, content: str) -> str:
     """Wrap a file's content in the canonical ``<file name="…">`` block.
 

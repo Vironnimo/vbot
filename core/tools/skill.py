@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import re
 from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from difflib import SequenceMatcher
@@ -19,6 +20,8 @@ from core.skills.skills import (
     format_skill_catalog_entries,
 )
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._read_text import ReadPosition, render_text_window
+from core.tools.arguments import optional_int
 from core.tools.bash import format_bash_env_usage
 from core.tools.contracts import compile_tool_contract
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -56,6 +59,7 @@ SKILL_TOOL_DESCRIPTION = "List available Skills, load one Skill, or read one fil
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"
 SKILL_STATUS_FILE_LOADED = "file_loaded"
+SKILL_STATUS_CONTINUED = "continued"
 # OpenClaw-compatible marker skill authors may use in the body to reference bundled
 # files (e.g. ``python {baseDir}/scripts/run.py``); replaced with the absolute skill
 # directory at activation time.
@@ -64,6 +68,12 @@ SKILL_RESOURCE_FILES_GUIDANCE = (
     f"Files of this Skill. Run a scripts/ file by its absolute path with `{SHELL_MODEL_NAME}`; "
     "read another file with `skill` using this name and its relative file_path only "
     "when the instructions call for it."
+)
+# Leads a Skill's instructions that exceed one ``read``-sized page (50 KB or
+# 2000 lines); the page ends with the exact call that continues it.
+SKILL_PARTIAL_INSTRUCTIONS_NOTE = (
+    "[Only the first part of these instructions is below. Before you follow them, "
+    "read the rest with the call at the end.]"
 )
 _SKILL_NAME_PARAMETER: JsonObject = {
     "type": "string",
@@ -80,9 +90,17 @@ _SKILL_FILE_PATH_PARAMETER: JsonObject = {
         "Omit to load the named Skill."
     ),
 }
+_SKILL_OFFSET_PARAMETER: JsonObject = {
+    "type": "integer",
+    "minimum": 1,
+    "description": (
+        "Line to start at in the instructions or file_path. Omit to start at the beginning."
+    ),
+}
 _SKILL_PROPERTIES: JsonObject = {
     "name": _SKILL_NAME_PARAMETER,
     "file_path": _SKILL_FILE_PATH_PARAMETER,
+    "offset": _SKILL_OFFSET_PARAMETER,
 }
 SKILL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -91,8 +109,13 @@ SKILL_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-# Accepted but not offered: another harness passes a Skill's arguments this way.
-_SKILL_UNADVERTISED_PARAMETERS: JsonObject = {"args": {"type": "string"}}
+# Accepted but not offered: another harness passes a Skill's arguments this way,
+# and ``character`` carries the second half of an ``offset`` such as "12:241",
+# which continues a long line where a page cut it.
+_SKILL_UNADVERTISED_PARAMETERS: JsonObject = {
+    "args": {"type": "string"},
+    "character": {"type": "integer", "minimum": 1},
+}
 _SKILL_FIELD_ALIASES = {
     "skill": "name",
     "skill_name": "name",
@@ -106,6 +129,7 @@ _SKILL_ARGS_NOTE = "Skills take no arguments; apply the loaded instructions to t
 _SKILL_NAME_MARKS = "/$@"
 _SUGGESTION_LIMIT = 3
 _LISTED_NAME_LIMIT = 20
+_POSITION = re.compile(r"\s*(\d+)(?::(\d+))?\s*")
 
 _SKILL_RUNTIME_CONTRACT = compile_tool_contract(
     name=SKILL_TOOL_NAME,
@@ -134,6 +158,15 @@ def _normalize_skill_arguments(arguments: Any) -> Any:
     path = repaired.get("file_path")
     if isinstance(path, str):
         repaired["file_path"] = clean_skill_file_path(path)
+    offset = repaired.get("offset")
+    if isinstance(offset, str) and (position := _POSITION.fullmatch(offset)) is not None:
+        # A page continues a long line at ``offset="line:character"``.
+        offset = repaired["offset"] = int(position[1])
+        if position[2] is not None and "character" not in repaired:
+            repaired["character"] = int(position[2])
+    if offset == 0 and "character" not in repaired:
+        # Line 0 can only mean the start.
+        del repaired["offset"]
     return repaired
 
 
@@ -243,6 +276,13 @@ def make_skill_handler(
         requested = arguments.get("name")
         file_path = arguments.get("file_path")
         notes = [_SKILL_ARGS_NOTE] if arguments.get("args") else []
+        try:
+            position = ReadPosition(
+                optional_int(arguments.get("offset"), field_name="offset", minimum=1) or 1,
+                optional_int(arguments.get("character"), field_name="character", minimum=1) or 1,
+            )
+        except ValueError as error:
+            return tool_failure("invalid_arguments", str(error))
         if requested is None and file_path is None:
             return await run_tool_worker(
                 _skill_catalog_result,
@@ -311,7 +351,9 @@ def make_skill_handler(
         if isinstance(file_path, str):
             file_path = _package_relative_path(file_path, skill_name, skill.path.parent)
             try:
-                data = await run_tool_worker(load_skill_file, skill_name, skill.path, file_path)
+                data = await run_tool_worker(
+                    load_skill_file, skill_name, skill.path, file_path, position
+                )
             except OSError as error:
                 return tool_failure(
                     "skill_read_error",
@@ -325,6 +367,20 @@ def make_skill_handler(
                 str(data["content"]),
                 notes,
             )
+
+        if position != ReadPosition(1):
+            try:
+                page = await run_tool_worker(
+                    load_skill_instructions_page, skill_name, skill.path, position
+                )
+            except OSError as error:
+                return tool_failure(
+                    "skill_read_error",
+                    f"Failed to read skill '{skill_name}': {error}",
+                )
+            except ValueError as error:
+                return tool_failure("skill_read_error", str(error))
+            return _continued_skill_result(skill_name, page, notes)
 
         try:
             data = await run_tool_worker(
@@ -414,7 +470,11 @@ def _skill_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> li
     status = data.get("status")
     if status == SKILL_STATUS_ALREADY_ACTIVE:
         return [display_notice("info", "The Skill was already active; it was not loaded again.")]
-    label = "content" if status in {SKILL_STATUS_LOADED, SKILL_STATUS_FILE_LOADED} else "results"
+    label = (
+        "content"
+        if status in {SKILL_STATUS_LOADED, SKILL_STATUS_FILE_LOADED, SKILL_STATUS_CONTINUED}
+        else "results"
+    )
     blocks = [display_text(label, source="result", path=("data", "content"))]
     if data.get("environment_access"):
         blocks.append(
@@ -432,11 +492,18 @@ def load_skill_content(
     *,
     env_keys: Sequence[str] = (),
 ) -> JsonObject:
-    """Load the instruction body and activation metadata for one Skill file."""
-    body = _read_skill_body(skill_file)
+    """Load the instruction body and activation metadata for one Skill file.
+
+    Instructions longer than one page (50 KB or 2000 lines, as ``read`` pages a
+    file) load as their first page, led by ``SKILL_PARTIAL_INSTRUCTIONS_NOTE`` and
+    ended by the ``skill`` call that continues them. Both the Tool result and the
+    Session's Skill context carry only that page.
+    """
     skill_directory = skill_file.resolve().parent
     directory = skill_directory.as_posix()
-    body = body.replace(SKILL_BASE_DIR_MARKER, directory)
+    body, partial = _skill_instructions_window(skill_name, skill_file, ReadPosition(1))
+    if partial:
+        body = f"{SKILL_PARTIAL_INSTRUCTIONS_NOTE}\n\n{body}"
     resources = _scan_skill_resources(skill_directory)
     presented_resources = [_present_resource_path(resource, directory) for resource in resources]
     environment_access = ""
@@ -477,8 +544,53 @@ def _load_skill_content_with_env(
     return load_skill_content(skill_name, skill_file, env_keys=env_keys)
 
 
-def load_skill_file(skill_name: str, skill_file: Path, file_path: str) -> JsonObject:
-    """Read one UTF-8 package file by skill-relative path."""
+def load_skill_instructions_page(skill_name: str, skill_file: Path, position: ReadPosition) -> str:
+    """Return the page of a Skill's instructions that starts at *position*."""
+    page, _ = _skill_instructions_window(skill_name, skill_file, position)
+    return page
+
+
+def _skill_instructions_window(
+    skill_name: str, skill_file: Path, position: ReadPosition
+) -> tuple[str, bool]:
+    """Page the instruction body exactly as activation presents it.
+
+    Line numbers count lines of the body after its frontmatter, with ``{baseDir}``
+    replaced, so an activation's continuation offset addresses the same text.
+    """
+    directory = skill_file.resolve().parent.as_posix()
+    body = _read_skill_body(skill_file).replace(SKILL_BASE_DIR_MARKER, directory)
+    return render_text_window(
+        body,
+        position.line,
+        None,
+        number=False,
+        start_character=position.character,
+        continuation=_continuation_call(skill_name),
+    )
+
+
+def _continuation_call(skill_name: str, file_path: str | None = None) -> str:
+    """Name the ``skill`` call that continues a page; ``{offset}`` stays a placeholder."""
+    fields = [f"name={json.dumps(skill_name, ensure_ascii=False)}"]
+    if file_path is not None:
+        fields.append(f"file_path={json.dumps(file_path, ensure_ascii=False)}")
+    fields.append("offset={offset}")
+    return f"Continue with {SKILL_TOOL_NAME}({', '.join(fields)})."
+
+
+def load_skill_file(
+    skill_name: str,
+    skill_file: Path,
+    file_path: str,
+    position: ReadPosition | None = None,
+) -> JsonObject:
+    """Read one page of a UTF-8 package file by skill-relative path.
+
+    A file longer than one page (50 KB or 2000 lines) returns the page that starts
+    at *position* (default: the first line), ended by the ``skill`` call that
+    continues it.
+    """
     try:
         normalized = package_path(file_path.replace("\\", "/"))
         if excluded(normalized):
@@ -499,7 +611,16 @@ def load_skill_file(skill_name: str, skill_file: Path, file_path: str) -> JsonOb
         content = candidate.read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
         raise ValueError(f"Skill '{skill_name}' file is not UTF-8 text: {normalized}") from error
-    return {"name": skill_name, "file_path": normalized, "content": content}
+    start = position or ReadPosition(1)
+    page, _ = render_text_window(
+        content,
+        start.line,
+        None,
+        number=False,
+        start_character=start.character,
+        continuation=_continuation_call(skill_name, normalized),
+    )
+    return {"name": skill_name, "file_path": normalized, "content": page}
 
 
 def _loaded_skill_result(skill_name: str, loaded: JsonObject, notes: list[str]) -> JsonObject:
@@ -538,6 +659,15 @@ def _loaded_skill_file_result(
         "status": SKILL_STATUS_FILE_LOADED,
         "file_path": file_path,
     }
+    if notes:
+        data["note"] = " ".join(notes)
+    data["content"] = content
+    return tool_success(data)
+
+
+def _continued_skill_result(skill_name: str, content: str, notes: list[str]) -> JsonObject:
+    """A later page of a Skill's instructions; it activates nothing."""
+    data: JsonObject = {"name": skill_name, "status": SKILL_STATUS_CONTINUED}
     if notes:
         data["note"] = " ".join(notes)
     data["content"] = content
@@ -688,6 +818,7 @@ __all__ = [
     "SKILL_TOOL_NAME",
     "SKILL_TOOL_PARAMETERS",
     "load_skill_file",
+    "load_skill_instructions_page",
     "make_skill_handler",
     "load_skill_content",
     "register_skill_tool",
