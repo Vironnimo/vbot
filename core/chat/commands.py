@@ -341,7 +341,7 @@ class CommandDispatcher:
         ),
         "model": CommandSpec(
             "model",
-            "Show, set, or reset this session's model (/model reset to clear).",
+            "Show or permanently set this agent's model (/model reset to clear).",
             argument="optional",
             catalog_result="state_change",
             execution_mode="immediate",
