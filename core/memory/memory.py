@@ -184,6 +184,23 @@ class MemoryRevertError(MemoryError):
         super().__init__("\n".join(lines))
 
 
+class MemoryRevertIncompleteError(MemoryError):
+    """A revert failed after writing some scopes, and restoring them failed too.
+
+    ``changed`` names the scopes that keep their reverted entries; every other
+    scope is unchanged. The history has no record of the change and notices it
+    as ``external`` on a later operation.
+    """
+
+    def __init__(self, changed: Sequence[MemoryScope], failure: Exception) -> None:
+        self.changed: tuple[MemoryScope, ...] = tuple(changed)
+        names = " and ".join(self.changed)
+        super().__init__(
+            f"The revert failed part-way ({failure}). The {names} Memory could not be "
+            "restored and keeps its reverted entries; the other Memory is unchanged."
+        )
+
+
 @dataclass(frozen=True)
 class MemoryWriter:
     """Who changes Memory, recorded in the log line and the Memory history.
@@ -435,9 +452,13 @@ class FilePinnedMemoryBackend:
         """Take back the changes of *revision_ids*, all of them or none.
 
         Returns the recorded ``revert`` revisions, one per changed scope, and an
-        empty list when the entries already match. Raises
-        :class:`MemoryRevertError` when later changes built on a reverted one and
-        :class:`MemoryBudgetError` when restored entries would exceed a budget.
+        empty list when the entries already match (or the history could not
+        record them). Raises :class:`MemoryRevertError` when later changes built
+        on a reverted one and :class:`MemoryBudgetError` when restored entries
+        would exceed a budget, both before writing anything. Every changed scope
+        is written before any is recorded: when a write fails, the scopes already
+        written get their earlier content back and the failure is raised, or
+        :class:`MemoryRevertIncompleteError` when that restore fails too.
         """
         agent_id = writer.agent_id or ""
         history = self._require_history(agent_id)
@@ -445,9 +466,10 @@ class FilePinnedMemoryBackend:
             raise MemoryError("name at least one revision to revert")
         with self._scope_locks(workspace):
             paths = {scope: self._path(workspace, scope) for scope in MEMORY_SCOPES}
+            originals = {scope: _read_file(path) for scope, path in paths.items()}
             current: dict[MemoryScope, list[str]] = {}
             for scope, path in paths.items():
-                current[scope] = _read_entries(path)
+                current[scope] = _decode_entries(path, originals[scope])
                 history.sync(agent_id, scope, current[scope], path)
             revisions = history.revisions(agent_id)
             targets = _require_revisions(revisions, revision_ids)
@@ -463,9 +485,18 @@ class FilePinnedMemoryBackend:
             changed = [scope for scope in MEMORY_SCOPES if reverted[scope] != current[scope]]
             for scope in changed:
                 _enforce_scope_budget(scope, reverted[scope], _total(current[scope]))
+            try:
+                _write_scopes({scope: paths[scope] for scope in changed}, reverted, originals)
+            except MemoryRevertIncompleteError as error:
+                _LOGGER.warning(
+                    "Memory revert failed part-way (agent=%s scopes=%s actor=%s)",
+                    agent_id,
+                    ",".join(error.changed),
+                    writer.actor,
+                )
+                raise
             recorded: list[MemoryRevision] = []
             for scope in changed:
-                _write_entries(paths[scope], reverted[scope])
                 _log_mutation("reverted", scope, current[scope], reverted[scope], writer)
                 revision = self._record(
                     scope,
@@ -805,11 +836,26 @@ def _read_entries(path: Path) -> list[str]:
     the file is created only on the first write. A file that cannot be read, or
     whose content is not UTF-8 text, raises :class:`MemoryError`.
     """
+    return _decode_entries(path, _read_file(path))
+
+
+def _read_file(path: Path) -> bytes | None:
+    """Return a memory file's content, or ``None`` when it does not exist yet."""
     try:
-        text = path.read_text(encoding="utf-8")
+        return path.read_bytes()
     except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise MemoryError(f"failed to read memory file {path}: {exc}") from exc
+
+
+def _decode_entries(path: Path, content: bytes | None) -> list[str]:
+    """Return the entries in a memory file's *content*; a missing file has none."""
+    if content is None:
         return []
-    except (OSError, UnicodeDecodeError) as exc:
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
         raise MemoryError(f"failed to read memory file {path}: {exc}") from exc
     return _parse_entries(text)
 
@@ -837,6 +883,46 @@ def _write_entries(path: Path, entries: list[str]) -> None:
         atomic_write_bytes(path, text.encode("utf-8"))
     except OSError as exc:
         raise MemoryError(f"failed to write memory file {path}: {exc}") from exc
+
+
+def _write_scopes(
+    paths: dict[MemoryScope, Path],
+    entries: dict[MemoryScope, list[str]],
+    originals: dict[MemoryScope, bytes | None],
+) -> None:
+    """Write the *entries* of every scope in *paths*, all of them or none.
+
+    When a write fails, each scope already written gets its *originals* content
+    back (a file that did not exist is removed again) and the failure is raised.
+    When a restore fails too, :class:`MemoryRevertIncompleteError` names the
+    scopes left with their new entries.
+    """
+    written: list[MemoryScope] = []
+    try:
+        for scope, path in paths.items():
+            _write_entries(path, entries[scope])
+            written.append(scope)
+    except Exception as failure:
+        unrestored: list[MemoryScope] = []
+        for scope in written:
+            try:
+                _restore_file(paths[scope], originals[scope])
+            except MemoryError:
+                unrestored.append(scope)
+        if unrestored:
+            raise MemoryRevertIncompleteError(unrestored, failure) from failure
+        raise
+
+
+def _restore_file(path: Path, content: bytes | None) -> None:
+    """Put back a memory file's earlier *content*, or remove a file that did not exist."""
+    try:
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            atomic_write_bytes(path, content)
+    except OSError as exc:
+        raise MemoryError(f"failed to restore memory file {path}: {exc}") from exc
 
 
 def _render_entries_file(entries: list[str]) -> str:
