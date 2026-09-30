@@ -68,6 +68,10 @@ DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = PATIENT_PROBE_TIMEOUT_SECONDS
 # neither confirmed as vBot nor known to be foreign.
 UNRESPONSIVE_LISTENER_MESSAGE = "port occupied by unresponsive process"
 
+# A vBot server answers on the target port, but the target data directory's control
+# record does not name it: it belongs to another data directory and is left running.
+UNRECORDED_SERVER_MESSAGE = "port occupied by a vBot server of another data directory"
+
 
 PROCESS_CREATE_TIME_TOLERANCE_SECONDS = 0.001
 
@@ -416,6 +420,16 @@ def stop_server(
             return CommandResult(
                 ok=False,
                 message="vBot process not found",
+                instance=instance,
+                health=health,
+            )
+        # Any vBot answers /health; only the server this data directory started may
+        # be stopped, so a wrong data directory never stops another installation.
+        recorded = _resolve_control_process(instance)
+        if recorded is None or recorded.pid != process.pid:
+            return CommandResult(
+                ok=False,
+                message=UNRECORDED_SERVER_MESSAGE,
                 instance=instance,
                 health=health,
             )
@@ -1042,6 +1056,7 @@ __all__ = [
     "probe_health_patiently",
     "probe_webui",
     "resolve_instance",
+    "UNRECORDED_SERVER_MESSAGE",
     "UNRESPONSIVE_LISTENER_MESSAGE",
     "DEFAULT_STARTUP_TIMEOUT_SECONDS",
     "DEFAULT_SHUTDOWN_TIMEOUT_SECONDS",

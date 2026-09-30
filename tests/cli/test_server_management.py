@@ -14,6 +14,7 @@ import pytest
 
 from cli import _server_target, server_management
 from cli.server_management import (
+    UNRECORDED_SERVER_MESSAGE,
     UNRESPONSIVE_LISTENER_MESSAGE,
     CommandResult,
     HealthProbeResult,
@@ -469,6 +470,9 @@ def test_stop_server_shuts_down_the_confirmed_vbot_listener(
         return cooperative
 
     answer_health(monkeypatch, VBOT)
+    record = SimpleNamespace(pid=789, process_create_time=1000.25)
+    monkeypatch.setattr(server_management, "read_server_control", lambda *_args: record)
+    monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: process)
     monkeypatch.setattr(server_management, "find_listening_process", lambda _instance: process)
     monkeypatch.setattr(server_management, "_request_cooperative_shutdown", request_shutdown)
 
@@ -487,6 +491,36 @@ def test_stop_server_shuts_down_the_confirmed_vbot_listener(
     assert all(re.match(MANAGED_CLI_LOG_PATTERN, line) for line in lines)
     assert [line.split("[", 1)[1].split("]", 1)[0] for line in lines] == logged
     assert all("pid=789" in line for line in lines)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param(None, id="no-record"),
+        pytest.param(SimpleNamespace(pid=456, process_create_time=1000.25), id="other-process"),
+        pytest.param(SimpleNamespace(pid=789, process_create_time=2000.5), id="reused-pid"),
+    ],
+)
+def test_stop_server_leaves_a_vbot_listener_the_data_directory_did_not_start(
+    instance: ServerInstance, monkeypatch: pytest.MonkeyPatch, record: SimpleNamespace | None
+) -> None:
+    # Every vBot answers /health, so a wrong data directory must not stop the
+    # server of another installation on the same port.
+    process = FakeProcess(pid=789)
+    answer_health(monkeypatch, VBOT)
+    monkeypatch.setattr(server_management, "read_server_control", lambda *_args: record)
+    monkeypatch.setattr(server_management.psutil, "Process", lambda pid: FakeProcess(pid=pid))
+    monkeypatch.setattr(server_management, "find_listening_process", lambda _instance: process)
+    monkeypatch.setattr(
+        server_management,
+        "_request_cooperative_shutdown",
+        lambda *_args, **_kwargs: pytest.fail("must not ask another server to shut down"),
+    )
+
+    result = stop_server(instance, shutdown_timeout_seconds=2.0)
+
+    assert (result.ok, result.message) == (False, UNRECORDED_SERVER_MESSAGE)
+    assert process.calls == []
 
 
 @pytest.mark.parametrize(
