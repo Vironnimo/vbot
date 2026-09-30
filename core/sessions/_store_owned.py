@@ -164,11 +164,14 @@ def temporary_groups(
 
 
 def temporary_owners(connection: sqlite3.Connection) -> list[str]:
-    """Read the names of every owner with live bound Sessions, sorted."""
+    """Read the names of every owner with live bound Sessions, sorted.
+
+    It walks the bindings, not the usually far larger set of live Sessions.
+    """
     rows = connection.execute(
         "SELECT DISTINCT b.owner_name FROM temporary_session_bindings AS b "
-        "JOIN sessions AS s ON s.session_key = b.session_key "
-        "WHERE s.state = 'live' ORDER BY b.owner_name"
+        "WHERE EXISTS (SELECT 1 FROM sessions AS s "
+        "WHERE s.session_key = b.session_key AND s.state = 'live') ORDER BY b.owner_name"
     ).fetchall()
     return [str(row[0]) for row in rows]
 
