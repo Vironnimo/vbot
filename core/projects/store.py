@@ -28,6 +28,7 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
+from core.database import SnapshotBarrier
 from core.json_documents import JsonDocumentWriteError, write_json_document
 from core.projects.paths import cwd_identity_key
 from core.projects.projects import (
@@ -83,13 +84,24 @@ _ARCHIVE_DIRNAME = "archive"
 class ProjectStore:
     """CRUD store for project anchors rooted at a data directory."""
 
-    def __init__(self, data_dir: str | Path, *, sessions: ChatSessionManager | None = None) -> None:
+    def __init__(
+        self,
+        data_dir: str | Path,
+        *,
+        sessions: ChatSessionManager | None = None,
+        snapshot_barrier: SnapshotBarrier | None = None,
+    ) -> None:
         self._data_dir = Path(data_dir).expanduser()
         self._sessions = sessions
         self._owns_sessions = sessions is None
         # Commands and RPC workers share this store. Serialize complete config
         # transactions, including duplicate-cwd checks and failure compensation.
         self._write_lock = RLock()
+        # Deletion archives the anchor and its Sessions together; a data snapshot
+        # of the Runtime's barrier never copies between the two.
+        self._snapshot_barrier = (
+            snapshot_barrier if snapshot_barrier is not None else SnapshotBarrier()
+        )
 
     def close(self) -> None:
         with self._write_lock:
@@ -366,7 +378,7 @@ class ProjectStore:
         restore the active anchor and any prior archive. Product-level reference
         and Run admission guards belong to the caller. Returns the archive path.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._write_lock:
             project_dir = self._stored_project_dir(project_id)
             if project_dir is None:
                 raise ProjectNotFoundError(f"Project not found: {project_id}")

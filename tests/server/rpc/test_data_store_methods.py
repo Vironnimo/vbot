@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.database import (
+    SnapshotBarrier,
     UnregisteredDatabase,
     open_database,
     read_marker,
@@ -44,6 +45,7 @@ def _state(data_dir: Path, sessions: ChatSessionManager) -> SimpleNamespace:
     return SimpleNamespace(
         runtime=SimpleNamespace(
             canonical_databases=lambda: (sessions.database,),
+            snapshot_barrier=SnapshotBarrier(),
             storage=SimpleNamespace(data_dir=data_dir),
             unregister_extension_database=unregister_extension_database,
         ),

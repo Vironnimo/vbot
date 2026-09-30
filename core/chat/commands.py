@@ -14,6 +14,7 @@ from core.chat.messages import ReplySurface
 from core.chat.status_report import (
     ReasoningRenderDescriber,
 )
+from core.database import SnapshotBarrier
 from core.extensions.extensions import invoke_extension_handler
 from core.runs import (
     ChatRunManager,
@@ -404,6 +405,7 @@ class CommandDispatcher:
         terminal_manager: TerminalManager | None = None,
         reasoning_render_describer: ReasoningRenderDescriber | None = None,
         automation_references: AutomationReferences | None = None,
+        snapshot_barrier: SnapshotBarrier | None = None,
     ) -> None:
         from core.chat import _command_builtin, _command_status
 
@@ -418,6 +420,9 @@ class CommandDispatcher:
                 chat_runs=chat_runs,
                 projects=projects,
                 sessions=sessions,
+                snapshot_barrier=(
+                    snapshot_barrier if snapshot_barrier is not None else SnapshotBarrier()
+                ),
                 terminal_manager=terminal_manager,
                 trigger_service=trigger_service,
             ),

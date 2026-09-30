@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -10,6 +11,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import closing
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import pytest
@@ -18,6 +20,7 @@ from core.database import (
     Database,
     DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
+    SnapshotBarrier,
     SnapshotFacts,
     create_data_snapshot,
     data_store_status,
@@ -48,6 +51,7 @@ from tests.core.database.database_test_support import (
     rewrite_marker,
     snapshot_with_notes,
     stored_bodies,
+    write_document,
 )
 
 
@@ -186,6 +190,80 @@ def test_an_online_snapshot_is_one_consistent_copy_while_another_thread_keeps_wr
     # A standalone rollback-journal copy of one instant, without sidecars.
     assert {path.name for path in published.iterdir()} == {"notes.db", SNAPSHOT_MANIFEST_NAME}
     assert manifest_payload(published)["members"]["notes"]["facts"] == {"note_count": 5000}
+
+
+@pytest.mark.asyncio
+async def test_a_capture_waits_for_compound_mutations_in_flight_and_holds_off_new_ones() -> None:
+    barrier = SnapshotBarrier()
+    order: list[str] = []
+    mutating, capture_waiting, finish_mutation = Event(), Event(), Event()
+    captured, finish_capture = Event(), Event()
+
+    def mutation() -> None:
+        with barrier.compound_mutation():
+            mutating.set()
+            assert finish_mutation.wait(10.0)
+            # A nested entry never waits on the capture that waits for this mutation.
+            with barrier.compound_mutation():
+                order.append("mutation")
+
+    def still_waiting() -> bool:
+        capture_waiting.set()  # consulted only while the capture waits
+        return False
+
+    def capture() -> None:
+        with barrier.capture(cancelled=still_waiting) as held:
+            assert held
+            order.append("capture")
+            captured.set()
+            assert finish_capture.wait(10.0)
+
+    async def new_mutation() -> None:
+        async with barrier.compound_mutation_async():
+            order.append("new mutation")
+
+    with ThreadPoolExecutor(max_workers=2) as threads:
+        in_flight = threads.submit(mutation)
+        assert await asyncio.to_thread(mutating.wait, 10.0)
+        capturing = threads.submit(capture)
+        assert await asyncio.to_thread(capture_waiting.wait, 10.0)
+        finish_mutation.set()
+        assert await asyncio.to_thread(captured.wait, 10.0)
+        arriving = asyncio.create_task(new_mutation())
+        await asyncio.sleep(0)  # One loop turn: the new mutation runs up to its wait.
+        assert not arriving.done()
+        finish_capture.set()
+        await arriving
+        in_flight.result(timeout=10.0)
+        capturing.result(timeout=10.0)
+    assert order == ["mutation", "capture", "new mutation"]
+
+
+def test_an_online_snapshot_never_copies_inside_a_compound_mutation(data_dir: Path) -> None:
+    barrier = SnapshotBarrier(capture_wait_seconds=0.0)
+    database = open_database(notes_spec(data_dir))
+    try:
+        with barrier.compound_mutation():
+            add_note(database, "renamed")
+            halfway = create_data_snapshot(
+                data_dir, reason="test", databases=(database,), barrier=barrier
+            )
+            write_document(data_dir, "agents/renamed/agent.json", '{"format_version": 1}\n')
+        health = read_snapshot_health(data_dir)
+        published = create_data_snapshot(
+            data_dir, reason="test", databases=(database,), barrier=barrier
+        )
+    finally:
+        database.close()
+
+    # The attempt fails once the mutation outlasts the barrier's wait budget.
+    assert halfway is None
+    assert health["state"] == "degraded"
+    assert health["reason"].startswith(DatabaseUnavailableError.__name__)
+    assert isinstance(published, Path)
+    manifest = manifest_payload(published)
+    assert manifest["members"]["notes"]["facts"] == {"note_count": 1}
+    assert list(manifest["documents"]) == ["agents/renamed/agent.json"]
 
 
 @pytest.mark.parametrize("observed_at", ["2026-09-01T10:00:00Z", 17])

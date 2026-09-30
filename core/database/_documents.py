@@ -250,6 +250,15 @@ def documents_present(snapshot_dir: Path, members: Mapping[str, DocumentMember])
     return True
 
 
+def documents_size(data_dir: Path) -> int:
+    """The current size of the JSON document set; a document removed meanwhile counts 0."""
+    total = 0
+    for path in snapshot_document_paths(data_dir):
+        with suppress(FileNotFoundError):
+            total += Path(data_dir).joinpath(*_parts(path)).stat().st_size
+    return total
+
+
 def live_documents(data_dir: Path) -> dict[str, str]:
     """The SHA-256 of every current document in ``data_dir`` by relative path."""
     hashes: dict[str, str] = {}

@@ -28,6 +28,7 @@ from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
 from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.calendar import CalendarService
 from core.channels import ChannelService
+from core.database import SnapshotBarrier
 from core.sessions import ChatSessionManager
 from core.utils.logging import get_logger
 
@@ -44,6 +45,7 @@ class AgentRenameServices:
     cron: CronService
     bootstrap: BootstrapService
     calendar: CalendarService
+    snapshot_barrier: SnapshotBarrier
 
 
 @dataclass(frozen=True)
@@ -75,7 +77,10 @@ async def rename_identity_agent(
 
     Blocking work runs on the Session database's pool; Channel changes run on this
     Event Loop, which owns the Channel adapters. The caller holds the Run admission
-    guards of both ids. A failure reverts every change before it is raised.
+    guards of both ids. A failure reverts every change before it is raised. The
+    rename, every reference change and any revert form one compound mutation, so a
+    data snapshot copies the Sessions and the documents either before or after all
+    of it.
     """
     loop = asyncio.get_running_loop()
     return await services.sessions.run_async(_rename, services, agent_id, new_agent_id, loop)
@@ -152,6 +157,16 @@ def complete_pending_rename(services: AgentRenameServices, rename: AgentRename) 
 
 
 def _rename(
+    services: AgentRenameServices,
+    agent_id: str,
+    new_agent_id: str,
+    loop: asyncio.AbstractEventLoop,
+) -> AgentRenameOutcome:
+    with services.snapshot_barrier.compound_mutation():
+        return _rename_and_retarget(services, agent_id, new_agent_id, loop)
+
+
+def _rename_and_retarget(
     services: AgentRenameServices,
     agent_id: str,
     new_agent_id: str,

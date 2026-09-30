@@ -88,6 +88,7 @@ from core.config_validation import (
     JsonConfigValidationError,
     load_validated_json_file,
 )
+from core.database import SnapshotBarrier
 from core.json_documents import (
     JsonDocumentWriteError,
     strip_unknown_fields,
@@ -174,6 +175,7 @@ class AgentStore:
         template_dir: str | Path | None = None,
         defaults_provider: Callable[[], dict[str, Any]] | None = None,
         sessions: ChatSessionManager | None = None,
+        snapshot_barrier: SnapshotBarrier | None = None,
     ) -> None:
         self._data_dir = Path(data_dir).expanduser().resolve()
         self._template_dir = (
@@ -187,6 +189,11 @@ class AgentStore:
         # Hold this across each complete read-modify-write, including Session
         # repair and roster revisions, rather than just the final file replace.
         self._write_lock = RLock()
+        # Create, rename and delete change Sessions and ``agent.json`` together; a
+        # data snapshot of the Runtime's barrier never copies between the two.
+        self._snapshot_barrier = (
+            snapshot_barrier if snapshot_barrier is not None else SnapshotBarrier()
+        )
 
     @contextmanager
     def lifecycle_guard(self) -> Iterator[None]:
@@ -230,7 +237,7 @@ class AgentStore:
         compaction_policy: dict[str, Any] | None = None,
     ) -> Agent:
         """Create and persist a new Agent, initial Session, and Workspace."""
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._write_lock:
             _validate_agent_id(agent_id)
             agent_dir = self._agent_dir(agent_id)
             if agent_dir.exists():
@@ -692,7 +699,7 @@ class AgentStore:
         Agent-owned half and removes the record. While a rename is pending, no
         other rename starts and neither id can be created.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._write_lock:
             _validate_agent_id(agent_id)
             _validate_agent_id(new_agent_id)
             if agent_id == new_agent_id:
@@ -754,7 +761,7 @@ class AgentStore:
         :meth:`finish_rename` with it. On failure the reversed record stays, and
         the next start completes the rollback.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._write_lock:
             self._require_pending_rename(rename)
             reverse = rename.reversed()
             self._write_rename_record(reverse)
@@ -778,7 +785,7 @@ class AgentStore:
         the record cannot be read or neither direction completes; that record
         stays for the next start and the failure is logged.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._write_lock:
             try:
                 rename = self._load_rename_record()
             except (AgentError, OSError) as error:
@@ -950,7 +957,7 @@ class AgentStore:
         custom workspace outside the agent tree (e.g. a repo an identity agent is
         rooted in) still exists after the first move and is archived beside it.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._write_lock:
             agent = self.get(agent_id)
             archive_dir = self._archive_dir(agent_id)
             archive_dir.parent.mkdir(parents=True, exist_ok=True)

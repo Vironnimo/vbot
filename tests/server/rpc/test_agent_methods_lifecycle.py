@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from core.agents import AgentStore
+from core.database import DatabaseUnavailableError, SnapshotBarrier
 from core.runs import Run
 from core.sessions import SessionAddress
 from tests.server.rpc_test_support import (
@@ -56,11 +57,19 @@ async def test_agent_rename_publishes_the_mapping_of_retargeted_references(
         {"subagent_parent": {"agent_id": "coder", "session_id": "parent", "project_id": None}},
     )
     channels = [SimpleNamespace(id="telegram", agent_id="coder")]
+    # A data snapshot that finds a compound mutation in flight gives up at once.
+    state.runtime.snapshot_barrier = SnapshotBarrier(capture_wait_seconds=0.0)
+    snapshots_during_rename: list[str] = []
 
     async def retarget_agent_async(agent_id: str, new_agent_id: str) -> tuple[str, ...]:
         moved = [channel for channel in channels if channel.agent_id == agent_id]
         for channel in moved:
             channel.agent_id = new_agent_id
+        try:
+            with state.runtime.snapshot_barrier.capture():
+                snapshots_during_rename.append("captured")
+        except DatabaseUnavailableError:
+            snapshots_during_rename.append("held off")
         return tuple(channel.id for channel in moved)
 
     state.runtime.channel_service = SimpleNamespace(
@@ -94,6 +103,8 @@ async def test_agent_rename_publishes_the_mapping_of_retargeted_references(
         "session_links_updated": 1,
     }
     assert [job.agent_id for job in cron_jobs] == ["researcher", "coder", "coder"]
+    # Retargeting references is part of one compound mutation with the rename.
+    assert snapshots_during_rename == ["held off"]
     events = [event["payload"] for event in state.event_bus.events]
     assert events == [
         {

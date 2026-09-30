@@ -6,7 +6,8 @@ serialized writes, pooled reads, the per-database worker pool, schema
 evolution (additive reconcile, retired indexes, the migration ledger and
 format generations), the canonical and disposable profiles, the data-store
 marker and maintenance guard, data snapshots (every canonical database plus
-the JSON document set), quarantine, recovery incidents, automatic restore and
+the JSON document set, kept apart from compound mutations by the
+:class:`SnapshotBarrier`), quarantine, recovery incidents, automatic restore and
 the updater's guarded pre-update snapshot rollback. See
 ``.vorch/domain-maps/database.md``. :class:`DisposableDatabase` and
 :func:`projection_failure` serve owners of disposable projections at runtime.
@@ -56,6 +57,7 @@ from core.database.recovery import (
     restore_data_snapshot,
     unregister_database,
 )
+from core.database.snapshot_barrier import SnapshotBarrier
 from core.database.snapshots import (
     create_data_snapshot,
     describe_missing_databases,
@@ -113,6 +115,7 @@ __all__ = [
     "MarkerEntry",
     "Migration",
     "ProjectionFailure",
+    "SnapshotBarrier",
     "SnapshotFacts",
     "SnapshotRestore",
     "UnregisteredDatabase",

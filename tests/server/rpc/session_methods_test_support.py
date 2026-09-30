@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from core.automation import AutomationReferences
 from core.chat import ChatSessionError
+from core.database import SnapshotBarrier
 from core.runs import ChatRunManager
 from core.sessions import (
     FORK_SOURCE_META_KEY,
@@ -255,6 +256,7 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
         agent_resolver=resolver,
         chat_sessions=sessions,
         chat_run_manager=chat_runs,
+        snapshot_barrier=SnapshotBarrier(),
         bootstrap_service=SimpleNamespace(list_jobs=lambda: []),
         cron_service=SimpleNamespace(list_jobs=lambda: []),
         calendar_service=SimpleNamespace(

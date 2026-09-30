@@ -28,7 +28,7 @@ import sqlite3
 import stat
 import uuid
 from collections.abc import Callable, Iterable, Mapping
-from contextlib import closing, suppress
+from contextlib import AbstractContextManager, closing, nullcontext, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,6 +46,7 @@ from core.database._documents import (
     capture_documents,
     documents_payload,
     documents_present,
+    documents_size,
     parse_documents,
     verify_documents,
 )
@@ -68,7 +69,6 @@ from core.database.spec import (
     is_extension_database_name,
     validate_database_name,
 )
-from core.json_documents import snapshot_document_paths
 from core.utils.atomic import atomic_write_text
 from core.utils.timestamps import (
     is_canonical_timestamp,
@@ -79,6 +79,7 @@ from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
     from core.database.database import Database
+    from core.database.snapshot_barrier import SnapshotBarrier
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -803,15 +804,6 @@ def describe_missing_databases(data_dir: Path, marker: DataStoreMarker) -> str |
     )
 
 
-def _document_bytes(data_dir: Path) -> int:
-    """The current size of the JSON document set; a document removed meanwhile counts 0."""
-    total = 0
-    for path in snapshot_document_paths(data_dir):
-        with suppress(FileNotFoundError):
-            total += data_dir.joinpath(*path.split("/")).stat().st_size
-    return total
-
-
 def create_data_snapshot(
     data_dir: Path,
     *,
@@ -819,6 +811,7 @@ def create_data_snapshot(
     databases: Iterable[Database] = (),
     specs: Iterable[DatabaseSpec] = (),
     cancelled: Callable[[], bool] | None = None,
+    barrier: SnapshotBarrier | None = None,
 ) -> Path | None:
     """Capture, verify and atomically publish one snapshot of the durable data.
 
@@ -827,11 +820,14 @@ def create_data_snapshot(
     online through the handle, so live writers keep committing. Every other
     registered database is copied from its file, which must not be written by
     another process meanwhile. Documents are copied after the databases, each
-    read whole at one instant. ``specs`` add owner facts for members not open
-    here. Returns ``None`` when there is nothing to capture, the attempt was
-    cancelled, or it failed; failures are recorded in the snapshot health. A
-    registered database without its file fails the attempt with the operator's
-    next step (``describe_missing_databases``) instead of being skipped.
+    read whole at one instant. A process that mutates the data meanwhile passes
+    its ``barrier``, so every member is copied between two of its compound
+    mutations (``core.database.snapshot_barrier``). ``specs`` add owner facts for
+    members not open here. Returns ``None`` when there is nothing to capture,
+    the attempt was cancelled, or it failed; failures are recorded in the
+    snapshot health. A registered database without its file fails the attempt
+    with the operator's next step (``describe_missing_databases``) instead of
+    being skipped.
     Refuses with ``DatabaseFormatError`` while data maintenance is incomplete.
     """
     data_dir = Path(data_dir)
@@ -866,7 +862,7 @@ def create_data_snapshot(
                 canonical_database_path(data_dir, name).stat().st_size
                 for name in marker.databases
                 if canonical_database_path(data_dir, name).exists()
-            ) + _document_bytes(data_dir)
+            ) + documents_size(data_dir)
             if shutil.disk_usage(root).free < needed + SNAPSHOT_RESERVE_BYTES:
                 _record_snapshot_health(
                     data_dir, "degraded", reason="insufficient snapshot reserve"
@@ -878,19 +874,31 @@ def create_data_snapshot(
         snapshot_id = _new_snapshot_id()
         partial = root / f".{snapshot_id}.{os.getpid()}{SNAPSHOT_PARTIAL_SUFFIX}"
         partial.mkdir(parents=False, exist_ok=False)
+        # Copy every member while the barrier holds; verify the copies afterwards.
+        capture: AbstractContextManager[bool] = (
+            nullcontext(True) if barrier is None else barrier.capture(cancelled=cancelled)
+        )
+        with capture as held:
+            if not held:
+                raise _SnapshotCancelledError
+            for name in sorted(marker.databases):
+                destination = partial / member_file_name(name)
+                source_path = canonical_database_path(data_dir, name)
+                if not source_path.is_file():
+                    raise DatabaseUnavailableError(missing_database_reason(name))
+                handle = open_databases.get(name)
+                if handle is not None:
+                    copied = handle.backup(destination, cancelled=cancelled)
+                else:
+                    copied = _copy_file_database(source_path, destination, cancelled=cancelled)
+                if not copied or (cancelled is not None and cancelled()):
+                    raise _SnapshotCancelledError
+            documents = capture_documents(data_dir, partial, cancelled=cancelled)
+        if documents is None:
+            raise _SnapshotCancelledError
         members: dict[str, SnapshotMember] = {}
         for name, entry in sorted(marker.databases.items()):
             destination = partial / member_file_name(name)
-            source_path = canonical_database_path(data_dir, name)
-            if not source_path.is_file():
-                raise DatabaseUnavailableError(missing_database_reason(name))
-            handle = open_databases.get(name)
-            if handle is not None:
-                copied = handle.backup(destination, cancelled=cancelled)
-            else:
-                copied = _copy_file_database(source_path, destination, cancelled=cancelled)
-            if not copied or (cancelled is not None and cancelled()):
-                raise _SnapshotCancelledError
             file_size = destination.stat().st_size
             digest = _sha256(destination, cancelled=cancelled)
             verification = verify_database_file(
@@ -914,9 +922,6 @@ def create_data_snapshot(
                 migrations=verification.migrations,
                 facts=verification.facts,
             )
-        documents = capture_documents(data_dir, partial, cancelled=cancelled)
-        if documents is None:
-            raise _SnapshotCancelledError
         manifest = SnapshotManifest(
             snapshot_id=snapshot_id,
             reason=reason,

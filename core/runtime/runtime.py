@@ -27,7 +27,7 @@ from core.automation import (
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
-from core.database import Database, UnregisteredDatabase
+from core.database import Database, SnapshotBarrier, UnregisteredDatabase
 from core.extensions import (
     ExtensionRegistry,
     InteractionEvent,
@@ -154,6 +154,9 @@ class Runtime:
             None
         )
         self._close_task: asyncio.Task[None] | None = None
+        # Lives as long as the Runtime: a restart keeps coordinating with a
+        # data snapshot that is still copying.
+        self._snapshot_barrier = SnapshotBarrier()
         self._clear_service_references()
 
     def _clear_service_references(self) -> None:
@@ -812,6 +815,7 @@ class Runtime:
             cron=cron,
             bootstrap=bootstrap_jobs,
             calendar=calendar,
+            snapshot_barrier=self._snapshot_barrier,
         )
 
     def reload_skills(self) -> None:
@@ -1043,6 +1047,16 @@ class Runtime:
     @property
     def extensions(self) -> ExtensionRegistry | None:
         return self._extensions
+
+    @property
+    def snapshot_barrier(self) -> SnapshotBarrier:
+        """Keeps data snapshots apart from this Runtime's compound mutations.
+
+        Every change of a canonical database together with a durable JSON
+        document enters it shared as one unit; a data snapshot of this data
+        directory passes it to ``create_data_snapshot``.
+        """
+        return self._snapshot_barrier
 
     def canonical_databases(self) -> tuple[Database, ...]:
         """Every canonical database this Runtime has open.

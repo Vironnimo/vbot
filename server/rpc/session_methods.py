@@ -235,14 +235,17 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
                 await state.runtime.terminal_manager.close_scope(
                     TerminalOwner(project_id, agent_id, session_id)
                 )
-                await chat_sessions.archive(_session_address(agent_id, session_id, project_id))
-                next_session_id = await chat_sessions.run_async(
-                    _resolve_post_delete_landing,
-                    state,
-                    agent_id,
-                    session_id,
-                    project_id,
-                )
+                # Archiving the row and re-aiming the current pointer is one unit
+                # for data snapshots.
+                async with state.runtime.snapshot_barrier.compound_mutation_async():
+                    await chat_sessions.archive(_session_address(agent_id, session_id, project_id))
+                    next_session_id = await chat_sessions.run_async(
+                        _resolve_post_delete_landing,
+                        state,
+                        agent_id,
+                        session_id,
+                        project_id,
+                    )
                 await state.runtime.remove_session_from_recall(agent_id, session_id, project_id)
         except RunAdmissionBlockedError as exc:
             raise RpcError(

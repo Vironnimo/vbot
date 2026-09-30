@@ -474,32 +474,35 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
             try:
                 async with _state_chat_runs(state).project_admission_guard(project_id):
                     _ensure_no_automation_reference(state, project_id)
-                    rooted_agents = state.runtime.agents.agents_rooted_in(project_id)
-                    completed_updates: list[tuple[Any, Any]] = []
-                    try:
-                        await state.runtime.terminal_manager.close_project_scope(project_id)
-                        for agent in rooted_agents:
-                            default_workspace = state.runtime.agents.default_workspace(agent.id)
-                            changes: JsonObject = {"root_project_id": None}
-                            workspace_changes = agent.workspace != default_workspace
-                            if workspace_changes:
-                                changes["workspace"] = default_workspace
-                            result = state.runtime.agents.update_with_metadata(
-                                agent.id,
-                                copy_workspace_identity_files=(
-                                    copy_identity_files and workspace_changes
-                                ),
-                                **changes,
-                            )
-                            completed_updates.append((agent, result))
-                            affected_agents.append(agent.id)
-                            copied_files[agent.id] = list(result.copied_files)
-                            backed_up_files[agent.id] = list(result.backed_up_files)
-                        archive_path = projects.delete(project_id)
-                    except Exception:
-                        for previous_agent, result in reversed(completed_updates):
-                            state.runtime.agents.restore_update(previous_agent, result)
-                        raise
+                    # Unrooting Agents and archiving the anchor and its Sessions is
+                    # one unit for data snapshots, compensation included.
+                    async with state.runtime.snapshot_barrier.compound_mutation_async():
+                        rooted_agents = state.runtime.agents.agents_rooted_in(project_id)
+                        completed_updates: list[tuple[Any, Any]] = []
+                        try:
+                            await state.runtime.terminal_manager.close_project_scope(project_id)
+                            for agent in rooted_agents:
+                                default_workspace = state.runtime.agents.default_workspace(agent.id)
+                                changes: JsonObject = {"root_project_id": None}
+                                workspace_changes = agent.workspace != default_workspace
+                                if workspace_changes:
+                                    changes["workspace"] = default_workspace
+                                result = state.runtime.agents.update_with_metadata(
+                                    agent.id,
+                                    copy_workspace_identity_files=(
+                                        copy_identity_files and workspace_changes
+                                    ),
+                                    **changes,
+                                )
+                                completed_updates.append((agent, result))
+                                affected_agents.append(agent.id)
+                                copied_files[agent.id] = list(result.copied_files)
+                                backed_up_files[agent.id] = list(result.backed_up_files)
+                            archive_path = projects.delete(project_id)
+                        except Exception:
+                            for previous_agent, result in reversed(completed_updates):
+                                state.runtime.agents.restore_update(previous_agent, result)
+                            raise
             except RunAdmissionBlockedError as exc:
                 raise RpcError(
                     RPC_ERROR_PROJECT_BUSY,
