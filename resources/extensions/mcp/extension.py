@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 import uuid
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -42,7 +42,6 @@ from ._definitions import (
     MCP_OPERATION_DESCRIPTIONS,
     MCP_OPERATIONS,
     MCP_PARAMETERS,
-    PUBLISHED_TARGETS_PER_CONNECTION,
     SEARCH_MAX_LIMIT,
     SEARCH_PAGE_CHARACTERS,
     SEARCH_PAGE_SIZE,
@@ -81,6 +80,33 @@ _TARGET_KINDS = ("tool", "resource", "template", "prompt", "operation")
 # What a search without kind covers: the application's own items.
 _APPLICATION_KINDS = ("tool", "resource", "template", "prompt")
 
+# The protocol operation a call of each application kind performs; an operation
+# target performs the operation it names.
+_KIND_OPERATIONS = {
+    "tool": "tools/call",
+    "resource": "resources/read",
+    "template": "resources/read",
+    "prompt": "prompts/get",
+}
+
+# The definition fields a target fingerprint covers: what the item does and how it
+# is called. Metadata a server can vary between listings (``_meta``, icons, a
+# resource's size or modification date) leaves the fingerprint unchanged.
+_FINGERPRINT_FIELDS = {
+    "tool": (
+        "name",
+        "title",
+        "description",
+        "inputSchema",
+        "outputSchema",
+        "annotations",
+        "execution",
+    ),
+    "resource": ("name", "title", "uri", "description", "mimeType"),
+    "template": ("name", "title", "uriTemplate", "description", "mimeType"),
+    "prompt": ("name", "title", "description", "arguments"),
+}
+
 _DETAIL_CHARACTERS = 300
 
 
@@ -108,6 +134,31 @@ def _folded(name: str) -> str:
     return re.sub(r"[\s_-]+", "_", name.strip().casefold())
 
 
+def _candidates(entries: list[dict[str, Any]], kind: str | None) -> list[dict[str, Any]]:
+    """The items a target of *kind* can name; the connection entry only by its full target."""
+    return [
+        entry
+        for entry in entries
+        if entry["kind"] != "connection" and (kind is None or entry["kind"] == kind)
+    ]
+
+
+def _item_names(entry: dict[str, Any]) -> set[str]:
+    """The names a target can use for *entry*: its name and a Resource's URI or template."""
+    definition = entry["definition"]
+    return {
+        value
+        for value in (entry["name"], definition.get("uri"), definition.get("uriTemplate"))
+        if isinstance(value, str)
+    }
+
+
+def _operation(entry: dict[str, Any]) -> str:
+    """The protocol operation a call of *entry* performs."""
+    operation: str = _KIND_OPERATIONS.get(entry["kind"], entry["name"])
+    return operation
+
+
 def _one_line(text: str, limit: int) -> str:
     return " ".join(text.split())[:limit]
 
@@ -129,8 +180,6 @@ class MCPService:
         self.jobs: dict[str, asyncio.Task[dict[str, Any]]] = {}
         self._lock = asyncio.Lock()
         self._runner_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        # Per connection, the targets its results have shown, most recently seen last.
-        self._published: dict[str, OrderedDict[str, None]] = {}
         # Per connection, the server title and Tool names its description shows.
         self.catalogs = CatalogSummaries(api.logger)
         self._closed = False
@@ -326,8 +375,15 @@ class MCPService:
 
     @staticmethod
     def _target(kind: str, name: str, definition: Any) -> str:
+        """``kind:name:fingerprint``; the fingerprint changes with the definition's meaning."""
+        fields = _FINGERPRINT_FIELDS.get(kind)
+        meaning = (
+            definition
+            if fields is None
+            else {field: definition[field] for field in fields if field in definition}
+        )
         fingerprint = hashlib.sha256(
-            json.dumps(definition, sort_keys=True, ensure_ascii=False).encode()
+            json.dumps(meaning, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()[:TARGET_FINGERPRINT_LENGTH]
         return f"{kind}:{name}:{fingerprint}"
 
@@ -476,10 +532,9 @@ class MCPService:
             if f"mcp_{runner.id}" not in allowed:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
         entries = self._entries(runner, allowed)
-        self._remember(runner.id, entries)
         if action == "search":
             return await self._search(runner, context, arguments, entries)
-        entry, note, failure = self._resolve(runner.id, entries, arguments)
+        entry, note, failure = self._resolve(entries, arguments)
         if failure is not None:
             if failure["error"]["code"] == "mcp_unknown_target" and self._names_denied_tool(
                 runner, arguments, allowed
@@ -505,21 +560,7 @@ class MCPService:
             for entry in self._entries(runner, None)
             if entry["kind"] == "tool" and remote_tool_name(runner.id, entry["name"]) not in allowed
         ]
-        return bool(denied) and self._resolve(runner.id, denied, arguments)[0] is not None
-
-    def _remember(self, connection: str, entries: list[dict[str, Any]]) -> None:
-        """Record the application targets this connection can show, within a bound.
-
-        A target whose definition changed later is then recognized as stale; one
-        never recorded (invented, or from before a restart) reads as its name.
-        """
-        record = self._published.setdefault(connection, OrderedDict())
-        for entry in entries:
-            if entry["kind"] in _APPLICATION_KINDS:
-                record[entry["target"]] = None
-                record.move_to_end(entry["target"])
-        while len(record) > PUBLISHED_TARGETS_PER_CONNECTION:
-            record.popitem(last=False)
+        return len(self._lookup(denied, arguments["target"])[0]) == 1
 
     @staticmethod
     def _noted(result: dict[str, Any], note: str) -> dict[str, Any]:
@@ -676,65 +717,65 @@ class MCPService:
             count=count, verb="matches" if count == 1 else "match", call=call
         )
 
-    def _resolve(
-        self, connection: str, entries: list[dict[str, Any]], arguments: dict[str, Any]
-    ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
-        """Find the one target a describe or call names; never choose between several.
+    @staticmethod
+    def _lookup(
+        entries: list[dict[str, Any]], target: str
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """The items *target* names, and the fingerprint it carries after the name.
 
         A full target from search matches exactly. A name, with or without its
-        kind, matches when it names one item (ignoring case and separators).
-        A fingerprint of an earlier definition this connection showed is not
-        substituted for a call; one it never showed is ignored, with a note.
+        kind, names the items it spells, ignoring case and separators.
         """
-        target = arguments["target"]
         exact = next((entry for entry in entries if entry["target"] == target), None)
         if exact is not None:
-            return exact, None, None
+            return [exact], None
         kind, name, fingerprint = _parse_target(target)
-        pool = [
-            entry
-            for entry in entries
-            if entry["kind"] != "connection" and (kind is None or entry["kind"] == kind)
-        ]
-
-        def names(entry: dict[str, Any]) -> set[str]:
-            definition = entry["definition"]
-            return {
-                value
-                for value in (entry["name"], definition.get("uri"), definition.get("uriTemplate"))
-                if isinstance(value, str)
-            }
-
-        named = [entry for entry in pool if name in names(entry)]
+        pool = _candidates(entries, kind)
+        named = [entry for entry in pool if name in _item_names(entry)]
         if not named:
+            folded = _folded(name)
             named = [
-                entry for entry in pool if _folded(name) in {_folded(item) for item in names(entry)}
+                entry for entry in pool if folded in {_folded(item) for item in _item_names(entry)}
             ]
+        return named, fingerprint
+
+    def _resolve(
+        self, entries: list[dict[str, Any]], arguments: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
+        """Find the one item a describe or call names; never choose between several.
+
+        A fingerprint that does not match the item's current definition may come
+        from an earlier definition, so a call that can change something is refused
+        with the current target. Describe and reading calls use the current
+        definition and say so in a note.
+        """
+        target = arguments["target"]
+        named, fingerprint = self._lookup(entries, target)
         if len(named) == 1:
             entry = named[0]
-            sent = f"{entry['kind']}:{entry['name']}:{fingerprint}"
-            if fingerprint is None or sent == entry["target"]:
+            current = entry["target"]
+            if fingerprint is None or current == f"{entry['kind']}:{entry['name']}:{fingerprint}":
                 return entry, None, None
-            if sent not in self._published.get(connection, {}):
-                note = MCP_MESSAGES["target_unrecognized"].format(
-                    current=entry["target"], sent=target
+            if arguments["action"] == "describe" or _operation(entry) in READ_OPERATIONS:
+                return (
+                    entry,
+                    MCP_MESSAGES["target_current"].format(current=current, sent=target),
+                    None,
                 )
-                return entry, note, None
-            if arguments["action"] == "describe":
-                return entry, MCP_MESSAGES["target_updated"].format(previous=target), None
-            describe = compact({"action": "describe", "target": entry["target"]})
             return (
                 None,
                 None,
                 tool_failure(
-                    "mcp_target_changed",
-                    MCP_MESSAGES["target_changed"].format(
+                    "mcp_target_mismatch",
+                    MCP_MESSAGES["target_mismatch"].format(
                         item=f"{entry['kind']} {entry['name']}",
-                        target=entry["target"],
-                        describe=describe,
+                        sent=target,
+                        target=current,
+                        describe=compact({"action": "describe", "target": current}),
                     ),
                 ),
             )
+        kind, name, _ = _parse_target(target)
         shown = name[:80] or target[:80]
         if len(named) > 1:
             return (
@@ -747,7 +788,13 @@ class MCPService:
                     ),
                 ),
             )
-        return None, None, tool_failure("mcp_unknown_target", self._unknown(pool, kind, shown))
+        return (
+            None,
+            None,
+            tool_failure(
+                "mcp_unknown_target", self._unknown(_candidates(entries, kind), kind, shown)
+            ),
+        )
 
     @staticmethod
     def _unknown(pool: list[dict[str, Any]], kind: str | None, name: str) -> str:
@@ -852,14 +899,10 @@ class MCPService:
                 allowed,
             )
         if entry["kind"] == "resource":
-            operation, inputs = "resources/read", {"uri": entry["definition"]["uri"]}
-        elif entry["kind"] == "template":
-            operation = "resources/read"
+            inputs = {"uri": entry["definition"]["uri"]}
         elif entry["kind"] == "prompt":
-            operation, inputs = "prompts/get", {"name": entry["name"], "arguments": inputs}
-        else:
-            operation = entry["name"]
-        return await self._call(runner, context, operation, inputs)
+            inputs = {"name": entry["name"], "arguments": inputs}
+        return await self._call(runner, context, _operation(entry), inputs)
 
     @staticmethod
     def _invalid_target_arguments(
@@ -1103,7 +1146,6 @@ class MCPService:
             await run_tool_worker(self.store.save, records)
             self.connections = records
             if operation == "remove":
-                self._published.pop(identifier, None)
                 self.catalogs.forget(identifier)
             if operation in {"disable", "remove"}:
                 await self._stop(identifier)
