@@ -374,3 +374,104 @@ function parseJsonValue(value) {
     return value;
   }
 }
+
+const FILE_CHANGE_KINDS = new Set([
+  'created',
+  'updated',
+  'replaced',
+  'deleted',
+  'moved',
+]);
+const DIFF_LINE_KINDS = { '+': 'added', '-': 'removed', ' ': 'context' };
+
+// The server-computed diffs of the files a Tool changed (`display.file_changes`),
+// with rows numbered from each hunk's start. Malformed entries are dropped.
+export function toolFileChanges(tool) {
+  const changes = toolDisplay(tool)?.file_changes;
+  if (!Array.isArray(changes)) return [];
+  return changes.flatMap((change) => {
+    if (
+      !isPlainObject(change) ||
+      typeof change.path !== 'string' ||
+      !change.path ||
+      !FILE_CHANGE_KINDS.has(change.change)
+    )
+      return [];
+    const hunks = Array.isArray(change.hunks)
+      ? change.hunks.filter(
+          (hunk) =>
+            isPlainObject(hunk) &&
+            isLineNumber(hunk.old_start) &&
+            isLineNumber(hunk.new_start) &&
+            Array.isArray(hunk.lines) &&
+            hunk.lines.every(
+              (line) => typeof line === 'string' && line[0] in DIFF_LINE_KINDS,
+            ),
+        )
+      : [];
+    return [
+      {
+        path: change.path,
+        change: change.change,
+        destination:
+          typeof change.destination === 'string' && change.destination
+            ? change.destination
+            : '',
+        added: countValue(change.added),
+        removed: countValue(change.removed),
+        binary: change.binary === true,
+        omittedLines: countValue(change.omitted_lines),
+        rows: diffRows(hunks),
+      },
+    ];
+  });
+}
+
+// One row per diff line; a `gap` row separates hunks. Removed lines carry
+// their old line number, added and context lines their new one.
+function diffRows(hunks) {
+  const rows = [];
+  hunks.forEach((hunk, hunkIndex) => {
+    if (hunkIndex > 0) rows.push({ kind: 'gap', number: null, text: '' });
+    let oldNumber = hunk.old_start;
+    let newNumber = hunk.new_start;
+    for (const line of hunk.lines) {
+      const kind = DIFF_LINE_KINDS[line[0]];
+      const text = line.slice(1);
+      if (kind === 'removed') {
+        rows.push({ kind, number: oldNumber, text });
+        oldNumber += 1;
+      } else {
+        rows.push({ kind, number: newNumber, text });
+        newNumber += 1;
+        if (kind === 'context') oldNumber += 1;
+      }
+    }
+  });
+  return rows;
+}
+
+// The unified-diff text of the shown lines, for the Copy action.
+export function fileChangesCopyText(changes) {
+  return changes
+    .map((change) => {
+      const target = change.destination
+        ? `${change.path} -> ${change.destination}`
+        : change.path;
+      const lines = change.rows.map((row) =>
+        row.kind === 'gap'
+          ? '...'
+          : `${row.kind === 'added' ? '+' : row.kind === 'removed' ? '-' : ' '}${row.text}`,
+      );
+      return [target, ...lines].join('\n');
+    })
+    .join('\n\n');
+}
+
+function isLineNumber(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function countValue(value) {
+  return Number.isInteger(value) && value > 0 ? value : 0;
+}

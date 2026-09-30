@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   appendEvents,
+  detailRow,
   detailText,
   flushSync,
   setupChatTimelineSuite,
@@ -273,6 +274,76 @@ describe('ChatTimeline Tools', () => {
       const resultCode = document.querySelector('.teb-code.error');
       expect(resultCode.textContent).toContain('invalid_regex');
       expect(resultCode.textContent).toContain('Invalid regular expression');
+    });
+
+    it('shows the changed files as a numbered diff in place of empty Args', () => {
+      const display = structuredDisplay({
+        hidden_argument_keys: ['patch'],
+        file_changes: [
+          {
+            path: 'src/app.py',
+            change: 'updated',
+            added: 1,
+            removed: 1,
+            hunks: [
+              { old_start: 4, new_start: 4, lines: [' a', '-b', '+B', ' c'] },
+              { old_start: 20, new_start: 20, lines: ['+tail'] },
+            ],
+            omitted_lines: 7,
+          },
+          {
+            path: 'logo.png',
+            change: 'moved',
+            destination: 'img/logo.png',
+            added: 0,
+            removed: 0,
+            hunks: [],
+            binary: true,
+          },
+        ],
+      });
+      timeline.render(
+        sessionWithTool([
+          toolStarted('call', 'apply_patch', { patch: '*** Begin Patch' }),
+          toolResult(
+            'call',
+            'apply_patch',
+            { ok: true, data: { status: 'applied', content: 'Updated.' } },
+            { display },
+          ),
+        ]),
+      );
+
+      expect(detailRow('chat.toolArgs')).toBeNull();
+      const files =
+        detailRow('chat.toolChanges').querySelectorAll('.tool-diff-file');
+      expect(files[0].querySelector('.tool-diff-file__path').textContent).toBe(
+        'src/app.py',
+      );
+      const rows = Array.from(
+        files[0].querySelectorAll('.tool-diff-line'),
+        (row) => [
+          row.className.replace('tool-diff-line tool-diff-line--', ''),
+          row.querySelector('.tool-diff-line__number').textContent,
+          row.querySelector('.tool-diff-line__text').textContent,
+        ],
+      );
+      expect(rows).toEqual([
+        ['context', '4', 'a'],
+        ['removed', '5', 'b'],
+        ['added', '5', 'B'],
+        ['context', '6', 'c'],
+        ['gap', '', '⋯'],
+        ['added', '20', 'tail'],
+      ]);
+      expect(files[0].textContent).toContain(
+        t('chat.fileChange.omitted', { count: 7 }),
+      );
+      expect(files[1].textContent).toContain('logo.png → img/logo.png');
+      expect(files[1].textContent).toContain(t('chat.fileChange.binary'));
+      expect(detailText('chat.toolResultLabel')).toBe(
+        'status: applied\ncontent: Updated.',
+      );
     });
 
     it.each([

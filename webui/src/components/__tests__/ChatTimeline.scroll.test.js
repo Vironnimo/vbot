@@ -288,6 +288,28 @@ describe('ChatTimeline scrolling', () => {
     await waitForCondition(() => view.geometry.currentScrollTop() === 600);
   });
 
+  it('keeps following while upward input scrolls a nested output box', async () => {
+    const view = await mountSessions();
+    const box = document.createElement('div');
+    box.style.overflowY = 'auto';
+    Object.defineProperty(box, 'scrollHeight', { get: () => 900 });
+    Object.defineProperty(box, 'clientHeight', { get: () => 300 });
+    box.scrollTop = 200;
+    view.container.querySelector('.msg').append(box);
+
+    box.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+    view.geometry.setScrollHeight(2400);
+    timeline.notifyContentResize();
+    await waitForCondition(() => view.geometry.currentScrollTop() === 2400);
+
+    // At the box's top the wheel moves the timeline again.
+    box.scrollTop = 0;
+    box.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+    view.geometry.setScrollHeight(2600);
+    timeline.notifyContentResize();
+    await waitForCondition(() => view.geometry.currentScrollTop() === 2400);
+  });
+
   it('resumes following when the user returns to the bottom', async () => {
     const view = await mountSessions();
 
