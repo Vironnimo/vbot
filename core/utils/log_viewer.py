@@ -1,24 +1,30 @@
 """Read-only daily log access and live update watching.
 
-Every log-directory scan, stat, file read and parse runs on the ``log-viewer``
-worker pool: a watched daily log is re-read and re-parsed on each change, up to
-ten times a second while the server logs, and must never stall the Event Loop.
-Cursor handoffs and watcher state stay on the Event Loop.
+Every log-directory scan, stat, file read, parse and cursor hash runs on the
+``log-viewer`` worker pool: a watched daily log is re-read and re-parsed on each
+change, up to ten times a second while the server logs, and must never stall the
+Event Loop. Watcher state and event fan-out stay on the Event Loop.
+
+A read cursor holds no server state: it names the bytes the read covered (their
+length and a digest bound to the file name), so any number of readers can each
+resume from their own read, in any order, as often as they like.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
 import re
 from collections.abc import AsyncGenerator, Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from watchfiles import awatch
 
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import (
     extract_websocket_path_from_message,
     get_logger,
@@ -27,6 +33,8 @@ from core.utils.logging import (
 from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
+# A subscriber queue carries events; ``None`` ends the subscriber's stream.
+_SubscriberQueue = asyncio.Queue[JsonObject | None]
 
 _LOGGER = get_logger("log_viewer")
 
@@ -36,9 +44,12 @@ CATALOG_EVENT = "catalog"
 UNKNOWN_LEVEL = "unknown"
 UNKNOWN_LOGGER_NAME = ""
 UNKNOWN_TIMESTAMP = ""
-MAX_READ_HANDOFFS = 32
 WATCHER_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 _LOG_WORKERS = BoundedWorkerPool(name="log-viewer", max_workers=2)
+
+# ``v1.<byte length>.<sha256 hex>``; both fields are bounded, so a forged cursor
+# costs one anchored match.
+_CURSOR_PATTERN = re.compile(r"v1\.(0|[1-9][0-9]{0,15})\.([0-9a-f]{64})")
 
 LOG_LINE_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) "
@@ -62,14 +73,16 @@ class _WatcherState:
     catalog: tuple[str, ...]
     directory_modified_ns: int | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
-    subscribers: list[asyncio.Queue[JsonObject]] = field(default_factory=list)
+    subscribers: list[_SubscriberQueue] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
 
 
-@dataclass(slots=True)
-class _ReadHandoff:
-    file_name: str
-    snapshot: _LogSnapshot
+@dataclass(frozen=True, slots=True)
+class _ReadCursor:
+    """What one ``read_file`` covered: the file's first ``byte_length`` bytes, by digest."""
+
+    byte_length: int
+    digest: str
 
 
 @dataclass(slots=True)
@@ -169,21 +182,18 @@ class LogViewer:
 
     def __init__(self, data_dir: str | Path) -> None:
         self._logs_dir = Path(data_dir).expanduser() / "logs"
-        self._read_handoffs: dict[str, _ReadHandoff] = {}
-        self._latest_read_cursor_by_file: dict[str, str] = {}
         self._watchers: dict[str, _WatcherState] = {}
         self._watch_lock = asyncio.Lock()
+        # Files whose watcher polls currently fail, so a failure logs once per streak.
+        self._poll_failures = LoggedConditions(limit=64)
 
     async def list_files(self) -> JsonObject:
         return await _LOG_WORKERS.run(self._list_files)
 
     async def read_file(self, file_name: str) -> JsonObject:
-        file_path, snapshot = await _LOG_WORKERS.run(self._read_existing_file, file_name)
-        return {
-            "file": file_path.name,
-            "entries": snapshot.entries,
-            "cursor": self._store_read_handoff(file_path.name, snapshot),
-        }
+        """Return the file's parsed entries and the cursor that resumes after them."""
+        file_path, snapshot, cursor = await _LOG_WORKERS.run(self._read_existing_file, file_name)
+        return {"file": file_path.name, "entries": snapshot.entries, "cursor": cursor}
 
     async def subscribe(
         self,
@@ -191,19 +201,32 @@ class LogViewer:
         *,
         cursor: str | None = None,
     ) -> AsyncGenerator[JsonObject, None]:
+        """Stream the file's changes and the log directory's catalog changes.
+
+        With a ``read_file`` cursor the stream first replays what changed since
+        that read; when the file no longer starts with the bytes the read covered
+        (truncated, rotated, rewritten, or another file's cursor), that replay is
+        a ``reset`` carrying the whole file. Without a cursor the stream starts at
+        the file's current end. The stream ends when the file's watcher stops
+        unexpectedly; the caller then reads again and subscribes to a fresh one.
+        Raises ``ValueError`` for an invalid file name or a malformed cursor and
+        ``FileNotFoundError`` for a missing file.
+        """
+        read_cursor = None if cursor is None else _parse_cursor(cursor)
         file_path = await _LOG_WORKERS.run(self._resolve_existing_file, file_name)
-        handoff_snapshot = self._take_read_handoff(file_path.name, cursor)
-        queue: asyncio.Queue[JsonObject] = asyncio.Queue()
+        queue: _SubscriberQueue = asyncio.Queue()
         pending_event: JsonObject | None = None
         catch_up_event: JsonObject | None = None
-        catch_up_subscribers: list[asyncio.Queue[JsonObject]] = []
+        catch_up_subscribers: list[_SubscriberQueue] = []
 
         # Finding or starting the watcher and registering the queue are one step under
         # the lock that also retires watchers. Split, the last other subscriber could
         # leave in between, evict the watcher and leave this queue on a dead one.
         async with self._watch_lock:
             watcher = await self._ensure_watcher(file_path.name)
-            next_snapshot = await _LOG_WORKERS.run(self._read_snapshot, file_path)
+            next_snapshot, read_snapshot = await _LOG_WORKERS.run(
+                _read_subscribe_start, file_path, read_cursor
+            )
             previous_snapshot = watcher.snapshot
             catch_up_event = _build_snapshot_event(file_path.name, previous_snapshot, next_snapshot)
             if catch_up_event is not None:
@@ -211,14 +234,8 @@ class LogViewer:
             watcher.snapshot = next_snapshot
             watcher.subscribers.append(queue)
 
-            if handoff_snapshot is not None:
-                pending_event = _build_snapshot_event(
-                    file_path.name, handoff_snapshot, next_snapshot
-                )
-            else:
-                pending_event = _build_snapshot_event(
-                    file_path.name, previous_snapshot, next_snapshot
-                )
+            if read_snapshot is not None:
+                pending_event = _build_snapshot_event(file_path.name, read_snapshot, next_snapshot)
 
         if catch_up_event is not None:
             for subscriber in catch_up_subscribers:
@@ -228,12 +245,12 @@ class LogViewer:
             queue.put_nowait(pending_event)
 
         try:
-            while True:
-                yield await queue.get()
+            while (event := await queue.get()) is not None:
+                yield event
         except asyncio.CancelledError:
             return
         finally:
-            await self._remove_subscriber(file_path.name, queue)
+            await self._remove_subscriber(watcher, queue)
 
     async def aclose(self) -> None:
         async with self._watch_lock:
@@ -259,11 +276,14 @@ class LogViewer:
         return len(watcher.subscribers)
 
     async def _ensure_watcher(self, file_name: str) -> _WatcherState:
-        """Return the file's watcher, starting it on first use; the caller holds the lock."""
+        """Return the file's running watcher, starting one if needed; the caller holds the lock."""
 
         watcher = self._watchers.get(file_name)
         if watcher is not None:
-            return watcher
+            if watcher.task is not None and not watcher.task.done():
+                return watcher
+            # Its watch loop has ended and serves nobody: never attach to it.
+            self._retire_locked(watcher)
 
         directory_modified_ns, catalog, snapshot = await _LOG_WORKERS.run(
             self._read_watch_start, self._logs_dir / file_name
@@ -274,7 +294,7 @@ class LogViewer:
             catalog=catalog,
             directory_modified_ns=directory_modified_ns,
         )
-        watcher.task = asyncio.create_task(self._watch_file(watcher))
+        watcher.task = asyncio.create_task(self._run_watcher(watcher))
 
         def on_done(task: asyncio.Task[None], file_name: str = file_name) -> None:
             _log_watcher_task_result(file_name, task)
@@ -283,35 +303,48 @@ class LogViewer:
         self._watchers[file_name] = watcher
         return watcher
 
-    async def _remove_subscriber(
-        self,
-        file_name: str,
-        queue: asyncio.Queue[JsonObject],
-    ) -> None:
+    def _retire_locked(self, watcher: _WatcherState) -> None:
+        """Unregister a watcher whose loop ended and end its subscribers' streams.
+
+        The caller holds the lock. Ending the streams closes their sockets, so each
+        accessor reads again and subscribes to a fresh watcher instead of waiting
+        on one that no longer delivers anything.
+        """
+        watcher.stop_event.set()
+        if self._watchers.get(watcher.file_name) is watcher:
+            del self._watchers[watcher.file_name]
+        subscribers, watcher.subscribers = watcher.subscribers, []
+        for subscriber in subscribers:
+            subscriber.put_nowait(None)
+
+    async def _remove_subscriber(self, watcher: _WatcherState, queue: _SubscriberQueue) -> None:
         task: asyncio.Task[None] | None = None
 
         async with self._watch_lock:
-            watcher = self._watchers.get(file_name)
-            if watcher is None:
+            if queue not in watcher.subscribers:
                 return
-
-            if queue in watcher.subscribers:
-                watcher.subscribers.remove(queue)
-
-            if watcher.subscribers:
+            watcher.subscribers.remove(queue)
+            # A retired watcher may already have a successor for the same file.
+            if watcher.subscribers or self._watchers.get(watcher.file_name) is not watcher:
                 return
 
             watcher.stop_event.set()
             task = watcher.task
-            self._watchers.pop(file_name, None)
+            del self._watchers[watcher.file_name]
 
         if task is not None:
             await _cancel_watcher_task(task)
 
-    async def _watch_file(self, watcher: _WatcherState) -> None:
-        watched_path = self._logs_dir / watcher.file_name
-        watched_path_str = str(watched_path)
+    async def _run_watcher(self, watcher: _WatcherState) -> None:
+        """Run the watch loop; one that ends before it was stopped retires its watcher."""
+        try:
+            await self._watch_file(watcher)
+        finally:
+            if not watcher.stop_event.is_set():
+                async with self._watch_lock:
+                    self._retire_locked(watcher)
 
+    async def _watch_file(self, watcher: _WatcherState) -> None:
         try:
             async for changes in awatch(
                 self._logs_dir,
@@ -326,60 +359,78 @@ class LogViewer:
             ):
                 if watcher.stop_event.is_set():
                     continue
-
-                should_refresh_catalog = bool(changes)
-                should_read_snapshot = _includes_path(changes, watched_path_str)
-                if not changes:
-                    should_refresh_catalog, should_read_snapshot = await _LOG_WORKERS.run(
-                        _metadata_changes,
-                        self._logs_dir,
-                        watcher.directory_modified_ns,
-                        watched_path,
-                        watcher.snapshot,
-                    )
-                if not should_refresh_catalog and not should_read_snapshot:
-                    continue
-
-                async with self._watch_lock:
-                    refresh = await _LOG_WORKERS.run(
-                        self._read_refresh,
-                        watched_path,
-                        catalog=should_refresh_catalog,
-                        snapshot=should_read_snapshot,
-                    )
-                    catalog_event = None
-                    if refresh.catalog is not None:
-                        next_catalog = tuple(refresh.catalog["files"])
-                        watcher.directory_modified_ns = refresh.directory_modified_ns
-                        if next_catalog != watcher.catalog:
-                            watcher.catalog = next_catalog
-                            catalog_event = {
-                                "type": CATALOG_EVENT,
-                                "file": watcher.file_name,
-                                **refresh.catalog,
-                            }
-
-                    event = None
-                    if refresh.snapshot is not None:
-                        event = _build_snapshot_event(
+                try:
+                    await self._poll(watcher, changes)
+                except OSError as error:
+                    # A share lock or a virus scanner can deny access for a moment.
+                    # Nothing was consumed, so the next poll sees the change again.
+                    if self._poll_failures.started(watcher.file_name, type(error).__name__):
+                        _LOGGER.warning(
+                            "Live-log watcher poll failed, retrying (file=%s error=%s: %s)",
                             watcher.file_name,
-                            watcher.snapshot,
-                            refresh.snapshot,
+                            type(error).__name__,
+                            error,
                         )
-                        watcher.snapshot = refresh.snapshot
-                    subscribers = list(watcher.subscribers)
-
-                for subscriber in subscribers:
-                    if catalog_event is not None:
-                        subscriber.put_nowait(catalog_event)
-                    if event is not None:
-                        subscriber.put_nowait(event)
+                    continue
+                if self._poll_failures.ended(watcher.file_name):
+                    _LOGGER.info("Live-log watcher poll recovered (file=%s)", watcher.file_name)
         except asyncio.CancelledError:
             return
         except UnboundLocalError:
             if watcher.stop_event.is_set():
                 return
             raise
+
+    async def _poll(self, watcher: _WatcherState, changes: set[tuple[Any, str]]) -> None:
+        """Reconcile one watch batch (empty on a timeout) and fan out its events."""
+        watched_path = self._logs_dir / watcher.file_name
+        should_refresh_catalog = bool(changes)
+        should_read_snapshot = _includes_path(changes, str(watched_path))
+        if not changes:
+            should_refresh_catalog, should_read_snapshot = await _LOG_WORKERS.run(
+                _metadata_changes,
+                self._logs_dir,
+                watcher.directory_modified_ns,
+                watched_path,
+                watcher.snapshot,
+            )
+        if not should_refresh_catalog and not should_read_snapshot:
+            return
+
+        async with self._watch_lock:
+            refresh = await _LOG_WORKERS.run(
+                self._read_refresh,
+                watched_path,
+                catalog=should_refresh_catalog,
+                snapshot=should_read_snapshot,
+            )
+            catalog_event = None
+            if refresh.catalog is not None:
+                next_catalog = tuple(refresh.catalog["files"])
+                watcher.directory_modified_ns = refresh.directory_modified_ns
+                if next_catalog != watcher.catalog:
+                    watcher.catalog = next_catalog
+                    catalog_event = {
+                        "type": CATALOG_EVENT,
+                        "file": watcher.file_name,
+                        **refresh.catalog,
+                    }
+
+            event = None
+            if refresh.snapshot is not None:
+                event = _build_snapshot_event(
+                    watcher.file_name,
+                    watcher.snapshot,
+                    refresh.snapshot,
+                )
+                watcher.snapshot = refresh.snapshot
+            subscribers = list(watcher.subscribers)
+
+        for subscriber in subscribers:
+            if catalog_event is not None:
+                subscriber.put_nowait(catalog_event)
+            if event is not None:
+                subscriber.put_nowait(event)
 
     # Worker-pool operations: they touch the filesystem and never watcher state.
 
@@ -390,9 +441,10 @@ class LogViewer:
         )
         return {"files": files, "default_file": files[0] if files else None}
 
-    def _read_existing_file(self, file_name: str) -> tuple[Path, _LogSnapshot]:
+    def _read_existing_file(self, file_name: str) -> tuple[Path, _LogSnapshot, str]:
         file_path = self._resolve_existing_file(file_name)
-        return file_path, self._read_snapshot(file_path)
+        data, snapshot = _read_log(file_path)
+        return file_path, snapshot, _encode_cursor(file_path.name, data)
 
     # The directory stamp is always taken before listing, so a file added in
     # between still counts as a change on the next metadata check.
@@ -433,59 +485,75 @@ class LogViewer:
         return file_name
 
     def _read_snapshot(self, file_path: Path) -> _LogSnapshot:
-        try:
-            file_stat = file_path.stat()
-            text = file_path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return _LogSnapshot(exists=False, size=0, entries=[])
+        return _read_log(file_path)[1]
 
-        return _LogSnapshot(
-            exists=True,
-            size=file_stat.st_size,
-            entries=parse_log_entries(text),
-            modified_ns=file_stat.st_mtime_ns,
-        )
 
-    def _store_read_handoff(self, file_name: str, snapshot: _LogSnapshot) -> str:
-        previous_cursor = self._latest_read_cursor_by_file.get(file_name)
-        if previous_cursor is not None:
-            self._read_handoffs.pop(previous_cursor, None)
+def _read_log(file_path: Path) -> tuple[bytes, _LogSnapshot]:
+    """Read and parse the file; a missing file reads as no bytes and a missing snapshot."""
+    try:
+        # Stat first: a write after it changes the metadata again, so the next
+        # metadata check re-reads instead of missing it.
+        modified_ns = file_path.stat().st_mtime_ns
+        data = file_path.read_bytes()
+    except FileNotFoundError:
+        return b"", _LogSnapshot(exists=False, size=0, entries=[])
 
-        cursor = uuid4().hex
-        self._read_handoffs[cursor] = _ReadHandoff(file_name=file_name, snapshot=snapshot)
-        self._latest_read_cursor_by_file[file_name] = cursor
-        self._prune_read_handoffs()
-        return cursor
+    return data, _LogSnapshot(
+        exists=True,
+        size=len(data),
+        entries=parse_log_entries(_decode_log(data)),
+        modified_ns=modified_ns,
+    )
 
-    def _prune_read_handoffs(self) -> None:
-        while len(self._read_handoffs) > MAX_READ_HANDOFFS:
-            oldest_cursor = next(iter(self._read_handoffs))
-            handoff = self._read_handoffs.pop(oldest_cursor)
-            if self._latest_read_cursor_by_file.get(handoff.file_name) == oldest_cursor:
-                self._latest_read_cursor_by_file.pop(handoff.file_name, None)
 
-    def _take_read_handoff(
-        self,
-        file_name: str,
-        cursor: str | None,
-    ) -> _LogSnapshot | None:
-        if cursor is None:
-            latest_cursor = self._latest_read_cursor_by_file.pop(file_name, None)
-            if latest_cursor is None:
-                return None
-            handoff = self._read_handoffs.pop(latest_cursor, None)
-            if handoff is None:
-                return None
-            return handoff.snapshot
-        if not isinstance(cursor, str) or not cursor:
-            raise ValueError("log cursor must be a non-empty string")
+def _decode_log(data: bytes) -> str:
+    # A torn or foreign byte sequence must show as U+FFFD, not stop the viewer.
+    return data.decode("utf-8", errors="replace")
 
-        handoff = self._read_handoffs.pop(cursor, None)
-        if handoff is None or handoff.file_name != file_name:
-            raise ValueError("invalid log cursor")
-        if self._latest_read_cursor_by_file.get(file_name) == cursor:
-            self._latest_read_cursor_by_file.pop(file_name, None)
-        return handoff.snapshot
+
+def _read_subscribe_start(
+    file_path: Path, cursor: _ReadCursor | None
+) -> tuple[_LogSnapshot, _LogSnapshot | None]:
+    """Read the file now and, for a cursor, rebuild what its read returned.
+
+    The rebuilt snapshot is missing when the file no longer starts with the bytes
+    the read covered, so the diff against it is a ``reset`` with the whole file.
+    """
+    data, snapshot = _read_log(file_path)
+    if cursor is None:
+        return snapshot, None
+    missing = _LogSnapshot(exists=False, size=0, entries=[])
+    if not snapshot.exists or cursor.byte_length > len(data):
+        return snapshot, missing
+    prefix = data[: cursor.byte_length]
+    if _prefix_digest(file_path.name, prefix) != cursor.digest:
+        return snapshot, missing
+    if cursor.byte_length == len(data):
+        return snapshot, snapshot
+    return snapshot, _LogSnapshot(
+        exists=True,
+        size=cursor.byte_length,
+        entries=parse_log_entries(_decode_log(prefix)),
+    )
+
+
+def _encode_cursor(file_name: str, data: bytes) -> str:
+    return f"v1.{len(data)}.{_prefix_digest(file_name, data)}"
+
+
+def _parse_cursor(cursor: object) -> _ReadCursor:
+    match = _CURSOR_PATTERN.fullmatch(cursor) if isinstance(cursor, str) else None
+    if match is None:
+        raise ValueError("invalid log cursor")
+    return _ReadCursor(byte_length=int(match.group(1)), digest=match.group(2))
+
+
+def _prefix_digest(file_name: str, prefix: bytes) -> str:
+    """Digest of the covered bytes, bound to the file name so a cursor never fits another file."""
+    digest = hashlib.sha256(os.fsencode(file_name))
+    digest.update(b"\0")
+    digest.update(prefix)
+    return digest.hexdigest()
 
 
 def _log_watcher_task_result(file_name: str, task: asyncio.Task[None]) -> None:

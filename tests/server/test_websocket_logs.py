@@ -6,8 +6,11 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
+from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
+from core.utils import log_viewer as log_viewer_module
 from server.app import create_app
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
@@ -89,6 +92,31 @@ def test_log_websocket_replays_handoff_entries_appended_after_log_read(tmp_path:
         wait_for_log_viewer_idle(app)
 
     assert event == {"type": "append", "file": "2026-05-11", "entries": [_FAILED_ENTRY]}
+
+
+def test_log_websocket_closes_when_the_log_watcher_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _log_file = _log_app(tmp_path)
+
+    async def crashing_awatch(*_args: object, **_kwargs: object):
+        raise OSError("log directory unavailable")
+        yield set()
+
+    monkeypatch.setattr(log_viewer_module, "awatch", crashing_awatch)
+
+    with TestClient(app) as client:
+        # A stopped watcher ends the stream instead of leaving an idle socket that
+        # heartbeats keep alive; the accessor reconnects, reads again and resubscribes.
+        with (
+            client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
+            pytest.raises(WebSocketDisconnect) as closed,
+        ):
+            websocket.receive_json()
+
+        wait_for_log_viewer_idle(app)
+
+    assert closed.value.code == 1011
 
 
 def wait_for_log_subscriber(app: Any, file_name: str, timeout_seconds: float = 2.0) -> None:

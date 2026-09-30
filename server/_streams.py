@@ -49,11 +49,12 @@ REPLAY_STATUS_EPOCH_CHANGED = "epoch_changed"
 
 async def _stream_websocket_events(
     websocket: WebSocket, stream: Any, *, on_binary: Callable[[bytes], None] | None = None
-) -> None:
+) -> bool:
     """Push *stream* items to the socket: ``bytes`` as binary frames, others as JSON.
 
     Inbound binary frames go to *on_binary* when given; every other inbound
-    frame is ignored.
+    frame is ignored. Returns ``True`` when *stream* ended and ``False`` when the
+    client disconnected first.
     """
     stream_iter = stream.__aiter__()
     disconnect_task = asyncio.create_task(websocket.receive())
@@ -79,7 +80,7 @@ async def _stream_websocket_events(
             if disconnect_task in done:
                 message = disconnect_task.result()
                 if message.get("type") == "websocket.disconnect":
-                    return
+                    return False
                 data = message.get("bytes")
                 if on_binary is not None and isinstance(data, bytes):
                     on_binary(data)
@@ -93,7 +94,7 @@ async def _stream_websocket_events(
                 try:
                     event = completed_event_task.result()
                 except StopAsyncIteration:
-                    return
+                    return True
                 if isinstance(event, bytes):
                     await websocket.send_bytes(event)
                 else:
