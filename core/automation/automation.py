@@ -38,8 +38,12 @@ AUTOMATIC_COMPLETION_GUIDANCE = (
     "and current system state before taking further action."
 )
 _SUPPRESSED_ORIGIN_LIMIT = 256
-_COMPLETION_PERSIST_RETRY_INITIAL_SECONDS = 0.25
-_COMPLETION_PERSIST_RETRY_MAX_SECONDS = 30.0
+# Backoff for a failed reminder append and for blocked follow-up Run admission.
+_COMPLETION_RETRY_INITIAL_SECONDS = 0.25
+_COMPLETION_RETRY_MAX_SECONDS = 30.0
+
+# Tests patch this seam instead of the process-wide ``asyncio.sleep``.
+_sleep = asyncio.sleep
 
 OwnedCompletionValidator = Callable[[SessionAddress, RunExecutionOwner], None]
 """Raise ``RunAdmissionBlockedError`` when an execution owner can no longer receive work."""
@@ -205,6 +209,7 @@ class _CompletionDeliveryCoordinator:
         address: SessionAddress,
         bucket: _CompletionBucket,
     ) -> None:
+        admission_retry_delay = _COMPLETION_RETRY_INITIAL_SECONDS
         try:
             while bucket.notices:
                 boundary_run = next(iter(bucket.notices.values())).boundary_run
@@ -285,6 +290,38 @@ class _CompletionDeliveryCoordinator:
                             ),
                             run_kind=RunKind.SYSTEM,
                         )
+                except RunAdmissionBlockedError as error:
+                    if owner is not None:
+                        # A stale owner (closed group, retired Extension) never
+                        # becomes admissible again: fail its results terminally,
+                        # as submission and the Session-write fallback do.
+                        pending = self._reject_inadmissible_owned(
+                            address, bucket, self._still_pending(bucket, pending)
+                        )
+                        if not pending:
+                            continue
+                    active_run = self._active_run(address)
+                    if active_run is not None:
+                        # A draining Run can still take the results at its next
+                        # request boundary while new admission stays blocked.
+                        for notice in pending:
+                            notice.boundary_run = active_run
+                        continue
+                    # Maintenance or a lifecycle guard holds admission and neither
+                    # announces its end, so retry with a bounded backoff.
+                    _LOGGER.debug(
+                        "Completion Run admission blocked (agent=%s session=%s reason=%s); "
+                        "retrying in %.2f seconds",
+                        address.agent_id,
+                        address.session_id,
+                        error,
+                        admission_retry_delay,
+                    )
+                    await _sleep(admission_retry_delay)
+                    admission_retry_delay = min(
+                        admission_retry_delay * 2, _COMPLETION_RETRY_MAX_SECONDS
+                    )
+                    continue
                 except ActiveRunError:
                     # Another ingress won the idle-session race. Keep the exact
                     # notices pending and collect everything that finishes while
@@ -321,6 +358,7 @@ class _CompletionDeliveryCoordinator:
                     await self._persist_without_run(address, bucket, pending)
                     continue
 
+                admission_retry_delay = _COMPLETION_RETRY_INITIAL_SECONDS
                 if (
                     reply_surface is not None
                     and reply_surface.kind == "channel"
@@ -347,7 +385,10 @@ class _CompletionDeliveryCoordinator:
                         notice.suppress_run = True
                     await self._persist_without_run(address, bucket, undelivered)
         except BaseException as error:
-            self._fail(bucket, list(bucket.notices.values()), error)
+            closing = self._closed and isinstance(error, asyncio.CancelledError)
+            if not closing:
+                # Closing settles the remaining notices itself (see ``aclose``).
+                self._fail(bucket, list(bucket.notices.values()), error)
             if isinstance(error, asyncio.CancelledError):
                 raise
         finally:
@@ -442,55 +483,74 @@ class _CompletionDeliveryCoordinator:
         notices: list[_CompletionNotice],
     ) -> None:
         """Persist results as a System Reminder without waking the Agent."""
-        if self._sessions is None:
+        retry_delay = _COMPLETION_RETRY_INITIAL_SECONDS
+        while True:
+            error = await self._persist_once(address, bucket, notices)
+            if error is None:
+                return
+            _LOGGER.warning(
+                "Completion persistence failed (agent=%s session=%s); retrying in %.2f seconds",
+                address.agent_id,
+                address.session_id,
+                retry_delay,
+                exc_info=error,
+            )
+            await _sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, _COMPLETION_RETRY_MAX_SECONDS)
+
+    async def _persist_once(
+        self,
+        address: SessionAddress,
+        bucket: _CompletionBucket,
+        notices: list[_CompletionNotice],
+    ) -> Exception | None:
+        """Append one System Reminder; return the error of a retryable failure.
+
+        ``None`` means every notice is settled: persisted, withdrawn, or failed
+        terminally because no durable target is left.
+        """
+        sessions = self._sessions
+        if sessions is None:
             self._fail(
                 bucket,
                 notices,
                 RuntimeError("completion delivery Session service is unavailable"),
             )
-            return
+            return None
+        # This write bypasses Run admission, so an owned notice is checked
+        # again: its owner may have gone stale since submission.
+        pending = self._reject_inadmissible_owned(
+            address, bucket, self._still_pending(bucket, notices)
+        )
+        if not pending:
+            return None
 
-        retry_delay = _COMPLETION_PERSIST_RETRY_INITIAL_SECONDS
-        while True:
-            # This write bypasses Run admission, so an owned notice is checked
-            # again: its owner may have gone stale since submission.
-            pending = self._reject_inadmissible_owned(
-                address, bucket, self._still_pending(bucket, notices)
-            )
+        async with sessions.write_lock(address):
+            pending = self._still_pending(bucket, notices)
             if not pending:
-                return
-
-            async with self._sessions.write_lock(address):
-                pending = self._still_pending(bucket, notices)
-                if not pending:
-                    return
-                try:
-                    session = await self._sessions.get_async(address)
-                except Exception as error:
-                    # There is no durable target left. A terminal delivery
-                    # failure lets producers release their process-local state.
-                    self._fail(bucket, pending, error)
-                    return
-                try:
-                    await session.add_note_async(_completion_message(pending))
-                except Exception:
-                    _LOGGER.warning(
-                        "Completion persistence failed (agent=%s session=%s); "
-                        "retrying in %.2f seconds",
-                        address.agent_id,
-                        address.session_id,
-                        retry_delay,
-                        exc_info=True,
-                    )
-                else:
+                return None
+            try:
+                session = await sessions.get_async(address)
+            except Exception as error:
+                # There is no durable target left. A terminal delivery
+                # failure lets producers release their process-local state.
+                self._fail(bucket, pending, error)
+                return None
+            append = asyncio.ensure_future(session.add_note_async(_completion_message(pending)))
+            try:
+                await asyncio.shield(append)
+            except asyncio.CancelledError:
+                # Closing cancels delivery workers, but a started append still
+                # lands. Settle it before the write lock is released so closing
+                # never persists the same results twice.
+                await asyncio.wait((append,))
+                if not append.cancelled() and append.exception() is None:
                     self._acknowledge(address, bucket, pending)
-                    return
-
-            await asyncio.sleep(retry_delay)
-            retry_delay = min(
-                retry_delay * 2,
-                _COMPLETION_PERSIST_RETRY_MAX_SECONDS,
-            )
+                raise
+            except Exception as error:
+                return error
+            self._acknowledge(address, bucket, pending)
+            return None
 
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
         """Withdraw this group's pending notices; its later submissions fail validation."""
@@ -572,7 +632,13 @@ class _CompletionDeliveryCoordinator:
             del origins[: len(origins) - _SUPPRESSED_ORIGIN_LIMIT]
 
     async def aclose(self) -> None:
-        """Cancel delivery workers and settle every producer-facing Future."""
+        """Stop delivery workers and settle every producer-facing Future.
+
+        Results still pending are persisted as a System Reminder, the durable
+        fallback used when a follow-up Run cannot start, so they survive a
+        restart. Owned results are withdrawn instead: their owner closed first.
+        Sessions must still be open.
+        """
         if self._closed:
             return
         self._closed = True
@@ -585,7 +651,21 @@ class _CompletionDeliveryCoordinator:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        for bucket in self._buckets.values():
+        for address, bucket in list(self._buckets.items()):
+            pending = [
+                notice for notice in bucket.notices.values() if notice.execution_owner is None
+            ]
+            if pending and self._sessions is not None:
+                error = await self._persist_once(address, bucket, pending)
+                if error is not None:
+                    _LOGGER.error(
+                        "Completion persistence failed at shutdown (agent=%s session=%s "
+                        "results=%d); results dropped",
+                        address.agent_id,
+                        address.session_id,
+                        len(self._still_pending(bucket, pending)),
+                        exc_info=error,
+                    )
             for notice in bucket.notices.values():
                 if not notice.delivered.done():
                     notice.delivered.cancel()
