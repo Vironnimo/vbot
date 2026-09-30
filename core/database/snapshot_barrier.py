@@ -28,6 +28,11 @@ database transaction, or a held write inside a Session transaction). Those
 enter at once. One that enters after the freeze instant would break the
 copies, so the capture discards them and starts over, up to
 :data:`CAPTURE_ATTEMPTS` times before it fails (``DatabaseUnavailableError``).
+A waiting change keeps every lock its thread holds, so an owner whose lock
+Event Loop code takes enters the change before the lock; a change it makes
+under the lock without that entry (a read that repairs what it finds) passes
+``wait=False`` and, instead of waiting, gets ``MemberFrozenError``, gives the
+lock up and enters again with waiting.
 
 The freeze state is process-wide and keyed by the resolved data directory,
 because it guards files, not objects: every owner, standalone store and
@@ -75,7 +80,7 @@ from contextlib import (
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.database.errors import DatabaseUnavailableError
+from core.database.errors import DatabaseUnavailableError, MemberFrozenError
 from core.database.spec import (
     ANCHOR_CAPTURE,
     HELD_CAPTURE,
@@ -230,18 +235,19 @@ _THREAD = threading.local()
 
 
 @contextmanager
-def member_change(data_dir: Path, *, held: bool = True) -> Iterator[None]:
+def member_change(data_dir: Path, *, held: bool = True, wait: bool = True) -> Iterator[None]:
     """Admit one change to a member of the resolved ``data_dir``.
 
     A held change waits while a capture freezes the data directory's held
     members (see the module docstring for the exceptions). ``held=False`` marks
     a change of an anchor or trailing member, which never waits; a held change
     nested inside it enters at once instead of waiting inside its transaction.
+    ``wait=False`` raises :class:`MemberFrozenError` where the change would wait.
     """
     depths = _thread_depths()
     depth = depths.get(data_dir, 0)
     if held:
-        _admit(data_dir, exempt=depth > 0 or _on_event_loop())
+        _admit(data_dir, exempt=depth > 0 or _on_event_loop(), wait=wait)
     depths[data_dir] = depth + 1
     try:
         yield
@@ -320,12 +326,16 @@ def capture_members(
     return result
 
 
-def _admit(data_dir: Path, *, exempt: bool) -> None:
+def _admit(data_dir: Path, *, exempt: bool, wait: bool) -> None:
     with _CONDITION:
         freeze = _FREEZES.get(data_dir)
         if freeze is not None:
             if exempt:
                 freeze.disturbed = freeze.disturbed or freeze.frozen
+            elif not wait:
+                raise MemberFrozenError(
+                    "a data snapshot is being taken; the change waits until it is done"
+                )
             else:
                 freeze.waited_changes += 1
                 while data_dir in _FREEZES:

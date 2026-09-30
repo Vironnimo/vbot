@@ -23,6 +23,7 @@ from core.database import (
     Database,
     DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
+    MemberFrozenError,
     SnapshotBarrier,
     SnapshotFacts,
     create_data_snapshot,
@@ -271,6 +272,10 @@ def test_a_capture_freezes_held_members_until_the_anchor_is_copied(data_dir: Pat
         late_ran.set()
         connection.execute("INSERT INTO notes (body) VALUES ('late')")
 
+    def change_without_waiting() -> None:
+        with document_change(document, wait=False):
+            pytest.fail("a change that must not wait entered during the freeze")
+
     def copy_database(name: str) -> None:
         order.append(name)
         if name == "journal":
@@ -278,6 +283,9 @@ def test_a_capture_freezes_held_members_until_the_anchor_is_copied(data_dir: Pat
             # The anchor keeps taking writes; the held member does not.
             threads.submit(add_note, journal, "live").result(timeout=10.0)
             assert not late_ran.is_set()
+            # A change that must not wait is refused instead.
+            with pytest.raises(MemberFrozenError):
+                threads.submit(change_without_waiting).result(timeout=10.0)
             assert note_bodies(notes) == ["in flight"]
 
     try:

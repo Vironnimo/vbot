@@ -32,6 +32,7 @@ from core.database.errors import (
     DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
     IncidentConflictError,
+    MemberFrozenError,
     UpdateRollbackRefusedError,
     generation_1_conversion_hint,
 )
@@ -121,6 +122,7 @@ __all__ = [
     "IncidentConflictError",
     "MaintenanceOperation",
     "MarkerEntry",
+    "MemberFrozenError",
     "Migration",
     "ProjectionFailure",
     "SnapshotBarrier",

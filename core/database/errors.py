@@ -48,6 +48,16 @@ class DatabaseUnavailableError(DatabaseError):
     """
 
 
+class MemberFrozenError(DatabaseUnavailableError):
+    """A change that must not wait arrived while a data snapshot freezes the members.
+
+    Raised instead of waiting by a change admitted with ``wait=False``
+    (``core.json_documents.document_change``), which its owner makes while it
+    holds a lock that Event Loop code takes: the owner gives the lock up, enters
+    the change again with waiting, and repeats its work.
+    """
+
+
 class DatabaseCorruptError(DatabaseError):
     """The database, or a snapshot or recovery record of it, cannot be trusted.
 

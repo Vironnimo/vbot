@@ -405,7 +405,7 @@ def write_json_document(
 
 
 @contextmanager
-def document_change(path: Path) -> Iterator[None]:
+def document_change(path: Path, *, wait: bool = True) -> Iterator[None]:
     """Admit one change of the snapshot documents at or below ``path``.
 
     Wrap every write, removal or move of a snapshot document, or of a directory
@@ -413,12 +413,16 @@ def document_change(path: Path) -> Iterator[None]:
     snapshot copies the data directory the change waits, off the Event Loop,
     until the copies are taken (``core.database.snapshot_barrier``). Entries
     nest freely; a change inside another change of the same data directory never
-    waits.
+    waits. The waiting change keeps the locks its thread holds, so an owner
+    enters it before any lock Event Loop code takes. A change made under such a
+    lock without that entry passes ``wait=False``: where it would wait it raises
+    ``core.database.MemberFrozenError``, and the owner gives the lock up, enters
+    with waiting and repeats its work.
     """
 
     with ExitStack() as stack:
         for data_dir in _document_data_dirs(Path(path)):
-            stack.enter_context(member_change(data_dir))
+            stack.enter_context(member_change(data_dir, wait=wait))
         yield
 
 
