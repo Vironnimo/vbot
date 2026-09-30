@@ -20,6 +20,8 @@
     // The Desktop Voice status snapshot, or null without Desktop Voice.
     voiceStatus = null,
     onToast = () => {},
+    // Called with whether a call is starting, live or stopping.
+    onRunningChange = () => {},
   } = $props();
 
   let voice = $state(createLiveVoiceState());
@@ -28,6 +30,11 @@
 
   const running = $derived(voice.phase !== 'off');
   const caption = $derived(voice.captions.at(-1) ?? null);
+
+  $effect(() => {
+    const isRunning = running;
+    untrack(() => onRunningChange(isRunning));
+  });
 
   const MESSAGES = {
     not_configured: () => t('live.error.notConfigured'),

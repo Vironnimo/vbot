@@ -33,6 +33,10 @@ import {
   onDesktopOpenSession,
   getDesktopLiveHotkey,
   setDesktopLiveHotkey,
+  getDesktopUpdate,
+  restartDesktop,
+  onDesktopUpdate,
+  onDesktopRestartRequest,
 } from '../desktopBridge.js';
 
 const DISABLED_CAPABILITIES = {
@@ -41,6 +45,7 @@ const DISABLED_CAPABILITIES = {
   contextMenu: false,
   voiceApi: 0,
   liveHotkey: false,
+  restart: false,
   secureOrigins: [],
 };
 
@@ -166,6 +171,7 @@ describe('getDesktopCapabilities', () => {
       contextMenu: true,
       voiceApi: 2,
       liveHotkey: 1,
+      restart: true,
       secureOrigins: ['http://pi.lan:8420', 42, null],
     }));
     desktopWindow({ getDesktopCapabilities: reportCapabilities });
@@ -177,6 +183,7 @@ describe('getDesktopCapabilities', () => {
       contextMenu: true,
       voiceApi: 2,
       liveHotkey: true,
+      restart: true,
       secureOrigins: ['http://pi.lan:8420'],
     });
     expect(await getDesktopCapabilities()).toBe(capabilities);
@@ -327,6 +334,13 @@ describe('Desktop bridge calls', () => {
       [{ enabled: true }],
       { supported: true, enabled: true, hotkey: null, error_code: null },
     ],
+    [
+      'getDesktopUpdate',
+      getDesktopUpdate,
+      [],
+      { pending: true, restarting: false, failed: true },
+    ],
+    ['restartDesktop', restartDesktop, [], { accepted: true }],
   ])('calls %s and resolves its answer', async (method, call, args, answer) => {
     const bridgeMethod = vi.fn(async () => answer);
     desktopWindow({ [method]: bridgeMethod });
@@ -340,6 +354,11 @@ describe('Desktop bridge calls', () => {
     ['listServers', listDesktopServers, []],
     ['listMicrophones', listMicrophones, []],
     ['listWakewordModels', listWakewordModels, []],
+    [
+      'getDesktopUpdate',
+      getDesktopUpdate,
+      { pending: false, restarting: false, failed: false },
+    ],
   ])('reads a malformed %s answer as empty', async (method, call, empty) => {
     desktopWindow({ [method]: () => null });
 
@@ -862,5 +881,52 @@ describe('pushed Session requests', () => {
     cleanup();
     expect(dispatch({ agent: 'builder', session: 'session-3' })).toBe(false);
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Desktop application update', () => {
+  it('hands validated update pushes to the handler and drops malformed ones', () => {
+    const page = eventWindow();
+    const handler = vi.fn();
+    const cleanup = onDesktopUpdate(handler);
+    const push = (detail) =>
+      page.dispatchEvent(new CustomEvent('vbot-desktop-update', { detail }));
+
+    push({ pending: true, restarting: 'yes', failed: false });
+    push(null);
+    push('pending');
+    expect(handler.mock.calls).toEqual([
+      [{ pending: true, restarting: false, failed: false }],
+    ]);
+
+    cleanup();
+    push({ pending: true, restarting: true, failed: false });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('acknowledges restart requests unless the handler declines them', () => {
+    const page = eventWindow();
+    const handler = vi.fn();
+    const cleanup = onDesktopRestartRequest(handler);
+    // True when the page took the restart over (cancelled the event).
+    const dispatch = (detail) =>
+      !page.dispatchEvent(
+        new CustomEvent('vbot-desktop-restart', { cancelable: true, detail }),
+      );
+
+    expect(dispatch({ reason: 'idle' })).toBe(true);
+    // A restart request needs nothing from its detail to be handled.
+    expect(dispatch(null)).toBe(true);
+    handler.mockReturnValueOnce(false);
+    expect(dispatch({ reason: 'idle' })).toBe(false);
+    expect(handler.mock.calls).toEqual([
+      [{ reason: 'idle' }],
+      [{ reason: null }],
+      [{ reason: 'idle' }],
+    ]);
+
+    cleanup();
+    expect(dispatch({ reason: 'idle' })).toBe(false);
+    expect(handler).toHaveBeenCalledTimes(3);
   });
 });

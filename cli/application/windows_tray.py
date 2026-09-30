@@ -13,6 +13,7 @@ import logging
 import os
 import queue
 import sys
+import time
 from collections.abc import Callable
 from ctypes import wintypes
 from pathlib import Path
@@ -52,6 +53,9 @@ _WINEVENT_SKIPOWNPROCESS = 0x0002
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _ASFW_ANY = 0xFFFFFFFF
 _DESKTOP_EXECUTABLE = "vbot.desktop.exe"
+#: Longest time a toast counts as shown when Windows never reports it closed
+#: (the longest "dismiss notifications after" setting is five minutes).
+_TOAST_SHOWN_SECONDS = 300.0
 _BADGES = {
     "stopped": (138, 138, 138, 255),
     "updating": (47, 124, 246, 255),
@@ -72,9 +76,16 @@ class TrayCommands(Protocol):
 class WindowsTray:
     """Native tray view; public methods are safe from any thread."""
 
-    def __init__(self, commands: TrayCommands, icon_path: Path) -> None:
+    def __init__(
+        self,
+        commands: TrayCommands,
+        icon_path: Path,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._commands = commands
         self._icon_path = icon_path
+        self._clock = clock
         self._calls: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
         self._hwnd = 0
         self._instance = 0
@@ -87,6 +98,7 @@ class WindowsTray:
         self._menu_open = False
         self._stopping = False
         self._toast: Toast | None = None
+        self._toast_until = 0.0
         self._foreground_hook = 0
         self._status: Any | None = None
         self._base_image: Any | None = None
@@ -100,6 +112,9 @@ class WindowsTray:
         self._post(lambda: self._apply(presentation))
 
     def show_toast(self, toast: Toast) -> None:
+        # Counts as shown at once, so a restart check that follows cannot
+        # overtake the UI thread showing it.
+        self._toast_until = self._clock() + _TOAST_SHOWN_SECONDS
         self._post(lambda: self._show_toast(toast))
 
     def dismiss_toast(self, key: str) -> None:
@@ -107,6 +122,19 @@ class WindowsTray:
 
     def show_status(self) -> None:
         self._post(self._open_status)
+
+    def interacting(self) -> bool:
+        """Whether the popup menu is open, a toast is shown or the status window is visible.
+
+        Reads only values the UI thread replaces atomically, without Win32 calls.
+        """
+
+        status = self._status
+        return (
+            self._menu_open
+            or self._clock() < self._toast_until
+            or (status is not None and status.visible)
+        )
 
     def stop(self) -> None:
         self._post(self._begin_stop)
@@ -395,6 +423,7 @@ class WindowsTray:
 
     def _show_toast(self, toast: Toast) -> None:
         if not self._hwnd:
+            self._toast_until = 0.0
             return
         data = self._icon_data(_NIF_INFO)
         data.szInfoTitle = toast.title[:63]
@@ -403,7 +432,10 @@ class WindowsTray:
         data.hBalloonIcon = self._icon("error" if toast.failure else "normal", native.SM_CXICON)
         if native.shell32.Shell_NotifyIconW(_NIM_MODIFY, ctypes.byref(data)):
             self._toast = toast
+            self._toast_until = self._clock() + _TOAST_SHOWN_SECONDS
             self._hook_foreground()
+        else:
+            self._toast_until = 0.0
 
     def _dismiss_toast(self, key: str) -> None:
         if self._toast is None or self._toast.key != key:
@@ -417,6 +449,7 @@ class WindowsTray:
 
     def _toast_closed(self) -> None:
         self._toast = None
+        self._toast_until = 0.0
         self._unhook_foreground()
 
     def _hook_foreground(self) -> None:

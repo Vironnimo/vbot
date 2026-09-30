@@ -178,6 +178,19 @@ def _module_install_root(source: Path) -> Path | None:
     return root if (root / "application.json").is_file() else None
 
 
+def loaded_version_id(source: Path) -> str | None:
+    """Return the installed version whose payload holds one loaded ``cli/application`` module.
+
+    ``None`` when the module does not run from a recorded installation's payload,
+    for example from a source checkout.
+    """
+
+    if _module_install_root(source) is None:
+        return None
+    version = source.resolve().parents[3].name
+    return version if is_safe_id(version) else None
+
+
 def _native_install_root(executable: Path) -> Path | None:
     """Return the install recorded by a native vBot host path, when available."""
 

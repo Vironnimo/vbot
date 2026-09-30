@@ -24,6 +24,9 @@ from cli.application.state import (
 )
 from core.utils.processes import subprocess_creation_flags
 
+#: Set only for a tray host started by its predecessor's restart handoff.
+HOST_SUCCESSOR_ENV = "VBOT_HOST_SUCCESSOR"
+
 
 def child_environment(install: Installation) -> dict[str, str]:
     environment = {
@@ -31,7 +34,14 @@ def child_environment(install: Installation) -> dict[str, str]:
         for key, value in os.environ.items()
         if not key.startswith("VBOT_RUN_")
         and key
-        not in {"VBOT_UPDATE_HANDOFF", "PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "VBOT_DATA_DIR"}
+        not in {
+            "VBOT_UPDATE_HANDOFF",
+            HOST_SUCCESSOR_ENV,
+            "PYTHONPATH",
+            "PYTHONHOME",
+            "VIRTUAL_ENV",
+            "VBOT_DATA_DIR",
+        }
     }
     environment["VBOT_INSTALL_ROOT"] = str(install.root)
     environment["PYTHONNOUSERSITE"] = "1"
@@ -273,9 +283,7 @@ def result_summary(install: Installation, operation: Operation) -> str:
         ):
             return "vBot is already up to date; no restart was needed."
         if not install.owns_server:
-            return (
-                "Update completed — Desktop client is current; no local server restart is needed."
-            )
+            return "Update completed — an open Desktop switches to the new version by restarting."
         if operation.server_was_running:
             return "Update completed — server restarted and passed its health check."
         return "Update completed — the server remains stopped."

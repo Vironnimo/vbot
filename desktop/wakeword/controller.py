@@ -365,6 +365,11 @@ class VoiceController:
         with self._lock:
             return self._status_locked()
 
+    def is_busy(self) -> bool:
+        """Whether a command recording or a calibration is running right now."""
+        with self._lock:
+            return self._recording is not None or self._active_calibration_locked() is not None
+
     # -- Config --------------------------------------------------------------
 
     def set_enabled(self, enabled: object) -> dict[str, Any]:

@@ -17,6 +17,7 @@ from desktop.bridge import BridgeError, DesktopBridge
 from desktop.connection import ConnectionController
 from desktop.main import DesktopProbeResult, DesktopTarget
 from desktop.page_events import PageEventDispatcher
+from desktop.restart import RestartError
 from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword.config import VoiceConfigError
 from desktop.wakeword.controller import VoiceControlError, VoiceController
@@ -97,6 +98,8 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
         "addServer",
         "removeServer",
         "selectServer",
+        "getDesktopUpdate",
+        "restartDesktop",
     }
 
 
@@ -193,7 +196,42 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
         "contextMenu": True,
         "liveHotkey": live_hotkey,
         "secureOrigins": ["http://a.lan:8420", "http://pi.lan:9000"],
+        "restart": False,
     }
+
+
+class FakeRestart:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.restarts = 0
+
+    def status(self) -> dict[str, bool]:
+        return {"pending": True, "restarting": False, "failed": False}
+
+    def restart(self) -> None:
+        self.restarts += 1
+        if self.error is not None:
+            raise self.error
+
+
+def test_the_update_restart_is_offered_only_by_a_packaged_desktop() -> None:
+    source, _ = _bridge()
+    assert source.getDesktopUpdate() == {"pending": False, "restarting": False, "failed": False}
+    with pytest.raises(BridgeError, match="^restart_unavailable$"):
+        source.restartDesktop()
+
+    restart = FakeRestart()
+    packaged, _ = _bridge(restart=restart)
+    assert packaged.getDesktopCapabilities()["restart"] is True
+    assert packaged.getDesktopUpdate() == restart.status()
+    assert packaged.restartDesktop() == {"accepted": True}
+    assert restart.restarts == 1
+
+    current, _ = _bridge(
+        restart=FakeRestart(RestartError("current", error_code="no_update_pending"))
+    )
+    with pytest.raises(BridgeError, match="^no_update_pending$"):
+        current.restartDesktop()
 
 
 def test_system_actions_validate_and_delegate() -> None:

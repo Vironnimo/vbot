@@ -13,6 +13,8 @@ const LIVE_REQUEST_ACTIONS = new Set(['start', 'toggle']);
 const LIVE_REQUEST_SOURCES = new Set(['wakeword', 'hotkey']);
 const VOICE_PUSH_EVENT = 'vbot-desktop-voice';
 const OPEN_SESSION_EVENT = 'vbot-desktop-open-session';
+const UPDATE_PUSH_EVENT = 'vbot-desktop-update';
+const RESTART_REQUEST_EVENT = 'vbot-desktop-restart';
 // The Voice UI works only against this Desktop Voice bridge version.
 const DESKTOP_VOICE_API_VERSION = 2;
 // A Live voice start never waits longer than this for the Desktop capabilities
@@ -24,6 +26,7 @@ const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
   serverSelection: false,
   contextMenu: false,
   liveHotkey: false,
+  restart: false,
   secureOrigins: Object.freeze([]),
 });
 
@@ -131,7 +134,9 @@ function callBridge(method, ...args) {
  * Fetch desktop capabilities from the bridge.
  * Result is cached after the first successful call from a live bridge.
  * Returns disabled capability flags when the bridge is absent, without caching.
- * `voiceApi` is the Desktop Voice bridge version (0 when none is offered).
+ * `voiceApi` is the Desktop Voice bridge version (0 when none is offered);
+ * `restart` tells whether the Desktop can restart itself into a new version
+ * (false for Desktops from before that protocol).
  */
 export async function getDesktopCapabilities() {
   if (!bridgeAvailable()) {
@@ -150,6 +155,7 @@ export async function getDesktopCapabilities() {
     serverSelection: Boolean(caps?.serverSelection),
     contextMenu: Boolean(caps?.contextMenu),
     liveHotkey: Boolean(caps?.liveHotkey),
+    restart: Boolean(caps?.restart),
     secureOrigins: Array.isArray(caps?.secureOrigins)
       ? caps.secureOrigins.filter((origin) => typeof origin === 'string')
       : [],
@@ -614,6 +620,73 @@ export function onDesktopOpenSession(handler) {
   };
   window.addEventListener(OPEN_SESSION_EVENT, listener);
   return () => window.removeEventListener(OPEN_SESSION_EVENT, listener);
+}
+
+// -- Application update (capability `restart`) --------------------------------
+
+// `pending`: a newer application version is active while this Desktop still
+// runs an older one. `restarting`: the restart handoff is in progress.
+// `failed`: the last restart attempt did not complete (the window stays).
+function normalizeDesktopUpdate(raw) {
+  const snapshot = isPlainObject(raw) ? raw : {};
+  return {
+    pending: snapshot.pending === true,
+    restarting: snapshot.restarting === true,
+    failed: snapshot.failed === true,
+  };
+}
+
+/** Read the Desktop's update state `{pending, restarting, failed}`. */
+export async function getDesktopUpdate() {
+  return normalizeDesktopUpdate(await callBridge('getDesktopUpdate'));
+}
+
+/**
+ * Ask the Desktop to restart into the active version. Resolves
+ * `{accepted}` once the handoff started: the window closes a few seconds
+ * later and the new Desktop reopens at the same server, view and window
+ * placement. Rejects with the code `no_update_pending` or
+ * `restart_unavailable` (read it with `desktopErrorCode`).
+ */
+export async function restartDesktop() {
+  const result = await callBridge('restartDesktop');
+  return { accepted: result?.accepted === true };
+}
+
+/**
+ * Receive the update state the Desktop pushes whenever it changes, as the
+ * same object `getDesktopUpdate()` resolves. Returns a cleanup function.
+ */
+export function onDesktopUpdate(handler) {
+  if (typeof window === 'undefined') return () => {};
+  const listener = (event) => {
+    if (isPlainObject(event?.detail))
+      handler(normalizeDesktopUpdate(event.detail));
+  };
+  window.addEventListener(UPDATE_PUSH_EVENT, listener);
+  return () => window.removeEventListener(UPDATE_PUSH_EVENT, listener);
+}
+
+/**
+ * Handle the Desktop's requests to restart into a new version while the user
+ * is idle. A handled request leaves the restart to this page: it calls
+ * `restartDesktop()` itself when nothing blocks, or does nothing and the
+ * Desktop asks again later; an unhandled one lets the Desktop restart on its
+ * own.
+ *
+ * `handler({reason})` receives the Desktop's reason (`idle`, or null when it
+ * names none); returning `false` reports the request as not handled. Returns
+ * a cleanup function.
+ */
+export function onDesktopRestartRequest(handler) {
+  if (typeof window === 'undefined') return () => {};
+  const listener = (event) => {
+    const reason = text(event?.detail?.reason);
+    // The Desktop reads a cancelled event as "handled".
+    if (handler({ reason }) !== false) event.preventDefault();
+  };
+  window.addEventListener(RESTART_REQUEST_EVENT, listener);
+  return () => window.removeEventListener(RESTART_REQUEST_EVENT, listener);
 }
 
 /**

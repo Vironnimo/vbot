@@ -72,6 +72,7 @@ def test_worker_spawn_is_detached_and_strips_run_caller_environment(
     captured: dict[str, object] = {}
     monkeypatch.setenv("VBOT_RUN_SESSION_ID", "session-secret")
     monkeypatch.setenv("PYTHONPATH", "caller-path")
+    monkeypatch.setenv("VBOT_HOST_SUCCESSOR", "1")
 
     def running(*, timeout):
         raise subprocess.TimeoutExpired("updater", timeout)
@@ -96,6 +97,7 @@ def test_worker_spawn_is_detached_and_strips_run_caller_environment(
     environment = cast(dict[str, str], captured["env"])
     assert "VBOT_RUN_SESSION_ID" not in environment
     assert "PYTHONPATH" not in environment
+    assert "VBOT_HOST_SUCCESSOR" not in environment
     assert environment["VBOT_INSTALL_ROOT"] == str(install.root)
     assert captured["creationflags"] == 73
     assert captured["stdin"] is operations.subprocess.DEVNULL

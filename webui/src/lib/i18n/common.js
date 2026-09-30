@@ -54,6 +54,23 @@ export default Object.freeze({
   'app.webuiOutdated':
     'vBot was updated. Reload the page to use the new version.',
   'app.webuiOutdatedReload': 'Reload',
+  'app.desktopRestart.pending':
+    'vBot was updated. Restart the app to use the new version.',
+  'app.desktopRestart.failed':
+    'vBot was updated, but the restart did not complete. Try again to use the new version.',
+  'app.desktopRestart.restart': 'Restart',
+  'app.desktopRestart.restarting': 'Restarting…',
+  'app.desktopRestart.cronDraftTitle': 'Discard the new schedule?',
+  'app.desktopRestart.cronDraftBody':
+    'The schedule you started creating is not saved yet. Restarting the app discards it.',
+  'app.desktopRestart.cronDraftConfirm': 'Discard and restart',
+  'app.desktopRestart.error.title': 'The app did not restart',
+  'app.desktopRestart.error.noUpdate':
+    'This app already runs the current version.',
+  'app.desktopRestart.error.unavailable':
+    'This app cannot restart itself. Close vBot and open it again to use the new version.',
+  'app.desktopRestart.error.generic':
+    'The restart could not start. Try again, or close vBot and open it again.',
   'navigation.primary': 'Primary navigation',
   'navigation.sections': 'Sections',
   'navigation.more': 'More',

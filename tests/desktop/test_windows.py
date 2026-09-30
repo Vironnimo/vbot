@@ -279,6 +279,50 @@ def test_second_launch_hands_its_request_to_the_first_and_releases_its_handles(
     assert len(first_api.closed) == 2
 
 
+@pytest.mark.parametrize("released_after", [3, None], ids=["handed-over", "never-released"])
+def test_a_restart_successor_hands_over_and_waits_for_the_guard(
+    monkeypatch, tmp_path, released_after
+):
+    monkeypatch.setattr(_windows.sys, "platform", "win32")
+    registry: dict[str, int] = {}
+    first_api = FakeInstanceApi(registry)
+    successor_api = FakeInstanceApi(registry)
+    first = _windows.claim_desktop_instance(tmp_path, api=first_api)
+    assert first is not None
+    now = [0.0]
+    pauses: list[float] = []
+
+    def pause(seconds: float) -> None:
+        pauses.append(seconds)
+        now[0] += 1.0
+        if released_after is not None and len(pauses) == released_after:
+            # The predecessor exited; the last handle to its guard is gone.
+            registry.pop(next(name for name in registry if name.endswith(".instance")))
+
+    successor = _windows.claim_desktop_instance(
+        tmp_path,
+        handoff="n" * 32,
+        api=successor_api,
+        clock=lambda: 1000.0,
+        monotonic=lambda: now[0],
+        pause=pause,
+    )
+
+    assert json.loads(_handoff_file(tmp_path).read_text(encoding="utf-8")) == {
+        "created_at": 1000.0,
+        "request": {"handoff": "n" * 32},
+    }
+    assert "signal" in successor_api.events
+    if released_after is None:
+        assert successor is None
+        assert now[0] >= _windows.HANDOFF_CLAIM_TIMEOUT_SECONDS
+    else:
+        assert successor is not None
+        assert len(pauses) == released_after
+        successor.close()
+    first.close()
+
+
 @pytest.mark.parametrize(
     "content",
     [

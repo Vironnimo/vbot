@@ -1,7 +1,7 @@
 """Pushes from the Desktop into the loaded page: Live voice requests, Voice updates,
-and requests to open a Session.
+requests to open a Session, and application update restarts.
 
-Three window events carry them:
+Five window events carry them:
 
 - ``vbot-desktop-live`` (cancelable), ``detail``
   ``{action: "start" | "toggle", source: "wakeword" | "hotkey"}``: a wake phrase
@@ -14,6 +14,12 @@ Three window events carry them:
   a later ``--open-session`` launch asks the page to open that Session (the
   Agent address and the Session id). The page acknowledges with
   ``preventDefault()``.
+- ``vbot-desktop-update``, ``detail`` ``{pending, restarting, failed}``: the
+  Desktop's update restart status (see :mod:`desktop.restart`).
+- ``vbot-desktop-restart`` (cancelable), ``detail`` ``{reason: "idle"}``: the
+  Desktop would restart into a newer version now. A page that handles it calls
+  ``preventDefault()`` and then restarts through ``restartDesktop`` or declines;
+  an unhandled request lets the Desktop restart on its own.
 
 ``Window.evaluate_js`` blocks until the page answers and deadlocks on the GUI
 thread, so one daemon thread (``vbot-desktop-page-events``) delivers every push
@@ -26,7 +32,9 @@ in order from one queue. Producers never block:
   dropped (the page notices the sequence gap and reads the status again);
 - Voice status: at most one snapshot waits; a newer one replaces its content
   where it waits;
-- Session requests: at most one waits; a newer one replaces it where it waits.
+- Session requests: at most one waits; a newer one replaces it where it waits;
+- update status: at most one snapshot waits, like the Voice status;
+- restart requests: at most one waits; a later one while it waits is dropped.
 
 A page without handlers (the connection screen) ignores the events.
 """
@@ -47,6 +55,8 @@ logger = logging.getLogger("vbot.desktop.page_events")
 LIVE_REQUEST_EVENT = "vbot-desktop-live"
 VOICE_PUSH_EVENT = "vbot-desktop-voice"
 OPEN_SESSION_EVENT = "vbot-desktop-open-session"
+UPDATE_EVENT = "vbot-desktop-update"
+RESTART_REQUEST_EVENT = "vbot-desktop-restart"
 LIVE_REQUEST_ACTIONS = frozenset({"start", "toggle"})
 LIVE_REQUEST_SOURCES = frozenset({"wakeword", "hotkey"})
 MAX_PENDING_LIVE_REQUESTS = 4
@@ -89,6 +99,23 @@ def open_session_script(agent: str, session: str) -> str:
     )
 
 
+def update_push_script(status: Mapping[str, Any]) -> str:
+    """Return JavaScript that dispatches one update restart status."""
+    return (
+        f"window.dispatchEvent(new CustomEvent({json.dumps(UPDATE_EVENT)}, "
+        f"{{detail: {json.dumps(dict(status))}}}))"
+    )
+
+
+def restart_request_script(reason: str) -> str:
+    """Return JavaScript that offers the page a restart and reports whether it took it."""
+    detail = json.dumps({"reason": reason})
+    return (
+        f"!window.dispatchEvent(new CustomEvent({json.dumps(RESTART_REQUEST_EVENT)}, "
+        f"{{cancelable: true, detail: {detail}}}))"
+    )
+
+
 @dataclass
 class _LiveRequest:
     action: str
@@ -103,6 +130,16 @@ class _OpenSession:
 
 
 @dataclass
+class _UpdatePush:
+    status: dict[str, Any]
+
+
+@dataclass
+class _RestartRequest:
+    on_result: Callable[[bool], None]
+
+
+@dataclass
 class _VoicePush:
     detail: dict[str, Any]
 
@@ -111,8 +148,11 @@ class _VoicePush:
         return self.detail.get("type") == "status"
 
 
+_Push = _LiveRequest | _VoicePush | _OpenSession | _UpdatePush | _RestartRequest
+
+
 class PageEventDispatcher:
-    """Deliver Live voice requests, Voice pushes, and Session requests to the window's page.
+    """Deliver Live voice requests, Voice pushes, Session requests and update restarts.
 
     Delivery runs off the GUI thread. Implements the Voice event sink
     (``publish_status`` / ``publish_event``).
@@ -122,9 +162,11 @@ class PageEventDispatcher:
         self._clock = clock
         self._condition = threading.Condition()
         self._window: Any = None
-        self._queue: deque[_LiveRequest | _VoicePush | _OpenSession] = deque()
+        self._queue: deque[_Push] = deque()
         self._pending_status: _VoicePush | None = None
         self._pending_open: _OpenSession | None = None
+        self._pending_update: _UpdatePush | None = None
+        self._pending_restart: _RestartRequest | None = None
         self._live_count = 0
         self._event_count = 0
         self._thread: threading.Thread | None = None
@@ -170,6 +212,31 @@ class PageEventDispatcher:
             self._enqueue_locked(request)
         logger.info("Asking the page to open Session %s of %s", session, agent)
 
+    def publish_update(self, status: Mapping[str, Any]) -> None:
+        """Queue an update restart status, replacing one that still waits."""
+        with self._condition:
+            if self._closed:
+                return
+            if self._pending_update is not None:
+                self._pending_update.status = dict(status)
+                return
+            push = _UpdatePush(dict(status))
+            self._pending_update = push
+            self._enqueue_locked(push)
+
+    def request_restart(self, on_result: Callable[[bool], None]) -> None:
+        """Offer the page an idle restart; ``on_result`` learns whether the page took it.
+
+        Runs ``on_result`` on the delivery thread. Without an attached window, or
+        when the page does not answer, the request counts as not taken.
+        """
+        with self._condition:
+            if self._closed or self._pending_restart is not None:
+                return
+            request = _RestartRequest(on_result)
+            self._pending_restart = request
+            self._enqueue_locked(request)
+
     def publish_status(self, status: Mapping[str, Any]) -> None:
         """Queue a Voice status snapshot, replacing one that still waits."""
         detail = {"type": "status", "status": dict(status)}
@@ -209,12 +276,14 @@ class PageEventDispatcher:
             self._queue.clear()
             self._pending_status = None
             self._pending_open = None
+            self._pending_update = None
+            self._pending_restart = None
             self._condition.notify_all()
             thread = self._thread
         if thread is not None:
             thread.join(_CLOSE_TIMEOUT_SECONDS)
 
-    def _enqueue_locked(self, item: _LiveRequest | _VoicePush | _OpenSession) -> None:
+    def _enqueue_locked(self, item: _Push) -> None:
         self._queue.append(item)
         if self._thread is None:
             self._thread = threading.Thread(
@@ -235,15 +304,25 @@ class PageEventDispatcher:
                     self._live_count -= 1
                 elif isinstance(item, _OpenSession):
                     self._pending_open = None
+                elif isinstance(item, _UpdatePush):
+                    self._pending_update = None
+                elif isinstance(item, _RestartRequest):
+                    self._pending_restart = None
                 elif item is self._pending_status:
                     self._pending_status = None
                 else:
                     self._event_count -= 1
                 detail = dict(item.detail) if isinstance(item, _VoicePush) else None
+                status = dict(item.status) if isinstance(item, _UpdatePush) else {}
             if isinstance(item, _LiveRequest):
                 self._deliver_live(window, item)
             elif isinstance(item, _OpenSession):
                 self._deliver_open_session(window, item)
+            elif isinstance(item, _UpdatePush):
+                if window is not None:
+                    self._evaluate(window, update_push_script(status))
+            elif isinstance(item, _RestartRequest):
+                self._deliver_restart(window, item)
             elif detail is not None:
                 self._deliver_voice(window, detail)
 
@@ -277,6 +356,17 @@ class PageEventDispatcher:
                 request.session,
                 request.agent,
             )
+
+    def _deliver_restart(self, window: Any, request: _RestartRequest) -> None:
+        handled = (
+            self._evaluate(window, restart_request_script("idle")) is True
+            if window is not None
+            else False
+        )
+        try:
+            request.on_result(handled)
+        except Exception:
+            logger.exception("The restart request answer could not be handled")
 
     def _deliver_voice(self, window: Any, detail: dict[str, Any]) -> None:
         if window is None:

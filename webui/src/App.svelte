@@ -95,6 +95,7 @@
   import DebugView from './components/DebugView.svelte';
   import ToastStack from './components/ToastStack.svelte';
   import Modal from './components/ui/Modal.svelte';
+  import ConfirmDialog from './components/ui/ConfirmDialog.svelte';
   import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
   import { onMount, tick, untrack } from 'svelte';
   import {
@@ -119,9 +120,11 @@
     createAutosaveCoordinator,
     provideAutosaveContext,
   } from '$lib/autosave.js';
+  import { flushComposerMemory } from '$lib/composerMemory.js';
   import {
     isDesktopAccessor,
     onDesktopOpenSession,
+    onDesktopRestartRequest,
   } from '$lib/desktopBridge.js';
   import {
     createNavigator,
@@ -191,6 +194,9 @@
   // Cron is unmounted as well; a changed new job waits here until its form
   // opens again.
   let cronNewJobDraft = $state.raw(null);
+  // A Live voice call is starting, live or stopping.
+  let liveCallRunning = $state(false);
+  let restartDiscardConfirmOpen = $state(false);
 
   let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
@@ -303,6 +309,51 @@
       }
       return action();
     });
+
+  // A Desktop restart into a new version replaces this page. The Restart
+  // button and the Desktop's idle request both come here. The user's restart
+  // saves pending edits through the navigation's autosave gate (with its
+  // Retry / Discard dialog) and asks before it discards an unsaved new Cron
+  // job. The idle request declines without any UI while a Live voice call
+  // runs, a new Cron job is unsaved or edits do not save; the Desktop asks
+  // again later.
+  const restartDesktopApp = async ({
+    interactive = false,
+    discardCronDraft = false,
+  } = {}) => {
+    const restart = () => {
+      // Unsent Chat composer text survives in the new window.
+      flushComposerMemory();
+      return desktop.requestRestart({ interactive });
+    };
+    if (interactive) {
+      if (cronNewJobDraft && !discardCronDraft) {
+        restartDiscardConfirmOpen = true;
+        return false;
+      }
+      return requestAutosaveTransition(restart);
+    }
+    const blocked = () =>
+      liveCallRunning ||
+      cronNewJobDraft !== null ||
+      restartDiscardConfirmOpen ||
+      autosaveTransitionSaving ||
+      autosaveFailureOpen;
+    if (blocked()) return false;
+    if (
+      autosaveCoordinator.hasPending() &&
+      !(await autosaveCoordinator.flushPending())
+    )
+      return false;
+    // Something may have started while the edits were saved.
+    if (blocked()) return false;
+    return restart();
+  };
+
+  const confirmRestartDiscardingCronDraft = () => {
+    restartDiscardConfirmOpen = false;
+    void restartDesktopApp({ interactive: true, discardCronDraft: true });
+  };
 
   const desktopAccessor = isDesktopAccessor();
   const navigator = createNavigator({
@@ -615,6 +666,13 @@
     const stopDesktopSessionRequests = isDesktopAccessor()
       ? onDesktopOpenSession(openSessionLink)
       : () => {};
+    // This page always takes over the Desktop's idle restart request, so the
+    // Desktop never restarts over pending edits on its own.
+    const stopDesktopRestartRequests = isDesktopAccessor()
+      ? onDesktopRestartRequest(() => {
+          void restartDesktopApp();
+        })
+      : () => {};
     connectServerEvents();
 
     const onVisibilityChange = () => {
@@ -650,6 +708,7 @@
     return () => {
       cancelled = true;
       stopDesktopSessionRequests();
+      stopDesktopRestartRequests();
       selection.destroy();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       appController.destroy();
@@ -658,11 +717,18 @@
     };
   });
   // Unsaved edits and an unsaved new Cron job ask before the page unloads.
+  // A Desktop restart in progress already asked about the Cron job.
   function protectPendingEdits(event) {
-    if (!autosaveCoordinator.hasPending() && !cronNewJobDraft) return;
+    const cronDraftAtRisk =
+      Boolean(cronNewJobDraft) && !desktop.update?.restarting;
+    if (!autosaveCoordinator.hasPending() && !cronDraftAtRisk) return;
     event.preventDefault();
     event.returnValue = '';
   }
+
+  const desktopRestartBusy = $derived(
+    Boolean(desktop.update?.restarting) || desktop.restartRequesting,
+  );
 </script>
 
 <svelte:window onbeforeunload={protectPendingEdits} />
@@ -685,7 +751,30 @@
   onStopVoiceRecording={desktop.handleStopVoiceRecording}
   onToast={desktop.showToast}
 >
-  {#if webuiOutdated}
+  {#if desktop.restartOffered}
+    <!-- A Desktop restart also loads the new WebUI, so it replaces the
+         reload banner. -->
+    <Banner variant="info" class="app-desktop-restart">
+      <span class="app-desktop-restart__text">
+        {desktop.update?.failed && !desktopRestartBusy
+          ? t('app.desktopRestart.failed')
+          : t('app.desktopRestart.pending')}
+      </span>
+      <Button
+        variant="secondary"
+        loading={desktopRestartBusy}
+        onClick={() => restartDesktopApp({ interactive: true })}
+      >
+        {#if desktopRestartBusy}
+          {t('app.desktopRestart.restarting')}
+        {:else if desktop.update?.failed}
+          {t('common.retry')}
+        {:else}
+          {t('app.desktopRestart.restart')}
+        {/if}
+      </Button>
+    </Banner>
+  {:else if webuiOutdated}
     <Banner variant="info" class="app-webui-outdated">
       <span class="app-webui-outdated__text">
         {t('app.webuiOutdated')}
@@ -715,6 +804,7 @@
       {serverUnavailable}
       voiceStatus={desktop.voiceStatus}
       onToast={desktop.showToast}
+      onRunningChange={(running) => (liveCallRunning = running)}
     />
   {/snippet}
   {#if dataStoreIncident}
@@ -940,6 +1030,16 @@
   </Modal>
 {/if}
 
+{#if restartDiscardConfirmOpen}
+  <ConfirmDialog
+    title={t('app.desktopRestart.cronDraftTitle')}
+    body={t('app.desktopRestart.cronDraftBody')}
+    confirmLabel={t('app.desktopRestart.cronDraftConfirm')}
+    onConfirm={confirmRestartDiscardingCronDraft}
+    onCancel={() => (restartDiscardConfirmOpen = false)}
+  />
+{/if}
+
 {#if serverSwitcherOpen}
   <Modal
     title={t('settings.desktop.switchModalTitle')}
@@ -963,7 +1063,8 @@
      above the active view inside the content column and disappears the instant
      a provider is connected. */
   :global(.app-finish-setup),
-  :global(.app-webui-outdated) {
+  :global(.app-webui-outdated),
+  :global(.app-desktop-restart) {
     flex-shrink: 0;
     gap: 14px;
     padding: 8px 20px;
@@ -1003,7 +1104,8 @@
   }
 
   .app-finish-setup__text,
-  .app-webui-outdated__text {
+  .app-webui-outdated__text,
+  .app-desktop-restart__text {
     color: var(--text-med);
     font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
@@ -1020,7 +1122,8 @@
 
   @media (max-width: 640px) {
     :global(.app-finish-setup),
-    :global(.app-webui-outdated) {
+    :global(.app-webui-outdated),
+    :global(.app-desktop-restart) {
       padding: 8px 14px;
     }
 

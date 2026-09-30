@@ -44,6 +44,7 @@ vi.mock('$lib/api.js', () =>
     RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
     debugStatus: (...args) => debugStatusMock(...args),
     getServedWebuiBuild: (...args) => getServedWebuiBuildMock(...args),
+    getLiveVoiceStatus: () => rpcMock('live.status'),
     listClients: (...args) => listClientsMock(...args),
     listQueue: (...args) => listQueueMock(...args),
     listSessions: (...args) => listSessionsMock(...args),

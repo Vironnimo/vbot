@@ -23,6 +23,7 @@ from desktop import connection as desktop_connection
 from desktop import hotkey as desktop_hotkey
 from desktop import main as desktop_main
 from desktop import page_events as desktop_page_events
+from desktop import restart as desktop_restart
 from desktop.main import DesktopProbeResult, DesktopTarget
 
 _TEST_DESKTOP_SESSION_ID = "desktop-test-session"
@@ -77,6 +78,7 @@ class LaunchSeams:
         self.instance: FakeDesktopInstance | None = FakeDesktopInstance()
         self.claimed: list[Path] = []
         self.handed_over: list[dict[str, Any] | None] = []
+        self.handoffs: list[str | None] = []
         self.browser_origins: list[tuple[str, ...]] = []
         self.secure_origin_targets: list[list[tuple[str, int]]] = []
         self.microphone_origin: Callable[[], str | None] | None = None
@@ -89,10 +91,15 @@ class LaunchSeams:
         return hotkey
 
     def claim(
-        self, config_directory: Path, *, request: dict[str, Any] | None = None
+        self,
+        config_directory: Path,
+        *,
+        request: dict[str, Any] | None = None,
+        handoff: str | None = None,
     ) -> FakeDesktopInstance | None:
         self.claimed.append(config_directory)
         self.handed_over.append(request)
+        self.handoffs.append(handoff)
         return self.instance
 
     def secure_origins(self, targets: Any) -> tuple[str, ...]:
@@ -1182,6 +1189,52 @@ def test_a_running_desktop_on_its_connection_screen_opens_no_session(
 
     assert dispatchers[0].opened_sessions == []
     assert fake_webview.window.focus_calls == ["show"]
+
+
+@pytest.mark.parametrize("packaged", [True, False], ids=["packaged", "development"])
+def test_a_restart_successor_restores_the_window_its_predecessor_showed(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+    monkeypatch: pytest.MonkeyPatch,
+    packaged: bool,
+) -> None:
+    nonce = "a" * 32
+    request = desktop_restart.RestartRequest(
+        nonce=nonce,
+        server=("nas.lan", 8420),
+        location="#settings/desktop",
+        placement=desktop_restart.WindowPlacement("normal", 1200, 700, 40, 60),
+    )
+    desktop_restart.write_restart_request(tmp_path, request, created_at=time.time())
+    if packaged:
+        contract = {
+            "version_file": str(tmp_path / "active-version"),
+            "version": "v1",
+            "command": [str(tmp_path / "vBot.GUI.exe"), "desktop"],
+        }
+        monkeypatch.setenv(desktop_restart.RELAUNCH_ENV, json.dumps(contract))
+    else:
+        monkeypatch.delenv(desktop_restart.RELAUNCH_ENV, raising=False)
+
+    fake_webview = _launch(tmp_path, settings=SAVED_PI)
+
+    kwargs = fake_webview.created_windows[0][1]
+    assert _bridge(fake_webview).getDesktopCapabilities()["restart"] is packaged
+    if not packaged:
+        # Only a packaged launch can be a successor; the request stays untouched.
+        assert launch_seams.handoffs == [None]
+        assert fake_webview.window.loaded_urls == [_webui_url("pi.lan", 9000)]
+        assert (tmp_path / desktop_restart.RESTART_REQUEST_FILE_NAME).exists()
+        return
+    assert launch_seams.handoffs == [nonce]
+    assert fake_webview.window.loaded_urls == [f"{_webui_url('nas.lan', 8420)}#settings/desktop"]
+    assert (kwargs["width"], kwargs["height"], kwargs["x"], kwargs["y"]) == (1200, 700, 40, 60)
+    assert (kwargs["minimized"], kwargs["maximized"]) == (False, False)
+    # A later successor's handoff goes to the restart, never to the focus.
+    instance = launch_seams.instance
+    assert instance is not None and instance.on_activate is not None
+    instance.on_activate({"handoff": "b" * 32})
+    assert fake_webview.window.focus_calls == []
 
 
 def test_page_pushes_reach_the_window_page_until_it_closes(

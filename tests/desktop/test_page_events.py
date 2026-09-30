@@ -16,6 +16,8 @@ from desktop.page_events import (
     PageEventDispatcher,
     live_request_script,
     open_session_script,
+    restart_request_script,
+    update_push_script,
     voice_push_script,
 )
 
@@ -97,8 +99,9 @@ def dispatchers() -> Any:
             "vbot-desktop-open-session",
             {"agent": "builder@project", "session": "session-1"},
         ),
+        (restart_request_script("idle"), "vbot-desktop-restart", {"reason": "idle"}),
     ],
-    ids=["live", "open-session"],
+    ids=["live", "open-session", "restart"],
 )
 def test_request_scripts_dispatch_a_cancelable_event_and_report_handling(
     script: str, event: str, detail: dict[str, str]
@@ -357,3 +360,49 @@ def test_close_stops_the_delivery_thread(dispatchers: Any) -> None:
     dispatcher.close()
 
     assert not thread.is_alive()
+
+
+# -- Update restart ----------------------------------------------------------------
+
+
+def test_update_status_keeps_only_the_newest_waiting_snapshot(dispatchers: Any) -> None:
+    release = threading.Event()
+    window = FakeWindow(block=release)
+    dispatcher = dispatchers()
+    dispatcher.attach_window(window)
+    dispatcher.publish_update({"pending": True, "restarting": False, "failed": False})
+    assert window.started.wait(timeout=2)
+
+    dispatcher.publish_update({"pending": True, "restarting": True, "failed": False})
+    dispatcher.publish_update({"pending": True, "restarting": False, "failed": True})
+    release.set()
+
+    _wait_until(lambda: len(window.scripts) == 2)
+    assert window.scripts[1] == update_push_script(
+        {"pending": True, "restarting": False, "failed": True}
+    )
+
+
+@pytest.mark.parametrize(
+    ("result", "attached", "handled"),
+    [
+        (True, True, True),
+        (False, True, False),
+        (RuntimeError("closing"), True, False),
+        (True, False, False),
+    ],
+    ids=["page-takes-it", "no-handler", "page-fails", "no-window"],
+)
+def test_a_restart_request_reports_whether_the_page_took_it(
+    dispatchers: Any, result: Any, attached: bool, handled: bool
+) -> None:
+    window = FakeWindow(result)
+    dispatcher = dispatchers()
+    if attached:
+        dispatcher.attach_window(window)
+    answers: list[bool] = []
+
+    dispatcher.request_restart(answers.append)
+
+    _wait_until(lambda: answers != [])
+    assert answers == [handled]

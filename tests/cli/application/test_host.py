@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,10 +52,14 @@ def test_client_state_never_resolves_a_local_server_target(
     assert state.version == "0.4.2"
 
 
-def test_tray_version_handles_full_manifest_and_refreshes_only_on_activation(tmp_path, monkeypatch):
+def test_tray_version_and_pending_restart_refresh_only_on_activation(tmp_path, monkeypatch):
     install = _install(tmp_path, shape="desktop-client")
+    install.save()
     manifest = install.version() / "release.json"
     manifest.write_text(json.dumps({"version": "1.0", "files": {"fixture": "x" * 1024**2}}))
+    # The tray runs the code of the version that was active when it started.
+    loaded = install.version() / "app" / "cli" / "application" / "host.py"
+    monkeypatch.setattr(host, "__file__", str(loaded))
     read = host.read_json
     reads = []
 
@@ -63,15 +69,70 @@ def test_tray_version_handles_full_manifest_and_refreshes_only_on_activation(tmp
 
     monkeypatch.setattr(host, "read_json", observed)
     facade = host.ApplicationFacade(install)
-    assert facade.state().version == "1.0"
-    assert facade.state().version == "1.0"
+    assert (facade.state().version, facade.state().restart_pending) == ("1.0", False)
     assert reads == [manifest]
     next_version = install.version("rel_next")
     next_version.mkdir()
     (next_version / "release.json").write_text('{"version":"1.1"}')
     install.activate("rel_next")
-    assert facade.state().version == "1.1"
+    update = Operation(id="upd_next", phase="verifying", message="Verifying")
+    update.save(install)
+    # The update that activated the version is still running.
+    assert (facade.state().version, facade.state().restart_pending) == ("1.1", False)
+    update.transition(install, "completed", "Updated")
+    assert facade.state().restart_pending is True
     assert reads == [manifest, next_version / "release.json"]
+    # A tray running from a source checkout never restarts.
+    assert host.ApplicationFacade(install, running_version=None).state().restart_pending is False
+
+
+def test_restart_hands_over_to_the_bootstrap_and_keeps_the_server_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    install = _install(tmp_path)
+    facade = host.ApplicationFacade(install, running_version="rel_old")
+    launches: list[tuple[list[str], dict[str, Any]]] = []
+    exit_code: list[int | None] = [1]
+
+    class Successor:
+        returncode: int | None = None
+
+        def wait(self, timeout: float) -> int:
+            if exit_code[0] is None:
+                raise subprocess.TimeoutExpired("vBot.exe", timeout)
+            self.returncode = exit_code[0]
+            return exit_code[0]
+
+    def launch(arguments: list[str], **options: Any) -> Successor:
+        launches.append((arguments, options))
+        return Successor()
+
+    monkeypatch.setattr(host.subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        host,
+        "subprocess_creation_flags",
+        lambda **kwargs: 11 if kwargs == {"new_process_group": True, "breakaway": True} else 0,
+    )
+    monkeypatch.setattr(
+        host.processes, "stop", lambda *_args, **_kwargs: pytest.fail("the server keeps running")
+    )
+
+    # A successor that exits at once leaves this tray in charge.
+    with pytest.raises(ApplicationError):
+        facade.restart()
+    exit_code[0] = None
+    with caplog.at_level(logging.INFO, logger="vbot.application.host"):
+        facade.restart()
+
+    arguments, options = launches[-1]
+    assert arguments == [str(install.root / "vBot.exe")]
+    assert options["cwd"] == install.root
+    assert options["env"]["VBOT_HOST_SUCCESSOR"] == "1"
+    assert options["env"]["VBOT_INSTALL_ROOT"] == str(install.root)
+    assert options["creationflags"] == 11
+    assert all(options[name] is subprocess.DEVNULL for name in ("stdin", "stdout", "stderr"))
+    assert [record.levelno for record in caplog.records] == [logging.INFO]
+    assert "from=rel_old to=rel_current" in caplog.records[0].getMessage()
 
 
 class _Monitor:
@@ -296,6 +357,12 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
     assert options["creationflags"] == 7
     environment = cast(dict[str, str], cast(dict[str, Any], options)["env"])
     assert environment["VBOT_INSTALL_ROOT"] == str(install.root)
+    # The Desktop restarts into a later active version through the stable launcher.
+    assert json.loads(environment[desktop.RELAUNCH_ENV]) == {
+        "version_file": str(install.root / "active-version"),
+        "version": install.version().name,
+        "command": [str(install.root / "vBot.exe"), "desktop"],
+    }
 
 
 @pytest.mark.parametrize(
@@ -390,15 +457,32 @@ def test_browser_and_logs_use_only_the_owned_local_target(
         client.open_browser()
 
 
-def test_main_recovers_before_initial_start_and_never_restarts_after_manual_stop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("successor", "timeout", "started"),
+    [
+        pytest.param(None, 0, ["start"], id="first-host"),
+        # A restart successor waits for its predecessor and keeps the server as
+        # it is, including a server the user stopped on purpose.
+        pytest.param("1", 30, [], id="restart-successor"),
+    ],
+)
+def test_main_recovers_before_initial_start_and_only_a_first_host_starts_the_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    successor: str | None,
+    timeout: float,
+    started: list[str],
 ):
     install = _install(tmp_path)
     order: list[str] = []
+    if successor is None:
+        monkeypatch.delenv("VBOT_HOST_SUCCESSOR", raising=False)
+    else:
+        monkeypatch.setenv("VBOT_HOST_SUCCESSOR", successor)
 
     @contextmanager
-    def lock(_root: Path, name: str):
-        order.append(f"lock:{name}")
+    def lock(_root: Path, name: str, *, timeout: float):
+        order.append(f"lock:{name}:{timeout:g}")
         yield
 
     class Manager:
@@ -418,7 +502,7 @@ def test_main_recovers_before_initial_start_and_never_restarts_after_manual_stop
     monkeypatch.setattr(host, "run_tray", lambda _facade, _icon: order.append("tray"))
 
     assert host.main() == 0
-    assert order == ["lock:host", "logging", "recover", "start", "tray", "close"]
+    assert order == [f"lock:host:{timeout:g}", "logging", "recover", *started, "tray", "close"]
 
 
 def test_main_keeps_tray_running_when_initial_start_fails(
@@ -428,7 +512,7 @@ def test_main_keeps_tray_running_when_initial_start_fails(
     received: list[host.ApplicationFacade] = []
 
     @contextmanager
-    def lock(_root: Path, _name: str):
+    def lock(_root: Path, _name: str, **_kwargs: object):
         yield
 
     class Manager:

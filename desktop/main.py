@@ -1,8 +1,9 @@
 """Desktop launch, target probing, and window wiring for the vBot pywebview accessor.
 
 The entrypoint builds the in-window server-selection controller
-(:mod:`desktop.connection`), Voice (:mod:`desktop.wakeword.controller`) and the
-page pushes (:mod:`desktop.page_events`), wires the *same* bridge facade
+(:mod:`desktop.connection`), Voice (:mod:`desktop.wakeword.controller`), the
+page pushes (:mod:`desktop.page_events`) and, for a packaged launch, the update
+restart (:mod:`desktop.restart`), wires the *same* bridge facade
 (:mod:`desktop.bridge`) as the window's single ``js_api`` (so both the shell
 connection screen and the remote WebUI call into it), and hands the live window
 to the controller. There is no silent localhost default: the controller
@@ -24,6 +25,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -32,7 +34,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
-from desktop import _windows
+from desktop import _windows, restart
 from desktop.settings import (
     config_dir,
     read_window_size,
@@ -387,11 +389,26 @@ def launch_desktop(
     override = _resolve_launch_override(args)
     session_link = _resolve_session_link(args)
     desktop_config_directory = settings_file.parent if settings_file is not None else config_dir()
+    contract = restart.relaunch_contract()
+    # A packaged launch may be the successor of a Desktop restarting into this
+    # version; it restores what that Desktop showed.
+    restart_request = (
+        restart.take_restart_request(desktop_config_directory, now=time.time())
+        if contract is not None
+        else None
+    )
+    if restart_request is not None:
+        logger.info("Desktop starting as the successor of a restarting Desktop")
+        if restart_request.server is not None:
+            override, session_link = restart_request.server, None
     instance = _windows.claim_desktop_instance(
         desktop_config_directory,
         request=_activation_request(override, session_link),
+        handoff=restart_request.nonce if restart_request is not None else None,
     )
     if instance is None:
+        if restart_request is not None:
+            return False
         if session_link is not None:
             logger.info(
                 "vBot Desktop is already running; focused the open window and handed "
@@ -414,6 +431,8 @@ def launch_desktop(
             override,
             session_link,
             instance,
+            contract=contract,
+            restart_request=restart_request,
             desktop_config_directory=desktop_config_directory,
             settings_file=settings_file,
             probe=probe,
@@ -431,6 +450,8 @@ def _run_desktop(
     session_link: SessionLink | None,
     instance: _windows.DesktopInstance,
     *,
+    contract: restart.RelaunchContract | None = None,
+    restart_request: restart.RestartRequest | None = None,
     desktop_config_directory: Path,
     settings_file: Path | None,
     probe: Callable[[DesktopTarget], DesktopProbeResult],
@@ -458,11 +479,31 @@ def _run_desktop(
         on_press=lambda: page_events.request_live("toggle", "hotkey"),
     )
     voice = _create_voice(args, settings_file, server_url, page_events)
+    window_holder: list[Any] = []
+    window_state = _WindowState()
+    desktop_restart = (
+        restart.DesktopRestart(
+            contract,
+            config_directory=desktop_config_directory,
+            page=page_events,
+            active_server=controller.active_target,
+            location=lambda: _page_location(window_holder, controller),
+            placement=lambda: (
+                window_state.placement(window_holder[0], settings_file) if window_holder else None
+            ),
+            foreground=_windows.foreground_is_own_process,
+            shell_busy=voice.is_busy,
+            close_window=lambda: window_holder[0].destroy(),
+        )
+        if contract is not None
+        else None
+    )
     bridge = DesktopBridge(
         voice=voice,
         connection=controller,
         live_hotkey=live_hotkey,
         secure_origins=secure_origins,
+        restart=desktop_restart,
     )
     # Voice follows the window: every successful in-window connect retargets
     # it, so first-run connect and runtime server switches never leave Voice
@@ -473,10 +514,23 @@ def _run_desktop(
     # connection screen is a safe neutral page that the post-loop entry callable
     # replaces once the loop is live (navigating to the WebUI on connect).
     initial_html = build_connection_html(servers=controller.list_servers())
+    placement = restart_request.placement if restart_request is not None else None
     window_layout = resolve_window_layout(
-        read_window_size(settings_file),
+        (placement.width, placement.height)
+        if placement is not None
+        else read_window_size(settings_file),
         _primary_screen(webview),
     )
+    placement_kwargs: dict[str, Any] = {}
+    if placement is not None:
+        # A restart reopens the window where and how it was; the position is
+        # only kept for the normal state and was taken seconds ago.
+        if placement.x is not None and placement.y is not None:
+            placement_kwargs.update(x=placement.x, y=placement.y)
+        placement_kwargs.update(
+            minimized=placement.state == "minimized",
+            maximized=placement.state == "maximized",
+        )
     window = webview.create_window(
         WINDOW_TITLE,
         html=initial_html,
@@ -487,14 +541,21 @@ def _run_desktop(
         height=window_layout.height,
         min_size=(window_layout.minimum_width, window_layout.minimum_height),
         screen=window_layout.screen,
+        **placement_kwargs,
     )
+    window_holder.append(window)
+    window_state.track(window, placement.state if placement is not None else "normal")
     _windows.bind_window_dpi(window, (window_layout.minimum_width, window_layout.minimum_height))
     _windows.allow_server_microphone(
         window, lambda: _windows.url_origin(controller.active_server_url())
     )
     controller.attach_window(window)
     page_events.attach_window(window)
-    instance.listen(_activation_handler(controller, page_events, _WindowFocus(window)))
+    instance.listen(
+        _activation_handler(
+            controller, page_events, _WindowFocus(window, window_state), desktop_restart
+        )
+    )
 
     start_kwargs: dict[str, Any] = {}
     resolved_icon_path = app_icon_path if app_icon_path is not None else icon_path()
@@ -512,7 +573,12 @@ def _run_desktop(
     start_kwargs["private_mode"] = False
     start_kwargs["storage_path"] = str(desktop_config_directory / WEBVIEW_STORAGE_DIR_NAME)
 
-    connection_entry = _select_launch_entry(controller, override, session_link)
+    connection_entry = _select_launch_entry(
+        controller,
+        override,
+        session_link,
+        location=restart_request.location if restart_request is not None else None,
+    )
 
     def start_visible_services() -> None:
         # The lightweight shell must become visible before any network probe or
@@ -521,6 +587,8 @@ def _run_desktop(
         connection_entry()
         voice.start()
         live_hotkey.start()
+        if desktop_restart is not None:
+            desktop_restart.start()
 
     window.events.shown += start_visible_services
 
@@ -539,38 +607,51 @@ def _run_desktop(
     try:
         webview.start(**start_kwargs)
     finally:
+        if desktop_restart is not None:
+            desktop_restart.close()
         live_hotkey.stop()
         voice.close()
         page_events.close()
 
 
-class _WindowFocus:
-    """Bring the Desktop window to the front from a background thread.
+class _WindowState:
+    """Track whether the Desktop window is minimized or maximized.
 
-    pywebview's ``restore`` always returns to the normal size, so the window
-    state is tracked to bring a minimized, formerly maximized window back
-    maximized. The Window API marshals onto the GUI thread itself.
+    pywebview reports these only as events. The state brings a minimized,
+    formerly maximized window back maximized (``restore`` always returns to the
+    normal size) and describes the window for a restart.
     """
 
-    def __init__(self, window: Any) -> None:
-        self._window = window
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._minimized = False
         self._maximized = False
+
+    def track(self, window: Any, initial: str = "normal") -> None:
+        with self._lock:
+            self._minimized = initial == "minimized"
+            self._maximized = initial == "maximized"
         window.events.minimized += self._on_minimized
         window.events.maximized += self._on_maximized
         window.events.restored += self._on_restored
 
-    def bring_to_front(self) -> None:
+    def flags(self) -> tuple[bool, bool]:
+        """Return ``(minimized, maximized)``."""
         with self._lock:
-            minimized = self._minimized
-            maximized = self._maximized
-        if minimized:
-            if maximized:
-                self._window.maximize()
-            else:
-                self._window.restore()
-        self._window.show()
+            return self._minimized, self._maximized
+
+    def placement(self, window: Any, settings_file: Path | None) -> restart.WindowPlacement:
+        """Describe the window for its restart successor (logical pixels)."""
+        minimized, maximized = self.flags()
+        if minimized or maximized:
+            # Such a window reports no useful normal size or position; the
+            # successor uses the remembered size and centers.
+            width, height = read_window_size(settings_file) or (window.width, window.height)
+            state: restart.WindowState = "minimized" if minimized else "maximized"
+            return restart.WindowPlacement(state, int(width), int(height))
+        return restart.WindowPlacement(
+            "normal", int(window.width), int(window.height), int(window.x), int(window.y)
+        )
 
     def _on_minimized(self) -> None:
         with self._lock:
@@ -585,6 +666,40 @@ class _WindowFocus:
         with self._lock:
             self._minimized = False
             self._maximized = False
+
+
+class _WindowFocus:
+    """Bring the Desktop window to the front from a background thread.
+
+    The Window API marshals onto the GUI thread itself.
+    """
+
+    def __init__(self, window: Any, state: _WindowState) -> None:
+        self._window = window
+        self._state = state
+
+    def bring_to_front(self) -> None:
+        minimized, maximized = self._state.flags()
+        if minimized:
+            if maximized:
+                self._window.maximize()
+            else:
+                self._window.restore()
+        self._window.show()
+
+
+def _page_location(window_holder: list[Any], controller: ConnectionController) -> str | None:
+    """Return the WebUI URL fragment the window shows, for a restart to restore."""
+
+    active = controller.active_server_url()
+    if not window_holder or active is None:
+        return None
+    url = window_holder[0].get_current_url()
+    if not isinstance(url, str) or not url.startswith(active):
+        return None
+    _, separator, fragment = url.partition("#")
+    location = f"#{fragment}" if separator and fragment else None
+    return location if restart.is_location(location) else None
 
 
 def _launch_targets(
@@ -711,6 +826,8 @@ def _select_launch_entry(
     controller: ConnectionController,
     override: tuple[str, int] | None,
     session_link: SessionLink | None,
+    *,
+    location: str | None = None,
 ) -> Callable[[], Any]:
     """Return the nullary visible-window entry callable and log the chosen branch.
 
@@ -727,7 +844,7 @@ def _select_launch_entry(
         logger.info("Desktop starting; connecting to CLI override %s:%s", host, port)
 
         def connect_override() -> Any:
-            return controller.connect(host, port, open_session=session_link)
+            return controller.connect(host, port, open_session=session_link, location=location)
 
         return connect_override
 
@@ -751,16 +868,25 @@ def _activation_handler(
     controller: ConnectionController,
     page_events: PageEventDispatcher,
     focus: _WindowFocus,
+    desktop_restart: restart.DesktopRestart | None = None,
 ) -> Callable[[Mapping[str, Any] | None], None]:
     """Return the running Desktop's answer to a later launch.
 
     The window always comes to the front. A handed-over ``--open-session``
     request additionally opens its Session through the page, but only when
     the window shows the requested server: the one the launch named with
-    ``--host`` / ``--port``, or any server when it named none.
+    ``--host`` / ``--port``, or any server when it named none. A restart
+    successor's ``{"handoff": nonce}`` instead lets the restart close this
+    window.
     """
 
     def on_activate(request: Mapping[str, Any] | None) -> None:
+        if request is not None and "handoff" in request:
+            if desktop_restart is not None:
+                desktop_restart.accept_handoff(request.get("handoff"))
+            else:
+                logger.warning("Ignoring a Desktop handoff; this Desktop is not restarting")
+            return
         link = _requested_session(request, controller)
         if link is not None:
             page_events.request_open_session(link.agent, link.session)
