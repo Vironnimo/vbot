@@ -42,7 +42,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 ### Project Context
 
-**Definition:** The current instructions, absolute Project path, and available Project Skills that tell an Agent how to work in a registered Project. Supplied automatically when that Project is the Agent's working Project, or loaded explicitly by an Identity Agent through the `project` Tool (`tools/project.md`).
+**Definition:** The current instructions, absolute Project path, and available Project Skills that tell an Agent how to work in a registered Project. Supplied automatically when that Project is the Agent's working Project, or loaded explicitly by an Identity Agent through the `project` Tool (`tools/project.md`). Each auto-load file enters whole up to 128 KiB; a larger one appears only as a notice to read it with `read` (`prompts.md` -> Data blocks).
 
 **Not:** An Agent type, Project membership, Rooting, or a current-working-directory change; an explicit load changes none of those, and every one-shot `bash` call must set `workdir` again.
 

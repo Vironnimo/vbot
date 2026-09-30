@@ -19,6 +19,7 @@ from core.attachments import sniff_media_type
 from core.chat.content_blocks import ContentBlock, FileMentionBlock, TextBlock
 from core.chat.errors import ChatError
 from core.projects import resolve_working_project_id
+from core.prompts import INLINE_FILE_MAX_BYTES
 from core.tools.search import SearchBudget, ignore_rules_apply, iter_search_entries
 from core.utils.logging import get_logger
 
@@ -30,9 +31,10 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("chat.file_mentions")
 
-# Inline cap for a mentioned text file: larger files degrade to a reference note
-# the agent can read selectively, so one @-mention cannot flood the context window.
-MENTION_INLINE_MAX_BYTES = 128 * 1024
+# Inline cap for a mentioned text file, shared with Project auto-load files: larger
+# files degrade to a reference note the agent can read selectively, so one
+# @-mention cannot flood the context window.
+MENTION_INLINE_MAX_BYTES = INLINE_FILE_MAX_BYTES
 
 # Hard ceiling for the picker file list; the files.list response marks truncation.
 MENTION_FILE_LIST_LIMIT = 5000
