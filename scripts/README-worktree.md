@@ -142,7 +142,7 @@ the worktree. The important boundary is the current working directory.
 
 ### 6. Merge the finished task into `main`
 
-When every change is committed, merge from anywhere. The commits passed the static checks of the commit hook; the merge runs the tests. It first runs the branch check in the worktree: the pytest tests the branch's changes affect, outside the merge lock. Then the merge commit passes the commit check against the merged result, which runs only the tests the branch check did not cover plus the WebUI checks:
+When every change is committed, merge from anywhere. The commits passed the static checks of the commit hook; the merge runs the tests. It first checks, without touching `main`, whether the branch conflicts with it (`git merge-tree`), and reports a conflict before any test runs. Then it runs the branch check in the worktree: the pytest tests the branch's changes affect, outside the merge lock. Then the merge commit passes the commit check against the merged result, which runs only the tests the branch check did not cover plus the WebUI checks:
 
 ```bash
 python scripts/worktree.py merge my-task

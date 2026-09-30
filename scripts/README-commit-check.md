@@ -35,6 +35,10 @@
 - The hook sizes its runs to the pool (`_workers`, and the complete suite with all of it); `-n auto` means 2 workers locally. CI (`CI` set) and pytest runs that tests start inside a run holding cores (`VBOT_TEST_CORES_HELD`) skip the pool.
 - Each run appends a JSON line to `runs.jsonl` there: checkout, kind (`commit`, `merge`, `branch`, `rerun` from the hook, `manual` otherwise), cores asked and granted, wait, duration, exit status and outcome counts, and for a complete suite the reason `_test_impact` gives.
 
+## Reusing another checkout's test runs
+
+- The branch check selects twice as well: against the worktree's records, and against the primary checkout's (with the changes since its tested state, normally the branch's own). After a rebase the worktree's records see everything the branch took over from main as changed; the primary checkout's runs cover it. The branch check runs only the tests both select, and of the staged test modules only those that differ from the primary checkout's tested state. The worktree adopts the primary checkout's record of each test whose current state only it tested.
+
 ## Merge commits
 
 - A merge commit selects twice: against this checkout's records, and against the records of the worktree holding the merged branch (with the changes since that worktree's tested state, normally the changes made here since the fork). It runs only the tests both select; a test either side leaves out passed there with the code and files it has now.

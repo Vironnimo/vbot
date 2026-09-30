@@ -611,6 +611,48 @@ def test_merge_commit_runs_a_test_both_sides_changed(
     assert "test_factor.py::test_factor" in output
 
 
+# Two branch checks and a commit check each start pytest in the project.
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    ("main_change", "branch_change", "expected"),
+    [
+        (("calc.py", HARMLESS_CALC), ("wip.py", HARMLESS_WIP), "PASS (no test affected)"),
+        (("factor.txt", "4"), ("calc.py", SKEWED_CALC), "FAIL: tests affected by this commit"),
+    ],
+    ids=["main tested its change", "both sides changed"],
+)
+def test_branch_check_after_a_rebase_runs_only_the_tests_main_did_not_run(
+    impact_project: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    main_change: tuple[str, str],
+    branch_change: tuple[str, str],
+    expected: str,
+) -> None:
+    worktree = tmp_path / "worktree"
+    _git(impact_project, "worktree", "add", "-q", "-b", "task", str(worktree))
+    path, content = branch_change
+    _write(worktree, path, content)
+    _git(worktree, "add", path)
+    _git(worktree, "commit", "-q", "-m", path, "--no-verify")
+    assert commit_check.check_branch(worktree) == 0
+    path, content = main_change
+    _write(impact_project, path, content)
+    _git(impact_project, "add", path)
+    assert _check_tests(impact_project) == {"PASS": (False, "")}
+    _git(impact_project, "commit", "-q", "-m", path, "--no-verify")
+    _git(worktree, "rebase", "-q", _git(impact_project, "rev-parse", "HEAD").strip())
+    capsys.readouterr()
+
+    exit_code = commit_check.check_branch(worktree)
+
+    output = capsys.readouterr().out
+    assert expected in output
+    assert (exit_code == 0) is expected.startswith("PASS")
+    # Merged, test_factor doubles the factor 4 to 12; neither side ran it so.
+    assert ("test_factor.py::test_factor" in output) is (exit_code != 0)
+
+
 # The branch check starts a nested pytest process under parallel suite load.
 @pytest.mark.timeout(120)
 def test_worktree_commits_leave_the_tests_to_the_branch_check(
@@ -636,7 +678,7 @@ def test_worktree_commits_leave_the_tests_to_the_branch_check(
     # A worktree made without scripts/worktree.py takes the records over now.
     output = capsys.readouterr().out
     assert f"using the test-impact data of {impact_project}" in output
-    assert "no usable test-impact data" not in output
+    assert "running the complete suite" not in output
     assert "FAIL: tests affected by this commit" in output
     assert "test_calc.py::test_double" in output
     assert "test_wip.py" not in output
