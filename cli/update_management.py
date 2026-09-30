@@ -47,9 +47,9 @@ from cli.server_management import (
     DEFAULT_SERVICE_NAME,
     CommandResult,
     ServerInstance,
+    classify_server,
     decode_command_output,
     has_vbot_run_context,
-    probe_health,
     restart_server,
     schedule_server_restart,
     start_server,
@@ -58,6 +58,7 @@ from cli.server_management import (
 from core.utils.atomic import atomic_write_bytes
 from core.utils.config import VBOT_ROOT
 from core.utils.processes import kill_process_tree
+from core.utils.server_control import live_server_ports
 
 GITHUB_API_BASE = "https://api.github.com/repos/Vironnimo/vbot"
 
@@ -117,10 +118,21 @@ def _ensure_update_data_snapshot(instance: ServerInstance) -> _Step:
     if missing is not None:
         return _Step(False, f"update: {missing}")
 
-    health = probe_health(instance)
-    if health.reachable:
-        if not health.is_vbot:
-            return _Step(False, "update: the target port is occupied by a non-vBot process")
+    # A busy server must never be taken for a stopped one: its files are still in use.
+    state = classify_server(instance)
+    if state == "unresponsive":
+        return _Step(
+            False,
+            "update: the server is running but does not answer its health check, so no "
+            "data snapshot was taken; try the update again once the server responds",
+        )
+    if state == "foreign":
+        return _Step(
+            False,
+            "update: the target port is held by another process or by a vBot server "
+            "of another data directory",
+        )
+    if state == "running":
         payload = rpc_call(instance, "data_store.snapshot_create", {"reason": "update"})
         if not payload.ok:
             return _Step(False, f"update: pre-update data snapshot failed: {payload.message}")
@@ -130,8 +142,23 @@ def _ensure_update_data_snapshot(instance: ServerInstance) -> _Step:
             return _Step(False, "update: pre-update data snapshot response was incomplete")
         return _SnapshotStep(True, f"pre-update data snapshot: {snapshot_id}", snapshot_id)
 
-    # The server is stopped: copy the files directly. No owner declarations are
-    # passed, so a snapshot never depends on this checkout's schema shapes.
+    # The target is stopped, but a server on another port may still use the data
+    # directory; its lifetime claim covers every port.
+    try:
+        ports = live_server_ports(data_dir)
+    except OSError as exc:
+        return _Step(
+            False, f"update: the servers running on the data directory could not be checked ({exc})"
+        )
+    if ports:
+        return _Step(
+            False,
+            "update: a vBot server is running on the data directory (port "
+            + ", ".join(str(port) for port in ports)
+            + "), so no data snapshot was taken; stop it and try the update again",
+        )
+    # No server runs: copy the files directly. No owner declarations are passed,
+    # so a snapshot never depends on this checkout's schema shapes.
     try:
         created = create_data_snapshot(data_dir, reason="update")
     except (OSError, ValueError, DatabaseError) as exc:
