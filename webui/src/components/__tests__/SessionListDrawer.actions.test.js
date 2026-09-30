@@ -184,9 +184,14 @@ describe('SessionListDrawer row actions', () => {
   it.each([
     {
       name: 'a busy Session',
-      error: new Error('cannot delete session with an active or queued run'),
-      shown: ['active or queued run'],
-      hidden: [],
+      error: Object.assign(
+        new Error(
+          'cannot delete session with an active or queued run: session-1',
+        ),
+        { code: 'session_busy' },
+      ),
+      shown: [t('sessions.delete_busy')],
+      hidden: ['cannot delete session'],
     },
     {
       // The refusal names what uses the Session by the names the user knows,

@@ -165,6 +165,7 @@ export function asText(value) {
 // A refused delete names, in the user's words, what still runs in the Session;
 // other refusals keep the server's explanation.
 export function sessionDeleteErrorText(error) {
+  if (error?.code === 'session_busy') return t('sessions.delete_busy');
   if (error?.code === 'session_in_use') {
     const references = Array.isArray(error.details?.data?.references)
       ? error.details.data.references

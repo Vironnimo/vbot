@@ -432,6 +432,8 @@ export default Object.freeze({
   'sessions.delete_confirm':
     'Delete session "{name}"? It is archived and can be restored.',
   'sessions.delete_error': 'The session could not be deleted.',
+  'sessions.delete_busy':
+    'This Session cannot be deleted while a Run is active or queued. Wait until it finishes or stop it, then try again.',
   'sessions.delete_in_use':
     'This Session cannot be deleted while it is used by {references}. Choose another Session for each of them or delete them first.',
   'sessions.reference_cron': 'the Cron job "{name}"',
