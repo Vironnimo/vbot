@@ -224,6 +224,16 @@ class TrayController:
                         TrayMenuItem("Stop server", "stop_server", enabled=not update_active),
                     )
                 )
+            elif state.server_state == "unresponsive":
+                # The server process lives, so a start would be refused; only its
+                # own restart or stop can recover it.
+                items.extend(
+                    (
+                        separator,
+                        TrayMenuItem("Restart server", "restart_server", enabled=not update_active),
+                        TrayMenuItem("Stop server", "stop_server", enabled=not update_active),
+                    )
+                )
             elif state.server_state in {"stopped", "conflict"}:
                 items.extend(
                     (
@@ -254,7 +264,7 @@ class TrayController:
             return TrayPresentation("normal", "vBot", menu, status)
         title, line, failed = self._status_line(state)
         update_active = self._update_active(state)
-        if failed or state.server_state == "conflict":
+        if failed or state.server_state in {"conflict", "unresponsive"}:
             icon = "error"
         elif update_active:
             icon = "updating"
@@ -431,6 +441,7 @@ class TrayController:
         if state.install_shape in _SERVER_SHAPES:
             status = {
                 "running": "Server running",
+                "unresponsive": "Server not responding",
                 "stopped": "Server stopped",
                 "conflict": "Server port is occupied",
                 "unknown": "Checking server…",

@@ -12,7 +12,7 @@ import pytest
 from cli import data_store_management
 from cli.main import dispatch_data_store_command
 from cli.parser import parse_args
-from cli.server_management import CommandResult, HealthProbeResult, ServerInstance
+from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, ServerState
 from core.chat import ChatMessage
 from core.database import (
     SnapshotRestore,
@@ -201,6 +201,22 @@ def _stopped_server(monkeypatch, instance: ServerInstance) -> None:
         "probe_health",
         lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
     )
+    _classified(monkeypatch, "absent")
+
+
+def _classified(monkeypatch, *states: ServerState) -> None:
+    """Classify the target as *states* in turn; the last one repeats."""
+    remaining = list(states)
+    monkeypatch.setattr(
+        data_store_management,
+        "probe_health_patiently",
+        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+    )
+    monkeypatch.setattr(
+        data_store_management,
+        "classify_server",
+        lambda _instance, **_kwargs: remaining.pop(0) if len(remaining) > 1 else remaining[0],
+    )
 
 
 def test_status_falls_back_to_a_local_read_of_a_damaged_database(
@@ -243,20 +259,16 @@ def test_local_status_reports_invalid_recovery_evidence_without_changing_it(
     assert evidence.read_text(encoding="utf-8") == "[]"
 
 
+# A busy server runs too: it must be started again, never left stopped.
+@pytest.mark.parametrize("state", ["running", "unresponsive"], ids=["answering", "busy"])
 def test_restore_stops_verifies_and_restarts_the_previously_running_server(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, state: ServerState
 ) -> None:
     instance = _instance(tmp_path)
     snapshot = _snapshot_with_one_session(tmp_path)
     sessions = ChatSessionManager(tmp_path)
     sessions.create("agent", session_id="later").append(ChatMessage.user("after the snapshot"))
     sessions.close()
-    probes = iter(
-        (
-            HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
-            HealthProbeResult(reachable=False, is_vbot=False),
-        )
-    )
     calls: list[str] = []
 
     def stop(resolved: ServerInstance) -> CommandResult:
@@ -267,7 +279,7 @@ def test_restore_stops_verifies_and_restarts_the_previously_running_server(
         calls.append("start")
         return CommandResult(ok=True, message="started", instance=resolved)
 
-    monkeypatch.setattr(data_store_management, "probe_health", lambda _instance: next(probes))
+    _classified(monkeypatch, state, "absent")
     monkeypatch.setattr(data_store_management, "is_systemd_managed", lambda *_args: False)
     monkeypatch.setattr(data_store_management, "stop_server", stop)
     monkeypatch.setattr(data_store_management, "start_server", start)
@@ -319,11 +331,7 @@ def test_restore_checks_process_shutdown_even_after_listener_closed(
         calls.append("check" if check_only else "restore")
         return SnapshotRestore("snapshot")
 
-    monkeypatch.setattr(
-        data_store_management,
-        "probe_health",
-        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
-    )
+    _classified(monkeypatch, "absent")
     monkeypatch.setattr(data_store_management, "is_systemd_managed", lambda *_args: False)
     monkeypatch.setattr(data_store_management, "stop_server", stop)
     monkeypatch.setattr(data_store_management, "restore_data_snapshot", restore)

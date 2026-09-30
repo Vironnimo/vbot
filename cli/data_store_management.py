@@ -12,8 +12,10 @@ from cli.server_management import (
     DEFAULT_SERVICE_NAME,
     CommandResult,
     ServerInstance,
+    classify_server,
     is_systemd_managed,
     probe_health,
+    probe_health_patiently,
     start_server,
     start_systemd_server,
     stop_server,
@@ -194,7 +196,7 @@ def data_store_snapshot_restore(
     ``documents`` is selected. ``documents`` restores the JSON document set as
     one unit. ``complete`` restores every database and the documents and
     moves databases registered after the snapshot to quarantine. A server that
-    was running is stopped first and started again afterwards.
+    was running, busy or answering, is stopped first and started again afterwards.
     """
     if instance.host not in _LOOPBACK_HOSTS:
         return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
@@ -237,19 +239,22 @@ def data_store_snapshot_restore(
             message=f"snapshot cannot be restored: {snapshot_id}: {exc}",
             instance=instance,
         )
-    health = probe_health(instance)
-    if health.reachable and not health.is_vbot:
+    health = probe_health_patiently(instance)
+    state = classify_server(instance, health=health)
+    if state == "foreign":
         return CommandResult(
             ok=False,
             message=(
-                "refusing data-store restore because a non-vBot process owns "
-                f"{instance.host}:{instance.port}"
+                "refusing data-store restore because another process or a vBot server of "
+                f"another data directory holds {instance.host}:{instance.port}"
             ),
             instance=instance,
             health=health,
         )
-    was_running = health.is_vbot
     systemd_managed = is_systemd_managed(instance, DEFAULT_SERVICE_NAME)
+    # A busy server runs as well: it is stopped like an answering one and started
+    # again afterwards, never left stopped as if it had not been running.
+    was_running = systemd_managed or state != "absent"
     # A closed listener can still belong to a Runtime draining its databases.
     # The lifecycle owner also waits for that exact control-record process.
     stopped = (
@@ -257,7 +262,7 @@ def data_store_snapshot_restore(
         if systemd_managed
         else stop_server(instance)
     )
-    if not stopped.ok or probe_health(instance).reachable:
+    if not stopped.ok or classify_server(instance) != "absent":
         return CommandResult(
             ok=False,
             message=f"could not stop and verify the exact vBot target: {stopped.message}",

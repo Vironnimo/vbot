@@ -112,18 +112,33 @@ def _wait_until(condition, *, timeout: float = 2.0) -> None:
     assert condition()
 
 
-def test_server_desktop_menu_projects_only_the_available_actions():
-    actions = Actions(TrayState("running", "server-desktop", version="1.2.3"))
+@pytest.mark.parametrize(
+    ("server_state", "offered", "withheld"),
+    [
+        pytest.param(
+            "running",
+            {"Open in browser", "Restart server", "Stop server"},
+            {"Start server"},
+            id="running",
+        ),
+        pytest.param(
+            "unresponsive",
+            {"Restart server", "Stop server"},
+            {"Open in browser", "Start server"},
+            id="not-responding",
+        ),
+    ],
+)
+def test_server_desktop_menu_projects_only_the_available_actions(
+    server_state: str, offered: set[str], withheld: set[str]
+):
+    actions = Actions(TrayState(server_state, "server-desktop", version="1.2.3"))
     controller = TrayController(actions)
     controller._poll_state()
 
     menu = _labels(controller)
-    assert "Open Desktop" in menu
-    assert "Open in browser" in menu
-    assert "Restart server" in menu
-    assert "Stop server" in menu
-    assert "Status…" in menu
-    assert "Start server" not in menu
+    assert {"Open Desktop", "Status…", *offered} <= menu.keys()
+    assert not withheld & menu.keys()
     assert "1.2.3" in next(iter(menu))
 
 
@@ -157,6 +172,12 @@ def test_update_is_disabled_while_an_operation_is_active():
     [
         pytest.param(TrayState("running", "server"), "normal", "Server running", id="running"),
         pytest.param(TrayState("stopped", "server"), "stopped", "Server stopped", id="stopped"),
+        pytest.param(
+            TrayState("unresponsive", "server"),
+            "error",
+            "Server not responding",
+            id="not-responding",
+        ),
         pytest.param(
             TrayState("running", "server", update_phase="verifying"),
             "updating",

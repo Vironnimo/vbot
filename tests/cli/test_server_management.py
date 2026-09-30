@@ -16,6 +16,7 @@ from cli import _server_target, server_management
 from cli.server_management import (
     UNRECORDED_SERVER_MESSAGE,
     UNRESPONSIVE_LISTENER_MESSAGE,
+    UNRESPONSIVE_SERVER_MESSAGE,
     CommandResult,
     HealthProbeResult,
     ServerInstance,
@@ -88,6 +89,14 @@ def answer_health(monkeypatch: pytest.MonkeyPatch, *answers: HealthProbeResult) 
     remaining = iter(answers)
     for probe in ("probe_health", "probe_health_patiently"):
         monkeypatch.setattr(server_management, probe, lambda _instance: next(remaining))
+
+
+def record_server(monkeypatch: pytest.MonkeyPatch, *, recorded: bool = True) -> None:
+    """Publish the target's control record naming one live server process, or none."""
+
+    record = SimpleNamespace(pid=456, process_create_time=1000.25) if recorded else None
+    monkeypatch.setattr(server_management, "read_server_control", lambda *_args: record)
+    monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: FakeProcess(pid=456))
 
 
 def script_busy_listener(
@@ -172,21 +181,32 @@ def test_start_server_process_spawns_a_detached_quiet_server(
 
 
 @pytest.mark.parametrize(
-    ("health", "ok", "message", "webui"),
+    ("health", "recorded", "ok", "message", "webui"),
     [
-        pytest.param(VBOT, True, "already running", WebUIProbeResult(False, 404), id="vbot"),
-        pytest.param(FOREIGN, False, "port occupied by non-vBot process", None, id="foreign"),
+        pytest.param(VBOT, True, True, "already running", WebUIProbeResult(False, 404), id="vbot"),
+        pytest.param(
+            FOREIGN, False, False, "port occupied by non-vBot process", None, id="foreign"
+        ),
+        pytest.param(
+            VBOT, False, False, UNRECORDED_SERVER_MESSAGE, None, id="other-data-directory"
+        ),
+        # The control record exists before the listener: the server is starting or stopping.
+        pytest.param(
+            UNREACHABLE, True, False, UNRESPONSIVE_SERVER_MESSAGE, None, id="no-listener-yet"
+        ),
     ],
 )
 def test_start_server_never_spawns_when_the_port_already_answers(
     instance: ServerInstance,
     monkeypatch: pytest.MonkeyPatch,
     health: HealthProbeResult,
+    recorded: bool,
     ok: bool,
     message: str,
     webui: WebUIProbeResult | None,
 ) -> None:
     answer_health(monkeypatch, health)
+    record_server(monkeypatch, recorded=recorded)
     monkeypatch.setattr(
         server_management, "probe_webui", lambda _instance: WebUIProbeResult(False, 404)
     )
@@ -204,24 +224,27 @@ def test_start_server_never_spawns_when_the_port_already_answers(
 
 
 @pytest.mark.parametrize(
-    ("patient", "ok", "message"),
+    ("patient", "recorded", "ok", "message"),
     [
         pytest.param(
-            httpx.Response(200, json={"status": "ok"}), True, "already running", id="late"
+            httpx.Response(200, json={"status": "ok"}), True, True, "already running", id="late"
         ),
-        pytest.param(None, False, UNRESPONSIVE_LISTENER_MESSAGE, id="never-answers"),
+        pytest.param(None, True, False, UNRESPONSIVE_SERVER_MESSAGE, id="busy-server"),
+        pytest.param(None, False, False, UNRESPONSIVE_LISTENER_MESSAGE, id="silent-listener"),
     ],
 )
 def test_start_server_never_spawns_a_duplicate_next_to_a_busy_listener(
     instance: ServerInstance,
     monkeypatch: pytest.MonkeyPatch,
     patient: httpx.Response | None,
+    recorded: bool,
     ok: bool,
     message: str,
 ) -> None:
     # A stalled Event Loop misses the quick probe; a duplicate child would fail to claim
     # the target and the next probe would report "started" for the old server.
     script_busy_listener(monkeypatch, instance, patient)
+    record_server(monkeypatch, recorded=recorded)
     monkeypatch.setattr(
         server_management, "probe_webui", lambda _instance: WebUIProbeResult(True, 200)
     )
@@ -625,6 +648,58 @@ def test_stop_server_asks_a_busy_listener_to_shut_down_instead_of_killing_it(
     assert (result.ok, result.message, result.forced) == (ok, message, False)
     assert process.calls == calls
     assert requested == ([456] if ok else [])
+
+
+BUSY = HealthProbeResult(reachable=False, is_vbot=False, timed_out=True, unresponsive=True)
+
+
+def _inspection_denied(_process: object) -> bool:
+    raise server_management.psutil.AccessDenied(456)
+
+
+def _exited_during_inspection(_process: object) -> bool:
+    raise server_management.psutil.NoSuchProcess(456)
+
+
+@pytest.mark.parametrize(
+    ("health", "process", "is_expected", "expected"),
+    [
+        pytest.param(VBOT, "alive", None, "running", id="running"),
+        pytest.param(BUSY, "alive", None, "unresponsive", id="busy-event-loop"),
+        pytest.param(UNREACHABLE, "alive", None, "unresponsive", id="starting-or-stopping"),
+        pytest.param(UNREACHABLE, "exited", None, "absent", id="stopped"),
+        pytest.param(UNREACHABLE, "reused", None, "absent", id="pid-reused"),
+        pytest.param(UNREACHABLE, None, None, "absent", id="never-started"),
+        pytest.param(VBOT, None, None, "foreign", id="other-data-directory"),
+        pytest.param(BUSY, None, None, "foreign", id="silent-listener"),
+        pytest.param(FOREIGN, "alive", None, "foreign", id="other-application"),
+        pytest.param(VBOT, "alive", lambda _process: False, "foreign", id="not-the-expected"),
+        pytest.param(BUSY, "alive", _inspection_denied, "foreign", id="uninspectable"),
+        pytest.param(UNREACHABLE, "alive", _exited_during_inspection, "absent", id="exits-now"),
+    ],
+)
+def test_classify_server_separates_identity_liveness_and_health(
+    instance: ServerInstance,
+    monkeypatch: pytest.MonkeyPatch,
+    health: HealthProbeResult,
+    process: str | None,
+    is_expected: Callable[[object], bool] | None,
+    expected: str,
+) -> None:
+    record = SimpleNamespace(pid=456, process_create_time=1000.25) if process else None
+    monkeypatch.setattr(server_management, "read_server_control", lambda *_args: record)
+
+    def open_process(_pid: int) -> FakeProcess:
+        if process == "exited":
+            raise server_management.psutil.NoSuchProcess(456)
+        return FakeProcess(pid=456, create_time=2000.0 if process == "reused" else 1000.25)
+
+    monkeypatch.setattr(server_management.psutil, "Process", open_process)
+    # Only the patient probe decides: one missed quick answer never means stopped.
+    monkeypatch.setattr(server_management, "probe_health", lambda *_a: pytest.fail("quick probe"))
+    monkeypatch.setattr(server_management, "probe_health_patiently", lambda _instance: health)
+
+    assert server_management.classify_server(instance, is_expected=is_expected) == expected
 
 
 def test_cooperative_shutdown_requires_control_record_for_listener_pid(

@@ -36,7 +36,7 @@ from cli.autostart_management import (
     disable_autostart,
 )
 from cli.install_state import InstallState, read_install_state
-from cli.server_management import probe_health, resolve_instance, stop_server
+from cli.server_management import ServerState, resolve_instance, stop_server
 from core.utils.processes import subprocess_creation_flags
 
 
@@ -302,7 +302,7 @@ def uninstall(
     runner: Runner | None = None,
     stop: Callable[[Installation], Any] = processes.stop,
     start: Callable[[Installation], Any] = processes.start,
-    probe: Callable[[Any], Any] = probe_health,
+    server_state: Callable[[Installation], ServerState] = processes.server_state,
     exit_host: Callable[[Installation], Any] = request_host_exit,
     launcher: UninstallerLauncher = _launch_uninstaller,
     remove_tree: RemoveTree = _remove_tree,
@@ -328,8 +328,22 @@ def uninstall(
             exit_host(install)
         with exclusive(install.root, "operation", timeout=5):
             was_running = False
-            if install.owns_server:
-                was_running = bool(probe(processes.target(install)).is_vbot) if data_only else False
+            if install.owns_server and data_only:
+                # A reset keeps the server's prior state, so a busy server must never
+                # be taken for a stopped one and have its data deleted underneath it.
+                state = server_state(install)
+                if state == "unresponsive":
+                    raise ApplicationError(
+                        "The server is running but does not answer its health check, so "
+                        "vBot data was not reset; try again once the server responds"
+                    )
+                if state == "foreign":
+                    raise ApplicationError(
+                        "The server port is held by another process or application version, "
+                        "so vBot data was not reset"
+                    )
+                was_running = state == "running"
+            if install.owns_server and (was_running or not data_only):
                 result = stop(install)
                 if not result.ok:
                     raise ApplicationError(
@@ -507,8 +521,21 @@ def begin_removal(install: Installation) -> dict[str, Any]:
     with exclusive(install.root, "dispatch", timeout=15), exclusive(install.root):
         if any(not operation.terminal for operation in operations(install)):
             raise ApplicationError("An update is still pending; wait before removing vBot")
-        if install.owns_server and probe_health(processes.target(install)).reachable:
-            raise ApplicationError("The application server must stop before removal")
+        if install.owns_server:
+            # Removal refuses and never stops: `server stop` ran before this step.
+            state = processes.server_state(install)
+            if state == "running":
+                raise ApplicationError("The application server must stop before removal")
+            if state == "unresponsive":
+                raise ApplicationError(
+                    "The application server is still running but does not answer its "
+                    "health check; it must stop before removal"
+                )
+            if state == "foreign":
+                raise ApplicationError(
+                    "The server port is held by another process or application version; "
+                    "it must be freed before removal"
+                )
         uninstaller = registered_uninstaller(install.root)
         parent = psutil.Process(os.getppid())
         try:

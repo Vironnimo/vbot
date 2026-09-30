@@ -25,6 +25,7 @@ from cli.application.integration import (
 from cli.application.state import ApplicationError, Installation
 from cli.autostart_management import CommandRun
 from cli.install_state import build_install_state, write_install_state
+from cli.server_management import ServerState
 
 
 def _install(root: Path, shape: str = "server") -> Installation:
@@ -207,7 +208,19 @@ def test_notification_identity_is_removed_only_by_the_installation_it_points_int
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, leftover)
 
 
-def test_data_only_reset_preserves_application_autostart_and_running_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        pytest.param("running", ["stop", "remove:data", "start"], id="running"),
+        pytest.param("absent", ["remove:data"], id="stopped"),
+        # A server that lives without answering is neither stopped nor reset under.
+        pytest.param("unresponsive", None, id="busy-server"),
+        pytest.param("foreign", None, id="foreign-server"),
+    ],
+)
+def test_data_only_reset_preserves_application_autostart_and_running_state(
+    tmp_path: Path, state: ServerState, expected: list[str] | None
+) -> None:
     install = _install(tmp_path / "app")
     assert install.server_data_directory is not None
     data = Path(install.server_data_directory)
@@ -223,25 +236,31 @@ def test_data_only_reset_preserves_application_autostart_and_running_state(tmp_p
         events.append("start")
         return SimpleNamespace(ok=True, message="started")
 
-    result = uninstall(
-        install,
-        data_only=True,
-        platform="win32",
-        probe=lambda instance: SimpleNamespace(is_vbot=True),
-        stop=stop,
-        start=start,
-        remove_tree=lambda path: events.append(f"remove:{path.name}"),
-    )
+    with (
+        nullcontext()
+        if expected is not None
+        else pytest.raises(ApplicationError, match="vBot data was not reset")
+    ):
+        result = uninstall(
+            install,
+            data_only=True,
+            platform="win32",
+            server_state=lambda _install: state,
+            stop=stop,
+            start=start,
+            remove_tree=lambda path: events.append(f"remove:{path.name}"),
+        )
 
-    assert events == ["stop", "remove:data", "start"]
-    assert result == {
-        "ok": True,
-        "completed": True,
-        "application_preserved": True,
-        "autostart_preserved": True,
-        "data_removed": True,
-        "server_restarted": True,
-    }
+    assert events == (expected or [])
+    if expected is not None:
+        assert result == {
+            "ok": True,
+            "completed": True,
+            "application_preserved": True,
+            "autostart_preserved": True,
+            "data_removed": True,
+            "server_restarted": state == "running",
+        }
 
 
 def test_checkout_transition_refuses_dirty_source_before_stop(tmp_path: Path) -> None:

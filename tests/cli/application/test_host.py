@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 
+from cli._server_target import HealthProbeResult
 from cli.application import desktop, host
 from cli.application.monitor import MonitorStatus
 from cli.application.notifications import Toast
@@ -138,8 +139,9 @@ def test_restart_hands_over_to_the_bootstrap_and_keeps_the_server_running(
 class _Monitor:
     instances: list[_Monitor] = []
 
-    def __init__(self, target, listener, *, local: bool, user_agent: str) -> None:
+    def __init__(self, target, listener, *, local: bool, user_agent: str, classify=None) -> None:
         self.target, self.listener, self.local = target, listener, local
+        self.classify = classify
         self.status = MonitorStatus()
         self.reconnects = 0
         _Monitor.instances.append(self)
@@ -200,7 +202,9 @@ def _on_monitor_loop(callback) -> None:
     [
         pytest.param(MonitorStatus(), "unknown", id="before-first-attempt"),
         pytest.param(MonitorStatus("u", "connected", True), "running", id="connected"),
+        pytest.param(MonitorStatus("u", "unresponsive"), "unresponsive", id="busy-server"),
         pytest.param(MonitorStatus("u", "refused"), "stopped", id="refused"),
+        pytest.param(MonitorStatus("u", "unreachable"), "stopped", id="unreachable"),
         pytest.param(MonitorStatus("u", "rejected", True), "running", id="safe-mode"),
         pytest.param(MonitorStatus("u", "rejected", False), "conflict", id="foreign-listener"),
     ],
@@ -211,6 +215,17 @@ def test_server_state_follows_the_event_stream_monitor(
     facade, monitor, sink = _watched(_install(tmp_path), monkeypatch)
     assert monitor.target() == "http://127.0.0.1:8420"
     assert monitor.local is True
+    # The monitor classifies a silent owned target from its own unanswered request.
+    classified: list[tuple[str, HealthProbeResult]] = []
+
+    def classify_server(instance: Any, *, health: HealthProbeResult) -> str:
+        classified.append((instance.url, health))
+        return "unresponsive"
+
+    monkeypatch.setattr(host, "classify_server", classify_server)
+    silent = HealthProbeResult(reachable=False, is_vbot=False, timed_out=True)
+    assert monitor.classify(silent) == "unresponsive"
+    assert classified == [("http://127.0.0.1:8420", silent)]
 
     monitor.status = status
     _on_monitor_loop(lambda: monitor.listener.status_changed(status))

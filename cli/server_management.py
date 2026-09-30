@@ -16,7 +16,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import psutil  # type: ignore[import-untyped]
@@ -67,6 +67,10 @@ DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = PATIENT_PROBE_TIMEOUT_SECONDS
 # A local listener holds the target port but never answered `/health`, so it is
 # neither confirmed as vBot nor known to be foreign.
 UNRESPONSIVE_LISTENER_MESSAGE = "port occupied by unresponsive process"
+
+# The control record names a live server process for the target, but the target does
+# not answer `/health`: the server is busy, still starting or already stopping.
+UNRESPONSIVE_SERVER_MESSAGE = "the server process is running but does not answer its health check"
 
 # A vBot server answers on the target port, but the target data directory's control
 # record does not name it: it belongs to another data directory and is left running.
@@ -214,7 +218,10 @@ def start_server(
     logger = manager.get_logger(CLI_SERVER_LOGGER_NAME)
     try:
         initial_health = probe_health_patiently(instance)
-        if initial_health.is_vbot:
+        # Never spawn next to a server: a duplicate cannot claim the target, and the
+        # readiness probe would then report the existing server as started.
+        state = classify_server(instance, health=initial_health)
+        if state == "running":
             logger.debug("CLI-managed background server already running at %s", instance.url)
             return CommandResult(
                 ok=True,
@@ -224,30 +231,14 @@ def start_server(
                 webui=probe_webui(instance),
                 log_path=instance.log_path,
             )
-        if initial_health.reachable:
+        if state != "absent":
+            message = _start_refusal_message(state, initial_health)
             logger.warning(
-                "Refusing CLI-managed background server start because %s is occupied by"
-                " a non-vBot process",
-                instance.url,
+                "Refusing CLI-managed background server start at %s: %s", instance.url, message
             )
             return CommandResult(
                 ok=False,
-                message="port occupied by non-vBot process",
-                instance=instance,
-                health=initial_health,
-                log_path=instance.log_path,
-            )
-        if initial_health.unresponsive:
-            # A spawned duplicate would fail to bind or claim the target, and the
-            # readiness probe would then succeed against the old server.
-            logger.warning(
-                "Refusing CLI-managed background server start because %s is held by a"
-                " process that does not answer its health check",
-                instance.url,
-            )
-            return CommandResult(
-                ok=False,
-                message=UNRESPONSIVE_LISTENER_MESSAGE,
+                message=message,
                 instance=instance,
                 health=initial_health,
                 log_path=instance.log_path,
@@ -328,6 +319,18 @@ def start_server(
         return result
     finally:
         manager.close()
+
+
+def _start_refusal_message(state: ServerState, health: HealthProbeResult) -> str:
+    """Name what holds the target when ``start_server`` must not spawn."""
+
+    if state == "unresponsive":
+        return UNRESPONSIVE_SERVER_MESSAGE
+    if health.is_vbot:
+        return UNRECORDED_SERVER_MESSAGE
+    if health.reachable:
+        return "port occupied by non-vBot process"
+    return UNRESPONSIVE_LISTENER_MESSAGE
 
 
 def _create_cli_log_manager(instance: ServerInstance) -> LogManager:
@@ -468,6 +471,52 @@ def _resolve_control_process(instance: ServerInstance) -> psutil.Process | None:
     except (psutil.Error, OSError):
         return None
     return process
+
+
+#: How a local target's server stands before a lifecycle decision (``classify_server``).
+ServerState = Literal["absent", "running", "unresponsive", "foreign"]
+
+
+def classify_server(
+    instance: ServerInstance,
+    *,
+    health: HealthProbeResult | None = None,
+    is_expected: Callable[[psutil.Process], bool] | None = None,
+) -> ServerState:
+    """Classify a local target's server, keeping identity, liveness and health apart.
+
+    Identity and liveness come from the target's control record: the exact process
+    (PID plus creation time) that published it, which *is_expected* may narrow, for
+    example to one installed version. Health comes from ``probe_health_patiently``
+    unless the caller passes an observation it already made, so a busy server is
+    never taken for a stopped one.
+
+    ``running``: the recorded process lives and the target answers as vBot.
+    ``unresponsive``: it lives but the target does not answer (busy Event Loop, still
+    starting, already stopping; the record exists before the listener). ``foreign``:
+    something else holds or answers the target (a process *is_expected* rejects or
+    that cannot be inspected, a vBot server of another data directory, a non-vBot
+    or unidentified listener). ``absent``: no live recorded process and no listener.
+    """
+
+    if health is None:
+        health = probe_health_patiently(instance)
+    process = _resolve_control_process(instance)
+    recorded: Literal["expected", "other"] | None = None
+    if process is not None:
+        try:
+            recorded = "expected" if is_expected is None or is_expected(process) else "other"
+        except psutil.NoSuchProcess:
+            recorded = None
+        except (psutil.Error, OSError):
+            # A live process that cannot be inspected is never taken for the server.
+            recorded = "other"
+    if recorded == "other" or (health.reachable and not health.is_vbot):
+        return "foreign"
+    if recorded == "expected":
+        return "running" if health.is_vbot else "unresponsive"
+    # Without a live recorded process any listener belongs to someone else.
+    return "foreign" if health.reachable or health.unresponsive else "absent"
 
 
 def _await_process_exit(
@@ -1058,6 +1107,7 @@ __all__ = [
     "resolve_instance",
     "UNRECORDED_SERVER_MESSAGE",
     "UNRESPONSIVE_LISTENER_MESSAGE",
+    "UNRESPONSIVE_SERVER_MESSAGE",
     "DEFAULT_STARTUP_TIMEOUT_SECONDS",
     "DEFAULT_SHUTDOWN_TIMEOUT_SECONDS",
     "DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS",
@@ -1070,6 +1120,8 @@ __all__ = [
     "start_server_process",
     "start_server",
     "find_listening_process",
+    "ServerState",
+    "classify_server",
     "stop_server",
     "SystemctlRunner",
     "is_systemd_managed",

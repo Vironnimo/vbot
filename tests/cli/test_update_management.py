@@ -17,7 +17,7 @@ from cli._update_types import UpdateResult, _SnapshotStep
 from cli.install_state import dependency_digest, read_install_state
 from cli.main import dispatch_update_command
 from cli.parser import parse_args
-from cli.server_management import CommandResult, HealthProbeResult, ServerInstance
+from cli.server_management import CommandResult, ServerInstance, ServerState
 from cli.update_management import (
     UNKNOWN_VBOT_VERSION,
     CommandRun,
@@ -28,6 +28,7 @@ from cli.update_management import (
 from core.chat import ChatMessage, ChatSessionManager
 from core.database import MarkerEntry, write_bootstrap_marker
 from core.database.marker import register_database
+from core.database.snapshots import snapshot_root
 from tests.cli.update_management_test_support import (
     ScriptedRunner,
     _err,
@@ -61,12 +62,15 @@ def test_update_refuses_non_git_checkout(tmp_path: Path) -> None:
     assert events == []
 
 
-def _stopped_instance(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> ServerInstance:
-    monkeypatch.setattr(
-        update_management,
-        "probe_health",
-        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
-    )
+def _stopped_instance(
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    state: ServerState = "absent",
+    claimed_ports: tuple[int, ...] = (),
+) -> ServerInstance:
+    monkeypatch.setattr(update_management, "classify_server", lambda _instance: state)
+    monkeypatch.setattr(update_management, "live_server_ports", lambda _data_dir: claimed_ports)
     return ServerInstance(
         host="127.0.0.1",
         port=8420,
@@ -76,8 +80,17 @@ def _stopped_instance(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Server
     )
 
 
-def test_update_snapshot_preflight_captures_current_format_data_when_server_is_down(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("server", "refusal"),
+    [
+        pytest.param({}, None, id="server-down"),
+        # A busy server still has its files open; a copy would not be consistent.
+        pytest.param({"state": "unresponsive"}, "does not answer its health check", id="busy"),
+        pytest.param({"claimed_ports": (9000,)}, "(port 9000)", id="server-on-another-port"),
+    ],
+)
+def test_update_snapshot_preflight_copies_current_format_data_only_when_no_server_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server: dict[str, Any], refusal: str | None
 ) -> None:
     write_bootstrap_marker(tmp_path)
     manager = ChatSessionManager(tmp_path)
@@ -91,10 +104,15 @@ def test_update_snapshot_preflight_captures_current_format_data_when_server_is_d
 
     monkeypatch.setattr("core.database.database.open_database", refuse_open)
     monkeypatch.setattr("core.database.database.open_offline_database", refuse_open)
-    instance = _stopped_instance(tmp_path, monkeypatch)
+    instance = _stopped_instance(tmp_path, monkeypatch, **server)
 
     result = update_management._ensure_update_data_snapshot(instance)
 
+    if refusal is not None:
+        assert result.ok is False
+        assert refusal in result.message
+        assert not snapshot_root(tmp_path).exists()
+        return
     assert result.ok is True
     assert "pre-update data snapshot:" in result.message
 

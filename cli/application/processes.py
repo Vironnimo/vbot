@@ -13,19 +13,25 @@ import psutil  # type: ignore[import-untyped]
 from cli.application.operations import child_environment
 from cli.application.state import ApplicationError, Installation
 from cli.server_management import (
+    UNRESPONSIVE_SERVER_MESSAGE,
     CommandResult,
+    HealthProbeResult,
     ServerInstance,
+    ServerState,
+    classify_server,
     probe_health,
+    probe_health_patiently,
     probe_webui,
     resolve_instance,
     stop_server,
 )
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR
 from core.utils.processes import subprocess_creation_flags
-from core.utils.server_control import read_server_control
 
 # The startup log keeps one previous generation once it outgrows this bound.
 STARTUP_LOG_ROTATE_BYTES = 1024 * 1024
+
+OCCUPIED_MESSAGE = "Server port is occupied by another application version or startup mode"
 
 
 def target(install: Installation) -> ServerInstance:
@@ -38,32 +44,41 @@ def target(install: Installation) -> ServerInstance:
     )
 
 
-def running_server_matches(
+def server_state(
     install: Installation,
     *,
     version_id: str | None = None,
     verification: bool = False,
-) -> bool:
-    """Prove the listener belongs to the exact installed version and startup mode."""
+) -> ServerState:
+    """Classify the installation's server for the exact installed version and startup mode.
+
+    ``classify_server`` with the recorded process narrowed to that version's native
+    executable and startup mode: any other version or mode is ``foreign``.
+    """
     instance = target(install)
-    health = probe_health(instance)
-    if not health.is_vbot:
-        return False
-    record = read_server_control(instance.data_dir, instance.port)
-    if record is None:
-        return False
-    try:
-        process = psutil.Process(record.pid)
-        if abs(process.create_time() - record.process_create_time) >= 0.001:
+    health = probe_health_patiently(instance)
+    return _classify(install, instance, health, version_id=version_id, verification=verification)
+
+
+def _classify(
+    install: Installation,
+    instance: ServerInstance,
+    health: HealthProbeResult,
+    *,
+    version_id: str | None,
+    verification: bool,
+) -> ServerState:
+    def is_exact(process: psutil.Process) -> bool:
+        try:
+            expected = install.interpreter(version_id, "Server").resolve()
+        except ApplicationError:
             return False
-        expected = install.interpreter(version_id, "Server").resolve()
         actual = Path(process.exe()).resolve()
         if os.path.normcase(str(actual)) != os.path.normcase(str(expected)):
             return False
-        command = process.cmdline()
-    except (OSError, psutil.Error, ApplicationError):
-        return False
-    return ("--verification-only" in command) is verification
+        return ("--verification-only" in process.cmdline()) is verification
+
+    return classify_server(instance, health=health, is_expected=is_exact)
 
 
 def start(
@@ -75,21 +90,24 @@ def start(
     breakaway: bool = True,
 ) -> CommandResult:
     instance = target(install)
-    current = probe_health(instance)
-    if current.reachable:
-        matches = current.is_vbot and running_server_matches(
-            install, version_id=version_id, verification=verification
-        )
+    current = probe_health_patiently(instance)
+    state = _classify(install, instance, current, version_id=version_id, verification=verification)
+    if state != "absent":
+        # Never spawn next to a server: a duplicate cannot claim the target, and the
+        # readiness check would then report the existing server as started.
+        ready = state == "running" and not verification
         return CommandResult(
-            ok=matches and not verification,
+            ok=ready,
             message=(
                 "already running"
-                if matches and not verification
-                else "Server port is occupied by another application version or startup mode"
+                if ready
+                else UNRESPONSIVE_SERVER_MESSAGE
+                if state == "unresponsive"
+                else OCCUPIED_MESSAGE
             ),
             instance=instance,
             health=current,
-            webui=probe_webui(instance) if matches and not verification else None,
+            webui=probe_webui(instance) if ready else None,
         )
     executable = install.interpreter(version_id, "Server")
     args = [
@@ -123,13 +141,17 @@ def start(
         )
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline and process.poll() is None:
-        if running_server_matches(install, version_id=version_id, verification=verification):
+        health = probe_health(instance)
+        if health.is_vbot and (
+            _classify(install, instance, health, version_id=version_id, verification=verification)
+            == "running"
+        ):
             return CommandResult(
                 ok=True,
                 message="started",
                 instance=instance,
                 process_id=process.pid,
-                health=probe_health(instance),
+                health=health,
                 webui=probe_webui(instance) if not verification else None,
             )
         time.sleep(0.25)

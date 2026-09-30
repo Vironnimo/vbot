@@ -100,10 +100,7 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
 
     monkeypatch.setattr(integration, "exclusive", tracked_lock)
     monkeypatch.setattr(integration, "operations", lambda _install: [])
-    monkeypatch.setattr(integration.processes, "target", lambda _install: object())
-    monkeypatch.setattr(
-        integration, "probe_health", lambda _target: SimpleNamespace(reachable=False)
-    )
+    monkeypatch.setattr(integration.processes, "server_state", lambda _install: "absent")
     monkeypatch.chdir(install.root)
     monkeypatch.setitem(
         sys.modules,
@@ -135,6 +132,35 @@ def test_begin_removal_rejects_pending_update_before_writing_a_marker(
     assert not (install.root / "removal-pending.json").exists()
 
 
+@pytest.mark.parametrize(
+    ("state", "message"),
+    [
+        pytest.param("running", "must stop before removal", id="running"),
+        # A busy server holds its data and files like an answering one.
+        pytest.param("unresponsive", "does not answer its health check", id="busy-server"),
+        pytest.param("foreign", "must be freed before removal", id="foreign"),
+    ],
+)
+def test_begin_removal_refuses_a_live_server_before_writing_a_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, message: str
+) -> None:
+    install = _install(tmp_path / "app")
+    monkeypatch.setattr(integration, "operations", lambda _install: [])
+    monkeypatch.setattr(integration.processes, "server_state", lambda _install: state)
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(
+            Error=OSError,
+            Process=lambda _pid: pytest.fail("removal must refuse before inspecting processes"),
+        ),
+    )
+
+    with pytest.raises(ApplicationError, match=message):
+        integration.begin_removal(install)
+    assert not (install.root / "removal-pending.json").exists()
+
+
 def test_begin_removal_rejects_an_unverified_process_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -147,10 +173,7 @@ def test_begin_removal_rejects_an_unverified_process_chain(
     )
 
     monkeypatch.setattr(integration, "operations", lambda _install: [])
-    monkeypatch.setattr(integration.processes, "target", lambda _install: object())
-    monkeypatch.setattr(
-        integration, "probe_health", lambda _target: SimpleNamespace(reachable=False)
-    )
+    monkeypatch.setattr(integration.processes, "server_state", lambda _install: "absent")
     monkeypatch.setitem(
         sys.modules,
         "psutil",
@@ -178,10 +201,7 @@ def test_begin_removal_rejects_a_mismatched_second_phase_target(
     )
 
     monkeypatch.setattr(integration, "operations", lambda _install: [])
-    monkeypatch.setattr(integration.processes, "target", lambda _install: object())
-    monkeypatch.setattr(
-        integration, "probe_health", lambda _target: SimpleNamespace(reachable=False)
-    )
+    monkeypatch.setattr(integration.processes, "server_state", lambda _install: "absent")
     monkeypatch.setitem(
         sys.modules,
         "psutil",
@@ -210,10 +230,7 @@ def test_begin_removal_rejects_a_live_owned_desktop_process(
         info = {"exe": str(desktop)}
 
     monkeypatch.setattr(integration, "operations", lambda _install: [])
-    monkeypatch.setattr(integration.processes, "target", lambda _install: object())
-    monkeypatch.setattr(
-        integration, "probe_health", lambda _target: SimpleNamespace(reachable=False)
-    )
+    monkeypatch.setattr(integration.processes, "server_state", lambda _install: "absent")
     monkeypatch.setitem(
         sys.modules,
         "psutil",

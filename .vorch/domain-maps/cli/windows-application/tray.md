@@ -13,14 +13,15 @@ Supplementary to `cli/windows-application.md`. Read when changing the `vBot.exe`
 
 ## Idle cost contract
 
-The tray does no periodic server I/O. Server state comes from the event stream; `/health` is probed only after a failed connect. The controller's 1 s poll only calls `facade.state()`, which must stay cheap (about 0.15 ms): `operations.OperationObserver` rereads only operation records whose mtime/size changed, and the release version and server URL are cached. Do not add network, process or full-directory work to `state()`. Measured idle cost: about 0.02 % of one core (previously 0.5-3 % from a per-second health probe with a fresh HTTP client plus reloading every operation record).
+The tray does no periodic server I/O. Server state comes from the event stream; `/health` is probed only after a failed connect, and only an unanswered `/health` request adds the local control-record and process check below (no further probe). The controller's 1 s poll only calls `facade.state()`, which must stay cheap (about 0.15 ms): `operations.OperationObserver` rereads only operation records whose mtime/size changed, and the release version and server URL are cached. Do not add network, process or full-directory work to `state()`. Measured idle cost: about 0.02 % of one core (previously 0.5-3 % from a per-second health probe with a fresh HTTP client plus reloading every operation record).
 
 ## Server connection
 
 - URL `ws://<target>/ws?connection_id=<stable hex>&accessor=tray`, plus `epoch` and `after_sequence` when reconnecting within 60 s of a loss. Heartbeat frames are ignored; protocol pings (20 s) are the only idle traffic. Protocol details: `server/events-and-reconnect.md`.
 - Target: the owned server (`processes.target`) for server shapes; a Desktop Client follows the Desktop's last used server and re-checks it every 30 s while connected.
 - Retry backoff 1-5 s for a local target, up to 30 s for a remote one. `start_server`/`restart_server` skip the current delay.
-- State mapping in the facade: connected -> running; refused or unreachable -> stopped; rejected by a listener whose `/health` is exactly vBot -> running (safe mode); rejected by anything else -> conflict; before the first attempt -> unknown.
+- Busy server: when the stream and then `/health` go unanswered (not refused), a server shape classifies its target with `classify_server`, passing that unanswered request as the health observation, on the monitor thread. A live recorded server process makes the status `unresponsive`; anything else stays `unreachable`. A refused connect is never classified, so the server-stopped toast keeps its meaning. A Desktop Client never classifies.
+- State mapping in the facade: connected -> running; unresponsive -> unresponsive; refused or unreachable -> stopped; rejected by a listener whose `/health` is exactly vBot -> running (safe mode); rejected by anything else -> conflict; before the first attempt -> unknown.
 - Close codes 1000, 1001 and 1012 are cooperative. Any other loss (a killed process shows 1006) arms the server-stopped toast, which fires only if the next connect is refused.
 
 ## Toasts
@@ -39,7 +40,8 @@ The tray does no periodic server I/O. Server state comes from the event stream; 
 - Left click (`NIN_SELECT`/`NIN_KEYSELECT`) runs the default item: Open Desktop for Desktop shapes, Open in browser for a running `server` shape, otherwise Status. Right click (`WM_CONTEXTMENU`) builds the owner-drawn popup at open time.
 - The menu follows the Windows light/dark app theme and DPI. Lifecycle items and Quit are disabled while an update runs. Application logs and Server logs open their respective owners. External tray shutdown ends an open popup before destroying the window.
 - Busy-cursor gotcha: the host window class carries the arrow cursor and the tray calls `SetCursor` before `TrackPopupMenuEx`; without both, Windows shows the busy cursor while hovering the menu.
-- Icon states normal, stopped, updating and error are badges rendered with Pillow over the release icon. The tooltip is at most 127 characters.
+- Icon states normal, stopped, updating and error are badges rendered with Pillow over the release icon; conflict and unresponsive show error. The tooltip is at most 127 characters.
+- An unresponsive server reads "Server not responding" and offers Restart server and Stop server, never Start server (its process lives, so a start is refused) or Open in browser.
 - The status window shows version, rows (Server, Data or the Desktop Client's server, Updates from, Last update, Installed in), the update activity since tray start (the same progress lines as the CLI plus the final summary from `operations.result_summary`) and up to three action buttons.
 
 ## Restart after activation

@@ -25,11 +25,11 @@ from cli.install_state import DESKTOP_CLIENT_SHAPE, InstallStateError, read_inst
 from cli.server_management import (
     DEFAULT_SERVICE_NAME,
     CommandResult,
-    HealthProbeResult,
     ServerInstance,
+    ServerState,
+    classify_server,
     decode_command_output,
     is_systemd_managed,
-    probe_health,
     resolve_instance,
     start_server,
     start_systemd_server,
@@ -80,7 +80,7 @@ Runner = Callable[[list[str], Path], CommandRun]
 Exec = Callable[[str, list[str]], object]
 ChangeDirectory = Callable[[str | os.PathLike[str]], None]
 ResolveInstance = Callable[..., ServerInstance]
-ProbeHealth = Callable[[ServerInstance], HealthProbeResult]
+ClassifyServer = Callable[[ServerInstance], ServerState]
 ServerLifecycle = Callable[[ServerInstance], CommandResult]
 SystemdManaged = Callable[[ServerInstance, str], bool]
 SystemdLifecycle = Callable[[ServerInstance, str], CommandResult]
@@ -303,7 +303,7 @@ def run_uninstall(
     input_fn: Input = input,
     output_fn: Output = print,
     resolve: ResolveInstance = resolve_instance,
-    probe: ProbeHealth = probe_health,
+    classify: ClassifyServer = classify_server,
     stop: ServerLifecycle = stop_server,
     start: ServerLifecycle = start_server,
     systemd_managed: SystemdManaged = is_systemd_managed,
@@ -393,7 +393,7 @@ def run_uninstall(
         return reset_data_directory(
             instance,
             service_name=service_name,
-            probe=probe,
+            classify=classify,
             stop=stop,
             start=start,
             systemd_managed=systemd_managed,
@@ -408,7 +408,7 @@ def run_uninstall(
             instance,
             install_root=install_root,
             service_name=service_name,
-            probe=probe,
+            classify=classify,
             stop=stop,
             systemd_managed=systemd_managed,
             stop_systemd=stop_systemd,
@@ -438,21 +438,28 @@ def _stop_application_server(
     *,
     install_root: Path,
     service_name: str,
-    probe: ProbeHealth,
+    classify: ClassifyServer,
     stop: ServerLifecycle,
     systemd_managed: SystemdManaged,
     stop_systemd: SystemdLifecycle,
 ) -> UninstallResult | None:
     """Stop the selected application's server before handing its files to a remover."""
 
-    health = probe(instance)
-    unit_owned = systemd_managed(instance, service_name)
-    if unit_owned:
+    if systemd_managed(instance, service_name):
         stopped = stop_systemd(instance, service_name)
-    elif health.is_vbot:
-        stopped = stop(instance)
     else:
-        return None
+        state = classify(instance)
+        if state == "absent":
+            return None
+        if state == "foreign":
+            return _fail(
+                "uninstall: application removal aborted because the server port is held by "
+                "another process or by a vBot server of another data directory; application "
+                f"directory preserved: {install_root}"
+            )
+        # A busy (unresponsive) server is the exact recorded process too; the stop
+        # asks it to shut down first and ends it only after that fails.
+        stopped = stop(instance)
     if stopped.ok:
         return None
     return _fail(
@@ -465,7 +472,7 @@ def reset_data_directory(
     instance: ServerInstance,
     *,
     service_name: str = DEFAULT_SERVICE_NAME,
-    probe: ProbeHealth = probe_health,
+    classify: ClassifyServer = classify_server,
     stop: ServerLifecycle = stop_server,
     start: ServerLifecycle = start_server,
     systemd_managed: SystemdManaged = is_systemd_managed,
@@ -475,15 +482,26 @@ def reset_data_directory(
 ) -> UninstallResult:
     """Delete one data directory while preserving the target's prior running state."""
 
-    health = probe(instance)
     unit_owned = systemd_managed(instance, service_name)
-    was_running = health.is_vbot or unit_owned
     if unit_owned:
-        stopped = stop_systemd(instance, service_name)
-    elif health.is_vbot:
-        stopped = stop(instance)
+        was_running = True
+        stopped: CommandResult | None = stop_systemd(instance, service_name)
     else:
-        stopped = None
+        # A busy server must never be taken for a stopped one: it would not be
+        # restarted, or its data would be deleted underneath it.
+        state = classify(instance)
+        if state == "unresponsive":
+            return _fail(
+                "uninstall: the server is running but does not answer its health check, so "
+                "the data directory was not reset; try again once the server responds"
+            )
+        if state == "foreign":
+            return _fail(
+                "uninstall: the server port is held by another process or by a vBot server "
+                "of another data directory, so the data directory was not reset"
+            )
+        was_running = state == "running"
+        stopped = stop(instance) if was_running else None
     if stopped is not None and not stopped.ok:
         return _fail(
             f"uninstall: data reset aborted because the server could not be stopped: "
