@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +34,7 @@ class _CompletionChatLoop:
         self._run_manager = run_manager
         self.messages: list[str] = []
         self.reply_surfaces: list[ReplySurface | None] = []
+        self.start_attempts = 0
 
     async def start_run(
         self,
@@ -48,6 +50,7 @@ class _CompletionChatLoop:
     ) -> Run:
         assert internal is True
         assert run_kind is RunKind.SYSTEM
+        self.start_attempts += 1
 
         async def executor(_run: Run) -> str:
             self.messages.append(content)
@@ -231,26 +234,36 @@ async def test_owned_completion_for_a_live_owner_is_delivered(
     sessions.close()
 
 
+@pytest.mark.parametrize("origin_user_cancelled", [False, True])
 async def test_owned_completion_whose_owner_goes_stale_is_not_written_to_the_session(
-    tmp_path: Path,
+    tmp_path: Path, origin_user_cancelled: bool
 ) -> None:
-    # Admitted while live, but the owner is replaced before the Session-write
-    # fallback runs: the write re-checks the owner instead of bypassing admission.
-    manager = ChatRunManager()
+    # Admitted while live, but the owner goes stale before delivery. Its follow-up
+    # Run admission fails terminally instead of retrying a Run that can never be
+    # admitted, and the Session-write fallback for a user-cancelled origin
+    # re-checks the owner instead of bypassing admission.
+    admission = _OwnerAdmission(_LIVE_OWNER)
+
+    def validate_run_admission(address: SessionAddress, run_admission: RunAdmission) -> None:
+        # Runtime wires the same group check into Run admission.
+        if run_admission.owner is not None:
+            admission(address, run_admission.owner)
+
+    manager = ChatRunManager(admission_validator=validate_run_admission)
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="session-one")
     loop = _CompletionChatLoop(manager)
     service = TriggerService(cast(Any, loop), manager, Mock(), sessions=sessions)
-    admission = _OwnerAdmission(_LIVE_OWNER)
-    service.set_owned_completion_starter(_owned_starter(manager, []))
+    started: list[str] = []
+    service.set_owned_completion_starter(_owned_starter(manager, started))
     service.set_owned_completion_validator(admission)
-    origin = await _user_cancelled_origin(manager)
+    origin_id = (await _user_cancelled_origin(manager)).id if origin_user_cancelled else "origin"
 
     delivery = service.submit_completion(
         "coder",
         "session-one",
         notice_id="stale-later",
-        origin_run_id=origin.id,
+        origin_run_id=origin_id,
         body="stale later result",
         execution_owner=_LIVE_OWNER,
     )
@@ -259,6 +272,8 @@ async def test_owned_completion_whose_owner_goes_stale_is_not_written_to_the_ses
     with pytest.raises(RunAdmissionBlockedError):
         await asyncio.wait_for(delivery, 2)
     assert _notes(session) == []
+    assert started == []
+    assert service.has_execution_work(_LIVE_OWNER) is False
     await service.aclose()
     await manager.aclose()
     sessions.close()
@@ -472,25 +487,28 @@ async def test_idle_completion_does_not_send_webui_surface_to_channel_relay(
     await trigger_service.aclose()
 
 
-async def test_completion_delivery_aclose_cancels_workers_and_pending_notices(
-    tmp_path: Path,
+@pytest.mark.parametrize("waiting_for", ["active_run", "blocked_admission"])
+async def test_completion_delivery_aclose_persists_pending_results_and_rejects_later_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, waiting_for: str
 ) -> None:
+    # An update drains Runs under maintenance and then restarts: a result still
+    # waiting at shutdown must survive the restart as a System Reminder.
     run_manager = ChatRunManager()
-    active_started = asyncio.Event()
-    active_release = asyncio.Event()
+    origin_run: Run | None = None
+    origin_release = asyncio.Event()
+    backoff_waits: list[float] = []
 
-    async def active_executor(_run: Run) -> str:
-        active_started.set()
-        await active_release.wait()
-        return "done"
+    async def hold_backoff(delay: float) -> None:
+        backoff_waits.append(delay)
+        await asyncio.Event().wait()
 
-    parent_run = await run_manager.start(
-        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
-        active_executor,
-    )
-    await active_started.wait()
+    monkeypatch.setattr(automation_module, "_sleep", hold_backoff)
+    if waiting_for == "active_run":
+        origin_run, origin_release = await _active_origin(run_manager)
+    else:
+        await run_manager.maintenance_begin("update")
     sessions = ChatSessionManager(tmp_path)
-    sessions.create("coder", session_id="session-one")
+    session = sessions.create("coder", session_id="session-one")
     completion_loop = _CompletionChatLoop(run_manager)
     trigger_service = TriggerService(
         cast(Any, completion_loop),
@@ -499,28 +517,101 @@ async def test_completion_delivery_aclose_cancels_workers_and_pending_notices(
         trigger_chat_loop=cast(Any, completion_loop),
         sessions=sessions,
     )
-    pending = trigger_service.submit_completion(
+    trigger_service.set_owned_completion_validator(_OwnerAdmission(_LIVE_OWNER))
+    origin_id = origin_run.id if origin_run is not None else "origin"
+    pending = _submit(trigger_service, "bash:pending-at-shutdown", "pending result", origin_id)
+    owned = trigger_service.submit_completion(
         "coder",
         "session-one",
-        notice_id="bash:pending-at-shutdown",
-        origin_run_id=parent_run.id,
-        body="pending result",
+        notice_id="owned:pending-at-shutdown",
+        origin_run_id=origin_id,
+        body="owned result",
+        execution_owner=_LIVE_OWNER,
     )
-    await asyncio.sleep(0)
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if origin_run is not None or backoff_waits:
+            break
+    assert backoff_waits == ([] if origin_run is not None else [0.25])
 
     await trigger_service.aclose()
 
-    assert pending.cancelled()
-    late = trigger_service.submit_completion(
-        "coder",
-        "session-one",
-        notice_id="bash:after-shutdown",
-        origin_run_id=parent_run.id,
-        body="late result",
-    )
+    await asyncio.wait_for(pending, timeout=1)
+    notes = _notes(session)
+    assert len(notes) == 1
+    assert "pending result" in notes[0]
+    # An owned result is withdrawn: its owner closed before completion delivery.
+    assert owned.cancelled()
+    assert "owned result" not in notes[0]
+    assert completion_loop.messages == []
+    late = _submit(trigger_service, "bash:after-shutdown", "late result", origin_id)
     assert late.cancelled()
-    active_release.set()
-    assert await parent_run.wait() == "done"
+    origin_release.set()
+    await run_manager.aclose()
+    sessions.close()
+
+
+async def test_blocked_completion_admission_backs_off_until_admission_reopens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Maintenance blocks new Runs until every active Run drains and announces no
+    # end, so a blocked follow-up retries with a bounded backoff instead of spinning.
+    manager = ChatRunManager()
+    service, loop, _session = _completion_service(tmp_path, manager)
+    delays: list[float] = []
+
+    async def record_wait(delay: float) -> None:
+        delays.append(delay)
+        if len(delays) == 9:
+            await manager.maintenance_end("update")
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(automation_module, "_sleep", record_wait)
+    await manager.maintenance_begin("update")
+
+    delivery = _submit(service, "bash:blocked", "finished during maintenance", "origin")
+    await asyncio.wait_for(delivery, timeout=1)
+
+    assert delays == [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+    assert loop.start_attempts == len(delays) + 1
+    assert len(loop.messages) == 1
+    assert "finished during maintenance" in loop.messages[0]
+    await service.aclose()
+    await manager.aclose()
+
+
+async def test_closing_during_a_reminder_write_persists_it_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Closing cancels the delivery worker mid-append; the append still lands and
+    # counts as delivered, so closing does not write the same results again.
+    manager = ChatRunManager()
+    service, _loop, session = _completion_service(tmp_path, manager)
+    origin = await _user_cancelled_origin(manager)
+    entered = threading.Event()
+    release = threading.Event()
+    original_add_note = ChatSession.add_note
+
+    def held_add_note(chat_session: ChatSession, content: str, **options: Any) -> None:
+        entered.set()
+        release.wait(5)
+        original_add_note(chat_session, content, **options)
+
+    monkeypatch.setattr(ChatSession, "add_note", held_add_note)
+    delivery = _submit(service, "bash:closing", "written while closing", origin.id)
+    assert await asyncio.to_thread(entered.wait, 5)
+
+    closing = asyncio.create_task(service.aclose())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    release.set()
+    await asyncio.wait_for(closing, timeout=5)
+
+    await asyncio.wait_for(delivery, timeout=1)
+    notes = _notes(session)
+    assert len(notes) == 1
+    assert "written while closing" in notes[0]
+    await manager.aclose()
 
 
 async def test_completion_start_failure_persists_system_reminder_without_run(
@@ -586,11 +677,12 @@ async def test_completion_fallback_retries_transient_persistence_failure(
         original_add_note(session, content, **options)
 
     monkeypatch.setattr(ChatSession, "add_note", add_note_with_transient_failure)
-    monkeypatch.setattr(
-        automation_module,
-        "_COMPLETION_PERSIST_RETRY_INITIAL_SECONDS",
-        0.0,
-    )
+    delays: list[float] = []
+
+    async def record_wait(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(automation_module, "_sleep", record_wait)
 
     delivery = trigger_service.submit_completion(
         "coder",
@@ -602,6 +694,7 @@ async def test_completion_fallback_retries_transient_persistence_failure(
     await asyncio.wait_for(delivery, timeout=5)
 
     assert attempts == 2
+    assert delays == [0.25]
     notes = _notes(sessions.get(_ADDRESS))
     assert len(notes) == 1
     assert "retry this result" in notes[0]
