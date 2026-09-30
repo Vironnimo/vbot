@@ -39,6 +39,7 @@
     command: () => t('chat.toolDetailLabel.command'),
     output: () => t('chat.toolDetailLabel.output'),
     query: () => t('chat.toolDetailLabel.query'),
+    results: () => t('chat.toolDetailLabel.results'),
   };
 
   let blocks = $derived(toolDetailBlocks(tool, { args, result }));

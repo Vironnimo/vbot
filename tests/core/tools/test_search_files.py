@@ -804,3 +804,29 @@ async def test_timeout_offers_a_callable_directory_narrowing_step(tmp_path, monk
     recovery = await dispatch(tmp_path, timed_out["data"]["narrow_call"])
     assert recovery["data"]["content"] == "vendor/package/"
     assert recovery["data"]["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_user_sees_the_results_further_pages_and_warnings(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.py").write_text("needle\nneedle\n", encoding="utf-8")
+    arguments = {"pattern": "needle", "path": ["missing", "src"], "limit": 1}
+    registry = search_registry()
+
+    result = await registry.dispatch(context(tmp_path), arguments)
+    details = registry.display_for_call("search_files", arguments, result=result)["details"]
+
+    # The content is read from the result, not copied; paging fields stay raw.
+    assert details == [
+        {
+            "type": "text",
+            "label": "results",
+            "source": {"from": "result", "path": ["data", "content"]},
+        },
+        {
+            "type": "notice",
+            "level": "info",
+            "text": "More results follow; the next page starts at result 2.",
+        },
+        {"type": "notice", "level": "warning", "text": "Path not found: missing."},
+    ]

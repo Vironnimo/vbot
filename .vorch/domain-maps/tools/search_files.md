@@ -150,7 +150,7 @@ batches remain (`test_native_validation_with_and_without_candidates`).
 
 ## Results and Resource Bounds
 
-Success returns `data.content` and `complete`. Paths are relative to effective cwd
+Success returns `data.content` and `complete`. The display's detail builder (`_display_details`) shows the user a `results` text block read from `data.content`, an info notice naming the next page's first result when `next_offset` is set, and each warning as a warning notice; page controls, roots and the continuation stay in the raw result (`test_search_files.py::test_the_user_sees_the_results_further_pages_and_warnings`). Paths are relative to effective cwd
 when possible, absolute otherwise; directory rows end in `/`. Content includes
 source line numbers, and occurrence output adds byte columns. Line numbers equal
 `read`'s (both ignore form feed, U+2028 and similar separators) except in files

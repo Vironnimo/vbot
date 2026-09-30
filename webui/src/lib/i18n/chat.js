@@ -224,6 +224,7 @@ export default Object.freeze({
   'chat.toolDetailLabel.command': 'Command',
   'chat.toolDetailLabel.output': 'Output',
   'chat.toolDetailLabel.query': 'Query',
+  'chat.toolDetailLabel.results': 'Results',
   'chat.toolMatches': 'Matches',
   'chat.memoryScope.agent': 'Agent Memory',
   'chat.memoryScope.user': 'User Profile',

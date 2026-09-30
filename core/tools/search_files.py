@@ -37,6 +37,8 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    display_notice,
+    display_text,
     run_tool_worker,
     tool_failure,
     tool_success,
@@ -715,6 +717,30 @@ def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
     return parts
 
 
+def _display_details(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
+    """Show the user what was found, whether more follows, and the warnings.
+
+    Page controls, searched roots and the continuation instruction are for the
+    Agent and stay in the raw result.
+    """
+    data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
+    if not isinstance(data, dict):
+        return []
+    blocks = [display_text("results", source="result", path=("data", "content"))]
+    next_offset = data.get("next_offset")
+    if isinstance(next_offset, int) and not isinstance(next_offset, bool):
+        blocks.append(
+            display_notice(
+                "info", f"More results follow; the next page starts at result {next_offset + 1}."
+            )
+        )
+    warnings = data.get("warnings")
+    for warning in warnings if isinstance(warnings, list) else []:
+        if isinstance(warning, str) and warning.strip():
+            blocks.append(display_notice("warning", warning))
+    return blocks
+
+
 def register_search_files_tool(registry: ToolRegistry) -> None:
     available = True
     hint = None
@@ -729,7 +755,7 @@ def register_search_files_tool(registry: ToolRegistry) -> None:
         _search_files_async,
         family="files",
         result_schema={"type": "object", "required": ["content"]},
-        display=ToolDisplay(parts_builder=_display_parts),
+        display=ToolDisplay(parts_builder=_display_parts, detail_builder=_display_details),
         parallel_safe=True,
         open_input_schema=True,
         argument_normalizer=normalize_search_arguments,
