@@ -296,6 +296,22 @@ class MCPService:
             )
         self.api.operations.replace_tools(runner.id, declarations)
 
+    def _gone(self, connection: str) -> dict[str, Any] | None:
+        """The failure for a call that finds the Extension stopped or *connection* removed.
+
+        Both leave nothing to run; checked before any effect so neither reads as
+        an access denial or an unknown outcome.
+        """
+        if self.host is None or self._closed:
+            return tool_failure("mcp_request_failed", MCP_MESSAGES["not_running"], retryable=True)
+        if connection not in self.connections:
+            return tool_failure(
+                "mcp_request_failed",
+                MCP_MESSAGES["removed"].format(connection=connection),
+                retryable=False,
+            )
+        return None
+
     def _authorize(self, context: ToolContext) -> None:
         """Recheck the ordinary Tool policy when a queued invocation begins."""
         if context.tool_name not in self._allowed(context):
@@ -308,6 +324,9 @@ class MCPService:
             # Select a runner only after an admitted configuration change has
             # finished closing the previous one and publishing its replacement.
             async with self._runner_locks[connection]:
+                gone = self._gone(connection)
+                if gone is not None:
+                    return gone
                 config = self._connection(connection)
                 if not config["enabled"]:
                     return tool_failure(
@@ -522,6 +541,9 @@ class MCPService:
             except ValueError as error:
                 return self._unreachable(runner, error)
             # Reconnecting can publish new Tools; resolve followers against that catalog.
+            gone = self._gone(runner.id)
+            if gone is not None:
+                return gone
             allowed = self._allowed(context)
             if not self._connection(runner.id)["enabled"]:
                 return tool_failure(

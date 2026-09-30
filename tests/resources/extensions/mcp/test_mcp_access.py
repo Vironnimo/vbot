@@ -96,25 +96,63 @@ async def test_direct_remote_dispatch_rechecks_revoked_parent(context_service, h
     assert calls == []
 
 
+def _disable(service):
+    service.connections["example"] = {**service.connections["example"], "enabled": False}
+
+
+def _remove(service):
+    del service.connections["example"]
+
+
+def _stop(service):
+    service._closed = True
+
+
+_DISABLED = (
+    "Error (mcp_access_denied): The MCP connection example is disabled, so nothing was "
+    "run. Tell the user to enable it in Settings -> Integrations -> Extensions -> MCP "
+    "connections if it is needed.\nretryable: false"
+)
+_REMOVED = (
+    "Error (mcp_request_failed): The MCP connection example was removed, so nothing was run. "
+    "Tell the user if it is needed.\nretryable: false"
+)
+_STOPPED = (
+    "Error (mcp_request_failed): The MCP Extension is not running, so nothing was run. Try "
+    "once more, and if it fails again, tell the user that the MCP Extension is not running."
+    "\nretryable: true"
+)
+
+
 @pytest.mark.asyncio
-async def test_connection_disabled_while_connecting_names_where_the_user_enables_it(
-    context_service, host, monkeypatch
+@pytest.mark.parametrize(
+    ("change", "while_connecting", "expected"),
+    [
+        pytest.param(_disable, True, _DISABLED, id="disabled-while-connecting"),
+        pytest.param(_remove, True, _REMOVED, id="removed-while-connecting"),
+        pytest.param(_stop, True, _STOPPED, id="stopped-while-connecting"),
+        pytest.param(_stop, False, _STOPPED, id="stopped-before-the-call"),
+    ],
+)
+async def test_connection_gone_before_any_effect_names_what_the_user_can_do(
+    context_service, host, monkeypatch, change, while_connecting, expected
 ):
+    # A connection disabled or removed, or an Extension stopped, runs nothing, so
+    # none of them may read as an access denial or an unknown outcome.
     service, registry, runner, calls = context_service
     runner.state = "connecting"
 
     async def connect(*args):
-        service.connections["example"] = {**service.connections["example"], "enabled": False}
+        change(service)
         runner.state = "connected"
 
     monkeypatch.setattr(runner, "invoke", connect)
+    if not while_connecting:
+        change(service)
     result = await dispatch(registry, host, {"action": "search"})
 
-    assert model_text(result) == (
-        "Error (mcp_access_denied): The MCP connection example is disabled, so nothing was "
-        "run. Tell the user to enable it in Settings -> Integrations -> Extensions -> MCP "
-        "connections if it is needed.\nretryable: false"
-    )
+    assert model_text(result) == expected
+    assert calls == []
 
 
 @pytest.mark.asyncio
