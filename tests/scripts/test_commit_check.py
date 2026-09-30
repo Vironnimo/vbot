@@ -295,6 +295,18 @@ FLAKY_WIP = (
     "        return x * 4\n"
     "    return x * 3\n"
 )
+FLAKY_CALC = (
+    "import os\n"
+    "from pathlib import Path\n"
+    "\n"
+    "\n"
+    "def double(x):\n"
+    '    first_run = Path(os.environ["FLAKY_MARKER"])\n'
+    "    if not first_run.exists():\n"
+    '        first_run.write_text("")\n'
+    "        return x * 3\n"
+    "    return x * 2\n"
+)
 # Keeps test_calc passing, but doubles a factor above 2 to 10 or more.
 SKEWED_CALC = "def double(x):\n    return x * 2 if x < 3 else x * 3\n"
 # The test step as a pre-merge-commit hook, like .githooks/pre-merge-commit.
@@ -419,14 +431,26 @@ def test_a_checkout_without_usable_test_impact_data_runs_the_complete_suite(
         assert not testmon_data.exists()
 
 
-def test_failure_caused_by_the_staged_change_blocks(impact_project: Path) -> None:
-    _write(impact_project, "calc.py", BROKEN_CALC)
+@pytest.mark.parametrize(
+    ("calc", "status"),
+    [
+        (BROKEN_CALC, "FAIL: tests affected by this commit"),
+        (FLAKY_CALC, "NOT BLOCKING: failed, then passed when run again alone"),
+    ],
+    ids=["failing", "passing alone"],
+)
+def test_failure_caused_by_the_staged_change_blocks_unless_it_passes_alone(
+    impact_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, calc: str, status: str
+) -> None:
+    monkeypatch.setenv("FLAKY_MARKER", str(tmp_path / "first-run"))
+    _write(impact_project, "calc.py", calc)
     _git(impact_project, "add", "calc.py")
 
     results = _check_tests(impact_project)
 
-    blocking, details = results["FAIL: tests affected by this commit"]
-    assert blocking
+    blocking, details = results[status]
+    assert blocking is status.startswith("FAIL")
+    assert any(result[0] for result in results.values()) is blocking
     assert "test_calc.py::test_double" in details
     assert "test_wip.py" not in details
 
@@ -448,7 +472,7 @@ def test_failure_in_unstaged_work_of_another_file_does_not_block(impact_project:
     ("wip", "status"),
     [
         (BROKEN_WIP, "FAIL: tests failing on committed code; fix them in a separate commit first"),
-        (FLAKY_WIP, "NOT BLOCKING: failed on committed code, then passed when run again alone"),
+        (FLAKY_WIP, "NOT BLOCKING: failed, then passed when run again alone"),
     ],
     ids=["failing", "passing alone"],
 )

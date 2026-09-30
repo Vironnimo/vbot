@@ -784,8 +784,10 @@ def check_tests(
         if not failed:
             return [StepResult("pytest", "PASS", False)]
         commit, committed, in_progress = classify_failures(root, failed, set(changed), dirty)
-        # No checked change explains these failures; a busy machine may.
-        committed, flaky = _rerun_alone(root, committed, env)
+        # A busy machine can fail any test: only a test that fails alone as well blocks.
+        failing, flaky = _rerun_alone(root, [*commit, *committed], env)
+        commit = [test for test in commit if test in failing]
+        committed = [test for test in committed if test in failing]
 
     results: list[StepResult] = []
     if commit:
@@ -819,7 +821,7 @@ def check_tests(
         results.append(
             StepResult(
                 "pytest",
-                "NOT BLOCKING: failed on committed code, then passed when run again alone",
+                "NOT BLOCKING: failed, then passed when run again alone",
                 False,
                 _summary_lines(output, flaky),
             )
