@@ -301,6 +301,8 @@ class ToolRegistry:
         )
         if context is not None and context.presentation_images:
             payload["image_files"] = [dict(image) for image in context.presentation_images]
+        if context is not None and context.presentation_file_changes:
+            payload["file_changes"] = [dict(change) for change in context.presentation_file_changes]
         return payload
 
     def get(self, name: str) -> Tool:

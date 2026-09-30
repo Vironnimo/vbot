@@ -43,8 +43,8 @@ def _gutter(number: int, text: str) -> str:
     return f"{number}{LINE_NUMBER_GUTTER_SEPARATOR} {text}"
 
 
-def _after_preview(before: str, after: str) -> tuple[list[str], int, int]:
-    """Return the changed regions of ``after`` with line numbers, and line counts."""
+def _after_preview(before: str, after: str) -> list[str]:
+    """Return the changed regions of ``after`` with line numbers."""
     old_lines = split_text_lines(before, keepends=True)
     new_lines = split_text_lines(after, keepends=True)
     old_starts, new_starts = [0], [0]
@@ -53,14 +53,11 @@ def _after_preview(before: str, after: str) -> tuple[list[str], int, int]:
     for line in new_lines:
         new_starts.append(new_starts[-1] + len(line))
     changes: list[list[int]] = []
-    added = removed = 0
     for tag, i1, i2, j1, j2 in SequenceMatcher(
         None, old_lines, new_lines, autojunk=False
     ).get_opcodes():
         if tag == "equal":
             continue
-        added += j2 - j1
-        removed += i2 - i1
         # Changes whose shown surroundings would touch or overlap read as one region.
         if changes and j1 - changes[-1][3] <= 2 * _PREVIEW_CONTEXT_LINES:
             changes[-1][1], changes[-1][3] = i2, j2
@@ -96,7 +93,7 @@ def _after_preview(before: str, after: str) -> tuple[list[str], int, int]:
             middle = len(shown) // 2
             shown[middle:middle] = [f"[{omitted} lines not shown]"]
         lines.extend(shown)
-    return lines, added, removed
+    return lines
 
 
 def file_report(
@@ -107,26 +104,22 @@ def file_report(
     after: str | None,
     *,
     destination: str | None = None,
-) -> tuple[_FileReport, int, int]:
-    """Describe one file's net effect; ``None`` text means absent or not text.
-
-    Returns the report and the added and removed line counts.
-    """
+) -> _FileReport:
+    """Describe one file's net effect; ``None`` text means absent or not text."""
     report = _FileReport(label, kind, destination)
-    old_count = len(split_text_lines(before)) if before is not None else 0
     if kind == "deleted":
-        return report, 0, old_count
+        return report
     if kind in {"created", "replaced"}:
         text = after or ""
         report.line_count = len(split_text_lines(text))
         warning = warning_for_written_file(path, text) if after is not None else None
         report.syntax_warning = warning
-        return report, report.line_count, old_count
+        return report
     if before is None or after is None or before == after:
-        return report, 0, 0
-    report.preview, added, removed = _after_preview(before, after)
+        return report
+    report.preview = _after_preview(before, after)
     report.syntax_warning = warning_for_edited_file(path, before, after)
-    return report, added, removed
+    return report
 
 
 def _file_text(report: _FileReport) -> str:

@@ -59,6 +59,86 @@ def test_display_names_the_file_and_hides_the_edit_text(tmp_path, arguments, sum
         }
 
 
+def test_display_carries_each_changed_files_diff(tmp_path):
+    (tmp_path / "app.py").write_bytes(b"".join(b"line %d\n" % n for n in range(1, 11)))
+    (tmp_path / "gone.txt").write_bytes(b"a\nb\n")
+    (tmp_path / "old.txt").write_bytes(b"same\n")
+    ctx = context(tmp_path)
+    patch = (
+        "*** Begin Patch\n*** Update File: app.py\n@@\n line 5\n-line 6\n+line six\n line 7\n"
+        "*** Add File: new.txt\n+first\n+second\n*** Delete File: gone.txt\n"
+        "*** Move File: old.txt -> moved.txt\n*** End Patch"
+    )
+
+    result = apply(tmp_path, patch, ctx=ctx)
+    display = registry().display_for_call("apply_patch", {"patch": patch}, context=ctx)
+
+    assert result["ok"], result
+    assert display["file_changes"] == [
+        {
+            "path": "app.py",
+            "change": "updated",
+            "added": 1,
+            "removed": 1,
+            "hunks": [
+                {
+                    "old_start": 3,
+                    "new_start": 3,
+                    "lines": [
+                        " line 3",
+                        " line 4",
+                        " line 5",
+                        "-line 6",
+                        "+line six",
+                        " line 7",
+                        " line 8",
+                        " line 9",
+                    ],
+                }
+            ],
+        },
+        {
+            "path": "new.txt",
+            "change": "created",
+            "added": 2,
+            "removed": 0,
+            "hunks": [{"old_start": 1, "new_start": 1, "lines": ["+first", "+second"]}],
+        },
+        {
+            "path": "gone.txt",
+            "change": "deleted",
+            "added": 0,
+            "removed": 2,
+            "hunks": [{"old_start": 1, "new_start": 1, "lines": ["-a", "-b"]}],
+        },
+        {
+            "path": "old.txt",
+            "change": "moved",
+            "destination": "moved.txt",
+            "added": 0,
+            "removed": 0,
+            "hunks": [],
+        },
+    ]
+    facts = {f["change"]: f["value"] for f in display["facts"] if f["kind"] == "line_change"}
+    assert facts == {"added": 3, "removed": 3}
+
+
+def test_display_diffs_share_one_line_budget_but_count_every_change(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.tools._tool_context.MAX_DISPLAY_DIFF_LINES", 3)
+    ctx = context(tmp_path)
+    patch = (
+        "*** Begin Patch\n*** Add File: a.txt\n+1\n+2\n*** Add File: b.txt\n+3\n+4\n*** End Patch"
+    )
+
+    apply(tmp_path, patch, ctx=ctx)
+
+    first, second = ctx.presentation_file_changes
+    assert first["hunks"][0]["lines"] == ["+1", "+2"] and "omitted_lines" not in first
+    assert second["hunks"][0]["lines"] == ["+3"] and second["omitted_lines"] == 1
+    assert second["added"] == 2
+
+
 PAYLOAD = '*** Add File: new.txt\n+{"input": "literal", "patch": "payload"}'
 
 

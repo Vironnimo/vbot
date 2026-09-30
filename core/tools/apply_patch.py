@@ -613,11 +613,13 @@ def _file_reports(context: ToolContext, batch: _Batch) -> list[_FileReport]:
         else:
             kind = "updated"
         reported.add(label)
-        report, plus, minus = file_report(
-            path, label, kind, _text(before), _text(after), destination=destination
+        before_text, after_text = _text(before), _text(after)
+        report = file_report(path, label, kind, before_text, after_text, destination=destination)
+        change = context.add_display_file_change(
+            label, kind, before_text, after_text, destination=destination
         )
-        added += plus
-        removed += minus
+        added += change["added"]
+        removed += change["removed"]
         if after.exists:
             report.notes = batch.warnings.get(path, [])
         reports.append(report)

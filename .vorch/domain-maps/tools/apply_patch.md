@@ -530,7 +530,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - Successful surviving files, including verified no-ops, receive Session read
   stamps. Metadata drift can produce a post-success warning. Text mutations
   feed the existing ChangeTracker with actual before/after contents and publish
-  presentation-only line/file counts. Updates reuse syntax-delta warnings; Add uses full-file syntax warnings.
+  presentation-only line/file counts. Each reported file also records its diff
+  of actual before/after text (`ToolContext.add_display_file_change`, display
+  `file_changes`); the line counts are that diff's, so a replaced file counts
+  its changed lines, not its whole content. Updates reuse syntax-delta warnings; Add uses full-file syntax warnings.
 - The handler uses the shared cancellation-shielded Tool worker boundary so
   an in-flight mutation settles before cancellation returns.
 
@@ -554,7 +557,7 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 ## Verification
 
 - `tests/core/tools/test_apply_patch_calls.py` covers the description example,
-  display metadata, patch spellings and wrappers, and other harnesses' shapes
+  display metadata (including the file diffs and their shared line budget), patch spellings and wrappers, and other harnesses' shapes
   (Edit, MultiEdit, Write, text-editor commands, Hermes mode, SEARCH/REPLACE)
   through production dispatch, including empty-text edits and refused open or
   conflicting calls. `scripts/tool_lab/cases/files.json` holds the Model-visible
