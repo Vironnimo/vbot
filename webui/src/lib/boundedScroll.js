@@ -1,7 +1,8 @@
 // A scroll box of bounded height for long content inside the Chat timeline
 // (Tool output, diffs). While its content overflows, the box is focusable so
 // keyboard users can scroll it, and it carries `data-overflowing` for
-// styling. With `follow`, it keeps showing the end of growing content (live
+// styling, plus `data-more-above`/`data-more-below` while content lies beyond
+// the top/bottom edge. With `follow`, it keeps showing the end of growing content (live
 // command output) until the reader scrolls away from the end; returning to
 // the end resumes following.
 //
@@ -20,22 +21,30 @@ export function boundedScroll(node, { follow = false } = {}) {
     );
   }
 
+  function mark(name, on) {
+    if (on) node.setAttribute(name, '');
+    else node.removeAttribute(name);
+  }
+
+  function markEdges() {
+    mark('data-more-above', node.scrollTop > 1);
+    mark('data-more-below', !atEndNow());
+  }
+
   function refresh() {
     const overflowing = node.scrollHeight > node.clientHeight + 1;
-    if (overflowing) {
-      node.tabIndex = 0;
-      node.setAttribute('data-overflowing', '');
-    } else {
-      node.removeAttribute('tabindex');
-      node.removeAttribute('data-overflowing');
-    }
+    if (overflowing) node.tabIndex = 0;
+    else node.removeAttribute('tabindex');
+    mark('data-overflowing', overflowing);
     if (following && atEnd && overflowing) {
       node.scrollTop = node.scrollHeight;
     }
+    markEdges();
   }
 
   const handleScroll = () => {
     atEnd = atEndNow();
+    markEdges();
   };
   node.addEventListener('scroll', handleScroll, { passive: true });
 

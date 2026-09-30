@@ -595,6 +595,66 @@
   outline-offset: 2px;
 }
 
+/* Soft edges say that the box holds more than it shows. The shades stick to
+   the box's edges while its content scrolls beneath them; negative margins
+   keep them out of the layout and across the box's padding. */
+.teb-scroll::before,
+.teb-scroll::after {
+  position: sticky;
+  z-index: 1;
+  display: block;
+  height: 32px;
+  margin: 0 -10px;
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.teb-scroll::before {
+  top: -6px;
+  margin-top: -6px;
+  margin-bottom: -26px;
+  background: linear-gradient(var(--surface), transparent);
+}
+
+.teb-scroll::after {
+  bottom: -6px;
+  margin-top: -26px;
+  margin-bottom: -6px;
+  background: linear-gradient(transparent, var(--surface));
+}
+
+.teb-scroll[data-more-above]::before,
+.teb-scroll[data-more-below]::after {
+  opacity: 1;
+}
+
+.teb-scroll.tool-diff-file__body::before,
+.teb-scroll.tool-diff-file__body::after {
+  margin-right: 0;
+  margin-left: 0;
+}
+
+.teb-scroll.tool-diff-file__body::before {
+  top: -4px;
+  margin-top: -4px;
+  margin-bottom: -28px;
+}
+
+.teb-scroll.tool-diff-file__body::after {
+  bottom: -4px;
+  margin-top: -28px;
+  margin-bottom: -4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .teb-scroll::before,
+  .teb-scroll::after {
+    transition: none;
+  }
+}
+
 .tool-diff-file + .tool-diff-file {
   margin-top: 12px;
 }

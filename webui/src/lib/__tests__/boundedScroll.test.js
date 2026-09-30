@@ -15,7 +15,7 @@ function scrollBox(geometry) {
 }
 
 describe('boundedScroll', () => {
-  it('is focusable only while its content overflows', () => {
+  it('is focusable and marks hidden content only while its content overflows', () => {
     const geometry = { contentHeight: 200 };
     const node = scrollBox(geometry);
     const action = boundedScroll(node);
@@ -25,6 +25,13 @@ describe('boundedScroll', () => {
     action.update();
     expect(node.tabIndex).toBe(0);
     expect(node.hasAttribute('data-overflowing')).toBe(true);
+    expect(node.hasAttribute('data-more-below')).toBe(true);
+    expect(node.hasAttribute('data-more-above')).toBe(false);
+
+    node.scrollTop = 600;
+    node.dispatchEvent(new Event('scroll'));
+    expect(node.hasAttribute('data-more-below')).toBe(false);
+    expect(node.hasAttribute('data-more-above')).toBe(true);
 
     geometry.contentHeight = 250;
     action.update();
