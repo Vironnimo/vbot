@@ -495,6 +495,59 @@ async def test_restart_recovers_terminal_run_from_session(tmp_path):
     assert trigger.trigger_run.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_identity_retarget_moves_actions_and_the_rows_that_follow_them(tmp_path):
+    service, event, _, now = setup(tmp_path)
+    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="coder")
+    await service.actions.tick(now)
+    await drain(service)
+    ((ran_key, ran),) = service.actions._executions.items()
+    # Only the Session the Run used moves with the renamed Agent.
+    service.actions._sessions.existing_addresses = Mock(
+        side_effect=lambda addresses: {a for a in addresses if a.session_id == ran["session"]}
+    )
+    rows = {
+        # Without a Session a row follows its action; with one it follows the Session.
+        "missed": {"action_id": action["id"], "target": "coder", "session": None},
+        "stayed": {"action_id": action["id"], "target": "coder", "session": "archived"},
+        "deleted-action": {"action_id": "gone", "target": "coder", "session": None},
+        # Left by an earlier ``researcher``: reverting the rename must not adopt it.
+        "leftover": {"action_id": action["id"], "target": "researcher", "session": "old"},
+    }
+    for key, fields in rows.items():
+        service.actions._executions[key] = {
+            **ran,
+            **fields,
+            "id": key,
+            "run_id": None,
+            "status": "missed",
+        }
+
+    def targets() -> dict[str, str]:
+        stored = json.loads(service.actions._path.read_text(encoding="utf-8"))["executions"]
+        return {key: row["target"] for key, row in stored.items()}
+
+    assert service.actions.retarget_identity("coder", "researcher") == 1
+    assert service.actions.list_actions()[0]["target"] == "researcher"
+    assert targets() == {
+        ran_key: "researcher",
+        "missed": "researcher",
+        "stayed": "coder",
+        "deleted-action": "coder",
+        "leftover": "researcher",
+    }
+
+    assert service.actions.retarget_identity("researcher", "coder") == 1
+    assert service.actions.list_actions()[0]["target"] == "coder"
+    assert targets() == {
+        ran_key: "coder",
+        "missed": "coder",
+        "stayed": "coder",
+        "deleted-action": "coder",
+        "leftover": "researcher",
+    }
+
+
 def test_failed_write_rolls_back_action_mutations(tmp_path, monkeypatch):
     service, event, _, _ = setup(tmp_path)
     action = service.actions.add(event.id, when="start", prompt="prepare", target="main")

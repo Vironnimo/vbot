@@ -39,7 +39,6 @@ from server.events import (
 )
 from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import (
-    _agent_reference_ids,
     _agent_reference_lock,
     _subagents_reference_identity_agent,
 )
@@ -334,7 +333,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
             # independent. The guard makes the idle check and the following
             # archive one atomic boundary against every Run ingress path.
             async with _state_chat_runs(state).agent_admission_guard(agent_id, project_id=None):
-                references = _agent_reference_ids(state, agent_id)
+                references = state.runtime.agent_references(agent_id)
                 if references:
                     raise RpcError(
                         RPC_ERROR_AGENT_IN_USE,

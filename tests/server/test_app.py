@@ -120,14 +120,13 @@ def test_real_runtime_serves_a_fresh_data_directory_and_stops_with_the_app(
         _ = runtime.storage
 
 
-@pytest.mark.parametrize("async_close", [False, True])
-def test_stub_runtime_lifespan_wires_state_and_closes_services(
-    tmp_path: Path, async_close: bool
-) -> None:
+@pytest.mark.parametrize("close", ["stop", "aclose", "aclose_fails"])
+def test_stub_runtime_lifespan_wires_state_and_closes_services(tmp_path: Path, close: str) -> None:
     preload = Mock()
     speech = SimpleNamespace(preload_configured=preload)
+    async_close = close != "stop"
     runtime = (
-        _AsyncCloseRuntime(tmp_path, speech=speech)
+        _AsyncCloseRuntime(tmp_path, speech=speech, fails=close == "aclose_fails")
         if async_close
         else ServerStubRuntime(tmp_path, speech=speech)
     )
@@ -135,10 +134,10 @@ def test_stub_runtime_lifespan_wires_state_and_closes_services(
     on_ready = Mock(
         side_effect=lambda _runtime: bootstrapped_when_ready.append(runtime.bootstrap_activated)
     )
-    closed_when_stopped: list[bool] = []
+    closed_when_stopped: list[tuple[bool, bool]] = []
     on_stopped = Mock(
-        side_effect=lambda: closed_when_stopped.append(
-            runtime.stopped or getattr(runtime, "aclose_called", False)
+        side_effect=lambda cleanly: closed_when_stopped.append(
+            (runtime.stopped or getattr(runtime, "aclose_called", False), cleanly)
         )
     )
     app = create_app(runtime=runtime, on_ready=on_ready, on_stopped=on_stopped)
@@ -159,8 +158,10 @@ def test_stub_runtime_lifespan_wires_state_and_closes_services(
         app.state.device_flow_engine = engine
 
     assert engine.aclose_called is True
-    # The stopped hook runs once, after the Runtime closed.
-    assert closed_when_stopped == [True]
+    # The stopped hook runs once, after the Runtime closed, and learns whether it
+    # closed cleanly. The Runtime logged a failed step, so leaving the lifespan
+    # raises nothing that uvicorn would log again.
+    assert closed_when_stopped == [(True, close != "aclose_fails")]
     # A runtime with async close is closed that way instead of stopped.
     assert runtime.stopped is not async_close
     assert getattr(runtime, "aclose_called", False) is async_close
@@ -367,12 +368,15 @@ def _rpc_result(client: TestClient, method: str) -> JsonObject:
 
 
 class _AsyncCloseRuntime(ServerStubRuntime):
-    def __init__(self, data_dir: Path, **services: Any) -> None:
+    def __init__(self, data_dir: Path, *, fails: bool = False, **services: Any) -> None:
         super().__init__(data_dir, **services)
         self.aclose_called = False
+        self._fails = fails
 
     async def aclose(self) -> None:
         self.aclose_called = True
+        if self._fails:
+            raise RuntimeError("shutdown step failed")
 
 
 class _AsyncCloseDeviceFlowEngine:

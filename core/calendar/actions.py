@@ -519,11 +519,16 @@ class CalendarActions:
         }
 
     def retarget_identity(self, source: str, destination: str) -> int:
-        """Point every action and execution row that targets ``source`` at ``destination``.
+        """Point every action that targets ``source`` at ``destination``, with its execution rows.
 
-        One step of an Identity Agent rename: repeating it converges, and swapping
-        the ids reverts it. Returns the number of retargeted actions for the
-        rename's summary line.
+        One step of an Identity Agent rename, run after the Agent's Sessions moved:
+        repeating it converges, and swapping the ids reverts it. An execution row
+        that ran in a Session names that Session's address, so it moves only when
+        the Session is now live under ``destination``; a row without a Session
+        follows its action. A row whose Session stayed behind or whose action no
+        longer targets ``destination`` keeps its target, so reverting a rename
+        leaves rows that named ``destination`` before it alone. Returns the number
+        of retargeted actions for the rename's summary line.
         """
         self._load()
         previous = copy.deepcopy((self._actions, self._executions))
@@ -532,8 +537,15 @@ class CalendarActions:
             if action["target"] == source:
                 action["target"] = destination
                 retargeted += 1
-        for row in self._executions.values():
-            if row["target"] == source:
+        rows = [row for row in self._executions.values() if row["target"] == source]
+        moved_sessions = self._live_session_ids(destination, rows)
+        for row in rows:
+            if row.get("session"):
+                follows = row["session"] in moved_sessions
+            else:
+                owner = self._actions.get(row["action_id"])
+                follows = owner is not None and owner["target"] == destination
+            if follows:
                 row["target"] = destination
         try:
             self._save()
@@ -542,6 +554,17 @@ class CalendarActions:
             raise
         self._calendar._notify_changed()
         return retargeted
+
+    def _live_session_ids(self, agent_id: str, rows: list[dict[str, Any]]) -> set[str]:
+        """Return which Sessions named by ``rows`` are live under Identity Agent ``agent_id``."""
+        addresses = [
+            SessionAddress(project_id=None, agent_id=agent_id, session_id=row["session"])
+            for row in rows
+            if row.get("session")
+        ]
+        if not addresses or self._sessions is None:
+            return set()
+        return {address.session_id for address in self._sessions.existing_addresses(addresses)}
 
     def list_actions(self, event_id: str | None = None) -> list[dict[str, Any]]:
         try:

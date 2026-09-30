@@ -13,6 +13,7 @@ from core.agents import (
     Agent,
     AgentAlreadyExistsError,
     AgentError,
+    AgentReferencedError,
     AgentRename,
     AgentStore,
 )
@@ -46,6 +47,27 @@ def _seed(store: AgentStore) -> Agent:
         {"subagent_parent": {"agent_id": "coder", "session_id": "kept", "project_id": None}},
     )
     return created
+
+
+def _link_to(store: AgentStore, session_id: str, parent_agent_id: str) -> SessionAddress:
+    """Give a new ``manager`` Session a Sub-Agent link to a parent Session that does not exist."""
+    sessions = store._session_manager()
+    address = sessions.create("manager", session_id=session_id).address
+    sessions.set_metadata(
+        address,
+        {
+            "subagent_parent": {
+                "agent_id": parent_agent_id,
+                "session_id": "gone",
+                "project_id": None,
+            }
+        },
+    )
+    return address
+
+
+def _link_agent_id(store: AgentStore, address: SessionAddress) -> str:
+    return str(store._session_manager().get_metadata(address)["subagent_parent"]["agent_id"])
 
 
 def _assert_agent_is(store: AgentStore, created: Agent, agent_id: str, other_id: str) -> None:
@@ -121,29 +143,26 @@ def test_rename_preserves_external_workspace(store: AgentStore, tmp_path: Path) 
 
 def test_rename_retargets_bare_allowed_agent_ids_and_sub_agent_links(store: AgentStore) -> None:
     _seed(store)
-    # A stale entry naming the new id merges instead of duplicating.
-    store.update(
-        "manager", tools={"subagent": {"allowed_agents": ["coder", "researcher", "coder@project"]}}
-    )
+    # A link follows its parent Session; one to a Session that did not move stays.
+    orphan = _link_to(store, "orphan", "coder")
 
     result = store.rename("coder", "researcher")
 
     assert result.policy_agent_ids == ("manager", "researcher")
     assert result.session_link_count == 1
-    assert store.get("manager").tools["subagent"]["allowed_agents"] == [
-        "researcher",
-        "coder@project",
-    ]
+    assert store.get("manager").tools["subagent"]["allowed_agents"] == ["researcher"]
     assert store.get("researcher").tools["subagent"]["allowed_agents"] == [
         "researcher",
         "coder@project",
     ]
-    subagent_parent = store._session_manager().get_metadata(_CHILD)["subagent_parent"]
-    assert subagent_parent["agent_id"] == "researcher"
+    assert _link_agent_id(store, _CHILD) == "researcher"
+    assert _link_agent_id(store, orphan) == "coder"
 
 
 def test_revert_rename_restores_the_original_agent(store: AgentStore) -> None:
     created = _seed(store)
+    # Left by an earlier ``researcher``: the revert moves back only what the rename moved.
+    leftover = _link_to(store, "leftover", "researcher")
     result = store.rename("coder", "researcher")
 
     reverse = store.revert_rename(result.rename)
@@ -151,6 +170,7 @@ def test_revert_rename_restores_the_original_agent(store: AgentStore) -> None:
     assert reverse == AgentRename(source_id="researcher", target_id="coder", rollback=True)
     store.finish_rename(reverse)
     _assert_agent_is(store, created, "coder", "researcher")
+    assert _link_agent_id(store, leftover) == "researcher"
 
 
 def test_rename_supports_case_only_id_change(store: AgentStore) -> None:
@@ -182,15 +202,38 @@ def test_rename_preserves_agent_order_position(store: AgentStore) -> None:
     assert [agent.id for agent in store.list()] == ["gamma", "renamed", "beta"]
 
 
-def test_rename_rejects_existing_destination(store: AgentStore) -> None:
+@pytest.mark.parametrize(
+    ("occupant", "refused"),
+    [
+        pytest.param(
+            {"agent_id": "researcher", "name": "Researcher Agent"},
+            AgentAlreadyExistsError,
+            id="agent",
+        ),
+        # A delegation grant left by a deleted ``researcher`` would pass to the
+        # renamed Agent, and a revert would take it along; so would a reference
+        # another owner holds.
+        pytest.param(
+            {"agent_id": "manager", "tools": {"subagent": {"allowed_agents": ["researcher"]}}},
+            AgentReferencedError,
+            id="references",
+        ),
+    ],
+)
+def test_rename_rejects_an_occupied_destination(
+    store: AgentStore, occupant: dict[str, Any], refused: type[AgentError]
+) -> None:
     store.create("coder", "Coder Agent")
-    store.create("researcher", "Researcher Agent")
+    store.create(**occupant)
+    before = {agent.id: agent for agent in store.list()}
 
-    with pytest.raises(AgentAlreadyExistsError, match="researcher"):
-        store.rename("coder", "researcher")
+    with pytest.raises(refused) as raised:
+        store.rename("coder", "researcher", external_references=("channel:tg-old",))
 
-    assert store.get("coder").name == "Coder Agent"
-    assert store.get("researcher").name == "Researcher Agent"
+    if isinstance(raised.value, AgentReferencedError):
+        assert raised.value.agent_id == "researcher"
+        assert raised.value.references == ("allowed_agents:manager", "channel:tg-old")
+    assert {agent.id: agent for agent in store.list()} == before
     assert not _record(store).exists()
 
 

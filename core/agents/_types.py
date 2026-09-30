@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,6 +27,23 @@ class AgentAlreadyExistsError(AgentError):
 
 class AgentNotFoundError(AgentError):
     """Raised when an agent cannot be found."""
+
+
+class AgentReferencedError(AgentError):
+    """Raised when a rename targets an Agent id that references still name.
+
+    ``references`` names each one as ``<kind>:<id>``, such as ``channel:tg-main``,
+    ``cron:<job id>`` or ``allowed_agents:manager`` (the delegation allow-list of
+    Agent ``manager``).
+    """
+
+    def __init__(self, agent_id: str, references: Iterable[str]) -> None:
+        self.agent_id = agent_id
+        self.references = tuple(sorted(references))
+        super().__init__(
+            f"Cannot rename an Agent to {agent_id} while {', '.join(self.references)} "
+            "still reference it; change or remove these references first"
+        )
 
 
 class InvalidAgentIdError(AgentError):

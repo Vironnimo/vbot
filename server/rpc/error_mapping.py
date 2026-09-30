@@ -6,6 +6,7 @@ from core.agents import (
     AgentError,
     AgentNotFoundError,
     AgentOrderConflictError,
+    AgentReferencedError,
     InvalidAgentOrderError,
 )
 from core.channels import ChannelConfigError, ChannelNotFoundError
@@ -36,6 +37,7 @@ from core.tools.terminal_manager import (
 from core.utils.errors import ConfigError, VBotError
 from server.rpc.errors import (
     RPC_ERROR_ACTIVE_RUN,
+    RPC_ERROR_AGENT_IN_USE,
     RPC_ERROR_AGENT_NOT_FOUND,
     RPC_ERROR_AGENT_ORDER_CONFLICT,
     RPC_ERROR_CANCELLED,
@@ -96,6 +98,8 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_AGENT_NOT_FOUND, str(error))
     if isinstance(error, AgentOrderConflictError):
         return RpcError(RPC_ERROR_AGENT_ORDER_CONFLICT, str(error))
+    if isinstance(error, AgentReferencedError):
+        return RpcError(RPC_ERROR_AGENT_IN_USE, str(error))
     if isinstance(error, InvalidAgentOrderError):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, TerminalNotFoundError):

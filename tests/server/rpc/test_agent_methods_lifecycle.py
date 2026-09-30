@@ -49,6 +49,7 @@ async def test_agent_rename_publishes_the_mapping_of_retargeted_references(
     agents.create("coder", tools={"subagent": {"allowed_agents": ["coder", "coder@vbot"]}})
     agents.create("manager", "Manager", tools={"subagent": {"allowed_agents": ["coder"]}})
     child = SessionAddress(project_id=None, agent_id="manager", session_id="child")
+    state.runtime.chat_sessions.create("coder", session_id="parent")
     state.runtime.chat_sessions.create("manager", session_id="child")
     state.runtime.chat_sessions.set_metadata(
         child,
@@ -56,11 +57,14 @@ async def test_agent_rename_publishes_the_mapping_of_retargeted_references(
     )
     channels = [SimpleNamespace(id="telegram", agent_id="coder")]
 
-    async def update_channel(channel_id: str, **fields: Any) -> None:
-        next(item for item in channels if item.id == channel_id).agent_id = fields["agent_id"]
+    async def retarget_agent_async(agent_id: str, new_agent_id: str) -> tuple[str, ...]:
+        moved = [channel for channel in channels if channel.agent_id == agent_id]
+        for channel in moved:
+            channel.agent_id = new_agent_id
+        return tuple(channel.id for channel in moved)
 
     state.runtime.channel_service = SimpleNamespace(
-        list_channels=lambda: channels, update_channel=update_channel
+        list_channels=lambda: channels, retarget_agent_async=retarget_agent_async
     )
     # Completed history stays as it ran; a Project-qualified job targets that
     # Project's Team Agent, not the same-named Identity Agent.
@@ -150,6 +154,17 @@ def _open_subagent_relation(busy_agent_id: str) -> Callable[[Any], None]:
     return arrange
 
 
+def _references(service: str, *entries: JsonObject) -> Callable[[Any], None]:
+    """Install a Channel, cron or bootstrap service listing *entries*."""
+
+    def arrange(state: Any) -> None:
+        listed = [SimpleNamespace(**entry) for entry in entries]
+        fake = SimpleNamespace(list_channels=lambda: listed, list_jobs=lambda: listed)
+        setattr(state.runtime, service, fake)
+
+    return arrange
+
+
 def _existing_destination(state: Any) -> None:
     state.runtime.agents.create("researcher", "Researcher")
 
@@ -161,6 +176,12 @@ def _existing_destination(state: Any) -> None:
         pytest.param(_open_subagent_relation("coder"), "agent_busy", id="subagent-source"),
         pytest.param(_open_subagent_relation("researcher"), "agent_busy", id="subagent-target"),
         pytest.param(_existing_destination, "domain_error", id="existing-destination"),
+        # A reverted rename would take along a reference that already named the new id.
+        pytest.param(
+            _references("channel_service", {"id": "tg-old", "agent_id": "researcher"}),
+            "agent_in_use",
+            id="referenced-destination",
+        ),
     ],
 )
 async def test_a_refused_agent_rename_leaves_every_agent_in_place(
@@ -175,17 +196,6 @@ async def test_a_refused_agent_rename_leaves_every_agent_in_place(
     assert error["code"] == code
     assert _agent_names(state) == before
     assert state.event_bus.events == []
-
-
-def _references(service: str, *entries: JsonObject) -> Callable[[Any], None]:
-    """Install a Channel, cron or bootstrap service listing *entries*."""
-
-    def arrange(state: Any) -> None:
-        listed = [SimpleNamespace(**entry) for entry in entries]
-        fake = SimpleNamespace(list_channels=lambda: listed, list_jobs=lambda: listed)
-        setattr(state.runtime, service, fake)
-
-    return arrange
 
 
 @pytest.mark.asyncio

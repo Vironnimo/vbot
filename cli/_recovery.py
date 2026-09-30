@@ -51,8 +51,8 @@ _CODE_GUIDANCE = {
     "agent_busy": "The Agent is busy. Inspect its Sessions and wait for active work to finish.",
     "session_busy": "The Session is busy. Inspect it and wait for active work to finish.",
     "project_busy": "The Project is busy. Inspect its Agents and wait for active work to finish.",
-    "agent_in_use": "The Agent is still referenced. Inspect its configuration and dependencies "
-    "before changing or removing those references.",
+    "agent_in_use": "The Agent id is still referenced by the items the error lists. Change or "
+    "remove those references before retrying.",
     "project_in_use": "The Project is still referenced. Inspect its Agents and dependencies "
     "before changing or removing those references.",
     "last_agent": "The last Agent cannot be removed. Inspect the Agent list and keep at least one.",

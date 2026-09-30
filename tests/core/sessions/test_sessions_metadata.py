@@ -260,6 +260,8 @@ def test_callback_failure_does_not_turn_a_committed_title_into_an_error(
 def test_identity_reference_changes_roll_back_together(manager, monkeypatch) -> None:
     from core.sessions import _store_values
 
+    # The parent Session already moved to the new id.
+    manager.create("new", session_id="parent")
     children = [manager.create("child", session_id=f"child-{index}") for index in range(2)]
     for child in children:
         manager.set_metadata(
@@ -285,12 +287,27 @@ def test_identity_reference_changes_roll_back_together(manager, monkeypatch) -> 
 
 
 def test_identity_reference_retarget_skips_unrelated_sessions(manager) -> None:
+    # The rename moved ``parent``; ``archived`` stayed at the old id, and ``gone`` never existed.
+    manager.create("new", session_id="parent")
+    manager.create("old", session_id="archived")
+    manager.archive_identity_agent_sessions("old")
     changed = manager.create("child", session_id="changed")
     unrelated = manager.create("child", session_id="unrelated")
     qualified = manager.create("child", session_id="qualified")
-    manager.set_metadata(changed.address, {"subagent_parent": {"agent_id": "old"}})
+    stayed = manager.create("child", session_id="stayed")
+    dangling = manager.create("child", session_id="dangling")
     manager.set_metadata(
-        qualified.address, {"subagent_parent": {"agent_id": "old", "project_id": "project"}}
+        changed.address, {"subagent_parent": {"agent_id": "old", "session_id": "parent"}}
+    )
+    manager.set_metadata(
+        qualified.address,
+        {"subagent_parent": {"agent_id": "old", "session_id": "parent", "project_id": "project"}},
+    )
+    manager.set_metadata(
+        stayed.address, {"subagent_parent": {"agent_id": "old", "session_id": "archived"}}
+    )
+    manager.set_metadata(
+        dangling.address, {"subagent_parent": {"agent_id": "old", "session_id": "gone"}}
     )
 
     def state(session):
@@ -304,10 +321,11 @@ def test_identity_reference_retarget_skips_unrelated_sessions(manager) -> None:
             )
         )
 
-    before = [state(session) for session in (unrelated, qualified)]
+    skipped = (unrelated, qualified, stayed, dangling)
+    before = [state(session) for session in skipped]
 
     updates = manager.retarget_identity_agent_references("old", "new")
 
     assert [update.address for update in updates] == [changed.address]
     assert manager.get_metadata(changed.address)["subagent_parent"]["agent_id"] == "new"
-    assert [state(session) for session in (unrelated, qualified)] == before
+    assert [state(session) for session in skipped] == before

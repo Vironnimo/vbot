@@ -723,10 +723,13 @@ class ChatSessionManager:
     def retarget_identity_agent_references(
         self, old_agent_id: str, new_agent_id: str
     ) -> tuple[SessionIdentityReferenceUpdate, ...]:
-        """Point every live Sub-Agent parent link that names an Identity Agent at its new id.
+        """Point live Sub-Agent parent links at an Identity Agent's moved Sessions.
 
-        Only links still naming ``old_agent_id`` change, so a repeated call after an
-        interruption finishes the retarget; reversing the ids reverts it.
+        Run after :meth:`retarget_identity_agent_sessions`: a link naming
+        ``old_agent_id`` changes only when its parent Session is now live under
+        ``new_agent_id``. A link to a parent that stayed behind or no longer exists
+        keeps its id, so reversing the ids moves back only links to moved Sessions, and a
+        repeated call after an interruption finishes the retarget.
         """
         return self._store.retarget_identity_agent_references(old_agent_id, new_agent_id)
 

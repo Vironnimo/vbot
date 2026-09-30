@@ -63,6 +63,7 @@ from core.runs import ChatRunManager
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
+    identity_agent_references,
     rename_identity_agent,
 )
 from core.runtime._bootstrap import RuntimeStartupSummary, bootstrap, start_event_loop_service
@@ -459,46 +460,6 @@ class Runtime:
         if self.logger is not None:
             self.logger.debug("Runtime stopped")
 
-    def _cleanup_failed_startup(self) -> None:
-        """Release every started resource after a failed synchronous bootstrap."""
-        if self._calendar_service is not None:
-            self._calendar_service.actions.stop()
-        cleanup_actions = (
-            (self._decisions, "close"),
-            (self._speech, "close"),
-            (self._extensions, "fire_shutdown_blocking"),
-            (self._channel_service, "stop"),
-            (self._cron_service, "stop"),
-            (self._bootstrap_service, "stop"),
-            (self._provider_usage, "close"),
-            (self._performance, "stop"),
-            (self._process_manager, "stop"),
-            (self._terminal_manager, "stop"),
-            (self._keep_awake, "close"),
-        )
-        for service, method_name in cleanup_actions:
-            if service is None:
-                continue
-            method = getattr(service, method_name)
-            with suppress(Exception):
-                method()
-        with suppress(Exception):
-            self._close_extension_databases()
-        if self._storage is not None:
-            with suppress(Exception):
-                self._storage.temporary_files.stop()
-        if self._channel_service is not None:
-            with suppress(Exception):
-                self._channel_service.close()
-        if self._usage_recorder is not None:
-            with suppress(Exception):
-                self._usage_recorder.close()
-        if self._chat_sessions is not None:
-            with suppress(Exception):
-                self._chat_sessions.close()
-        self._clear_service_references()
-        self._close_log_manager()
-
     def _live_extension_config(self, name: str) -> dict[str, Any]:
         """Read one extension's persisted config **live** from ``settings.json``.
 
@@ -778,9 +739,12 @@ class Runtime:
         The Agent's tree, config, Sessions and Sub-Agent links move together with
         the Channels, Cron and Bootstrap jobs, Calendar actions and delegation
         allow-lists that name it. A failure reverts all of it; an interrupted
-        rename completes on the next start. The caller holds the Run admission
-        guards of both ids. Afterwards Skills of both ids are invalidated and the
-        active Recall index forgets the moved Sessions' old addresses.
+        rename completes on the next start. While any of these references still
+        names ``new_agent_id``, the rename is refused with
+        ``AgentReferencedError`` before anything changes. The caller holds the Run
+        admission guards of both ids. Afterwards Skills of both ids are
+        invalidated and the active Recall index forgets the moved Sessions' old
+        addresses.
         """
         self._ensure_started()
         outcome = await rename_identity_agent(self._agent_rename_services(), agent_id, new_agent_id)
@@ -798,6 +762,16 @@ class Runtime:
                         error,
                     )
         return outcome
+
+    def agent_references(self, agent_id: str) -> tuple[str, ...]:
+        """Name the Channels, Cron and Bootstrap jobs and Calendar actions addressing an Agent id.
+
+        Labels are ``<kind>:<id>``, sorted. An Identity Agent they name must not
+        be deleted, and no Agent can be renamed to an id they name. Blocking: it
+        reads every Channel config.
+        """
+        self._ensure_started()
+        return identity_agent_references(self._agent_rename_services(), agent_id)
 
     def _agent_rename_services(self) -> AgentRenameServices:
         """The owners an Identity Agent rename changes, also while startup builds them."""
