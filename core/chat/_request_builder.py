@@ -892,13 +892,7 @@ class RequestBuilder:
             # Model-wide fallback when the active Connection cannot be resolved.
             pass
 
-        try:
-            local_context_windows = self._dependencies.get_local_context_windows()
-        except (AttributeError, KeyError):
-            # Tolerant of a missing/partial runtime (test doubles may not
-            # implement the local-model settings hook): treated as "no
-            # user-configured local window overrides".
-            local_context_windows = {}
+        local_context_windows = self._dependencies.get_local_context_windows()
 
         return resolve_effective_context_window(
             model_context_window,

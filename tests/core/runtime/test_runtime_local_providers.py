@@ -20,6 +20,7 @@ from core.providers.ollama import OllamaAdapter
 from core.providers.token_getter import StaticTokenGetter
 from core.runtime.runtime import Runtime
 from core.storage.layout import DataDirectoryLayout
+from core.utils.errors import StorageError
 from core.utils.retry import retry_async
 
 LOCAL = ConnectionRef("ollama", "ollama:local")
@@ -66,8 +67,11 @@ async def test_keyless_local_connection_is_usable_only_after_opt_in(runtime: Run
     assert isinstance(runtime.get_adapter(LOCAL), OllamaAdapter)
 
 
+@pytest.mark.parametrize(
+    "settings_read_fails", [False, True], ids=["user-override", "settings-read-failure"]
+)
 def test_local_context_resolver_enforces_the_effective_window(
-    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch, settings_read_fails: bool
 ) -> None:
     entries = {
         "ministral-3:8b": _local_model("ministral-3:8b", {"ollama": {"local": True}}),
@@ -78,12 +82,18 @@ def test_local_context_resolver_enforces_the_effective_window(
     runtime.storage.update_settings_sections(
         {"local_models": {"context_windows": {"ollama/ministral-3:8b": 16384}}}
     )
+    if settings_read_fails:
+        monkeypatch.setattr(
+            runtime.storage,
+            "load_local_models_settings",
+            Mock(side_effect=StorageError("Settings could not be read")),
+        )
 
     resolver = runtime._provider_operations()._local_context_resolver("ollama")  # noqa: SLF001
 
-    # The user-set window, the default cap without a setting, and None for the
-    # proxied cloud model or an unknown one.
-    assert resolver("ministral-3:8b") == 16384
+    # An unreadable override uses the same local cap as an absent one. Remote
+    # and unknown Models never receive a local limit.
+    assert resolver("ministral-3:8b") == (32768 if settings_read_fails else 16384)
     assert resolver("big-local") == 32768
     assert resolver("kimi-k2.6:cloud") is None
     assert resolver("missing") is None
