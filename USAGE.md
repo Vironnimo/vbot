@@ -263,7 +263,7 @@ The command shows the Installer-recorded target before offering three explicit s
 | Data only / reset | Preserved | Permanently deleted |
 | Application and data | Removed | Permanently deleted |
 
-Any data-removing scope displays the resolved directory and requires typing `DELETE`. A data-only reset preserves the previous server state: a running server restarts with fresh data, while a stopped server remains stopped. A systemd-owned server is controlled through its existing unit so Autostart ownership is preserved.
+Any data-removing scope displays the resolved directory and requires typing `DELETE`. A data-only reset preserves the previous server state: a running server restarts with fresh data, while a stopped server remains stopped. A server that runs but does not answer its health check is left untouched and the reset is refused; try again once it responds. A systemd-owned server is controlled through its existing unit so Autostart ownership is preserved.
 
 <details>
 <summary>Non-interactive Uninstall commands</summary>

@@ -14,7 +14,7 @@ from cli.install_state import (
     InstallState,
     write_install_state,
 )
-from cli.server_management import CommandResult, HealthProbeResult, ServerInstance
+from cli.server_management import CommandResult, ServerInstance, ServerState
 from cli.uninstall_management import (
     CommandRun,
     UninstallMode,
@@ -250,7 +250,7 @@ def test_interactive_data_reset_restarts_previously_running_server(tmp_path: Pat
         input_fn=lambda _prompt: next(answers),
         output_fn=output.append,
         resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+        classify=lambda _instance: "running",
         stop=lambda _instance: _record_command(calls, "stop", instance),
         start=lambda _instance: _record_command(calls, "start", instance),
         systemd_managed=lambda _instance, _name: False,
@@ -282,7 +282,7 @@ def test_app_only_preserves_data_and_all_forwards_data_to_launcher(tmp_path: Pat
         assume_yes=True,
         root=root,
         resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+        classify=lambda _instance: "running",
         stop=stop,
         systemd_managed=lambda _instance, _name: False,
         launcher=launcher,
@@ -292,7 +292,7 @@ def test_app_only_preserves_data_and_all_forwards_data_to_launcher(tmp_path: Pat
         assume_yes=True,
         root=root,
         resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+        classify=lambda _instance: "running",
         stop=stop,
         systemd_managed=lambda _instance, _name: False,
         launcher=launcher,
@@ -361,7 +361,7 @@ def test_uninstall_defaults_to_recorded_installation_target(tmp_path: Path) -> N
         assume_yes=True,
         root=root,
         resolve=resolve,
-        probe=lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+        classify=lambda _instance: "absent",
         systemd_managed=lambda _instance, _name: False,
         launcher=lambda **_kwargs: UninstallResult(ok=True, message="launched"),
     )
@@ -380,7 +380,7 @@ def test_desktop_client_application_scopes_never_target_default_server(tmp_path:
         lifecycle_calls.append("resolve")
         raise AssertionError("Desktop Client must not resolve a default server")
 
-    def unexpected_probe(_instance: ServerInstance) -> HealthProbeResult:
+    def unexpected_probe(_instance: ServerInstance) -> ServerState:
         lifecycle_calls.append("probe")
         raise AssertionError("Desktop Client must not probe a default server")
 
@@ -394,7 +394,7 @@ def test_desktop_client_application_scopes_never_target_default_server(tmp_path:
             assume_yes=True,
             root=root,
             resolve=unexpected_resolve,
-            probe=unexpected_probe,
+            classify=unexpected_probe,
             stop=lambda _instance: _record_command(lifecycle_calls, "stop", _instance),
             systemd_managed=lambda _instance, _name: False,
             launcher=launcher,
@@ -469,7 +469,7 @@ def test_desktop_client_data_only_accepts_complete_explicit_target(tmp_path: Pat
         port=instance.port,
         data_dir=instance.data_dir,
         resolve=resolve,
-        probe=lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+        classify=lambda _instance: "absent",
         systemd_managed=lambda _instance, _name: False,
         remove_directory=lambda path: calls.append(f"remove:{path}"),
     )
@@ -549,26 +549,35 @@ def _lifecycle(
 
 
 @pytest.mark.parametrize(
-    ("running", "systemd", "stop_ok", "ok", "expected"),
+    ("state", "systemd", "stop_ok", "failure", "expected"),
     [
-        pytest.param(False, False, True, True, ["remove"], id="stopped-stays-stopped"),
+        pytest.param("absent", False, True, None, ["remove"], id="stopped-stays-stopped"),
         pytest.param(
+            "running",
             True,
             True,
-            True,
-            True,
+            None,
             ["systemd-stop:custom-vbot", "remove", "systemd-start:custom-vbot"],
             id="systemd-keeps-ownership",
         ),
-        pytest.param(True, False, False, False, ["stop"], id="stop-fails-before-delete"),
+        pytest.param("running", False, False, "locked", ["stop"], id="stop-fails-before-delete"),
+        # A busy server is neither stopped nor reset under.
+        pytest.param(
+            "unresponsive",
+            False,
+            True,
+            "does not answer its health check",
+            [],
+            id="busy-server-refuses",
+        ),
     ],
 )
 def test_data_reset_stops_and_restores_the_server_state_around_the_delete(
     tmp_path: Path,
-    running: bool,
+    state: ServerState,
     systemd: bool,
     stop_ok: bool,
-    ok: bool,
+    failure: str | None,
     expected: list[str],
 ) -> None:
     root = _install_root(tmp_path)
@@ -582,7 +591,7 @@ def test_data_reset_stops_and_restores_the_server_state_around_the_delete(
         root=root,
         service_name="custom-vbot",
         resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=running, is_vbot=running),
+        classify=lambda _instance: state,
         systemd_managed=lambda selected, name: (
             systemd and selected is instance and name == "custom-vbot"
         ),
@@ -595,22 +604,32 @@ def test_data_reset_stops_and_restores_the_server_state_around_the_delete(
         start_systemd=lifecycle["start_systemd"],
     )
 
-    assert result.ok is ok
+    assert result.ok is (failure is None)
     assert calls == expected
-    if not ok:
-        assert "locked" in result.message
+    if failure is not None:
+        assert failure in result.message
 
 
 @pytest.mark.parametrize(
-    ("systemd", "stop_ok", "ok", "expected"),
+    ("state", "systemd", "stop_ok", "failure", "expected"),
     [
-        pytest.param(False, True, True, ["stop", "launch"], id="managed-server"),
-        pytest.param(True, True, True, ["systemd-stop:custom-vbot", "launch"], id="systemd"),
-        pytest.param(False, False, False, ["stop"], id="stop-fails"),
+        pytest.param("running", False, True, None, ["stop", "launch"], id="managed-server"),
+        pytest.param(
+            "running", True, True, None, ["systemd-stop:custom-vbot", "launch"], id="systemd"
+        ),
+        pytest.param("running", False, False, "locked", ["stop"], id="stop-fails"),
+        # A busy server is still this installation's server and is stopped first.
+        pytest.param("unresponsive", False, True, None, ["stop", "launch"], id="busy-server"),
+        pytest.param("foreign", False, True, "held by another process", [], id="foreign-port"),
     ],
 )
 def test_application_removal_stops_the_running_server_before_the_launcher(
-    tmp_path: Path, systemd: bool, stop_ok: bool, ok: bool, expected: list[str]
+    tmp_path: Path,
+    state: ServerState,
+    systemd: bool,
+    stop_ok: bool,
+    failure: str | None,
+    expected: list[str],
 ) -> None:
     root = _install_root(tmp_path)
     instance = make_instance(tmp_path)
@@ -627,7 +646,7 @@ def test_application_removal_stops_the_running_server_before_the_launcher(
         root=root,
         service_name="custom-vbot",
         resolve=lambda **_kwargs: instance,
-        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+        classify=lambda _instance: state,
         stop=lifecycle["stop"],
         stop_systemd=lifecycle["stop_systemd"],
         systemd_managed=lambda selected, name: (
@@ -636,9 +655,9 @@ def test_application_removal_stops_the_running_server_before_the_launcher(
         launcher=launcher,
     )
 
-    assert result.ok is ok
+    assert result.ok is (failure is None)
     assert calls == expected
-    if not ok:
+    if failure is not None:
         # The message names the installation that was kept.
-        assert "locked" in result.message
+        assert failure in result.message
         assert str(root) in result.message
