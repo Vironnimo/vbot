@@ -456,10 +456,10 @@ class StubRuntime:
     async def rename_agent(self, agent_id: str, new_agent_id: str) -> AgentRenameOutcome:
         return await rename_identity_agent(self._rename_services(), agent_id, new_agent_id)
 
-    def agent_references(self, agent_id: str) -> tuple[str, ...]:
+    async def agent_references(self, agent_id: str) -> tuple[str, ...]:
         references = [
             f"channel:{channel.id}"
-            for channel in self.channel_service.list_channels()
+            for channel in await self.channel_service.list_channels_async()
             if channel.agent_id == agent_id
         ]
         references.extend(

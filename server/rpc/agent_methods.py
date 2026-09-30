@@ -333,7 +333,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
             # independent. The guard makes the idle check and the following
             # archive one atomic boundary against every Run ingress path.
             async with _state_chat_runs(state).agent_admission_guard(agent_id, project_id=None):
-                references = state.runtime.agent_references(agent_id)
+                references = await state.runtime.agent_references(agent_id)
                 if references:
                     raise RpcError(
                         RPC_ERROR_AGENT_IN_USE,

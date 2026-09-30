@@ -200,11 +200,14 @@ async def test_a_live_rename_moves_every_reference_or_none(
 
 @pytest.mark.asyncio
 async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
-    config: Config,
+    config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = _started(config)
     try:
         current_session_id = await _seed(runtime)
+        # The rename and delete checks read every Channel config, off the Event Loop.
+        channel_reads: set[int] = set()
+        _record_threads(runtime.channel_service._storage, ("load_all",), channel_reads, monkeypatch)
         # A deleted ``researcher`` left a Cron job and a delegation grant behind:
         # the renamed Agent would adopt them, and a revert would take them along.
         runtime.agents.create("researcher", "Researcher")
@@ -218,7 +221,9 @@ async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
             await runtime.rename_agent("coder", "researcher")
 
         assert refused.value.references == ("allowed_agents:coder", f"cron:{leftover.id}")
-        assert runtime.agent_references("researcher") == (f"cron:{leftover.id}",)
+        assert await runtime.agent_references("researcher") == (f"cron:{leftover.id}",)
+        assert len(channel_reads) > 0
+        assert threading.get_ident() not in channel_reads
         assert sorted(agent.id for agent in runtime.agents.list()) == ["coder", "main"]
         assert runtime.agents.get("coder").current_session_id == current_session_id
         assert sorted(job.agent_id for job in runtime.cron_service.list_jobs()) == [

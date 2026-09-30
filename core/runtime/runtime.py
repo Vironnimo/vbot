@@ -772,18 +772,18 @@ class Runtime:
                     )
         return outcome
 
-    def agent_references(self, agent_id: str) -> tuple[str, ...]:
+    async def agent_references(self, agent_id: str) -> tuple[str, ...]:
         """Name the Channels and live automations that keep an Identity Agent from deletion.
 
         Labels are ``channel:<id>`` and the ``<kind>:<id>`` labels of
         :meth:`AutomationReferences.agent_references`, sorted; automation history
-        that never starts another Run does not count. Blocking: it reads every
-        Channel config.
+        that never starts another Run does not count. The Channel configs are read
+        off the Event Loop.
         """
         self._ensure_started()
         references = [
             f"channel:{channel.id}"
-            for channel in self.channel_service.list_channels()
+            for channel in await self.channel_service.list_channels_async()
             if channel.agent_id == agent_id
         ]
         references.extend(
