@@ -551,6 +551,9 @@ def classify_failures(
     and on no staged file, and otherwise to committed code.
     """
     dependencies = _test_impact.dependencies(root, set(failed))
+    # The dependencies are spelled as the records spell paths.
+    staged = set(map(file_dependencies.recorded_path, staged))
+    dirty = set(map(file_dependencies.recorded_path, dirty))
     commit: list[str] = []
     committed: list[str] = []
     in_progress: list[str] = []

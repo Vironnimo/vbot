@@ -258,7 +258,8 @@ IMPACT_PROJECT = {
     "conftest.py": 'pytest_plugins = ["tests.file_dependencies"]\n',
     "calc.py": "def double(x):\n    return x * 2\n",
     "wip.py": "def triple(x):\n    return x * 3\n",
-    "factor.txt": "2",
+    # Mixed case: the records fold case where the filesystem ignores it (Windows).
+    "Factor.txt": "2",
     "test_calc.py": "import calc\n\n\ndef test_double():\n    assert calc.double(2) == 4\n",
     "test_wip.py": "import wip\n\n\ndef test_triple():\n    assert wip.triple(2) == 6\n",
     "test_factor.py": (
@@ -268,7 +269,7 @@ IMPACT_PROJECT = {
         "\n"
         "\n"
         "def test_factor():\n"
-        '    assert calc.double(int(Path("factor.txt").read_text())) < 10\n'
+        '    assert calc.double(int(Path("Factor.txt").read_text())) < 10\n'
     ),
     "test_git.py": (
         "import subprocess\n"
@@ -376,8 +377,8 @@ def _check_tests(root: Path) -> dict[str, tuple[bool, str]]:
     ("records", "path", "content"),
     [
         ("missing", "calc.py", HARMLESS_CALC),
-        ("missing", "factor.txt", "9"),
-        ("without tested state", "factor.txt", "9"),
+        ("missing", "Factor.txt", "9"),
+        ("without tested state", "Factor.txt", "9"),
         ("corrupt", "calc.py", HARMLESS_CALC),
     ],
     ids=["no records, code", "no records, data", "no tested state", "corrupt"],
@@ -494,8 +495,8 @@ def test_failure_on_committed_code_blocks_every_commit_unless_it_passes_alone(
 
 
 def test_staged_data_file_runs_the_tests_that_read_it(impact_project: Path) -> None:
-    _write(impact_project, "factor.txt", "9")
-    _git(impact_project, "add", "factor.txt")
+    _write(impact_project, "Factor.txt", "9")
+    _git(impact_project, "add", "Factor.txt")
 
     results = _check_tests(impact_project)
 
@@ -601,7 +602,7 @@ def test_merge_commit_runs_a_test_both_sides_changed(
     output = _merge_after_checked_commits(
         impact_project,
         tmp_path / "worktree",
-        ("factor.txt", "4"),
+        ("Factor.txt", "4"),
         ("calc.py", SKEWED_CALC),
         rebase=rebase,
     )

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tests.file_dependencies import COLLECTION, DATA_FILE, TESTMON_DATA
+from tests.file_dependencies import COLLECTION, DATA_FILE, TESTMON_DATA, recorded_path
 
 # Changes that can affect any test: pytest and plugin configuration.
 FULL_SUITE_TRIGGERS = frozenset({"pyproject.toml"})
@@ -80,13 +80,15 @@ def readers(root: Path, paths: set[str], records: Path | None = None) -> set[str
     itself, and one that no longer exists was removed; either changes the entries
     of its own directory in turn. So the tests that listed any directory up to the
     nearest existing one a test listed are readers too. The result contains
-    ``COLLECTION`` when a path was read outside any test.
+    ``COLLECTION`` when a path was read outside any test. *paths* may be spelled
+    in any case the filesystem accepts; the records answer for each path in
+    their own spelling.
 
     Raises sqlite3.Error when the records are missing or unreadable.
     """
     records = records or root
-    directories = {path: _directories(path) for path in paths}
-    candidates = set(paths).union(*directories.values())
+    directories = {path: _directories(path) for path in map(recorded_path, paths)}
+    candidates = set(directories).union(*directories.values())
     rows = _query(
         records / DATA_FILE,
         "SELECT DISTINCT test, path FROM reads WHERE path IN ({placeholders})",
@@ -113,9 +115,10 @@ def dependencies(root: Path, tests: set[str]) -> dict[str, set[str]]:
     That is every Python file whose code the test executed (testmon) and every data
     file it read or directory it listed. Each test also depends on its own module.
     A test module id without ``::``, as a collection error reports it, depends on
-    the files of all recorded tests of that module.
+    the files of all recorded tests of that module. Paths are spelled as
+    ``recorded_path`` spells them; compare them with paths spelled alike.
     """
-    result = {test: {test.partition("::")[0]} for test in tests}
+    result = {test: {recorded_path(test.partition("::")[0])} for test in tests}
     modules = {test.partition("::")[0] for test in tests}
     module_of = "substr({column}, 1, instr({column} || '::', '::') - 1) IN ({{placeholders}})"
     executed = _query_or_nothing(
@@ -135,7 +138,7 @@ def dependencies(root: Path, tests: set[str]) -> dict[str, set[str]]:
         module = recorded.partition("::")[0]
         for test in (recorded, module):
             if test in result:
-                result[test].add(path.replace("\\", "/"))
+                result[test].add(recorded_path(path))
     return result
 
 

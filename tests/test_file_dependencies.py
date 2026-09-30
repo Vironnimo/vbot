@@ -22,10 +22,10 @@ PROJECT_FILES = {
     "pytest.ini": "[pytest]\n",
     "conftest.py": 'pytest_plugins = ["tests.file_dependencies"]\n',
     "helper.py": "def shout(text):\n    return text.upper()\n",
-    "data/prompt.txt": "hello",
+    "data/Prompt.txt": "hello",
     "data/imported.txt": "at import",
-    "listed/a.txt": "",
-    "listed/nested/b.txt": "",
+    "Listed/a.txt": "",
+    "Listed/nested/b.txt": "",
     "test_reads.py": (
         "from pathlib import Path\n"
         "\n"
@@ -35,15 +35,15 @@ PROJECT_FILES = {
         "\n"
         "\n"
         "def test_reads_file():\n"
-        '    assert helper.shout(Path("data/prompt.txt").read_text()) == "HELLO"\n'
+        '    assert helper.shout(Path("data/Prompt.txt").read_text()) == "HELLO"\n'
         "\n"
         "\n"
         "def test_lists_directory():\n"
-        '    assert sorted(path.name for path in Path("listed").iterdir()) == ["a.txt", "nested"]\n'
+        '    assert sorted(path.name for path in Path("Listed").iterdir()) == ["a.txt", "nested"]\n'
         "\n"
         "\n"
         "def test_lists_nested_directory():\n"
-        '    assert [path.name for path in Path("listed/nested").iterdir()] == ["b.txt"]\n'
+        '    assert [path.name for path in Path("Listed/nested").iterdir()] == ["b.txt"]\n'
         "\n"
         "\n"
         "def test_reads_nothing():\n"
@@ -76,17 +76,19 @@ def test_readers_are_the_tests_that_read_a_file_or_listed_its_directory(
 ) -> None:
     lists = "test_reads.py::test_lists_directory"
     lists_nested = "test_reads.py::test_lists_nested_directory"
-    assert _test_impact.readers(recorded_project, {"data/prompt.txt"}) == {
+    # Paths as git spells them find their readers, although the records fold
+    # case where the filesystem ignores it.
+    assert _test_impact.readers(recorded_project, {"data/Prompt.txt"}) == {
         "test_reads.py::test_reads_file"
     }
     # A file added to a listed directory changes what the listing test sees.
-    assert _test_impact.readers(recorded_project, {"listed/new.txt"}) == {lists}
-    assert _test_impact.readers(recorded_project, {"listed/nested/new.txt"}) == {lists_nested}
+    assert _test_impact.readers(recorded_project, {"Listed/new.txt"}) == {lists}
+    assert _test_impact.readers(recorded_project, {"Listed/nested/new.txt"}) == {lists_nested}
     # So does a new directory in it, however deep the added file lies.
-    assert _test_impact.readers(recorded_project, {"listed/new/deeper/c.txt"}) == {lists}
+    assert _test_impact.readers(recorded_project, {"Listed/new/deeper/c.txt"}) == {lists}
     # A removed listed directory changes the listing of its own directory.
-    (tmp_path / "listed").mkdir()
-    assert _test_impact.readers(tmp_path, {"listed/nested/b.txt"}, recorded_project) == {
+    (tmp_path / "Listed").mkdir()
+    assert _test_impact.readers(tmp_path, {"Listed/nested/b.txt"}, recorded_project) == {
         lists,
         lists_nested,
     }
@@ -101,16 +103,16 @@ def test_dependencies_combine_executed_code_and_read_files(recorded_project: Pat
 
     dependencies = _test_impact.dependencies(recorded_project, tests)
 
-    assert {"test_reads.py", "helper.py", "data/prompt.txt"} <= dependencies[
-        "test_reads.py::test_reads_file"
-    ]
+    # Spelled as the records spell paths.
+    prompt = file_dependencies.recorded_path("data/Prompt.txt")
+    assert {"test_reads.py", "helper.py", prompt} <= dependencies["test_reads.py::test_reads_file"]
     assert "helper.py" not in dependencies["test_reads.py::test_reads_nothing"]
     # A collection error names only the module: it depends on what its tests use.
-    assert {"helper.py", "data/prompt.txt"} <= dependencies["test_reads.py"]
+    assert {"helper.py", prompt} <= dependencies["test_reads.py"]
 
 
 def test_copied_data_answers_like_the_original(recorded_project: Path, tmp_path: Path) -> None:
     assert _test_impact.copy_data(recorded_project, tmp_path) is True
 
-    assert _test_impact.readers(tmp_path, {"data/prompt.txt"}) == {"test_reads.py::test_reads_file"}
+    assert _test_impact.readers(tmp_path, {"data/Prompt.txt"}) == {"test_reads.py::test_reads_file"}
     assert _test_impact.copy_data(tmp_path / "missing", tmp_path) is False
