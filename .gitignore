@@ -2,6 +2,8 @@
 .github/*
 !.github/workflows/
 !.github/assets/
+!.github/ISSUE_TEMPLATE/
+!.github/pull_request_template.md
 .vscode/
 .opencode/
 .agents/

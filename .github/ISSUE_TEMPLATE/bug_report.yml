@@ -1,0 +1,84 @@
+name: Bug report
+description: Something in vBot is broken or behaves unexpectedly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Questions about your setup fit better in [Discussions → Q&A](https://github.com/Vironnimo/vbot/discussions/categories/q-a). Security vulnerabilities go through [private reporting](https://github.com/Vironnimo/vbot/security/advisories/new), not here.
+
+        **Before posting, remove API keys, tokens, personal data and private Session content** from everything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open …
+        2. Send …
+        3. See …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: vBot version
+      description: "WebUI: Settings → General → Version (Copy version)."
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation
+      options:
+        - Installer (Windows)
+        - Installer (Linux or Raspberry Pi)
+        - Desktop app connected to a remote server
+        - Source checkout
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11, Debian 13, Raspberry Pi OS …
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Installation or update
+        - Chat and Sessions
+        - Agents, Memory or Skills
+        - Terminals
+        - Swarms
+        - Live voice or speech
+        - Calendar, Cron or Queue
+        - Projects
+        - Providers and Models
+        - Channels (Telegram, Discord, Slack, WhatsApp, Mattermost)
+        - Tools, MCP or Extensions
+        - Desktop app
+        - CLI
+        - Other
+  - type: input
+    id: model
+    attributes:
+      label: Provider and Model
+      description: If the problem involves a Model, which one? For example `opencode-go/kimi-k3` or `ollama-cloud/glm-5.3`.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: "The WebUI Logs page, `vbot log`, or the files in `~/.vbot/logs/`. Paste only the relevant part and remove secrets."
+      render: text

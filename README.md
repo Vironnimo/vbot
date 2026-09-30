@@ -125,7 +125,7 @@ The server has no built-in authentication and binds to `127.0.0.1` by default. T
 
 ## Project status
 
-vBot is alpha software under active development. Back up `~/.vbot` before upgrades, expect interfaces to change between releases, and report problems through [GitHub Issues](https://github.com/Vironnimo/vbot/issues).
+vBot is alpha software under active development. Back up `~/.vbot` before upgrades, expect interfaces to change between releases, and report problems through [GitHub Issues](https://github.com/Vironnimo/vbot/issues). Questions, ideas and show-and-tell belong in [Discussions](https://github.com/Vironnimo/vbot/discussions); [CONTRIBUTING.md](CONTRIBUTING.md) explains how to contribute and [SECURITY.md](SECURITY.md) how to report vulnerabilities privately.
 
 ## License
 

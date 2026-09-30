@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a specific, well-scoped improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open-ended ideas and bigger changes are easier to shape together in [Discussions → Ideas](https://github.com/Vironnimo/vbot/discussions/categories/ideas) first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the situation and what gets in your way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: Describe the behavior you would like to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds or alternatives
+      description: What do you do today instead, and what else did you consider?

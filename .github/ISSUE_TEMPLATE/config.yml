@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and help
+    url: https://github.com/Vironnimo/vbot/discussions/categories/q-a
+    about: Ask about installation, setup and how to use vBot.
+  - name: Ideas and bigger changes
+    url: https://github.com/Vironnimo/vbot/discussions/categories/ideas
+    about: Share an idea or discuss a larger change before opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/Vironnimo/vbot/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue.
